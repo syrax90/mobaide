@@ -1,0 +1,48 @@
+# Claude Mobile
+
+A mobile application (Android/iOS) for remotely controlling [Claude Code](https://claude.ai/code) sessions running on a server, with full terminal I/O streaming and multi-session support.
+
+## The Problem
+
+Running Claude Code CLI sessions requires a desktop terminal. There's no way to start, monitor, or interact with sessions from a mobile device — especially when you're away from your workstation. Additionally, the existing `claude_auto_executor` script (which automates Claude sessions with Linear integration, git worktree management, and Auto Scan mode) has no remote access capability.
+
+## The Idea
+
+Claude Mobile bridges this gap with a client-server architecture:
+
+- **Server (.NET 8)** — Runs on your workstation (Windows/Linux). Reimplements the `claude_auto_executor.ps1` logic natively in C#: manages ConPTY terminal sessions, streams I/O over SignalR, handles Linear integration, git worktrees, and Auto Scan mode. Supports multiple concurrent Claude sessions.
+- **Client (Android / Kotlin)** — Connects to the server via SignalR (WebSocket + MessagePack). Provides a multi-session terminal UI to start, monitor, and interact with Claude Code sessions in real time. Built with Jetpack Compose and Material 3.
+- **NAT Traversal** — Uses Cloudflare Tunnel to securely expose the server over the internet without a public IP or port forwarding. Deployed via Docker Compose (server + cloudflared).
+
+## Key Features
+
+- **Remote Terminal** — Full bidirectional terminal I/O with Claude Code sessions from your phone
+- **Multi-Session** — Run and switch between up to 16 concurrent Claude sessions
+- **Auto Scan Mode** — Polls Linear for issues labeled "AutoPipeline", auto-creates git worktrees, and launches Claude sessions to work on them
+- **Reconnection** — Scrollback buffer (10K lines) per session ensures seamless reconnect after network drops
+- **Secure Access** — JWT authentication + Cloudflare Access service tokens (defense in depth)
+- **Cross-Platform Ready** — Server abstracts terminal I/O behind interfaces (ConPTY on Windows, PTY on Linux). iOS client planned via Kotlin Multiplatform shared layer.
+
+## Architecture
+
+```
+[ Android App ]  <--SignalR/MessagePack-->  [ .NET 8 Server ]  <--ConPTY-->  [ Claude CLI ]
+     (Kotlin/Compose)        |              (ASP.NET Core)                   (cmd.exe sessions)
+                             |
+                    [ Cloudflare Tunnel ]
+                    (NAT traversal, HTTPS)
+```
+
+## Project Structure (Planned)
+
+| Component | Tech | Description |
+|-----------|------|-------------|
+| `ClaudeMobile.Core` | .NET 8 / C# | ConPTY wrapper, session manager, domain models |
+| `ClaudeMobile.Server` | ASP.NET Core | SignalR hub, JWT auth, REST endpoints |
+| `ClaudeMobile.LinearIntegration` | .NET 8 / C# | Linear GraphQL client, Auto Scan engine, worktree manager |
+| `kotlin/` | Kotlin / Compose | Android app — SignalR client, multi-session UI, terminal view |
+| `docker-compose.yml` | Docker | Server + Cloudflare Tunnel deployment |
+
+## Status
+
+Early development. Tracked in [Linear (Claude_mobile project)](https://linear.app/claude-mobile) — issues CLA-6 through CLA-10.
