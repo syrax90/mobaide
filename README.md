@@ -10,8 +10,8 @@ Running Claude Code CLI sessions requires a desktop terminal. There's no way to 
 
 Claude Mobile bridges this gap with a client-server architecture:
 
-- **Server (.NET 8)** — Runs on your workstation (Windows/Linux). Reimplements the `claude_auto_executor.ps1` logic natively in C#: manages ConPTY terminal sessions, streams I/O over SignalR, handles Linear integration, git worktrees, and Auto Scan mode. Supports multiple concurrent Claude sessions.
-- **Client (Android / Kotlin)** — Connects to the server via SignalR (WebSocket + MessagePack). Provides a multi-session terminal UI to start, monitor, and interact with Claude Code sessions in real time. Built with Jetpack Compose and Material 3.
+- **Server (Python / FastAPI)** — Runs on your workstation (Windows/Linux). Reimplements the `claude_auto_executor.ps1` logic natively in Python: manages cross-platform PTY terminal sessions (pywinpty on Windows, stdlib pty on Linux), streams I/O over WebSocket, handles Linear integration, git worktrees, and Auto Scan mode. Supports multiple concurrent Claude sessions.
+- **Client (Android / Kotlin)** — Connects to the server via raw WebSocket (OkHttp). Provides a multi-session terminal UI to start, monitor, and interact with Claude Code sessions in real time. Built with Jetpack Compose and Material 3.
 - **NAT Traversal** — Uses Cloudflare Tunnel to securely expose the server over the internet without a public IP or port forwarding. Deployed via Docker Compose (server + cloudflared).
 
 ## Key Features
@@ -21,26 +21,36 @@ Claude Mobile bridges this gap with a client-server architecture:
 - **Auto Scan Mode** — Polls Linear for issues labeled "AutoPipeline", auto-creates git worktrees, and launches Claude sessions to work on them
 - **Reconnection** — Scrollback buffer (10K lines) per session ensures seamless reconnect after network drops
 - **Secure Access** — JWT authentication + Cloudflare Access service tokens (defense in depth)
-- **Cross-Platform Ready** — Server abstracts terminal I/O behind interfaces (ConPTY on Windows, PTY on Linux). iOS client planned via Kotlin Multiplatform shared layer.
+- **Cross-Platform** — Server runs on both Windows and Linux out of the box via PTY abstraction (pywinpty / stdlib pty). iOS client planned via Kotlin Multiplatform shared layer.
 
 ## Architecture
 
 ```
-[ Android App ]  <--SignalR/MessagePack-->  [ .NET 8 Server ]  <--ConPTY-->  [ Claude CLI ]
-     (Kotlin/Compose)        |              (ASP.NET Core)                   (cmd.exe sessions)
-                             |
-                    [ Cloudflare Tunnel ]
-                    (NAT traversal, HTTPS)
+[ Android App ]  <--WebSocket/JSON-->  [ Python Server ]  <--PTY-->  [ Claude CLI ]
+     (Kotlin/Compose)      |           (FastAPI/uvicorn)             (bash/cmd sessions)
+                           |
+                  [ Cloudflare Tunnel ]
+                  (NAT traversal, HTTPS)
 ```
+
+## Server Stack
+
+| Library | Purpose |
+|---------|---------|
+| FastAPI + uvicorn | HTTP + WebSocket server |
+| pywinpty / pty (stdlib) | Cross-platform terminal sessions |
+| PyJWT | JWT authentication |
+| gql + httpx | Linear GraphQL integration |
+| asyncio | Concurrent session management |
 
 ## Project Structure (Planned)
 
 | Component | Tech | Description |
 |-----------|------|-------------|
-| `ClaudeMobile.Core` | .NET 8 / C# | ConPTY wrapper, session manager, domain models |
-| `ClaudeMobile.Server` | ASP.NET Core | SignalR hub, JWT auth, REST endpoints |
-| `ClaudeMobile.LinearIntegration` | .NET 8 / C# | Linear GraphQL client, Auto Scan engine, worktree manager |
-| `kotlin/` | Kotlin / Compose | Android app — SignalR client, multi-session UI, terminal view |
+| `claude_mobile/core/` | Python 3.12+ | PTY backend abstraction, session manager, domain models |
+| `claude_mobile/server/` | FastAPI | WebSocket endpoints, JWT auth, REST API |
+| `claude_mobile/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
+| `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
 | `docker-compose.yml` | Docker | Server + Cloudflare Tunnel deployment |
 
 ## Status
