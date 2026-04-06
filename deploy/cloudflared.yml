@@ -1,0 +1,23 @@
+# Cloudflare Tunnel configuration — for locally-managed tunnels only.
+#
+# The RECOMMENDED approach is a remotely-managed tunnel:
+#   1. Create the tunnel in the Cloudflare Zero Trust dashboard
+#   2. Configure the public hostname and service there
+#   3. Pass the tunnel token via TUNNEL_TOKEN environment variable
+#   4. Run: cloudflared tunnel --no-autoupdate run
+#
+# This file is provided as a reference for users who prefer locally-managed
+# tunnels (e.g., for automation or version-controlled tunnel config).
+
+tunnel: <YOUR_TUNNEL_ID>
+credentials-file: /etc/cloudflared/<YOUR_TUNNEL_ID>.json
+
+ingress:
+  - hostname: claude-mobile.yourdomain.com
+    service: http://localhost:8000
+    originRequest:
+      connectTimeout: 30s
+      noTLSVerify: true
+      keepAliveTimeout: 90s
+  # Catch-all rule (required by cloudflared)
+  - service: http_status:404
