@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "claude-mobile-server"
 version = "0.1.0"
-description = "Claude Mobile server — cross-platform PTY session manager"
+description = "Claude Mobile server — cross-platform PTY session manager with WebSocket API"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
@@ -14,6 +14,8 @@ dependencies = [
     "PyJWT",
     "gql",
     "httpx",
+    "python-dotenv",
+    "bcrypt",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +23,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pytest-timeout",
+    "httpx-ws",
 ]
 
 [tool.pytest.ini_options]
