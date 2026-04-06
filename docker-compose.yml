@@ -1,0 +1,48 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: claude-mobile-server
+    restart: unless-stopped
+    env_file:
+      - ./server/.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - USER_STORE_PATH=/app/data/users.json
+      - PROCESSED_ITEMS_PATH=/app/data/processed_items.json
+    volumes:
+      - server-data:/app/data
+    # Ports are NOT published — all external access goes through cloudflared.
+    # Uncomment for local debugging without the tunnel:
+    # ports:
+    #   - "8000:8000"
+    networks:
+      - tunnel-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: claude-mobile-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    networks:
+      - tunnel-net
+    depends_on:
+      server:
+        condition: service_healthy
+
+volumes:
+  server-data:
+
+networks:
+  tunnel-net:
+    driver: bridge
