@@ -7,10 +7,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from claude_mobile.core import SessionManager
+from claude_mobile.linear.scanner import AutoScanService
 
 from .auth.jwt_service import JwtService
 from .auth.router import router as auth_router
 from .auth.user_store import UserStore
+from .autoscan.router import router as autoscan_router
+from .autoscan.router import ws_router as autoscan_ws_router
 from .config import ServerConfig
 from .sessions.router import router as sessions_router
 from .ws.event_fanout import SessionListBroadcaster
@@ -34,6 +37,10 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         await app.state.session_manager.start_liveness_monitor()
         yield
         logger.info("Shutting down Claude Mobile server")
+        # Stop auto-scan service if running
+        auto_scan = getattr(app.state, "auto_scan_service", None)
+        if auto_scan is not None:
+            await auto_scan.stop()
         # Cancel all fanout tasks
         for fanout in app.state.fanouts.values():
             fanout.stop()
@@ -56,20 +63,35 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.state.broadcaster = SessionListBroadcaster()
     app.state.fanouts = {}  # session_id -> SessionEventFanout
 
+    # Auto-scan service (optional — only if PROJECTS is configured)
+    if config.auto_scan_config is not None:
+        app.state.auto_scan_service = AutoScanService(
+            config=config.auto_scan_config,
+            session_manager=app.state.session_manager,
+        )
+    else:
+        app.state.auto_scan_service = None
+
     # Routers
     app.include_router(auth_router)
     app.include_router(sessions_router)
     app.include_router(ws_session_io_router)
     app.include_router(ws_session_list_router)
+    app.include_router(autoscan_router)
+    app.include_router(autoscan_ws_router)
 
     # Health endpoint (no auth)
     @app.get("/api/health", tags=["health"])
     async def health():
         sm = app.state.session_manager
-        return {
+        auto_scan = getattr(app.state, "auto_scan_service", None)
+        result = {
             "status": "ok",
             "sessions": len(sm.list_sessions()),
             "max_sessions": sm.max_sessions,
         }
+        if auto_scan is not None:
+            result["auto_scan"] = auto_scan.get_status()["status"]
+        return result
 
     return app

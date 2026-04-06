@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from claude_mobile.linear.config import AutoScanConfig
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -18,6 +20,7 @@ class ServerConfig:
     max_sessions: int = 16
     session_disconnect_timeout: int = 300  # 5 minutes
     log_level: str = "INFO"
+    auto_scan_config: AutoScanConfig | None = None
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -42,4 +45,5 @@ class ServerConfig:
                 os.getenv("SESSION_DISCONNECT_TIMEOUT", "300"),
             ),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            auto_scan_config=AutoScanConfig.from_env(),
         )
