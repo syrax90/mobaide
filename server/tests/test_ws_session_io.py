@@ -56,6 +56,54 @@ class TestWsAuth:
             ) as ws:
                 ws.receive_json()
 
+    def test_connect_with_refresh_token_rejected(self, test_client, app, session_id_sync):
+        """Refresh tokens must not be accepted for WebSocket auth."""
+        refresh_token = app.state.jwt_service.create_refresh_token(TEST_USERNAME)
+        with pytest.raises(Exception):
+            with test_client.websocket_connect(
+                f"/ws/session/{session_id_sync}?token={refresh_token}",
+            ) as ws:
+                ws.receive_json()
+
+    def test_first_message_auth_valid(self, test_client, auth_token, session_id_sync):
+        """Authenticate via first-message JSON payload (no query param)."""
+        with test_client.websocket_connect(
+            f"/ws/session/{session_id_sync}",
+        ) as ws:
+            ws.send_json({"type": "auth", "token": auth_token})
+            msg = ws.receive_json()
+            assert msg["type"] in ("output", "state")
+
+    def test_first_message_auth_invalid_token(self, test_client, session_id_sync):
+        """First-message auth with invalid token should close connection."""
+        with pytest.raises(Exception):
+            with test_client.websocket_connect(
+                f"/ws/session/{session_id_sync}",
+            ) as ws:
+                ws.send_json({"type": "auth", "token": "bad.token.here"})
+                ws.receive_json()
+
+    def test_first_message_auth_wrong_message_type(self, test_client, session_id_sync):
+        """First message with wrong type field should close connection."""
+        with pytest.raises(Exception):
+            with test_client.websocket_connect(
+                f"/ws/session/{session_id_sync}",
+            ) as ws:
+                ws.send_json({"type": "input", "data": "hello"})
+                ws.receive_json()
+
+    def test_first_message_auth_refresh_token_rejected(
+        self, test_client, app, session_id_sync
+    ):
+        """First-message auth with refresh token should be rejected."""
+        refresh_token = app.state.jwt_service.create_refresh_token(TEST_USERNAME)
+        with pytest.raises(Exception):
+            with test_client.websocket_connect(
+                f"/ws/session/{session_id_sync}",
+            ) as ws:
+                ws.send_json({"type": "auth", "token": refresh_token})
+                ws.receive_json()
+
 
 class TestWsIO:
     def test_receive_state_message(self, test_client, auth_token, session_id_sync):

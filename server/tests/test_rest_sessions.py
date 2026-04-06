@@ -24,6 +24,18 @@ class TestCreateSession:
         assert resp.status_code == 201
 
 
+    async def test_create_exceeds_max_sessions_returns_409(self, client, auth_headers):
+        """Creating sessions beyond max_sessions limit returns 409 Conflict."""
+        # server_config fixture sets max_sessions=4
+        for _ in range(4):
+            resp = await client.post("/api/sessions", headers=auth_headers, json={})
+            assert resp.status_code == 201
+
+        resp = await client.post("/api/sessions", headers=auth_headers, json={})
+        assert resp.status_code == 409
+        assert "limit" in resp.json()["detail"].lower()
+
+
 class TestListSessions:
     async def test_empty_list(self, client, auth_headers):
         resp = await client.get("/api/sessions", headers=auth_headers)
