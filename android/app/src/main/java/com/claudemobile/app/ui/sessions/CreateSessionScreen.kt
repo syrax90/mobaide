@@ -1,11 +1,14 @@
 package com.claudemobile.app.ui.sessions
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -13,13 +16,16 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -58,13 +64,36 @@ fun CreateSessionScreen(
             viewModel.clearError()
         }
     }
+    LaunchedEffect(state.dismiss) {
+        if (state.dismiss) {
+            viewModel.consumeDismiss()
+            onBack()
+        }
+    }
+
+    // System back navigates between steps before exiting the screen.
+    BackHandler(enabled = state.step != CreateSessionStep.ProjectSelect) {
+        viewModel.goBack()
+    }
+
+    val onTopBarBack: () -> Unit = {
+        if (state.step == CreateSessionStep.ProjectSelect) onBack() else viewModel.goBack()
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("New Session") },
+                title = {
+                    Text(
+                        when (state.step) {
+                            CreateSessionStep.ProjectSelect -> "New Session"
+                            CreateSessionStep.ModePick -> "Select mode"
+                            CreateSessionStep.StandardConfig -> "Standard mode"
+                        }
+                    )
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = onTopBarBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
@@ -80,86 +109,168 @@ fun CreateSessionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // -- Project picker --
-            var dropdownExpanded by remember { mutableStateOf(false) }
             val selectedProject = state.projects.firstOrNull { it.name == state.selectedProjectName }
-            ExposedDropdownMenuBox(
-                expanded = dropdownExpanded,
-                onExpandedChange = { dropdownExpanded = !dropdownExpanded },
-            ) {
-                OutlinedTextField(
-                    value = state.selectedProjectName ?: if (state.isLoadingProjects) "Loading…" else "Select project",
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Project") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded) },
-                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+
+            when (state.step) {
+                CreateSessionStep.ProjectSelect -> ProjectSelectSection(
+                    state = state,
+                    selectedProject = selectedProject,
+                    onSelect = viewModel::selectProject,
                 )
-                DropdownMenu(
-                    expanded = dropdownExpanded,
-                    onDismissRequest = { dropdownExpanded = false },
-                ) {
-                    state.projects.forEach { project ->
-                        DropdownMenuItem(
-                            text = { Text(project.name) },
-                            onClick = {
-                                viewModel.selectProject(project.name)
-                                dropdownExpanded = false
-                            },
-                        )
-                    }
-                }
-            }
-
-            selectedProject?.let { project ->
-                Text(
-                    text = project.path,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                CreateSessionStep.ModePick -> ModePickerSection(
+                    project = selectedProject,
+                    onStandard = viewModel::selectStandardMode,
+                    onAutoScan = viewModel::selectAutoScanMode,
+                    loading = state.autoScanStarting,
                 )
-                if (project.has_linear_key) {
-                    AssistChip(
-                        onClick = {},
-                        label = { Text("Linear key") },
-                        colors = AssistChipDefaults.assistChipColors(),
-                    )
-                }
-            }
-
-            // -- Toggles --
-            ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
-            ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
-            ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
-            ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
-
-            if (state.worktree) {
-                OutlinedTextField(
-                    value = state.branchName,
-                    onValueChange = viewModel::setBranchName,
-                    label = { Text("Branch name (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                CreateSessionStep.StandardConfig -> StandardConfigSection(
+                    state = state,
+                    viewModel = viewModel,
                 )
-            }
-
-            OutlinedTextField(
-                value = state.initialPrompt,
-                onValueChange = viewModel::setInitialPrompt,
-                label = { Text("Initial prompt (optional)") },
-                modifier = Modifier
-                    .fillMaxWidth(),
-                minLines = 3,
-                maxLines = 8,
-            )
-
-            Button(
-                onClick = viewModel::submit,
-                enabled = state.selectedProjectName != null && !state.submitting,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (state.submitting) "Creating…" else "Create session")
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProjectSelectSection(
+    state: CreateSessionUiState,
+    selectedProject: com.claudemobile.app.data.network.dto.ProjectInfo?,
+    onSelect: (String) -> Unit,
+) {
+    var dropdownExpanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = dropdownExpanded,
+        onExpandedChange = { dropdownExpanded = !dropdownExpanded },
+    ) {
+        OutlinedTextField(
+            value = state.selectedProjectName ?: if (state.isLoadingProjects) "Loading…" else "Select project",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Project") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = dropdownExpanded,
+            onDismissRequest = { dropdownExpanded = false },
+        ) {
+            state.projects.forEach { project ->
+                DropdownMenuItem(
+                    text = { Text(project.name) },
+                    onClick = {
+                        onSelect(project.name)
+                        dropdownExpanded = false
+                    },
+                )
+            }
+        }
+    }
+
+    selectedProject?.let { project ->
+        Text(
+            text = project.path,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (project.has_linear_key) {
+            AssistChip(
+                onClick = {},
+                label = { Text("Linear key") },
+                colors = AssistChipDefaults.assistChipColors(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModePickerSection(
+    project: com.claudemobile.app.data.network.dto.ProjectInfo?,
+    onStandard: () -> Unit,
+    onAutoScan: () -> Unit,
+    loading: Boolean,
+) {
+    Text(
+        text = project?.name ?: "",
+        style = MaterialTheme.typography.titleMedium,
+    )
+    project?.path?.let {
+        Text(
+            text = it,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    ElevatedCard(
+        onClick = onStandard,
+        enabled = !loading,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        ListItem(
+            headlineContent = { Text("Standard mode") },
+            supportingContent = { Text("Configure and launch a Claude session.") },
+        )
+    }
+
+    // Per CLA-15 AC: hide Auto Scan entirely when no Linear key is configured.
+    if (project?.has_linear_key == true) {
+        ElevatedCard(
+            onClick = onAutoScan,
+            enabled = !loading,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            ListItem(
+                headlineContent = { Text("Auto Scan mode") },
+                supportingContent = { Text("Scan Linear for AutoPipeline issues and launch sessions.") },
+                trailingContent = if (loading) {
+                    {
+                        Box(modifier = Modifier.size(24.dp)) {
+                            CircularProgressIndicator(strokeWidth = 2.dp)
+                        }
+                    }
+                } else null,
+            )
+        }
+    }
+}
+
+@Composable
+private fun StandardConfigSection(
+    state: CreateSessionUiState,
+    viewModel: CreateSessionViewModel,
+) {
+    ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
+    ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
+    ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
+    ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+    if (state.worktree) {
+        OutlinedTextField(
+            value = state.branchName,
+            onValueChange = viewModel::setBranchName,
+            label = { Text("Branch name (optional)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    OutlinedTextField(
+        value = state.initialPrompt,
+        onValueChange = viewModel::setInitialPrompt,
+        label = { Text("Initial prompt (optional)") },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 3,
+        maxLines = 8,
+    )
+
+    Button(
+        onClick = viewModel::submit,
+        enabled = state.selectedProjectName != null && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
     }
 }
 

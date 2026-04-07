@@ -6,6 +6,7 @@ import logging
 import time
 from datetime import UTC, datetime
 
+from .da_responder import DaResponder
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
 from .pty_backend import PtyBackend, create_pty_backend
 
@@ -44,6 +45,9 @@ class TerminalSession:
         )
         self._reader_task: asyncio.Task[None] | None = None
         self._created_at = datetime.now(UTC)
+        # Intercepts DA1/2/3 queries from the child so they don't end up in
+        # the ring buffer leaking into the client input field. See da_responder.py.
+        self._da = DaResponder()
 
     # -- Properties --
 
@@ -98,6 +102,18 @@ class TerminalSession:
                 )
                 if not data:
                     break
+                # Intercept DA queries before they hit the ring buffer.
+                # Replies are written back to the PTY master so the child
+                # sees a normal terminal response.
+                data = self._da.process(data)
+                replies = self._da.pending_replies()
+                if replies:
+                    fut = loop.run_in_executor(
+                        None, self._backend.write, replies,
+                    )
+                    fut.add_done_callback(self._log_da_write_failure)
+                if not data:
+                    continue
                 self._scrollback.append(data)
                 self._append_ring(data)
                 # ``put`` (not ``put_nowait``) so a slow consumer applies
@@ -126,6 +142,16 @@ class TerminalSession:
                 ),
             )
             logger.warning("Session %s crashed", self.session_id)
+
+    def _log_da_write_failure(self, fut: asyncio.Future) -> None:
+        """Surface exceptions from the fire-and-forget DA reply write."""
+        exc = fut.exception()
+        if exc is not None:
+            logger.warning(
+                "Session %s: DA reply write failed: %r",
+                self.session_id,
+                exc,
+            )
 
     def _append_ring(self, data: bytes) -> None:
         self._ring += data
