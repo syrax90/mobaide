@@ -5,12 +5,28 @@ from pydantic import BaseModel
 from claude_mobile.core.models import SessionInfo
 
 
+class ClaudeOptionsModel(BaseModel):
+    plan_mode: bool = False
+    skip_permissions: bool = False
+    no_memory: bool = False
+    initial_prompt: str | None = None
+    worktree: bool = False
+    branch_name: str | None = None
+    identifier: str | None = None
+    title: str | None = None
+
+
 class CreateSessionRequest(BaseModel):
     command: list[str] | None = None
     cwd: str | None = None
     env: dict[str, str] | None = None
     rows: int = 24
     cols: int = 80
+    # CLA-12: project-aware launch. When set, ``command``/``cwd``/``env``
+    # are ignored and ``ClaudeLauncher`` builds them from the project +
+    # ``claude_options``.
+    project_name: str | None = None
+    claude_options: ClaudeOptionsModel | None = None
 
 
 class SessionResponse(BaseModel):

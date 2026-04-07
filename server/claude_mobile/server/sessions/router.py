@@ -5,7 +5,12 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from claude_mobile.core import SessionConfig, SessionManager, MaxSessionsError
+from claude_mobile.core import (
+    ClaudeOptions,
+    MaxSessionsError,
+    SessionConfig,
+    SessionManager,
+)
 
 from ..auth.dependencies import get_current_user
 from ..logging import audit_event, get_logger
@@ -34,6 +39,13 @@ async def create_session(
     """Create a new PTY session."""
     manager = _get_manager(request)
     session_id = uuid.uuid4().hex[:12]
+    claude_options = (
+        ClaudeOptions(**body.claude_options.model_dump())
+        if body.claude_options is not None
+        else None
+    )
+    # Project-aware launch ignores raw command/cwd/env — they will be
+    # overwritten by ClaudeLauncher inside SessionManager.
     config = SessionConfig(
         session_id=session_id,
         command=body.command or _DEFAULT_SHELL,
@@ -41,12 +53,24 @@ async def create_session(
         env=body.env,
         rows=body.rows,
         cols=body.cols,
+        project_name=body.project_name,
+        claude_options=claude_options,
     )
     try:
         session = await manager.create_session(config)
     except MaxSessionsError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc).strip("'"),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         )
 

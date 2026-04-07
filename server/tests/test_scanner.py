@@ -25,6 +25,7 @@ def _make_config(tmp_path) -> AutoScanConfig:
     return AutoScanConfig(
         projects={
             "test-project": ProjectConfig(
+                name="test-project",
                 path=str(tmp_path / "repo"),
                 linear_api_key="lin_api_test",
             )
@@ -253,17 +254,27 @@ class TestScanOnce:
 
 
 class TestBuildClaudeCommand:
-    def test_default_command(self, service):
-        cmd = service._build_claude_command()
-        assert cmd == ["claude"]
+    """The argv is now built by the shared ClaudeLauncher; AutoScanService
+    just delegates. Verify the delegation produces the expected shape."""
 
-    def test_with_prompt(self, service):
-        service._config = AutoScanConfig(
-            projects=service._config.projects,
-            auto_scan_prompt="Read the issue. Fix it.",
+    async def test_argv_includes_skip_permissions(self, service):
+        from claude_mobile.core.claude_launcher import ClaudeOptions
+
+        spec = await service._launcher.build(
+            service._config.projects["test-project"],
+            ClaudeOptions(skip_permissions=True),
         )
-        cmd = service._build_claude_command()
-        assert cmd == ["claude", "--prompt", "Read the issue. Fix it."]
+        assert spec.argv[0] == "claude"
+        assert "--allow-dangerously-skip-permissions" in spec.argv
+
+    async def test_argv_with_prompt(self, service):
+        from claude_mobile.core.claude_launcher import ClaudeOptions
+
+        spec = await service._launcher.build(
+            service._config.projects["test-project"],
+            ClaudeOptions(skip_permissions=True, initial_prompt="Read it. Fix it."),
+        )
+        assert spec.argv[-2:] == ["--", "Read it. Fix it."]
 
 
 class TestStartStop:
