@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import platform
 import time
 import uuid
 from pathlib import Path
+
+try:
+    from claude_mobile.server.logging import bind_request_context, get_logger, log_call
+except Exception:  # pragma: no cover
+    import logging
+    def get_logger(name): return logging.getLogger(name)
+    def log_call(*args, **kwargs):
+        def deco(fn): return fn
+        return deco
+    def bind_request_context(**kwargs): pass
 
 from claude_mobile.core import SessionConfig, SessionManager
 
@@ -15,7 +24,7 @@ from .config import AutoScanConfig
 from .models import LinearIssue, ScanEvent, ScanStatus
 from .worktree import WorktreeManager, convert_to_worktree_slug
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class AutoScanService:
@@ -151,12 +160,14 @@ class AutoScanService:
             {"found": len(issues), "new": len(new_issues)},
         )
 
+    @log_call(name="autoscan.process_issue", log_args=("issue",))
     async def _process_issue(self, issue: LinearIssue) -> None:
         """Process a single issue: transition state, remove label, create worktree, launch session."""
         assert self._client is not None
         assert self._worktree_mgr is not None
         assert self._active_project is not None
 
+        bind_request_context(issue_identifier=issue.identifier)
         project = self._config.projects[self._active_project]
         logger.info("Processing: %s - %s", issue.identifier, issue.title)
         self._emit_event(

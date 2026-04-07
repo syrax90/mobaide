@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
-
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, status
 
 from claude_mobile.linear.scanner import AutoScanService
 
 from ..auth.dependencies import get_current_user, ws_authenticate
+from ..logging import get_logger
+from ..ws.logging import (
+    log_ws_authenticated,
+    log_ws_connect,
+    log_ws_disconnect,
+    log_ws_error,
+)
 from .models import ScanStatusResponse, StartScanRequest
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/api/autoscan",
@@ -76,25 +80,32 @@ ws_router = APIRouter(tags=["autoscan-ws"])
 @ws_router.websocket("/ws/autoscan")
 async def ws_autoscan(websocket: WebSocket) -> None:
     """Stream auto-scan events to the mobile client in real time."""
+    channel = "autoscan"
     await websocket.accept()
+    log_ws_connect(channel, websocket)
 
     try:
-        await ws_authenticate(websocket)
-    except Exception:
+        username = await ws_authenticate(websocket)
+    except Exception as exc:
+        log_ws_error(channel, exc, stage="auth")
         await websocket.close(code=4001, reason="Authentication failed")
         return
+    log_ws_authenticated(channel, username)
 
     svc = getattr(websocket.app.state, "auto_scan_service", None)
     if svc is None:
+        log_ws_disconnect(channel, reason="not_configured", username=username)
         await websocket.close(
             code=4002, reason="Auto scan not configured"
         )
         return
 
     queue = svc.subscribe_events()
+    msg_count = 0
     try:
         # Send current status as first message
         await websocket.send_text(json.dumps(svc.get_status()))
+        msg_count += 1
 
         # Stream events
         while True:
@@ -108,7 +119,9 @@ async def ws_autoscan(websocket: WebSocket) -> None:
                     }
                 )
             )
-    except Exception:
-        pass
+            msg_count += 1
+    except Exception as exc:
+        log_ws_error(channel, exc, stage="stream")
     finally:
         svc.unsubscribe_events(queue)
+        log_ws_disconnect(channel, username=username, msg_count=msg_count)

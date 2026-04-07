@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+
+try:
+    from claude_mobile.server.logging import audit_event, get_logger, log_call
+except Exception:  # pragma: no cover - logging package optional during isolated tests
+    import logging
+    def get_logger(name): return logging.getLogger(name)
+    def log_call(*args, **kwargs):
+        def deco(fn): return fn
+        return deco
+    def audit_event(*args, **kwargs): pass
 
 from .models import SessionConfig, SessionInfo, SessionState
 from .session import TerminalSession
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MaxSessionsError(RuntimeError):
@@ -28,6 +37,7 @@ class SessionManager:
 
     # -- CRUD --
 
+    @log_call(name="session_manager.create_session", log_args=("config",))
     async def create_session(self, config: SessionConfig) -> TerminalSession:
         """Create, start, and register a new terminal session."""
         async with self._lock:
@@ -43,10 +53,10 @@ class SessionManager:
             await session.start()
             self._sessions[config.session_id] = session
             logger.info(
-                "Session created: %s (%d/%d)",
-                config.session_id,
-                len(self._sessions),
-                self._max_sessions,
+                "session.created",
+                session_id=config.session_id,
+                active=len(self._sessions),
+                max_sessions=self._max_sessions,
             )
             return session
 
@@ -58,6 +68,7 @@ class SessionManager:
         """Return lightweight DTOs for all sessions."""
         return [s.to_info() for s in self._sessions.values()]
 
+    @log_call(name="session_manager.stop_session", log_args=("session_id", "force"))
     async def stop_session(self, session_id: str, force: bool = False) -> None:
         """Stop and remove a session."""
         async with self._lock:
@@ -65,7 +76,14 @@ class SessionManager:
         if session is None:
             raise KeyError(f"Session '{session_id}' not found")
         await session.stop(force=force)
-        logger.info("Session removed: %s", session_id)
+        logger.info("session.removed", session_id=session_id)
+        audit_event(
+            "audit.session.terminated",
+            target=session_id,
+            outcome="ok",
+            force=force,
+            via="session_manager",
+        )
 
     async def stop_all(self) -> None:
         """Stop all sessions concurrently."""
@@ -107,7 +125,22 @@ class SessionManager:
         dead_ids: list[str] = []
         for sid, session in self._sessions.items():
             if session.state == SessionState.RUNNING and not session._backend.is_alive():
-                logger.warning("Session %s process died — marking as CRASHED", sid)
+                runtime_seconds = None
+                try:
+                    from datetime import UTC, datetime
+                    runtime_seconds = (
+                        datetime.now(UTC) - session.created_at
+                    ).total_seconds()
+                except Exception:
+                    pass
+                logger.warning(
+                    "session.crashed",
+                    session_id=sid,
+                    pid=session.pid,
+                    command=getattr(session, "_config", None)
+                    and session._config.command,
+                    runtime_seconds=runtime_seconds,
+                )
                 session._state = SessionState.CRASHED
                 dead_ids.append(sid)
 

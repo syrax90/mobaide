@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import platform
 import uuid
 
@@ -9,9 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from claude_mobile.core import SessionConfig, SessionManager, MaxSessionsError
 
 from ..auth.dependencies import get_current_user
+from ..logging import audit_event, get_logger
 from .models import CreateSessionRequest, ScrollbackResponse, SessionResponse
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/api/sessions",
@@ -55,6 +55,13 @@ async def create_session(
     if broadcaster:
         await broadcaster.notify(manager.list_sessions())
 
+    audit_event(
+        "audit.session.created",
+        actor=getattr(request.state, "username", None),
+        target=session_id,
+        outcome="ok",
+        command=config.command,
+    )
     return SessionResponse.from_info(session.to_info())
 
 
@@ -91,6 +98,14 @@ async def stop_session(
     broadcaster = getattr(request.app.state, "broadcaster", None)
     if broadcaster:
         await broadcaster.notify(manager.list_sessions())
+
+    audit_event(
+        "audit.session.terminated",
+        actor=getattr(request.state, "username", None),
+        target=session_id,
+        outcome="ok",
+        force=force,
+    )
 
 
 @router.get("/{session_id}/scrollback", response_model=ScrollbackResponse)

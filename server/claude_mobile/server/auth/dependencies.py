@@ -42,6 +42,12 @@ async def get_current_user(request: Request) -> str:
             detail="Expected access token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    request.state.username = payload.sub
+    try:
+        from ..logging import bind_request_context
+        bind_request_context(username=payload.sub)
+    except Exception:
+        pass
     return payload.sub
 
 
@@ -63,6 +69,11 @@ async def ws_authenticate(websocket: WebSocket) -> str:
                 await websocket.close(code=4001, reason="Expected access token")
                 raise _auth_failed("Expected access token")
             await websocket.accept()
+            try:
+                from ..logging import bind_request_context
+                bind_request_context(username=payload.sub)
+            except Exception:
+                pass
             return payload.sub
         except jwt.InvalidTokenError as exc:
             await websocket.close(code=4001, reason=str(exc))
@@ -88,6 +99,11 @@ async def ws_authenticate(websocket: WebSocket) -> str:
         if payload.token_type != "access":
             await websocket.close(code=4001, reason="Expected access token")
             raise _auth_failed("Expected access token")
+        try:
+            from ..logging import bind_request_context
+            bind_request_context(username=payload.sub)
+        except Exception:
+            pass
         return payload.sub
     except jwt.InvalidTokenError as exc:
         await websocket.close(code=4001, reason=str(exc))

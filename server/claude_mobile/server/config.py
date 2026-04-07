@@ -20,6 +20,9 @@ class ServerConfig:
     max_sessions: int = 16
     session_disconnect_timeout: int = 300  # 5 minutes
     log_level: str = "INFO"
+    log_format: str = "json"  # "json" | "console"
+    audit_log_path: str | None = None
+    log_sample_ws: bool = False
     auto_scan_config: AutoScanConfig | None = None
 
     @classmethod
@@ -45,5 +48,8 @@ class ServerConfig:
                 os.getenv("SESSION_DISCONNECT_TIMEOUT", "300"),
             ),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            log_format=os.getenv("LOG_FORMAT", "json"),
+            audit_log_path=os.getenv("AUDIT_LOG_PATH") or None,
+            log_sample_ws=os.getenv("LOG_SAMPLE_WS", "").lower() in ("1", "true", "yes"),
             auto_scan_config=AutoScanConfig.from_env(),
         )

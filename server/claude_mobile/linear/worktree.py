@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 import re
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+try:
+    from claude_mobile.server.logging import audit_event, get_logger, log_call
+except Exception:  # pragma: no cover
+    import logging
+    def get_logger(name): return logging.getLogger(name)
+    def log_call(*args, **kwargs):
+        def deco(fn): return fn
+        return deco
+    def audit_event(*args, **kwargs): pass
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -79,6 +88,7 @@ class WorktreeManager:
         self._branch_prefix = branch_prefix
         self._main_branch = main_branch
 
+    @log_call(name="worktree.create_worktree", log_args=("slug",))
     async def create_worktree(
         self, slug: str, project_root: str
     ) -> WorktreeResult | None:
@@ -125,6 +135,12 @@ class WorktreeManager:
         )
         if rc == 0:
             logger.info("Worktree created successfully")
+            audit_event(
+                "audit.worktree.created",
+                target=wt_dir,
+                outcome="ok",
+                branch=branch_name,
+            )
             return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
         # Attempt 2: branch may already exist — retry without -b
@@ -135,6 +151,13 @@ class WorktreeManager:
         )
         if rc == 0:
             logger.info("Worktree created successfully (existing branch)")
+            audit_event(
+                "audit.worktree.created",
+                target=wt_dir,
+                outcome="ok",
+                branch=branch_name,
+                existing_branch=True,
+            )
             return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
         logger.error(
@@ -143,6 +166,7 @@ class WorktreeManager:
         )
         return None
 
+    @log_call(name="worktree.cleanup_worktree", log_args=("path",))
     async def cleanup_worktree(self, path: str, project_root: str) -> bool:
         """Remove a git worktree."""
         rc, _, stderr = await _run_git(
@@ -152,4 +176,5 @@ class WorktreeManager:
             logger.error("Failed to remove worktree %s: %s", path, stderr.strip())
             return False
         logger.info("Worktree removed: %s", path)
+        audit_event("audit.worktree.removed", target=path, outcome="ok")
         return True
