@@ -1,7 +1,13 @@
 from .client import LinearApiClient
 from .config import AutoScanConfig, ProjectConfig
 from .models import LinearIssue, ScanEvent, ScanStatus
-from .scanner import AutoScanService
+from .rate_limiter import LinearRateLimiter
+from .scanner import (
+    AutoScanAlreadyRunning,
+    AutoScanCapacityReached,
+    AutoScanInstance,
+    AutoScanSessionManager,
+)
 from .worktree import WorktreeManager, convert_to_worktree_slug
 
 __all__ = [
@@ -11,7 +17,11 @@ __all__ = [
     "LinearIssue",
     "ScanEvent",
     "ScanStatus",
-    "AutoScanService",
+    "LinearRateLimiter",
+    "AutoScanInstance",
+    "AutoScanSessionManager",
+    "AutoScanAlreadyRunning",
+    "AutoScanCapacityReached",
     "WorktreeManager",
     "convert_to_worktree_slug",
 ]

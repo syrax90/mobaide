@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from claude_mobile.core.projects_config import ProjectConfig, ProjectsConfig
 
 __all__ = ["ProjectConfig", "AutoScanConfig"]
+
+
+def _sanitize_project(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", name)
 
 
 @dataclass(frozen=True)
@@ -22,7 +28,11 @@ class AutoScanConfig:
     main_branch: str = "main"
     linear_active_state: str = "In Progress"
     auto_scan_prompt: str | None = None
-    processed_items_path: str = "processed_items.json"
+    state_dir: str = "server/state"
+
+    def processed_items_path_for(self, project_name: str) -> Path:
+        """Return the per-project processed-items JSON path."""
+        return Path(self.state_dir) / _sanitize_project(project_name) / "processed_items.json"
 
     @classmethod
     def from_env(cls) -> AutoScanConfig | None:
@@ -56,7 +66,5 @@ class AutoScanConfig:
             main_branch=os.getenv("MAIN_BRANCH", "main"),
             linear_active_state=os.getenv("LINEAR_ACTIVE_STATE", "In Progress"),
             auto_scan_prompt=prompt,
-            processed_items_path=os.getenv(
-                "PROCESSED_ITEMS_PATH", "processed_items.json"
-            ),
+            state_dir=os.getenv("STATE_DIR", "server/state"),
         )

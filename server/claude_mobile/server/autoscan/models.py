@@ -7,11 +7,26 @@ class StartScanRequest(BaseModel):
     project_name: str
 
 
-class ScanStatusResponse(BaseModel):
+class StopScanRequest(BaseModel):
+    project_name: str
+
+
+class AutoScanInstanceDto(BaseModel):
+    project_name: str
     status: str
-    active_project: str | None
+    started_at: float
+    last_activity_at: float
     processed_count: int
-    last_scan_time: float | None
+    last_scan_time: float | None = None
     scan_interval_seconds: int
+
+
+class AutoScanListResponse(BaseModel):
+    scans: list[AutoScanInstanceDto]
+    capacity: int
+    max_scans: int
     available_projects: list[str]
-    recent_events: list[dict]
+
+
+class AutoScanInstanceStatusResponse(AutoScanInstanceDto):
+    recent_events: list[dict] = []

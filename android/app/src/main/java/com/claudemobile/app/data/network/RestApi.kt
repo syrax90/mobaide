@@ -1,12 +1,13 @@
 package com.claudemobile.app.data.network
 
 import com.claudemobile.app.data.auth.TokenStore
+import com.claudemobile.app.data.network.dto.AutoScanListResponse
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
 import com.claudemobile.app.data.network.dto.ProjectInfo
-import com.claudemobile.app.data.network.dto.ScanStatusResponse
 import com.claudemobile.app.data.network.dto.ScrollbackResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
 import com.claudemobile.app.data.network.dto.StartScanRequest
+import com.claudemobile.app.data.network.dto.StopScanRequest
 import com.claudemobile.app.data.network.dto.TokenRequest
 import com.claudemobile.app.data.network.dto.TokenResponse
 import kotlinx.coroutines.Dispatchers
@@ -98,9 +99,9 @@ class RestApi(
 
     // Auto Scan
 
-    suspend fun getAutoScanStatus(): ScanStatusResponse {
+    suspend fun getAutoScanList(): AutoScanListResponse {
         val request = Request.Builder()
-            .url("${baseUrl()}/api/autoscan/status")
+            .url("${baseUrl()}/api/autoscan/list")
             .get()
             .build()
         return execute(request)
@@ -116,10 +117,12 @@ class RestApi(
         executeRaw(request)
     }
 
-    suspend fun stopAutoScan() {
+    suspend fun stopAutoScan(projectName: String) {
+        val body = json.encodeToString(StopScanRequest(projectName))
+            .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/stop")
-            .post("".toRequestBody(jsonMediaType))
+            .post(body)
             .build()
         executeRaw(request)
     }

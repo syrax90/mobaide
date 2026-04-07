@@ -1,7 +1,8 @@
 package com.claudemobile.app.data.events
 
+import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
+import com.claudemobile.app.data.network.dto.AutoScanListResponse
 import com.claudemobile.app.data.network.dto.ProjectInfo
-import com.claudemobile.app.data.network.dto.ScanStatusResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
@@ -18,8 +19,10 @@ sealed class ServerEvent {
     data class SessionsChanged(val sessions: List<SessionResponse>) : ServerEvent()
     data class SessionUpdated(val session: SessionResponse) : ServerEvent()
     data class ProjectsChanged(val projects: List<ProjectInfo>) : ServerEvent()
-    data class AutoScanStatus(val status: ScanStatusResponse) : ServerEvent()
+    data class AutoScanStatus(val instance: AutoScanInstanceDto) : ServerEvent()
+    data class AutoScanListChanged(val list: AutoScanListResponse) : ServerEvent()
     data class AutoScanEvent(
+        val projectName: String,
         val eventType: String,
         val timestamp: Double,
         val data: JsonElement?,

@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 
 from claude_mobile.core import ClaudeLauncher, SessionManager
-from claude_mobile.linear.scanner import AutoScanService
+from claude_mobile.linear.rate_limiter import LinearRateLimiter
+from claude_mobile.linear.scanner import AutoScanSessionManager
 from claude_mobile.linear.worktree import WorktreeManager
 
 from .auth.jwt_service import JwtService
@@ -51,13 +52,27 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("server.starting")
+        # One-time legacy migration: drop the old global processed_items.json.
+        # Per-project state lives under server/state/<project>/processed_items.json now.
+        from pathlib import Path as _Path
+        legacy = _Path("processed_items.json")
+        if legacy.exists():
+            try:
+                legacy.unlink()
+                logger.warning(
+                    "autoscan.legacy_state.deleted path=%s — first scan per "
+                    "project will re-emit previously processed issues once.",
+                    legacy,
+                )
+            except OSError as exc:
+                logger.warning("autoscan.legacy_state.delete_failed: %s", exc)
+
         await app.state.session_manager.start_liveness_monitor()
         yield
         logger.info("server.shutting_down")
-        # Stop auto-scan service if running
-        auto_scan = getattr(app.state, "auto_scan_service", None)
-        if auto_scan is not None:
-            await auto_scan.stop()
+        autoscan_mgr = getattr(app.state, "autoscan_manager", None)
+        if autoscan_mgr is not None:
+            await autoscan_mgr.shutdown()
         # Cancel all fanout tasks
         for fanout in app.state.fanouts.values():
             fanout.stop()
@@ -157,16 +172,19 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.state.broadcaster = SessionListBroadcaster()
     app.state.fanouts = {}  # session_id -> SessionEventFanout
 
-    # Auto-scan service (optional — only if PROJECTS is configured)
+    # Auto-scan manager (optional — only if PROJECTS is configured).
+    # Multi-instance: one AutoScanInstance per active project, up to 5 concurrent.
     if config.auto_scan_config is not None:
-        app.state.auto_scan_service = AutoScanService(
+        app.state.linear_rate_limiter = LinearRateLimiter()
+        app.state.autoscan_manager = AutoScanSessionManager(
             config=config.auto_scan_config,
             session_manager=app.state.session_manager,
             launcher=app.state.claude_launcher,
             event_bus=app.state.event_bus,
+            rate_limiter=app.state.linear_rate_limiter,
         )
     else:
-        app.state.auto_scan_service = None
+        app.state.autoscan_manager = None
 
     # Routers
     app.include_router(auth_router)
@@ -182,14 +200,14 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     @app.get("/api/health", tags=["health"])
     async def health():
         sm = app.state.session_manager
-        auto_scan = getattr(app.state, "auto_scan_service", None)
+        autoscan_mgr = getattr(app.state, "autoscan_manager", None)
         result = {
             "status": "ok",
             "sessions": len(sm.list_sessions()),
             "max_sessions": sm.max_sessions,
         }
-        if auto_scan is not None:
-            result["auto_scan"] = auto_scan.get_status()["status"]
+        if autoscan_mgr is not None:
+            result["auto_scans_active"] = len(autoscan_mgr.list())
         return result
 
     return app

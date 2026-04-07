@@ -4,8 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.local.PreferencesStore
-import com.claudemobile.app.data.network.dto.ScanStatusResponse
+import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.SessionResponse
+import com.claudemobile.app.data.repository.AutoScanAlreadyRunningException
+import com.claudemobile.app.data.repository.AutoScanCapacityException
 import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,7 +25,10 @@ data class SessionListUiState(
     val sessions: List<SessionResponse> = emptyList(),
     val isReconnecting: Boolean = false,
     val error: String? = null,
-    val scanStatus: ScanStatusResponse? = null,
+    val activeScans: List<AutoScanInstanceDto> = emptyList(),
+    val autoScanCapacity: Int = 0,
+    val autoScanMax: Int = 5,
+    val autoScanAvailableProjects: List<String> = emptyList(),
 )
 
 @HiltViewModel
@@ -43,10 +48,8 @@ class SessionListViewModel @Inject constructor(
     private var didTryAutoResume = false
 
     init {
-        // Make sure the bus is connected; idempotent.
         serverEventBus.start()
 
-        // Reactive: sessions list flows from the bus-backed repository.
         viewModelScope.launch {
             sessionRepository.observeSessionList().collect { sessions ->
                 _uiState.update { it.copy(sessions = sessions) }
@@ -54,27 +57,29 @@ class SessionListViewModel @Inject constructor(
             }
         }
 
-        // Reactive: autoscan status from the bus-backed repository.
+        // Reactive multi-scan list from the bus-backed repository.
         viewModelScope.launch {
-            autoScanRepository.observeStatus().collect { status ->
-                _uiState.update { it.copy(scanStatus = status) }
+            autoScanRepository.observeList().collect { list ->
+                _uiState.update {
+                    it.copy(
+                        activeScans = list.scans,
+                        autoScanCapacity = list.capacity,
+                        autoScanMax = list.max_scans,
+                        autoScanAvailableProjects = list.available_projects,
+                    )
+                }
             }
         }
 
-        // Initial REST seed for autoscan status if the bus snapshot hasn't
-        // arrived yet (e.g. cold start before /ws/events connects).
+        // Initial REST seed for the multi-scan list.
         viewModelScope.launch {
             try {
-                val status = autoScanRepository.getStatus()
-                _uiState.update {
-                    if (it.scanStatus == null) it.copy(scanStatus = status) else it
-                }
+                autoScanRepository.refresh()
             } catch (_: Exception) {
                 // Auto scan may not be configured — ignore.
             }
         }
 
-        // Reflect connection status as "reconnecting".
         viewModelScope.launch {
             serverEventBus.connection.collect { state ->
                 _uiState.update {
@@ -96,9 +101,14 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    /** Manual escape hatch: tear down the WebSocket and resync from a fresh snapshot. */
     fun refresh() {
         serverEventBus.forceReconnect()
+        viewModelScope.launch {
+            try {
+                autoScanRepository.refresh()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     fun deleteSession(sessionId: String) {
@@ -115,16 +125,22 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 autoScanRepository.startScan(projectName)
+            } catch (e: AutoScanAlreadyRunningException) {
+                _uiState.update { it.copy(error = "$projectName is already scanning") }
+            } catch (e: AutoScanCapacityException) {
+                _uiState.update {
+                    it.copy(error = "Maximum ${e.maxScans} concurrent auto scans reached")
+                }
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Failed to start scan: ${e.message}") }
             }
         }
     }
 
-    fun stopAutoScan() {
+    fun stopAutoScan(projectName: String) {
         viewModelScope.launch {
             try {
-                autoScanRepository.stopScan()
+                autoScanRepository.stopScan(projectName)
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Failed to stop scan: ${e.message}") }
             }
