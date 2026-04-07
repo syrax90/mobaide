@@ -6,6 +6,7 @@ import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.dto.ClaudeOptionsModel
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
 import com.claudemobile.app.data.network.dto.ProjectInfo
+import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.ProjectsRepository
 import com.claudemobile.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -19,7 +20,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig }
+
 data class CreateSessionUiState(
+    val step: CreateSessionStep = CreateSessionStep.ProjectSelect,
     val projects: List<ProjectInfo> = emptyList(),
     val isLoadingProjects: Boolean = false,
     val selectedProjectName: String? = null,
@@ -30,6 +34,8 @@ data class CreateSessionUiState(
     val branchName: String = "",
     val initialPrompt: String = "",
     val submitting: Boolean = false,
+    val autoScanStarting: Boolean = false,
+    val dismiss: Boolean = false,
     val error: String? = null,
 )
 
@@ -37,6 +43,7 @@ data class CreateSessionUiState(
 class CreateSessionViewModel @Inject constructor(
     private val projectsRepository: ProjectsRepository,
     private val sessionRepository: SessionRepository,
+    private val autoScanRepository: AutoScanRepository,
     private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
 
@@ -72,7 +79,47 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun selectProject(name: String) = _uiState.update { it.copy(selectedProjectName = name) }
+    fun selectProject(name: String) = _uiState.update {
+        // Selecting a project advances to the mode picker (CLA-15). The
+        // standard config form is only revealed once the user picks a mode.
+        it.copy(selectedProjectName = name, step = CreateSessionStep.ModePick)
+    }
+
+    fun selectStandardMode() = _uiState.update {
+        it.copy(step = CreateSessionStep.StandardConfig)
+    }
+
+    fun selectAutoScanMode() {
+        val state = _uiState.value
+        val projectName = state.selectedProjectName ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(autoScanStarting = true) }
+            try {
+                autoScanRepository.startScan(projectName)
+                preferencesStore.setLastUsedProjectName(projectName)
+                _uiState.update { it.copy(autoScanStarting = false, dismiss = true) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        autoScanStarting = false,
+                        error = "Failed to start Auto Scan: ${e.message}",
+                    )
+                }
+            }
+        }
+    }
+
+    fun goBack() = _uiState.update {
+        when (it.step) {
+            CreateSessionStep.StandardConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.ModePick -> it.copy(
+                step = CreateSessionStep.ProjectSelect,
+                selectedProjectName = null,
+            )
+            CreateSessionStep.ProjectSelect -> it
+        }
+    }
+
     fun togglePlanMode(v: Boolean) = _uiState.update { it.copy(planMode = v) }
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
@@ -80,6 +127,9 @@ class CreateSessionViewModel @Inject constructor(
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
     fun clearError() = _uiState.update { it.copy(error = null) }
+
+    /** Reset the dismiss flag after the screen has consumed it. */
+    fun consumeDismiss() = _uiState.update { it.copy(dismiss = false) }
 
     fun submit() {
         val state = _uiState.value

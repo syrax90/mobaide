@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import struct
 
 from fastapi import APIRouter, WebSocket
@@ -39,6 +40,15 @@ _STATE_MAP = {
     SessionState.STOPPED: "stopped",
     SessionState.CRASHED: "crashed",
 }
+
+# Belt-and-braces strip for any DA reply bytes that may already be sitting
+# in a session's ring buffer (e.g. from sessions started before the
+# server-side DaResponder was deployed). Matches DA1/DA2 (CSI ? ... c /
+# CSI > ... c) and DA3 (DCS ! | ... ST). The PTY-side responder in
+# core/da_responder.py is the primary fix; this is a safety net on replay.
+_DA_REPLY_STRIP = re.compile(
+    rb"\x1b\[\?[\d;]*c|\x1b\[>[\d;]*c|\x1bP![|][^\x1b]*\x1b\\",
+)
 
 _EVENT_TO_STATUS = {
     "started": "running",
@@ -89,7 +99,7 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     # 2) Send the ring-buffer replay marker, then the recent raw bytes as a
     #    single output frame. The marker lets a future client distinguish
     #    history from live output without changing the output frame shape.
-    ring = session.get_ring()
+    ring = _DA_REPLY_STRIP.sub(b"", session.get_ring())
     await websocket.send_bytes(FRAME_REPLAY)
     # Always emit a single output frame after the replay marker — even if
     # the ring is empty — so clients can rely on a fixed handshake shape
