@@ -1,0 +1,135 @@
+package com.claudemobile.app.data.events
+
+import com.claudemobile.app.data.network.WebSocketConnection
+import com.claudemobile.app.data.network.WebSocketManager
+import com.claudemobile.app.data.network.WsEvent
+import com.claudemobile.app.data.network.dto.ScanStatusResponse
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * App-scoped sink for server-pushed events.
+ *
+ * Maintains a single WebSocket connection to `ws/events`, demultiplexes
+ * incoming JSON envelopes into typed [ServerEvent]s, and exposes them as a
+ * [SharedFlow] that any repository can subscribe to.
+ *
+ * Lifecycle: [start] is idempotent and safe to call repeatedly (e.g. on every
+ * activity start). [forceReconnect] tears the connection down and rebuilds it,
+ * which the server treats as a new client and replies with a fresh snapshot.
+ */
+@Singleton
+class ServerEventBus @Inject constructor(
+    private val webSocketManager: WebSocketManager,
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private val _events = MutableSharedFlow<ServerEvent>(
+        replay = 0,
+        extraBufferCapacity = 256,
+    )
+    val events: SharedFlow<ServerEvent> = _events.asSharedFlow()
+
+    enum class ConnState { Disconnected, Connecting, Connected }
+
+    private val _connection = MutableStateFlow(ConnState.Disconnected)
+    val connection: StateFlow<ConnState> = _connection.asStateFlow()
+
+    private var conn: WebSocketConnection? = null
+    private var collectorJob: Job? = null
+
+    @Synchronized
+    fun start() {
+        if (conn != null) return
+        try {
+            val c = webSocketManager.createConnection("ws/events")
+            conn = c
+            _connection.value = ConnState.Connecting
+            c.connect()
+            collectorJob = scope.launch {
+                c.events.collect { handle(it) }
+            }
+        } catch (_: IllegalStateException) {
+            // Server URL or token not yet configured — caller should retry after login.
+            _connection.value = ConnState.Disconnected
+        }
+    }
+
+    @Synchronized
+    fun stop() {
+        collectorJob?.cancel()
+        collectorJob = null
+        conn?.disconnect()
+        conn = null
+        _connection.value = ConnState.Disconnected
+    }
+
+    @Synchronized
+    fun forceReconnect() {
+        stop()
+        start()
+    }
+
+    inline fun <reified T : ServerEvent> stream(): kotlinx.coroutines.flow.Flow<T> =
+        events.filterIsInstance()
+
+    private suspend fun handle(event: WsEvent) {
+        when (event) {
+            is WsEvent.Connected -> _connection.value = ConnState.Connected
+            is WsEvent.Disconnected -> _connection.value = ConnState.Connecting
+            is WsEvent.Error -> _connection.value = ConnState.Connecting
+            is WsEvent.Message -> parseAndEmit(event.text)
+            is WsEvent.Binary -> Unit  // /ws/events is text-only
+        }
+    }
+
+    private suspend fun parseAndEmit(text: String) {
+        val envelope = try {
+            json.decodeFromString(ServerEventEnvelope.serializer(), text)
+        } catch (_: Exception) {
+            return
+        }
+        val payload = envelope.payload as? JsonObject ?: envelope.payload.jsonObject
+        val typed: ServerEvent? = try {
+            when (envelope.type) {
+                "sessions.changed" -> ServerEvent.SessionsChanged(
+                    json.decodeFromJsonElement(SessionsChangedPayload.serializer(), payload).sessions
+                )
+                "session.updated" -> ServerEvent.SessionUpdated(
+                    json.decodeFromJsonElement(SessionUpdatedPayload.serializer(), payload).session
+                )
+                "projects.changed" -> ServerEvent.ProjectsChanged(
+                    json.decodeFromJsonElement(ProjectsChangedPayload.serializer(), payload).projects
+                )
+                "autoscan.status" -> ServerEvent.AutoScanStatus(
+                    json.decodeFromJsonElement(ScanStatusResponse.serializer(), payload)
+                )
+                "autoscan.event" -> ServerEvent.AutoScanEvent(
+                    eventType = payload["event_type"]?.toString()?.trim('"').orEmpty(),
+                    timestamp = (payload["timestamp"]?.toString() ?: "0").toDoubleOrNull() ?: 0.0,
+                    data = payload["data"],
+                )
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (typed != null) _events.emit(typed)
+    }
+}

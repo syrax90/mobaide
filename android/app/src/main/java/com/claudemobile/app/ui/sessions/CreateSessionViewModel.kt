@@ -54,22 +54,38 @@ class CreateSessionViewModel @Inject constructor(
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
 
     init {
-        loadProjects()
-    }
+        // Reactive: collect projects from the bus-backed repository.
+        viewModelScope.launch {
+            val last = preferencesStore.getLastUsedProjectName()
+            projectsRepository.observeProjects().collect { projects ->
+                _uiState.update { state ->
+                    state.copy(
+                        projects = projects,
+                        isLoadingProjects = projects.isEmpty(),
+                        selectedProjectName = state.selectedProjectName
+                            ?: projects.firstOrNull { it.name == last }?.name,
+                    )
+                }
+            }
+        }
 
-    private fun loadProjects() {
+        // Fallback REST seed if the bus snapshot hasn't arrived yet.
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingProjects = true) }
             try {
                 val projects = projectsRepository.listProjects()
                 val last = preferencesStore.getLastUsedProjectName()
-                val preselected = projects.firstOrNull { it.name == last }?.name
-                _uiState.update {
-                    it.copy(
-                        projects = projects,
-                        isLoadingProjects = false,
-                        selectedProjectName = preselected,
-                    )
+                _uiState.update { state ->
+                    if (state.projects.isEmpty()) {
+                        state.copy(
+                            projects = projects,
+                            isLoadingProjects = false,
+                            selectedProjectName = state.selectedProjectName
+                                ?: projects.firstOrNull { it.name == last }?.name,
+                        )
+                    } else {
+                        state.copy(isLoadingProjects = false)
+                    }
                 }
             } catch (e: Exception) {
                 _uiState.update {

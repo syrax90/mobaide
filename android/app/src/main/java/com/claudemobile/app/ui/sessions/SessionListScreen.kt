@@ -92,7 +92,7 @@ fun SessionListScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         PullToRefreshBox(
-            isRefreshing = uiState.isLoading,
+            isRefreshing = uiState.isReconnecting,
             onRefresh = viewModel::refresh,
             modifier = Modifier
                 .fillMaxSize()
@@ -114,7 +114,7 @@ fun SessionListScreen(
                     }
                 }
 
-                if (uiState.sessions.isEmpty() && !uiState.isLoading) {
+                if (uiState.sessions.isEmpty() && !uiState.isReconnecting) {
                     item {
                         Box(
                             modifier = Modifier

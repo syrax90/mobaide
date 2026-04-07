@@ -2,6 +2,7 @@ package com.claudemobile.app.ui.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.dto.ScanStatusResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
@@ -14,14 +15,13 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class SessionListUiState(
     val sessions: List<SessionResponse> = emptyList(),
-    val isLoading: Boolean = false,
+    val isReconnecting: Boolean = false,
     val error: String? = null,
     val scanStatus: ScanStatusResponse? = null,
 )
@@ -31,6 +31,7 @@ class SessionListViewModel @Inject constructor(
     private val sessionRepository: SessionRepository,
     private val autoScanRepository: AutoScanRepository,
     private val preferencesStore: PreferencesStore,
+    private val serverEventBus: ServerEventBus,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionListUiState())
@@ -42,61 +43,62 @@ class SessionListViewModel @Inject constructor(
     private var didTryAutoResume = false
 
     init {
-        loadSessions()
-        observeSessionList()
-        loadAutoScanStatus()
-    }
+        // Make sure the bus is connected; idempotent.
+        serverEventBus.start()
 
-    private fun loadSessions() {
+        // Reactive: sessions list flows from the bus-backed repository.
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true) }
-            try {
-                val sessions = sessionRepository.listSessions()
-                _uiState.update { it.copy(sessions = sessions, isLoading = false) }
+            sessionRepository.observeSessionList().collect { sessions ->
+                _uiState.update { it.copy(sessions = sessions) }
                 maybeAutoResume(sessions)
-            } catch (e: Exception) {
-                _uiState.update { it.copy(isLoading = false, error = e.message) }
+            }
+        }
+
+        // Reactive: autoscan status from the bus-backed repository.
+        viewModelScope.launch {
+            autoScanRepository.observeStatus().collect { status ->
+                _uiState.update { it.copy(scanStatus = status) }
+            }
+        }
+
+        // Initial REST seed for autoscan status if the bus snapshot hasn't
+        // arrived yet (e.g. cold start before /ws/events connects).
+        viewModelScope.launch {
+            try {
+                val status = autoScanRepository.getStatus()
+                _uiState.update {
+                    if (it.scanStatus == null) it.copy(scanStatus = status) else it
+                }
+            } catch (_: Exception) {
+                // Auto scan may not be configured — ignore.
+            }
+        }
+
+        // Reflect connection status as "reconnecting".
+        viewModelScope.launch {
+            serverEventBus.connection.collect { state ->
+                _uiState.update {
+                    it.copy(isReconnecting = state == ServerEventBus.ConnState.Connecting)
+                }
             }
         }
     }
 
     private suspend fun maybeAutoResume(sessions: List<SessionResponse>) {
-        if (didTryAutoResume) return
+        if (didTryAutoResume || sessions.isEmpty()) return
         didTryAutoResume = true
         val lastId = preferencesStore.getLastUsedSessionId() ?: return
         val match = sessions.firstOrNull { it.session_id == lastId } ?: return
         if (match.state == "running" || match.state == "starting") {
             _autoResumeSessionId.tryEmit(lastId)
         } else {
-            // Stale — forget it so we don't loop on next launch.
             preferencesStore.setLastUsedSessionId(null)
         }
     }
 
-    private fun observeSessionList() {
-        viewModelScope.launch {
-            sessionRepository.observeSessionList()
-                .catch { /* WebSocket errors handled by reconnect */ }
-                .collect { sessions ->
-                    _uiState.update { it.copy(sessions = sessions) }
-                }
-        }
-    }
-
-    private fun loadAutoScanStatus() {
-        viewModelScope.launch {
-            try {
-                val status = autoScanRepository.getStatus()
-                _uiState.update { it.copy(scanStatus = status) }
-            } catch (_: Exception) {
-                // Auto scan may not be configured — ignore
-            }
-        }
-    }
-
+    /** Manual escape hatch: tear down the WebSocket and resync from a fresh snapshot. */
     fun refresh() {
-        loadSessions()
-        loadAutoScanStatus()
+        serverEventBus.forceReconnect()
     }
 
     fun deleteSession(sessionId: String) {
@@ -113,7 +115,6 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 autoScanRepository.startScan(projectName)
-                loadAutoScanStatus()
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Failed to start scan: ${e.message}") }
             }
@@ -124,7 +125,6 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 autoScanRepository.stopScan()
-                loadAutoScanStatus()
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Failed to stop scan: ${e.message}") }
             }
@@ -133,10 +133,5 @@ class SessionListViewModel @Inject constructor(
 
     fun clearError() {
         _uiState.update { it.copy(error = null) }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        sessionRepository.disconnectSessionList()
     }
 }

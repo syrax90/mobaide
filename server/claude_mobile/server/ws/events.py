@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from fastapi import APIRouter, WebSocket
+from starlette.websockets import WebSocketDisconnect
+
+from ..auth.dependencies import WebSocketAuthError, ws_authenticate
+from ..events import EventBus
+from .session_list import _serialize_sessions
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+def _serialize_projects(app) -> list[dict]:
+    pc = getattr(app.state, "projects_config", None)
+    if pc is None:
+        return []
+    return pc.list_public()
+
+
+@router.websocket("/ws/events")
+async def events_ws(websocket: WebSocket) -> None:
+    """Unified server-push event channel.
+
+    On connect we send one snapshot envelope per topic so the client can
+    seed every reactive repository, then forward published events forever.
+    """
+    try:
+        username = await ws_authenticate(websocket)
+    except WebSocketAuthError:
+        return
+
+    bus: EventBus | None = getattr(websocket.app.state, "event_bus", None)
+    if bus is None:
+        await websocket.close(code=1011, reason="Event bus not configured")
+        return
+
+    manager = websocket.app.state.session_manager
+    auto_scan = getattr(websocket.app.state, "auto_scan_service", None)
+
+    # Initial snapshots — one envelope per topic.
+    await websocket.send_json(
+        {"type": "sessions.changed", "payload": {"sessions": _serialize_sessions(manager)}}
+    )
+    await websocket.send_json(
+        {"type": "projects.changed", "payload": {"projects": _serialize_projects(websocket.app)}}
+    )
+    if auto_scan is not None:
+        try:
+            status = auto_scan.get_status()
+            # Augment with available_projects to match REST shape consumed by the client.
+            cfg = websocket.app.state.config.auto_scan_config
+            status["available_projects"] = list(cfg.projects.keys()) if cfg else []
+            await websocket.send_json({"type": "autoscan.status", "payload": status})
+        except Exception:
+            logger.exception("events_ws.autoscan_status_snapshot_failed")
+
+    q = bus.subscribe()
+    try:
+        while True:
+            ev = await q.get()
+            await websocket.send_json({"type": ev.type, "payload": ev.payload})
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("events_ws.stream_failed")
+    finally:
+        bus.unsubscribe(q)
+        logger.info("events_ws.disconnected user=%s", username)

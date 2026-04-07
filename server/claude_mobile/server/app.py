@@ -23,7 +23,9 @@ from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
 from .sessions.router import router as sessions_router
+from .events import EventBus
 from .ws.event_fanout import SessionListBroadcaster
+from .ws.events import router as ws_events_router
 from .ws.session_io import router as ws_session_io_router
 from .ws.session_list import router as ws_session_list_router
 
@@ -151,6 +153,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     user_store = UserStore(config.user_store_path)
     user_store.load()
     app.state.user_store = user_store
+    app.state.event_bus = EventBus()
     app.state.broadcaster = SessionListBroadcaster()
     app.state.fanouts = {}  # session_id -> SessionEventFanout
 
@@ -160,6 +163,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             config=config.auto_scan_config,
             session_manager=app.state.session_manager,
             launcher=app.state.claude_launcher,
+            event_bus=app.state.event_bus,
         )
     else:
         app.state.auto_scan_service = None
@@ -170,6 +174,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(projects_router)
     app.include_router(ws_session_io_router)
     app.include_router(ws_session_list_router)
+    app.include_router(ws_events_router)
     app.include_router(autoscan_router)
     app.include_router(autoscan_ws_router)
 

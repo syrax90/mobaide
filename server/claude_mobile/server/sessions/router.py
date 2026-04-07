@@ -74,10 +74,17 @@ async def create_session(
             detail=str(exc),
         )
 
-    # Notify session-list broadcaster
+    # Notify session-list broadcaster (legacy /ws/sessions) and event bus.
+    sessions_now = manager.list_sessions()
     broadcaster = getattr(request.app.state, "broadcaster", None)
     if broadcaster:
-        await broadcaster.notify(manager.list_sessions())
+        await broadcaster.notify(sessions_now)
+    bus = getattr(request.app.state, "event_bus", None)
+    if bus is not None:
+        bus.publish(
+            "sessions.changed",
+            {"sessions": [SessionResponse.from_info(s).model_dump() for s in sessions_now]},
+        )
 
     audit_event(
         "audit.session.created",
@@ -118,10 +125,17 @@ async def stop_session(
     if fanout:
         fanout.stop()
 
-    # Notify session-list broadcaster
+    # Notify session-list broadcaster (legacy /ws/sessions) and event bus.
+    sessions_now = manager.list_sessions()
     broadcaster = getattr(request.app.state, "broadcaster", None)
     if broadcaster:
-        await broadcaster.notify(manager.list_sessions())
+        await broadcaster.notify(sessions_now)
+    bus = getattr(request.app.state, "event_bus", None)
+    if bus is not None:
+        bus.publish(
+            "sessions.changed",
+            {"sessions": [SessionResponse.from_info(s).model_dump() for s in sessions_now]},
+        )
 
     audit_event(
         "audit.session.terminated",

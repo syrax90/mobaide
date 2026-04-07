@@ -2,6 +2,7 @@ package com.claudemobile.app.di
 
 import android.content.Context
 import com.claudemobile.app.data.auth.TokenStore
+import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketManager
@@ -41,23 +42,30 @@ object RepositoryModule {
 
     @Provides
     @Singleton
+    fun provideServerEventBus(webSocketManager: WebSocketManager): ServerEventBus {
+        return ServerEventBus(webSocketManager)
+    }
+
+    @Provides
+    @Singleton
     fun provideSessionRepository(
         restApi: RestApi,
         webSocketManager: WebSocketManager,
+        eventBus: ServerEventBus,
     ): SessionRepository {
-        return SessionRepository(restApi, webSocketManager)
+        return SessionRepository(restApi, webSocketManager, eventBus)
     }
 
     @Provides
     @Singleton
-    fun provideAutoScanRepository(restApi: RestApi): AutoScanRepository {
-        return AutoScanRepository(restApi)
+    fun provideAutoScanRepository(restApi: RestApi, eventBus: ServerEventBus): AutoScanRepository {
+        return AutoScanRepository(restApi, eventBus)
     }
 
     @Provides
     @Singleton
-    fun provideProjectsRepository(restApi: RestApi): ProjectsRepository {
-        return ProjectsRepository(restApi)
+    fun provideProjectsRepository(restApi: RestApi, eventBus: ServerEventBus): ProjectsRepository {
+        return ProjectsRepository(restApi, eventBus)
     }
 
     @Provides

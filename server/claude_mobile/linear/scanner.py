@@ -43,10 +43,12 @@ class AutoScanService:
         config: AutoScanConfig,
         session_manager: SessionManager,
         launcher: ClaudeLauncher | None = None,
+        event_bus=None,
     ) -> None:
         self._config = config
         self._session_manager = session_manager
         self._launcher = launcher or ClaudeLauncher()
+        self._event_bus = event_bus
         self._processed_items: set[str] = set()
         self._status = ScanStatus.IDLE
         self._poll_task: asyncio.Task[None] | None = None
@@ -304,6 +306,20 @@ class AutoScanService:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 pass  # drop for slow consumers
+
+        # Publish to the unified server event bus.
+        if self._event_bus is not None:
+            self._event_bus.publish(
+                "autoscan.event",
+                {
+                    "event_type": event.event_type,
+                    "timestamp": event.timestamp,
+                    "data": event.data,
+                },
+            )
+            status = self.get_status()
+            status["available_projects"] = list(self._config.projects.keys())
+            self._event_bus.publish("autoscan.status", status)
 
     def subscribe_events(self) -> asyncio.Queue[ScanEvent]:
         """Subscribe to scan events (for WebSocket relay)."""

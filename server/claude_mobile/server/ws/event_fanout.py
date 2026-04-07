@@ -26,10 +26,12 @@ class SessionEventFanout:
         session: TerminalSession,
         broadcaster: SessionListBroadcaster | None = None,
         get_sessions: callable | None = None,
+        event_bus=None,
     ) -> None:
         self._session = session
         self._broadcaster = broadcaster
         self._get_sessions = get_sessions
+        self._event_bus = event_bus
         self._subscribers: set[asyncio.Queue[SessionEvent]] = set()
         self._task: asyncio.Task | None = None
 
@@ -50,12 +52,44 @@ class SessionEventFanout:
                     except asyncio.QueueFull:
                         pass  # drop for slow consumers
                 # Notify session-list broadcaster on state changes
-                if (
-                    event.event_type in _STATE_EVENTS
-                    and self._broadcaster
-                    and self._get_sessions
-                ):
-                    await self._broadcaster.notify(self._get_sessions())
+                if event.event_type in _STATE_EVENTS and self._get_sessions:
+                    sessions_now = self._get_sessions()
+                    if self._broadcaster:
+                        await self._broadcaster.notify(sessions_now)
+                    if self._event_bus is not None:
+                        serialized = [
+                            {
+                                "session_id": s.session_id,
+                                "state": s.state.value,
+                                "created_at": s.created_at.isoformat(),
+                                "pid": s.pid,
+                                "command": s.command,
+                                "cwd": s.cwd,
+                            }
+                            for s in sessions_now
+                        ]
+                        self._event_bus.publish(
+                            "sessions.changed", {"sessions": serialized}
+                        )
+                        # Also publish a single-session delta for the changed one.
+                        changed = next(
+                            (s for s in sessions_now if s.session_id == self._session.session_id),
+                            None,
+                        )
+                        if changed is not None:
+                            self._event_bus.publish(
+                                "session.updated",
+                                {
+                                    "session": {
+                                        "session_id": changed.session_id,
+                                        "state": changed.state.value,
+                                        "created_at": changed.created_at.isoformat(),
+                                        "pid": changed.pid,
+                                        "command": changed.command,
+                                        "cwd": changed.cwd,
+                                    }
+                                },
+                            )
         except asyncio.CancelledError:
             return
 
