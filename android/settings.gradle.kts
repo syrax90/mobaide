@@ -23,3 +23,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "ClaudeMobile"
 include(":app")
+include(":terminal-emulator")
+include(":terminal-view")

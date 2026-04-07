@@ -76,4 +76,10 @@ dependencies {
 
     // Security
     implementation(libs.androidx.security.crypto)
+
+    // DataStore (last-used project / session persistence)
+    implementation(libs.androidx.datastore.preferences)
+
+    // Vendored Termux terminal renderer (Apache-2.0)
+    implementation(project(":terminal-view"))
 }

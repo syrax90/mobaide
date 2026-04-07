@@ -2,14 +2,17 @@ package com.claudemobile.app.ui.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.claudemobile.app.data.network.dto.CreateSessionRequest
+import com.claudemobile.app.data.local.PreferencesStore
+import com.claudemobile.app.data.network.dto.ScanStatusResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
 import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.SessionRepository
-import com.claudemobile.app.data.network.dto.ScanStatusResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
@@ -21,17 +24,22 @@ data class SessionListUiState(
     val isLoading: Boolean = false,
     val error: String? = null,
     val scanStatus: ScanStatusResponse? = null,
-    val showCreateDialog: Boolean = false,
 )
 
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
     private val sessionRepository: SessionRepository,
     private val autoScanRepository: AutoScanRepository,
+    private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionListUiState())
     val uiState: StateFlow<SessionListUiState> = _uiState.asStateFlow()
+
+    private val _autoResumeSessionId = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val autoResumeSessionId: SharedFlow<String> = _autoResumeSessionId.asSharedFlow()
+
+    private var didTryAutoResume = false
 
     init {
         loadSessions()
@@ -45,9 +53,23 @@ class SessionListViewModel @Inject constructor(
             try {
                 val sessions = sessionRepository.listSessions()
                 _uiState.update { it.copy(sessions = sessions, isLoading = false) }
+                maybeAutoResume(sessions)
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, error = e.message) }
             }
+        }
+    }
+
+    private suspend fun maybeAutoResume(sessions: List<SessionResponse>) {
+        if (didTryAutoResume) return
+        didTryAutoResume = true
+        val lastId = preferencesStore.getLastUsedSessionId() ?: return
+        val match = sessions.firstOrNull { it.session_id == lastId } ?: return
+        if (match.state == "running" || match.state == "starting") {
+            _autoResumeSessionId.tryEmit(lastId)
+        } else {
+            // Stale — forget it so we don't loop on next launch.
+            preferencesStore.setLastUsedSessionId(null)
         }
     }
 
@@ -75,33 +97,6 @@ class SessionListViewModel @Inject constructor(
     fun refresh() {
         loadSessions()
         loadAutoScanStatus()
-    }
-
-    fun showCreateDialog() {
-        _uiState.update { it.copy(showCreateDialog = true) }
-    }
-
-    fun hideCreateDialog() {
-        _uiState.update { it.copy(showCreateDialog = false) }
-    }
-
-    fun createSession(command: String?, cwd: String?, rows: Int = 24, cols: Int = 80) {
-        viewModelScope.launch {
-            try {
-                val cmdList = command?.takeIf { it.isNotBlank() }?.split(" ")
-                sessionRepository.createSession(
-                    CreateSessionRequest(
-                        command = cmdList,
-                        cwd = cwd?.takeIf { it.isNotBlank() },
-                        rows = rows,
-                        cols = cols,
-                    )
-                )
-                _uiState.update { it.copy(showCreateDialog = false) }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Failed to create session: ${e.message}") }
-            }
-        }
     }
 
     fun deleteSession(sessionId: String) {

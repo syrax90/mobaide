@@ -1,7 +1,5 @@
 package com.claudemobile.app.ui.terminal
 
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -10,6 +8,7 @@ import com.claudemobile.app.data.network.TerminalProtocol
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WsEvent
 import com.claudemobile.app.data.repository.SessionRepository
+import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +17,9 @@ import kotlinx.coroutines.launch
 import okio.ByteString
 import org.json.JSONObject
 import javax.inject.Inject
+
+/** Live, reconnecting, replaying — what the UI overlay should show on top of the terminal. */
+enum class ConnectionState { Live, Reconnecting, ReplayingBuffer }
 
 @HiltViewModel
 class TerminalViewModel @Inject constructor(
@@ -30,7 +32,16 @@ class TerminalViewModel @Inject constructor(
 
     private var connection: WebSocketConnection? = null
 
-    val lines = mutableStateListOf<AnnotatedString>()
+    /** Termux session driving the renderer. Survives recomposition; created lazily on first connect. */
+    val session: TerminalSession = TerminalSession(NoopTerminalSessionClient()).also {
+        // 80x24 default until the View measures itself and calls resize().
+        it.updateSize(80, 24, 12, 24)
+        it.setOnInputListener { data, offset, count ->
+            // Bytes the emulator / view want to send to the (remote) PTY — wrap in an 'i' frame.
+            val slice = if (offset == 0 && count == data.size) data else data.copyOfRange(offset, offset + count)
+            sendBytes(slice)
+        }
+    }
 
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
@@ -38,8 +49,11 @@ class TerminalViewModel @Inject constructor(
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
-    // Partial line buffer for output that doesn't end with newline
-    private var partialLine: String = ""
+    private val _connectionState = MutableStateFlow(ConnectionState.Reconnecting)
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    /** When true, the next 'o' frame is the start of replay-buffer playback. */
+    private var inReplay = false
 
     init {
         connect()
@@ -52,14 +66,20 @@ class TerminalViewModel @Inject constructor(
         viewModelScope.launch {
             connection?.events?.collect { event ->
                 when (event) {
-                    is WsEvent.Connected -> _isConnected.value = true
-                    is WsEvent.Disconnected -> _isConnected.value = false
-                    is WsEvent.Error -> _isConnected.value = false
-                    is WsEvent.Binary -> handleBinary(event.bytes)
-                    is WsEvent.Message -> {
-                        // Text frames are not used by the binary terminal
-                        // protocol — ignore.
+                    is WsEvent.Connected -> {
+                        _isConnected.value = true
+                        _connectionState.value = ConnectionState.Live
                     }
+                    is WsEvent.Disconnected -> {
+                        _isConnected.value = false
+                        _connectionState.value = ConnectionState.Reconnecting
+                    }
+                    is WsEvent.Error -> {
+                        _isConnected.value = false
+                        _connectionState.value = ConnectionState.Reconnecting
+                    }
+                    is WsEvent.Binary -> handleBinary(event.bytes)
+                    is WsEvent.Message -> { /* binary protocol only */ }
                 }
             }
         }
@@ -69,16 +89,19 @@ class TerminalViewModel @Inject constructor(
         when (val decoded = TerminalProtocol.decode(frame)) {
             is TerminalFrame.Output -> {
                 if (decoded.bytes.isNotEmpty()) {
-                    appendOutput(String(decoded.bytes, Charsets.UTF_8))
+                    session.emitOutput(decoded.bytes, decoded.bytes.size)
+                }
+                if (inReplay) {
+                    inReplay = false
+                    _connectionState.value = ConnectionState.Live
                 }
             }
             is TerminalFrame.State -> {
                 _sessionState.value = parseStatus(decoded.json)
             }
             TerminalFrame.ReplayMarker -> {
-                // History is about to follow. The current line/AnsiParser
-                // renderer doesn't need to flush — output is already
-                // append-only. The marker is here for the future VT view.
+                inReplay = true
+                _connectionState.value = ConnectionState.ReplayingBuffer
             }
             null -> { /* unknown frame type, ignore */ }
         }
@@ -91,52 +114,9 @@ class TerminalViewModel @Inject constructor(
             "unknown"
         }
 
-    private fun appendOutput(text: String) {
-        val combined = partialLine + text
-        val segments = combined.split('\n')
-
-        if (segments.size == 1) {
-            // No newline — accumulate in partial buffer
-            partialLine = combined
-            // Update the last line in display if exists, or add new
-            if (lines.isNotEmpty() && partialLine.isNotEmpty()) {
-                lines[lines.size - 1] = AnsiParser.parse(partialLine)
-            } else if (partialLine.isNotEmpty()) {
-                lines.add(AnsiParser.parse(partialLine))
-            }
-            return
-        }
-
-        // Complete lines
-        for (i in 0 until segments.size - 1) {
-            val line = if (i == 0) segments[0] else segments[i]
-            if (i == 0 && lines.isNotEmpty() && partialLine.isNotEmpty()) {
-                // Replace the last partial line with the complete one
-                lines[lines.size - 1] = AnsiParser.parse(line)
-            } else {
-                lines.add(AnsiParser.parse(line))
-            }
-        }
-
-        // Last segment is the new partial line
-        partialLine = segments.last()
-        if (partialLine.isNotEmpty()) {
-            lines.add(AnsiParser.parse(partialLine))
-        }
-
-        // Cap at 10,000 lines
-        if (lines.size > MAX_LINES) {
-            val excess = lines.size - MAX_LINES
-            repeat(excess) { lines.removeAt(0) }
-        }
-    }
-
     fun sendInput(text: String) {
-        // CR (\r), not LF (\n): Ink/React TUIs in raw mode (claude code)
-        // submit on CR. The previous LF was the root cause of "Enter does
-        // nothing" on the Android client.
-        val bytes = (text + "\r").toByteArray(Charsets.UTF_8)
-        sendBytes(bytes)
+        // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
+        sendBytes((text + "\r").toByteArray(Charsets.UTF_8))
     }
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
@@ -145,15 +125,12 @@ class TerminalViewModel @Inject constructor(
     }
 
     fun resize(rows: Int, cols: Int) {
+        session.updateSize(cols, rows, 12, 24)
         connection?.sendBinary(TerminalProtocol.encodeResize(rows, cols))
     }
 
     override fun onCleared() {
         super.onCleared()
         connection?.disconnect()
-    }
-
-    companion object {
-        private const val MAX_LINES = 10_000
     }
 }

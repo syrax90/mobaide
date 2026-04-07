@@ -1,5 +1,7 @@
 package com.claudemobile.app.ui.terminal
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,7 +11,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Circle
@@ -24,15 +26,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.claudemobile.app.ui.theme.StateCrashed
 import com.claudemobile.app.ui.theme.StateRunning
 import com.claudemobile.app.ui.theme.StateStarting
 import com.claudemobile.app.ui.theme.StateStopped
 import com.claudemobile.app.ui.theme.StateStopping
+import com.claudemobile.app.ui.theme.TerminalBackground
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,6 +46,7 @@ fun TerminalScreen(
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -89,31 +94,53 @@ fun TerminalScreen(
                 .padding(padding)
                 .imePadding(),
         ) {
-            // Wrap the terminal area in BoxWithConstraints so we can derive
-            // approximate (rows, cols) from the available pixel size and
-            // notify the server on rotation / soft-keyboard changes.
             BoxWithConstraints(modifier = Modifier.weight(1f)) {
-                val density = androidx.compose.ui.platform.LocalDensity.current
-                // 12sp font, 16sp line height (matches TerminalView). Cell
-                // width ~7.2sp at the same font. These are coarse but good
-                // enough until the real terminal-view renderer lands in the
-                // sibling task.
-                val rows = with(density) { (maxHeight.toPx() / 16.sp.toPx()).toInt() }
-                    .coerceAtLeast(1)
-                val cols = with(density) { (maxWidth.toPx() / 7.2.sp.toPx()).toInt() }
-                    .coerceAtLeast(1)
-                LaunchedEffect(rows, cols) {
-                    if (isConnected) viewModel.resize(rows, cols)
+                Box(modifier = Modifier.fillMaxSize().background(TerminalBackground)) {
+                    TerminalSurfaceView(
+                        session = viewModel.session,
+                        onResize = { rows, cols ->
+                            if (isConnected) viewModel.resize(rows, cols)
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    ConnectionOverlay(state = connectionState)
                 }
-                TerminalView(
-                    lines = viewModel.lines,
-                    modifier = Modifier.fillMaxSize(),
-                )
             }
             InputBar(
                 onSend = viewModel::sendInput,
                 onSendBytes = viewModel::sendBytes,
                 enabled = isConnected && sessionState == "running",
+            )
+        }
+    }
+}
+
+@Composable
+private fun ConnectionOverlay(state: ConnectionState) {
+    if (state == ConnectionState.Live) return
+    val (label, bg) = when (state) {
+        ConnectionState.Reconnecting -> "Reconnecting…" to Color(0xCC202020)
+        ConnectionState.ReplayingBuffer -> "Replaying buffer…" to Color(0xCC2A4D6E)
+        ConnectionState.Live -> return
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(12.dp),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(bg)
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+        ) {
+            Text(
+                text = label,
+                color = Color.White,
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                ),
             )
         }
     }
