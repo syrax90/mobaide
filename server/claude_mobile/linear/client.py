@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-import logging
+try:
+    from claude_mobile.server.logging import audit_event, get_logger, log_call
+except Exception:  # pragma: no cover
+    import logging
+    def get_logger(name): return logging.getLogger(name)
+    def log_call(*args, **kwargs):
+        def deco(fn): return fn
+        return deco
+    def audit_event(*args, **kwargs): pass
 
 from gql import Client, gql
 from gql.transport.httpx import HTTPXAsyncTransport
 
 from .models import IssueLabel, IssueState, LinearIssue
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _LINEAR_ENDPOINT = "https://api.linear.app/graphql"
 
@@ -78,6 +86,7 @@ class LinearApiClient:
             result = await session.execute(_QUERY_VIEWER)
         return result["viewer"]
 
+    @log_call(name="linear.get_auto_scan_issues")
     async def get_auto_scan_issues(self) -> list[LinearIssue]:
         """Query issues assigned to the viewer with status Proposals + label AutoPipeline."""
         async with self._client as session:
@@ -111,6 +120,7 @@ class LinearApiClient:
         logger.debug("Fetched %d issue(s) from Linear", len(issues))
         return issues
 
+    @log_call(name="linear.update_issue_state", log_args=("issue_id", "state_id"))
     async def update_issue_state(self, issue_id: str, state_id: str) -> bool:
         """Transition a Linear issue to a new workflow state."""
         async with self._client as session:
@@ -118,8 +128,17 @@ class LinearApiClient:
                 _MUTATION_UPDATE_STATE,
                 variable_values={"issueId": issue_id, "stateId": state_id},
             )
-        return result.get("issueUpdate", {}).get("success", False)
+        success = result.get("issueUpdate", {}).get("success", False)
+        if success:
+            audit_event(
+                "audit.linear.issue_state_changed",
+                target=issue_id,
+                outcome="ok",
+                state_id=state_id,
+            )
+        return success
 
+    @log_call(name="linear.remove_issue_label", log_args=("issue_id", "label_id"))
     async def remove_issue_label(self, issue_id: str, label_id: str) -> bool:
         """Remove a label from a Linear issue."""
         async with self._client as session:
@@ -127,4 +146,12 @@ class LinearApiClient:
                 _MUTATION_REMOVE_LABEL,
                 variable_values={"issueId": issue_id, "labelId": label_id},
             )
-        return result.get("issueRemoveLabel", {}).get("success", False)
+        success = result.get("issueRemoveLabel", {}).get("success", False)
+        if success:
+            audit_event(
+                "audit.linear.label_removed",
+                target=issue_id,
+                outcome="ok",
+                label_id=label_id,
+            )
+        return success

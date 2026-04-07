@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-import logging
+import secrets
+import time
 from contextlib import asynccontextmanager
 
+from asgi_correlation_id import CorrelationIdMiddleware
+from asgi_correlation_id.context import correlation_id
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from claude_mobile.core import SessionManager
 from claude_mobile.linear.scanner import AutoScanService
@@ -15,12 +18,22 @@ from .auth.user_store import UserStore
 from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .config import ServerConfig
+from .logging import bind_request_context, clear_request_context, get_logger
+from .logging_setup import configure_logging, shutdown_logging
 from .sessions.router import router as sessions_router
 from .ws.event_fanout import SessionListBroadcaster
 from .ws.session_io import router as ws_session_io_router
 from .ws.session_list import router as ws_session_list_router
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Endpoints excluded from per-request HTTP middleware logging (high-frequency, low-value).
+_HTTP_LOG_SKIP_PATHS = frozenset({"/api/health"})
+
+
+def _generate_correlation_id() -> str:
+    """16-byte hex (W3C trace-id shape) — forward-compatible with OpenTelemetry."""
+    return secrets.token_hex(16)
 
 
 def create_app(config: ServerConfig | None = None) -> FastAPI:
@@ -29,14 +42,14 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         load_dotenv()
         config = ServerConfig.from_env()
 
-    logging.basicConfig(level=config.log_level)
+    configure_logging(config)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        logger.info("Starting Claude Mobile server")
+        logger.info("server.starting")
         await app.state.session_manager.start_liveness_monitor()
         yield
-        logger.info("Shutting down Claude Mobile server")
+        logger.info("server.shutting_down")
         # Stop auto-scan service if running
         auto_scan = getattr(app.state, "auto_scan_service", None)
         if auto_scan is not None:
@@ -45,8 +58,66 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         for fanout in app.state.fanouts.values():
             fanout.stop()
         await app.state.session_manager.shutdown()
+        shutdown_logging()
 
     app = FastAPI(title="Claude Mobile Server", version="0.1.0", lifespan=lifespan)
+
+    # -- Middleware (added in reverse-execution order: outermost added last) --
+
+    @app.middleware("http")
+    async def _http_logging_middleware(request: Request, call_next):
+        if request.url.path in _HTTP_LOG_SKIP_PATHS:
+            return await call_next(request)
+
+        start = time.perf_counter()
+        client_ip = request.client.host if request.client else None
+        request_id = correlation_id.get() or ""
+        bind_request_context(
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            client_ip=client_ip,
+        )
+        logger.info(
+            "http.request.received",
+            method=request.method,
+            path=request.url.path,
+            client_ip=client_ip,
+            user_agent=request.headers.get("user-agent"),
+        )
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            logger.exception(
+                "http.request.failed",
+                method=request.method,
+                path=request.url.path,
+                duration_ms=duration_ms,
+                error_type=type(exc).__name__,
+            )
+            clear_request_context()
+            raise
+
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        username = getattr(request.state, "username", None)
+        logger.info(
+            "http.request.completed",
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            duration_ms=duration_ms,
+            username=username,
+        )
+        clear_request_context()
+        return response
+
+    # CorrelationIdMiddleware runs OUTSIDE the http logging middleware (added later → outer).
+    app.add_middleware(
+        CorrelationIdMiddleware,
+        header_name="X-Request-ID",
+        generator=_generate_correlation_id,
+    )
 
     # Shared state
     app.state.config = config
