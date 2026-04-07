@@ -3,7 +3,11 @@ package com.claudemobile.app.data.events
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WebSocketManager
 import com.claudemobile.app.data.network.WsEvent
-import com.claudemobile.app.data.network.dto.ScanStatusResponse
+import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
+import com.claudemobile.app.data.network.dto.AutoScanListResponse
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -118,11 +122,15 @@ class ServerEventBus @Inject constructor(
                     json.decodeFromJsonElement(ProjectsChangedPayload.serializer(), payload).projects
                 )
                 "autoscan.status" -> ServerEvent.AutoScanStatus(
-                    json.decodeFromJsonElement(ScanStatusResponse.serializer(), payload)
+                    json.decodeFromJsonElement(AutoScanInstanceDto.serializer(), payload)
+                )
+                "autoscan.list.changed" -> ServerEvent.AutoScanListChanged(
+                    json.decodeFromJsonElement(AutoScanListResponse.serializer(), payload)
                 )
                 "autoscan.event" -> ServerEvent.AutoScanEvent(
-                    eventType = payload["event_type"]?.toString()?.trim('"').orEmpty(),
-                    timestamp = (payload["timestamp"]?.toString() ?: "0").toDoubleOrNull() ?: 0.0,
+                    projectName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    eventType = payload["event_type"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    timestamp = payload["timestamp"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
                     data = payload["data"],
                 )
                 else -> null

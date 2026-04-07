@@ -14,6 +14,7 @@ from gql import Client, gql
 from gql.transport.httpx import HTTPXAsyncTransport
 
 from .models import IssueLabel, IssueState, LinearIssue
+from .rate_limiter import LinearRateLimiter
 
 logger = get_logger(__name__)
 
@@ -73,15 +74,26 @@ class LinearApiClient:
     Update-LinearIssueState, and Remove-LinearIssueLabel functions.
     """
 
-    def __init__(self, api_key: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        rate_limiter: LinearRateLimiter | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._rate_limiter = rate_limiter
         transport = HTTPXAsyncTransport(
             url=_LINEAR_ENDPOINT,
             headers={"Authorization": api_key},
         )
         self._client = Client(transport=transport, fetch_schema_from_transport=False)
 
+    async def _gate(self) -> None:
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire(self._api_key)
+
     async def get_viewer(self) -> dict:
         """Return the authenticated user's id and name."""
+        await self._gate()
         async with self._client as session:
             result = await session.execute(_QUERY_VIEWER)
         return result["viewer"]
@@ -89,6 +101,7 @@ class LinearApiClient:
     @log_call(name="linear.get_auto_scan_issues")
     async def get_auto_scan_issues(self) -> list[LinearIssue]:
         """Query issues assigned to the viewer with status Proposals + label AutoPipeline."""
+        await self._gate()
         async with self._client as session:
             result = await session.execute(_QUERY_AUTO_SCAN_ISSUES)
 
