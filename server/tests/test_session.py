@@ -31,12 +31,12 @@ class TestTerminalSessionLifecycle:
             await asyncio.sleep(0.5)
 
             if IS_WINDOWS:
-                await session.write("echo SESSIONTEST456\r\n")
+                await session.write(b"echo SESSIONTEST456\r\n")
             else:
-                await session.write("echo SESSIONTEST456\n")
+                await session.write(b"echo SESSIONTEST456\n")
 
             # Drain events until we see our marker
-            output = ""
+            output = b""
             deadline = asyncio.get_event_loop().time() + 5.0
             while asyncio.get_event_loop().time() < deadline:
                 try:
@@ -46,12 +46,12 @@ class TestTerminalSessionLifecycle:
                     )
                     if event.event_type == "output" and event.data:
                         output += event.data
-                    if "SESSIONTEST456" in output:
+                    if b"SESSIONTEST456" in output:
                         break
                 except asyncio.TimeoutError:
                     continue
 
-            assert "SESSIONTEST456" in output
+            assert b"SESSIONTEST456" in output
         finally:
             await session.stop()
 
@@ -66,9 +66,9 @@ class TestTerminalSessionLifecycle:
 
             for i in range(5):
                 if IS_WINDOWS:
-                    await session.write(f"echo line{i}\r\n")
+                    await session.write(f"echo line{i}\r\n".encode())
                 else:
-                    await session.write(f"echo line{i}\n")
+                    await session.write(f"echo line{i}\n".encode())
 
             # Give time for output to be read
             await asyncio.sleep(1.0)
@@ -92,9 +92,9 @@ class TestTerminalSessionLifecycle:
 
             for i in range(10):
                 if IS_WINDOWS:
-                    await session.write(f"echo overflow{i}\r\n")
+                    await session.write(f"echo overflow{i}\r\n".encode())
                 else:
-                    await session.write(f"echo overflow{i}\n")
+                    await session.write(f"echo overflow{i}\n".encode())
 
             await asyncio.sleep(1.5)
 

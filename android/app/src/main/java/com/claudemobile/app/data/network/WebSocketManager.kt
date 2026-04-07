@@ -18,11 +18,13 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString
 
 sealed class WsEvent {
     data object Connected : WsEvent()
     data object Disconnected : WsEvent()
     data class Message(val text: String) : WsEvent()
+    data class Binary(val bytes: ByteString) : WsEvent()
     data class Error(val throwable: Throwable) : WsEvent()
 }
 
@@ -53,6 +55,10 @@ class WebSocketConnection(
         return webSocket?.send(text) ?: false
     }
 
+    fun sendBinary(bytes: ByteString): Boolean {
+        return webSocket?.send(bytes) ?: false
+    }
+
     fun disconnect() {
         shouldReconnect = false
         reconnectJob?.cancel()
@@ -72,6 +78,10 @@ class WebSocketConnection(
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 _events.tryEmit(WsEvent.Message(text))
+            }
+
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                _events.tryEmit(WsEvent.Binary(bytes))
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

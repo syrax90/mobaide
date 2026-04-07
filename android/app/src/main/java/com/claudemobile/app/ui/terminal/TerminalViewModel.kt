@@ -1,24 +1,22 @@
 package com.claudemobile.app.ui.terminal
 
-import android.util.Base64
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.claudemobile.app.data.network.TerminalFrame
+import com.claudemobile.app.data.network.TerminalProtocol
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WsEvent
-import com.claudemobile.app.data.network.dto.WsInputMessage
-import com.claudemobile.app.data.network.dto.WsOutputMessage
-import com.claudemobile.app.data.network.dto.WsResizeMessage
 import com.claudemobile.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import okio.ByteString
+import org.json.JSONObject
 import javax.inject.Inject
 
 @HiltViewModel
@@ -30,7 +28,6 @@ class TerminalViewModel @Inject constructor(
     private val sessionId: String = savedStateHandle["sessionId"]
         ?: throw IllegalArgumentException("sessionId required")
 
-    private val json = Json { ignoreUnknownKeys = true }
     private var connection: WebSocketConnection? = null
 
     val lines = mutableStateListOf<AnnotatedString>()
@@ -58,29 +55,41 @@ class TerminalViewModel @Inject constructor(
                     is WsEvent.Connected -> _isConnected.value = true
                     is WsEvent.Disconnected -> _isConnected.value = false
                     is WsEvent.Error -> _isConnected.value = false
-                    is WsEvent.Message -> handleMessage(event.text)
+                    is WsEvent.Binary -> handleBinary(event.bytes)
+                    is WsEvent.Message -> {
+                        // Text frames are not used by the binary terminal
+                        // protocol — ignore.
+                    }
                 }
             }
         }
     }
 
-    private fun handleMessage(text: String) {
-        try {
-            val msg = json.decodeFromString<WsOutputMessage>(text)
-            when (msg.type) {
-                "output" -> {
-                    val data = msg.data ?: return
-                    val decoded = String(Base64.decode(data, Base64.DEFAULT))
-                    appendOutput(decoded)
-                }
-                "state" -> {
-                    _sessionState.value = msg.status ?: "unknown"
+    private fun handleBinary(frame: ByteString) {
+        when (val decoded = TerminalProtocol.decode(frame)) {
+            is TerminalFrame.Output -> {
+                if (decoded.bytes.isNotEmpty()) {
+                    appendOutput(String(decoded.bytes, Charsets.UTF_8))
                 }
             }
-        } catch (_: Exception) {
-            // Ignore malformed messages
+            is TerminalFrame.State -> {
+                _sessionState.value = parseStatus(decoded.json)
+            }
+            TerminalFrame.ReplayMarker -> {
+                // History is about to follow. The current line/AnsiParser
+                // renderer doesn't need to flush — output is already
+                // append-only. The marker is here for the future VT view.
+            }
+            null -> { /* unknown frame type, ignore */ }
         }
     }
+
+    private fun parseStatus(json: String): String =
+        try {
+            JSONObject(json).optString("status", "unknown")
+        } catch (_: Exception) {
+            "unknown"
+        }
 
     private fun appendOutput(text: String) {
         val combined = partialLine + text
@@ -123,15 +132,20 @@ class TerminalViewModel @Inject constructor(
     }
 
     fun sendInput(text: String) {
-        val input = text + "\n"
-        val encoded = Base64.encodeToString(input.toByteArray(), Base64.NO_WRAP)
-        val message = json.encodeToString(WsInputMessage(data = encoded))
-        connection?.send(message)
+        // CR (\r), not LF (\n): Ink/React TUIs in raw mode (claude code)
+        // submit on CR. The previous LF was the root cause of "Enter does
+        // nothing" on the Android client.
+        val bytes = (text + "\r").toByteArray(Charsets.UTF_8)
+        sendBytes(bytes)
+    }
+
+    /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
+    fun sendBytes(bytes: ByteArray) {
+        connection?.sendBinary(TerminalProtocol.encodeInput(bytes))
     }
 
     fun resize(rows: Int, cols: Int) {
-        val message = json.encodeToString(WsResizeMessage(rows = rows, cols = cols))
-        connection?.send(message)
+        connection?.sendBinary(TerminalProtocol.encodeResize(rows, cols))
     }
 
     override fun onCleared() {

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 
 import jwt
@@ -10,7 +9,6 @@ from .jwt_service import JwtService
 
 logger = logging.getLogger(__name__)
 
-WS_AUTH_TIMEOUT_SECONDS = 5
 
 
 def _get_jwt_service(request_or_ws: Request | WebSocket) -> JwtService:
@@ -52,62 +50,37 @@ async def get_current_user(request: Request) -> str:
 
 
 async def ws_authenticate(websocket: WebSocket) -> str:
-    """Authenticate a WebSocket connection.
+    """Authenticate a WebSocket connection via the ``?token=`` query param.
 
-    Tries query param ``?token=`` first, then waits for a first-message auth
-    payload ``{"type": "auth", "token": "..."}`` with a 5-second timeout.
-    Closes the connection with code 4001 on failure.
+    The previous first-message JSON auth path was removed when the wire
+    protocol switched to binary frames (CLA-13) — there is no longer a JSON
+    layer to carry an auth handshake. Closes the connection with code 4001
+    on failure.
     """
     jwt_service = _get_jwt_service(websocket)
 
-    # Path 1: query-param token
     token = websocket.query_params.get("token")
-    if token:
-        try:
-            payload = jwt_service.decode_token(token)
-            if payload.token_type != "access":
-                await websocket.close(code=4001, reason="Expected access token")
-                raise _auth_failed("Expected access token")
-            await websocket.accept()
-            try:
-                from ..logging import bind_request_context
-                bind_request_context(username=payload.sub)
-            except Exception:
-                pass
-            return payload.sub
-        except jwt.InvalidTokenError as exc:
-            await websocket.close(code=4001, reason=str(exc))
-            raise _auth_failed(str(exc))
-
-    # Path 2: first-message auth
-    await websocket.accept()
-    try:
-        raw = await asyncio.wait_for(
-            websocket.receive_json(),
-            timeout=WS_AUTH_TIMEOUT_SECONDS,
-        )
-    except (asyncio.TimeoutError, Exception):
-        await websocket.close(code=4001, reason="Auth timeout")
-        raise _auth_failed("Auth message timeout")
-
-    if raw.get("type") != "auth" or "token" not in raw:
-        await websocket.close(code=4001, reason="Expected auth message")
-        raise _auth_failed("Expected auth message")
+    if not token:
+        await websocket.close(code=4001, reason="Missing token query param")
+        raise _auth_failed("Missing token query param")
 
     try:
-        payload = jwt_service.decode_token(raw["token"])
-        if payload.token_type != "access":
-            await websocket.close(code=4001, reason="Expected access token")
-            raise _auth_failed("Expected access token")
-        try:
-            from ..logging import bind_request_context
-            bind_request_context(username=payload.sub)
-        except Exception:
-            pass
-        return payload.sub
+        payload = jwt_service.decode_token(token)
     except jwt.InvalidTokenError as exc:
         await websocket.close(code=4001, reason=str(exc))
         raise _auth_failed(str(exc))
+
+    if payload.token_type != "access":
+        await websocket.close(code=4001, reason="Expected access token")
+        raise _auth_failed("Expected access token")
+
+    await websocket.accept()
+    try:
+        from ..logging import bind_request_context
+        bind_request_context(username=payload.sub)
+    except Exception:
+        pass
+    return payload.sub
 
 
 class WebSocketAuthError(Exception):

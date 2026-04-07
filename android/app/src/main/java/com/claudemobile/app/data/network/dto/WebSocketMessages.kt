@@ -1,23 +1,6 @@
 package com.claudemobile.app.data.network.dto
 
-import kotlinx.serialization.Serializable
-
-@Serializable
-data class WsInputMessage(
-    val type: String = "input",
-    val data: String,
-)
-
-@Serializable
-data class WsResizeMessage(
-    val type: String = "resize",
-    val rows: Int,
-    val cols: Int,
-)
-
-@Serializable
-data class WsOutputMessage(
-    val type: String,
-    val data: String? = null,
-    val status: String? = null,
-)
+// The terminal I/O channel switched to a binary frame protocol in CLA-13
+// (see TerminalProtocol.kt). The previous JSON+base64 message DTOs are no
+// longer used; this file is intentionally empty so the package keeps an
+// anchor file. New JSON DTOs for other channels can be added here.

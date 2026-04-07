@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import collections
 import logging
-import os
 import time
 from datetime import UTC, datetime
 
@@ -12,9 +11,20 @@ from .pty_backend import PtyBackend, create_pty_backend
 
 logger = logging.getLogger(__name__)
 
+# Bounded ring buffer of recent raw PTY output bytes, replayed to clients
+# on (re)connect. ~256 KB is enough to capture the visible alt-screen of an
+# Ink/React TUI plus a few seconds of scrollback.
+RING_MAX_BYTES = 256 * 1024
+
+# The session-internal event queue is bounded so the PTY reader naturally
+# pauses (via ``await put``) when consumers are slow, providing backpressure
+# end-to-end without dropping output bytes.
+EVENT_QUEUE_MAXSIZE = 64
+
 
 class TerminalSession:
-    """Owns a single PTY session with async I/O, scrollback buffer, and event queue."""
+    """Owns a single PTY session with async I/O, scrollback, ring buffer,
+    and bounded event queue."""
 
     def __init__(
         self,
@@ -24,10 +34,14 @@ class TerminalSession:
         self._config = config
         self._backend = backend or create_pty_backend()
         self._state = SessionState.STARTING
-        self._scrollback: collections.deque[str] = collections.deque(
+        self._scrollback: collections.deque[bytes] = collections.deque(
             maxlen=config.scrollback_size,
         )
-        self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue()
+        # Raw byte ring for binary-WS replay on reconnect.
+        self._ring = bytearray()
+        self._event_queue: asyncio.Queue[SessionEvent] = asyncio.Queue(
+            maxsize=EVENT_QUEUE_MAXSIZE,
+        )
         self._reader_task: asyncio.Task[None] | None = None
         self._created_at = datetime.now(UTC)
 
@@ -57,15 +71,10 @@ class TerminalSession:
 
     async def start(self) -> None:
         """Spawn the PTY process and start the async reader loop."""
-        env = os.environ.copy()
-        if self._config.env:
-            env.update(self._config.env)
-        env["PYTHONIOENCODING"] = "utf-8"
-
         self._backend.spawn(
             cmd=self._config.command,
             cwd=self._config.cwd,
-            env=env,
+            env=self._config.env,
             rows=self._config.rows,
             cols=self._config.cols,
         )
@@ -84,10 +93,15 @@ class TerminalSession:
         loop = asyncio.get_running_loop()
         while self._state == SessionState.RUNNING:
             try:
-                data = await loop.run_in_executor(None, self._backend.read, 4096)
+                data: bytes = await loop.run_in_executor(
+                    None, self._backend.read, 4096,
+                )
                 if not data:
                     break
                 self._scrollback.append(data)
+                self._append_ring(data)
+                # ``put`` (not ``put_nowait``) so a slow consumer applies
+                # backpressure all the way down to the PTY read.
                 await self._event_queue.put(
                     SessionEvent("output", self._config.session_id, data, time.time()),
                 )
@@ -107,14 +121,24 @@ class TerminalSession:
                 SessionEvent(
                     "error",
                     self._config.session_id,
-                    "Process exited unexpectedly",
+                    None,
                     time.time(),
                 ),
             )
             logger.warning("Session %s crashed", self.session_id)
 
-    async def write(self, data: str) -> None:
-        """Write data to the PTY stdin."""
+    def _append_ring(self, data: bytes) -> None:
+        self._ring += data
+        overflow = len(self._ring) - RING_MAX_BYTES
+        if overflow > 0:
+            del self._ring[:overflow]
+
+    def get_ring(self) -> bytes:
+        """Snapshot of the recent raw PTY bytes for binary-WS replay."""
+        return bytes(self._ring)
+
+    async def write(self, data: bytes) -> None:
+        """Write raw bytes to the PTY stdin."""
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
 
@@ -123,8 +147,13 @@ class TerminalSession:
         self._backend.resize(rows, cols)
 
     def get_scrollback(self) -> list[str]:
-        """Return the current scrollback buffer contents."""
-        return list(self._scrollback)
+        """Return the current scrollback buffer as decoded strings.
+
+        The realtime WS path uses ``get_ring()`` for byte-exact replay; this
+        helper exists for the REST ``/scrollback`` endpoint, which is JSON
+        and therefore must hand back strings. Invalid UTF-8 is replaced.
+        """
+        return [chunk.decode("utf-8", errors="replace") for chunk in self._scrollback]
 
     async def stop(self, force: bool = False) -> None:
         """Stop the session: terminate PTY, cancel reader, clean up."""
@@ -150,9 +179,12 @@ class TerminalSession:
         await loop.run_in_executor(None, self._backend.close)
 
         self._state = SessionState.STOPPED
-        await self._event_queue.put(
-            SessionEvent("stopped", self._config.session_id, timestamp=time.time()),
-        )
+        try:
+            self._event_queue.put_nowait(
+                SessionEvent("stopped", self._config.session_id, timestamp=time.time()),
+            )
+        except asyncio.QueueFull:
+            pass
         logger.info("Session %s stopped", self.session_id)
 
     def to_info(self) -> SessionInfo:

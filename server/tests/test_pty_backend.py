@@ -55,22 +55,22 @@ class TestPtyBackendLifecycle:
             time.sleep(0.5)
 
             if IS_WINDOWS:
-                backend.write("echo PTYTEST123\r\n")
+                backend.write(b"echo PTYTEST123\r\n")
             else:
-                backend.write("echo PTYTEST123\n")
+                backend.write(b"echo PTYTEST123\n")
 
             # Read output until we see our marker or timeout
-            output = ""
+            output = b""
             deadline = time.time() + 5.0
             while time.time() < deadline:
                 data = backend.read(4096)
                 if data:
                     output += data
-                if "PTYTEST123" in output:
+                if b"PTYTEST123" in output:
                     break
                 time.sleep(0.1)
 
-            assert "PTYTEST123" in output
+            assert b"PTYTEST123" in output
         finally:
             backend.terminate(force=True)
             backend.close()

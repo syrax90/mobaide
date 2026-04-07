@@ -1,5 +1,6 @@
 package com.claudemobile.app.ui.terminal
 
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Circle
@@ -24,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.claudemobile.app.ui.theme.StateCrashed
 import com.claudemobile.app.ui.theme.StateRunning
@@ -86,12 +89,30 @@ fun TerminalScreen(
                 .padding(padding)
                 .imePadding(),
         ) {
-            TerminalView(
-                lines = viewModel.lines,
-                modifier = Modifier.weight(1f),
-            )
+            // Wrap the terminal area in BoxWithConstraints so we can derive
+            // approximate (rows, cols) from the available pixel size and
+            // notify the server on rotation / soft-keyboard changes.
+            BoxWithConstraints(modifier = Modifier.weight(1f)) {
+                val density = androidx.compose.ui.platform.LocalDensity.current
+                // 12sp font, 16sp line height (matches TerminalView). Cell
+                // width ~7.2sp at the same font. These are coarse but good
+                // enough until the real terminal-view renderer lands in the
+                // sibling task.
+                val rows = with(density) { (maxHeight.toPx() / 16.sp.toPx()).toInt() }
+                    .coerceAtLeast(1)
+                val cols = with(density) { (maxWidth.toPx() / 7.2.sp.toPx()).toInt() }
+                    .coerceAtLeast(1)
+                LaunchedEffect(rows, cols) {
+                    if (isConnected) viewModel.resize(rows, cols)
+                }
+                TerminalView(
+                    lines = viewModel.lines,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             InputBar(
                 onSend = viewModel::sendInput,
+                onSendBytes = viewModel::sendBytes,
                 enabled = isConnected && sessionState == "running",
             )
         }

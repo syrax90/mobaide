@@ -1,12 +1,17 @@
 package com.claudemobile.app.ui.terminal
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -23,9 +28,23 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 
+private data class ControlKey(val label: String, val bytes: ByteArray)
+
+private val CONTROL_KEYS = listOf(
+    ControlKey("Esc", byteArrayOf(0x1b)),
+    ControlKey("Tab", byteArrayOf(0x09)),
+    ControlKey("Ctrl-C", byteArrayOf(0x03)),
+    ControlKey("Ctrl-D", byteArrayOf(0x04)),
+    ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte())),
+    ControlKey("↓", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte())),
+    ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte())),
+    ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte())),
+)
+
 @Composable
 fun InputBar(
     onSend: (String) -> Unit,
+    onSendBytes: (ByteArray) -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
@@ -38,33 +57,62 @@ fun InputBar(
         }
     }
 
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            modifier = Modifier.weight(1f),
-            placeholder = { Text("Type command...") },
-            singleLine = true,
-            enabled = enabled,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = FontFamily.Monospace,
-            ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { send() }),
-        )
-        IconButton(
-            onClick = { send() },
-            enabled = enabled && text.isNotEmpty(),
+    Column(modifier = modifier.fillMaxWidth()) {
+        // Control-key strip — sends raw byte sequences directly so TUIs see
+        // the same input as a real terminal.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Icon(
-                Icons.AutoMirrored.Filled.Send,
-                contentDescription = "Send",
+            CONTROL_KEYS.forEach { key ->
+                FilledTonalButton(
+                    onClick = { onSendBytes(key.bytes) },
+                    enabled = enabled,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 10.dp, vertical = 4.dp,
+                    ),
+                ) {
+                    Text(
+                        key.label,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                    )
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Type command...") },
+                singleLine = true,
+                enabled = enabled,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Monospace,
+                ),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                keyboardActions = KeyboardActions(onSend = { send() }),
             )
+            IconButton(
+                onClick = { send() },
+                enabled = enabled && text.isNotEmpty(),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send",
+                )
+            }
         }
     }
 }
