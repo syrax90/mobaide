@@ -9,8 +9,9 @@ from asgi_correlation_id.context import correlation_id
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 
-from claude_mobile.core import SessionManager
+from claude_mobile.core import ClaudeLauncher, SessionManager
 from claude_mobile.linear.scanner import AutoScanService
+from claude_mobile.linear.worktree import WorktreeManager
 
 from .auth.jwt_service import JwtService
 from .auth.router import router as auth_router
@@ -20,6 +21,7 @@ from .autoscan.router import ws_router as autoscan_ws_router
 from .config import ServerConfig
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
+from .projects.router import router as projects_router
 from .sessions.router import router as sessions_router
 from .ws.event_fanout import SessionListBroadcaster
 from .ws.session_io import router as ws_session_io_router
@@ -121,7 +123,25 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     # Shared state
     app.state.config = config
-    app.state.session_manager = SessionManager(max_sessions=config.max_sessions)
+    app.state.projects_config = config.projects_config
+
+    # Build a ClaudeLauncher (and a worktree manager if auto-scan settings
+    # are present so launcher-driven worktrees use the same conventions).
+    worktree_mgr: WorktreeManager | None = None
+    if config.auto_scan_config is not None:
+        prefix = config.auto_scan_config.branch_prefix or "feature/claude"
+        worktree_mgr = WorktreeManager(
+            worktree_base=config.auto_scan_config.worktree_base,
+            branch_prefix=prefix,
+            main_branch=config.auto_scan_config.main_branch,
+        )
+    app.state.claude_launcher = ClaudeLauncher(worktree_mgr=worktree_mgr)
+
+    app.state.session_manager = SessionManager(
+        max_sessions=config.max_sessions,
+        projects_config=config.projects_config,
+        launcher=app.state.claude_launcher,
+    )
     app.state.jwt_service = JwtService(
         secret_key=config.jwt_secret_key,
         algorithm=config.jwt_algorithm,
@@ -139,6 +159,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         app.state.auto_scan_service = AutoScanService(
             config=config.auto_scan_config,
             session_manager=app.state.session_manager,
+            launcher=app.state.claude_launcher,
         )
     else:
         app.state.auto_scan_service = None
@@ -146,6 +167,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     # Routers
     app.include_router(auth_router)
     app.include_router(sessions_router)
+    app.include_router(projects_router)
     app.include_router(ws_session_io_router)
     app.include_router(ws_session_list_router)
     app.include_router(autoscan_router)

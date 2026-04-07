@@ -12,7 +12,9 @@ except Exception:  # pragma: no cover - logging package optional during isolated
         return deco
     def audit_event(*args, **kwargs): pass
 
+from .claude_launcher import ClaudeLauncher, ClaudeOptions
 from .models import SessionConfig, SessionInfo, SessionState
+from .projects_config import ProjectsConfig
 from .session import TerminalSession
 
 logger = get_logger(__name__)
@@ -25,11 +27,18 @@ class MaxSessionsError(RuntimeError):
 class SessionManager:
     """Manages multiple TerminalSession instances with liveness monitoring."""
 
-    def __init__(self, max_sessions: int = 16) -> None:
+    def __init__(
+        self,
+        max_sessions: int = 16,
+        projects_config: ProjectsConfig | None = None,
+        launcher: ClaudeLauncher | None = None,
+    ) -> None:
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = asyncio.Lock()
         self._max_sessions = max_sessions
         self._liveness_task: asyncio.Task[None] | None = None
+        self._projects_config = projects_config
+        self._launcher = launcher
 
     @property
     def max_sessions(self) -> int:
@@ -39,7 +48,16 @@ class SessionManager:
 
     @log_call(name="session_manager.create_session", log_args=("config",))
     async def create_session(self, config: SessionConfig) -> TerminalSession:
-        """Create, start, and register a new terminal session."""
+        """Create, start, and register a new terminal session.
+
+        When ``config.project_name`` is set, ``ClaudeLauncher`` resolves the
+        project from ``ProjectsConfig`` and rewrites ``config.command``,
+        ``config.cwd`` and ``config.env`` to the launcher output before the
+        PTY is spawned. This is the path that mirrors ``Start-StandardMode``
+        in ``claude_auto_executor.ps1``.
+        """
+        if config.project_name is not None:
+            await self._apply_project_launch(config)
         async with self._lock:
             if len(self._sessions) >= self._max_sessions:
                 raise MaxSessionsError(
@@ -59,6 +77,22 @@ class SessionManager:
                 max_sessions=self._max_sessions,
             )
             return session
+
+    async def _apply_project_launch(self, config: SessionConfig) -> None:
+        """Resolve a project + ClaudeOptions through the launcher and
+        overwrite the raw command/cwd/env on the SessionConfig in place."""
+        if self._projects_config is None or self._launcher is None:
+            raise ValueError(
+                "project_name set but server has no projects configured"
+            )
+        project = self._projects_config.get(config.project_name or "")
+        if project is None:
+            raise KeyError(f"Project '{config.project_name}' not found")
+        options = config.claude_options or ClaudeOptions()
+        spec = await self._launcher.build(project, options)
+        config.command = spec.argv
+        config.cwd = spec.cwd
+        config.env = spec.env
 
     async def get_session(self, session_id: str) -> TerminalSession | None:
         """Look up a session by ID."""

@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 
+from claude_mobile.core.projects_config import ProjectConfig, ProjectsConfig
 
-@dataclass(frozen=True)
-class ProjectConfig:
-    """Per-project configuration (path + Linear API key)."""
-
-    path: str
-    linear_api_key: str
+__all__ = ["ProjectConfig", "AutoScanConfig"]
 
 
 @dataclass(frozen=True)
@@ -33,28 +28,18 @@ class AutoScanConfig:
     def from_env(cls) -> AutoScanConfig | None:
         """Build config from environment variables.
 
-        Returns None if PROJECTS is not set (auto-scan not configured).
+        Returns None if PROJECTS is not set (auto-scan not configured) or
+        if no project carries a Linear API key (auto-scan needs one).
         """
-        projects_json = os.getenv("PROJECTS")
-        if not projects_json:
+        projects_config = ProjectsConfig.from_env()
+        if projects_config is None:
             return None
-
-        projects: dict[str, ProjectConfig] = {}
-        try:
-            parsed = json.loads(projects_json)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"PROJECTS environment variable contains invalid JSON: {exc}"
-            ) from exc
-        for name, value in parsed.items():
-            if isinstance(value, str):
-                # Legacy format: {"Name": "path"} — no API key
-                continue
-            projects[name] = ProjectConfig(
-                path=value["path"],
-                linear_api_key=value["linear_api_key"],
-            )
-
+        # Auto-scan only operates on projects that expose a Linear key.
+        projects: dict[str, ProjectConfig] = {
+            name: p
+            for name, p in projects_config.projects.items()
+            if p.linear_api_key
+        }
         if not projects:
             return None
 

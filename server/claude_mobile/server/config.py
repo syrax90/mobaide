@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from claude_mobile.core.projects_config import ProjectsConfig
 from claude_mobile.linear.config import AutoScanConfig
 
 
@@ -24,6 +25,7 @@ class ServerConfig:
     audit_log_path: str | None = None
     log_sample_ws: bool = False
     auto_scan_config: AutoScanConfig | None = None
+    projects_config: ProjectsConfig | None = None
 
     @classmethod
     def from_env(cls) -> ServerConfig:
@@ -52,4 +54,5 @@ class ServerConfig:
             audit_log_path=os.getenv("AUDIT_LOG_PATH") or None,
             log_sample_ws=os.getenv("LOG_SAMPLE_WS", "").lower() in ("1", "true", "yes"),
             auto_scan_config=AutoScanConfig.from_env(),
+            projects_config=ProjectsConfig.from_env(),
         )

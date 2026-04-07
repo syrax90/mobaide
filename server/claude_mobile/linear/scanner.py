@@ -17,7 +17,12 @@ except Exception:  # pragma: no cover
         return deco
     def bind_request_context(**kwargs): pass
 
-from claude_mobile.core import SessionConfig, SessionManager
+from claude_mobile.core import (
+    ClaudeLauncher,
+    ClaudeOptions,
+    SessionConfig,
+    SessionManager,
+)
 
 from .client import LinearApiClient
 from .config import AutoScanConfig
@@ -37,9 +42,11 @@ class AutoScanService:
         self,
         config: AutoScanConfig,
         session_manager: SessionManager,
+        launcher: ClaudeLauncher | None = None,
     ) -> None:
         self._config = config
         self._session_manager = session_manager
+        self._launcher = launcher or ClaudeLauncher()
         self._processed_items: set[str] = set()
         self._status = ScanStatus.IDLE
         self._poll_task: asyncio.Task[None] | None = None
@@ -212,14 +219,25 @@ class AutoScanService:
         wt_result = await self._worktree_mgr.create_worktree(slug, project.path)
         target_dir = wt_result.path if wt_result else project.path
 
-        # Launch Claude session
+        # Launch Claude session via the shared launcher (single source of
+        # truth — same argv/env mobile sessions get).
         logger.info("Launching Claude in: %s", target_dir)
-        command = self._build_claude_command()
+        spec = await self._launcher.build(
+            project,
+            ClaudeOptions(
+                skip_permissions=True,
+                initial_prompt=self._config.auto_scan_prompt,
+                identifier=issue.identifier,
+                title=issue.title,
+            ),
+        )
+        # Worktree was already created above for this flow; override cwd.
         session_id = uuid.uuid4().hex[:12]
         config = SessionConfig(
             session_id=session_id,
-            command=command,
+            command=spec.argv,
             cwd=target_dir,
+            env=spec.env,
         )
         try:
             await self._session_manager.create_session(config)
@@ -244,14 +262,6 @@ class AutoScanService:
         logger.info(
             "Done. Processed items total: %d", len(self._processed_items)
         )
-
-    def _build_claude_command(self) -> list[str]:
-        """Build the command to launch Claude Code."""
-        cmd = ["claude"]
-        prompt = self._config.auto_scan_prompt
-        if prompt:
-            cmd.extend(["--prompt", prompt])
-        return cmd
 
     # -- Processed items persistence --
 
