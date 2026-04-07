@@ -9,6 +9,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.ui.login.LoginScreen
+import com.claudemobile.app.ui.sessions.CreateSessionScreen
 import com.claudemobile.app.ui.sessions.SessionListScreen
 import com.claudemobile.app.ui.settings.SettingsScreen
 import com.claudemobile.app.ui.terminal.TerminalScreen
@@ -40,8 +41,23 @@ fun AppNavigation(tokenStore: TokenStore? = null) {
                 onSessionClick = { sessionId ->
                     navController.navigate(Routes.sessionDetail(sessionId))
                 },
+                onCreateClick = {
+                    navController.navigate(Routes.CREATE_SESSION)
+                },
                 onSettingsClick = {
                     navController.navigate(Routes.SETTINGS)
+                },
+            )
+        }
+
+        composable(Routes.CREATE_SESSION) {
+            CreateSessionScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+                onSessionCreated = { sessionId ->
+                    navController.navigate(Routes.sessionDetail(sessionId)) {
+                        popUpTo(Routes.SESSION_LIST)
+                    }
                 },
             )
         }

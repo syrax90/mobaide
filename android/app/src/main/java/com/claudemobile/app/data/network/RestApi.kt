@@ -2,6 +2,7 @@ package com.claudemobile.app.data.network
 
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
+import com.claudemobile.app.data.network.dto.ProjectInfo
 import com.claudemobile.app.data.network.dto.ScanStatusResponse
 import com.claudemobile.app.data.network.dto.ScrollbackResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
@@ -80,6 +81,16 @@ class RestApi(
     suspend fun getScrollback(sessionId: String, lines: Int = 1000): ScrollbackResponse {
         val request = Request.Builder()
             .url("${baseUrl()}/api/sessions/$sessionId/scrollback?lines=$lines")
+            .get()
+            .build()
+        return execute(request)
+    }
+
+    // Projects (CLA-12 / CLA-14)
+
+    suspend fun getProjects(): List<ProjectInfo> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects")
             .get()
             .build()
         return execute(request)

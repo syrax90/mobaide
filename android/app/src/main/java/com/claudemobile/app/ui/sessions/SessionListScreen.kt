@@ -54,6 +54,7 @@ import com.claudemobile.app.ui.theme.StateStopping
 fun SessionListScreen(
     viewModel: SessionListViewModel,
     onSessionClick: (String) -> Unit,
+    onCreateClick: () -> Unit,
     onSettingsClick: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -66,11 +67,10 @@ fun SessionListScreen(
         }
     }
 
-    if (uiState.showCreateDialog) {
-        CreateSessionDialog(
-            onDismiss = viewModel::hideCreateDialog,
-            onCreate = viewModel::createSession,
-        )
+    LaunchedEffect(viewModel) {
+        viewModel.autoResumeSessionId.collect { sessionId ->
+            onSessionClick(sessionId)
+        }
     }
 
     Scaffold(
@@ -85,7 +85,7 @@ fun SessionListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = viewModel::showCreateDialog) {
+            FloatingActionButton(onClick = onCreateClick) {
                 Icon(Icons.Default.Add, contentDescription = "New Session")
             }
         },
