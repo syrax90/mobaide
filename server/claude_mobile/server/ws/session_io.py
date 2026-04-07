@@ -113,6 +113,7 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
             session=session,
             broadcaster=websocket.app.state.broadcaster,
             get_sessions=manager.list_sessions,
+            event_bus=getattr(websocket.app.state, "event_bus", None),
         )
         fanout.start()
         fanouts[session_id] = fanout

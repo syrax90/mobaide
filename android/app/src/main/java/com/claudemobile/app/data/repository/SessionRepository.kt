@@ -1,65 +1,66 @@
 package com.claudemobile.app.data.repository
 
+import com.claudemobile.app.data.events.ServerEvent
+import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WebSocketManager
-import com.claudemobile.app.data.network.WsEvent
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
 import com.claudemobile.app.data.network.dto.ScrollbackResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.mapNotNull
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 class SessionRepository(
     private val restApi: RestApi,
     private val webSocketManager: WebSocketManager,
+    private val eventBus: ServerEventBus,
 ) {
-    private val json = Json { ignoreUnknownKeys = true }
-    private var sessionListConnection: WebSocketConnection? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    suspend fun createSession(request: CreateSessionRequest): SessionResponse {
-        return restApi.createSession(request)
+    private val _sessions = MutableStateFlow<List<SessionResponse>>(emptyList())
+
+    init {
+        scope.launch {
+            eventBus.stream<ServerEvent.SessionsChanged>().collect { ev ->
+                _sessions.value = ev.sessions
+            }
+        }
+        scope.launch {
+            eventBus.stream<ServerEvent.SessionUpdated>().collect { ev ->
+                _sessions.update { list ->
+                    val updated = ev.session
+                    if (list.any { it.session_id == updated.session_id }) {
+                        list.map { if (it.session_id == updated.session_id) updated else it }
+                    } else {
+                        list + updated
+                    }
+                }
+            }
+        }
     }
 
-    suspend fun listSessions(): List<SessionResponse> {
-        return restApi.listSessions()
-    }
+    suspend fun createSession(request: CreateSessionRequest): SessionResponse =
+        restApi.createSession(request)
+
+    suspend fun listSessions(): List<SessionResponse> = restApi.listSessions()
 
     suspend fun deleteSession(sessionId: String, force: Boolean = false) {
         restApi.deleteSession(sessionId, force)
     }
 
-    suspend fun getScrollback(sessionId: String, lines: Int = 1000): ScrollbackResponse {
-        return restApi.getScrollback(sessionId, lines)
-    }
+    suspend fun getScrollback(sessionId: String, lines: Int = 1000): ScrollbackResponse =
+        restApi.getScrollback(sessionId, lines)
 
-    fun observeSessionList(): Flow<List<SessionResponse>> {
-        sessionListConnection?.disconnect()
-        val connection = webSocketManager.createConnection("ws/sessions")
-        sessionListConnection = connection
-        connection.connect()
+    /** Live, app-scoped session list. Seeded by the bus snapshot on connect. */
+    fun observeSessionList(): StateFlow<List<SessionResponse>> = _sessions.asStateFlow()
 
-        return connection.events.mapNotNull { event ->
-            when (event) {
-                is WsEvent.Message -> {
-                    try {
-                        json.decodeFromString<List<SessionResponse>>(event.text)
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-                else -> null
-            }
-        }
-    }
-
-    fun createSessionIoConnection(sessionId: String): WebSocketConnection {
-        return webSocketManager.createConnection("ws/session/$sessionId")
-    }
-
-    fun disconnectSessionList() {
-        sessionListConnection?.disconnect()
-        sessionListConnection = null
-    }
+    fun createSessionIoConnection(sessionId: String): WebSocketConnection =
+        webSocketManager.createConnection("ws/session/$sessionId")
 }
