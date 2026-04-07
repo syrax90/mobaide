@@ -1,7 +1,8 @@
 """Integration test: full auth → create → WS connect → scrollback → stop flow."""
 from __future__ import annotations
 
-import base64
+import json
+import struct
 import sys
 import time
 
@@ -36,29 +37,24 @@ def test_full_flow(test_client):
     session_id = resp.json()["session_id"]
     assert resp.json()["state"] == "running"
 
-    # 3. Connect WebSocket and verify I/O channel works
+    # 3. Connect WebSocket (binary protocol) and verify I/O channel works
     with test_client.websocket_connect(
         f"/ws/session/{session_id}?token={access_token}",
     ) as ws:
-        # Read initial burst until state message
-        got_output = False
-        got_state = False
-        for _ in range(50):
-            msg = ws.receive_json()
-            if msg["type"] == "output":
-                got_output = True
-            if msg["type"] == "state":
-                got_state = True
-                assert msg["status"] == "running"
-                break
+        # First frame: state
+        first = ws.receive_bytes()
+        assert first[:1] == b"s"
+        state_payload = json.loads(first[1:].decode("utf-8"))
+        assert state_payload["status"] in ("starting", "running")
 
-        assert got_state, "Expected state message"
+        # Second frame: replay marker
+        marker = ws.receive_bytes()
+        assert marker == b"b"
 
-        # Send input and resize (verify they're accepted)
-        text = "echo ok\r\n" if sys.platform == "win32" else "echo ok\n"
-        encoded = base64.b64encode(text.encode()).decode()
-        ws.send_json({"type": "input", "data": encoded})
-        ws.send_json({"type": "resize", "rows": 30, "cols": 100})
+        # Send input (CR-terminated) and resize as binary frames.
+        text = b"echo ok\r\n" if sys.platform == "win32" else b"echo ok\r"
+        ws.send_bytes(b"i" + text)
+        ws.send_bytes(b"r" + struct.pack(">HH", 30, 100))
         time.sleep(0.5)
 
     # 4. Get scrollback

@@ -49,5 +49,6 @@ class SessionInfo:
 class SessionEvent:
     event_type: str  # "output", "started", "stopped", "error"
     session_id: str
-    data: str | None = None
+    # Output events carry raw PTY bytes; other event types leave this None.
+    data: bytes | None = None
     timestamp: float = field(default_factory=time.time)

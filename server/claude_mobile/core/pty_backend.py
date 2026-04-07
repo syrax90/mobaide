@@ -9,8 +9,22 @@ from typing import Protocol
 logger = logging.getLogger(__name__)
 
 
+def _terminal_env(env: dict[str, str] | None, rows: int, cols: int) -> dict[str, str]:
+    """Build the spawn environment with TERM/COLUMNS/LINES set so TUIs (Ink,
+    ncurses) render with the correct dimensions instead of falling back to
+    80x24."""
+    spawn_env = os.environ.copy()
+    if env:
+        spawn_env.update(env)
+    spawn_env["PYTHONIOENCODING"] = "utf-8"
+    spawn_env.setdefault("TERM", "xterm-256color")
+    spawn_env["COLUMNS"] = str(cols)
+    spawn_env["LINES"] = str(rows)
+    return spawn_env
+
+
 class PtyBackend(Protocol):
-    """Cross-platform PTY backend protocol."""
+    """Cross-platform PTY backend protocol. All I/O is in raw bytes."""
 
     def spawn(
         self,
@@ -21,9 +35,9 @@ class PtyBackend(Protocol):
         cols: int,
     ) -> None: ...
 
-    def read(self, size: int = 4096) -> str: ...
+    def read(self, size: int = 4096) -> bytes: ...
 
-    def write(self, data: str) -> None: ...
+    def write(self, data: bytes) -> None: ...
 
     def resize(self, rows: int, cols: int) -> None: ...
 
@@ -37,7 +51,12 @@ class PtyBackend(Protocol):
 
 
 class WindowsPtyBackend:
-    """PTY backend for Windows using pywinpty (ConPTY)."""
+    """PTY backend for Windows using pywinpty (ConPTY).
+
+    pywinpty's ``PtyProcess`` exposes a ``str``-based read/write API. We
+    encode/decode at the boundary so the public surface stays bytes — every
+    consumer above the backend now sees raw bytes regardless of platform.
+    """
 
     def __init__(self) -> None:
         self._process: object | None = None  # winpty.PtyProcess at runtime
@@ -52,10 +71,7 @@ class WindowsPtyBackend:
     ) -> None:
         from winpty import PtyProcess  # type: ignore[import-untyped]
 
-        spawn_env = os.environ.copy()
-        if env:
-            spawn_env.update(env)
-        spawn_env["PYTHONIOENCODING"] = "utf-8"
+        spawn_env = _terminal_env(env, rows, cols)
 
         self._process = PtyProcess.spawn(
             cmd,
@@ -65,20 +81,29 @@ class WindowsPtyBackend:
         )
         logger.info("Windows PTY spawned pid=%s cmd=%s", self.get_pid(), cmd)
 
-    def read(self, size: int = 4096) -> str:
+    def read(self, size: int = 4096) -> bytes:
         assert self._process is not None, "PTY not spawned"
         try:
-            return self._process.read(size)  # type: ignore[union-attr]
+            chunk = self._process.read(size)  # type: ignore[union-attr]
         except EOFError:
-            return ""
+            return b""
         except Exception:
             if not self.is_alive():
-                return ""
+                return b""
             raise
+        if not chunk:
+            return b""
+        if isinstance(chunk, bytes):
+            return chunk
+        return chunk.encode("utf-8", errors="replace")
 
-    def write(self, data: str) -> None:
+    def write(self, data: bytes) -> None:
         assert self._process is not None, "PTY not spawned"
-        self._process.write(data)  # type: ignore[union-attr]
+        # pywinpty's write expects str — decode permissively. Control bytes
+        # like 0x03 (Ctrl-C) and 0x1b (Esc) round-trip cleanly through latin-1
+        # / utf-8 since they are below 0x80.
+        text = data.decode("utf-8", errors="replace")
+        self._process.write(text)  # type: ignore[union-attr]
 
     def resize(self, rows: int, cols: int) -> None:
         assert self._process is not None, "PTY not spawned"
@@ -139,10 +164,7 @@ class LinuxPtyBackend:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
 
-        spawn_env = os.environ.copy()
-        if env:
-            spawn_env.update(env)
-        spawn_env["PYTHONIOENCODING"] = "utf-8"
+        spawn_env = _terminal_env(env, rows, cols)
 
         self._process = subprocess.Popen(
             cmd,
@@ -162,19 +184,19 @@ class LinuxPtyBackend:
 
         logger.info("Linux PTY spawned pid=%s cmd=%s", self.get_pid(), cmd)
 
-    def read(self, size: int = 4096) -> str:
+    def read(self, size: int = 4096) -> bytes:
         assert self._master_fd is not None, "PTY not spawned"
         try:
             data = os.read(self._master_fd, size)
             if not data:
-                return ""
-            return data.decode("utf-8", errors="replace")
+                return b""
+            return data
         except OSError:
-            return ""
+            return b""
 
-    def write(self, data: str) -> None:
+    def write(self, data: bytes) -> None:
         assert self._master_fd is not None, "PTY not spawned"
-        os.write(self._master_fd, data.encode("utf-8"))
+        os.write(self._master_fd, data)
 
     def resize(self, rows: int, cols: int) -> None:
         import fcntl

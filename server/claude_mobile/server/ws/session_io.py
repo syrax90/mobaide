@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import base64
+import json
+import struct
 
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
@@ -22,6 +23,15 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+# --- Binary frame protocol (ttyd / gotty style) ----------------------------
+# First byte = type, remainder = payload. All frames are sent as binary
+# WebSocket messages.
+FRAME_OUTPUT = b"o"  # 0x6f  S->C  raw PTY bytes
+FRAME_INPUT = b"i"   # 0x69  C->S  raw input bytes
+FRAME_RESIZE = b"r"  # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
+FRAME_STATE = b"s"   # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
+FRAME_REPLAY = b"b"  # 0x62  S->C  marker: ring-buffer replay starts next frame
+
 _STATE_MAP = {
     SessionState.STARTING: "starting",
     SessionState.RUNNING: "running",
@@ -30,15 +40,33 @@ _STATE_MAP = {
     SessionState.CRASHED: "crashed",
 }
 
+_EVENT_TO_STATUS = {
+    "started": "running",
+    "stopped": "stopped",
+    "error": "crashed",
+}
+
+
+def _state_frame(status: str, pid: int | None = None) -> bytes:
+    payload: dict[str, object] = {"status": status}
+    if pid is not None:
+        payload["pid"] = pid
+    return FRAME_STATE + json.dumps(payload).encode("utf-8")
+
 
 @router.websocket("/ws/session/{session_id}")
 async def session_io(websocket: WebSocket, session_id: str) -> None:
-    """Bidirectional terminal I/O channel for a single session."""
+    """Bidirectional terminal I/O channel for a single session.
+
+    Wire format is binary frames with a 1-byte type prefix; see the constants
+    at the top of this module. The previous JSON+base64 protocol has been
+    removed — clients must speak binary.
+    """
     channel = "session_io"
     log_ws_connect(channel, websocket, session_id=session_id)
     bind_request_context(session_id=session_id)
 
-    # Authenticate
+    # Authenticate (also calls websocket.accept())
     try:
         username = await ws_authenticate(websocket)
     except WebSocketAuthError as exc:
@@ -54,13 +82,19 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    # Send scrollback burst
-    for chunk in session.get_scrollback():
-        encoded = base64.b64encode(chunk.encode("utf-8", errors="replace")).decode()
-        await websocket.send_json({"type": "output", "data": encoded})
+    # 1) Send current state immediately so the client knows what it's about
+    #    to receive.
+    await websocket.send_bytes(_state_frame(_STATE_MAP[session.state], session.pid))
 
-    # Send current state
-    await websocket.send_json({"type": "state", "status": _STATE_MAP[session.state]})
+    # 2) Send the ring-buffer replay marker, then the recent raw bytes as a
+    #    single output frame. The marker lets a future client distinguish
+    #    history from live output without changing the output frame shape.
+    ring = session.get_ring()
+    await websocket.send_bytes(FRAME_REPLAY)
+    # Always emit a single output frame after the replay marker — even if
+    # the ring is empty — so clients can rely on a fixed handshake shape
+    # (state, marker, output) before live frames begin.
+    await websocket.send_bytes(FRAME_OUTPUT + ring)
 
     # Get or create event fanout for this session
     fanouts: dict[str, SessionEventFanout] = websocket.app.state.fanouts
@@ -82,19 +116,36 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     counters = {"bytes_in": 0, "bytes_out": 0, "msg_count": 0}
 
     async def _reader() -> None:
-        """Read messages from WebSocket and forward to PTY."""
+        """Read binary frames from WebSocket and forward to PTY."""
         try:
             while True:
-                raw = await websocket.receive_json()
-                msg_type = raw.get("type")
-                if msg_type == "input":
-                    data = base64.b64decode(raw["data"]).decode("utf-8")
-                    counters["bytes_in"] += len(data)
+                msg = await websocket.receive()
+                if msg.get("type") == "websocket.disconnect":
+                    return
+                data = msg.get("bytes")
+                if data is None:
+                    # Text frames are not part of the protocol — ignore.
+                    continue
+                if not data:
+                    continue
+                frame_type = data[:1]
+                payload = data[1:]
+                if frame_type == FRAME_INPUT:
+                    counters["bytes_in"] += len(payload)
                     counters["msg_count"] += 1
-                    await session.write(data)
-                elif msg_type == "resize":
-                    await session.resize(raw["rows"], raw["cols"])
-                    counters["msg_count"] += 1
+                    if payload:
+                        await session.write(payload)
+                elif frame_type == FRAME_RESIZE:
+                    if len(payload) >= 4:
+                        rows, cols = struct.unpack(">HH", payload[:4])
+                        await session.resize(rows, cols)
+                        counters["msg_count"] += 1
+                else:
+                    logger.debug(
+                        "ws.unknown_frame",
+                        session_id=session_id,
+                        frame_type=frame_type.hex() if frame_type else "",
+                    )
         except WebSocketDisconnect:
             pass
         except Exception as exc:
@@ -106,18 +157,12 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
             while True:
                 event: SessionEvent = await consumer_queue.get()
                 if event.event_type == "output" and event.data:
-                    encoded = base64.b64encode(
-                        event.data.encode("utf-8", errors="replace"),
-                    ).decode()
                     counters["bytes_out"] += len(event.data)
-                    await websocket.send_json({"type": "output", "data": encoded})
-                elif event.event_type in ("started", "stopped", "error"):
-                    status_str = {
-                        "started": "running",
-                        "stopped": "stopped",
-                        "error": "crashed",
-                    }.get(event.event_type, event.event_type)
-                    await websocket.send_json({"type": "state", "status": status_str})
+                    await websocket.send_bytes(FRAME_OUTPUT + event.data)
+                elif event.event_type in _EVENT_TO_STATUS:
+                    await websocket.send_bytes(
+                        _state_frame(_EVENT_TO_STATUS[event.event_type], session.pid),
+                    )
         except WebSocketDisconnect:
             pass
         except Exception as exc:
