@@ -1,5 +1,5 @@
 .mcp.json
-.claude/settings.local.json
+.claude
 **/__pycache__
 **/venv/
 server/.env
