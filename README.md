@@ -43,7 +43,7 @@ Claude Mobile bridges this gap with a client-server architecture:
 | gql + httpx | Linear GraphQL integration |
 | asyncio | Concurrent session management |
 
-## Project Structure (Planned)
+## Project Structure
 
 | Component | Tech | Description |
 |-----------|------|-------------|
@@ -55,4 +55,4 @@ Claude Mobile bridges this gap with a client-server architecture:
 
 ## Status
 
-Early development. Tracked in [Linear (Claude_mobile project)](https://linear.app/claude-mobile) — issues CLA-6 through CLA-10.
+Early development. Server core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and Cloudflare Tunnel deployment are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project).

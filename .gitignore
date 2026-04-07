@@ -1,5 +1,8 @@
 .mcp.json
 .claude/settings.local.json
 **/__pycache__
+**/venv/
 server/.env
 deploy/tunnel.env
+server/users.json
+android/app/src/main/res/xml/network_security_config.xml
