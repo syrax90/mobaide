@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import time
 import uuid
 from contextlib import suppress
@@ -125,8 +126,16 @@ class AutoScanInstance:
         self._status = ScanStatus.SCANNING
         self._started_at = time.time()
         self._last_activity_at = self._started_at
+        # Run the poll loop in a fresh contextvars.Context so it does NOT
+        # inherit per-request context (request_id, method, path, client_ip)
+        # from whichever HTTP handler happened to call start(). Without this,
+        # every structlog entry from the background loop would be tagged
+        # with the request_id of the /api/autoscan/start call that spawned
+        # it, making debugging run-now cycles very confusing.
         self._poll_task = asyncio.create_task(
-            self._poll_loop(), name=f"autoscan-poll[{self._project_name}]"
+            self._poll_loop(),
+            name=f"autoscan-poll[{self._project_name}]",
+            context=contextvars.Context(),
         )
         logger.info(
             "Auto Scan started for project '%s'. Interval: %ds",
