@@ -7,7 +7,6 @@ Mocks the Linear client, worktree manager, and session manager.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,8 +23,6 @@ from claude_mobile.linear.scanner import AutoScanInstance
 
 
 def _make_config(tmp_path) -> AutoScanConfig:
-    state_dir = tmp_path / "state"
-    state_dir.mkdir(exist_ok=True)
     return AutoScanConfig(
         projects={
             "test-project": ProjectConfig(
@@ -40,7 +37,6 @@ def _make_config(tmp_path) -> AutoScanConfig:
         main_branch="main",
         linear_active_state="In Progress",
         auto_scan_prompt=None,
-        state_dir=str(state_dir),
     )
 
 
