@@ -7,7 +7,7 @@ import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.long
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -127,12 +127,22 @@ class ServerEventBus @Inject constructor(
                 "autoscan.list.changed" -> ServerEvent.AutoScanListChanged(
                     json.decodeFromJsonElement(AutoScanListResponse.serializer(), payload)
                 )
-                "autoscan.event" -> ServerEvent.AutoScanEvent(
-                    projectName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                    eventType = payload["event_type"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                    timestamp = payload["timestamp"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
-                    data = payload["data"],
-                )
+                "autoscan.event" -> {
+                    val projectName = payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val evt = payload["event"] as? JsonObject
+                    if (evt == null) null else {
+                        val seq = evt["seq"]?.jsonPrimitive?.long ?: 0L
+                        val ts = evt["ts"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        val type = evt["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                        val pl = evt["payload"] as? JsonObject ?: JsonObject(emptyMap())
+                        ServerEvent.AutoScanEvent(
+                            projectName = projectName,
+                            seq = seq,
+                            ts = ts,
+                            payload = ScanPayloadParser.parse(type, pl),
+                        )
+                    }
+                }
                 else -> null
             }
         } catch (_: Exception) {

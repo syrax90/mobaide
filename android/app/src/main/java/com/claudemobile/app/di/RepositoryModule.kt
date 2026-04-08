@@ -4,6 +4,7 @@ import android.content.Context
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.local.PreferencesStore
+import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketManager
 import com.claudemobile.app.data.repository.AuthRepository
@@ -58,8 +59,18 @@ object RepositoryModule {
 
     @Provides
     @Singleton
-    fun provideAutoScanRepository(restApi: RestApi, eventBus: ServerEventBus): AutoScanRepository {
-        return AutoScanRepository(restApi, eventBus)
+    fun provideAutoScanWsClient(webSocketManager: WebSocketManager): AutoScanWsClient {
+        return AutoScanWsClient(webSocketManager)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAutoScanRepository(
+        restApi: RestApi,
+        eventBus: ServerEventBus,
+        autoScanWsClient: AutoScanWsClient,
+    ): AutoScanRepository {
+        return AutoScanRepository(restApi, eventBus, autoScanWsClient)
     }
 
     @Provides

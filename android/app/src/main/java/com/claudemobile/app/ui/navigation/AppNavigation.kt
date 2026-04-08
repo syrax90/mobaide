@@ -12,6 +12,7 @@ import com.claudemobile.app.ui.login.LoginScreen
 import com.claudemobile.app.ui.sessions.CreateSessionScreen
 import com.claudemobile.app.ui.sessions.SessionListScreen
 import com.claudemobile.app.ui.settings.SettingsScreen
+import com.claudemobile.app.ui.autoscan.AutoScanDetailScreen
 import com.claudemobile.app.ui.terminal.TerminalScreen
 
 @Composable
@@ -47,6 +48,9 @@ fun AppNavigation(tokenStore: TokenStore? = null) {
                 onSettingsClick = {
                     navController.navigate(Routes.SETTINGS)
                 },
+                onAutoScanClick = { projectName ->
+                    navController.navigate(Routes.autoScanDetail(projectName))
+                },
             )
         }
 
@@ -68,6 +72,16 @@ fun AppNavigation(tokenStore: TokenStore? = null) {
         ) {
             TerminalScreen(
                 viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = Routes.AUTO_SCAN_DETAIL,
+            arguments = listOf(navArgument("projectName") { type = NavType.StringType }),
+        ) { entry ->
+            AutoScanDetailScreen(
+                projectName = entry.arguments?.getString("projectName").orEmpty(),
                 onBack = { navController.popBackStack() },
             )
         }

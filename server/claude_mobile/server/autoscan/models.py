@@ -11,6 +11,10 @@ class StopScanRequest(BaseModel):
     project_name: str
 
 
+class RunNowRequest(BaseModel):
+    project_name: str
+
+
 class AutoScanInstanceDto(BaseModel):
     project_name: str
     status: str
@@ -19,6 +23,9 @@ class AutoScanInstanceDto(BaseModel):
     processed_count: int
     last_scan_time: float | None = None
     scan_interval_seconds: int
+    next_scan_at: str | None = None
+    cycle_number: int = 0
+    current_seq: int = 0
 
 
 class AutoScanListResponse(BaseModel):
