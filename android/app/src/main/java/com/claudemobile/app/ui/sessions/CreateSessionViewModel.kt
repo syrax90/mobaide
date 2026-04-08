@@ -22,11 +22,14 @@ import javax.inject.Inject
 
 enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig }
 
+enum class CreateSessionMode { Standard, AutoScan }
+
 data class CreateSessionUiState(
     val step: CreateSessionStep = CreateSessionStep.ProjectSelect,
     val projects: List<ProjectInfo> = emptyList(),
     val isLoadingProjects: Boolean = false,
     val selectedProjectName: String? = null,
+    val selectedMode: CreateSessionMode? = null,
     val planMode: Boolean = false,
     val skipPermissions: Boolean = false,
     val noMemory: Boolean = false,
@@ -52,6 +55,9 @@ class CreateSessionViewModel @Inject constructor(
 
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
+
+    private val _transientMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val transientMessages: SharedFlow<String> = _transientMessages.asSharedFlow()
 
     init {
         // Reactive: collect projects from the bus-backed repository.
@@ -96,17 +102,24 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun selectProject(name: String) = _uiState.update {
-        // Selecting a project advances to the mode picker (CLA-15). The
-        // standard config form is only revealed once the user picks a mode.
+        // CLA-21: pure setter — no auto-advance. The user commits the choice
+        // by pressing the explicit Continue button below the dropdown.
         // CLA-20: clamp worktree off if the picked project is not a git repo,
         // so the launch payload stays consistent with the (now hidden) toggle.
         val isGit = it.projects.firstOrNull { p -> p.name == name }?.is_git == true
         it.copy(
             selectedProjectName = name,
-            step = CreateSessionStep.ModePick,
             worktree = if (isGit) it.worktree else false,
             branchName = if (isGit) it.branchName else "",
         )
+    }
+
+    fun confirmProject() = _uiState.update {
+        if (it.selectedProjectName != null) it.copy(step = CreateSessionStep.ModePick) else it
+    }
+
+    fun pickMode(mode: CreateSessionMode) = _uiState.update {
+        it.copy(selectedMode = mode)
     }
 
     fun selectStandardMode() = _uiState.update {
@@ -121,7 +134,18 @@ class CreateSessionViewModel @Inject constructor(
             try {
                 autoScanRepository.startScan(projectName)
                 preferencesStore.setLastUsedProjectName(projectName)
-                _uiState.update { it.copy(autoScanStarting = false, dismiss = true) }
+                // CLA-21: stay on the screen so the user can immediately start
+                // another scan for a different project. Reset wizard back to
+                // the project picker and surface a transient confirmation.
+                _uiState.update {
+                    it.copy(
+                        autoScanStarting = false,
+                        step = CreateSessionStep.ProjectSelect,
+                        selectedMode = null,
+                        selectedProjectName = null,
+                    )
+                }
+                _transientMessages.tryEmit("Auto Scan started for $projectName")
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -139,6 +163,7 @@ class CreateSessionViewModel @Inject constructor(
             CreateSessionStep.ModePick -> it.copy(
                 step = CreateSessionStep.ProjectSelect,
                 selectedProjectName = null,
+                selectedMode = null,
             )
             CreateSessionStep.ProjectSelect -> it
         }

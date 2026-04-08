@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -57,6 +58,9 @@ fun CreateSessionScreen(
 
     LaunchedEffect(viewModel) {
         viewModel.navigateToSession.collect { sessionId -> onSessionCreated(sessionId) }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.transientMessages.collect { msg -> snackbar.showSnackbar(msg) }
     }
     LaunchedEffect(state.error) {
         state.error?.let {
@@ -116,11 +120,19 @@ fun CreateSessionScreen(
                     state = state,
                     selectedProject = selectedProject,
                     onSelect = viewModel::selectProject,
+                    onContinue = viewModel::confirmProject,
                 )
                 CreateSessionStep.ModePick -> ModePickerSection(
                     project = selectedProject,
-                    onStandard = viewModel::selectStandardMode,
-                    onAutoScan = viewModel::selectAutoScanMode,
+                    selectedMode = state.selectedMode,
+                    onPickMode = viewModel::pickMode,
+                    onCommit = {
+                        when (state.selectedMode) {
+                            CreateSessionMode.Standard -> viewModel.selectStandardMode()
+                            CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
+                            null -> Unit
+                        }
+                    },
                     loading = state.autoScanStarting,
                 )
                 CreateSessionStep.StandardConfig -> StandardConfigSection(
@@ -138,6 +150,7 @@ private fun ProjectSelectSection(
     state: CreateSessionUiState,
     selectedProject: com.claudemobile.app.data.network.dto.ProjectInfo?,
     onSelect: (String) -> Unit,
+    onContinue: () -> Unit,
 ) {
     var dropdownExpanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(
@@ -182,13 +195,22 @@ private fun ProjectSelectSection(
             )
         }
     }
+
+    Button(
+        onClick = onContinue,
+        enabled = state.selectedProjectName != null,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("Continue")
+    }
 }
 
 @Composable
 private fun ModePickerSection(
     project: com.claudemobile.app.data.network.dto.ProjectInfo?,
-    onStandard: () -> Unit,
-    onAutoScan: () -> Unit,
+    selectedMode: CreateSessionMode?,
+    onPickMode: (CreateSessionMode) -> Unit,
+    onCommit: () -> Unit,
     loading: Boolean,
 ) {
     Text(
@@ -203,22 +225,29 @@ private fun ModePickerSection(
         )
     }
 
+    val selectedColors = CardDefaults.elevatedCardColors(
+        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+    )
+
     ElevatedCard(
-        onClick = onStandard,
+        onClick = { onPickMode(CreateSessionMode.Standard) },
         enabled = !loading,
+        colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.elevatedCardColors(),
         modifier = Modifier.fillMaxWidth(),
     ) {
         ListItem(
             headlineContent = { Text("Standard mode") },
             supportingContent = { Text("Configure and launch a Claude session.") },
+            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
         )
     }
 
     // Per CLA-15 AC: hide Auto Scan entirely when no Linear key is configured.
     if (project?.has_linear_key == true) {
         ElevatedCard(
-            onClick = onAutoScan,
+            onClick = { onPickMode(CreateSessionMode.AutoScan) },
             enabled = !loading,
+            colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
             modifier = Modifier.fillMaxWidth(),
         ) {
             ListItem(
@@ -231,8 +260,23 @@ private fun ModePickerSection(
                         }
                     }
                 } else null,
+                colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
             )
         }
+    }
+
+    Button(
+        onClick = onCommit,
+        enabled = selectedMode != null && !loading,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            when (selectedMode) {
+                CreateSessionMode.AutoScan -> if (loading) "Starting…" else "Start Auto Scan"
+                CreateSessionMode.Standard -> "Continue"
+                null -> "Continue"
+            }
+        )
     }
 }
 
