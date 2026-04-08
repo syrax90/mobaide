@@ -127,6 +127,8 @@ async def test_cwd_resolution_with_worktree(tmp_path: Path):
             wt.mkdir(parents=True, exist_ok=True)
             return WorktreeResult(path=str(wt), is_new=True, branch=slug)
 
+    # CLA-20: launcher now skips worktree creation for non-git projects.
+    (tmp_path / ".git").mkdir()
     launcher = ClaudeLauncher(worktree_mgr=_FakeWorktreeMgr())  # type: ignore[arg-type]
     spec = await launcher.build(
         _make_project(str(tmp_path)),

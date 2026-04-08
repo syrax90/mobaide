@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,7 @@ class ProjectsConfig:
                 "name": p.name,
                 "path": p.path,
                 "has_linear_key": p.linear_api_key is not None,
+                "is_git": (Path(p.path) / ".git").exists(),
                 "default_flags": dict(p.default_flags),
             }
             for p in self.projects.values()
