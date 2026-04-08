@@ -51,7 +51,7 @@ class AutoScanDetailViewModel @Inject constructor(
     )
 
     data class PhaseState(
-        val status: String = "pending",   // pending | active | ok | failed
+        val status: String = "pending",   // pending | active | ok | failed | skipped
         val lines: List<AnnotatedString> = emptyList(),
     )
 
@@ -163,17 +163,28 @@ class AutoScanDetailViewModel @Inject constructor(
                 appendLog("--- Scan #${p.cycleNumber} started ---", newSeq)
             }
             "scan_completed" -> {
+                val idle = p.issuesProcessed == 0
                 _ui.update {
                     it.copy(
                         nextScanAt = p.nextScanAt,
                         activePhase = null,
-                        phases = it.phases.mapValues { (k, v) ->
-                            if (v.status == "active") v.copy(status = "ok") else v
+                        phases = it.phases.mapValues { (_, v) ->
+                            when {
+                                v.status == "active" -> v.copy(status = "ok")
+                                idle && v.status == "pending" -> v.copy(status = "skipped")
+                                else -> v
+                            }
                         },
                         lastSeq = newSeq,
                     )
                 }
                 appendLog("--- Scan #${p.cycleNumber} completed ---", newSeq)
+                if (idle) {
+                    appendLog(
+                        "no AutoPipeline issues — skipping remaining stages",
+                        newSeq,
+                    )
+                }
             }
             "scan_stopped" -> {
                 _ui.update { it.copy(activePhase = null, lastSeq = newSeq) }

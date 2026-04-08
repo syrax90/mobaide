@@ -20,6 +20,7 @@ sealed class ScanProgressPayload {
         val phase: String,           // scan_started | scan_completed | scan_stopped
         val cycleNumber: Int,
         val nextScanAt: String?,
+        val issuesProcessed: Int = 0, // # of issues processed in just-completed cycle
     ) : ScanProgressPayload()
 
     data class Issue(

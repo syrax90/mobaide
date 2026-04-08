@@ -52,6 +52,7 @@ class ScanPhasePayload:
     phase: str  # "scan_started" | "scan_completed" | "scan_stopped"
     cycle_number: int
     next_scan_at: str | None = None  # ISO8601 UTC
+    issues_processed: int = 0  # # of issues processed in the just-completed cycle
 
 
 @dataclass
