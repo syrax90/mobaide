@@ -3,6 +3,7 @@ package com.claudemobile.app.data.repository
 import com.claudemobile.app.data.events.ServerEvent
 import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.network.ApiException
+import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
@@ -25,6 +26,7 @@ class AutoScanCapacityException(val maxScans: Int) :
 class AutoScanRepository(
     private val restApi: RestApi,
     private val eventBus: ServerEventBus,
+    private val autoScanWsClient: AutoScanWsClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -79,4 +81,21 @@ class AutoScanRepository(
     suspend fun stopScan(projectName: String) {
         restApi.stopAutoScan(projectName)
     }
+
+    suspend fun runNow(projectName: String) {
+        restApi.runAutoScanNow(projectName)
+    }
+
+    /**
+     * Open a /ws/autoscan stream subscribed to a single project (so the server
+     * also relays heavy `log` events). Caller cancels the flow to disconnect.
+     */
+    fun observeDetailFrames(
+        projectName: String,
+        resumeFromSeq: Map<String, Long> = emptyMap(),
+    ): Flow<AutoScanWsClient.Frame> =
+        autoScanWsClient.connect(
+            subscribe = listOf(projectName),
+            resumeFromSeq = resumeFromSeq,
+        )
 }

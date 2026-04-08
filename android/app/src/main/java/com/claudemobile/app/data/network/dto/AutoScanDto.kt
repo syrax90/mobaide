@@ -11,6 +11,9 @@ data class AutoScanInstanceDto(
     val processed_count: Int = 0,
     val last_scan_time: Double? = null,
     val scan_interval_seconds: Int = 300,
+    val next_scan_at: String? = null,
+    val cycle_number: Int = 0,
+    val current_seq: Long = 0L,
 )
 
 @Serializable
@@ -28,5 +31,10 @@ data class StartScanRequest(
 
 @Serializable
 data class StopScanRequest(
+    val project_name: String,
+)
+
+@Serializable
+data class RunNowRequest(
     val project_name: String,
 )

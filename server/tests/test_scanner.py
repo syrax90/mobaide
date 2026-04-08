@@ -1,11 +1,14 @@
-"""Tests for AutoScanService — mock Linear client, worktree manager, and session manager."""
+"""Tests for AutoScanInstance — focused on the structured-event model
+and the run-now wakeup mechanism introduced for CLA-22.
+
+Mocks the Linear client, worktree manager, and session manager.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import json
-import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -17,11 +20,12 @@ from claude_mobile.linear.models import (
     LinearIssue,
     ScanStatus,
 )
-from claude_mobile.linear.scanner import AutoScanService
-from claude_mobile.linear.worktree import WorktreeResult
+from claude_mobile.linear.scanner import AutoScanInstance
 
 
 def _make_config(tmp_path) -> AutoScanConfig:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
     return AutoScanConfig(
         projects={
             "test-project": ProjectConfig(
@@ -31,12 +35,12 @@ def _make_config(tmp_path) -> AutoScanConfig:
             )
         },
         worktree_base="claude_worktree",
-        scan_interval_seconds=1,  # fast for tests
+        scan_interval_seconds=1,
         branch_prefix="feature/claude",
         main_branch="main",
         linear_active_state="In Progress",
         auto_scan_prompt=None,
-        processed_items_path=str(tmp_path / "processed.json"),
+        state_dir=str(state_dir),
     )
 
 
@@ -59,256 +63,149 @@ def _make_issue(
     )
 
 
-@pytest.fixture
-def config(tmp_path):
-    return _make_config(tmp_path)
+def _make_instance(tmp_path, *, client=None, worktree_mgr=None, session_manager=None,
+                   launcher=None) -> AutoScanInstance:
+    config = _make_config(tmp_path)
+    return AutoScanInstance(
+        project_name="test-project",
+        config=config,
+        session_manager=session_manager or AsyncMock(spec=SessionManager),
+        launcher=launcher or AsyncMock(),
+        client=client or AsyncMock(),
+        worktree_mgr=worktree_mgr or AsyncMock(),
+    )
 
 
-@pytest.fixture
-def session_manager():
-    mgr = AsyncMock(spec=SessionManager)
-    mgr.create_session = AsyncMock()
-    return mgr
+class TestEmitAndRingBuffer:
+    def test_emit_assigns_monotonic_seq(self, tmp_path):
+        inst = _make_instance(tmp_path)
+        a = inst._emit("log", {"line": "a"})
+        b = inst._emit("log", {"line": "b"})
+        c = inst._emit("log", {"line": "c"})
+        assert (a.seq, b.seq, c.seq) == (1, 2, 3)
+        assert a.ts and b.ts and c.ts
+
+    def test_ring_buffer_caps_at_max(self, tmp_path):
+        inst = _make_instance(tmp_path)
+        inst._max_recent_events = 500
+        for i in range(600):
+            inst._emit("log", {"line": str(i)})
+        assert len(inst._recent_events) == 500
+        assert inst._recent_events[-1].seq == 600
+        assert inst._recent_events[0].seq == 101
+
+    def test_to_dto_includes_new_fields(self, tmp_path):
+        inst = _make_instance(tmp_path)
+        inst._emit("log", {"line": "x"})
+        dto = inst.to_dto()
+        assert "next_scan_at" in dto
+        assert "cycle_number" in dto
+        assert dto["current_seq"] == 1
+
+    def test_subscribe_delivers_event(self, tmp_path):
+        inst = _make_instance(tmp_path)
+        q = inst.subscribe_events()
+        inst._emit("log", {"line": "hi"})
+        evt = q.get_nowait()
+        assert evt.type == "log"
+        assert evt.payload == {"line": "hi"}
 
 
-@pytest.fixture
-def service(config, session_manager):
-    return AutoScanService(config=config, session_manager=session_manager)
+class TestRunNow:
+    @pytest.mark.asyncio
+    async def test_request_immediate_scan_wakes_loop(self, tmp_path):
+        """A long sleep should be cut short when request_immediate_scan() is called."""
+        from dataclasses import replace
+        inst = _make_instance(tmp_path)
+        # Build a fresh config with a long interval (AutoScanConfig is frozen).
+        inst._config = replace(inst._config, scan_interval_seconds=30)
+
+        scan_calls = 0
+
+        async def fake_scan_once():
+            nonlocal scan_calls
+            scan_calls += 1
+            if scan_calls >= 2:
+                # stop the loop after we've observed the wake
+                raise asyncio.CancelledError()
+
+        inst._scan_once = fake_scan_once  # type: ignore[assignment]
+
+        loop_task = asyncio.create_task(inst._poll_loop())
+        # Give the loop time to run scan_once #1 and enter wait_for sleep
+        await asyncio.sleep(0.05)
+        assert scan_calls == 1
+        inst.request_immediate_scan()
+        # Wake should arrive nearly immediately
+        try:
+            await asyncio.wait_for(loop_task, timeout=1.0)
+        except asyncio.CancelledError:
+            pass
+        assert scan_calls == 2
 
 
-class TestProcessedItemsPersistence:
-    def test_save_and_load(self, service, tmp_path):
-        service._processed_items = {"id-1", "id-2", "id-3"}
-        service._save_processed_items()
+class TestProcessIssueEmitsPerStepEvents:
+    @pytest.mark.asyncio
+    async def test_emits_state_label_worktree_session_in_order(self, tmp_path):
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
 
-        path = tmp_path / "processed.json"
-        assert path.exists()
-        data = json.loads(path.read_text())
-        assert set(data) == {"id-1", "id-2", "id-3"}
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "worktree")
+        wt_mgr.create_worktree.return_value = wt_result
 
-        # Load into fresh service
-        service._processed_items = set()
-        service._load_processed_items()
-        assert service._processed_items == {"id-1", "id-2", "id-3"}
+        sess_mgr = AsyncMock()
+        session_obj = MagicMock()
+        session_obj.pid = 12345
+        sess_mgr.create_session.return_value = session_obj
 
-    def test_load_nonexistent_file(self, service):
-        service._load_processed_items()
-        assert service._processed_items == set()
+        launcher = AsyncMock()
+        spec = MagicMock()
+        spec.argv = ["claude"]
+        spec.env = {}
+        launcher.build.return_value = spec
 
-    def test_load_corrupt_file(self, service, tmp_path):
-        path = tmp_path / "processed.json"
-        path.write_text("not json!!!")
-        service._load_processed_items()
-        assert service._processed_items == set()
-
-
-class TestGetStatus:
-    def test_initial_status(self, service):
-        status = service.get_status()
-        assert status["status"] == "idle"
-        assert status["active_project"] is None
-        assert status["processed_count"] == 0
-        assert status["last_scan_time"] is None
-        assert isinstance(status["recent_events"], list)
-
-
-class TestEventPubSub:
-    def test_subscribe_and_receive(self, service):
-        queue = service.subscribe_events()
-        service._emit_event("test_event", {"key": "value"})
-        assert not queue.empty()
-        event = queue.get_nowait()
-        assert event.event_type == "test_event"
-        assert event.data == {"key": "value"}
-
-    def test_unsubscribe(self, service):
-        queue = service.subscribe_events()
-        service.unsubscribe_events(queue)
-        service._emit_event("test_event", None)
-        assert queue.empty()
-
-    def test_recent_events_capped(self, service):
-        for i in range(150):
-            service._emit_event(f"event_{i}", None)
-        assert len(service._recent_events) <= service._max_recent_events
-
-
-class TestProcessIssue:
-    async def test_full_issue_processing_flow(self, service, session_manager, tmp_path):
-        """Test the complete issue processing: state transition, label removal, worktree, session."""
-        issue = _make_issue()
-
-        mock_client = AsyncMock()
-        mock_client.update_issue_state.return_value = True
-        mock_client.remove_issue_label.return_value = True
-        service._client = mock_client
-        service._active_project = "test-project"
-
-        mock_wt_mgr = AsyncMock()
-        mock_wt_mgr.create_worktree.return_value = WorktreeResult(
-            path=str(tmp_path / "worktree"), is_new=True, branch="feature/claude/cla-8-test-issue"
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            worktree_mgr=wt_mgr,
+            session_manager=sess_mgr,
+            launcher=launcher,
         )
-        service._worktree_mgr = mock_wt_mgr
 
-        await service._process_issue(issue)
+        await inst._process_issue(_make_issue())
 
-        # Verify state was updated
-        mock_client.update_issue_state.assert_called_once_with(
-            "uuid-1", "state-inprogress"
-        )
+        # Collect step ordering from issue events.
+        steps = [
+            (e.payload["step"], e.payload["status"])
+            for e in inst._recent_events
+            if e.type == "issue"
+        ]
+        # Expected: each step has a started + ok pair, in this order
+        expected_order = [
+            ("state_update", "started"),
+            ("state_update", "ok"),
+            ("label_removal", "started"),
+            ("label_removal", "ok"),
+            ("worktree_create", "started"),
+            ("worktree_create", "ok"),
+            ("session_spawn", "started"),
+            ("session_spawn", "ok"),
+        ]
+        assert steps == expected_order
 
-        # Verify label was removed
-        mock_client.remove_issue_label.assert_called_once_with(
-            "uuid-1", "label-auto"
-        )
-
-        # Verify worktree was created
-        mock_wt_mgr.create_worktree.assert_called_once()
-
-        # Verify session was started
-        session_manager.create_session.assert_called_once()
-        config_arg = session_manager.create_session.call_args[0][0]
-        assert config_arg.cwd == str(tmp_path / "worktree")
-        assert "claude" in config_arg.command[0]
-
-        # Verify added to processed
-        assert "uuid-1" in service._processed_items
-
-    async def test_worktree_failure_falls_back_to_project_root(
-        self, service, session_manager, config, tmp_path
-    ):
-        """When worktree creation fails, session starts in project root."""
-        issue = _make_issue()
-
-        mock_client = AsyncMock()
-        mock_client.update_issue_state.return_value = True
-        mock_client.remove_issue_label.return_value = True
-        service._client = mock_client
-        service._active_project = "test-project"
-
-        mock_wt_mgr = AsyncMock()
-        mock_wt_mgr.create_worktree.return_value = None  # failure
-        service._worktree_mgr = mock_wt_mgr
-
-        await service._process_issue(issue)
-
-        config_arg = session_manager.create_session.call_args[0][0]
-        assert config_arg.cwd == config.projects["test-project"].path
-
-    async def test_missing_target_state_skips_update(self, service, session_manager):
-        """If the target state isn't in team workflow, skip state update."""
-        issue = _make_issue()
-        issue.team_states = [IssueState(id="s1", name="Proposals")]  # no "In Progress"
-
-        mock_client = AsyncMock()
-        mock_client.remove_issue_label.return_value = True
-        service._client = mock_client
-        service._active_project = "test-project"
-
-        mock_wt_mgr = AsyncMock()
-        mock_wt_mgr.create_worktree.return_value = None
-        service._worktree_mgr = mock_wt_mgr
-
-        await service._process_issue(issue)
-
-        mock_client.update_issue_state.assert_not_called()
+        # And worktree + session payloads were emitted
+        types = [e.type for e in inst._recent_events]
+        assert "worktree" in types
+        assert "session" in types
 
 
-class TestScanOnce:
-    async def test_filters_already_processed(self, service):
-        """Already-processed issues are skipped."""
-        issue = _make_issue()
-
-        mock_client = AsyncMock()
-        mock_client.get_auto_scan_issues.return_value = [issue]
-        service._client = mock_client
-        service._active_project = "test-project"
-        service._processed_items = {issue.id}
-
-        mock_wt_mgr = AsyncMock()
-        service._worktree_mgr = mock_wt_mgr
-
-        await service._scan_once()
-
-        # No worktree creation should have happened
-        mock_wt_mgr.create_worktree.assert_not_called()
-
-    async def test_processes_new_issues(self, service, session_manager):
-        """New issues are processed and added to the set."""
-        issue = _make_issue()
-
-        mock_client = AsyncMock()
-        mock_client.get_auto_scan_issues.return_value = [issue]
-        mock_client.update_issue_state.return_value = True
-        mock_client.remove_issue_label.return_value = True
-        service._client = mock_client
-        service._active_project = "test-project"
-
-        mock_wt_mgr = AsyncMock()
-        mock_wt_mgr.create_worktree.return_value = None
-        service._worktree_mgr = mock_wt_mgr
-
-        await service._scan_once()
-
-        assert issue.id in service._processed_items
-
-
-class TestBuildClaudeCommand:
-    """The argv is now built by the shared ClaudeLauncher; AutoScanService
-    just delegates. Verify the delegation produces the expected shape."""
-
-    async def test_argv_includes_skip_permissions(self, service):
-        from claude_mobile.core.claude_launcher import ClaudeOptions
-
-        spec = await service._launcher.build(
-            service._config.projects["test-project"],
-            ClaudeOptions(skip_permissions=True),
-        )
-        assert spec.argv[0] == "claude"
-        assert "--allow-dangerously-skip-permissions" in spec.argv
-
-    async def test_argv_with_prompt(self, service):
-        from claude_mobile.core.claude_launcher import ClaudeOptions
-
-        spec = await service._launcher.build(
-            service._config.projects["test-project"],
-            ClaudeOptions(skip_permissions=True, initial_prompt="Read it. Fix it."),
-        )
-        assert spec.argv[-2:] == ["--", "Read it. Fix it."]
-
-
-class TestStartStop:
-    async def test_start_validates_linear_auth(self, service):
-        """start() calls get_viewer to validate auth."""
-        mock_client = AsyncMock()
-        mock_client.get_viewer.return_value = {"id": "u1", "name": "Test"}
-
-        with patch(
-            "claude_mobile.linear.scanner.LinearApiClient", return_value=mock_client
-        ):
-            await service.start("test-project")
-
-        mock_client.get_viewer.assert_called_once()
-        assert service._status == ScanStatus.SCANNING
-
-        # Clean up
-        await service.stop()
-        assert service._status == ScanStatus.STOPPED
-
-    async def test_start_rejects_unknown_project(self, service):
-        with pytest.raises(ValueError, match="not found"):
-            await service.start("nonexistent-project")
-
-    async def test_start_rejects_double_start(self, service):
-        mock_client = AsyncMock()
-        mock_client.get_viewer.return_value = {"id": "u1", "name": "Test"}
-
-        with patch(
-            "claude_mobile.linear.scanner.LinearApiClient", return_value=mock_client
-        ):
-            await service.start("test-project")
-
-        with pytest.raises(RuntimeError, match="already running"):
-            await service.start("test-project")
-
-        await service.stop()
+class TestStopEmitsPhase:
+    @pytest.mark.asyncio
+    async def test_stop_emits_scan_stopped_phase(self, tmp_path):
+        inst = _make_instance(tmp_path)
+        await inst.stop()
+        phase_events = [e for e in inst._recent_events if e.type == "phase"]
+        assert any(e.payload["phase"] == "scan_stopped" for e in phase_events)

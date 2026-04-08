@@ -37,9 +37,12 @@ import com.claudemobile.app.ui.theme.StateStopped
 fun AutoScanCard(
     instance: AutoScanInstanceDto,
     onStop: (String) -> Unit,
+    onClick: (String) -> Unit = {},
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick(instance.project_name) },
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer,
         ),
@@ -83,6 +86,10 @@ fun AutoScanCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            CountdownText(
+                nextScanAtIso = instance.next_scan_at,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
     }
 }

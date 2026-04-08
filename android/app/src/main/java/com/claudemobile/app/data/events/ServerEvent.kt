@@ -14,6 +14,43 @@ data class ServerEventEnvelope(
     val payload: JsonElement,
 )
 
+/** Structured payload for an auto-scan progress event (matches server). */
+sealed class ScanProgressPayload {
+    data class Phase(
+        val phase: String,           // scan_started | scan_completed | scan_stopped
+        val cycleNumber: Int,
+        val nextScanAt: String?,
+    ) : ScanProgressPayload()
+
+    data class Issue(
+        val identifier: String,
+        val title: String,
+        val step: String,            // state_update | label_removal | worktree_create | session_spawn
+        val status: String,          // started | ok | failed
+        val error: String?,
+    ) : ScanProgressPayload()
+
+    data class Worktree(
+        val identifier: String,
+        val path: String,
+    ) : ScanProgressPayload()
+
+    data class Session(
+        val identifier: String,
+        val sessionId: String,
+        val pid: Int?,
+    ) : ScanProgressPayload()
+
+    data class Log(
+        val line: String,
+        val level: String,
+        val ansi: Boolean,
+    ) : ScanProgressPayload()
+
+    /** Unknown/forward-compatible event types fall through here. */
+    data class Unknown(val type: String) : ScanProgressPayload()
+}
+
 /** Typed events emitted by [ServerEventBus]. */
 sealed class ServerEvent {
     data class SessionsChanged(val sessions: List<SessionResponse>) : ServerEvent()
@@ -23,9 +60,9 @@ sealed class ServerEvent {
     data class AutoScanListChanged(val list: AutoScanListResponse) : ServerEvent()
     data class AutoScanEvent(
         val projectName: String,
-        val eventType: String,
-        val timestamp: Double,
-        val data: JsonElement?,
+        val seq: Long,
+        val ts: String,
+        val payload: ScanProgressPayload,
     ) : ServerEvent()
 }
 

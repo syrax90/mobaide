@@ -4,6 +4,9 @@ import asyncio
 import json
 import time
 import uuid
+from contextlib import suppress
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -25,7 +28,16 @@ from claude_mobile.core import (
 
 from .client import LinearApiClient
 from .config import AutoScanConfig
-from .models import LinearIssue, ScanEvent, ScanStatus
+from .models import (
+    LinearIssue,
+    ScanEvent,
+    ScanIssuePayload,
+    ScanPhasePayload,
+    ScanSessionPayload,
+    ScanStatus,
+    ScanWorktreePayload,
+    now_iso,
+)
 from .rate_limiter import LinearRateLimiter
 from .worktree import WorktreeManager, convert_to_worktree_slug
 
@@ -41,12 +53,7 @@ class AutoScanCapacityReached(Exception):
 
 
 class AutoScanInstance:
-    """One Auto Scan polling loop bound to a single project.
-
-    Holds all per-scan state: Linear client, worktree manager, processed-items
-    set, polling task, and event subscribers. Mirrors the old singleton
-    AutoScanService but is instantiated once per active project.
-    """
+    """One Auto Scan polling loop bound to a single project."""
 
     def __init__(
         self,
@@ -76,7 +83,12 @@ class AutoScanInstance:
         self._last_activity_at: float = self._started_at
         self._event_subscribers: set[asyncio.Queue[ScanEvent]] = set()
         self._recent_events: list[ScanEvent] = []
-        self._max_recent_events = 100
+        self._max_recent_events = 500
+
+        self._seq: int = 0
+        self._cycle_number: int = 0
+        self._next_scan_at: datetime | None = None
+        self._run_now_event: asyncio.Event = asyncio.Event()
 
     # -- Properties --
 
@@ -92,10 +104,17 @@ class AutoScanInstance:
     def processed_count(self) -> int:
         return len(self._processed_items)
 
+    @property
+    def current_seq(self) -> int:
+        return self._seq
+
+    @property
+    def recent_events(self) -> list[ScanEvent]:
+        return list(self._recent_events)
+
     # -- Lifecycle --
 
     async def start(self) -> None:
-        # Verify Linear connectivity
         viewer = await self._client.get_viewer()
         logger.info(
             "Linear authenticated as %s for project %s",
@@ -108,7 +127,6 @@ class AutoScanInstance:
         self._status = ScanStatus.SCANNING
         self._started_at = time.time()
         self._last_activity_at = self._started_at
-        self._emit_event("scan_started", {"project": self._project_name})
         self._poll_task = asyncio.create_task(
             self._poll_loop(), name=f"autoscan-poll[{self._project_name}]"
         )
@@ -129,26 +147,44 @@ class AutoScanInstance:
 
         await self._save_processed_items()
         self._status = ScanStatus.STOPPED
-        self._emit_event("scan_stopped", None)
+        self._next_scan_at = None
+        self._emit_phase("scan_stopped")
         logger.info("Auto Scan stopped for project '%s'", self._project_name)
+
+    def request_immediate_scan(self) -> None:
+        """Wake the polling loop to run a scan cycle immediately."""
+        self._run_now_event.set()
 
     # -- Polling --
 
     async def _poll_loop(self) -> None:
         try:
             while True:
+                self._cycle_number += 1
                 try:
                     await self._scan_once()
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
                     logger.error("Scan cycle failed", exc_info=True)
                     self._status = ScanStatus.ERROR
-                    self._emit_event("error", {"message": "Scan cycle failed"})
+                    self._emit(
+                        "log",
+                        {"line": f"Scan cycle failed: {exc}", "level": "error", "ansi": False},
+                    )
                 else:
                     self._status = ScanStatus.SCANNING
 
-                await asyncio.sleep(self._config.scan_interval_seconds)
+                interval = self._config.scan_interval_seconds
+                self._next_scan_at = datetime.now(timezone.utc) + timedelta(seconds=interval)
+                self._publish_status()
+
+                try:
+                    await asyncio.wait_for(self._run_now_event.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    self._run_now_event.clear()
         except asyncio.CancelledError:
             return
 
@@ -158,103 +194,112 @@ class AutoScanInstance:
         logger.info(
             "Scanning for AutoPipeline issues (project=%s)...", self._project_name
         )
+        self._emit_phase("scan_started")
 
         issues = await self._client.get_auto_scan_issues()
-
-        if not issues:
-            self._emit_event("scan_completed", {"found": 0, "new": 0})
-            return
-
         new_issues = [i for i in issues if i.id not in self._processed_items]
-        if not new_issues:
-            self._emit_event(
-                "scan_completed", {"found": len(issues), "new": 0}
-            )
-            return
 
-        logger.info("Found %d new issue(s) to process", len(new_issues))
-        for issue in new_issues:
-            await self._process_issue(issue)
+        if new_issues:
+            logger.info("Found %d new issue(s) to process", len(new_issues))
+            for issue in new_issues:
+                await self._process_issue(issue)
+            await self._save_processed_items()
 
-        await self._save_processed_items()
-        self._emit_event(
-            "scan_completed",
-            {"found": len(issues), "new": len(new_issues)},
-        )
+        self._emit_phase("scan_completed")
 
     @log_call(name="autoscan.process_issue", log_args=("issue",))
     async def _process_issue(self, issue: LinearIssue) -> None:
         bind_request_context(issue_identifier=issue.identifier)
         project = self._config.projects[self._project_name]
         logger.info("Processing: %s - %s", issue.identifier, issue.title)
-        self._emit_event(
-            "issue_found",
-            {"identifier": issue.identifier, "title": issue.title},
-        )
 
+        # 1) State update
         target_state_name = self._config.linear_active_state
         target_state = next(
             (s for s in issue.team_states if s.name == target_state_name), None
         )
+        self._emit_issue(issue, "state_update", "started")
         if target_state is None:
-            logger.warning(
-                "Could not find state '%s' in team workflow — skipping state update",
-                target_state_name,
+            self._emit_issue(
+                issue,
+                "state_update",
+                "failed",
+                error=f"workflow state '{target_state_name}' not found",
             )
         else:
-            success = await self._client.update_issue_state(
-                issue.id, target_state.id
-            )
-            if not success:
-                logger.error("Failed to update state for %s", issue.identifier)
+            try:
+                ok = await self._client.update_issue_state(issue.id, target_state.id)
+                self._emit_issue(
+                    issue, "state_update", "ok" if ok else "failed",
+                    error=None if ok else "Linear API returned failure",
+                )
+            except Exception as exc:
+                self._emit_issue(issue, "state_update", "failed", error=str(exc))
 
+        # 2) Label removal
         auto_label = next(
             (l for l in issue.labels if l.name == "AutoPipeline"), None
         )
-        if auto_label:
-            await self._client.remove_issue_label(issue.id, auto_label.id)
-
-        slug = convert_to_worktree_slug(issue.identifier, issue.title)
-        wt_result = await self._worktree_mgr.create_worktree(slug, project.path)
-        target_dir = wt_result.path if wt_result else project.path
-
-        spec = await self._launcher.build(
-            project,
-            ClaudeOptions(
-                skip_permissions=True,
-                initial_prompt=self._config.auto_scan_prompt,
-                identifier=issue.identifier,
-                title=issue.title,
-            ),
-        )
-        session_id = uuid.uuid4().hex[:12]
-        config = SessionConfig(
-            session_id=session_id,
-            command=spec.argv,
-            cwd=target_dir,
-            env=spec.env,
-        )
-        try:
-            await self._session_manager.create_session(config)
-            logger.info(
-                "Session %s started for %s", session_id, issue.identifier
+        self._emit_issue(issue, "label_removal", "started")
+        if auto_label is None:
+            self._emit_issue(
+                issue, "label_removal", "ok", error="AutoPipeline label absent"
             )
-        except Exception:
+        else:
+            try:
+                await self._client.remove_issue_label(issue.id, auto_label.id)
+                self._emit_issue(issue, "label_removal", "ok")
+            except Exception as exc:
+                self._emit_issue(issue, "label_removal", "failed", error=str(exc))
+
+        # 3) Worktree create
+        slug = convert_to_worktree_slug(issue.identifier, issue.title)
+        self._emit_issue(issue, "worktree_create", "started")
+        try:
+            wt_result = await self._worktree_mgr.create_worktree(slug, project.path)
+            target_dir = wt_result.path if wt_result else project.path
+            self._emit_issue(issue, "worktree_create", "ok")
+            self._emit("worktree", asdict(ScanWorktreePayload(
+                identifier=issue.identifier, path=str(target_dir),
+            )))
+        except Exception as exc:
+            self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
+            target_dir = project.path
+
+        # 4) Session spawn
+        self._emit_issue(issue, "session_spawn", "started")
+        session_id = uuid.uuid4().hex[:12]
+        try:
+            spec = await self._launcher.build(
+                project,
+                ClaudeOptions(
+                    skip_permissions=True,
+                    initial_prompt=self._config.auto_scan_prompt,
+                    identifier=issue.identifier,
+                    title=issue.title,
+                ),
+            )
+            config = SessionConfig(
+                session_id=session_id,
+                command=spec.argv,
+                cwd=target_dir,
+                env=spec.env,
+            )
+            session = await self._session_manager.create_session(config)
+            pid = getattr(session, "pid", None)
+            self._emit_issue(issue, "session_spawn", "ok")
+            self._emit("session", asdict(ScanSessionPayload(
+                identifier=issue.identifier, session_id=session_id, pid=pid,
+            )))
+            logger.info("Session %s started for %s", session_id, issue.identifier)
+        except Exception as exc:
+            self._emit_issue(issue, "session_spawn", "failed", error=str(exc))
             logger.error(
                 "Failed to start session for %s", issue.identifier, exc_info=True
             )
 
         self._processed_items.add(issue.id)
         self._last_activity_at = time.time()
-        self._emit_event(
-            "issue_processed",
-            {
-                "identifier": issue.identifier,
-                "title": issue.title,
-                "session_id": session_id,
-                "worktree": target_dir,
-            },
-        )
 
     # -- Processed items persistence --
 
@@ -293,31 +338,69 @@ class AutoScanInstance:
 
     # -- Event pub-sub --
 
-    def _emit_event(self, event_type: str, data: dict | None) -> None:
-        event = ScanEvent(event_type=event_type, data=data)
-        self._recent_events.append(event)
+    def _emit(self, type_: str, payload: dict) -> ScanEvent:
+        self._seq += 1
+        evt = ScanEvent(
+            seq=self._seq,
+            ts=now_iso(),
+            type=type_,
+            payload=payload,
+        )
+        self._recent_events.append(evt)
         if len(self._recent_events) > self._max_recent_events:
             self._recent_events = self._recent_events[-self._max_recent_events:]
 
         for q in list(self._event_subscribers):
-            try:
-                q.put_nowait(event)
-            except asyncio.QueueFull:
-                pass
+            with suppress(asyncio.QueueFull):
+                q.put_nowait(evt)
 
         if self._event_bus is not None:
             self._event_bus.publish(
                 "autoscan.event",
                 {
                     "project_name": self._project_name,
-                    "event_type": event.event_type,
-                    "timestamp": event.timestamp,
-                    "data": event.data,
+                    "event": evt.to_dict(),
                 },
             )
-            self._event_bus.publish(
-                "autoscan.status", self.to_dto()
-            )
+            self._event_bus.publish("autoscan.status", self.to_dto())
+        return evt
+
+    def _emit_phase(self, phase: str) -> None:
+        next_at = self._next_scan_at.isoformat() if self._next_scan_at else None
+        self._emit(
+            "phase",
+            asdict(
+                ScanPhasePayload(
+                    phase=phase,
+                    cycle_number=self._cycle_number,
+                    next_scan_at=next_at,
+                )
+            ),
+        )
+
+    def _emit_issue(
+        self,
+        issue: LinearIssue,
+        step: str,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        self._emit(
+            "issue",
+            asdict(
+                ScanIssuePayload(
+                    identifier=issue.identifier,
+                    title=issue.title,
+                    step=step,
+                    status=status,
+                    error=error,
+                )
+            ),
+        )
+
+    def _publish_status(self) -> None:
+        if self._event_bus is not None:
+            self._event_bus.publish("autoscan.status", self.to_dto())
 
     def subscribe_events(self) -> asyncio.Queue[ScanEvent]:
         q: asyncio.Queue[ScanEvent] = asyncio.Queue(maxsize=200)
@@ -330,8 +413,6 @@ class AutoScanInstance:
     # -- DTO --
 
     def to_dto(self) -> dict:
-        """Serialize this instance to the per-project status dict used by
-        REST/WebSocket consumers."""
         return {
             "project_name": self._project_name,
             "status": self._status.value,
@@ -340,29 +421,19 @@ class AutoScanInstance:
             "processed_count": len(self._processed_items),
             "last_scan_time": self._last_scan_time,
             "scan_interval_seconds": self._config.scan_interval_seconds,
+            "next_scan_at": self._next_scan_at.isoformat() if self._next_scan_at else None,
+            "cycle_number": self._cycle_number,
+            "current_seq": self._seq,
         }
 
     def get_status(self) -> dict:
-        """Full status payload (DTO + recent events) for the per-project
-        status endpoint."""
         dto = self.to_dto()
-        dto["recent_events"] = [
-            {
-                "event_type": e.event_type,
-                "timestamp": e.timestamp,
-                "data": e.data,
-            }
-            for e in self._recent_events[-20:]
-        ]
+        dto["recent_events"] = [e.to_dict() for e in self._recent_events[-50:]]
         return dto
 
 
 class AutoScanSessionManager:
-    """Manages multiple concurrent AutoScanInstance objects.
-
-    Mirrors the dict-keyed pattern of SessionManager: ``_scans`` maps
-    project name → AutoScanInstance, protected by ``_lock``.
-    """
+    """Manages multiple concurrent AutoScanInstance objects."""
 
     def __init__(
         self,
@@ -392,6 +463,9 @@ class AutoScanSessionManager:
 
     def get(self, project_name: str) -> AutoScanInstance | None:
         return self._scans.get(project_name)
+
+    def all_instances(self) -> list[AutoScanInstance]:
+        return list(self._scans.values())
 
     def list(self) -> list[dict]:
         return [inst.to_dto() for inst in self._scans.values()]

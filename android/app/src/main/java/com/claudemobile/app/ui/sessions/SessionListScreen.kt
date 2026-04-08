@@ -61,6 +61,7 @@ fun SessionListScreen(
     onSessionClick: (String) -> Unit,
     onCreateClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onAutoScanClick: (String) -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -156,6 +157,7 @@ fun SessionListScreen(
                     AutoScanCard(
                         instance = instance,
                         onStop = viewModel::stopAutoScan,
+                        onClick = onAutoScanClick,
                     )
                 }
                 if (uiState.autoScanAvailableProjects.isNotEmpty()) {
