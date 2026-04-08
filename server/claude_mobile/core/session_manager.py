@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, Awaitable, Callable
 
 try:
     from claude_mobile.server.logging import audit_event, get_logger, log_call
@@ -32,6 +33,10 @@ class SessionManager:
         max_sessions: int = 16,
         projects_config: ProjectsConfig | None = None,
         launcher: ClaudeLauncher | None = None,
+        event_bus: Any | None = None,
+        on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
+        on_session_removed: Callable[[str], Awaitable[None] | None] | None = None,
+        session_dto_factory: Callable[[SessionInfo], dict] | None = None,
     ) -> None:
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = asyncio.Lock()
@@ -39,6 +44,31 @@ class SessionManager:
         self._liveness_task: asyncio.Task[None] | None = None
         self._projects_config = projects_config
         self._launcher = launcher
+        self._event_bus = event_bus
+        self._on_session_created = on_session_created
+        self._on_session_removed = on_session_removed
+        self._session_dto_factory = session_dto_factory or (
+            lambda info: {
+                "session_id": info.session_id,
+                "state": info.state.value,
+                "created_at": info.created_at.isoformat(),
+                "pid": info.pid,
+                "command": info.command,
+                "cwd": info.cwd,
+            }
+        )
+
+    async def _publish_sessions_changed(self) -> None:
+        if self._event_bus is None:
+            return
+        sessions_now = self.list_sessions()
+        try:
+            self._event_bus.publish(
+                "sessions.changed",
+                {"sessions": [self._session_dto_factory(s) for s in sessions_now]},
+            )
+        except Exception:
+            logger.exception("session_manager.publish_failed")
 
     @property
     def max_sessions(self) -> int:
@@ -76,7 +106,19 @@ class SessionManager:
                 active=len(self._sessions),
                 max_sessions=self._max_sessions,
             )
-            return session
+        # Eager hook (e.g. attach SessionEventFanout) so headless sessions
+        # — like Auto Scan subsessions — start fanning out events without
+        # requiring a /ws/session/{id} client to first attach.
+        if self._on_session_created is not None:
+            try:
+                result = self._on_session_created(session)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("session_manager.on_created_hook_failed")
+        # Single source of truth for sessions.changed.
+        await self._publish_sessions_changed()
+        return session
 
     async def _apply_project_launch(self, config: SessionConfig) -> None:
         """Resolve a project + ClaudeOptions through the launcher and
@@ -118,6 +160,14 @@ class SessionManager:
             force=force,
             via="session_manager",
         )
+        if self._on_session_removed is not None:
+            try:
+                result = self._on_session_removed(session_id)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.exception("session_manager.on_removed_hook_failed")
+        await self._publish_sessions_changed()
 
     async def stop_all(self) -> None:
         """Stop all sessions concurrently."""

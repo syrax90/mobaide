@@ -64,6 +64,36 @@ def _state_frame(status: str, pid: int | None = None) -> bytes:
     return FRAME_STATE + json.dumps(payload).encode("utf-8")
 
 
+def ensure_fanout(app_state, session) -> SessionEventFanout:
+    """Get or eagerly create a SessionEventFanout for ``session``.
+
+    Used both by the ``/ws/session/{id}`` handler and by the
+    ``SessionManager.on_session_created`` hook (registered in ``app.py``)
+    so headless sessions — including those spawned by Auto Scan — start
+    fanning out events the moment they are created.
+    """
+    fanouts: dict[str, SessionEventFanout] = app_state.fanouts
+    fanout = fanouts.get(session.session_id)
+    if fanout is None:
+        manager = app_state.session_manager
+        fanout = SessionEventFanout(
+            session=session,
+            broadcaster=getattr(app_state, "broadcaster", None),
+            get_sessions=manager.list_sessions,
+            event_bus=getattr(app_state, "event_bus", None),
+        )
+        fanout.start()
+        fanouts[session.session_id] = fanout
+    return fanout
+
+
+def stop_fanout(app_state, session_id: str) -> None:
+    fanouts: dict[str, SessionEventFanout] = getattr(app_state, "fanouts", {})
+    fanout = fanouts.pop(session_id, None)
+    if fanout:
+        fanout.stop()
+
+
 @router.websocket("/ws/session/{session_id}")
 async def session_io(websocket: WebSocket, session_id: str) -> None:
     """Bidirectional terminal I/O channel for a single session.
@@ -106,19 +136,9 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     # (state, marker, output) before live frames begin.
     await websocket.send_bytes(FRAME_OUTPUT + ring)
 
-    # Get or create event fanout for this session
-    fanouts: dict[str, SessionEventFanout] = websocket.app.state.fanouts
-    if session_id not in fanouts:
-        fanout = SessionEventFanout(
-            session=session,
-            broadcaster=websocket.app.state.broadcaster,
-            get_sessions=manager.list_sessions,
-            event_bus=getattr(websocket.app.state, "event_bus", None),
-        )
-        fanout.start()
-        fanouts[session_id] = fanout
-    else:
-        fanout = fanouts[session_id]
+    # Get or eagerly create the fanout. (Headless auto-scan sessions also
+    # come through here via the on_session_created hook in app.py.)
+    fanout = ensure_fanout(websocket.app.state, session)
 
     # Subscribe to events
     consumer_queue = fanout.subscribe()
