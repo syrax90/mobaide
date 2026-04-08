@@ -241,19 +241,27 @@ private fun StandardConfigSection(
     state: CreateSessionUiState,
     viewModel: CreateSessionViewModel,
 ) {
+    val isGitProject = state.projects
+        .firstOrNull { it.name == state.selectedProjectName }
+        ?.is_git == true
+
     ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
-    ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
-    if (state.worktree) {
-        OutlinedTextField(
-            value = state.branchName,
-            onValueChange = viewModel::setBranchName,
-            label = { Text("Branch name (optional)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
+    // CLA-20: worktree requires a git repo — hide the toggle for non-git projects.
+    if (isGitProject) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) {
+            OutlinedTextField(
+                value = state.branchName,
+                onValueChange = viewModel::setBranchName,
+                label = { Text("Branch name (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 
     OutlinedTextField(

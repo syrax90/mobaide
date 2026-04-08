@@ -98,7 +98,15 @@ class CreateSessionViewModel @Inject constructor(
     fun selectProject(name: String) = _uiState.update {
         // Selecting a project advances to the mode picker (CLA-15). The
         // standard config form is only revealed once the user picks a mode.
-        it.copy(selectedProjectName = name, step = CreateSessionStep.ModePick)
+        // CLA-20: clamp worktree off if the picked project is not a git repo,
+        // so the launch payload stays consistent with the (now hidden) toggle.
+        val isGit = it.projects.firstOrNull { p -> p.name == name }?.is_git == true
+        it.copy(
+            selectedProjectName = name,
+            step = CreateSessionStep.ModePick,
+            worktree = if (isGit) it.worktree else false,
+            branchName = if (isGit) it.branchName else "",
+        )
     }
 
     fun selectStandardMode() = _uiState.update {

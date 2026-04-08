@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from typing import TYPE_CHECKING
 
@@ -137,6 +140,14 @@ class ClaudeLauncher:
         self, project: ProjectConfig, options: ClaudeOptions
     ) -> str:
         if not options.worktree:
+            return project.path
+        # CLA-20: a stale client may still send worktree=true for a non-git
+        # project. Log it for audit and fall back to the project root.
+        if not (Path(project.path) / ".git").exists():
+            logger.warning(
+                "worktree=true requested for non-git project %r; ignoring",
+                project.name,
+            )
             return project.path
         if self._worktree_mgr is None:
             return project.path

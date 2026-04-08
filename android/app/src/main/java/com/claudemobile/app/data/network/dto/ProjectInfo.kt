@@ -8,5 +8,6 @@ data class ProjectInfo(
     val name: String,
     val path: String,
     val has_linear_key: Boolean = false,
+    val is_git: Boolean = false,
     val default_flags: Map<String, String> = emptyMap(),
 )
