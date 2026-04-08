@@ -11,7 +11,7 @@ from claude_mobile.linear.scanner import (
     AutoScanSessionManager,
 )
 
-from ..auth.dependencies import get_current_user, ws_authenticate
+from ..auth.dependencies import WebSocketAuthError, get_current_user, ws_authenticate
 from ..logging import get_logger
 from ..ws.logging import (
     log_ws_authenticated,
@@ -139,14 +139,12 @@ async def ws_autoscan(websocket: WebSocket) -> None:
       Clients NOT in `subscribe` get all event types except `log` filtered out.
     """
     channel = "autoscan"
-    await websocket.accept()
     log_ws_connect(channel, websocket)
 
     try:
         username = await ws_authenticate(websocket)
-    except Exception as exc:
+    except WebSocketAuthError as exc:
         log_ws_error(channel, exc, stage="auth")
-        await websocket.close(code=4001, reason="Authentication failed")
         return
     log_ws_authenticated(channel, username)
 
