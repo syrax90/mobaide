@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 import uuid
 from contextlib import suppress
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 try:
     from claude_mobile.server.logging import bind_request_context, get_logger, log_call
@@ -74,8 +72,10 @@ class AutoScanInstance:
         self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
 
+        # In-memory dedup only — purges when the AutoScanInstance stops.
+        # Source of truth for "needs processing" is the Linear issue's state +
+        # AutoPipeline label, which the pipeline transitions away after work.
         self._processed_items: set[str] = set()
-        self._processed_lock = asyncio.Lock()
         self._status = ScanStatus.IDLE
         self._poll_task: asyncio.Task[None] | None = None
         self._last_scan_time: float | None = None
@@ -122,8 +122,6 @@ class AutoScanInstance:
             self._project_name,
         )
 
-        await self._load_processed_items()
-
         self._status = ScanStatus.SCANNING
         self._started_at = time.time()
         self._last_activity_at = self._started_at
@@ -145,7 +143,6 @@ class AutoScanInstance:
                 pass
             self._poll_task = None
 
-        await self._save_processed_items()
         self._status = ScanStatus.STOPPED
         self._next_scan_at = None
         self._emit_phase("scan_stopped")
@@ -212,7 +209,6 @@ class AutoScanInstance:
             for issue in new_issues:
                 await self._process_issue(issue)
                 processed_count += 1
-            await self._save_processed_items()
 
         self._emit_phase("scan_completed", issues_processed=processed_count)
 
@@ -309,41 +305,6 @@ class AutoScanInstance:
 
         self._processed_items.add(issue.id)
         self._last_activity_at = time.time()
-
-    # -- Processed items persistence --
-
-    def _processed_items_path(self) -> Path:
-        return self._config.processed_items_path_for(self._project_name)
-
-    async def _load_processed_items(self) -> None:
-        path = self._processed_items_path()
-        async with self._processed_lock:
-            if path.exists():
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    self._processed_items = set(data)
-                    logger.info(
-                        "Loaded %d processed items for %s from %s",
-                        len(self._processed_items),
-                        self._project_name,
-                        path,
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning(
-                        "Could not parse %s — starting fresh", path
-                    )
-                    self._processed_items = set()
-            else:
-                self._processed_items = set()
-
-    async def _save_processed_items(self) -> None:
-        path = self._processed_items_path()
-        async with self._processed_lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(sorted(self._processed_items), indent=2),
-                encoding="utf-8",
-            )
 
     # -- Event pub-sub --
 
