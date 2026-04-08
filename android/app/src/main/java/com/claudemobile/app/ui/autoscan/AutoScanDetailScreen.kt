@@ -233,6 +233,7 @@ private fun phaseColor(status: String): Color = when (status) {
     "active" -> StateStarting
     "ok" -> StateRunning
     "failed" -> StateCrashed
+    "skipped" -> StateStopped
     else -> StateStopped
 }
 

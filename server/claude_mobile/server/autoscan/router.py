@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, status
+from starlette.websockets import WebSocketDisconnect
 
 from claude_mobile.linear.scanner import (
     AutoScanAlreadyRunning,
@@ -230,16 +231,22 @@ async def ws_autoscan(websocket: WebSocket) -> None:
 
         async def _reader() -> None:
             # Continue accepting subscribe updates after snapshot.
+            # Returns cleanly on client disconnect so the surrounding
+            # asyncio.wait() does not surface a "Task exception was never
+            # retrieved" log entry on the normal close path.
             nonlocal subscribe_set
-            while True:
-                text = await websocket.receive_text()
-                try:
-                    obj = json.loads(text)
-                    sub = obj.get("subscribe")
-                    if isinstance(sub, list):
-                        subscribe_set = {str(s) for s in sub}
-                except (json.JSONDecodeError, ValueError):
-                    pass
+            try:
+                while True:
+                    text = await websocket.receive_text()
+                    try:
+                        obj = json.loads(text)
+                        sub = obj.get("subscribe")
+                        if isinstance(sub, list):
+                            subscribe_set = {str(s) for s in sub}
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+            except WebSocketDisconnect:
+                return
 
         if not queues:
             # No active scans — still keep the socket open for reader/late events.

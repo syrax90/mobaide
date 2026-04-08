@@ -206,13 +206,15 @@ class AutoScanInstance:
         issues = await self._client.get_auto_scan_issues()
         new_issues = [i for i in issues if i.id not in self._processed_items]
 
+        processed_count = 0
         if new_issues:
             logger.info("Found %d new issue(s) to process", len(new_issues))
             for issue in new_issues:
                 await self._process_issue(issue)
+                processed_count += 1
             await self._save_processed_items()
 
-        self._emit_phase("scan_completed")
+        self._emit_phase("scan_completed", issues_processed=processed_count)
 
     @log_call(name="autoscan.process_issue", log_args=("issue",))
     async def _process_issue(self, issue: LinearIssue) -> None:
@@ -372,7 +374,7 @@ class AutoScanInstance:
             self._event_bus.publish("autoscan.status", self.to_dto())
         return evt
 
-    def _emit_phase(self, phase: str) -> None:
+    def _emit_phase(self, phase: str, *, issues_processed: int = 0) -> None:
         next_at = self._next_scan_at.isoformat() if self._next_scan_at else None
         self._emit(
             "phase",
@@ -381,6 +383,7 @@ class AutoScanInstance:
                     phase=phase,
                     cycle_number=self._cycle_number,
                     next_scan_at=next_at,
+                    issues_processed=issues_processed,
                 )
             ),
         )

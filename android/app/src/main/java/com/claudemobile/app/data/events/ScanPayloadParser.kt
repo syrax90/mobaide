@@ -24,6 +24,7 @@ object ScanPayloadParser {
             phase = payload.str("phase"),
             cycleNumber = payload.intOr("cycle_number"),
             nextScanAt = payload.strOrNull("next_scan_at"),
+            issuesProcessed = payload.intOr("issues_processed"),
         )
         "issue" -> ScanProgressPayload.Issue(
             identifier = payload.str("identifier"),
