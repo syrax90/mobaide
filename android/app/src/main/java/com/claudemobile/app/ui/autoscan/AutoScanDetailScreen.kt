@@ -239,7 +239,7 @@ private fun phaseColor(status: String): Color = when (status) {
 
 @Composable
 private fun LogPane(
-    lines: List<androidx.compose.ui.text.AnnotatedString>,
+    lines: List<AutoScanDetailViewModel.LogLine>,
     isPaused: Boolean,
     newLineCount: Int,
     onPaused: (Boolean) -> Unit,
@@ -275,9 +275,9 @@ private fun LogPane(
                 contentPadding = PaddingValues(8.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                items(lines, key = { it.hashCode() }) { line ->
+                items(lines, key = { it.id }) { line ->
                     Text(
-                        text = line,
+                        text = line.text,
                         color = Color(0xFFE0E0E0),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,

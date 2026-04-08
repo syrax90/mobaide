@@ -55,6 +55,18 @@ class AutoScanDetailViewModel @Inject constructor(
         val lines: List<AnnotatedString> = emptyList(),
     )
 
+    /**
+     * One line in the scrollable log pane.
+     *
+     * @param id Monotonically increasing id assigned at append time. Never
+     *           recycled, so it stays unique even after the ring buffer
+     *           evicts the oldest entry. Used as the LazyColumn key so
+     *           duplicate-text lines (common when idle scans repeat the
+     *           same "no AutoPipeline issues" message) do not collide
+     *           and crash the list.
+     */
+    data class LogLine(val id: Long, val text: AnnotatedString)
+
     data class UiState(
         val instance: AutoScanInstanceDto? = null,
         val nextScanAt: String? = null,
@@ -62,7 +74,7 @@ class AutoScanDetailViewModel @Inject constructor(
         val activePhase: String? = null,
         val phases: Map<String, PhaseState> = PHASE_ORDER.associateWith { PhaseState() },
         val recentIssues: List<IssueRow> = emptyList(),
-        val logLines: List<AnnotatedString> = emptyList(),
+        val logLines: List<LogLine> = emptyList(),
         val newLineCount: Int = 0,
         val isPausedAutoscroll: Boolean = false,
         val connection: ConnectionState = ConnectionState.Connecting,
@@ -76,7 +88,8 @@ class AutoScanDetailViewModel @Inject constructor(
     val errors: Flow<String> =
         repository.events.filterIsInstance<AutoScanUiEvent.Error>().map { it.message }
 
-    private val logRing: ArrayDeque<AnnotatedString> = ArrayDeque(LOG_RING_MAX)
+    private val logRing: ArrayDeque<LogLine> = ArrayDeque(LOG_RING_MAX)
+    private var nextLogId: Long = 0L
     private var streamJob: Job? = null
 
     init {
@@ -149,6 +162,11 @@ class AutoScanDetailViewModel @Inject constructor(
     private fun handlePhase(p: ScanProgressPayload.Phase, newSeq: Long) {
         when (p.phase) {
             "scan_started" -> {
+                // NOTE: we intentionally do NOT clear recentIssues here.
+                // Idle scans (0 new issues) would leave the list empty
+                // forever, making the user think "Run Now" didn't do
+                // anything. The 50-item cap in handleIssue rolls stale
+                // entries off naturally on any productive future scan.
                 _ui.update {
                     it.copy(
                         cycleNumber = p.cycleNumber,
@@ -156,7 +174,6 @@ class AutoScanDetailViewModel @Inject constructor(
                         phases = it.phases.mapValues { (k, _) ->
                             if (k == "scan") PhaseState("active") else PhaseState()
                         },
-                        recentIssues = emptyList(),
                         lastSeq = newSeq,
                     )
                 }
@@ -225,7 +242,8 @@ class AutoScanDetailViewModel @Inject constructor(
 
     private fun appendLogAnnotated(line: AnnotatedString, newSeq: Long) {
         if (logRing.size >= LOG_RING_MAX) logRing.removeFirst()
-        logRing.addLast(line)
+        val entry = LogLine(id = nextLogId++, text = line)
+        logRing.addLast(entry)
         _ui.update {
             it.copy(
                 logLines = logRing.toList(),
