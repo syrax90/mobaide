@@ -40,7 +40,7 @@ async def events_ws(websocket: WebSocket) -> None:
         return
 
     manager = websocket.app.state.session_manager
-    auto_scan = getattr(websocket.app.state, "auto_scan_service", None)
+    autoscan_mgr = getattr(websocket.app.state, "autoscan_manager", None)
 
     # Initial snapshots — one envelope per topic.
     await websocket.send_json(
@@ -49,15 +49,13 @@ async def events_ws(websocket: WebSocket) -> None:
     await websocket.send_json(
         {"type": "projects.changed", "payload": {"projects": _serialize_projects(websocket.app)}}
     )
-    if auto_scan is not None:
+    if autoscan_mgr is not None:
         try:
-            status = auto_scan.get_status()
-            # Augment with available_projects to match REST shape consumed by the client.
-            cfg = websocket.app.state.config.auto_scan_config
-            status["available_projects"] = list(cfg.projects.keys()) if cfg else []
-            await websocket.send_json({"type": "autoscan.status", "payload": status})
+            await websocket.send_json(
+                {"type": "autoscan.list.changed", "payload": autoscan_mgr.list_response()}
+            )
         except Exception:
-            logger.exception("events_ws.autoscan_status_snapshot_failed")
+            logger.exception("events_ws.autoscan_list_snapshot_failed")
 
     q = bus.subscribe()
     try:
