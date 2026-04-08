@@ -38,3 +38,10 @@ data class StopScanRequest(
 data class RunNowRequest(
     val project_name: String,
 )
+
+@Serializable
+data class RunNowResponse(
+    val ok: Boolean,
+    val project_name: String,
+    val next_scan_at: String? = null,
+)

@@ -23,6 +23,7 @@ from .models import (
     AutoScanInstanceStatusResponse,
     AutoScanListResponse,
     RunNowRequest,
+    RunNowResponse,
     StartScanRequest,
     StopScanRequest,
 )
@@ -73,9 +74,13 @@ async def stop_scan(body: StopScanRequest, request: Request) -> dict:
     return {"message": f"Auto scan stopped for project '{body.project_name}'"}
 
 
-@router.post("/run-now", status_code=status.HTTP_200_OK)
-async def run_now(body: RunNowRequest, request: Request) -> dict:
-    """Trigger an immediate scan cycle for a running auto scan."""
+@router.post("/run-now", response_model=RunNowResponse, status_code=status.HTTP_200_OK)
+async def run_now(body: RunNowRequest, request: Request) -> RunNowResponse:
+    """Trigger an immediate scan cycle for a running auto scan.
+
+    Returns the freshly anchored ``next_scan_at`` so the caller can
+    rebind its countdown synchronously, without waiting for the bus event.
+    """
     mgr = _get_manager(request)
     instance = mgr.get(body.project_name)
     if instance is None:
@@ -84,7 +89,12 @@ async def run_now(body: RunNowRequest, request: Request) -> dict:
             detail=f"No active auto scan for project '{body.project_name}'",
         )
     instance.request_immediate_scan()
-    return {"ok": True, "project_name": body.project_name}
+    next_at = instance.to_dto().get("next_scan_at")
+    return RunNowResponse(
+        ok=True,
+        project_name=body.project_name,
+        next_scan_at=next_at,
+    )
 
 
 @router.get("/list", response_model=AutoScanListResponse)

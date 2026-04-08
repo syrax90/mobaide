@@ -34,9 +34,14 @@ def test_run_now_404_when_not_running(app_with_mock_manager):
 def test_run_now_calls_request_immediate_scan(app_with_mock_manager):
     app, mgr = app_with_mock_manager
     fake_inst = MagicMock()
+    fake_inst.to_dto.return_value = {"next_scan_at": "2026-04-08T15:00:00Z"}
     mgr.get.return_value = fake_inst
     client = TestClient(app)
     resp = client.post("/api/autoscan/run-now", json={"project_name": "p"})
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "project_name": "p"}
+    assert resp.json() == {
+        "ok": True,
+        "project_name": "p",
+        "next_scan_at": "2026-04-08T15:00:00Z",
+    }
     fake_inst.request_immediate_scan.assert_called_once()

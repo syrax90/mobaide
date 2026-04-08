@@ -37,3 +37,9 @@ class AutoScanListResponse(BaseModel):
 
 class AutoScanInstanceStatusResponse(AutoScanInstanceDto):
     recent_events: list[dict] = []
+
+
+class RunNowResponse(BaseModel):
+    ok: bool
+    project_name: str
+    next_scan_at: str | None = None

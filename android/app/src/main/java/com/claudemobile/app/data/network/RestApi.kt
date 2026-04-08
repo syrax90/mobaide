@@ -7,6 +7,7 @@ import com.claudemobile.app.data.network.dto.ProjectInfo
 import com.claudemobile.app.data.network.dto.ScrollbackResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
 import com.claudemobile.app.data.network.dto.RunNowRequest
+import com.claudemobile.app.data.network.dto.RunNowResponse
 import com.claudemobile.app.data.network.dto.StartScanRequest
 import com.claudemobile.app.data.network.dto.StopScanRequest
 import com.claudemobile.app.data.network.dto.TokenRequest
@@ -128,14 +129,14 @@ class RestApi(
         executeRaw(request)
     }
 
-    suspend fun runAutoScanNow(projectName: String) {
+    suspend fun runAutoScanNow(projectName: String): RunNowResponse {
         val body = json.encodeToString(RunNowRequest(projectName))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/run-now")
             .post(body)
             .build()
-        executeRaw(request)
+        return execute(request)
     }
 
     // Helpers

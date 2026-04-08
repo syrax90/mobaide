@@ -152,8 +152,15 @@ class AutoScanInstance:
         logger.info("Auto Scan stopped for project '%s'", self._project_name)
 
     def request_immediate_scan(self) -> None:
-        """Wake the polling loop to run a scan cycle immediately."""
+        """Wake the polling loop to run a scan cycle immediately.
+
+        Also reanchors ``next_scan_at`` to "now" and republishes status so
+        the Android client's countdown can reset synchronously without
+        having to wait for the next poll cycle to emit a phase event.
+        """
         self._run_now_event.set()
+        self._next_scan_at = datetime.now(timezone.utc)
+        self._publish_status()
 
     # -- Polling --
 

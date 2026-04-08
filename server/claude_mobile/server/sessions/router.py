@@ -74,17 +74,13 @@ async def create_session(
             detail=str(exc),
         )
 
-    # Notify session-list broadcaster (legacy /ws/sessions) and event bus.
-    sessions_now = manager.list_sessions()
+    # SessionManager.create_session is the single source of truth for
+    # `sessions.changed` (Domain Events). It also fires the eager fanout
+    # hook so headless sessions get a SessionEventFanout immediately.
+    # We only need the legacy `/ws/sessions` broadcaster nudge here.
     broadcaster = getattr(request.app.state, "broadcaster", None)
     if broadcaster:
-        await broadcaster.notify(sessions_now)
-    bus = getattr(request.app.state, "event_bus", None)
-    if bus is not None:
-        bus.publish(
-            "sessions.changed",
-            {"sessions": [SessionResponse.from_info(s).model_dump() for s in sessions_now]},
-        )
+        await broadcaster.notify(manager.list_sessions())
 
     audit_event(
         "audit.session.created",
@@ -119,23 +115,11 @@ async def stop_session(
             detail=f"Session '{session_id}' not found",
         )
 
-    # Clean up fanout for this session
-    fanouts = getattr(request.app.state, "fanouts", {})
-    fanout = fanouts.pop(session_id, None)
-    if fanout:
-        fanout.stop()
-
-    # Notify session-list broadcaster (legacy /ws/sessions) and event bus.
-    sessions_now = manager.list_sessions()
+    # Fanout cleanup is performed by the on_session_removed hook wired in
+    # app.py; SessionManager.stop_session also publishes `sessions.changed`.
     broadcaster = getattr(request.app.state, "broadcaster", None)
     if broadcaster:
-        await broadcaster.notify(sessions_now)
-    bus = getattr(request.app.state, "event_bus", None)
-    if bus is not None:
-        bus.publish(
-            "sessions.changed",
-            {"sessions": [SessionResponse.from_info(s).model_dump() for s in sessions_now]},
-        )
+        await broadcaster.notify(manager.list_sessions())
 
     audit_event(
         "audit.session.terminated",

@@ -8,11 +8,16 @@ import com.claudemobile.app.data.events.ScanProgressPayload
 import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.repository.AutoScanRepository
+import com.claudemobile.app.data.repository.AutoScanUiEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -66,6 +71,10 @@ class AutoScanDetailViewModel @Inject constructor(
 
     private val _ui = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _ui.asStateFlow()
+
+    /** One-shot error messages from the repository for Snackbar consumption. */
+    val errors: Flow<String> =
+        repository.events.filterIsInstance<AutoScanUiEvent.Error>().map { it.message }
 
     private val logRing: ArrayDeque<AnnotatedString> = ArrayDeque(LOG_RING_MAX)
     private var streamJob: Job? = null
@@ -217,7 +226,14 @@ class AutoScanDetailViewModel @Inject constructor(
 
     fun runNow() {
         viewModelScope.launch {
-            try { repository.runNow(projectName) } catch (_: Exception) { }
+            try {
+                val response = repository.runNow(projectName)
+                // Rebind countdown synchronously from the REST response so
+                // the user sees the reset before the bus event arrives.
+                _ui.update { it.copy(nextScanAt = response.next_scan_at) }
+            } catch (_: Exception) {
+                // Repository already emitted an AutoScanUiEvent.Error.
+            }
         }
     }
 

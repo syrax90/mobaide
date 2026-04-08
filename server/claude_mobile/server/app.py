@@ -27,7 +27,11 @@ from .sessions.router import router as sessions_router
 from .events import EventBus
 from .ws.event_fanout import SessionListBroadcaster
 from .ws.events import router as ws_events_router
-from .ws.session_io import router as ws_session_io_router
+from .ws.session_io import (
+    ensure_fanout,
+    router as ws_session_io_router,
+    stop_fanout,
+)
 from .ws.session_list import router as ws_session_list_router
 
 logger = get_logger(__name__)
@@ -154,10 +158,27 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         )
     app.state.claude_launcher = ClaudeLauncher(worktree_mgr=worktree_mgr)
 
+    # event_bus / broadcaster / fanouts must exist before SessionManager
+    # so the on_session_created hook can attach a SessionEventFanout
+    # (and publish `sessions.changed` via the bus) the moment any session
+    # is created — including headless Auto Scan subsessions.
+    app.state.event_bus = EventBus()
+    app.state.broadcaster = SessionListBroadcaster()
+    app.state.fanouts = {}  # session_id -> SessionEventFanout
+
+    def _on_session_created(session) -> None:
+        ensure_fanout(app.state, session)
+
+    def _on_session_removed(session_id: str) -> None:
+        stop_fanout(app.state, session_id)
+
     app.state.session_manager = SessionManager(
         max_sessions=config.max_sessions,
         projects_config=config.projects_config,
         launcher=app.state.claude_launcher,
+        event_bus=app.state.event_bus,
+        on_session_created=_on_session_created,
+        on_session_removed=_on_session_removed,
     )
     app.state.jwt_service = JwtService(
         secret_key=config.jwt_secret_key,
@@ -168,10 +189,6 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     user_store = UserStore(config.user_store_path)
     user_store.load()
     app.state.user_store = user_store
-    app.state.event_bus = EventBus()
-    app.state.broadcaster = SessionListBroadcaster()
-    app.state.fanouts = {}  # session_id -> SessionEventFanout
-
     # Auto-scan manager (optional — only if PROJECTS is configured).
     # Multi-instance: one AutoScanInstance per active project, up to 5 concurrent.
     if config.auto_scan_config is not None:
