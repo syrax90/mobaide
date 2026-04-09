@@ -13,8 +13,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -30,7 +33,7 @@ sealed class WsEvent {
 
 class WebSocketConnection(
     private val client: OkHttpClient,
-    private val url: String,
+    private val urlProvider: () -> String,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
@@ -69,7 +72,7 @@ class WebSocketConnection(
     }
 
     private fun doConnect() {
-        val request = Request.Builder().url(url).build()
+        val request = Request.Builder().url(urlProvider()).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 backoffMs = INITIAL_BACKOFF_MS
@@ -123,14 +126,58 @@ class WebSocketManager(
     private val client: OkHttpClient,
     private val tokenStore: TokenStore,
 ) {
+    private val json = Json { ignoreUnknownKeys = true }
+
     fun createConnection(path: String): WebSocketConnection {
-        val serverUrl = tokenStore.getServerUrl()
-            ?: throw IllegalStateException("Server URL not configured")
-        val token = tokenStore.getAccessToken() ?: ""
-        val wsScheme = if (serverUrl.startsWith("https")) "wss" else "ws"
-        val host = serverUrl.removePrefix("https://").removePrefix("http://")
-        val separator = if (path.contains("?")) "&" else "?"
-        val url = "$wsScheme://$host/$path${separator}token=$token"
-        return WebSocketConnection(client, url)
+        return WebSocketConnection(client) {
+            refreshTokenIfNeeded()
+            val serverUrl = tokenStore.getServerUrl()
+                ?: throw IllegalStateException("Server URL not configured")
+            val token = tokenStore.getAccessToken() ?: ""
+            val wsScheme = if (serverUrl.startsWith("https")) "wss" else "ws"
+            val host = serverUrl.removePrefix("https://").removePrefix("http://")
+            val separator = if (path.contains("?")) "&" else "?"
+            "$wsScheme://$host/$path${separator}token=$token"
+        }
     }
+
+    /**
+     * If the current access token is expiring soon, synchronously refresh it
+     * using the refresh token. Called from the URL-provider lambda before each
+     * WebSocket connect/reconnect so that stale tokens are replaced.
+     *
+     * AuthInterceptor skips `/api/auth/refresh` paths, so this request passes
+     * through the interceptor chain without recursive refresh.
+     */
+    private fun refreshTokenIfNeeded() {
+        if (!tokenStore.isAccessTokenExpiringSoon()) return
+        val refreshToken = tokenStore.getRefreshToken() ?: return
+        val serverUrl = tokenStore.getServerUrl() ?: return
+
+        val body = """{"refresh_token":"$refreshToken"}"""
+            .toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url("$serverUrl/api/auth/refresh")
+            .post(body)
+            .build()
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val responseBody = response.body?.string() ?: return
+                    val tokens = json.decodeFromString<TokenResponseDto>(responseBody)
+                    tokenStore.saveTokens(tokens.access_token, tokens.refresh_token)
+                }
+            }
+        } catch (_: Exception) {
+            // Best-effort; if refresh fails we try connecting with the current
+            // token anyway — the server will reject and backoff-retry will fire.
+        }
+    }
+
+    @kotlinx.serialization.Serializable
+    private data class TokenResponseDto(
+        val access_token: String,
+        val refresh_token: String,
+    )
 }
