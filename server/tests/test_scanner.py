@@ -140,6 +140,69 @@ class TestRunNow:
         assert scan_calls == 2
 
 
+    def test_request_immediate_scan_clears_processed_items(self, tmp_path):
+        """request_immediate_scan() must clear _processed_items so that
+        manually-reset issues are picked up again."""
+        inst = _make_instance(tmp_path)
+        inst._processed_items.add("uuid-1")
+        inst._processed_items.add("uuid-2")
+        assert len(inst._processed_items) == 2
+
+        inst.request_immediate_scan()
+
+        assert len(inst._processed_items) == 0
+
+    @pytest.mark.asyncio
+    async def test_run_now_reprocesses_previously_seen_issue(self, tmp_path):
+        """After Run-Now, an issue that was already processed should be
+        picked up again if it still matches the Linear query filters."""
+        client = AsyncMock()
+        issue = _make_issue(issue_id="uuid-reprocess", identifier="CLA-99")
+        client.get_auto_scan_issues.return_value = [issue]
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "wt")
+        wt_mgr.create_worktree.return_value = wt_result
+
+        sess_mgr = AsyncMock()
+        session_obj = MagicMock()
+        session_obj.pid = 999
+        sess_mgr.create_session.return_value = session_obj
+
+        launcher = AsyncMock()
+        spec = MagicMock()
+        spec.argv = ["claude"]
+        spec.env = {}
+        launcher.build.return_value = spec
+
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            worktree_mgr=wt_mgr,
+            session_manager=sess_mgr,
+            launcher=launcher,
+        )
+
+        # First scan: issue gets processed and added to dedup set
+        await inst._scan_once()
+        assert "uuid-reprocess" in inst._processed_items
+
+        # Second scan WITHOUT Run-Now: issue is filtered out (dedup)
+        await inst._scan_once()
+        assert client.update_issue_state.call_count == 1
+
+        # Simulate Run-Now: clears processed set
+        inst.request_immediate_scan()
+        assert "uuid-reprocess" not in inst._processed_items
+
+        # Third scan AFTER Run-Now: issue is reprocessed
+        await inst._scan_once()
+        assert client.update_issue_state.call_count == 2
+
+
 class TestProcessIssueEmitsPerStepEvents:
     @pytest.mark.asyncio
     async def test_emits_state_label_worktree_session_in_order(self, tmp_path):
