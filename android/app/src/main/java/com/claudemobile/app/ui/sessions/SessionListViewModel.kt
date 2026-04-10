@@ -6,8 +6,6 @@ import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.SessionResponse
-import com.claudemobile.app.data.repository.AutoScanAlreadyRunningException
-import com.claudemobile.app.data.repository.AutoScanCapacityException
 import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -26,9 +24,6 @@ data class SessionListUiState(
     val isReconnecting: Boolean = false,
     val error: String? = null,
     val activeScans: List<AutoScanInstanceDto> = emptyList(),
-    val autoScanCapacity: Int = 0,
-    val autoScanMax: Int = 5,
-    val autoScanAvailableProjects: List<String> = emptyList(),
 )
 
 @HiltViewModel
@@ -61,12 +56,7 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             autoScanRepository.observeList().collect { list ->
                 _uiState.update {
-                    it.copy(
-                        activeScans = list.scans,
-                        autoScanCapacity = list.capacity,
-                        autoScanMax = list.max_scans,
-                        autoScanAvailableProjects = list.available_projects,
-                    )
+                    it.copy(activeScans = list.scans)
                 }
             }
         }
@@ -117,22 +107,6 @@ class SessionListViewModel @Inject constructor(
                 sessionRepository.deleteSession(sessionId)
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = "Failed to stop session: ${e.message}") }
-            }
-        }
-    }
-
-    fun startAutoScan(projectName: String) {
-        viewModelScope.launch {
-            try {
-                autoScanRepository.startScan(projectName)
-            } catch (e: AutoScanAlreadyRunningException) {
-                _uiState.update { it.copy(error = "$projectName is already scanning") }
-            } catch (e: AutoScanCapacityException) {
-                _uiState.update {
-                    it.copy(error = "Maximum ${e.maxScans} concurrent auto scans reached")
-                }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Failed to start scan: ${e.message}") }
             }
         }
     }

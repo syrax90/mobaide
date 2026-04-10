@@ -42,12 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.claudemobile.app.data.network.dto.SessionResponse
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import com.claudemobile.app.ui.autoscan.AutoScanCard
-import com.claudemobile.app.ui.autoscan.StartNewAutoScanRow
 import com.claudemobile.app.ui.theme.StateCrashed
 import com.claudemobile.app.ui.theme.StateRunning
 import com.claudemobile.app.ui.theme.StateStarting
@@ -65,40 +60,6 @@ fun SessionListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
-    var showStartScanPicker by remember { mutableStateOf(false) }
-
-    if (showStartScanPicker) {
-        val activeNames = uiState.activeScans.map { it.project_name }.toSet()
-        val choices = uiState.autoScanAvailableProjects.filter { it !in activeNames }
-        AlertDialog(
-            onDismissRequest = { showStartScanPicker = false },
-            title = { Text("Start auto scan") },
-            text = {
-                if (choices.isEmpty()) {
-                    Text("No projects available — every configured project already has an active scan.")
-                } else {
-                    Column {
-                        choices.forEach { name ->
-                            Text(
-                                text = name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 12.dp)
-                                    .clickable {
-                                        showStartScanPicker = false
-                                        viewModel.startAutoScan(name)
-                                    },
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showStartScanPicker = false }) { Text("Cancel") }
-            },
-        )
-    }
 
     LaunchedEffect(uiState.error) {
         uiState.error?.let {
@@ -144,7 +105,7 @@ fun SessionListScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 // Active Auto Scans (one card per running project)
-                if (uiState.activeScans.isNotEmpty() || uiState.autoScanAvailableProjects.isNotEmpty()) {
+                if (uiState.activeScans.isNotEmpty()) {
                     item {
                         Text(
                             text = "Active Auto Scans",
@@ -159,14 +120,6 @@ fun SessionListScreen(
                         onStop = viewModel::stopAutoScan,
                         onClick = onAutoScanClick,
                     )
-                }
-                if (uiState.autoScanAvailableProjects.isNotEmpty()) {
-                    item {
-                        StartNewAutoScanRow(
-                            enabled = uiState.activeScans.size < uiState.autoScanMax,
-                            onClick = { showStartScanPicker = true },
-                        )
-                    }
                 }
 
                 if (uiState.sessions.isEmpty() && !uiState.isReconnecting) {
