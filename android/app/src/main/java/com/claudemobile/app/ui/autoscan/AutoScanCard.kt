@@ -2,7 +2,6 @@ package com.claudemobile.app.ui.autoscan
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Card
@@ -135,35 +133,5 @@ private fun relativeTime(epochSeconds: Double): String {
         deltaSec < 3600 -> "${deltaSec / 60}m ago"
         deltaSec < 86400 -> "${deltaSec / 3600}h ago"
         else -> "${deltaSec / 86400}d ago"
-    }
-}
-
-@Composable
-fun StartNewAutoScanRow(
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center,
-        ) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (enabled) "Start new auto scan" else "Auto scan capacity reached",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
     }
 }
