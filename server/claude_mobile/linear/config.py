@@ -7,6 +7,11 @@ from claude_mobile.core.projects_config import ProjectConfig, ProjectsConfig
 
 __all__ = ["ProjectConfig", "AutoScanConfig"]
 
+_DEFAULT_AUTO_SCAN_PROMPT = (
+    "Read the Linear issue matching the identifier in the current worktree name. "
+    "Analyze the issue deeply. Resolve the issue (task). WORK in GOP Development Mode."
+)
+
 
 @dataclass(frozen=True)
 class AutoScanConfig:
@@ -21,7 +26,7 @@ class AutoScanConfig:
     branch_prefix: str = ""
     main_branch: str = "main"
     linear_active_state: str = "In Progress"
-    auto_scan_prompt: str | None = None
+    auto_scan_prompt: str | None = _DEFAULT_AUTO_SCAN_PROMPT
 
     @classmethod
     def from_env(cls) -> AutoScanConfig | None:
@@ -43,7 +48,7 @@ class AutoScanConfig:
             return None
 
         prompt_raw = os.getenv("AUTO_SCAN_PROMPT")
-        prompt = prompt_raw.replace("\\n", "\n") if prompt_raw else None
+        prompt = prompt_raw.replace("\\n", "\n") if prompt_raw else _DEFAULT_AUTO_SCAN_PROMPT
 
         return cls(
             projects=projects,

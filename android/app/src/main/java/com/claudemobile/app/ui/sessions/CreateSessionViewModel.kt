@@ -30,12 +30,10 @@ data class CreateSessionUiState(
     val isLoadingProjects: Boolean = false,
     val selectedProjectName: String? = null,
     val selectedMode: CreateSessionMode? = null,
-    val planMode: Boolean = false,
     val skipPermissions: Boolean = false,
     val noMemory: Boolean = false,
     val worktree: Boolean = false,
     val branchName: String = "",
-    val initialPrompt: String = "",
     val submitting: Boolean = false,
     val autoScanStarting: Boolean = false,
     val autoScanConfigInitialized: Boolean = false,
@@ -185,12 +183,10 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun togglePlanMode(v: Boolean) = _uiState.update { it.copy(planMode = v) }
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
     fun toggleWorktree(v: Boolean) = _uiState.update { it.copy(worktree = v) }
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
-    fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
     fun clearError() = _uiState.update { it.copy(error = null) }
 
     /** Reset the dismiss flag after the screen has consumed it. */
@@ -206,12 +202,10 @@ class CreateSessionViewModel @Inject constructor(
                     CreateSessionRequest(
                         project_name = projectName,
                         claude_options = ClaudeOptionsModel(
-                            plan_mode = state.planMode,
                             skip_permissions = state.skipPermissions,
                             no_memory = state.noMemory,
                             worktree = state.worktree,
                             branch_name = state.branchName.takeIf { it.isNotBlank() },
-                            initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
                         ),
                     ),
                 )

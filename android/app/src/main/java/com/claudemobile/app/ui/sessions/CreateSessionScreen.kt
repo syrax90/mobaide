@@ -289,7 +289,6 @@ private fun StandardConfigSection(
         .firstOrNull { it.name == state.selectedProjectName }
         ?.is_git == true
 
-    ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
@@ -307,15 +306,6 @@ private fun StandardConfigSection(
             )
         }
     }
-
-    OutlinedTextField(
-        value = state.initialPrompt,
-        onValueChange = viewModel::setInitialPrompt,
-        label = { Text("Initial prompt (optional)") },
-        modifier = Modifier.fillMaxWidth(),
-        minLines = 3,
-        maxLines = 8,
-    )
 
     Button(
         onClick = viewModel::submit,
