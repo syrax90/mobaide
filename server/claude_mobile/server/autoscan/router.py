@@ -5,6 +5,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
+from claude_mobile.core.claude_launcher import ClaudeOptions
 from claude_mobile.linear.scanner import (
     AutoScanAlreadyRunning,
     AutoScanCapacityReached,
@@ -52,8 +53,13 @@ def _get_manager(request: Request) -> AutoScanSessionManager:
 async def start_scan(body: StartScanRequest, request: Request) -> dict:
     """Start an auto scan for a project. 409 if already running, 429 if at cap."""
     mgr = _get_manager(request)
+    claude_options = (
+        ClaudeOptions(**body.claude_options.model_dump())
+        if body.claude_options is not None
+        else None
+    )
     try:
-        instance = await mgr.start(body.project_name)
+        instance = await mgr.start(body.project_name, client_options=claude_options)
     except AutoScanAlreadyRunning as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except AutoScanCapacityReached as exc:

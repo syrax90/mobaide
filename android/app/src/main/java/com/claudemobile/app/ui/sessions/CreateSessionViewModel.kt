@@ -20,7 +20,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig }
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, AutoScanConfig }
 
 enum class CreateSessionMode { Standard, AutoScan }
 
@@ -38,6 +38,7 @@ data class CreateSessionUiState(
     val initialPrompt: String = "",
     val submitting: Boolean = false,
     val autoScanStarting: Boolean = false,
+    val autoScanConfigInitialized: Boolean = false,
     val dismiss: Boolean = false,
     val error: String? = null,
 )
@@ -55,6 +56,9 @@ class CreateSessionViewModel @Inject constructor(
 
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
+
+    private val _navigateToAutoScan = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val navigateToAutoScan: SharedFlow<String> = _navigateToAutoScan.asSharedFlow()
 
     private val _transientMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val transientMessages: SharedFlow<String> = _transientMessages.asSharedFlow()
@@ -126,26 +130,38 @@ class CreateSessionViewModel @Inject constructor(
         it.copy(step = CreateSessionStep.StandardConfig)
     }
 
-    fun selectAutoScanMode() {
+    fun selectAutoScanMode() = _uiState.update {
+        if (it.autoScanConfigInitialized) {
+            it.copy(step = CreateSessionStep.AutoScanConfig)
+        } else {
+            it.copy(
+                step = CreateSessionStep.AutoScanConfig,
+                autoScanConfigInitialized = true,
+                skipPermissions = true,
+                worktree = true,
+                initialPrompt = autoScanRepository.getAutoScanPrompt() ?: "",
+            )
+        }
+    }
+
+    fun submitAutoScan() {
         val state = _uiState.value
         val projectName = state.selectedProjectName ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(autoScanStarting = true) }
             try {
-                autoScanRepository.startScan(projectName)
+                val options = ClaudeOptionsModel(
+                    plan_mode = state.planMode,
+                    skip_permissions = state.skipPermissions,
+                    no_memory = state.noMemory,
+                    worktree = state.worktree,
+                    branch_name = state.branchName.takeIf { it.isNotBlank() },
+                    initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
+                )
+                autoScanRepository.startScan(projectName, options)
                 preferencesStore.setLastUsedProjectName(projectName)
-                // CLA-21: stay on the screen so the user can immediately start
-                // another scan for a different project. Reset wizard back to
-                // the project picker and surface a transient confirmation.
-                _uiState.update {
-                    it.copy(
-                        autoScanStarting = false,
-                        step = CreateSessionStep.ProjectSelect,
-                        selectedMode = null,
-                        selectedProjectName = null,
-                    )
-                }
-                _transientMessages.tryEmit("Auto Scan started for $projectName")
+                _uiState.update { it.copy(autoScanStarting = false) }
+                _navigateToAutoScan.tryEmit(projectName)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -160,9 +176,9 @@ class CreateSessionViewModel @Inject constructor(
     fun goBack() = _uiState.update {
         when (it.step) {
             CreateSessionStep.StandardConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.ModePick -> it.copy(
                 step = CreateSessionStep.ProjectSelect,
-                selectedProjectName = null,
                 selectedMode = null,
             )
             CreateSessionStep.ProjectSelect -> it

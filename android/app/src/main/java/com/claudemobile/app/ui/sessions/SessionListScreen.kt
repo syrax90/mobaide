@@ -122,6 +122,16 @@ fun SessionListScreen(
                     )
                 }
 
+                if (uiState.sessions.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "Sessions",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
                 if (uiState.sessions.isEmpty() && !uiState.isReconnecting) {
                     item {
                         Box(

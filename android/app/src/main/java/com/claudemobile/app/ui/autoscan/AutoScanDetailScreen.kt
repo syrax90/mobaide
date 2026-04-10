@@ -49,7 +49,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
+
 import com.claudemobile.app.ui.theme.StateCrashed
 import com.claudemobile.app.ui.theme.StateRunning
 import com.claudemobile.app.ui.theme.StateStarting
@@ -60,7 +60,7 @@ import com.claudemobile.app.ui.theme.StateStopped
 fun AutoScanDetailScreen(
     projectName: String,
     onBack: () -> Unit,
-    viewModel: AutoScanDetailViewModel = hiltViewModel(),
+    viewModel: AutoScanDetailViewModel,
 ) {
     val ui by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }

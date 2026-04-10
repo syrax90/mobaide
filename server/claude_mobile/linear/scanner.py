@@ -64,6 +64,7 @@ class AutoScanInstance:
         client: LinearApiClient,
         worktree_mgr: WorktreeManager,
         event_bus=None,
+        client_options: ClaudeOptions | None = None,
     ) -> None:
         self._project_name = project_name
         self._config = config
@@ -72,6 +73,7 @@ class AutoScanInstance:
         self._client = client
         self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
+        self._client_options = client_options
 
         # In-memory dedup only — purges when the AutoScanInstance stops.
         # Source of truth for "needs processing" is the Linear issue's state +
@@ -288,11 +290,18 @@ class AutoScanInstance:
         self._emit_issue(issue, "session_spawn", "started")
         session_id = uuid.uuid4().hex[:12]
         try:
+            base = self._client_options
             spec = await self._launcher.build(
                 project,
                 ClaudeOptions(
-                    skip_permissions=True,
-                    initial_prompt=self._config.auto_scan_prompt,
+                    plan_mode=base.plan_mode if base else False,
+                    skip_permissions=base.skip_permissions if base else True,
+                    no_memory=base.no_memory if base else False,
+                    initial_prompt=(
+                        base.initial_prompt
+                        if base and base.initial_prompt
+                        else self._config.auto_scan_prompt
+                    ),
                     identifier=issue.identifier,
                     title=issue.title,
                 ),
@@ -460,9 +469,12 @@ class AutoScanSessionManager:
             "capacity": len(self._scans),
             "max_scans": self._max_scans,
             "available_projects": self.available_projects,
+            "auto_scan_prompt": self._config.auto_scan_prompt,
         }
 
-    async def start(self, project_name: str) -> AutoScanInstance:
+    async def start(
+        self, project_name: str, *, client_options: ClaudeOptions | None = None,
+    ) -> AutoScanInstance:
         if project_name not in self._config.projects:
             raise ValueError(
                 f"Project '{project_name}' not found in config. "
@@ -499,6 +511,7 @@ class AutoScanSessionManager:
                 client=client,
                 worktree_mgr=worktree_mgr,
                 event_bus=self._event_bus,
+                client_options=client_options,
             )
             await instance.start()
             self._scans[project_name] = instance
