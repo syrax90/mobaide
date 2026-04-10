@@ -55,11 +55,19 @@ class WebSocketConnection(
     }
 
     fun send(text: String): Boolean {
-        return webSocket?.send(text) ?: false
+        val sent = webSocket?.send(text) ?: false
+        if (!sent) {
+            _events.tryEmit(WsEvent.Error(IllegalStateException("WebSocket send failed")))
+        }
+        return sent
     }
 
     fun sendBinary(bytes: ByteString): Boolean {
-        return webSocket?.send(bytes) ?: false
+        val sent = webSocket?.send(bytes) ?: false
+        if (!sent) {
+            _events.tryEmit(WsEvent.Error(IllegalStateException("WebSocket send failed")))
+        }
+        return sent
     }
 
     fun disconnect() {

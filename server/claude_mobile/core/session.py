@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 # Ink/React TUI plus a few seconds of scrollback.
 RING_MAX_BYTES = 256 * 1024
 
-# The session-internal event queue is bounded so the PTY reader naturally
-# pauses (via ``await put``) when consumers are slow, providing backpressure
-# end-to-end without dropping output bytes.
+# The session-internal event queue is bounded.  When it fills, the oldest
+# output event is discarded (drop-oldest policy) so the PTY reader never
+# stalls.  The ring buffer retains recent bytes for reconnect replay.
 EVENT_QUEUE_MAXSIZE = 64
 
 
@@ -116,11 +116,21 @@ class TerminalSession:
                     continue
                 self._scrollback.append(data)
                 self._append_ring(data)
-                # ``put`` (not ``put_nowait``) so a slow consumer applies
-                # backpressure all the way down to the PTY read.
-                await self._event_queue.put(
-                    SessionEvent("output", self._config.session_id, data, time.time()),
-                )
+                # Drop-oldest policy: never stall the PTY reader due to slow
+                # consumers.  Stale output frames are acceptable to lose —
+                # the ring buffer holds recent bytes for reconnect replay.
+                event = SessionEvent("output", self._config.session_id, data, time.time())
+                try:
+                    self._event_queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    try:
+                        self._event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        self._event_queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
             except asyncio.CancelledError:
                 raise
             except Exception:

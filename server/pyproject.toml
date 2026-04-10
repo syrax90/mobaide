@@ -18,6 +18,7 @@ dependencies = [
     "bcrypt",
     "structlog>=24.1",
     "asgi-correlation-id>=4.3",
+    "orjson",
 ]
 
 [project.optional-dependencies]

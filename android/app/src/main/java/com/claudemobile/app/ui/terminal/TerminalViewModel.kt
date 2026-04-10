@@ -10,6 +10,8 @@ import com.claudemobile.app.data.network.WsEvent
 import com.claudemobile.app.data.repository.SessionRepository
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,6 +33,10 @@ class TerminalViewModel @Inject constructor(
         ?: throw IllegalArgumentException("sessionId required")
 
     private var connection: WebSocketConnection? = null
+
+    /** Buffered channel for outgoing PTY frames — consumed by a single IO coroutine to
+     *  keep sends off the main thread while preserving FIFO ordering. */
+    private val sendChannel = Channel<ByteString>(capacity = Channel.BUFFERED)
 
     // ── Prompt detection ────────────────────────────────────────────────────────
 
@@ -64,6 +70,13 @@ class TerminalViewModel @Inject constructor(
             }
         }
         connect()
+
+        // Single consumer drains the send channel on IO, keeping the UI thread free.
+        viewModelScope.launch(Dispatchers.IO) {
+            for (frame in sendChannel) {
+                connection?.sendBinary(frame)
+            }
+        }
     }
 
     // ── Connection state ────────────────────────────────────────────────────────
@@ -144,7 +157,7 @@ class TerminalViewModel @Inject constructor(
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
-        connection?.sendBinary(TerminalProtocol.encodeInput(bytes))
+        sendChannel.trySend(TerminalProtocol.encodeInput(bytes))
     }
 
     /** Manually dismiss the currently detected prompt (e.g. user swiped the sheet away). */
@@ -154,11 +167,14 @@ class TerminalViewModel @Inject constructor(
 
     fun resize(rows: Int, cols: Int) {
         session.updateSize(cols, rows, 12, 24)
-        connection?.sendBinary(TerminalProtocol.encodeResize(rows, cols))
+        viewModelScope.launch(Dispatchers.IO) {
+            connection?.sendBinary(TerminalProtocol.encodeResize(rows, cols))
+        }
     }
 
     override fun onCleared() {
         super.onCleared()
+        sendChannel.close()
         connection?.disconnect()
     }
 }
