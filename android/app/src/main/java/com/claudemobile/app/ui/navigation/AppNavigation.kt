@@ -63,6 +63,11 @@ fun AppNavigation(tokenStore: TokenStore? = null) {
                         popUpTo(Routes.SESSION_LIST)
                     }
                 },
+                onAutoScanStarted = { projectName ->
+                    navController.navigate(Routes.autoScanDetail(projectName)) {
+                        popUpTo(Routes.SESSION_LIST)
+                    }
+                },
             )
         }
 
@@ -83,6 +88,7 @@ fun AppNavigation(tokenStore: TokenStore? = null) {
             AutoScanDetailScreen(
                 projectName = entry.arguments?.getString("projectName").orEmpty(),
                 onBack = { navController.popBackStack() },
+                viewModel = hiltViewModel(),
             )
         }
 

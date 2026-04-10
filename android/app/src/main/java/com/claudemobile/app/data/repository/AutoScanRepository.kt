@@ -7,6 +7,7 @@ import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
+import com.claudemobile.app.data.network.dto.ClaudeOptionsModel
 import com.claudemobile.app.data.network.dto.RunNowResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,8 +85,10 @@ class AutoScanRepository(
     fun observeEvents(): Flow<ServerEvent.AutoScanEvent> =
         eventBus.stream<ServerEvent.AutoScanEvent>()
 
+    fun getAutoScanPrompt(): String? = _list.value.auto_scan_prompt
+
     /** Throws [AutoScanAlreadyRunningException] on 409, [AutoScanCapacityException] on 429. */
-    suspend fun startScan(projectName: String) {
+    suspend fun startScan(projectName: String, claudeOptions: ClaudeOptionsModel? = null) {
         val prev = _list.value
         // Optimistic placeholder so the card appears immediately. The
         // server's `autoscan.list.changed` event will overwrite this with
@@ -101,7 +104,7 @@ class AutoScanRepository(
             _list.value = prev.copy(scans = prev.scans + placeholder)
         }
         try {
-            restApi.startAutoScan(projectName)
+            restApi.startAutoScan(projectName, claudeOptions)
         } catch (e: Exception) {
             _list.value = prev
             val typed: Exception = if (e is ApiException) {

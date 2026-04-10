@@ -22,11 +22,13 @@ data class AutoScanListResponse(
     val capacity: Int = 0,
     val max_scans: Int = 5,
     val available_projects: List<String> = emptyList(),
+    val auto_scan_prompt: String? = null,
 )
 
 @Serializable
 data class StartScanRequest(
     val project_name: String,
+    val claude_options: ClaudeOptionsModel? = null,
 )
 
 @Serializable

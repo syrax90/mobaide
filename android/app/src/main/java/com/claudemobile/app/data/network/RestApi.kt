@@ -2,6 +2,7 @@ package com.claudemobile.app.data.network
 
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
+import com.claudemobile.app.data.network.dto.ClaudeOptionsModel
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
 import com.claudemobile.app.data.network.dto.ProjectInfo
 import com.claudemobile.app.data.network.dto.ScrollbackResponse
@@ -109,8 +110,8 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun startAutoScan(projectName: String) {
-        val body = json.encodeToString(StartScanRequest(projectName))
+    suspend fun startAutoScan(projectName: String, claudeOptions: ClaudeOptionsModel? = null) {
+        val body = json.encodeToString(StartScanRequest(projectName, claudeOptions))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/start")

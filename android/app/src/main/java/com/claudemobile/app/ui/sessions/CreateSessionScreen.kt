@@ -2,7 +2,6 @@ package com.claudemobile.app.ui.sessions
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,7 +15,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -51,12 +49,16 @@ fun CreateSessionScreen(
     viewModel: CreateSessionViewModel,
     onBack: () -> Unit,
     onSessionCreated: (String) -> Unit,
+    onAutoScanStarted: (String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
         viewModel.navigateToSession.collect { sessionId -> onSessionCreated(sessionId) }
+    }
+    LaunchedEffect(viewModel) {
+        viewModel.navigateToAutoScan.collect { projectName -> onAutoScanStarted(projectName) }
     }
     LaunchedEffect(viewModel) {
         viewModel.transientMessages.collect { msg -> snackbar.showSnackbar(msg) }
@@ -92,6 +94,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.ProjectSelect -> "New Session"
                             CreateSessionStep.ModePick -> "Select mode"
                             CreateSessionStep.StandardConfig -> "Standard mode"
+                            CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                         }
                     )
                 },
@@ -132,9 +135,12 @@ fun CreateSessionScreen(
                             null -> Unit
                         }
                     },
-                    loading = state.autoScanStarting,
                 )
                 CreateSessionStep.StandardConfig -> StandardConfigSection(
+                    state = state,
+                    viewModel = viewModel,
+                )
+                CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
                     state = state,
                     viewModel = viewModel,
                 )
@@ -221,7 +227,6 @@ private fun ModePickerSection(
     selectedMode: CreateSessionMode?,
     onPickMode: (CreateSessionMode) -> Unit,
     onCommit: () -> Unit,
-    loading: Boolean,
 ) {
     Text(
         text = project?.name ?: "",
@@ -241,7 +246,6 @@ private fun ModePickerSection(
 
     ElevatedCard(
         onClick = { onPickMode(CreateSessionMode.Standard) },
-        enabled = !loading,
         colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.elevatedCardColors(),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -256,20 +260,12 @@ private fun ModePickerSection(
     if (project?.has_linear_key == true) {
         ElevatedCard(
             onClick = { onPickMode(CreateSessionMode.AutoScan) },
-            enabled = !loading,
             colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
             modifier = Modifier.fillMaxWidth(),
         ) {
             ListItem(
                 headlineContent = { Text("Auto Scan mode") },
                 supportingContent = { Text("Scan Linear for AutoPipeline issues and launch sessions.") },
-                trailingContent = if (loading) {
-                    {
-                        Box(modifier = Modifier.size(24.dp)) {
-                            CircularProgressIndicator(strokeWidth = 2.dp)
-                        }
-                    }
-                } else null,
                 colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
             )
         }
@@ -277,16 +273,10 @@ private fun ModePickerSection(
 
     Button(
         onClick = onCommit,
-        enabled = selectedMode != null && !loading,
+        enabled = selectedMode != null,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text(
-            when (selectedMode) {
-                CreateSessionMode.AutoScan -> if (loading) "Starting…" else "Start Auto Scan"
-                CreateSessionMode.Standard -> "Continue"
-                null -> "Continue"
-            }
-        )
+        Text("Continue")
     }
 }
 
@@ -333,6 +323,51 @@ private fun StandardConfigSection(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@Composable
+private fun AutoScanConfigSection(
+    state: CreateSessionUiState,
+    viewModel: CreateSessionViewModel,
+) {
+    val isGitProject = state.projects
+        .firstOrNull { it.name == state.selectedProjectName }
+        ?.is_git == true
+
+    ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
+    ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
+    ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
+
+    if (isGitProject) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) {
+            OutlinedTextField(
+                value = state.branchName,
+                onValueChange = viewModel::setBranchName,
+                label = { Text("Branch name (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+
+    OutlinedTextField(
+        value = state.initialPrompt,
+        onValueChange = viewModel::setInitialPrompt,
+        label = { Text("Initial prompt (optional)") },
+        modifier = Modifier.fillMaxWidth(),
+        minLines = 3,
+        maxLines = 8,
+    )
+
+    Button(
+        onClick = viewModel::submitAutoScan,
+        enabled = state.selectedProjectName != null && !state.autoScanStarting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.autoScanStarting) "Starting…" else "Start Auto Scan")
     }
 }
 
