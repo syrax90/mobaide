@@ -47,6 +47,7 @@ fun TerminalScreen(
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val promptState by viewModel.promptState.collectAsStateWithLifecycle()
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -113,14 +114,38 @@ fun TerminalScreen(
             )
         }
     }
+
+    // ── Prompt detection bottom sheets ───────────────────────────────────────────
+    when (val prompt = promptState) {
+        is PromptState.Permission -> PermissionPromptSheet(
+            state = prompt,
+            onAllow = { viewModel.sendBytes(InkSequenceBuilder.permission(true)) },
+            onDeny = { viewModel.sendBytes(InkSequenceBuilder.permission(false)) },
+            onDismiss = { viewModel.dismissPrompt() },
+        )
+        is PromptState.Checkbox -> CheckboxPromptSheet(
+            state = prompt,
+            onMoveUp = { viewModel.sendBytes(InkSequenceBuilder.arrowUp()) },
+            onMoveDown = { viewModel.sendBytes(InkSequenceBuilder.arrowDown()) },
+            onToggle = { viewModel.sendBytes(InkSequenceBuilder.checkboxToggle()) },
+            onSubmit = { viewModel.sendBytes(InkSequenceBuilder.checkboxSubmit()) },
+            onDismiss = { viewModel.dismissPrompt() },
+        )
+        is PromptState.TextInput -> TextInputPromptSheet(
+            state = prompt,
+            onSubmit = { text -> viewModel.sendBytes(InkSequenceBuilder.textInput(text)) },
+            onDismiss = { viewModel.dismissPrompt() },
+        )
+        PromptState.None -> { /* no sheet */ }
+    }
 }
 
 @Composable
 private fun ConnectionOverlay(state: ConnectionState) {
     if (state == ConnectionState.Live) return
     val (label, bg) = when (state) {
-        ConnectionState.Reconnecting -> "Reconnecting…" to Color(0xCC202020)
-        ConnectionState.ReplayingBuffer -> "Replaying buffer…" to Color(0xCC2A4D6E)
+        ConnectionState.Reconnecting -> "Reconnecting\u2026" to Color(0xCC202020)
+        ConnectionState.ReplayingBuffer -> "Replaying buffer\u2026" to Color(0xCC2A4D6E)
         ConnectionState.Live -> return
     }
     Box(

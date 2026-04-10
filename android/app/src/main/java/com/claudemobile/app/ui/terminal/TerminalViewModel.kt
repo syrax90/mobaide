@@ -32,16 +32,41 @@ class TerminalViewModel @Inject constructor(
 
     private var connection: WebSocketConnection? = null
 
-    /** Termux session driving the renderer. Survives recomposition; created lazily on first connect. */
-    val session: TerminalSession = TerminalSession(NoopTerminalSessionClient()).also {
-        // 80x24 default until the View measures itself and calls resize().
-        it.updateSize(80, 24, 12, 24)
-        it.setOnInputListener { data, offset, count ->
-            // Bytes the emulator / view want to send to the (remote) PTY — wrap in an 'i' frame.
-            val slice = if (offset == 0 && count == data.size) data else data.copyOfRange(offset, offset + count)
-            sendBytes(slice)
+    // ── Prompt detection ────────────────────────────────────────────────────────
+
+    private val promptDetector = PromptDetector()
+
+    /** Observable prompt state for the UI to render bottom-sheet overlays. */
+    val promptState: StateFlow<PromptState> = promptDetector.promptState
+
+    // ── Terminal session ────────────────────────────────────────────────────────
+
+    /** Termux session driving the renderer. Survives recomposition; created once in init. */
+    val session: TerminalSession
+
+    init {
+        session = TerminalSession(
+            TerminalSessionCallback(
+                onScreenUpdated = {
+                    // Skip prompt detection during replay to avoid false positives.
+                    if (_connectionState.value != ConnectionState.ReplayingBuffer) {
+                        promptDetector.onScreenChanged(viewModelScope, session)
+                    }
+                },
+            ),
+        ).also {
+            // 80x24 default until the View measures itself and calls resize().
+            it.updateSize(80, 24, 12, 24)
+            it.setOnInputListener { data, offset, count ->
+                // Bytes the emulator / view want to send to the (remote) PTY — wrap in an 'i' frame.
+                val slice = if (offset == 0 && count == data.size) data else data.copyOfRange(offset, offset + count)
+                sendBytes(slice)
+            }
         }
+        connect()
     }
+
+    // ── Connection state ────────────────────────────────────────────────────────
 
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
@@ -54,10 +79,6 @@ class TerminalViewModel @Inject constructor(
 
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
-
-    init {
-        connect()
-    }
 
     private fun connect() {
         connection = sessionRepository.createSessionIoConnection(sessionId)
@@ -114,6 +135,8 @@ class TerminalViewModel @Inject constructor(
             "unknown"
         }
 
+    // ── Input ───────────────────────────────────────────────────────────────────
+
     fun sendInput(text: String) {
         // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
         sendBytes((text + "\r").toByteArray(Charsets.UTF_8))
@@ -122,6 +145,11 @@ class TerminalViewModel @Inject constructor(
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
         connection?.sendBinary(TerminalProtocol.encodeInput(bytes))
+    }
+
+    /** Manually dismiss the currently detected prompt (e.g. user swiped the sheet away). */
+    fun dismissPrompt() {
+        promptDetector.dismiss()
     }
 
     fun resize(rows: Int, cols: Int) {
