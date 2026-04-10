@@ -99,6 +99,7 @@ fun TerminalScreen(
                 Box(modifier = Modifier.fillMaxSize().background(TerminalBackground)) {
                     TerminalSurfaceView(
                         session = viewModel.session,
+                        sessionCallback = viewModel.sessionCallback,
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },

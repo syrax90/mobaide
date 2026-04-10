@@ -41,20 +41,21 @@ class TerminalViewModel @Inject constructor(
 
     // ── Terminal session ────────────────────────────────────────────────────────
 
+    /** Exposed so the View layer can attach an invalidation hook. */
+    val sessionCallback = TerminalSessionCallback(
+        onScreenUpdated = {
+            // Skip prompt detection during replay to avoid false positives.
+            if (_connectionState.value != ConnectionState.ReplayingBuffer) {
+                promptDetector.onScreenChanged(viewModelScope, session)
+            }
+        },
+    )
+
     /** Termux session driving the renderer. Survives recomposition; created once in init. */
     val session: TerminalSession
 
     init {
-        session = TerminalSession(
-            TerminalSessionCallback(
-                onScreenUpdated = {
-                    // Skip prompt detection during replay to avoid false positives.
-                    if (_connectionState.value != ConnectionState.ReplayingBuffer) {
-                        promptDetector.onScreenChanged(viewModelScope, session)
-                    }
-                },
-            ),
-        ).also {
+        session = TerminalSession(sessionCallback).also {
             // 80x24 default until the View measures itself and calls resize().
             it.updateSize(80, 24, 12, 24)
             it.setOnInputListener { data, offset, count ->

@@ -4,6 +4,7 @@ import android.graphics.Typeface
 import android.view.ViewGroup
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -21,10 +22,16 @@ import com.termux.view.TerminalViewClient
 @Composable
 fun TerminalSurfaceView(
     session: TerminalSession,
+    sessionCallback: TerminalSessionCallback,
     onResize: (rows: Int, cols: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
+
+    DisposableEffect(sessionCallback) {
+        onDispose { sessionCallback.onInvalidate = null }
+    }
+
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
@@ -37,6 +44,7 @@ fun TerminalSurfaceView(
                 setTypeface(Typeface.MONOSPACE)
                 setTerminalViewClient(client)
                 attachSession(session)
+                sessionCallback.onInvalidate = { onScreenUpdated() }
                 viewTreeObserver.addOnGlobalLayoutListener {
                     val emu = session.emulator
                     if (emu != null) onResize(emu.mRows, emu.mColumns)
@@ -46,6 +54,7 @@ fun TerminalSurfaceView(
         update = { view ->
             if (view.mTermSession !== session) {
                 view.attachSession(session)
+                sessionCallback.onInvalidate = { view.onScreenUpdated() }
             }
         },
     )
@@ -58,8 +67,12 @@ fun TerminalSurfaceView(
 class TerminalSessionCallback(
     private val onScreenUpdated: () -> Unit = {},
 ) : TerminalSessionClient {
+    /** Set by the View layer to trigger [TerminalView.onScreenUpdated] → [invalidate]. */
+    var onInvalidate: (() -> Unit)? = null
+
     override fun onTextChanged(changedSession: TerminalSession) {
         onScreenUpdated()
+        onInvalidate?.invoke()
     }
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {}
