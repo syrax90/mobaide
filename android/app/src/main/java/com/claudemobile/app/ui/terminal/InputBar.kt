@@ -27,6 +27,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -60,6 +62,7 @@ fun InputBar(
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    val haptic = LocalHapticFeedback.current
     var text by remember { mutableStateOf("") }
     var panelExpanded by remember { mutableStateOf(false) }
 
@@ -130,7 +133,10 @@ fun InputBar(
                     ) {
                         row.forEach { key ->
                             FilledTonalButton(
-                                onClick = { onSendBytes(key.bytes) },
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSendBytes(key.bytes)
+                                },
                                 enabled = enabled,
                                 contentPadding = PaddingValues(
                                     horizontal = 10.dp, vertical = 4.dp,
