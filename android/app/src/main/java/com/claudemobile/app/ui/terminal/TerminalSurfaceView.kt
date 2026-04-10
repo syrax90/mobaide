@@ -24,7 +24,7 @@ fun TerminalSurfaceView(
     onResize: (rows: Int, cols: Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val client = remember { NoopTerminalViewClient() }
+    val client = remember { TerminalViewClientImpl() }
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
@@ -52,12 +52,15 @@ fun TerminalSurfaceView(
 }
 
 /**
- * Minimal [TerminalSessionClient] used by the host view-model. The Termux client interface has
- * many hooks (title changes, bell, clipboard, ...) that the Claude Mobile UI does not need —
- * everything is a no-op except [onTextChanged], which the View itself uses to invalidate.
+ * [TerminalSessionClient] that forwards screen-update events to the host ViewModel for prompt
+ * detection. All other Termux callbacks (title, bell, clipboard, ...) are no-ops.
  */
-class NoopTerminalSessionClient : TerminalSessionClient {
-    override fun onTextChanged(changedSession: TerminalSession) { /* view repaints itself */ }
+class TerminalSessionCallback(
+    private val onScreenUpdated: () -> Unit = {},
+) : TerminalSessionClient {
+    override fun onTextChanged(changedSession: TerminalSession) {
+        onScreenUpdated()
+    }
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {}
     override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
@@ -76,8 +79,17 @@ class NoopTerminalSessionClient : TerminalSessionClient {
     override fun logStackTrace(tag: String?, e: Exception?) {}
 }
 
-/** Hardware-keyboard / IME glue. We accept all default Termux key handling. */
-private class NoopTerminalViewClient : TerminalViewClient {
+/**
+ * Hardware-keyboard / IME glue with modifier key state tracking.
+ * Modifier flags are read-and-clear (standard Termux convention): set the flag before
+ * dispatching a key event, and [TerminalView] reads and consumes it.
+ */
+private class TerminalViewClientImpl : TerminalViewClient {
+    var ctrlDown = false
+    var shiftDown = false
+    var altDown = false
+    var fnDown = false
+
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: android.view.MotionEvent?) {}
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
@@ -88,10 +100,10 @@ private class NoopTerminalViewClient : TerminalViewClient {
     override fun onKeyDown(keyCode: Int, e: android.view.KeyEvent?, session: TerminalSession?): Boolean = false
     override fun onKeyUp(keyCode: Int, e: android.view.KeyEvent?): Boolean = false
     override fun onLongPress(event: android.view.MotionEvent?): Boolean = false
-    override fun readControlKey(): Boolean = false
-    override fun readAltKey(): Boolean = false
-    override fun readShiftKey(): Boolean = false
-    override fun readFnKey(): Boolean = false
+    override fun readControlKey(): Boolean = ctrlDown.also { ctrlDown = false }
+    override fun readAltKey(): Boolean = altDown.also { altDown = false }
+    override fun readShiftKey(): Boolean = shiftDown.also { shiftDown = false }
+    override fun readFnKey(): Boolean = fnDown.also { fnDown = false }
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
     override fun onEmulatorSet() {}
     override fun logError(tag: String?, message: String?) {}
