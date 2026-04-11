@@ -179,34 +179,11 @@ class RestApiTest {
         verify(exactly = 0) { tokenStore.getServerUrl() }
     }
 
-    // ---- refreshToken -------------------------------------------------------
-
-    @Test
-    fun refreshToken_postsToBaseUrl_withRefreshTokenInJsonBody() = runTest {
-        val (api, client) = newApi(serverUrl = "https://api.example.com")
-        val captured = stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """{"access_token":"a2","refresh_token":"r2"}""",
-            )
-        }
-
-        api.refreshToken("refresh-old")
-
-        assertEquals(
-            "https://api.example.com/api/auth/refresh",
-            captured.captured.url.toString(),
-        )
-        assertEquals("POST", captured.captured.method)
-        val buffer = okio.Buffer()
-        captured.captured.body!!.writeTo(buffer)
-        val body = buffer.readUtf8()
-        assertTrue(
-            "refresh body must contain the refresh token — was: $body",
-            body.contains("\"refresh_token\":\"refresh-old\""),
-        )
-    }
+    // Note: there is no RestApi.refreshToken test because RestApi no
+    // longer exposes a refresh endpoint — that method used to bypass
+    // SessionManager's single-flight coordination and was deleted as
+    // part of the auth-crash fix. Refresh coverage lives in
+    // com.claudemobile.app.data.auth.SessionManagerTest.
 
     // ---- createSession: URL + JSON body serialisation -----------------------
 

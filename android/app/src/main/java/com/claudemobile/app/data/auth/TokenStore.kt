@@ -37,7 +37,18 @@ class TokenStore(context: Context) {
 
     fun getServerUrl(): String? = prefs.getString(KEY_SERVER_URL, null)
 
-    fun isLoggedIn(): Boolean = getAccessToken() != null && getServerUrl() != null
+    /**
+     * "Logged in" means we have **all three** persisted values required to
+     * recover a session silently: access token, refresh token, and server
+     * URL. Dropping the refresh-token check here meant a previously
+     * invalidated session (access-token-present, refresh-token-cleared) was
+     * still reported as logged in, and the UI would navigate to the
+     * authenticated graph before firing doomed API calls.
+     */
+    fun isLoggedIn(): Boolean =
+        getAccessToken() != null &&
+            getRefreshToken() != null &&
+            getServerUrl() != null
 
     fun clear() {
         prefs.edit().clear().apply()

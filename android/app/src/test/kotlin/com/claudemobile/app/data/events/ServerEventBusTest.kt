@@ -1,6 +1,7 @@
 package com.claudemobile.app.data.events
 
 import app.cash.turbine.test
+import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WebSocketManager
 import com.claudemobile.app.data.network.WsEvent
@@ -11,6 +12,7 @@ import com.claudemobile.app.data.network.dto.SessionResponse
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import okio.ByteString
@@ -43,14 +45,40 @@ class ServerEventBusTest {
      * connection events flow, and the connection mock (for verifying
      * connect/disconnect calls).
      */
-    private fun newBus(): BusFixture {
+    private fun newBus(initiallyLoggedIn: Boolean = true): BusFixture =
+        newBusWithAuthStateFlow(initiallyLoggedIn).toBusFixture()
+
+    /**
+     * Like [newBus], but also exposes the underlying [MutableStateFlow] that
+     * backs `sessionManager.authState`, so tests can drive mid-session
+     * `LoggedIn`/`LoggedOut` transitions and observe the bus's reactive
+     * start/stop behavior (the `init` block that collects `authState.drop(1)`).
+     */
+    private fun newBusWithAuthStateFlow(
+        initiallyLoggedIn: Boolean = true,
+    ): ReactiveBusFixture {
         val connEvents = MutableSharedFlow<WsEvent>(replay = 0, extraBufferCapacity = 64)
         val conn = mockk<WebSocketConnection>(relaxed = true)
         every { conn.events } returns connEvents
         val wsm = mockk<WebSocketManager>()
         every { wsm.createConnection("ws/events") } returns conn
-        val bus = ServerEventBus(wsm)
-        return BusFixture(bus, connEvents, conn, wsm)
+        val sessionManager = mockk<SessionManager>(relaxed = true)
+        val initialState: SessionManager.AuthState = if (initiallyLoggedIn) {
+            SessionManager.AuthState.LoggedIn
+        } else {
+            SessionManager.AuthState.LoggedOut
+        }
+        val authStateFlow = MutableStateFlow<SessionManager.AuthState>(initialState)
+        every { sessionManager.authState } returns authStateFlow
+        // Keep isLoggedIn() in lock-step with the live flow value, so the
+        // bus's `@Synchronized fun start()` guard (which consults
+        // `sessionManager.isLoggedIn()`) agrees with whatever state the
+        // test last emitted into `authStateFlow`.
+        every { sessionManager.isLoggedIn() } answers {
+            authStateFlow.value is SessionManager.AuthState.LoggedIn
+        }
+        val bus = ServerEventBus(wsm, sessionManager)
+        return ReactiveBusFixture(bus, connEvents, conn, wsm, sessionManager, authStateFlow)
     }
 
     private data class BusFixture(
@@ -58,7 +86,20 @@ class ServerEventBusTest {
         val connEvents: MutableSharedFlow<WsEvent>,
         val conn: WebSocketConnection,
         val wsm: WebSocketManager,
+        val sessionManager: SessionManager,
     )
+
+    private data class ReactiveBusFixture(
+        val bus: ServerEventBus,
+        val connEvents: MutableSharedFlow<WsEvent>,
+        val conn: WebSocketConnection,
+        val wsm: WebSocketManager,
+        val sessionManager: SessionManager,
+        val authStateFlow: MutableStateFlow<SessionManager.AuthState>,
+    ) {
+        fun toBusFixture(): BusFixture =
+            BusFixture(bus, connEvents, conn, wsm, sessionManager)
+    }
 
     // ---- Connection state machine -------------------------------------------
 
@@ -144,16 +185,76 @@ class ServerEventBusTest {
     }
 
     @Test
-    fun start_whenUrlNotConfigured_fallsBackToDisconnected_silently() = runTest {
-        val wsm = mockk<WebSocketManager>()
-        every { wsm.createConnection("ws/events") } throws
-            IllegalStateException("Server URL not configured")
-        val bus = ServerEventBus(wsm)
+    fun start_whenNotLoggedIn_isNoOp_andStaysDisconnected() = runTest {
+        // When the SessionManager reports LoggedOut, the bus must not even
+        // ask WebSocketManager for a connection — there's nothing to
+        // connect to, and any attempt to open a socket with a stale token
+        // would spam the server with failing handshakes.
+        val fixture = newBus(initiallyLoggedIn = false)
+        val (bus, _, _, wsm, _) = fixture
 
-        // Must not propagate the exception.
         bus.start()
 
         assertEquals(ServerEventBus.ConnState.Disconnected, bus.connection.value)
+        verify(exactly = 0) { wsm.createConnection(any()) }
+    }
+
+    @Test
+    fun authState_transitionLoggedOutToLoggedIn_autoStartsTheBus() = runTest {
+        // Regression guard for the bus's reactive `init` collector
+        // (`authState.drop(1).collect { ... }`): when the session flips to
+        // LoggedIn mid-run (e.g. the user logs in after a cold-start on the
+        // login screen), the bus must auto-start without anybody calling
+        // `start()` explicitly. MainActivity no longer calls start() on
+        // resume — the bus self-starts through this path.
+        val fixture = newBusWithAuthStateFlow(initiallyLoggedIn = false)
+        val (bus, _, conn, wsm, _, authStateFlow) = fixture
+
+        // Pre-condition: cold-start LoggedOut → no connection, no calls to wsm.
+        assertEquals(ServerEventBus.ConnState.Disconnected, bus.connection.value)
+        verify(exactly = 0) { wsm.createConnection(any()) }
+
+        // Drive the transition LoggedOut → LoggedIn and wait for the bus to
+        // move into Connecting via its init-block collector. Turbine's default
+        // 3s timeout comfortably covers the `Dispatchers.Default` hop.
+        bus.connection.test {
+            assertEquals(ServerEventBus.ConnState.Disconnected, awaitItem())
+            authStateFlow.value = SessionManager.AuthState.LoggedIn
+            assertEquals(ServerEventBus.ConnState.Connecting, awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        verify(exactly = 1) { wsm.createConnection("ws/events") }
+        verify(exactly = 1) { conn.connect() }
+
+        bus.stop()
+    }
+
+    @Test
+    fun authState_transitionLoggedInToLoggedOut_autoStopsTheBus_andDisconnectsSocket() = runTest {
+        // Regression guard for the second half of the init-block collector:
+        // on LoggedIn → LoggedOut (e.g. a refresh-token rejection inside
+        // SessionManager.forceLogout), the bus must tear down the live
+        // WebSocketConnection so the reconnect loop stops hammering
+        // `/ws/events` with a dead token.
+        val fixture = newBusWithAuthStateFlow(initiallyLoggedIn = true)
+        val (bus, _, conn, _, _, authStateFlow) = fixture
+
+        // Explicitly start the bus from the LoggedIn cold-start path so the
+        // subsequent logout transition has something to tear down.
+        bus.start()
+        assertEquals(ServerEventBus.ConnState.Connecting, bus.connection.value)
+
+        bus.connection.test {
+            // Replay of the current value, then the LoggedOut-triggered stop.
+            assertEquals(ServerEventBus.ConnState.Connecting, awaitItem())
+            authStateFlow.value = SessionManager.AuthState.LoggedOut
+            assertEquals(ServerEventBus.ConnState.Disconnected, awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        // The connection we created in start() must have been disconnected.
+        verify(atLeast = 1) { conn.disconnect() }
     }
 
     // ---- Envelope parsing & typed demultiplexing ----------------------------
