@@ -41,6 +41,10 @@ android {
     buildFeatures {
         compose = true
     }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -82,4 +86,10 @@ dependencies {
 
     // Vendored Termux terminal renderer (Apache-2.0)
     implementation(project(":terminal-view"))
+
+    // Unit testing
+    testImplementation(libs.junit)
+    testImplementation(libs.mockk)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
 }
