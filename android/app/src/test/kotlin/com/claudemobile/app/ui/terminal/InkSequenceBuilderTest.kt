@@ -9,24 +9,6 @@ import org.junit.Test
  */
 class InkSequenceBuilderTest {
 
-    // ---- permission ---------------------------------------------------------
-
-    @Test
-    fun permission_allow_isYThenCarriageReturn() {
-        assertArrayEquals(
-            "y\r".toByteArray(Charsets.UTF_8),
-            InkSequenceBuilder.permission(allow = true),
-        )
-    }
-
-    @Test
-    fun permission_deny_isNThenCarriageReturn() {
-        assertArrayEquals(
-            "n\r".toByteArray(Charsets.UTF_8),
-            InkSequenceBuilder.permission(allow = false),
-        )
-    }
-
     // ---- textInput ----------------------------------------------------------
 
     @Test

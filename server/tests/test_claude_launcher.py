@@ -16,12 +16,26 @@ def _make_project(path: str, *, key: str | None = None, conda: str | None = None
 
 
 @pytest.mark.asyncio
-async def test_argv_minimal(tmp_path: Path):
+async def test_argv_minimal_adds_bypass(tmp_path: Path):
+    """Default options now force bypass mode — the mobile client cannot mediate
+    approval dialogs, so sessions always start with permissions skipped."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)), ClaudeOptions()
     )
-    assert spec.argv == ["claude", "--debug"]
+    assert spec.argv == ["claude", "--debug", "--dangerously-skip-permissions"]
+
+
+@pytest.mark.asyncio
+async def test_argv_plan_mode_excludes_bypass(tmp_path: Path):
+    """Plan mode is mutually exclusive with bypass (both set --permission-mode),
+    so only --permission-mode plan is passed when plan_mode is enabled."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(plan_mode=True),
+    )
+    assert spec.argv == ["claude", "--debug", "--permission-mode", "plan"]
 
 
 @pytest.mark.asyncio
@@ -31,7 +45,6 @@ async def test_argv_all_flags(tmp_path: Path):
         _make_project(str(tmp_path)),
         ClaudeOptions(
             plan_mode=True,
-            skip_permissions=True,
             no_memory=True,
             initial_prompt="hello world",
         ),
@@ -41,7 +54,6 @@ async def test_argv_all_flags(tmp_path: Path):
         "--debug",
         "--permission-mode",
         "plan",
-        "--allow-dangerously-skip-permissions",
         "--",
         "hello world",
     ]

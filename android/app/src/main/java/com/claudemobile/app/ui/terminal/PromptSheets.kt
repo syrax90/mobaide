@@ -41,57 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 
-// ── Permission prompt ───────────────────────────────────────────────────────────
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PermissionPromptSheet(
-    state: PromptState.Permission,
-    onAllow: () -> Unit,
-    onDeny: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-        ) {
-            Text(
-                text = "Permission Request",
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-            )
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = state.question,
-                style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace),
-            )
-            Spacer(Modifier.height(20.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                FilledTonalButton(
-                    onClick = onDeny,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Deny")
-                }
-                Button(
-                    onClick = onAllow,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Allow")
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-        }
-    }
-}
-
 // ── Checkbox / multi-select prompt ──────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)

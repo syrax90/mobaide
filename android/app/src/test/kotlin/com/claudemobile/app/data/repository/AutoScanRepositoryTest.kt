@@ -226,7 +226,6 @@ class AutoScanRepositoryTest {
     fun startScan_forwardsClaudeOptions_toRestApi() = runTest {
         val (repo, restApi) = newRepo()
         val options = ClaudeOptionsModel(
-            skip_permissions = true,
             worktree = true,
             initial_prompt = "go",
         )

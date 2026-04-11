@@ -289,7 +289,6 @@ private fun StandardConfigSection(
         .firstOrNull { it.name == state.selectedProjectName }
         ?.is_git == true
 
-    ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
     // CLA-20: worktree requires a git repo — hide the toggle for non-git projects.
@@ -326,7 +325,6 @@ private fun AutoScanConfigSection(
         ?.is_git == true
 
     ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
-    ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
     if (isGitProject) {

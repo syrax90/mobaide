@@ -118,12 +118,6 @@ fun TerminalScreen(
 
     // ── Prompt detection bottom sheets ───────────────────────────────────────────
     when (val prompt = promptState) {
-        is PromptState.Permission -> PermissionPromptSheet(
-            state = prompt,
-            onAllow = { viewModel.sendBytes(InkSequenceBuilder.permission(true)) },
-            onDeny = { viewModel.sendBytes(InkSequenceBuilder.permission(false)) },
-            onDismiss = { viewModel.dismissPrompt() },
-        )
         is PromptState.Checkbox -> CheckboxPromptSheet(
             state = prompt,
             onMoveUp = { viewModel.sendBytes(InkSequenceBuilder.arrowUp()) },

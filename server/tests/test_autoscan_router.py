@@ -194,7 +194,6 @@ class TestStartScan:
             "project_name": "proj",
             "claude_options": {
                 "plan_mode": True,
-                "skip_permissions": True,
                 "no_memory": False,
                 "initial_prompt": "hello",
                 "worktree": True,
@@ -216,7 +215,6 @@ class TestStartScan:
         opts = call.kwargs["client_options"]
         assert isinstance(opts, ClaudeOptions)
         assert opts.plan_mode is True
-        assert opts.skip_permissions is True
         assert opts.no_memory is False
         assert opts.initial_prompt == "hello"
         assert opts.worktree is True

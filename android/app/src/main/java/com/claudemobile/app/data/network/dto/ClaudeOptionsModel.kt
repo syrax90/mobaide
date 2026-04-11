@@ -6,7 +6,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ClaudeOptionsModel(
     val plan_mode: Boolean = false,
-    val skip_permissions: Boolean = false,
     val no_memory: Boolean = false,
     val initial_prompt: String? = null,
     val worktree: Boolean = false,
