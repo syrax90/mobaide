@@ -1,5 +1,6 @@
 package com.claudemobile.app.data.repository
 
+import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.network.RestApi
@@ -21,20 +22,24 @@ import org.junit.Assert.fail
 import org.junit.Test
 
 /**
- * Unit tests for [AuthRepository] — thin delegation layer over [RestApi] and
- * [TokenStore]. The goal is to pin the exact calls made for each public
- * method and to confirm that login persists the server URL *before* tokens
- * are written (so a concurrent reader never sees tokens without a URL).
+ * Unit tests for [AuthRepository] — thin delegation layer over [RestApi],
+ * [TokenStore], and [SessionManager]. The goal is to pin the exact calls
+ * made for each public method, confirm that login persists the server URL
+ * **before** tokens are written (so a concurrent reader never sees tokens
+ * without a URL), and that [SessionManager.markLoggedIn] is invoked
+ * **after** token persistence so observers cannot race into `LoggedIn`
+ * with only a URL and no bearer.
  */
 class AuthRepositoryTest {
 
     // ---- login --------------------------------------------------------------
 
     @Test
-    fun login_storesServerUrl_andTokens_inOrder() = runTest {
+    fun login_storesServerUrl_tokens_thenMarksSessionLoggedIn_inOrder() = runTest {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
-        val repo = AuthRepository(restApi, tokenStore)
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+        val repo = AuthRepository(restApi, tokenStore, sessionManager)
 
         coEvery {
             restApi.login("https://example.com", "alice", "hunter2")
@@ -45,12 +50,13 @@ class AuthRepositoryTest {
 
         repo.login("https://example.com", "alice", "hunter2")
 
-        // Relative order matters — isLoggedIn() depends on BOTH url and token
-        // being present, so URL must land first. Enforcing the order also
-        // documents that contract for future refactors.
+        // URL first, then tokens (so a concurrent reader never sees
+        // tokens-without-URL), then markLoggedIn() so an observer on
+        // authState cannot race into LoggedIn before tokens land.
         verifyOrder {
             tokenStore.saveServerUrl("https://example.com")
             tokenStore.saveTokens("access-xyz", "refresh-xyz")
+            sessionManager.markLoggedIn()
         }
         coVerify(exactly = 1) {
             restApi.login("https://example.com", "alice", "hunter2")
@@ -58,10 +64,11 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun login_propagatesApiException_andDoesNotTouchTokenStore() = runTest {
+    fun login_propagatesApiException_andDoesNotTouchTokenStore_orSessionManager() = runTest {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
-        val repo = AuthRepository(restApi, tokenStore)
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+        val repo = AuthRepository(restApi, tokenStore, sessionManager)
 
         coEvery {
             restApi.login(any(), any(), any())
@@ -78,6 +85,7 @@ class AuthRepositoryTest {
         // A failed login must not leave a partial auth state behind.
         verify(exactly = 0) { tokenStore.saveServerUrl(any()) }
         verify(exactly = 0) { tokenStore.saveTokens(any(), any()) }
+        verify(exactly = 0) { sessionManager.markLoggedIn() }
     }
 
     @Test
@@ -88,7 +96,8 @@ class AuthRepositoryTest {
         // to both RestApi.login and TokenStore.saveServerUrl.
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
-        val repo = AuthRepository(restApi, tokenStore)
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+        val repo = AuthRepository(restApi, tokenStore, sessionManager)
 
         coEvery {
             restApi.login("https://example.com/", "bob", "pw")
@@ -98,51 +107,61 @@ class AuthRepositoryTest {
 
         verify(exactly = 1) { tokenStore.saveServerUrl("https://example.com/") }
         verify(exactly = 1) { tokenStore.saveTokens("a", "r") }
+        verify(exactly = 1) { sessionManager.markLoggedIn() }
     }
 
     // ---- logout -------------------------------------------------------------
 
     @Test
-    fun logout_clearsTokenStore_andDoesNothingElse() {
-        val restApi = mockk<RestApi>() // intentionally no stubs — must not be touched.
+    fun logout_delegatesToSessionManager_forceLogout() {
+        // restApi is intentionally unstubbed — logout() must never touch it.
+        val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>()
-        every { tokenStore.clear() } just Runs
+        val sessionManager = mockk<SessionManager>()
+        every { sessionManager.forceLogout() } just Runs
 
-        AuthRepository(restApi, tokenStore).logout()
+        AuthRepository(restApi, tokenStore, sessionManager).logout()
 
-        verify(exactly = 1) { tokenStore.clear() }
+        // The forceLogout contract (clear tokens + emit LoggedOut) is
+        // verified in SessionManagerTest; here we only pin that the
+        // repository delegates to it.
+        verify(exactly = 1) { sessionManager.forceLogout() }
+        verify(exactly = 0) { tokenStore.clear() }
     }
 
     // ---- isLoggedIn / delegations ------------------------------------------
 
     @Test
-    fun isLoggedIn_delegatesToTokenStore_true() {
+    fun isLoggedIn_delegatesToSessionManager_true() {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>()
-        every { tokenStore.isLoggedIn() } returns true
+        val sessionManager = mockk<SessionManager>()
+        every { sessionManager.isLoggedIn() } returns true
 
-        assertTrue(AuthRepository(restApi, tokenStore).isLoggedIn())
-        verify(exactly = 1) { tokenStore.isLoggedIn() }
+        assertTrue(AuthRepository(restApi, tokenStore, sessionManager).isLoggedIn())
+        verify(exactly = 1) { sessionManager.isLoggedIn() }
     }
 
     @Test
-    fun isLoggedIn_delegatesToTokenStore_false() {
+    fun isLoggedIn_delegatesToSessionManager_false() {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>()
-        every { tokenStore.isLoggedIn() } returns false
+        val sessionManager = mockk<SessionManager>()
+        every { sessionManager.isLoggedIn() } returns false
 
-        assertFalse(AuthRepository(restApi, tokenStore).isLoggedIn())
+        assertFalse(AuthRepository(restApi, tokenStore, sessionManager).isLoggedIn())
     }
 
     @Test
     fun getServerUrl_delegatesToTokenStore() {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = mockk<SessionManager>()
         every { tokenStore.getServerUrl() } returns "https://example.com"
 
         assertEquals(
             "https://example.com",
-            AuthRepository(restApi, tokenStore).getServerUrl(),
+            AuthRepository(restApi, tokenStore, sessionManager).getServerUrl(),
         )
     }
 
@@ -150,8 +169,9 @@ class AuthRepositoryTest {
     fun getUsername_delegatesToTokenStore_andForwardsNull() {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = mockk<SessionManager>()
         every { tokenStore.getUsername() } returns null
 
-        assertNull(AuthRepository(restApi, tokenStore).getUsername())
+        assertNull(AuthRepository(restApi, tokenStore, sessionManager).getUsername())
     }
 }

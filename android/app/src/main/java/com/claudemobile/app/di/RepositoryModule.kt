@@ -1,6 +1,7 @@
 package com.claudemobile.app.di
 
 import android.content.Context
+import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.data.local.PreferencesStore
@@ -31,20 +32,31 @@ object RepositoryModule {
 
     @Provides
     @Singleton
-    fun provideWebSocketManager(client: OkHttpClient, tokenStore: TokenStore): WebSocketManager {
-        return WebSocketManager(client, tokenStore)
+    fun provideWebSocketManager(
+        client: OkHttpClient,
+        tokenStore: TokenStore,
+        sessionManager: SessionManager,
+    ): WebSocketManager {
+        return WebSocketManager(client, tokenStore, sessionManager)
     }
 
     @Provides
     @Singleton
-    fun provideAuthRepository(restApi: RestApi, tokenStore: TokenStore): AuthRepository {
-        return AuthRepository(restApi, tokenStore)
+    fun provideAuthRepository(
+        restApi: RestApi,
+        tokenStore: TokenStore,
+        sessionManager: SessionManager,
+    ): AuthRepository {
+        return AuthRepository(restApi, tokenStore, sessionManager)
     }
 
     @Provides
     @Singleton
-    fun provideServerEventBus(webSocketManager: WebSocketManager): ServerEventBus {
-        return ServerEventBus(webSocketManager)
+    fun provideServerEventBus(
+        webSocketManager: WebSocketManager,
+        sessionManager: SessionManager,
+    ): ServerEventBus {
+        return ServerEventBus(webSocketManager, sessionManager)
     }
 
     @Provides

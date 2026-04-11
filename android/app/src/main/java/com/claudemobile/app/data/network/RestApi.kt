@@ -44,14 +44,13 @@ class RestApi(
         return execute(request)
     }
 
-    suspend fun refreshToken(refreshToken: String): TokenResponse {
-        val body = """{"refresh_token":"$refreshToken"}""".toRequestBody(jsonMediaType)
-        val request = Request.Builder()
-            .url("${baseUrl()}/api/auth/refresh")
-            .post(body)
-            .build()
-        return execute(request)
-    }
+    // Note: token refresh is handled exclusively by SessionManager, which
+    // uses a dedicated bare OkHttpClient with no AuthInterceptor and
+    // single-flight coalesces concurrent callers through an
+    // AtomicReference<Deferred<RefreshResult>>. A RestApi.refreshToken
+    // method would go through the authenticated client and bypass that
+    // coordination — exactly the second independent refresh path that
+    // produced the original crash. Do not re-introduce it here.
 
     // Sessions
 

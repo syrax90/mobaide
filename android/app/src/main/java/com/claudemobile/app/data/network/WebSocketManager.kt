@@ -1,6 +1,8 @@
 package com.claudemobile.app.data.network
 
+import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -11,13 +13,11 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.Json
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -33,9 +33,30 @@ sealed class WsEvent {
 
 class WebSocketConnection(
     private val client: OkHttpClient,
-    private val urlProvider: () -> String,
+    private val sessionManager: SessionManager,
+    /**
+     * Returns the URL to connect to, or `null` when the caller should
+     * abandon the connect attempt (e.g. because the user is logged out
+     * and no server URL is stored). **Must not throw** — historically a
+     * throw here propagated through the scope's unhandled coroutine
+     * exception handler and crashed the app.
+     */
+    private val urlProvider: () -> String?,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * Defence-in-depth: without this handler, any uncaught exception in
+     * a coroutine launched on [scope] bubbles up to Android's default
+     * `Thread.uncaughtExceptionHandler` and terminates the process.
+     * With it, exotic failures inside the URL provider or the reconnect
+     * loop degrade to a [WsEvent.Error] instead.
+     */
+    private val exceptionHandler = CoroutineExceptionHandler { _, t ->
+        _events.tryEmit(WsEvent.Error(t))
+    }
+
+    private val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + exceptionHandler,
+    )
     private val mutex = Mutex()
     private var webSocket: WebSocket? = null
     private var reconnectJob: Job? = null
@@ -80,7 +101,23 @@ class WebSocketConnection(
     }
 
     private fun doConnect() {
-        val request = Request.Builder().url(urlProvider()).build()
+        // Any throw from the URL provider (or its upstream dependencies)
+        // is caught here — letting it escape would tear down the
+        // coroutine scope and crash the app.
+        val url = try {
+            urlProvider()
+        } catch (t: Throwable) {
+            _events.tryEmit(WsEvent.Error(t))
+            return
+        } ?: run {
+            // Logged out / no server URL / session dead — don't connect
+            // and don't retry. A subsequent login will create a fresh
+            // WebSocketConnection anyway.
+            _events.tryEmit(WsEvent.Disconnected)
+            return
+        }
+
+        val request = Request.Builder().url(url).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 backoffMs = INITIAL_BACKOFF_MS
@@ -113,13 +150,17 @@ class WebSocketConnection(
     }
 
     private fun scheduleReconnect() {
-        if (!shouldReconnect) return
+        // Don't retry if the caller explicitly disconnected or the
+        // session is dead. This short-circuit is what prevents the
+        // retry-spam loop that used to hammer `/ws/events` every second
+        // after a failed refresh.
+        if (!shouldReconnect || !sessionManager.isLoggedIn()) return
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
             mutex.withLock {
-                if (shouldReconnect) doConnect()
+                if (shouldReconnect && sessionManager.isLoggedIn()) doConnect()
             }
         }
     }
@@ -133,59 +174,51 @@ class WebSocketConnection(
 class WebSocketManager(
     private val client: OkHttpClient,
     private val tokenStore: TokenStore,
+    private val sessionManager: SessionManager,
 ) {
-    private val json = Json { ignoreUnknownKeys = true }
-
+    /**
+     * Build a [WebSocketConnection] whose URL provider pulls the latest
+     * server URL + access token from [TokenStore] every reconnect, so a
+     * token rotated by [SessionManager] is picked up on the next
+     * handshake without rebuilding the connection object.
+     *
+     * The provider blocks briefly on [SessionManager.refresh] if the
+     * access token is expiring soon — single-flight ensures that at
+     * most one refresh HTTP call is issued even if multiple connections
+     * reconnect simultaneously. Previously this was done by an
+     * in-file `refreshTokenIfNeeded()` using its own OkHttpClient call,
+     * which was one of the two independent refresh paths that raced at
+     * startup.
+     */
     fun createConnection(path: String): WebSocketConnection {
-        return WebSocketConnection(client) {
-            refreshTokenIfNeeded()
-            val serverUrl = tokenStore.getServerUrl()
-                ?: throw IllegalStateException("Server URL not configured")
-            val token = tokenStore.getAccessToken() ?: ""
+        // Use an anonymous function instead of a lambda so early `return null`
+        // exits only the URL provider (not the enclosing function).
+        val provider: () -> String? = fun(): String? {
+            if (!sessionManager.isLoggedIn()) return null
+
+            if (tokenStore.isAccessTokenExpiringSoon()) {
+                // Run on the caller's thread — WebSocketConnection.doConnect
+                // already executes inside a coroutine scope, so runBlocking
+                // here only parks that single coroutine worker, not the
+                // Android main thread.
+                when (runBlocking { sessionManager.refresh() }) {
+                    SessionManager.RefreshResult.Terminal -> return null
+                    else -> Unit
+                }
+            }
+
+            val serverUrl = tokenStore.getServerUrl() ?: return null
+            val token = tokenStore.getAccessToken() ?: return null
             val wsScheme = if (serverUrl.startsWith("https")) "wss" else "ws"
             val host = serverUrl.removePrefix("https://").removePrefix("http://")
             val separator = if (path.contains("?")) "&" else "?"
-            "$wsScheme://$host/$path${separator}token=$token"
+            return "$wsScheme://$host/$path${separator}token=$token"
         }
+
+        return WebSocketConnection(
+            client = client,
+            sessionManager = sessionManager,
+            urlProvider = provider,
+        )
     }
-
-    /**
-     * If the current access token is expiring soon, synchronously refresh it
-     * using the refresh token. Called from the URL-provider lambda before each
-     * WebSocket connect/reconnect so that stale tokens are replaced.
-     *
-     * AuthInterceptor skips `/api/auth/refresh` paths, so this request passes
-     * through the interceptor chain without recursive refresh.
-     */
-    private fun refreshTokenIfNeeded() {
-        if (!tokenStore.isAccessTokenExpiringSoon()) return
-        val refreshToken = tokenStore.getRefreshToken() ?: return
-        val serverUrl = tokenStore.getServerUrl() ?: return
-
-        val body = """{"refresh_token":"$refreshToken"}"""
-            .toRequestBody("application/json".toMediaType())
-        val request = Request.Builder()
-            .url("$serverUrl/api/auth/refresh")
-            .post(body)
-            .build()
-
-        try {
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string() ?: return
-                    val tokens = json.decodeFromString<TokenResponseDto>(responseBody)
-                    tokenStore.saveTokens(tokens.access_token, tokens.refresh_token)
-                }
-            }
-        } catch (_: Exception) {
-            // Best-effort; if refresh fails we try connecting with the current
-            // token anyway — the server will reject and backoff-retry will fire.
-        }
-    }
-
-    @kotlinx.serialization.Serializable
-    private data class TokenResponseDto(
-        val access_token: String,
-        val refresh_token: String,
-    )
 }

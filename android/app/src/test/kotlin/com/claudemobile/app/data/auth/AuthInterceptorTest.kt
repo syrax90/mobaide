@@ -1,8 +1,8 @@
 package com.claudemobile.app.data.auth
 
-import io.mockk.Runs
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
 import io.mockk.verify
 import okhttp3.Interceptor
@@ -12,6 +12,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -19,10 +20,17 @@ import org.junit.Test
 
 /**
  * Unit tests for [AuthInterceptor] — exercise the request-path decisions
- * (skip list, expiring-soon pre-refresh, Bearer injection) and the 401 →
- * refresh → replay retry path. [TokenStore] and [Interceptor.Chain] are
- * mocked with MockK; [Request] / [Response] are built with the real OkHttp
- * builders to keep the header/URL/code semantics realistic.
+ * (skip list, synthesised-401 short-circuit when logged out, expiring-soon
+ * pre-refresh, Bearer injection) and the 401 → refresh → replay retry
+ * path. [SessionManager], [TokenStore], and [Interceptor.Chain] are
+ * mocked with MockK; [Request] / [Response] are built with the real
+ * OkHttp builders to keep the header/URL/code semantics realistic.
+ *
+ * Crucially, these tests pin that the interceptor never issues MORE THAN
+ * ONE refresh per `intercept()` call — the regression we fixed was a
+ * double-refresh (once from the pre-emptive expiring-soon branch, once
+ * from the 401-retry branch) that produced the rapid pair of
+ * `POST /api/auth/refresh` requests seen in the original crash logs.
  */
 class AuthInterceptorTest {
 
@@ -43,22 +51,25 @@ class AuthInterceptorTest {
         .body(bodyJson.toResponseBody("application/json".toMediaType()))
         .build()
 
+    /** Build a SessionManager mock whose [SessionManager.isLoggedIn] is stubbed. */
+    private fun newSessionManager(loggedIn: Boolean = true): SessionManager {
+        val sm = mockk<SessionManager>(relaxUnitFun = true)
+        every { sm.isLoggedIn() } returns loggedIn
+        return sm
+    }
+
     // ---- Skip-list paths ----------------------------------------------------
 
     @Test
     fun intercept_skipsAuthHeader_forTokenEndpoint() {
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/auth/token")
         every { chain.request() } returns original
         every { chain.proceed(any()) } answers {
-            // Must forward the *original* request unchanged — no Authorization.
             val forwarded = firstArg<Request>()
-            assertSame(
-                "skip-path must not rewrite the request",
-                original,
-                forwarded,
-            )
+            assertSame("skip-path must not rewrite the request", original, forwarded)
             assertNull(
                 "skip-path must not attach a Bearer header",
                 forwarded.header("Authorization"),
@@ -66,29 +77,50 @@ class AuthInterceptorTest {
             responseFor(forwarded, 200)
         }
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(200, result.code)
-        // No token-store interaction at all on the skip path.
+        // No token-store or session-manager interaction at all on the skip path.
         verify(exactly = 0) { tokenStore.isAccessTokenExpiringSoon() }
         verify(exactly = 0) { tokenStore.getAccessToken() }
-        verify(exactly = 0) { tokenStore.clear() }
+        verify(exactly = 0) { sessionManager.isLoggedIn() }
     }
 
     @Test
     fun intercept_skipsAuthHeader_forRefreshEndpoint() {
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/auth/refresh")
         every { chain.request() } returns original
         every { chain.proceed(original) } returns responseFor(original, 200)
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(200, result.code)
         assertNull(result.request.header("Authorization"))
         verify(exactly = 0) { tokenStore.isAccessTokenExpiringSoon() }
+        verify(exactly = 0) { sessionManager.isLoggedIn() }
+        coVerify(exactly = 0) { sessionManager.refresh() }
+    }
+
+    // ---- Synthesised 401 short-circuit --------------------------------------
+
+    @Test
+    fun intercept_whenLoggedOut_returnsSynthesised401_withoutHittingNetwork() {
+        val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager(loggedIn = false)
+        val chain = mockk<Interceptor.Chain>()
+        val original = request("https://example.com/api/sessions")
+        every { chain.request() } returns original
+
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
+
+        assertEquals(401, result.code)
+        verify(exactly = 0) { chain.proceed(any()) }
+        verify(exactly = 0) { tokenStore.isAccessTokenExpiringSoon() }
         verify(exactly = 0) { tokenStore.getAccessToken() }
+        coVerify(exactly = 0) { sessionManager.refresh() }
     }
 
     // ---- Bearer injection ---------------------------------------------------
@@ -96,13 +128,13 @@ class AuthInterceptorTest {
     @Test
     fun intercept_injectsBearerHeader_whenTokenPresent_andNotExpiring() {
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/sessions")
         every { chain.request() } returns original
         every { tokenStore.isAccessTokenExpiringSoon() } returns false
         every { tokenStore.getAccessToken() } returns "access-123"
 
-        // Capture the forwarded request so we can assert the injected header.
         var forwardedAuth: String? = null
         every { chain.proceed(any()) } answers {
             val req = firstArg<Request>()
@@ -110,16 +142,17 @@ class AuthInterceptorTest {
             responseFor(req, 200)
         }
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(200, result.code)
         assertEquals("Bearer access-123", forwardedAuth)
-        verify(exactly = 0) { tokenStore.clear() }
+        coVerify(exactly = 0) { sessionManager.refresh() }
     }
 
     @Test
     fun intercept_doesNotInjectBearer_whenTokenMissing() {
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/sessions")
         every { chain.request() } returns original
@@ -138,180 +171,151 @@ class AuthInterceptorTest {
             responseFor(req, 200)
         }
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(200, result.code)
         assertNull(forwardedAuth)
-        verify(exactly = 0) { tokenStore.clear() }
     }
 
     // ---- Expiring-soon pre-refresh ------------------------------------------
 
     @Test
     fun intercept_prefetchesRefresh_whenAccessTokenExpiringSoon() {
-        val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
+        val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/sessions")
 
         every { chain.request() } returns original
         every { tokenStore.isAccessTokenExpiringSoon() } returns true
-        every { tokenStore.getRefreshToken() } returns "refresh-old"
-        every { tokenStore.getServerUrl() } returns "https://example.com"
-        // After the pre-refresh succeeds the interceptor re-reads getAccessToken()
-        // to build the Bearer header for the actual request.
         every { tokenStore.getAccessToken() } returns "access-new"
+        coEvery { sessionManager.refresh() } returns SessionManager.RefreshResult.Success
 
-        val forwardedUrls = mutableListOf<String>()
-        val forwardedAuths = mutableListOf<String?>()
+        var forwardedAuth: String? = null
         every { chain.proceed(any()) } answers {
             val req = firstArg<Request>()
-            forwardedUrls += req.url.toString()
-            forwardedAuths += req.header("Authorization")
-            if (req.url.encodedPath == "/api/auth/refresh") {
-                responseFor(
-                    req,
-                    200,
-                    bodyJson = """{"access_token":"access-new","refresh_token":"refresh-new"}""",
-                )
-            } else {
-                responseFor(req, 200)
-            }
+            forwardedAuth = req.header("Authorization")
+            responseFor(req, 200)
         }
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(200, result.code)
-        // First call = refresh, second = actual request with fresh Bearer.
-        assertEquals(2, forwardedUrls.size)
-        assertTrue(
-            "first hop must be the refresh endpoint",
-            forwardedUrls[0].endsWith("/api/auth/refresh"),
-        )
-        assertEquals("https://example.com/api/sessions", forwardedUrls[1])
-        assertNull("refresh request must not carry a Bearer header", forwardedAuths[0])
-        assertEquals("Bearer access-new", forwardedAuths[1])
-        verify(exactly = 1) {
-            tokenStore.saveTokens("access-new", "refresh-new")
+        assertEquals("Bearer access-new", forwardedAuth)
+        coVerify(exactly = 1) { sessionManager.refresh() }
+    }
+
+    @Test
+    fun intercept_whenPrefetchRefreshReturnsTerminal_returnsSynthesised401_withoutRequest() {
+        // Terminal refresh means the session was killed inside SessionManager
+        // (refresh token rejected). The interceptor must not send the
+        // main request with a known-dead token.
+        val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
+        val chain = mockk<Interceptor.Chain>()
+        val original = request("https://example.com/api/sessions")
+
+        every { chain.request() } returns original
+        every { tokenStore.isAccessTokenExpiringSoon() } returns true
+        coEvery { sessionManager.refresh() } returns SessionManager.RefreshResult.Terminal
+
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
+
+        assertEquals(401, result.code)
+        verify(exactly = 0) { chain.proceed(any()) }
+        coVerify(exactly = 1) { sessionManager.refresh() }
+    }
+
+    @Test
+    fun intercept_whenPrefetchRefreshIsTransient_proceedsWithCurrentToken() {
+        // Transient = network flake. Keep the token, send the request;
+        // if the server rejects it, the 401-retry branch kicks in below.
+        val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
+        val chain = mockk<Interceptor.Chain>()
+        val original = request("https://example.com/api/sessions")
+
+        every { chain.request() } returns original
+        every { tokenStore.isAccessTokenExpiringSoon() } returns true
+        every { tokenStore.getAccessToken() } returns "still-here"
+        coEvery { sessionManager.refresh() } returns SessionManager.RefreshResult.Transient
+
+        var forwardedAuth: String? = null
+        every { chain.proceed(any()) } answers {
+            val req = firstArg<Request>()
+            forwardedAuth = req.header("Authorization")
+            responseFor(req, 200)
         }
-        verify(exactly = 0) { tokenStore.clear() }
+
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
+
+        assertEquals(200, result.code)
+        assertEquals("Bearer still-here", forwardedAuth)
     }
 
     // ---- 401 retry path -----------------------------------------------------
 
     @Test
     fun intercept_on401_refreshesOnce_andReplaysWithNewToken() {
-        val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
+        val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/sessions")
 
         every { chain.request() } returns original
         every { tokenStore.isAccessTokenExpiringSoon() } returns false
-        // 1st read = initial Bearer ("old"); 2nd read = retry Bearer ("new").
         every { tokenStore.getAccessToken() } returnsMany listOf("old", "new")
-        every { tokenStore.getRefreshToken() } returns "refresh-old"
-        every { tokenStore.getServerUrl() } returns "https://example.com"
+        coEvery { sessionManager.refresh() } returns SessionManager.RefreshResult.Success
 
         val forwardedAuths = mutableListOf<String?>()
-        val forwardedUrls = mutableListOf<String>()
+        var call = 0
         every { chain.proceed(any()) } answers {
             val req = firstArg<Request>()
-            forwardedUrls += req.url.toString()
             forwardedAuths += req.header("Authorization")
-            when {
-                req.url.encodedPath == "/api/auth/refresh" -> responseFor(
-                    req,
-                    200,
-                    bodyJson = """{"access_token":"new","refresh_token":"refresh-new"}""",
-                )
-                forwardedUrls.size == 1 -> responseFor(req, 401)
-                else -> responseFor(req, 200)
-            }
+            call++
+            if (call == 1) responseFor(req, 401) else responseFor(req, 200)
         }
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(200, result.code)
-        // Three proceed hops: initial(401) → refresh(200) → retry(200).
-        assertEquals(3, forwardedUrls.size)
-        assertEquals("https://example.com/api/sessions", forwardedUrls[0])
-        assertTrue(forwardedUrls[1].endsWith("/api/auth/refresh"))
-        assertEquals("https://example.com/api/sessions", forwardedUrls[2])
+        assertEquals(2, forwardedAuths.size)
         assertEquals("Bearer old", forwardedAuths[0])
-        assertNull(forwardedAuths[1])
-        assertEquals("Bearer new", forwardedAuths[2])
-        verify(exactly = 1) { tokenStore.saveTokens("new", "refresh-new") }
-        verify(exactly = 0) { tokenStore.clear() }
+        assertEquals("Bearer new", forwardedAuths[1])
+        coVerify(exactly = 1) { sessionManager.refresh() }
     }
 
     @Test
-    fun intercept_on401_whenRefreshFails_clearsTokenStore_andReturns401() {
+    fun intercept_on401_whenRefreshIsTerminal_returnsSynthesised401() {
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/sessions")
 
         every { chain.request() } returns original
         every { tokenStore.isAccessTokenExpiringSoon() } returns false
         every { tokenStore.getAccessToken() } returns "old"
-        every { tokenStore.getRefreshToken() } returns "refresh-old"
-        every { tokenStore.getServerUrl() } returns "https://example.com"
-        every { tokenStore.clear() } just Runs
+        coEvery { sessionManager.refresh() } returns SessionManager.RefreshResult.Terminal
 
-        val forwardedUrls = mutableListOf<String>()
+        var proceedCalls = 0
         every { chain.proceed(any()) } answers {
-            val req = firstArg<Request>()
-            forwardedUrls += req.url.toString()
-            when {
-                req.url.encodedPath == "/api/auth/refresh" -> responseFor(req, 500)
-                else -> responseFor(req, 401)
-            }
-        }
-
-        val result = AuthInterceptor(tokenStore).intercept(chain)
-
-        // After a failed refresh the interceptor returns the original 401 response;
-        // it must NOT make a third proceed call (no silent retry with a stale token).
-        assertEquals(401, result.code)
-        assertEquals(2, forwardedUrls.size)
-        assertEquals("https://example.com/api/sessions", forwardedUrls[0])
-        assertTrue(forwardedUrls[1].endsWith("/api/auth/refresh"))
-        verify(exactly = 1) { tokenStore.clear() }
-    }
-
-    @Test
-    fun intercept_on401_whenNoRefreshToken_doesNotRetry_andClearsStore() {
-        // refreshTokenSync() short-circuits to false when getRefreshToken() is null,
-        // so the outer branch still hits tokenStore.clear().
-        val tokenStore = mockk<TokenStore>()
-        val chain = mockk<Interceptor.Chain>()
-        val original = request("https://example.com/api/sessions")
-
-        every { chain.request() } returns original
-        every { tokenStore.isAccessTokenExpiringSoon() } returns false
-        every { tokenStore.getAccessToken() } returns "old"
-        every { tokenStore.getRefreshToken() } returns null
-        every { tokenStore.clear() } just Runs
-
-        val forwardedUrls = mutableListOf<String>()
-        every { chain.proceed(any()) } answers {
-            forwardedUrls += firstArg<Request>().url.toString()
+            proceedCalls++
             responseFor(firstArg(), 401)
         }
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(401, result.code)
-        assertEquals(1, forwardedUrls.size)
-        verify(exactly = 1) { tokenStore.clear() }
-        // getServerUrl should never be consulted when refresh token is absent.
-        verify(exactly = 0) { tokenStore.getServerUrl() }
+        // One proceed for the main request, one refresh via SessionManager
+        // (single-flight), and NO silent retry with a stale token.
+        assertEquals(1, proceedCalls)
+        coVerify(exactly = 1) { sessionManager.refresh() }
     }
 
     @Test
     fun intercept_on401_whenInitialTokenWasNull_doesNotAttemptRefresh() {
-        // With no initial token the code path `response.code == 401 && token != null`
-        // is false, so the raw 401 is returned without touching refreshTokenSync
-        // or clear().
         val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
         val chain = mockk<Interceptor.Chain>()
         val original = request("https://example.com/api/sessions")
 
@@ -325,11 +329,60 @@ class AuthInterceptorTest {
             responseFor(firstArg(), 401)
         }
 
-        val result = AuthInterceptor(tokenStore).intercept(chain)
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
 
         assertEquals(401, result.code)
         assertEquals(1, proceedCalls)
-        verify(exactly = 0) { tokenStore.clear() }
-        verify(exactly = 0) { tokenStore.getRefreshToken() }
+        coVerify(exactly = 0) { sessionManager.refresh() }
+    }
+
+    // ---- No-double-refresh guard --------------------------------------------
+
+    @Test
+    fun intercept_whenPrefetchRefreshSucceeds_doesNotRefreshAgainOn401() {
+        // Regression guard: after a successful pre-emptive refresh, a
+        // server-side 401 on the main request must NOT trigger a second
+        // refresh within the same intercept() call. This prevents the
+        // rapid double-refresh pattern that produced the original crash
+        // logs (two POST /api/auth/refresh 401s ~23ms apart).
+        val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager()
+        val chain = mockk<Interceptor.Chain>()
+        val original = request("https://example.com/api/sessions")
+
+        every { chain.request() } returns original
+        every { tokenStore.isAccessTokenExpiringSoon() } returns true
+        every { tokenStore.getAccessToken() } returns "fresh-from-prefetch"
+        coEvery { sessionManager.refresh() } returns SessionManager.RefreshResult.Success
+
+        // Simulate the server still returning 401 on the main request
+        // (e.g. its authorization DB is out of sync). The interceptor
+        // must NOT re-refresh — just return the 401.
+        every { chain.proceed(any()) } answers { responseFor(firstArg(), 401) }
+
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
+
+        assertEquals(401, result.code)
+        coVerify(exactly = 1) { sessionManager.refresh() }
+    }
+
+    // ---- Synthesised response shape ----------------------------------------
+
+    @Test
+    fun synthesisedUnauthorized_carriesJsonBody_withDetailField() {
+        // Ensures the upstream RestApi.execute() consumer can parse the
+        // synthesised response just like a real server-rejected 401 and
+        // surface a meaningful error via ApiException.
+        val tokenStore = mockk<TokenStore>()
+        val sessionManager = newSessionManager(loggedIn = false)
+        val chain = mockk<Interceptor.Chain>()
+        every { chain.request() } returns request("https://example.com/api/sessions")
+
+        val result = AuthInterceptor(tokenStore, sessionManager).intercept(chain)
+
+        val body = result.body?.string()
+        assertNotNull(body)
+        assertTrue(body!!.contains("Session expired"))
+        assertTrue(body.startsWith("{") && body.endsWith("}"))
     }
 }

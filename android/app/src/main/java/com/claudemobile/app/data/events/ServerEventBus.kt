@@ -1,5 +1,6 @@
 package com.claudemobile.app.data.events
 
+import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WebSocketManager
 import com.claudemobile.app.data.network.WsEvent
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -40,6 +42,7 @@ import javax.inject.Singleton
 @Singleton
 class ServerEventBus @Inject constructor(
     private val webSocketManager: WebSocketManager,
+    private val sessionManager: SessionManager,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true }
@@ -58,20 +61,38 @@ class ServerEventBus @Inject constructor(
     private var conn: WebSocketConnection? = null
     private var collectorJob: Job? = null
 
+    init {
+        // React to session-state transitions only. `drop(1)` skips the
+        // StateFlow's initial replay so construction doesn't race with
+        // the first explicit [start] call from [MainActivity]; cold-start
+        // is handled by that explicit call, while mid-session transitions
+        // (login after logout, forced logout after refresh failure) flow
+        // through this collector.
+        scope.launch {
+            sessionManager.authState.drop(1).collect { state ->
+                when (state) {
+                    SessionManager.AuthState.LoggedIn -> start()
+                    SessionManager.AuthState.LoggedOut -> stop()
+                }
+            }
+        }
+    }
+
     @Synchronized
     fun start() {
         if (conn != null) return
-        try {
-            val c = webSocketManager.createConnection("ws/events")
-            conn = c
-            _connection.value = ConnState.Connecting
-            c.connect()
-            collectorJob = scope.launch {
-                c.events.collect { handle(it) }
-            }
-        } catch (_: IllegalStateException) {
-            // Server URL or token not yet configured — caller should retry after login.
+        if (!sessionManager.isLoggedIn()) {
+            // No-op until the user authenticates. The authState collector
+            // above will call start() again when that happens.
             _connection.value = ConnState.Disconnected
+            return
+        }
+        val c = webSocketManager.createConnection("ws/events")
+        conn = c
+        _connection.value = ConnState.Connecting
+        c.connect()
+        collectorJob = scope.launch {
+            c.events.collect { handle(it) }
         }
     }
 

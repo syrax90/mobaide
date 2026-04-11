@@ -4,7 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import com.claudemobile.app.data.auth.TokenStore
+import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.events.ServerEventBus
 import com.claudemobile.app.ui.navigation.AppNavigation
 import com.claudemobile.app.ui.theme.ClaudeMobileTheme
@@ -15,7 +15,7 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject
-    lateinit var tokenStore: TokenStore
+    lateinit var sessionManager: SessionManager
 
     @Inject
     lateinit var serverEventBus: ServerEventBus
@@ -23,13 +23,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // Idempotent — safe even before login; will quietly no-op until a
-        // server URL + token are available, at which point any screen that
-        // calls start() again (e.g. SessionListViewModel.init) will succeed.
+        // Idempotent — safe to call every onCreate, no-ops if the user
+        // is not logged in. The ServerEventBus also auto-reacts to
+        // session state transitions (LoggedOut → stop, subsequent
+        // LoggedIn → start), so a mid-session logout doesn't leak the
+        // connection.
         serverEventBus.start()
         setContent {
             ClaudeMobileTheme {
-                AppNavigation(tokenStore = tokenStore)
+                AppNavigation(sessionManager = sessionManager)
             }
         }
     }
