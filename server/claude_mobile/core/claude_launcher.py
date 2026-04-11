@@ -23,7 +23,6 @@ class ClaudeOptions:
     ``Start-ClaudeInWorktree`` in ``claude_auto_executor.ps1``."""
 
     plan_mode: bool = False
-    skip_permissions: bool = False
     no_memory: bool = False
     initial_prompt: str | None = None
     worktree: bool = False
@@ -88,11 +87,15 @@ class ClaudeLauncher:
 
     @staticmethod
     def _build_argv(options: ClaudeOptions) -> list[str]:
+        # Permissions: bypass them unconditionally in standard mode because the
+        # mobile client cannot mediate approval dialogs. Plan mode is the only
+        # exception and is mutually exclusive with bypass (both set
+        # ``--permission-mode``, so only one may be passed at a time).
         argv: list[str] = ["claude", "--debug"]
         if options.plan_mode:
             argv += ["--permission-mode", "plan"]
-        if options.skip_permissions:
-            argv.append("--allow-dangerously-skip-permissions")
+        else:
+            argv.append("--dangerously-skip-permissions")
         if options.initial_prompt:
             argv += ["--", options.initial_prompt]
         return argv

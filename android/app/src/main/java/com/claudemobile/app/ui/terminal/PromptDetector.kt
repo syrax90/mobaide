@@ -14,11 +14,6 @@ import kotlinx.coroutines.launch
 sealed class PromptState {
     data object None : PromptState()
 
-    data class Permission(
-        val question: String,
-        val options: List<String>,
-    ) : PromptState()
-
     data class Checkbox(
         val title: String,
         val items: List<CheckboxItem>,
@@ -77,27 +72,9 @@ class PromptDetector {
         val text = screen.getSelectedText(0, startRow, cols - 1, rows - 1, false)
         val lines = text.split('\n').map { it.trimEnd() }
 
-        return detectPermission(lines)
-            ?: detectCheckbox(lines)
+        return detectCheckbox(lines)
             ?: detectTextInput(lines)
             ?: PromptState.None
-    }
-
-    // ── Permission prompts ──────────────────────────────────────────────────────
-
-    private fun detectPermission(lines: List<String>): PromptState.Permission? {
-        for (line in lines.asReversed()) {
-            if (line.isBlank()) continue
-            for (pattern in PERMISSION_PATTERNS) {
-                val match = pattern.find(line) ?: continue
-                val question = match.value
-                return PromptState.Permission(
-                    question = question,
-                    options = listOf("y", "n"),
-                )
-            }
-        }
-        return null
     }
 
     // ── Checkbox / multi-select prompts ─────────────────────────────────────────
@@ -162,16 +139,6 @@ class PromptDetector {
     companion object {
         private const val DEBOUNCE_MS = 100L
         private const val MAX_SCAN_ROWS = 15
-
-        // Permission prompt patterns
-        private val PERMISSION_PATTERNS = listOf(
-            Regex("""Allow .+\? ?\([Yy]/[Nn]\)"""),
-            Regex("""Do you want to .+\?"""),
-            Regex("""Proceed\? ?\([Yy]/[Nn]\)"""),
-            Regex("""\([Yy]\)es.*\([Nn]\)o"""),
-            Regex("""Allow .+ access"""),
-            Regex("""Approve .+\?"""),
-        )
 
         // Checkbox / multi-select patterns: matches [ ], [x], [X]
         private val CHECKBOX_PATTERN = Regex("""\[([xX ])][ ]+(.+)""")

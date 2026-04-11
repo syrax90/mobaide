@@ -225,7 +225,7 @@ class RestApiTest {
             command = listOf("bash", "-l"),
             cwd = "/home/alice",
             project_name = "alpha",
-            claude_options = ClaudeOptionsModel(skip_permissions = true, worktree = true),
+            claude_options = ClaudeOptionsModel(no_memory = true, worktree = true),
         )
 
         val resp = api.createSession(request)
@@ -242,7 +242,7 @@ class RestApiTest {
         captured.captured.body!!.writeTo(buffer)
         val body = buffer.readUtf8()
         assertTrue(body.contains("\"project_name\":\"alpha\""))
-        assertTrue(body.contains("\"skip_permissions\":true"))
+        assertTrue(body.contains("\"no_memory\":true"))
         assertTrue(body.contains("\"worktree\":true"))
         assertTrue(body.contains("\"cwd\":\"/home/alice\""))
 

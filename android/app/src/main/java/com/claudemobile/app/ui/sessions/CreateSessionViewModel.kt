@@ -31,7 +31,6 @@ data class CreateSessionUiState(
     val selectedProjectName: String? = null,
     val selectedMode: CreateSessionMode? = null,
     val planMode: Boolean = false,
-    val skipPermissions: Boolean = false,
     val noMemory: Boolean = false,
     val initialPrompt: String = "",
     val worktree: Boolean = false,
@@ -137,7 +136,6 @@ class CreateSessionViewModel @Inject constructor(
             it.copy(
                 step = CreateSessionStep.AutoScanConfig,
                 autoScanConfigInitialized = true,
-                skipPermissions = true,
                 worktree = true,
                 initialPrompt = autoScanRepository.getAutoScanPrompt() ?: "",
             )
@@ -152,7 +150,6 @@ class CreateSessionViewModel @Inject constructor(
             try {
                 val options = ClaudeOptionsModel(
                     plan_mode = state.planMode,
-                    skip_permissions = state.skipPermissions,
                     no_memory = state.noMemory,
                     worktree = state.worktree,
                     branch_name = state.branchName.takeIf { it.isNotBlank() },
@@ -186,7 +183,6 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun togglePlanMode(v: Boolean) = _uiState.update { it.copy(planMode = v) }
-    fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
     fun toggleWorktree(v: Boolean) = _uiState.update { it.copy(worktree = v) }
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
@@ -206,7 +202,6 @@ class CreateSessionViewModel @Inject constructor(
                     CreateSessionRequest(
                         project_name = projectName,
                         claude_options = ClaudeOptionsModel(
-                            skip_permissions = state.skipPermissions,
                             no_memory = state.noMemory,
                             worktree = state.worktree,
                             branch_name = state.branchName.takeIf { it.isNotBlank() },

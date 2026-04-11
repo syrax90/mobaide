@@ -192,7 +192,6 @@ class CreateSessionViewModelTest {
         vm.selectProject("alpha")
         vm.confirmProject()
         vm.selectStandardMode()
-        vm.toggleSkipPermissions(true)
         vm.toggleNoMemory(true)
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
@@ -209,8 +208,7 @@ class CreateSessionViewModelTest {
         assertEquals("alpha", req.project_name)
         val opts = req.claude_options
         assertNotNull(opts)
-        assertTrue(opts!!.skip_permissions)
-        assertTrue(opts.no_memory)
+        assertTrue(opts!!.no_memory)
         assertTrue(opts.worktree)
         assertEquals("feature/x", opts.branch_name)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
@@ -279,7 +277,6 @@ class CreateSessionViewModelTest {
 
         val s = vm.uiState.value
         assertEquals(CreateSessionStep.AutoScanConfig, s.step)
-        assertTrue("AutoScan preset must skip permissions", s.skipPermissions)
         assertTrue("AutoScan preset must enable worktree", s.worktree)
         assertEquals("scan everything", s.initialPrompt)
         assertTrue(s.autoScanConfigInitialized)
@@ -295,13 +292,13 @@ class CreateSessionViewModelTest {
         vm.confirmProject()
         vm.selectAutoScanMode() // seeds defaults
         vm.setInitialPrompt("user edit")
-        vm.toggleSkipPermissions(false)
+        vm.toggleNoMemory(true)
         vm.goBack()
         vm.selectAutoScanMode() // must NOT re-seed — autoScanConfigInitialized=true
 
         val s = vm.uiState.value
         assertEquals("user edit", s.initialPrompt)
-        assertFalse(s.skipPermissions)
+        assertTrue(s.noMemory)
     }
 
     @Test
@@ -315,7 +312,7 @@ class CreateSessionViewModelTest {
 
         vm.selectProject("alpha")
         vm.confirmProject()
-        vm.selectAutoScanMode() // seeds skipPermissions=true, worktree=true, initialPrompt="seed"
+        vm.selectAutoScanMode() // seeds worktree=true, initialPrompt="seed"
 
         vm.navigateToAutoScan.test {
             vm.submitAutoScan()
@@ -326,7 +323,6 @@ class CreateSessionViewModelTest {
         }
 
         val opts = optsSlot.captured
-        assertTrue(opts.skip_permissions)
         assertTrue(opts.worktree)
         assertEquals("seed", opts.initial_prompt)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }

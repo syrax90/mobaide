@@ -7,10 +7,6 @@ package com.claudemobile.app.ui.terminal
  */
 object InkSequenceBuilder {
 
-    /** Permission prompt: "y" + CR or "n" + CR. */
-    fun permission(allow: Boolean): ByteArray =
-        if (allow) "y\r".toByteArray(Charsets.UTF_8) else "n\r".toByteArray(Charsets.UTF_8)
-
     /** Free-text input: text + CR. */
     fun textInput(text: String): ByteArray =
         (text + "\r").toByteArray(Charsets.UTF_8)
