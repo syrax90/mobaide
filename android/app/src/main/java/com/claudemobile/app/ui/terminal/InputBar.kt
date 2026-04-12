@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -85,8 +84,9 @@ fun InputBar(
     }
 
     fun send() {
-        if (text.text.isNotEmpty()) {
-            onSend(text.text)
+        val trimmed = text.text.trimEnd('\n', '\r')
+        if (trimmed.isNotEmpty()) {
+            onSend(trimmed)
             onTextChange(TextFieldValue(""))
         }
     }
@@ -112,13 +112,12 @@ fun InputBar(
                         hasFocus = focusState.isFocused
                     },
                 placeholder = { Text("Type command...") },
-                singleLine = true,
+                maxLines = 4,
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     fontFamily = FontFamily.Monospace,
                 ),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
             )
             IconButton(
                 onClick = { panelExpanded = !panelExpanded },

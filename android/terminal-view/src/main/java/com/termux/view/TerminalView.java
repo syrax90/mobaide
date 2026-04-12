@@ -460,11 +460,12 @@ public final class TerminalView extends View {
 
     /**
      * Finds the complete input message that the given row belongs to.
-     * Input messages start with the "> " prompt prefix.  Continuation rows
-     * (part of the same multi-line message) are collected by walking down
-     * until a blank row, a new prompt, or terminal decoration is found.
+     * Input messages start with the prompt prefix: {@code ❯} (U+276F) followed
+     * by a non-breaking space (U+00A0), or the ASCII fallback {@code > }.
+     * Continuation rows (part of the same multi-line message) are collected by
+     * walking down until a blank row, a new prompt, or terminal decoration.
      *
-     * @return the message text with the "> " prefix stripped, or null if the
+     * @return the message text with the prompt prefix stripped, or null if the
      *         row is not part of an input message.
      */
     private String findInputMessage(int tappedRow) {
@@ -474,16 +475,16 @@ public final class TerminalView extends View {
         // Determine the input-start row.
         int inputStartRow = Integer.MIN_VALUE;
         String tappedText = getRowText(tappedRow, screen);
-        if (tappedText != null && tappedText.startsWith("> ")) {
+        if (tappedText != null && getPromptPrefixLength(tappedText) > 0) {
             inputStartRow = tappedRow;
         } else {
-            // Walk UP to find the nearest row starting with "> "
+            // Walk UP to find the nearest row starting with prompt prefix
             int searchRow = tappedRow - 1;
             int maxWalkUp = 20;
             while (searchRow >= -screen.getActiveTranscriptRows() && maxWalkUp-- > 0) {
                 String rowText = getRowText(searchRow, screen);
                 if (rowText == null || rowText.isEmpty()) break;
-                if (rowText.startsWith("> ")) {
+                if (getPromptPrefixLength(rowText) > 0) {
                     inputStartRow = searchRow;
                     break;
                 }
@@ -497,7 +498,8 @@ public final class TerminalView extends View {
         String startText = getRowText(inputStartRow, screen);
         if (startText == null) return null;
 
-        StringBuilder message = new StringBuilder(startText.substring(2).trim());
+        int prefixLen = getPromptPrefixLength(startText);
+        StringBuilder message = new StringBuilder(startText.substring(prefixLen).trim());
 
         int contRow = inputStartRow + 1;
         int maxWalkDown = 50;
@@ -505,7 +507,7 @@ public final class TerminalView extends View {
         while (contRow < mEmulator.mRows && maxWalkDown-- > 0) {
             String contText = getRowText(contRow, screen);
             if (contText == null || contText.isEmpty()) break;
-            if (contText.startsWith("> ")) break;
+            if (getPromptPrefixLength(contText) > 0) break;
             if (isTerminalDecoration(contText)) break;
             message.append("\n").append(contText);
             lastContRow = contRow;
@@ -517,6 +519,25 @@ public final class TerminalView extends View {
 
         String result = message.toString().trim();
         return result.isEmpty() ? null : result;
+    }
+
+    /**
+     * Returns the length of the input-prompt prefix if {@code text} starts with
+     * one, or 0 if it does not.  Recognised prefixes:
+     * <ul>
+     *   <li>{@code ❯\u00A0} — U+276F + non-breaking space (Claude CLI / Ink)</li>
+     *   <li>{@code ❯ }     — U+276F + regular space</li>
+     *   <li>{@code > }     — ASCII greater-than + space (fallback)</li>
+     * </ul>
+     */
+    private static int getPromptPrefixLength(String text) {
+        if (text.length() >= 2) {
+            char first = text.charAt(0);
+            char second = text.charAt(1);
+            if (first == '\u276F' && (second == '\u00A0' || second == ' ')) return 2;
+            if (first == '>' && second == ' ') return 2;
+        }
+        return 0;
     }
 
     private String getRowText(int row, TerminalBuffer screen) {
