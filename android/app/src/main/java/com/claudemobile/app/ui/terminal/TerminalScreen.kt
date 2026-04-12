@@ -55,6 +55,7 @@ fun TerminalScreen(
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var requestInputFocus by remember { mutableStateOf(false) }
+    var pendingClear by remember { mutableStateOf(false) }
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -112,13 +113,9 @@ fun TerminalScreen(
                         },
                         onRowTapped = { text, isCurrentInput ->
                             if (isCurrentInput) {
-                                // The tapped row IS the current active input line, so the
-                                // PTY buffer already holds this text.  Clear it NOW — the
-                                // time gap until the user presses Send lets the program
-                                // process the clearing bytes before new text arrives.
-                                val clear = byteArrayOf(0x15, 0x05) +  // Ctrl+U, Ctrl+E
-                                    ByteArray(maxOf(text.length, 200)) { 0x7F.toByte() }
-                                viewModel.sendBytes(clear)
+                                // Mark that the PTY buffer holds stale text that must be
+                                // cleared atomically when the user presses Send.
+                                pendingClear = true
                             }
                             inputText = TextFieldValue(text = text, selection = TextRange(text.length))
                             requestInputFocus = true
@@ -131,7 +128,10 @@ fun TerminalScreen(
             InputBar(
                 text = inputText,
                 onTextChange = { inputText = it },
-                onSend = viewModel::sendInput,
+                onSend = { text ->
+                    viewModel.sendInput(text, clearFirst = pendingClear)
+                    pendingClear = false
+                },
                 onSendBytes = viewModel::sendBytes,
                 enabled = isConnected && sessionState == "running",
                 requestFocus = requestInputFocus,

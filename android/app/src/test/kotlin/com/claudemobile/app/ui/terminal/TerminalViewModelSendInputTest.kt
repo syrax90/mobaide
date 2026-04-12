@@ -21,7 +21,8 @@ import org.junit.Test
  * Unit tests for [TerminalViewModel.sendInput] — verifies that the method
  * sends the user's text followed by CR, wrapped in a terminal-protocol 'i' frame.
  *
- * PTY input-buffer clearing is handled on-tap (in TerminalScreen), not here.
+ * When `clearFirst = true` (text came from tapping the current input line),
+ * clearing bytes are prepended atomically in the same frame.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelSendInputTest {
@@ -103,5 +104,92 @@ class TerminalViewModelSendInputTest {
             'i'.code.toByte(),
             captured.captured.toByteArray()[0],
         )
+    }
+
+    // ── clearFirst tests ────────────────────────────────────────────────────────
+
+    @Test
+    fun sendInput_clearFirst_prependsClearingBytesBeforeTextAndCR() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("/stats", clearFirst = true)
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+
+        val payload = payloadOf(captured.captured)
+        val clearPrefix = byteArrayOf(0x15, 0x05) +
+            ByteArray(maxOf("/stats".length, 200)) { 0x7F.toByte() }
+        val expected = clearPrefix + "/stats\r".toByteArray(Charsets.UTF_8)
+
+        assertArrayEquals(expected, payload)
+    }
+
+    @Test
+    fun sendInput_clearFirst_false_doesNotPrependClearingBytes() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("/stats", clearFirst = false)
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertArrayEquals(
+            "/stats\r".toByteArray(Charsets.UTF_8),
+            payloadOf(captured.captured),
+        )
+    }
+
+    @Test
+    fun sendInput_clearFirst_sendsAsSingleFrame() {
+        val vm = createViewModel()
+        val captured = mutableListOf<ByteString>()
+
+        vm.sendInput("/stats", clearFirst = true)
+
+        verify(timeout = 2000, exactly = 1) { connection.sendBinary(capture(captured)) }
+        assertEquals(1, captured.size)
+        assertEquals(
+            "frame must start with 'i' type byte",
+            'i'.code.toByte(),
+            captured[0].toByteArray()[0],
+        )
+    }
+
+    @Test
+    fun sendInput_clearFirst_longText_delCountMatchesTextLength() {
+        val longText = "a".repeat(300)
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput(longText, clearFirst = true)
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+
+        val payload = payloadOf(captured.captured)
+        // maxOf(300, 200) = 300 — DEL count must scale with text length
+        val expectedDelCount = 300
+        val clearPrefix = byteArrayOf(0x15, 0x05) +
+            ByteArray(expectedDelCount) { 0x7F.toByte() }
+        val expected = clearPrefix + (longText + "\r").toByteArray(Charsets.UTF_8)
+
+        assertArrayEquals(expected, payload)
+    }
+
+    @Test
+    fun sendInput_clearFirst_emptyText_uses200Dels_plusBareCR() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("", clearFirst = true)
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+
+        val payload = payloadOf(captured.captured)
+        // maxOf(0, 200) = 200 — minimum DEL count even for empty input
+        val clearPrefix = byteArrayOf(0x15, 0x05) +
+            ByteArray(200) { 0x7F.toByte() }
+        val expected = clearPrefix + "\r".toByteArray(Charsets.UTF_8)
+
+        assertArrayEquals(expected, payload)
     }
 }

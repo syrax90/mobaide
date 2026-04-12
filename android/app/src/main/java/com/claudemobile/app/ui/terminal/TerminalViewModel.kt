@@ -151,11 +151,19 @@ class TerminalViewModel @Inject constructor(
 
     // ── Input ───────────────────────────────────────────────────────────────────
 
-    fun sendInput(text: String) {
+    fun sendInput(text: String, clearFirst: Boolean = false) {
         // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
-        // Any stale PTY input is cleared on-tap (TerminalScreen), not here,
-        // so the buffer is already empty by the time the user presses Send.
-        sendBytes((text + "\r").toByteArray(Charsets.UTF_8))
+        val textBytes = (text + "\r").toByteArray(Charsets.UTF_8)
+        if (clearFirst) {
+            // Atomically clear PTY input buffer then send new text in a
+            // single WebSocket frame — prevents the doubled-text race
+            // where stale PTY input survives a separate clearing message.
+            val clear = byteArrayOf(0x15, 0x05) +  // Ctrl+U, Ctrl+E
+                ByteArray(maxOf(text.length, 200)) { 0x7F.toByte() }
+            sendBytes(clear + textBytes)
+        } else {
+            sendBytes(textBytes)
+        }
     }
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
