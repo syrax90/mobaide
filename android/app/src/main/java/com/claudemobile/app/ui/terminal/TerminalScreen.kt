@@ -55,7 +55,6 @@ fun TerminalScreen(
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var requestInputFocus by remember { mutableStateOf(false) }
-    var pendingClear by remember { mutableStateOf(false) }
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -111,12 +110,7 @@ fun TerminalScreen(
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },
-                        onRowTapped = { text, isCurrentInput ->
-                            if (isCurrentInput) {
-                                // Mark that the PTY buffer holds stale text that must be
-                                // cleared atomically when the user presses Send.
-                                pendingClear = true
-                            }
+                        onRowTapped = { text ->
                             inputText = TextFieldValue(text = text, selection = TextRange(text.length))
                             requestInputFocus = true
                         },
@@ -128,10 +122,7 @@ fun TerminalScreen(
             InputBar(
                 text = inputText,
                 onTextChange = { inputText = it },
-                onSend = { text ->
-                    viewModel.sendInput(text, clearFirst = pendingClear)
-                    pendingClear = false
-                },
+                onSend = { text -> viewModel.sendInput(text) },
                 onSendBytes = viewModel::sendBytes,
                 enabled = isConnected && sessionState == "running",
                 requestFocus = requestInputFocus,

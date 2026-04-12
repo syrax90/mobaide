@@ -24,7 +24,7 @@ fun TerminalSurfaceView(
     session: TerminalSession,
     sessionCallback: TerminalSessionCallback,
     onResize: (rows: Int, cols: Int) -> Unit,
-    onRowTapped: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
+    onRowTapped: (text: String) -> Unit = { _ -> },
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
@@ -104,11 +104,11 @@ private class TerminalViewClientImpl : TerminalViewClient {
     var shiftDown = false
     var altDown = false
     var fnDown = false
-    var onRowTapped: (String, Boolean) -> Unit = { _, _ -> }
+    var onRowTapped: (String) -> Unit = { _ -> }
 
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: android.view.MotionEvent?) {}
-    override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) { onRowTapped(text, isCurrentInput) }
+    override fun onTerminalRowTapped(text: String) { onRowTapped(text) }
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = true
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false

@@ -171,10 +171,7 @@ public final class TerminalView extends View {
                 int row = colAndRow[1];
                 String inputMessage = findInputMessage(row);
                 if (inputMessage != null && !inputMessage.isEmpty()) {
-                    int cursorRow = mEmulator.getCursorRow();
-                    boolean isCurrentInput = cursorRow >= mLastInputStartRow
-                            && cursorRow <= mLastInputEndRow;
-                    mClient.onTerminalRowTapped(inputMessage, isCurrentInput);
+                    mClient.onTerminalRowTapped(inputMessage);
                 } else {
                     requestFocus();
                 }
@@ -461,20 +458,12 @@ public final class TerminalView extends View {
         return mEmulator == null ? 1 : mEmulator.mRows;
     }
 
-    /** Row range of the last successful {@link #findInputMessage} call. */
-    private int mLastInputStartRow = Integer.MIN_VALUE;
-    private int mLastInputEndRow = Integer.MIN_VALUE;
-
     /**
      * Finds the complete input message that the given row belongs to.
      * Input messages start with the prompt prefix: {@code ❯} (U+276F) followed
      * by a non-breaking space (U+00A0), or the ASCII fallback {@code > }.
      * Continuation rows (part of the same multi-line message) are collected by
      * walking down until a blank row, a new prompt, or terminal decoration.
-     * <p>
-     * As a side-effect, populates {@link #mLastInputStartRow} and
-     * {@link #mLastInputEndRow} so the caller can check whether the cursor
-     * falls inside the detected input range.
      *
      * @return the message text with the prompt prefix stripped, or null if the
      *         row is not part of an input message.
@@ -527,9 +516,6 @@ public final class TerminalView extends View {
 
         // Verify the tapped row is within the input message range.
         if (tappedRow < inputStartRow || tappedRow > lastContRow) return null;
-
-        mLastInputStartRow = inputStartRow;
-        mLastInputEndRow = lastContRow;
 
         String result = message.toString().trim();
         return result.isEmpty() ? null : result;
