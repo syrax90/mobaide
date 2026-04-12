@@ -32,6 +32,7 @@ data class CreateSessionUiState(
     val selectedMode: CreateSessionMode? = null,
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
+    val skipPermissions: Boolean = true,
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
@@ -151,8 +152,8 @@ class CreateSessionViewModel @Inject constructor(
                 val options = ClaudeOptionsModel(
                     plan_mode = state.planMode,
                     no_memory = state.noMemory,
-                    worktree = state.worktree,
-                    branch_name = state.branchName.takeIf { it.isNotBlank() },
+                    skip_permissions = state.skipPermissions,
+                    worktree = true,
                     initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
                 )
                 autoScanRepository.startScan(projectName, options)
@@ -184,6 +185,7 @@ class CreateSessionViewModel @Inject constructor(
 
     fun togglePlanMode(v: Boolean) = _uiState.update { it.copy(planMode = v) }
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
+    fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun toggleWorktree(v: Boolean) = _uiState.update { it.copy(worktree = v) }
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
@@ -203,6 +205,7 @@ class CreateSessionViewModel @Inject constructor(
                         project_name = projectName,
                         claude_options = ClaudeOptionsModel(
                             no_memory = state.noMemory,
+                            skip_permissions = state.skipPermissions,
                             worktree = state.worktree,
                             branch_name = state.branchName.takeIf { it.isNotBlank() },
                         ),

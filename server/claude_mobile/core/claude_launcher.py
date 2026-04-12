@@ -24,6 +24,7 @@ class ClaudeOptions:
 
     plan_mode: bool = False
     no_memory: bool = False
+    skip_permissions: bool = True
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None
@@ -87,14 +88,13 @@ class ClaudeLauncher:
 
     @staticmethod
     def _build_argv(options: ClaudeOptions) -> list[str]:
-        # Permissions: bypass them unconditionally in standard mode because the
-        # mobile client cannot mediate approval dialogs. Plan mode is the only
-        # exception and is mutually exclusive with bypass (both set
-        # ``--permission-mode``, so only one may be passed at a time).
         argv: list[str] = ["claude", "--debug"]
-        if options.plan_mode:
+        if options.plan_mode and options.skip_permissions:
+            argv += ["--permission-mode", "plan",
+                     "--allow-dangerously-skip-permissions"]
+        elif options.plan_mode:
             argv += ["--permission-mode", "plan"]
-        else:
+        elif options.skip_permissions:
             argv.append("--dangerously-skip-permissions")
         if options.initial_prompt:
             argv += ["--", options.initial_prompt]

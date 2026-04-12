@@ -209,6 +209,7 @@ class CreateSessionViewModelTest {
         val opts = req.claude_options
         assertNotNull(opts)
         assertTrue(opts!!.no_memory)
+        assertTrue(opts.skip_permissions)
         assertTrue(opts.worktree)
         assertEquals("feature/x", opts.branch_name)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
@@ -323,7 +324,9 @@ class CreateSessionViewModelTest {
         }
 
         val opts = optsSlot.captured
+        assertTrue(opts.skip_permissions)
         assertTrue(opts.worktree)
+        assertNull(opts.branch_name)
         assertEquals("seed", opts.initial_prompt)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
         assertFalse(vm.uiState.value.autoScanStarting)
