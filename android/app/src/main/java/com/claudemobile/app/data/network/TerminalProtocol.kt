@@ -14,6 +14,7 @@ import okio.ByteString.Companion.toByteString
  * |------|------|-----------|-----------------------------------------------|
  * | 0x6f | 'o'  | S->C      | raw PTY output bytes                          |
  * | 0x69 | 'i'  | C->S      | raw input bytes (CR / Ctrl / Esc / UTF-8)     |
+ * | 0x78 | 'x'  | C->S      | execute: server Ctrl+C clears, then writes     |
  * | 0x72 | 'r'  | C->S      | resize: u16 rows + u16 cols (big-endian)      |
  * | 0x73 | 's'  | S->C      | state: UTF-8 JSON {status, pid?, exit_code?}  |
  * | 0x62 | 'b'  | S->C      | replay-buffer marker (empty payload)          |
@@ -22,6 +23,7 @@ object TerminalProtocol {
 
     const val TYPE_OUTPUT: Byte = 'o'.code.toByte()
     const val TYPE_INPUT: Byte = 'i'.code.toByte()
+    const val TYPE_EXECUTE: Byte = 'x'.code.toByte()
     const val TYPE_RESIZE: Byte = 'r'.code.toByte()
     const val TYPE_STATE: Byte = 's'.code.toByte()
     const val TYPE_REPLAY: Byte = 'b'.code.toByte()
@@ -30,6 +32,16 @@ object TerminalProtocol {
     fun encodeInput(bytes: ByteArray): ByteString {
         val out = ByteArray(bytes.size + 1)
         out[0] = TYPE_INPUT
+        System.arraycopy(bytes, 0, out, 1, bytes.size)
+        return out.toByteString()
+    }
+
+    /** Wrap a complete command in an `'x'` (execute) frame.
+     *  The server sends Ctrl+C to cancel stale PTY input, pauses to let
+     *  the TUI show a fresh prompt, then writes the payload. */
+    fun encodeExecute(bytes: ByteArray): ByteString {
+        val out = ByteArray(bytes.size + 1)
+        out[0] = TYPE_EXECUTE
         System.arraycopy(bytes, 0, out, 1, bytes.size)
         return out.toByteString()
     }

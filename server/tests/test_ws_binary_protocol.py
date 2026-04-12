@@ -188,3 +188,76 @@ class TestInputFrame:
         # The first capture must be byte-equal to the payload — no LF
         # substitution, no UTF-8 mangling.
         assert captured[0] == payload
+
+
+class TestExecuteFrame:
+    def test_execute_frame_sends_ctrl_c_then_payload(self, test_client, auth_token):
+        """An 'x' frame must write Ctrl+C first, pause, then write the
+        payload — two separate PTY writes so the TUI cancels stale input
+        and shows a fresh prompt before the new command arrives."""
+        sid = _create_session(test_client, auth_token)
+
+        manager = test_client.app.state.session_manager
+        session = manager._sessions[sid]
+        captured: list[bytes] = []
+        original_write = session._backend.write
+
+        def _capture(data):
+            captured.append(data)
+
+        session._backend.write = _capture  # type: ignore[method-assign]
+
+        try:
+            with test_client.websocket_connect(
+                f"/ws/session/{sid}?token={auth_token}",
+            ) as ws:
+                _drain_until_replay(ws)
+                ws.receive_bytes()  # the always-emitted output frame
+                payload = b"/stats\r"
+                ws.send_bytes(b"x" + payload)
+                time.sleep(1.0)
+        finally:
+            session._backend.write = original_write  # type: ignore[method-assign]
+
+        assert len(captured) == 2, (
+            f"expected 2 writes (Ctrl+C + command), got {len(captured)}"
+        )
+        # First write: Ctrl+C to cancel stale input
+        assert captured[0] == b"\x03"
+        # Second write: the actual command (after the pause)
+        assert captured[1] == payload
+
+    def test_execute_frame_empty_payload_does_not_write(self, test_client, auth_token):
+        """An 'x' frame with no payload must NOT write anything to the PTY.
+
+        Without this guard the server would send a bare Ctrl+C, which would
+        needlessly cancel the user's current input.
+        """
+        sid = _create_session(test_client, auth_token)
+
+        manager = test_client.app.state.session_manager
+        session = manager._sessions[sid]
+        captured: list[bytes] = []
+        original_write = session._backend.write
+
+        def _capture(data):
+            captured.append(data)
+
+        session._backend.write = _capture  # type: ignore[method-assign]
+
+        try:
+            with test_client.websocket_connect(
+                f"/ws/session/{sid}?token={auth_token}",
+            ) as ws:
+                _drain_until_replay(ws)
+                ws.receive_bytes()  # the always-emitted output frame
+                # Send an 'x' frame with zero-length payload (type byte only)
+                ws.send_bytes(b"x")
+                time.sleep(0.5)
+        finally:
+            session._backend.write = original_write  # type: ignore[method-assign]
+
+        assert captured == [], (
+            "empty execute frame must not trigger any write, "
+            f"but got {len(captured)} write(s)"
+        )

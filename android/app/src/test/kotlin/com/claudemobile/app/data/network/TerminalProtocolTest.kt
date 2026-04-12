@@ -52,6 +52,39 @@ class TerminalProtocolTest {
         assertEquals(0x00.toByte(), frame[3])
     }
 
+    // ---- encodeExecute -----------------------------------------------------
+
+    @Test
+    fun encodeExecute_prependsTypeByte_andPreservesPayload() {
+        val payload = byteArrayOf(0x68, 0x69, 0x0d) // "hi\r"
+        val frame = TerminalProtocol.encodeExecute(payload).toByteArray()
+
+        assertEquals("frame length must be payload + 1 type byte", 4, frame.size)
+        assertEquals("first byte must be 'x'", 'x'.code.toByte(), frame[0])
+        assertArrayEquals(
+            "remaining bytes must match payload verbatim",
+            payload,
+            frame.copyOfRange(1, frame.size),
+        )
+    }
+
+    @Test
+    fun encodeExecute_emptyPayload_producesSingleTypeByte() {
+        val frame = TerminalProtocol.encodeExecute(ByteArray(0)).toByteArray()
+        assertArrayEquals(byteArrayOf('x'.code.toByte()), frame)
+    }
+
+    @Test
+    fun encodeExecute_preservesHighBitBytes() {
+        val payload = byteArrayOf(0xFF.toByte(), 0x80.toByte(), 0x00)
+        val frame = TerminalProtocol.encodeExecute(payload).toByteArray()
+
+        assertEquals('x'.code.toByte(), frame[0])
+        assertEquals(0xFF.toByte(), frame[1])
+        assertEquals(0x80.toByte(), frame[2])
+        assertEquals(0x00.toByte(), frame[3])
+    }
+
     // ---- encodeResize -------------------------------------------------------
 
     @Test
@@ -134,6 +167,13 @@ class TerminalProtocolTest {
 
         assertNull(TerminalProtocol.decode(inputWire))
         assertNull(TerminalProtocol.decode(resizeWire))
+    }
+
+    @Test
+    fun decode_executeFrame_returnsNull_becauseDecodeIsServerToClientOnly() {
+        // 'x' is a client->server type (execute); decode must not accept it.
+        val executeWire = byteArrayOf('x'.code.toByte(), 0x68, 0x69, 0x0d).toByteString()
+        assertNull(TerminalProtocol.decode(executeWire))
     }
 
     @Test

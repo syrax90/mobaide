@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -21,16 +20,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 
 private data class ControlKey(val label: String, val bytes: ByteArray)
@@ -57,19 +62,32 @@ private val CONTROL_KEY_ROWS = listOf(
 
 @Composable
 fun InputBar(
+    text: TextFieldValue,
+    onTextChange: (TextFieldValue) -> Unit,
     onSend: (String) -> Unit,
     onSendBytes: (ByteArray) -> Unit,
     enabled: Boolean = true,
+    requestFocus: Boolean = false,
+    onFocusHandled: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
-    var text by remember { mutableStateOf("") }
     var panelExpanded by remember { mutableStateOf(false) }
+    var hasFocus by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(requestFocus) {
+        if (requestFocus) {
+            focusRequester.requestFocus()
+            onFocusHandled()
+        }
+    }
 
     fun send() {
-        if (text.isNotEmpty()) {
-            onSend(text)
-            text = ""
+        val trimmed = text.text.trimEnd('\n', '\r')
+        if (trimmed.isNotEmpty()) {
+            onSend(trimmed)
+            onTextChange(TextFieldValue(""))
         }
     }
 
@@ -83,16 +101,23 @@ fun InputBar(
         ) {
             OutlinedTextField(
                 value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.weight(1f),
+                onValueChange = { onTextChange(it) },
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused && !hasFocus && text.text.isNotEmpty()) {
+                            onTextChange(text.copy(selection = TextRange(text.text.length)))
+                        }
+                        hasFocus = focusState.isFocused
+                    },
                 placeholder = { Text("Type command...") },
-                singleLine = true,
+                maxLines = 4,
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     fontFamily = FontFamily.Monospace,
                 ),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { send() }),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
             )
             IconButton(
                 onClick = { panelExpanded = !panelExpanded },
@@ -105,7 +130,7 @@ fun InputBar(
             }
             IconButton(
                 onClick = { send() },
-                enabled = enabled && text.isNotEmpty(),
+                enabled = enabled && text.text.isNotEmpty(),
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.Send,
