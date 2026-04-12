@@ -27,15 +27,53 @@ async def test_argv_minimal_adds_bypass(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_argv_plan_mode_excludes_bypass(tmp_path: Path):
-    """Plan mode is mutually exclusive with bypass (both set --permission-mode),
-    so only --permission-mode plan is passed when plan_mode is enabled."""
+async def test_argv_plan_mode_with_default_skip_permissions(tmp_path: Path):
+    """When plan_mode is on and skip_permissions is True (the default),
+    both --permission-mode plan and --allow-dangerously-skip-permissions are passed."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
         ClaudeOptions(plan_mode=True),
     )
+    assert spec.argv == [
+        "claude", "--debug",
+        "--permission-mode", "plan",
+        "--allow-dangerously-skip-permissions",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
+    """Plan mode with skip_permissions=False: only --permission-mode plan."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(plan_mode=True, skip_permissions=False),
+    )
     assert spec.argv == ["claude", "--debug", "--permission-mode", "plan"]
+
+
+@pytest.mark.asyncio
+async def test_argv_no_plan_no_skip(tmp_path: Path):
+    """Neither plan_mode nor skip_permissions: bare claude --debug."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(plan_mode=False, skip_permissions=False),
+    )
+    assert spec.argv == ["claude", "--debug"]
+
+
+@pytest.mark.asyncio
+async def test_argv_no_skip_with_initial_prompt(tmp_path: Path):
+    """skip_permissions=False with an initial_prompt: no permission flags,
+    but the ``--`` separator and prompt must still appear."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(skip_permissions=False, initial_prompt="run it"),
+    )
+    assert spec.argv == ["claude", "--debug", "--", "run it"]
 
 
 @pytest.mark.asyncio
@@ -54,6 +92,7 @@ async def test_argv_all_flags(tmp_path: Path):
         "--debug",
         "--permission-mode",
         "plan",
+        "--allow-dangerously-skip-permissions",
         "--",
         "hello world",
     ]

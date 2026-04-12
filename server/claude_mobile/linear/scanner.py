@@ -296,6 +296,7 @@ class AutoScanInstance:
                 ClaudeOptions(
                     plan_mode=base.plan_mode if base else False,
                     no_memory=base.no_memory if base else False,
+                    skip_permissions=base.skip_permissions if base else True,
                     initial_prompt=(
                         base.initial_prompt
                         if base and base.initial_prompt

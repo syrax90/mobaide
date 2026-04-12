@@ -222,6 +222,33 @@ class TestStartScan:
         assert opts.identifier == "id-1"
         assert opts.title == "Some title"
 
+    def test_happy_path_skip_permissions_false(self, app_with_mock_manager):
+        """Explicit ``skip_permissions: false`` in the request body must
+        propagate through to the ClaudeOptions dataclass passed to the
+        scan manager."""
+        app, mgr = app_with_mock_manager
+        fake_inst = MagicMock()
+        fake_inst.project_name = "proj"
+        mgr.start = AsyncMock(return_value=fake_inst)
+
+        client = TestClient(app)
+        body = {
+            "project_name": "proj",
+            "claude_options": {
+                "plan_mode": True,
+                "skip_permissions": False,
+            },
+        }
+        resp = client.post("/api/autoscan/start", json=body)
+
+        assert resp.status_code == 200
+        call = mgr.start.await_args
+        assert call is not None
+        opts = call.kwargs["client_options"]
+        assert isinstance(opts, ClaudeOptions)
+        assert opts.skip_permissions is False
+        assert opts.plan_mode is True
+
     def test_start_409_when_already_running(self, app_with_mock_manager):
         app, mgr = app_with_mock_manager
         mgr.start = AsyncMock(side_effect=AutoScanAlreadyRunning("already going"))

@@ -8,6 +8,7 @@ from claude_mobile.core.models import SessionInfo
 class ClaudeOptionsModel(BaseModel):
     plan_mode: bool = False
     no_memory: bool = False
+    skip_permissions: bool = True
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None
