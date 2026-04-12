@@ -54,6 +54,7 @@ fun TerminalScreen(
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
+    var requestInputFocus by remember { mutableStateOf(false) }
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -109,7 +110,10 @@ fun TerminalScreen(
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },
-                        onRowTapped = { text -> inputText = TextFieldValue(text = text, selection = TextRange(text.length)) },
+                        onRowTapped = { text ->
+                            inputText = TextFieldValue(text = text, selection = TextRange(text.length))
+                            requestInputFocus = true
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                     ConnectionOverlay(state = connectionState)
@@ -121,6 +125,8 @@ fun TerminalScreen(
                 onSend = viewModel::sendInput,
                 onSendBytes = viewModel::sendBytes,
                 enabled = isConnected && sessionState == "running",
+                requestFocus = requestInputFocus,
+                onFocusHandled = { requestInputFocus = false },
             )
         }
     }

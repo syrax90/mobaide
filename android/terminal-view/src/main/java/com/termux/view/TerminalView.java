@@ -162,42 +162,18 @@ public final class TerminalView extends View {
                     stopTextSelectionMode();
                     return true;
                 }
-                requestFocus();
                 mClient.onSingleTapUp(event);
 
-                // Extract tapped row text and forward to client for InputBar population.
-                // Only input lines (starting with "> ") are copyable; output requires
-                // text-selection highlighting.  Wrapped lines are joined so that long
-                // messages spanning several terminal rows are copied in full.
+                // Try to find an input message at the tapped row.
+                // Only input lines (starting with "> ") are copyable via tap;
+                // output requires text-selection highlighting.
                 int[] colAndRow = getColumnAndRow(event, true);
                 int row = colAndRow[1];
-                TerminalBuffer screen = mEmulator.getScreen();
-
-                // Find start of logical line (walk up through wrapped lines)
-                int logicalStart = row;
-                while (logicalStart - 1 >= -screen.getActiveTranscriptRows()
-                       && screen.getLineWrap(logicalStart - 1)) {
-                    logicalStart--;
-                }
-
-                // Find end of logical line (walk down through wrapped lines)
-                int logicalEnd = row;
-                while (logicalEnd < mEmulator.mRows - 1
-                       && screen.getLineWrap(logicalEnd)) {
-                    logicalEnd++;
-                }
-
-                // Extract full logical line, joining wrapped segments
-                String fullText = screen.getSelectedText(0, logicalStart, mEmulator.mColumns, logicalEnd, true);
-                if (fullText != null) {
-                    fullText = fullText.trim();
-                    // Only allow copying input lines (those starting with "> " prompt)
-                    if (fullText.startsWith("> ")) {
-                        String message = fullText.substring(2).trim();
-                        if (!message.isEmpty()) {
-                            mClient.onTerminalRowTapped(message);
-                        }
-                    }
+                String inputMessage = findInputMessage(row);
+                if (inputMessage != null && !inputMessage.isEmpty()) {
+                    mClient.onTerminalRowTapped(inputMessage);
+                } else {
+                    requestFocus();
                 }
 
                 return true;
@@ -480,6 +456,86 @@ public final class TerminalView extends View {
     @Override
     protected int computeVerticalScrollExtent() {
         return mEmulator == null ? 1 : mEmulator.mRows;
+    }
+
+    /**
+     * Finds the complete input message that the given row belongs to.
+     * Input messages start with the "> " prompt prefix.  Continuation rows
+     * (part of the same multi-line message) are collected by walking down
+     * until a blank row, a new prompt, or terminal decoration is found.
+     *
+     * @return the message text with the "> " prefix stripped, or null if the
+     *         row is not part of an input message.
+     */
+    private String findInputMessage(int tappedRow) {
+        if (mEmulator == null) return null;
+        TerminalBuffer screen = mEmulator.getScreen();
+
+        // Determine the input-start row.
+        int inputStartRow = Integer.MIN_VALUE;
+        String tappedText = getRowText(tappedRow, screen);
+        if (tappedText != null && tappedText.startsWith("> ")) {
+            inputStartRow = tappedRow;
+        } else {
+            // Walk UP to find the nearest row starting with "> "
+            int searchRow = tappedRow - 1;
+            int maxWalkUp = 20;
+            while (searchRow >= -screen.getActiveTranscriptRows() && maxWalkUp-- > 0) {
+                String rowText = getRowText(searchRow, screen);
+                if (rowText == null || rowText.isEmpty()) break;
+                if (rowText.startsWith("> ")) {
+                    inputStartRow = searchRow;
+                    break;
+                }
+                searchRow--;
+            }
+        }
+
+        if (inputStartRow == Integer.MIN_VALUE) return null;
+
+        // Collect the full message: start row (stripped) + continuation rows.
+        String startText = getRowText(inputStartRow, screen);
+        if (startText == null) return null;
+
+        StringBuilder message = new StringBuilder(startText.substring(2).trim());
+
+        int contRow = inputStartRow + 1;
+        int maxWalkDown = 50;
+        int lastContRow = inputStartRow;
+        while (contRow < mEmulator.mRows && maxWalkDown-- > 0) {
+            String contText = getRowText(contRow, screen);
+            if (contText == null || contText.isEmpty()) break;
+            if (contText.startsWith("> ")) break;
+            if (isTerminalDecoration(contText)) break;
+            message.append("\n").append(contText);
+            lastContRow = contRow;
+            contRow++;
+        }
+
+        // Verify the tapped row is within the input message range.
+        if (tappedRow < inputStartRow || tappedRow > lastContRow) return null;
+
+        String result = message.toString().trim();
+        return result.isEmpty() ? null : result;
+    }
+
+    private String getRowText(int row, TerminalBuffer screen) {
+        if (row < -screen.getActiveTranscriptRows() || row >= mEmulator.mRows) return null;
+        String text = screen.getSelectedText(0, row, mEmulator.mColumns, row, false);
+        return (text != null) ? text.trim() : null;
+    }
+
+    private static boolean isTerminalDecoration(String text) {
+        if (text.isEmpty()) return false;
+        char first = text.charAt(0);
+        return first == '\u2502' || first == '\u2503'   // │ ┃
+            || first == '\u256D' || first == '\u256E'   // ╭ ╮
+            || first == '\u2570' || first == '\u256F'   // ╰ ╯
+            || first == '\u2500' || first == '\u2501'   // ─ ━
+            || first == '\u250C' || first == '\u2510'   // ┌ ┐
+            || first == '\u2514' || first == '\u2518'   // └ ┘
+            || first == '\u251C' || first == '\u2524'   // ├ ┤
+            || first == '\u2550' || first == '\u2551';  // ═ ║
     }
 
     @Override
