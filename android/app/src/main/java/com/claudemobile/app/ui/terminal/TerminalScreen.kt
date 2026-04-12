@@ -24,6 +24,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,6 +51,7 @@ fun TerminalScreen(
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
+    var inputText by remember { mutableStateOf("") }
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -103,12 +107,15 @@ fun TerminalScreen(
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },
+                        onRowTapped = { text -> inputText = text },
                         modifier = Modifier.fillMaxSize(),
                     )
                     ConnectionOverlay(state = connectionState)
                 }
             }
             InputBar(
+                text = inputText,
+                onTextChange = { inputText = it },
                 onSend = viewModel::sendInput,
                 onSendBytes = viewModel::sendBytes,
                 enabled = isConnected && sessionState == "running",

@@ -28,6 +28,12 @@ public interface TerminalViewClient {
      */
     void onSingleTapUp(MotionEvent e);
 
+    /**
+     * Called when the user taps a terminal row containing non-empty text.
+     * The text is the full row content, trimmed of leading/trailing whitespace.
+     */
+    default void onTerminalRowTapped(String text) {}
+
     boolean shouldBackButtonBeMappedToEscape();
 
     boolean shouldEnforceCharBasedInput();

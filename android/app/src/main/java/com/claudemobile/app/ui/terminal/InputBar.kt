@@ -57,19 +57,20 @@ private val CONTROL_KEY_ROWS = listOf(
 
 @Composable
 fun InputBar(
+    text: String,
+    onTextChange: (String) -> Unit,
     onSend: (String) -> Unit,
     onSendBytes: (ByteArray) -> Unit,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
-    var text by remember { mutableStateOf("") }
     var panelExpanded by remember { mutableStateOf(false) }
 
     fun send() {
         if (text.isNotEmpty()) {
             onSend(text)
-            text = ""
+            onTextChange("")
         }
     }
 
@@ -83,7 +84,7 @@ fun InputBar(
         ) {
             OutlinedTextField(
                 value = text,
-                onValueChange = { text = it },
+                onValueChange = { onTextChange(it) },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Type command...") },
                 singleLine = true,

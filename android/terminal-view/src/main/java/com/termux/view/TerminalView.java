@@ -163,6 +163,18 @@ public final class TerminalView extends View {
                 }
                 requestFocus();
                 mClient.onSingleTapUp(event);
+
+                // Extract tapped row text and forward to client for InputBar population.
+                int[] colAndRow = getColumnAndRow(event, true);
+                int row = colAndRow[1];
+                String rowText = mEmulator.getScreen().getSelectedText(0, row, mEmulator.mColumns, row);
+                if (rowText != null) {
+                    rowText = rowText.trim();
+                    if (!rowText.isEmpty()) {
+                        mClient.onTerminalRowTapped(rowText);
+                    }
+                }
+
                 return true;
             }
 
