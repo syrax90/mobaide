@@ -29,8 +29,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 
 private data class ControlKey(val label: String, val bytes: ByteArray)
@@ -57,8 +60,8 @@ private val CONTROL_KEY_ROWS = listOf(
 
 @Composable
 fun InputBar(
-    text: String,
-    onTextChange: (String) -> Unit,
+    text: TextFieldValue,
+    onTextChange: (TextFieldValue) -> Unit,
     onSend: (String) -> Unit,
     onSendBytes: (ByteArray) -> Unit,
     enabled: Boolean = true,
@@ -66,11 +69,12 @@ fun InputBar(
 ) {
     val haptic = LocalHapticFeedback.current
     var panelExpanded by remember { mutableStateOf(false) }
+    var hasFocus by remember { mutableStateOf(false) }
 
     fun send() {
-        if (text.isNotEmpty()) {
-            onSend(text)
-            onTextChange("")
+        if (text.text.isNotEmpty()) {
+            onSend(text.text)
+            onTextChange(TextFieldValue(""))
         }
     }
 
@@ -85,7 +89,14 @@ fun InputBar(
             OutlinedTextField(
                 value = text,
                 onValueChange = { onTextChange(it) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused && !hasFocus && text.text.isNotEmpty()) {
+                            onTextChange(text.copy(selection = TextRange(text.text.length)))
+                        }
+                        hasFocus = focusState.isFocused
+                    },
                 placeholder = { Text("Type command...") },
                 singleLine = true,
                 enabled = enabled,
@@ -106,7 +117,7 @@ fun InputBar(
             }
             IconButton(
                 onClick = { send() },
-                enabled = enabled && text.isNotEmpty(),
+                enabled = enabled && text.text.isNotEmpty(),
             ) {
                 Icon(
                     Icons.AutoMirrored.Filled.Send,

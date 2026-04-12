@@ -28,6 +28,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -51,7 +53,7 @@ fun TerminalScreen(
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
-    var inputText by remember { mutableStateOf("") }
+    var inputText by remember { mutableStateOf(TextFieldValue("")) }
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -107,7 +109,7 @@ fun TerminalScreen(
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },
-                        onRowTapped = { text -> inputText = text },
+                        onRowTapped = { text -> inputText = TextFieldValue(text = text, selection = TextRange(text.length)) },
                         modifier = Modifier.fillMaxSize(),
                     )
                     ConnectionOverlay(state = connectionState)

@@ -29,8 +29,9 @@ public interface TerminalViewClient {
     void onSingleTapUp(MotionEvent e);
 
     /**
-     * Called when the user taps a terminal row containing non-empty text.
-     * The text is the full row content, trimmed of leading/trailing whitespace.
+     * Called when the user taps a terminal input line (one starting with "> ").
+     * The text parameter contains the message content with the prompt prefix
+     * stripped and whitespace trimmed.
      */
     default void onTerminalRowTapped(String text) {}
 

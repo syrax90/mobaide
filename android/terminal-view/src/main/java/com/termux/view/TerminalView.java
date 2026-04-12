@@ -38,6 +38,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
 import com.termux.terminal.KeyHandler;
+import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
@@ -165,13 +166,37 @@ public final class TerminalView extends View {
                 mClient.onSingleTapUp(event);
 
                 // Extract tapped row text and forward to client for InputBar population.
+                // Only input lines (starting with "> ") are copyable; output requires
+                // text-selection highlighting.  Wrapped lines are joined so that long
+                // messages spanning several terminal rows are copied in full.
                 int[] colAndRow = getColumnAndRow(event, true);
                 int row = colAndRow[1];
-                String rowText = mEmulator.getScreen().getSelectedText(0, row, mEmulator.mColumns, row);
-                if (rowText != null) {
-                    rowText = rowText.trim();
-                    if (!rowText.isEmpty()) {
-                        mClient.onTerminalRowTapped(rowText);
+                TerminalBuffer screen = mEmulator.getScreen();
+
+                // Find start of logical line (walk up through wrapped lines)
+                int logicalStart = row;
+                while (logicalStart - 1 >= -screen.getActiveTranscriptRows()
+                       && screen.getLineWrap(logicalStart - 1)) {
+                    logicalStart--;
+                }
+
+                // Find end of logical line (walk down through wrapped lines)
+                int logicalEnd = row;
+                while (logicalEnd < mEmulator.mRows - 1
+                       && screen.getLineWrap(logicalEnd)) {
+                    logicalEnd++;
+                }
+
+                // Extract full logical line, joining wrapped segments
+                String fullText = screen.getSelectedText(0, logicalStart, mEmulator.mColumns, logicalEnd, true);
+                if (fullText != null) {
+                    fullText = fullText.trim();
+                    // Only allow copying input lines (those starting with "> " prompt)
+                    if (fullText.startsWith("> ")) {
+                        String message = fullText.substring(2).trim();
+                        if (!message.isEmpty()) {
+                            mClient.onTerminalRowTapped(message);
+                        }
                     }
                 }
 
