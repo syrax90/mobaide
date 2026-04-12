@@ -110,7 +110,16 @@ fun TerminalScreen(
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },
-                        onRowTapped = { text ->
+                        onRowTapped = { text, isCurrentInput ->
+                            if (isCurrentInput) {
+                                // The tapped row IS the current active input line, so the
+                                // PTY buffer already holds this text.  Clear it NOW — the
+                                // time gap until the user presses Send lets the program
+                                // process the clearing bytes before new text arrives.
+                                val clear = byteArrayOf(0x15, 0x05) +  // Ctrl+U, Ctrl+E
+                                    ByteArray(maxOf(text.length, 200)) { 0x7F.toByte() }
+                                viewModel.sendBytes(clear)
+                            }
                             inputText = TextFieldValue(text = text, selection = TextRange(text.length))
                             requestInputFocus = true
                         },

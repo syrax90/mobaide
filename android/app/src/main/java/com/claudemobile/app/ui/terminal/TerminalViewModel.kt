@@ -152,15 +152,10 @@ class TerminalViewModel @Inject constructor(
     // ── Input ───────────────────────────────────────────────────────────────────
 
     fun sendInput(text: String) {
-        // Clear any existing text in the remote PTY's input line using layered strategies:
-        // 1. Ctrl+U (0x15) — standard "kill line" for bash/zsh/readline
-        // 2. Ctrl+E (0x05) + DEL×N — universal fallback for Ink/React TUIs that ignore Ctrl+U:
-        //    Ctrl+E moves cursor to end-of-line; DEL (0x7F) backspaces one character.
-        //    Extra DELs on an empty line are harmless no-ops.
         // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
-        val clearLength = maxOf(text.length, 200)
-        val clear = byteArrayOf(0x15, 0x05) + ByteArray(clearLength) { 0x7F.toByte() }
-        sendBytes(clear + (text + "\r").toByteArray(Charsets.UTF_8))
+        // Any stale PTY input is cleared on-tap (TerminalScreen), not here,
+        // so the buffer is already empty by the time the user presses Send.
+        sendBytes((text + "\r").toByteArray(Charsets.UTF_8))
     }
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
