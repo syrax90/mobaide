@@ -192,8 +192,9 @@ class TestInputFrame:
 
 class TestExecuteFrame:
     def test_execute_frame_prepends_clear_sequence(self, test_client, auth_token):
-        """An 'x' frame must prepend Ctrl+E (0x05) + Ctrl+U (0x15) to
-        the payload before writing to the PTY, clearing any stale input."""
+        """An 'x' frame must prepend Down-arrow burst + Ctrl+E + Ctrl+U
+        to the payload before writing to the PTY, clearing any stale
+        input (including text recalled via shell history Up arrow)."""
         sid = _create_session(test_client, auth_token)
 
         manager = test_client.app.state.session_manager
@@ -219,8 +220,9 @@ class TestExecuteFrame:
             session._backend.write = original_write  # type: ignore[method-assign]
 
         assert captured, "execute frame did not reach backend.write"
-        # Server must prepend Ctrl+E (move to end) + Ctrl+U (kill line)
-        assert captured[0] == b"\x05\x15" + payload
+        # 50 Down arrows to exit history recall, then Ctrl+E + Ctrl+U
+        expected_clear = b"\x1b[B" * 50 + b"\x05\x15"
+        assert captured[0] == expected_clear + payload
 
     def test_execute_frame_empty_payload_does_not_write(self, test_client, auth_token):
         """An 'x' frame with no payload must NOT write anything to the PTY.

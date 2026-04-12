@@ -171,10 +171,12 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     counters["bytes_in"] += len(payload)
                     counters["msg_count"] += 1
                     if payload:
-                        # Move to end of line (Ctrl+E), then kill line
-                        # (Ctrl+U), ensuring any stale shell input is
-                        # cleared before the new command is written.
-                        await session.write(b"\x05\x15" + payload)
+                        # Press Down arrow repeatedly to exit any shell
+                        # history recall (Up), then Ctrl+E (end of line)
+                        # + Ctrl+U (kill line) to clear stale input.
+                        _DOWN = b"\x1b[B"
+                        clear = _DOWN * 50 + b"\x05\x15"
+                        await session.write(clear + payload)
                 elif frame_type == FRAME_RESIZE:
                     if len(payload) >= 4:
                         rows, cols = struct.unpack(">HH", payload[:4])
