@@ -171,12 +171,15 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     counters["bytes_in"] += len(payload)
                     counters["msg_count"] += 1
                     if payload:
-                        # Press Down arrow repeatedly to exit any shell
-                        # history recall (Up), then Ctrl+E (end of line)
-                        # + Ctrl+U (kill line) to clear stale input.
-                        _DOWN = b"\x1b[B"
-                        clear = _DOWN * 50 + b"\x05\x15"
-                        await session.write(clear + payload)
+                        # Two-phase clear: first blast Backspace (DEL) to
+                        # erase any stale input, then after a brief pause
+                        # write the new command.  The pause is required
+                        # because React-based TUIs (Ink) batch key events
+                        # from a single stdin read — clearing + new chars
+                        # in one chunk get merged instead of sequenced.
+                        await session.write(b"\x7f" * 300)
+                        await asyncio.sleep(0.05)
+                        await session.write(payload)
                 elif frame_type == FRAME_RESIZE:
                     if len(payload) >= 4:
                         rows, cols = struct.unpack(">HH", payload[:4])
