@@ -110,8 +110,11 @@ fun TerminalScreen(
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },
-                        onRowTapped = { text ->
+                        onRowTapped = { text, isCurrentInput ->
                             inputText = TextFieldValue(text = text, selection = TextRange(text.length))
+                            if (isCurrentInput) {
+                                viewModel.onRowTapped(text)
+                            }
                             requestInputFocus = true
                         },
                         modifier = Modifier.fillMaxSize(),

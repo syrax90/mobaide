@@ -33,9 +33,12 @@ public interface TerminalViewClient {
      * The text parameter contains the message content with the prompt prefix
      * stripped and whitespace trimmed.
      *
-     * @param text the extracted message text
+     * @param text           the extracted message text
+     * @param isCurrentInput true when the cursor is on the tapped input line,
+     *                       meaning the PTY's active input buffer likely holds
+     *                       this text already
      */
-    default void onTerminalRowTapped(String text) {}
+    default void onTerminalRowTapped(String text, boolean isCurrentInput) {}
 
     boolean shouldBackButtonBeMappedToEscape();
 

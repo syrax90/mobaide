@@ -14,7 +14,7 @@ import okio.ByteString.Companion.toByteString
  * |------|------|-----------|-----------------------------------------------|
  * | 0x6f | 'o'  | S->C      | raw PTY output bytes                          |
  * | 0x69 | 'i'  | C->S      | raw input bytes (CR / Ctrl / Esc / UTF-8)     |
- * | 0x78 | 'x'  | C->S      | execute: server clears PTY line then writes    |
+ * | 0x78 | 'x'  | C->S      | execute: server Ctrl+C clears, then writes     |
  * | 0x72 | 'r'  | C->S      | resize: u16 rows + u16 cols (big-endian)      |
  * | 0x73 | 's'  | S->C      | state: UTF-8 JSON {status, pid?, exit_code?}  |
  * | 0x62 | 'b'  | S->C      | replay-buffer marker (empty payload)          |
@@ -37,8 +37,8 @@ object TerminalProtocol {
     }
 
     /** Wrap a complete command in an `'x'` (execute) frame.
-     *  The server prepends Ctrl+E Ctrl+U to clear the PTY input line
-     *  before writing the payload, preventing doubled text. */
+     *  The server sends Ctrl+C to cancel stale PTY input, pauses to let
+     *  the TUI show a fresh prompt, then writes the payload. */
     fun encodeExecute(bytes: ByteArray): ByteString {
         val out = ByteArray(bytes.size + 1)
         out[0] = TYPE_EXECUTE

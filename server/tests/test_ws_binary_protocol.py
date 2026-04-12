@@ -191,10 +191,10 @@ class TestInputFrame:
 
 
 class TestExecuteFrame:
-    def test_execute_frame_clears_then_writes_in_two_phases(self, test_client, auth_token):
-        """An 'x' frame must write clearing bytes first, pause, then write
-        the payload — two separate PTY writes so the shell / TUI processes
-        the clear before the command arrives."""
+    def test_execute_frame_sends_ctrl_c_then_payload(self, test_client, auth_token):
+        """An 'x' frame must write Ctrl+C first, pause, then write the
+        payload — two separate PTY writes so the TUI cancels stale input
+        and shows a fresh prompt before the new command arrives."""
         sid = _create_session(test_client, auth_token)
 
         manager = test_client.app.state.session_manager
@@ -220,18 +220,18 @@ class TestExecuteFrame:
             session._backend.write = original_write  # type: ignore[method-assign]
 
         assert len(captured) == 2, (
-            f"expected 2 writes (clear + command), got {len(captured)}"
+            f"expected 2 writes (Ctrl+C + command), got {len(captured)}"
         )
-        # First write: 300 Backspace (DEL) chars to erase stale input
-        assert captured[0] == b"\x7f" * 300
+        # First write: Ctrl+C to cancel stale input
+        assert captured[0] == b"\x03"
         # Second write: the actual command (after the pause)
         assert captured[1] == payload
 
     def test_execute_frame_empty_payload_does_not_write(self, test_client, auth_token):
         """An 'x' frame with no payload must NOT write anything to the PTY.
 
-        Without this guard the server would send bare Ctrl+E Ctrl+U (0x05 0x15),
-        which would needlessly clear the user's current input line.
+        Without this guard the server would send a bare Ctrl+C, which would
+        needlessly cancel the user's current input.
         """
         sid = _create_session(test_client, auth_token)
 

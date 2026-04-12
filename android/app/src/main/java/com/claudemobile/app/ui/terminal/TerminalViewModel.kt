@@ -149,18 +149,42 @@ class TerminalViewModel @Inject constructor(
             "unknown"
         }
 
-    // ── Input ───────────────────────────────────────────────────────────────────
+    // ── Input ─────────────────────────────────────��─────────────────────────────
+
+    /** Text from the last row-tap on the *current* input line (isCurrentInput). */
+    private var tappedOriginal: String? = null
+
+    /** Called by TerminalScreen when the user taps the current PTY input line. */
+    fun onRowTapped(text: String) {
+        tappedOriginal = text
+    }
 
     fun sendInput(text: String) {
+        val tapped = tappedOriginal
+        tappedOriginal = null
+
         // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
-        // Uses 'x' (execute) frame so the server clears stale PTY input
-        // before writing the command, preventing doubled text.
-        val textBytes = (text + "\r").toByteArray(Charsets.UTF_8)
-        sendChannel.trySend(TerminalProtocol.encodeExecute(textBytes))
+        val frame = if (tapped != null && text == tapped) {
+            // Unchanged tap on current input — text is already in the PTY,
+            // just press Enter to execute it.
+            TerminalProtocol.encodeInput("\r".toByteArray(Charsets.UTF_8))
+        } else if (tapped != null) {
+            // Edited after tapping current input — the PTY still holds the
+            // old text. Use 'x' (execute) frame so the server sends Ctrl+C
+            // to cancel the stale input, pauses, then writes the new command.
+            TerminalProtocol.encodeExecute((text + "\r").toByteArray(Charsets.UTF_8))
+        } else {
+            // Fresh typed text (no tap involved) — send as regular input.
+            TerminalProtocol.encodeInput((text + "\r").toByteArray(Charsets.UTF_8))
+        }
+        sendChannel.trySend(frame)
     }
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
+        // Any direct terminal interaction invalidates the tap state — the
+        // PTY's input may have changed since the row was tapped.
+        tappedOriginal = null
         sendChannel.trySend(TerminalProtocol.encodeInput(bytes))
     }
 

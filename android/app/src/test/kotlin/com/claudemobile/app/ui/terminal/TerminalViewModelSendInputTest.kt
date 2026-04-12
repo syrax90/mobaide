@@ -18,9 +18,11 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Unit tests for [TerminalViewModel.sendInput] — verifies that the method
- * sends the user's text followed by CR, wrapped in a terminal-protocol 'x'
- * (execute) frame so the server clears stale PTY input before writing.
+ * Unit tests for [TerminalViewModel.sendInput] — verifies the three send paths:
+ *
+ * 1. **Unchanged tap**: text matches [TerminalViewModel.onRowTapped] → bare CR via 'i' frame
+ * 2. **Edited tap**: text differs from tapped original → 'x' (execute) frame
+ * 3. **Fresh text**: no prior [onRowTapped] call → text + CR via 'i' frame
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelSendInputTest {
@@ -46,8 +48,12 @@ class TerminalViewModelSendInputTest {
     private fun payloadOf(frame: ByteString): ByteArray =
         frame.toByteArray().let { it.copyOfRange(1, it.size) }
 
+    private fun frameTypeOf(frame: ByteString): Byte = frame.toByteArray()[0]
+
+    // ── Path 1: Fresh text (no tap) ────────────────────────────────────────────
+
     @Test
-    fun sendInput_sendsTextFollowedByCR() {
+    fun sendInput_freshText_sendsTextPlusCR() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
@@ -61,7 +67,22 @@ class TerminalViewModelSendInputTest {
     }
 
     @Test
-    fun sendInput_emptyString_sendsBareCR() {
+    fun sendInput_freshText_usesInputFrame() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("hello")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertEquals(
+            "fresh text must use 'i' (input) frame",
+            'i'.code.toByte(),
+            frameTypeOf(captured.captured),
+        )
+    }
+
+    @Test
+    fun sendInput_freshText_emptyString_sendsBareCR() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
@@ -75,11 +96,10 @@ class TerminalViewModelSendInputTest {
     }
 
     @Test
-    fun sendInput_utf8Text_encodesCorrectly() {
+    fun sendInput_freshText_utf8_encodesCorrectly() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
-        // "\u00e9" (e-acute) is 2 bytes in UTF-8 (0xC3 0xA9)
         vm.sendInput("\u00e9")
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
@@ -89,18 +109,113 @@ class TerminalViewModelSendInputTest {
         )
     }
 
+    // ── Path 2: Unchanged tap → bare CR ────────────────────────────────────────
+
     @Test
-    fun sendInput_wrapsPayloadInExecuteFrame() {
+    fun sendInput_unchangedTap_sendsBareCR() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
-        vm.sendInput("test")
+        vm.onRowTapped("/stats")
+        vm.sendInput("/stats")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertArrayEquals(
+            "unchanged tap on current input must send bare CR",
+            "\r".toByteArray(Charsets.UTF_8),
+            payloadOf(captured.captured),
+        )
+    }
+
+    @Test
+    fun sendInput_unchangedTap_usesInputFrame() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.onRowTapped("/stats")
+        vm.sendInput("/stats")
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals(
-            "first byte of the WebSocket frame must be 'x' (execute type)",
+            "unchanged tap must use 'i' (input) frame",
+            'i'.code.toByte(),
+            frameTypeOf(captured.captured),
+        )
+    }
+
+    // ── Path 3: Edited tap → 'x' (execute) frame ──────────────────────────────
+
+    @Test
+    fun sendInput_editedTap_sendsEditedTextPlusCR() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.onRowTapped("/stats")
+        vm.sendInput("/help")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertArrayEquals(
+            "edited tap must send the new text + CR",
+            "/help\r".toByteArray(Charsets.UTF_8),
+            payloadOf(captured.captured),
+        )
+    }
+
+    @Test
+    fun sendInput_editedTap_usesExecuteFrame() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.onRowTapped("/stats")
+        vm.sendInput("/help")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertEquals(
+            "edited tap must use 'x' (execute) frame for server-side Ctrl+C clear",
             'x'.code.toByte(),
-            captured.captured.toByteArray()[0],
+            frameTypeOf(captured.captured),
+        )
+    }
+
+    // ── tappedOriginal reset ───────────────────────────────────────────────────
+
+    @Test
+    fun sendInput_consumesTappedOriginal_subsequentSendIsFresh() {
+        val vm = createViewModel()
+        val captured = mutableListOf<ByteString>()
+
+        vm.onRowTapped("/stats")
+        vm.sendInput("/stats")  // consumes tappedOriginal
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+
+        vm.sendInput("/stats")  // should be fresh (no tappedOriginal)
+
+        verify(timeout = 2000, atLeast = 2) { connection.sendBinary(capture(captured)) }
+        val second = captured.last()
+        assertArrayEquals(
+            "second send after tap consumed should be fresh text + CR",
+            "/stats\r".toByteArray(Charsets.UTF_8),
+            payloadOf(second),
+        )
+    }
+
+    @Test
+    fun sendBytes_resetsTappedOriginal() {
+        val vm = createViewModel()
+        val captured = mutableListOf<ByteString>()
+
+        vm.onRowTapped("/stats")
+        vm.sendBytes(byteArrayOf(0x03))  // Ctrl+C invalidates tap state
+
+        vm.sendInput("/stats")  // should be fresh now
+
+        verify(timeout = 2000, atLeast = 2) { connection.sendBinary(capture(captured)) }
+        val sendInputFrame = captured.last()
+        assertEquals(
+            "sendBytes must reset tappedOriginal — subsequent sendInput uses 'i' frame",
+            'i'.code.toByte(),
+            frameTypeOf(sendInputFrame),
         )
     }
 }

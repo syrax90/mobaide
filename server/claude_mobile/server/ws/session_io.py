@@ -30,7 +30,7 @@ router = APIRouter()
 FRAME_OUTPUT = b"o"  # 0x6f  S->C  raw PTY bytes
 FRAME_INPUT = b"i"   # 0x69  C->S  raw input bytes
 FRAME_RESIZE = b"r"  # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
-FRAME_EXECUTE = b"x" # 0x78  C->S  clear-then-write: Ctrl+E Ctrl+U + payload
+FRAME_EXECUTE = b"x" # 0x78  C->S  clear-then-write: Ctrl+C + pause + payload
 FRAME_STATE = b"s"   # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
 FRAME_REPLAY = b"b"  # 0x62  S->C  marker: ring-buffer replay starts next frame
 
@@ -171,14 +171,11 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     counters["bytes_in"] += len(payload)
                     counters["msg_count"] += 1
                     if payload:
-                        # Two-phase clear: first blast Backspace (DEL) to
-                        # erase any stale input, then after a brief pause
-                        # write the new command.  The pause is required
-                        # because React-based TUIs (Ink) batch key events
-                        # from a single stdin read — clearing + new chars
-                        # in one chunk get merged instead of sequenced.
-                        await session.write(b"\x7f" * 300)
-                        await asyncio.sleep(0.05)
+                        # Cancel stale input with Ctrl+C, pause for the TUI
+                        # to process and show a fresh prompt, then write the
+                        # new command.
+                        await session.write(b"\x03")
+                        await asyncio.sleep(0.1)
                         await session.write(payload)
                 elif frame_type == FRAME_RESIZE:
                     if len(payload) >= 4:
