@@ -11,7 +11,9 @@ import com.claudemobile.app.data.repository.SessionRepository
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +35,10 @@ class TerminalViewModel @Inject constructor(
         ?: throw IllegalArgumentException("sessionId required")
 
     private var connection: WebSocketConnection? = null
+
+    private var lastResizeRows = -1
+    private var lastResizeCols = -1
+    private var resizeJob: Job? = null
 
     /** Buffered channel for outgoing PTY frames — consumed by a single IO coroutine to
      *  keep sends off the main thread while preserving FIFO ordering. */
@@ -194,9 +200,14 @@ class TerminalViewModel @Inject constructor(
     }
 
     fun resize(rows: Int, cols: Int) {
+        if (rows == lastResizeRows && cols == lastResizeCols) return
+        lastResizeRows = rows
+        lastResizeCols = cols
         session.updateSize(cols, rows, 12, 24)
-        viewModelScope.launch(Dispatchers.IO) {
-            connection?.sendBinary(TerminalProtocol.encodeResize(rows, cols))
+        resizeJob?.cancel()
+        resizeJob = viewModelScope.launch {
+            delay(100)
+            sendChannel.trySend(TerminalProtocol.encodeResize(rows, cols))
         }
     }
 
