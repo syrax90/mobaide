@@ -1,8 +1,8 @@
 [Unit]
 Description=Cloudflare Tunnel for Claude Mobile
-After=network-online.target claude-mobile-server.service
+After=network-online.target claude-mobile-agent.service
 Wants=network-online.target
-Requires=claude-mobile-server.service
+Requires=claude-mobile-agent.service
 
 [Service]
 Type=simple

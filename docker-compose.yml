@@ -1,19 +1,19 @@
 services:
-  server:
+  claude-agent:
     build:
-      context: ./server
+      context: ./claude_agent
       dockerfile: Dockerfile
-    container_name: claude-mobile-server
+    container_name: claude-mobile-agent
     restart: unless-stopped
     env_file:
-      - ./server/.env
+      - ./claude_agent/.env
     environment:
       - HOST=0.0.0.0
       - PORT=8000
       - USER_STORE_PATH=/app/data/users.json
       - PROCESSED_ITEMS_PATH=/app/data/processed_items.json
     volumes:
-      - server-data:/app/data
+      - agent-data:/app/data
     # Ports are NOT published — all external access goes through cloudflared.
     # Uncomment for local debugging without the tunnel:
     # ports:
@@ -37,11 +37,11 @@ services:
     networks:
       - tunnel-net
     depends_on:
-      server:
+      claude-agent:
         condition: service_healthy
 
 volumes:
-  server-data:
+  agent-data:
 
 networks:
   tunnel-net:

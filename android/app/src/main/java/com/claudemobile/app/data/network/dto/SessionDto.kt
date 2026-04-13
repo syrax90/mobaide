@@ -20,7 +20,7 @@ data class CreateSessionRequest(
     val rows: Int = 24,
     val cols: Int = 80,
     // CLA-12: project-aware launch. When set, command/cwd/env are ignored
-    // and the server's ClaudeLauncher derives them from the project.
+    // and the agent's ClaudeLauncher derives them from the project.
     val project_name: String? = null,
     val claude_options: ClaudeOptionsModel? = null,
 )

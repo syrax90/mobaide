@@ -7,7 +7,7 @@
 # This script:
 #   1. Checks prerequisites (Python 3.12+, git, curl)
 #   2. Creates a system user and directory structure
-#   3. Sets up a Python virtual environment and installs the server
+#   3. Sets up a Python virtual environment and installs the agent
 #   4. Generates configuration files
 #   5. Downloads cloudflared
 #   6. Installs and starts systemd services
@@ -73,8 +73,8 @@ fi
 # --- Directory structure ---
 
 info "Setting up ${INSTALL_DIR}..."
-mkdir -p "${INSTALL_DIR}/server"
-cp -r "${REPO_ROOT}/server/." "${INSTALL_DIR}/server/"
+mkdir -p "${INSTALL_DIR}/claude_agent"
+cp -r "${REPO_ROOT}/claude_agent/." "${INSTALL_DIR}/claude_agent/"
 
 # --- Virtual environment ---
 
@@ -85,17 +85,17 @@ else
     python3 -m venv "$VENV_DIR"
 fi
 
-info "Installing server package..."
+info "Installing agent package..."
 "${VENV_DIR}/bin/pip" install --no-cache-dir --upgrade pip
-"${VENV_DIR}/bin/pip" install --no-cache-dir "${INSTALL_DIR}/server"
+"${VENV_DIR}/bin/pip" install --no-cache-dir "${INSTALL_DIR}/claude_agent"
 
-# --- Server .env ---
+# --- Agent .env ---
 
-ENV_FILE="${INSTALL_DIR}/server/.env"
+ENV_FILE="${INSTALL_DIR}/claude_agent/.env"
 if [[ -f "$ENV_FILE" ]]; then
-    info "Server .env already exists, skipping generation."
+    info "Agent .env already exists, skipping generation."
 else
-    info "Generating server .env..."
+    info "Generating agent .env..."
     JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
     cat > "$ENV_FILE" <<EOF
 JWT_SECRET_KEY=${JWT_SECRET}
@@ -158,13 +158,13 @@ chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
 # --- systemd services ---
 
 info "Installing systemd services..."
-cp "${REPO_ROOT}/deploy/claude-mobile-server.service" /etc/systemd/system/
+cp "${REPO_ROOT}/deploy/claude-mobile-agent.service" /etc/systemd/system/
 cp "${REPO_ROOT}/deploy/cloudflared.service" /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable claude-mobile-server cloudflared
-systemctl start claude-mobile-server
-# Wait briefly for the server health check before starting the tunnel
+systemctl enable claude-mobile-agent cloudflared
+systemctl start claude-mobile-agent
+# Wait briefly for the agent health check before starting the tunnel
 sleep 3
 systemctl start cloudflared
 
@@ -175,9 +175,9 @@ echo "============================================"
 echo "  Claude Mobile — Deployment Complete"
 echo "============================================"
 echo ""
-echo "  Server status:  systemctl status claude-mobile-server"
+echo "  Agent status:  systemctl status claude-mobile-agent"
 echo "  Tunnel status:  systemctl status cloudflared"
-echo "  Server logs:    journalctl -u claude-mobile-server -f"
+echo "  Agent logs:    journalctl -u claude-mobile-agent -f"
 echo "  Tunnel logs:    journalctl -u cloudflared -f"
 echo "  Health check:   curl http://localhost:8000/api/health"
 echo ""

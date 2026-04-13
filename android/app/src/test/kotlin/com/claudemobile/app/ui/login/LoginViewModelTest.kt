@@ -40,7 +40,7 @@ class LoginViewModelTest {
     // ---- Helpers ------------------------------------------------------------
 
     private fun primed(vm: LoginViewModel) = vm.apply {
-        updateServerUrl("https://example.com")
+        updateAgentUrl("https://example.com")
         updateUsername("alice")
         updatePassword("secret")
     }
@@ -51,7 +51,7 @@ class LoginViewModelTest {
     fun initialState_hasDefaultServerUrlPrefix_andNoErrorOrLoading() = runTest {
         val vm = LoginViewModel(authRepository)
         val state = vm.uiState.value
-        assertEquals("https://", state.serverUrl)
+        assertEquals("https://", state.agentUrl)
         assertEquals("", state.username)
         assertEquals("", state.password)
         assertFalse(state.isLoading)
@@ -64,7 +64,7 @@ class LoginViewModelTest {
     @Test
     fun login_whenServerUrlBlank_setsError_andDoesNotCallRepository() = runTest {
         val vm = LoginViewModel(authRepository)
-        vm.updateServerUrl("   ")
+        vm.updateAgentUrl("   ")
         vm.updateUsername("alice")
         vm.updatePassword("secret")
 
@@ -79,7 +79,7 @@ class LoginViewModelTest {
     @Test
     fun login_whenUsernameBlank_setsError_andDoesNotCallRepository() = runTest {
         val vm = LoginViewModel(authRepository)
-        vm.updateServerUrl("https://example.com")
+        vm.updateAgentUrl("https://example.com")
         vm.updateUsername("")
         vm.updatePassword("secret")
 
@@ -93,7 +93,7 @@ class LoginViewModelTest {
     @Test
     fun login_whenPasswordBlank_setsError_andDoesNotCallRepository() = runTest {
         val vm = LoginViewModel(authRepository)
-        vm.updateServerUrl("https://example.com")
+        vm.updateAgentUrl("https://example.com")
         vm.updateUsername("alice")
         vm.updatePassword("")
 
@@ -225,17 +225,17 @@ class LoginViewModelTest {
     // ---- update* helpers clear the pending error ----------------------------
 
     @Test
-    fun updateServerUrl_clearsPendingError() = runTest {
+    fun updateAgentUrl_clearsPendingError() = runTest {
         val vm = LoginViewModel(authRepository)
         // Seed an error via the blank-field path.
         vm.login()
         advanceUntilIdle()
         assertEquals("All fields are required", vm.uiState.value.error)
 
-        vm.updateServerUrl("https://example.com")
+        vm.updateAgentUrl("https://example.com")
 
         assertNull(vm.uiState.value.error)
-        assertEquals("https://example.com", vm.uiState.value.serverUrl)
+        assertEquals("https://example.com", vm.uiState.value.agentUrl)
     }
 
     @Test

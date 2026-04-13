@@ -55,8 +55,8 @@ fun SettingsScreen(
                 .padding(padding),
         ) {
             ListItem(
-                headlineContent = { Text("Server") },
-                supportingContent = { Text(uiState.serverUrl) },
+                headlineContent = { Text("Agent") },
+                supportingContent = { Text(uiState.agentUrl) },
             )
             HorizontalDivider()
             ListItem(

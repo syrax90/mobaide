@@ -62,13 +62,13 @@ class SessionManagerTest {
     private fun stubTokenStore(
         refresh: String? = "refresh-initial",
         access: String? = "access-initial",
-        serverUrl: String? = "https://example.com",
+        agentUrl: String? = "https://example.com",
     ): TokenStore {
         val store = mockk<TokenStore>(relaxUnitFun = true)
         every { store.getRefreshToken() } returns refresh
         every { store.getAccessToken() } returns access
-        every { store.getServerUrl() } returns serverUrl
-        every { store.isLoggedIn() } returns (access != null && refresh != null && serverUrl != null)
+        every { store.getAgentUrl() } returns agentUrl
+        every { store.isLoggedIn() } returns (access != null && refresh != null && agentUrl != null)
         return store
     }
 
@@ -86,7 +86,7 @@ class SessionManagerTest {
 
     @Test
     fun initialState_reflectsTokenStoreIsLoggedIn_whenFalse() {
-        val store = stubTokenStore(refresh = null, access = null, serverUrl = null)
+        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
         val client = mockk<OkHttpClient>()
         val sm = SessionManager(store, client)
 
@@ -98,7 +98,7 @@ class SessionManagerTest {
 
     @Test
     fun markLoggedIn_flipsStateToLoggedIn() {
-        val store = stubTokenStore(refresh = null, access = null, serverUrl = null)
+        val store = stubTokenStore(refresh = null, access = null, agentUrl = null)
         val client = mockk<OkHttpClient>()
         val sm = SessionManager(store, client)
         assertEquals(SessionManager.AuthState.LoggedOut, sm.authState.value)
@@ -144,11 +144,11 @@ class SessionManagerTest {
         // Start LoggedIn (access + refresh present) so the applyRefreshSuccess
         // guard — which correctly bails if forceLogout() won the race — does not
         // mistake "initially not yet logged in" for "logout already won".
-        val store = stubTokenStore(refresh = "r-1", access = "a-1", serverUrl = "https://example.com")
+        val store = stubTokenStore(refresh = "r-1", access = "a-1", agentUrl = "https://example.com")
         // Re-stub just the bits refresh() touches (already covered by stubTokenStore above,
         // but kept explicit for clarity):
         every { store.getRefreshToken() } returns "r-1"
-        every { store.getServerUrl() } returns "https://example.com"
+        every { store.getAgentUrl() } returns "https://example.com"
 
         val client = mockk<OkHttpClient>()
         val reqSlot = slot<Request>()

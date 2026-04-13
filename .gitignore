@@ -2,7 +2,7 @@
 .claude
 **/__pycache__
 **/venv/
-server/.env
+claude_agent/.env
 deploy/tunnel.env
-server/users.json
+claude_agent/users.json
 android/app/src/main/res/xml/network_security_config.xml

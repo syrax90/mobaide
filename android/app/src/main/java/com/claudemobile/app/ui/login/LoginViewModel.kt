@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class LoginUiState(
-    val serverUrl: String = "https://",
+    val agentUrl: String = "https://",
     val username: String = "",
     val password: String = "",
     val isLoading: Boolean = false,
@@ -31,8 +31,8 @@ class LoginViewModel @Inject constructor(
     private val _loginSuccess = MutableStateFlow(false)
     val loginSuccess: StateFlow<Boolean> = _loginSuccess.asStateFlow()
 
-    fun updateServerUrl(url: String) {
-        _uiState.update { it.copy(serverUrl = url, error = null) }
+    fun updateAgentUrl(url: String) {
+        _uiState.update { it.copy(agentUrl = url, error = null) }
     }
 
     fun updateUsername(username: String) {
@@ -45,7 +45,7 @@ class LoginViewModel @Inject constructor(
 
     fun login() {
         val state = _uiState.value
-        if (state.serverUrl.isBlank() || state.username.isBlank() || state.password.isBlank()) {
+        if (state.agentUrl.isBlank() || state.username.isBlank() || state.password.isBlank()) {
             _uiState.update { it.copy(error = "All fields are required") }
             return
         }
@@ -53,7 +53,7 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                authRepository.login(state.serverUrl, state.username, state.password)
+                authRepository.login(state.agentUrl, state.username, state.password)
                 _loginSuccess.value = true
             } catch (e: ApiException) {
                 val message = when (e.code) {

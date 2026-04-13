@@ -5,7 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.claudemobile.app.data.auth.SessionManager
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.ui.navigation.AppNavigation
 import com.claudemobile.app.ui.theme.ClaudeMobileTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -18,17 +18,17 @@ class MainActivity : ComponentActivity() {
     lateinit var sessionManager: SessionManager
 
     @Inject
-    lateinit var serverEventBus: ServerEventBus
+    lateinit var agentEventBus: AgentEventBus
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // Idempotent — safe to call every onCreate, no-ops if the user
-        // is not logged in. The ServerEventBus also auto-reacts to
+        // is not logged in. The AgentEventBus also auto-reacts to
         // session state transitions (LoggedOut → stop, subsequent
         // LoggedIn → start), so a mid-session logout doesn't leak the
         // connection.
-        serverEventBus.start()
+        agentEventBus.start()
         setContent {
             ClaudeMobileTheme {
                 AppNavigation(sessionManager = sessionManager)

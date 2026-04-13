@@ -1,8 +1,8 @@
 package com.claudemobile.app.data.repository
 
 import app.cash.turbine.test
-import com.claudemobile.app.data.events.ServerEvent
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEvent
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.RestApi
@@ -28,7 +28,7 @@ import org.junit.Test
  * with rollback, 409→[AutoScanAlreadyRunningException], 429→[AutoScanCapacityException]
  * error classification, `observeScans` flow, and event-bus-driven list refresh.
  *
- * All collaborators are mocked. [ServerEventBus.events] is stubbed to a real
+ * All collaborators are mocked. [AgentEventBus.events] is stubbed to a real
  * [MutableSharedFlow] so that `eventBus.stream<T>()` (an inline function that
  * expands to `events.filterIsInstance()`) works without needing a real bus.
  *
@@ -52,8 +52,8 @@ class AutoScanRepositoryTest {
 
     private fun newRepo(): Fixture {
         val restApi = mockk<RestApi>(relaxed = true)
-        val eventFlow = MutableSharedFlow<ServerEvent>(replay = 0, extraBufferCapacity = 64)
-        val bus = mockk<ServerEventBus>()
+        val eventFlow = MutableSharedFlow<AgentEvent>(replay = 0, extraBufferCapacity = 64)
+        val bus = mockk<AgentEventBus>()
         every { bus.events } returns eventFlow
         val wsClient = mockk<AutoScanWsClient>(relaxed = true)
         val repo = AutoScanRepository(restApi, bus, wsClient)
@@ -63,8 +63,8 @@ class AutoScanRepositoryTest {
     private data class Fixture(
         val repo: AutoScanRepository,
         val restApi: RestApi,
-        val bus: ServerEventBus,
-        val eventFlow: MutableSharedFlow<ServerEvent>,
+        val bus: AgentEventBus,
+        val eventFlow: MutableSharedFlow<AgentEvent>,
         val wsClient: AutoScanWsClient,
     )
 
@@ -412,7 +412,7 @@ class AutoScanRepositoryTest {
                 max_scans = 10,
                 available_projects = listOf("p1", "p2", "p3"),
             )
-            eventFlow.emit(ServerEvent.AutoScanListChanged(pushed))
+            eventFlow.emit(AgentEvent.AutoScanListChanged(pushed))
 
             val updated = awaitItem()
             assertEquals(pushed, updated)
@@ -439,7 +439,7 @@ class AutoScanRepositoryTest {
             awaitItem()
 
             val updatedInstance = instance("p1", status = "idle")
-            eventFlow.emit(ServerEvent.AutoScanStatus(updatedInstance))
+            eventFlow.emit(AgentEvent.AutoScanStatus(updatedInstance))
 
             val afterUpdate = awaitItem()
             assertEquals(2, afterUpdate.scans.size)
@@ -462,7 +462,7 @@ class AutoScanRepositoryTest {
         repo.refresh()
 
         // Emit a status for a project that's not in the list.
-        eventFlow.emit(ServerEvent.AutoScanStatus(instance("p2", status = "running")))
+        eventFlow.emit(AgentEvent.AutoScanStatus(instance("p2", status = "running")))
 
         // The `map { ... }` in the status handler leaves the list untouched
         // when no entry matches — still exactly one scan with the original

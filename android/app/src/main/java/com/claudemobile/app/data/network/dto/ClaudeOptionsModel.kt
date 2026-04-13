@@ -2,7 +2,7 @@ package com.claudemobile.app.data.network.dto
 
 import kotlinx.serialization.Serializable
 
-/** Mirror of the server's ClaudeOptionsModel — see server/sessions/models.py. */
+/** Mirror of the agent's ClaudeOptionsModel — see claude_agent/claude_mobile/agent/sessions/models.py. */
 @Serializable
 data class ClaudeOptionsModel(
     val plan_mode: Boolean = false,

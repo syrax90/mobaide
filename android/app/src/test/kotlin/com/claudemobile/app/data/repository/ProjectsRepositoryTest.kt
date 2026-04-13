@@ -1,8 +1,8 @@
 package com.claudemobile.app.data.repository
 
 import app.cash.turbine.test
-import com.claudemobile.app.data.events.ServerEvent
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEvent
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.dto.ProjectInfo
 import io.mockk.coEvery
@@ -18,9 +18,9 @@ import org.junit.Test
 
 /**
  * Unit tests for [ProjectsRepository] — one-shot REST fetch, initial empty
- * state, and event-bus-driven refresh on [ServerEvent.ProjectsChanged].
+ * state, and event-bus-driven refresh on [AgentEvent.ProjectsChanged].
  *
- * Collaborators are mocked. [ServerEventBus.events] is stubbed to a real
+ * Collaborators are mocked. [AgentEventBus.events] is stubbed to a real
  * [MutableSharedFlow] so that `eventBus.stream<T>()` (an inline function that
  * expands to `events.filterIsInstance()`) works without needing a real bus.
  * The repository launches its event collector on `Dispatchers.Default` via an
@@ -34,8 +34,8 @@ class ProjectsRepositoryTest {
 
     private fun newRepo(): Fixture {
         val restApi = mockk<RestApi>(relaxed = true)
-        val eventFlow = MutableSharedFlow<ServerEvent>(replay = 0, extraBufferCapacity = 64)
-        val bus = mockk<ServerEventBus>()
+        val eventFlow = MutableSharedFlow<AgentEvent>(replay = 0, extraBufferCapacity = 64)
+        val bus = mockk<AgentEventBus>()
         every { bus.events } returns eventFlow
         val repo = ProjectsRepository(restApi, bus)
         return Fixture(repo, restApi, bus, eventFlow)
@@ -44,8 +44,8 @@ class ProjectsRepositoryTest {
     private data class Fixture(
         val repo: ProjectsRepository,
         val restApi: RestApi,
-        val bus: ServerEventBus,
-        val eventFlow: MutableSharedFlow<ServerEvent>,
+        val bus: AgentEventBus,
+        val eventFlow: MutableSharedFlow<AgentEvent>,
     )
 
     // ---- initial state ------------------------------------------------------
@@ -122,7 +122,7 @@ class ProjectsRepositoryTest {
             assertEquals(emptyList<ProjectInfo>(), awaitItem())
 
             val pushed = listOf(project("alpha"), project("beta"))
-            eventFlow.emit(ServerEvent.ProjectsChanged(pushed))
+            eventFlow.emit(AgentEvent.ProjectsChanged(pushed))
 
             assertEquals(pushed, awaitItem())
             cancelAndIgnoreRemainingEvents()
@@ -138,11 +138,11 @@ class ProjectsRepositoryTest {
             awaitItem()
 
             // First push a non-empty list.
-            eventFlow.emit(ServerEvent.ProjectsChanged(listOf(project("alpha"))))
+            eventFlow.emit(AgentEvent.ProjectsChanged(listOf(project("alpha"))))
             assertEquals(1, awaitItem().size)
 
             // Then clear it.
-            eventFlow.emit(ServerEvent.ProjectsChanged(emptyList()))
+            eventFlow.emit(AgentEvent.ProjectsChanged(emptyList()))
             assertEquals(emptyList<ProjectInfo>(), awaitItem())
 
             cancelAndIgnoreRemainingEvents()
@@ -156,12 +156,12 @@ class ProjectsRepositoryTest {
         repo.observeProjects().test {
             awaitItem()
 
-            eventFlow.emit(ServerEvent.ProjectsChanged(listOf(project("alpha"), project("beta"))))
+            eventFlow.emit(AgentEvent.ProjectsChanged(listOf(project("alpha"), project("beta"))))
             assertEquals(2, awaitItem().size)
 
             // Different, overlapping-by-name set — must be a full replace, not a merge.
             val replacement = listOf(project("beta"), project("gamma"))
-            eventFlow.emit(ServerEvent.ProjectsChanged(replacement))
+            eventFlow.emit(AgentEvent.ProjectsChanged(replacement))
             val after = awaitItem()
             assertEquals(replacement, after)
             assertEquals(listOf("beta", "gamma"), after.map { it.name })
@@ -171,19 +171,19 @@ class ProjectsRepositoryTest {
     }
 
     @Test
-    fun unrelatedServerEvent_doesNotMutateProjectsState() = runTest {
+    fun unrelatedAgentEvent_doesNotMutateProjectsState() = runTest {
         val (repo, _, _, eventFlow) = newRepo()
 
         repo.observeProjects().test {
             awaitItem() // initial empty
 
             // Seed with a known list so we can detect spurious mutations.
-            eventFlow.emit(ServerEvent.ProjectsChanged(listOf(project("alpha"))))
+            eventFlow.emit(AgentEvent.ProjectsChanged(listOf(project("alpha"))))
             val seeded = awaitItem()
             assertEquals(listOf("alpha"), seeded.map { it.name })
 
             // Emit a SessionsChanged event — must not touch the projects flow.
-            eventFlow.emit(ServerEvent.SessionsChanged(emptyList()))
+            eventFlow.emit(AgentEvent.SessionsChanged(emptyList()))
 
             // No new emission from observeProjects().
             expectNoEvents()

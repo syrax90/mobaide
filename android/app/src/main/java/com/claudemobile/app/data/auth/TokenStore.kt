@@ -31,15 +31,15 @@ class TokenStore(context: Context) {
 
     fun getRefreshToken(): String? = prefs.getString(KEY_REFRESH_TOKEN, null)
 
-    fun saveServerUrl(url: String) {
-        prefs.edit().putString(KEY_SERVER_URL, url.trimEnd('/')).apply()
+    fun saveAgentUrl(url: String) {
+        prefs.edit().putString(KEY_AGENT_URL, url.trimEnd('/')).apply()
     }
 
-    fun getServerUrl(): String? = prefs.getString(KEY_SERVER_URL, null)
+    fun getAgentUrl(): String? = prefs.getString(KEY_AGENT_URL, null)
 
     /**
      * "Logged in" means we have **all three** persisted values required to
-     * recover a session silently: access token, refresh token, and server
+     * recover a session silently: access token, refresh token, and agent
      * URL. Dropping the refresh-token check here meant a previously
      * invalidated session (access-token-present, refresh-token-cleared) was
      * still reported as logged in, and the UI would navigate to the
@@ -48,7 +48,7 @@ class TokenStore(context: Context) {
     fun isLoggedIn(): Boolean =
         getAccessToken() != null &&
             getRefreshToken() != null &&
-            getServerUrl() != null
+            getAgentUrl() != null
 
     fun clear() {
         prefs.edit().clear().apply()
@@ -83,6 +83,6 @@ class TokenStore(context: Context) {
     companion object {
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
-        private const val KEY_SERVER_URL = "server_url"
+        private const val KEY_AGENT_URL = "agent_url"
     }
 }

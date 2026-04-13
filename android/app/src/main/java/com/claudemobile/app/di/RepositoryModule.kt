@@ -3,7 +3,7 @@ package com.claudemobile.app.di
 import android.content.Context
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.RestApi
@@ -52,11 +52,11 @@ object RepositoryModule {
 
     @Provides
     @Singleton
-    fun provideServerEventBus(
+    fun provideAgentEventBus(
         webSocketManager: WebSocketManager,
         sessionManager: SessionManager,
-    ): ServerEventBus {
-        return ServerEventBus(webSocketManager, sessionManager)
+    ): AgentEventBus {
+        return AgentEventBus(webSocketManager, sessionManager)
     }
 
     @Provides
@@ -64,7 +64,7 @@ object RepositoryModule {
     fun provideSessionRepository(
         restApi: RestApi,
         webSocketManager: WebSocketManager,
-        eventBus: ServerEventBus,
+        eventBus: AgentEventBus,
     ): SessionRepository {
         return SessionRepository(restApi, webSocketManager, eventBus)
     }
@@ -79,7 +79,7 @@ object RepositoryModule {
     @Singleton
     fun provideAutoScanRepository(
         restApi: RestApi,
-        eventBus: ServerEventBus,
+        eventBus: AgentEventBus,
         autoScanWsClient: AutoScanWsClient,
     ): AutoScanRepository {
         return AutoScanRepository(restApi, eventBus, autoScanWsClient)
@@ -87,7 +87,7 @@ object RepositoryModule {
 
     @Provides
     @Singleton
-    fun provideProjectsRepository(restApi: RestApi, eventBus: ServerEventBus): ProjectsRepository {
+    fun provideProjectsRepository(restApi: RestApi, eventBus: AgentEventBus): ProjectsRepository {
         return ProjectsRepository(restApi, eventBus)
     }
 

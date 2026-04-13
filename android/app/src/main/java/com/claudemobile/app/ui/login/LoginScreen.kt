@@ -74,7 +74,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Connect to your Claude Code server",
+                text = "Connect to your Claude Agent",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -82,10 +82,10 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             OutlinedTextField(
-                value = uiState.serverUrl,
-                onValueChange = viewModel::updateServerUrl,
-                label = { Text("Server URL") },
-                placeholder = { Text("https://your-server.example.com") },
+                value = uiState.agentUrl,
+                onValueChange = viewModel::updateAgentUrl,
+                label = { Text("Agent URL") },
+                placeholder = { Text("https://your-agent.example.com") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Uri,
