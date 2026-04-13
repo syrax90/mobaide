@@ -29,16 +29,16 @@ class RestApi(
     private val json = Json { ignoreUnknownKeys = true }
     private val jsonMediaType = "application/json".toMediaType()
 
-    private fun baseUrl(): String = tokenStore.getServerUrl()
-        ?: throw IllegalStateException("Server URL not configured")
+    private fun baseUrl(): String = tokenStore.getAgentUrl()
+        ?: throw IllegalStateException("Agent URL not configured")
 
     // Auth
 
-    suspend fun login(serverUrl: String, username: String, password: String): TokenResponse {
+    suspend fun login(agentUrl: String, username: String, password: String): TokenResponse {
         val body = json.encodeToString(TokenRequest(username, password))
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
-            .url("${serverUrl.trimEnd('/')}/api/auth/token")
+            .url("${agentUrl.trimEnd('/')}/api/auth/token")
             .post(body)
             .build()
         return execute(request)

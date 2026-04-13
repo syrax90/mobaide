@@ -80,7 +80,7 @@ class ConnectionService : Service() {
                 "Connection Status",
                 NotificationManager.IMPORTANCE_LOW,
             ).apply {
-                description = "Shows when Claude Mobile is connected to the server"
+                description = "Shows when Claude Mobile is connected to the agent"
             },
         )
         manager.createNotificationChannel(
@@ -97,7 +97,7 @@ class ConnectionService : Service() {
     private fun buildConnectionNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_CONNECTION)
             .setContentTitle("Claude Mobile")
-            .setContentText("Connected to server")
+            .setContentText("Connected to agent")
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

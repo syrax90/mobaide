@@ -14,7 +14,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Unit tests for [SettingsViewModel] — the ViewModel reads `serverUrl` and
+ * Unit tests for [SettingsViewModel] — the ViewModel reads `agentUrl` and
  * `username` synchronously from [AuthRepository] inside its constructor, then
  * exposes an immutable [SettingsUiState] and delegates `logout()` to the
  * repository. Both collaborators are mocked with MockK; no coroutines run in
@@ -32,49 +32,49 @@ class SettingsViewModelTest {
     @Test
     fun initialState_populatesServerUrlAndUsername_fromAuthRepository() = runTest {
         val authRepository = mockk<AuthRepository>()
-        every { authRepository.getServerUrl() } returns "https://example.com"
+        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns "alice"
 
         val vm = SettingsViewModel(authRepository)
 
         val state = vm.uiState.value
-        assertEquals("https://example.com", state.serverUrl)
+        assertEquals("https://example.com", state.agentUrl)
         assertEquals("alice", state.username)
         // Read-through: the constructor must consult both accessors exactly once.
-        verify(exactly = 1) { authRepository.getServerUrl() }
+        verify(exactly = 1) { authRepository.getAgentUrl() }
         verify(exactly = 1) { authRepository.getUsername() }
     }
 
     @Test
     fun initialState_coercesNullServerUrl_toEmptyString() = runTest {
         val authRepository = mockk<AuthRepository>()
-        every { authRepository.getServerUrl() } returns null
+        every { authRepository.getAgentUrl() } returns null
         every { authRepository.getUsername() } returns "alice"
 
         val vm = SettingsViewModel(authRepository)
 
         val state = vm.uiState.value
-        assertEquals("", state.serverUrl)
+        assertEquals("", state.agentUrl)
         assertEquals("alice", state.username)
     }
 
     @Test
     fun initialState_coercesNullUsername_toEmptyString() = runTest {
         val authRepository = mockk<AuthRepository>()
-        every { authRepository.getServerUrl() } returns "https://example.com"
+        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns null
 
         val vm = SettingsViewModel(authRepository)
 
         val state = vm.uiState.value
-        assertEquals("https://example.com", state.serverUrl)
+        assertEquals("https://example.com", state.agentUrl)
         assertEquals("", state.username)
     }
 
     @Test
     fun initialState_whenBothNull_isFullyEmpty() = runTest {
         val authRepository = mockk<AuthRepository>()
-        every { authRepository.getServerUrl() } returns null
+        every { authRepository.getAgentUrl() } returns null
         every { authRepository.getUsername() } returns null
 
         val vm = SettingsViewModel(authRepository)
@@ -87,7 +87,7 @@ class SettingsViewModelTest {
     @Test
     fun logout_delegatesToAuthRepository_withoutMutatingUiState() = runTest {
         val authRepository = mockk<AuthRepository>()
-        every { authRepository.getServerUrl() } returns "https://example.com"
+        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns "alice"
         every { authRepository.logout() } just Runs
 

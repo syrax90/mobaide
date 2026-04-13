@@ -1,7 +1,7 @@
 package com.claudemobile.app.data.repository
 
-import com.claudemobile.app.data.events.ServerEvent
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEvent
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.RestApi
@@ -36,7 +36,7 @@ sealed interface AutoScanUiEvent {
 
 class AutoScanRepository(
     private val restApi: RestApi,
-    private val eventBus: ServerEventBus,
+    private val eventBus: AgentEventBus,
     private val autoScanWsClient: AutoScanWsClient,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -56,12 +56,12 @@ class AutoScanRepository(
 
     init {
         scope.launch {
-            eventBus.stream<ServerEvent.AutoScanListChanged>().collect { ev ->
+            eventBus.stream<AgentEvent.AutoScanListChanged>().collect { ev ->
                 _list.value = ev.list
             }
         }
         scope.launch {
-            eventBus.stream<ServerEvent.AutoScanStatus>().collect { ev ->
+            eventBus.stream<AgentEvent.AutoScanStatus>().collect { ev ->
                 val current = _list.value
                 val updated = current.scans.map {
                     if (it.project_name == ev.instance.project_name) ev.instance else it
@@ -82,8 +82,8 @@ class AutoScanRepository(
         return list
     }
 
-    fun observeEvents(): Flow<ServerEvent.AutoScanEvent> =
-        eventBus.stream<ServerEvent.AutoScanEvent>()
+    fun observeEvents(): Flow<AgentEvent.AutoScanEvent> =
+        eventBus.stream<AgentEvent.AutoScanEvent>()
 
     fun getAutoScanPrompt(): String? = _list.value.auto_scan_prompt
 

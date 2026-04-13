@@ -1,7 +1,7 @@
 package com.claudemobile.app.data.repository
 
-import com.claudemobile.app.data.events.ServerEvent
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEvent
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WebSocketManager
@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
 class SessionRepository(
     private val restApi: RestApi,
     private val webSocketManager: WebSocketManager,
-    private val eventBus: ServerEventBus,
+    private val eventBus: AgentEventBus,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -28,12 +28,12 @@ class SessionRepository(
 
     init {
         scope.launch {
-            eventBus.stream<ServerEvent.SessionsChanged>().collect { ev ->
+            eventBus.stream<AgentEvent.SessionsChanged>().collect { ev ->
                 _sessions.value = ev.sessions
             }
         }
         scope.launch {
-            eventBus.stream<ServerEvent.SessionUpdated>().collect { ev ->
+            eventBus.stream<AgentEvent.SessionUpdated>().collect { ev ->
                 _sessions.update { list ->
                     val updated = ev.session
                     if (list.any { it.session_id == updated.session_id }) {

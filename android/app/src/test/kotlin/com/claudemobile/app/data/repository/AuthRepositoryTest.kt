@@ -24,7 +24,7 @@ import org.junit.Test
 /**
  * Unit tests for [AuthRepository] — thin delegation layer over [RestApi],
  * [TokenStore], and [SessionManager]. The goal is to pin the exact calls
- * made for each public method, confirm that login persists the server URL
+ * made for each public method, confirm that login persists the agent URL
  * **before** tokens are written (so a concurrent reader never sees tokens
  * without a URL), and that [SessionManager.markLoggedIn] is invoked
  * **after** token persistence so observers cannot race into `LoggedIn`
@@ -54,7 +54,7 @@ class AuthRepositoryTest {
         // tokens-without-URL), then markLoggedIn() so an observer on
         // authState cannot race into LoggedIn before tokens land.
         verifyOrder {
-            tokenStore.saveServerUrl("https://example.com")
+            tokenStore.saveAgentUrl("https://example.com")
             tokenStore.saveTokens("access-xyz", "refresh-xyz")
             sessionManager.markLoggedIn()
         }
@@ -83,7 +83,7 @@ class AuthRepositoryTest {
         }
 
         // A failed login must not leave a partial auth state behind.
-        verify(exactly = 0) { tokenStore.saveServerUrl(any()) }
+        verify(exactly = 0) { tokenStore.saveAgentUrl(any()) }
         verify(exactly = 0) { tokenStore.saveTokens(any(), any()) }
         verify(exactly = 0) { sessionManager.markLoggedIn() }
     }
@@ -91,9 +91,9 @@ class AuthRepositoryTest {
     @Test
     fun login_passesTrailingSlashUrlThrough_unchanged() = runTest {
         // AuthRepository itself does not normalise the URL — the contract is
-        // that TokenStore.saveServerUrl trims the trailing slash. This test
+        // that TokenStore.saveAgentUrl trims the trailing slash. This test
         // pins that AuthRepository forwards the caller-supplied value verbatim
-        // to both RestApi.login and TokenStore.saveServerUrl.
+        // to both RestApi.login and TokenStore.saveAgentUrl.
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
         val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
@@ -105,7 +105,7 @@ class AuthRepositoryTest {
 
         repo.login("https://example.com/", "bob", "pw")
 
-        verify(exactly = 1) { tokenStore.saveServerUrl("https://example.com/") }
+        verify(exactly = 1) { tokenStore.saveAgentUrl("https://example.com/") }
         verify(exactly = 1) { tokenStore.saveTokens("a", "r") }
         verify(exactly = 1) { sessionManager.markLoggedIn() }
     }
@@ -153,15 +153,15 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun getServerUrl_delegatesToTokenStore() {
+    fun getAgentUrl_delegatesToTokenStore() {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>()
         val sessionManager = mockk<SessionManager>()
-        every { tokenStore.getServerUrl() } returns "https://example.com"
+        every { tokenStore.getAgentUrl() } returns "https://example.com"
 
         assertEquals(
             "https://example.com",
-            AuthRepository(restApi, tokenStore, sessionManager).getServerUrl(),
+            AuthRepository(restApi, tokenStore, sessionManager).getAgentUrl(),
         )
     }
 

@@ -68,10 +68,10 @@ class RestApiTest {
         return captured
     }
 
-    private fun newApi(serverUrl: String? = "https://api.example.com"): Triple<RestApi, OkHttpClient, TokenStore> {
+    private fun newApi(agentUrl: String? = "https://api.example.com"): Triple<RestApi, OkHttpClient, TokenStore> {
         val client = mockk<OkHttpClient>()
         val tokenStore = mockk<TokenStore>()
-        every { tokenStore.getServerUrl() } returns serverUrl
+        every { tokenStore.getAgentUrl() } returns agentUrl
         return Triple(RestApi(client, tokenStore), client, tokenStore)
     }
 
@@ -79,12 +79,12 @@ class RestApiTest {
 
     @Test
     fun baseUrl_withTrailingSlash_isNotDoubleSlashedInRequests() = runTest {
-        // tokenStore.getServerUrl() is used verbatim in `${baseUrl()}/api/...`,
+        // tokenStore.getAgentUrl() is used verbatim in `${baseUrl()}/api/...`,
         // so a trailing slash on the stored URL must NOT produce a double slash
-        // in the final request path. [TokenStore.saveServerUrl] trims trailing
+        // in the final request path. [TokenStore.saveAgentUrl] trims trailing
         // slashes at store time — this test pins the store-side contract by
         // asserting the *canonical* case (no trailing slash → no double slash).
-        val (api, client) = newApi(serverUrl = "https://api.example.com")
+        val (api, client) = newApi(agentUrl = "https://api.example.com")
         val captured = stubCall(client) { req -> responseFor(req, 200, bodyJson = "[]") }
 
         api.listSessions()
@@ -98,23 +98,23 @@ class RestApiTest {
 
     @Test
     fun baseUrl_notConfigured_throwsIllegalStateException_fromListSessions() = runTest {
-        val (api, _, tokenStore) = newApi(serverUrl = null)
+        val (api, _, tokenStore) = newApi(agentUrl = null)
         // Pin the exact message so a future refactor that silently swallows
         // the null doesn't go unnoticed.
         try {
             api.listSessions()
-            fail("expected IllegalStateException for missing server URL")
+            fail("expected IllegalStateException for missing agent URL")
         } catch (e: IllegalStateException) {
-            assertEquals("Server URL not configured", e.message)
+            assertEquals("Agent URL not configured", e.message)
         }
-        verify(exactly = 1) { tokenStore.getServerUrl() }
+        verify(exactly = 1) { tokenStore.getAgentUrl() }
     }
 
     // ---- login: URL, body, response decode ----------------------------------
 
     @Test
     fun login_trimsTrailingSlash_onServerUrlArgument_andPostsCredentialJson() = runTest {
-        val (api, client) = newApi(serverUrl = null) // login does not use baseUrl()
+        val (api, client) = newApi(agentUrl = null) // login does not use baseUrl()
         val captured = stubCall(client) { req ->
             responseFor(
                 req,
@@ -124,12 +124,12 @@ class RestApiTest {
         }
 
         val resp = api.login(
-            serverUrl = "https://login.example.com/",
+            agentUrl = "https://login.example.com/",
             username = "alice",
             password = "s3cret",
         )
 
-        // URL: trailing slash on serverUrl must be trimmed before path concat.
+        // URL: trailing slash on agentUrl must be trimmed before path concat.
         assertEquals(
             "https://login.example.com/api/auth/token",
             captured.captured.url.toString(),
@@ -159,11 +159,11 @@ class RestApiTest {
 
     @Test
     fun login_doesNotConsultTokenStore_forBaseUrl() = runTest {
-        // login() receives serverUrl as an explicit argument — it must never
-        // fall back to tokenStore.getServerUrl() for the base URL.
+        // login() receives agentUrl as an explicit argument — it must never
+        // fall back to tokenStore.getAgentUrl() for the base URL.
         val client = mockk<OkHttpClient>()
         val tokenStore = mockk<TokenStore>()
-        // Intentionally do NOT stub tokenStore.getServerUrl() — a call would
+        // Intentionally do NOT stub tokenStore.getAgentUrl() — a call would
         // make MockK throw a missing-answer error.
         stubCall(client) { req ->
             responseFor(
@@ -176,7 +176,7 @@ class RestApiTest {
 
         api.login("https://login.example.com", "u", "p")
 
-        verify(exactly = 0) { tokenStore.getServerUrl() }
+        verify(exactly = 0) { tokenStore.getAgentUrl() }
     }
 
     // Note: there is no RestApi.refreshToken test because RestApi no

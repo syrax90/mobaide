@@ -1,8 +1,8 @@
 package com.claudemobile.app.data.repository
 
 import app.cash.turbine.test
-import com.claudemobile.app.data.events.ServerEvent
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEvent
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WebSocketManager
@@ -22,13 +22,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Unit tests for [SessionRepository] — exercises the [ServerEvent]-driven
- * list-merging logic ([ServerEvent.SessionsChanged] full replace,
- * [ServerEvent.SessionUpdated] add-if-new / replace-if-existing by id),
+ * Unit tests for [SessionRepository] — exercises the [AgentEvent]-driven
+ * list-merging logic ([AgentEvent.SessionsChanged] full replace,
+ * [AgentEvent.SessionUpdated] add-if-new / replace-if-existing by id),
  * REST delegation, and [WebSocketManager.createConnection] path construction
  * for per-session I/O connections.
  *
- * Collaborators are mocked. [ServerEventBus.events] is stubbed to a real
+ * Collaborators are mocked. [AgentEventBus.events] is stubbed to a real
  * [MutableSharedFlow] so that `eventBus.stream<T>()` (an inline function that
  * expands to `events.filterIsInstance()`) works without needing a real bus.
  * The repository launches its event collectors on `Dispatchers.Default` via an
@@ -49,8 +49,8 @@ class SessionRepositoryTest {
 
     private fun newRepo(): Fixture {
         val restApi = mockk<RestApi>(relaxed = true)
-        val eventFlow = MutableSharedFlow<ServerEvent>(replay = 0, extraBufferCapacity = 64)
-        val bus = mockk<ServerEventBus>()
+        val eventFlow = MutableSharedFlow<AgentEvent>(replay = 0, extraBufferCapacity = 64)
+        val bus = mockk<AgentEventBus>()
         every { bus.events } returns eventFlow
         val wsManager = mockk<WebSocketManager>(relaxed = true)
         val repo = SessionRepository(restApi, wsManager, bus)
@@ -60,8 +60,8 @@ class SessionRepositoryTest {
     private data class Fixture(
         val repo: SessionRepository,
         val restApi: RestApi,
-        val bus: ServerEventBus,
-        val eventFlow: MutableSharedFlow<ServerEvent>,
+        val bus: AgentEventBus,
+        val eventFlow: MutableSharedFlow<AgentEvent>,
         val wsManager: WebSocketManager,
     )
 
@@ -166,7 +166,7 @@ class SessionRepositoryTest {
             assertEquals(emptyList<SessionResponse>(), awaitItem())
 
             val pushed = listOf(session("s-1"), session("s-2"))
-            eventFlow.emit(ServerEvent.SessionsChanged(pushed))
+            eventFlow.emit(AgentEvent.SessionsChanged(pushed))
 
             assertEquals(pushed, awaitItem())
             cancelAndIgnoreRemainingEvents()
@@ -180,12 +180,12 @@ class SessionRepositoryTest {
         repo.observeSessionList().test {
             awaitItem() // initial empty
 
-            eventFlow.emit(ServerEvent.SessionsChanged(listOf(session("s-1"), session("s-2"))))
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-1"), session("s-2"))))
             assertEquals(2, awaitItem().size)
 
             // Full replace — the old s-1 / s-2 must not leak through.
             val replacement = listOf(session("s-3"))
-            eventFlow.emit(ServerEvent.SessionsChanged(replacement))
+            eventFlow.emit(AgentEvent.SessionsChanged(replacement))
             val after = awaitItem()
             assertEquals(replacement, after)
             assertEquals(listOf("s-3"), after.map { it.session_id })
@@ -201,10 +201,10 @@ class SessionRepositoryTest {
         repo.observeSessionList().test {
             awaitItem() // initial empty
 
-            eventFlow.emit(ServerEvent.SessionsChanged(listOf(session("s-1"))))
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-1"))))
             assertEquals(1, awaitItem().size)
 
-            eventFlow.emit(ServerEvent.SessionsChanged(emptyList()))
+            eventFlow.emit(AgentEvent.SessionsChanged(emptyList()))
             assertEquals(emptyList<SessionResponse>(), awaitItem())
 
             cancelAndIgnoreRemainingEvents()
@@ -221,11 +221,11 @@ class SessionRepositoryTest {
             awaitItem() // initial empty
 
             // Seed the list via SessionsChanged.
-            eventFlow.emit(ServerEvent.SessionsChanged(listOf(session("s-1"))))
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-1"))))
             assertEquals(listOf("s-1"), awaitItem().map { it.session_id })
 
             // Update for a brand-new id → append.
-            eventFlow.emit(ServerEvent.SessionUpdated(session("s-2")))
+            eventFlow.emit(AgentEvent.SessionUpdated(session("s-2")))
             val after = awaitItem()
             assertEquals(2, after.size)
             assertEquals(listOf("s-1", "s-2"), after.map { it.session_id })
@@ -243,7 +243,7 @@ class SessionRepositoryTest {
 
             // Seed the list via SessionsChanged with two sessions.
             eventFlow.emit(
-                ServerEvent.SessionsChanged(
+                AgentEvent.SessionsChanged(
                     listOf(
                         session("s-1", state = "running"),
                         session("s-2", state = "running"),
@@ -254,7 +254,7 @@ class SessionRepositoryTest {
 
             // Update s-1 → same id, new state. Must replace in place (not duplicate).
             val updated = session("s-1", state = "stopped")
-            eventFlow.emit(ServerEvent.SessionUpdated(updated))
+            eventFlow.emit(AgentEvent.SessionUpdated(updated))
             val after = awaitItem()
             assertEquals(
                 "replacement must preserve size and order",
@@ -276,7 +276,7 @@ class SessionRepositoryTest {
             awaitItem() // initial empty
 
             // Update without a prior SessionsChanged — starts from empty list.
-            eventFlow.emit(ServerEvent.SessionUpdated(session("s-7")))
+            eventFlow.emit(AgentEvent.SessionUpdated(session("s-7")))
             val after = awaitItem()
             assertEquals(1, after.size)
             assertEquals("s-7", after[0].session_id)

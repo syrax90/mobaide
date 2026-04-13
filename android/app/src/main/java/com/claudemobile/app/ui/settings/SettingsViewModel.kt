@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 
 data class SettingsUiState(
-    val serverUrl: String = "",
+    val agentUrl: String = "",
     val username: String = "",
 )
 
@@ -20,7 +20,7 @@ class SettingsViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(
         SettingsUiState(
-            serverUrl = authRepository.getServerUrl() ?: "",
+            agentUrl = authRepository.getAgentUrl() ?: "",
             username = authRepository.getUsername() ?: "",
         )
     )

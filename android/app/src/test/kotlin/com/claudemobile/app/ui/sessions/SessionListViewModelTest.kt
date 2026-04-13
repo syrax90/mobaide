@@ -1,7 +1,7 @@
 package com.claudemobile.app.ui.sessions
 
 import app.cash.turbine.test
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
@@ -32,7 +32,7 @@ import org.junit.Test
 /**
  * Unit tests for [SessionListViewModel] — exercises auto-resume matching
  * (last-session id + running/starting state filter via [PreferencesStore]),
- * [ServerEventBus.connection]-driven `isReconnecting` state, the
+ * [AgentEventBus.connection]-driven `isReconnecting` state, the
  * `deleteSession` / `stopAutoScan` error-emission paths, and the
  * `observeSessionList` / `observeList` pass-through to the UI state.
  *
@@ -63,10 +63,10 @@ class SessionListViewModelTest {
         val sessionRepo: SessionRepository,
         val autoScanRepo: AutoScanRepository,
         val prefs: PreferencesStore,
-        val bus: ServerEventBus,
+        val bus: AgentEventBus,
         val sessionsFlow: MutableStateFlow<List<SessionResponse>>,
         val scanListFlow: MutableStateFlow<AutoScanListResponse>,
-        val connectionFlow: MutableStateFlow<ServerEventBus.ConnState>,
+        val connectionFlow: MutableStateFlow<AgentEventBus.ConnState>,
     )
 
     /**
@@ -82,12 +82,12 @@ class SessionListViewModelTest {
             max_scans = 5,
             available_projects = emptyList(),
         ),
-        initialConnection: ServerEventBus.ConnState = ServerEventBus.ConnState.Disconnected,
+        initialConnection: AgentEventBus.ConnState = AgentEventBus.ConnState.Disconnected,
     ): Fixture {
         val sessionRepo = mockk<SessionRepository>(relaxed = true)
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
         val prefs = mockk<PreferencesStore>(relaxed = true)
-        val bus = mockk<ServerEventBus>(relaxed = true)
+        val bus = mockk<AgentEventBus>(relaxed = true)
 
         val sessionsFlow = MutableStateFlow(initialSessions)
         val scanListFlow = MutableStateFlow(initialScanList)
@@ -303,21 +303,21 @@ class SessionListViewModelTest {
         coVerify(exactly = 1) { fx.prefs.getLastUsedSessionId() }
     }
 
-    // ---- isReconnecting driven by ServerEventBus.connection ----------------
+    // ---- isReconnecting driven by AgentEventBus.connection ----------------
 
     @Test
     fun isReconnecting_isTrue_whenConnectionStateIsConnecting() = runTest {
-        val fx = newFixture(initialConnection = ServerEventBus.ConnState.Disconnected)
+        val fx = newFixture(initialConnection = AgentEventBus.ConnState.Disconnected)
         val vm = fx.buildVm()
         advanceUntilIdle()
         assertFalse(vm.uiState.value.isReconnecting)
 
-        fx.connectionFlow.value = ServerEventBus.ConnState.Connecting
+        fx.connectionFlow.value = AgentEventBus.ConnState.Connecting
         advanceUntilIdle()
 
         assertTrue(vm.uiState.value.isReconnecting)
 
-        fx.connectionFlow.value = ServerEventBus.ConnState.Connected
+        fx.connectionFlow.value = AgentEventBus.ConnState.Connected
         advanceUntilIdle()
 
         assertFalse(vm.uiState.value.isReconnecting)

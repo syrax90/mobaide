@@ -37,7 +37,7 @@ class WebSocketConnection(
     /**
      * Returns the URL to connect to, or `null` when the caller should
      * abandon the connect attempt (e.g. because the user is logged out
-     * and no server URL is stored). **Must not throw** — historically a
+     * and no agent URL is stored). **Must not throw** — historically a
      * throw here propagated through the scope's unhandled coroutine
      * exception handler and crashed the app.
      */
@@ -110,7 +110,7 @@ class WebSocketConnection(
             _events.tryEmit(WsEvent.Error(t))
             return
         } ?: run {
-            // Logged out / no server URL / session dead — don't connect
+            // Logged out / no agent URL / session dead — don't connect
             // and don't retry. A subsequent login will create a fresh
             // WebSocketConnection anyway.
             _events.tryEmit(WsEvent.Disconnected)
@@ -178,7 +178,7 @@ class WebSocketManager(
 ) {
     /**
      * Build a [WebSocketConnection] whose URL provider pulls the latest
-     * server URL + access token from [TokenStore] every reconnect, so a
+     * agent URL + access token from [TokenStore] every reconnect, so a
      * token rotated by [SessionManager] is picked up on the next
      * handshake without rebuilding the connection object.
      *
@@ -207,10 +207,10 @@ class WebSocketManager(
                 }
             }
 
-            val serverUrl = tokenStore.getServerUrl() ?: return null
+            val agentUrl = tokenStore.getAgentUrl() ?: return null
             val token = tokenStore.getAccessToken() ?: return null
-            val wsScheme = if (serverUrl.startsWith("https")) "wss" else "ws"
-            val host = serverUrl.removePrefix("https://").removePrefix("http://")
+            val wsScheme = if (agentUrl.startsWith("https")) "wss" else "ws"
+            val host = agentUrl.removePrefix("https://").removePrefix("http://")
             val separator = if (path.contains("?")) "&" else "?"
             return "$wsScheme://$host/$path${separator}token=$token"
         }

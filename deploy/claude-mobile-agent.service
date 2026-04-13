@@ -1,0 +1,26 @@
+[Unit]
+Description=Claude Mobile Agent (FastAPI/uvicorn)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claude-mobile
+Group=claude-mobile
+WorkingDirectory=/opt/claude-mobile/claude_agent
+EnvironmentFile=/opt/claude-mobile/claude_agent/.env
+ExecStart=/opt/claude-mobile/venv/bin/python -m claude_mobile
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/claude-mobile
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

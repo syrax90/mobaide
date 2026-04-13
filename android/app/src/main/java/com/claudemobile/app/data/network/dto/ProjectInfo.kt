@@ -2,7 +2,7 @@ package com.claudemobile.app.data.network.dto
 
 import kotlinx.serialization.Serializable
 
-/** Mirror of the server's `list_public()` entry — see core/projects_config.py. */
+/** Mirror of the agent's `list_public()` entry — see core/projects_config.py. */
 @Serializable
 data class ProjectInfo(
     val name: String,

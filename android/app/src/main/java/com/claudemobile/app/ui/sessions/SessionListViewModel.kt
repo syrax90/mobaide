@@ -2,7 +2,7 @@ package com.claudemobile.app.ui.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.claudemobile.app.data.events.ServerEventBus
+import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.SessionResponse
@@ -31,7 +31,7 @@ class SessionListViewModel @Inject constructor(
     private val sessionRepository: SessionRepository,
     private val autoScanRepository: AutoScanRepository,
     private val preferencesStore: PreferencesStore,
-    private val serverEventBus: ServerEventBus,
+    private val agentEventBus: AgentEventBus,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionListUiState())
@@ -43,7 +43,7 @@ class SessionListViewModel @Inject constructor(
     private var didTryAutoResume = false
 
     init {
-        serverEventBus.start()
+        agentEventBus.start()
 
         viewModelScope.launch {
             sessionRepository.observeSessionList().collect { sessions ->
@@ -71,9 +71,9 @@ class SessionListViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            serverEventBus.connection.collect { state ->
+            agentEventBus.connection.collect { state ->
                 _uiState.update {
-                    it.copy(isReconnecting = state == ServerEventBus.ConnState.Connecting)
+                    it.copy(isReconnecting = state == AgentEventBus.ConnState.Connecting)
                 }
             }
         }
@@ -92,7 +92,7 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun refresh() {
-        serverEventBus.forceReconnect()
+        agentEventBus.forceReconnect()
         viewModelScope.launch {
             try {
                 autoScanRepository.refresh()

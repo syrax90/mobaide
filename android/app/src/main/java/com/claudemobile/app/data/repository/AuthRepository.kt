@@ -9,12 +9,12 @@ class AuthRepository(
     private val tokenStore: TokenStore,
     private val sessionManager: SessionManager,
 ) {
-    suspend fun login(serverUrl: String, username: String, password: String) {
-        val response = restApi.login(serverUrl, username, password)
+    suspend fun login(agentUrl: String, username: String, password: String) {
+        val response = restApi.login(agentUrl, username, password)
         // Persist first, then flip the observable state. Ordering matters
         // so that any observer that races on LoggedIn can read the tokens
         // it needs without seeing a half-initialised session.
-        tokenStore.saveServerUrl(serverUrl)
+        tokenStore.saveAgentUrl(agentUrl)
         tokenStore.saveTokens(response.access_token, response.refresh_token)
         sessionManager.markLoggedIn()
     }
@@ -32,7 +32,7 @@ class AuthRepository(
 
     fun isLoggedIn(): Boolean = sessionManager.isLoggedIn()
 
-    fun getServerUrl(): String? = tokenStore.getServerUrl()
+    fun getAgentUrl(): String? = tokenStore.getAgentUrl()
 
     fun getUsername(): String? = tokenStore.getUsername()
 }
