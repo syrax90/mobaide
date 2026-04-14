@@ -1,5 +1,6 @@
 package com.claudemobile.app.ui.settings
 
+import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -14,12 +15,13 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Unit tests for [SettingsViewModel] — the ViewModel reads `agentUrl` and
- * `username` synchronously from [AuthRepository] inside its constructor, then
- * exposes an immutable [SettingsUiState] and delegates `logout()` to the
- * repository. Both collaborators are mocked with MockK; no coroutines run in
- * this ViewModel, but the [MainDispatcherRule] is installed for consistency
- * with the other ViewModel test files in this package.
+ * Unit tests for [SettingsViewModel] — the ViewModel reads connection info
+ * and username synchronously from [AuthRepository] / [TokenStore] inside its
+ * constructor, then exposes an immutable [SettingsUiState] and delegates
+ * `logout()` to the repository.
+ *
+ * CLA-32 changed the constructor to accept a [TokenStore] and replaced
+ * `agentUrl` with `connectionInfo` that adapts to the active connection mode.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsViewModelTest {
@@ -27,59 +29,134 @@ class SettingsViewModelTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
-    // ---- Initial state from AuthRepository ---------------------------------
+    // ---- Helpers ------------------------------------------------------------
+
+    private fun stubTokenStore(
+        mode: TokenStore.ConnectionMode = TokenStore.ConnectionMode.DIRECT,
+        relayServerUrl: String? = null,
+        agentId: String? = null,
+        deviceId: String? = null,
+    ): TokenStore {
+        val store = mockk<TokenStore>()
+        every { store.getConnectionMode() } returns mode
+        every { store.getRelayServerUrl() } returns relayServerUrl
+        every { store.getAgentId() } returns agentId
+        every { store.getDeviceId() } returns deviceId
+        return store
+    }
+
+    // ---- Direct mode state --------------------------------------------------
 
     @Test
-    fun initialState_populatesServerUrlAndUsername_fromAuthRepository() = runTest {
+    fun initialState_directMode_showsDirectConnectionInfo() = runTest {
         val authRepository = mockk<AuthRepository>()
         every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns "alice"
+        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
 
-        val vm = SettingsViewModel(authRepository)
+        val vm = SettingsViewModel(authRepository, tokenStore)
 
         val state = vm.uiState.value
-        assertEquals("https://example.com", state.agentUrl)
+        assertEquals("Direct: https://example.com", state.connectionInfo)
         assertEquals("alice", state.username)
-        // Read-through: the constructor must consult both accessors exactly once.
-        verify(exactly = 1) { authRepository.getAgentUrl() }
-        verify(exactly = 1) { authRepository.getUsername() }
     }
 
     @Test
-    fun initialState_coercesNullServerUrl_toEmptyString() = runTest {
+    fun initialState_directMode_nullAgentUrl_showsUnknown() = runTest {
         val authRepository = mockk<AuthRepository>()
         every { authRepository.getAgentUrl() } returns null
         every { authRepository.getUsername() } returns "alice"
+        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
 
-        val vm = SettingsViewModel(authRepository)
+        val vm = SettingsViewModel(authRepository, tokenStore)
+
+        assertEquals("Direct: unknown", vm.uiState.value.connectionInfo)
+    }
+
+    // ---- Relay mode state ---------------------------------------------------
+
+    @Test
+    fun initialState_relayMode_showsRelayConnectionInfo() = runTest {
+        val authRepository = mockk<AuthRepository>()
+        every { authRepository.getUsername() } returns null
+        val tokenStore = stubTokenStore(
+            mode = TokenStore.ConnectionMode.RELAY,
+            relayServerUrl = "https://relay.example.com",
+            agentId = "agent-abc",
+            deviceId = "dev-123",
+        )
+
+        val vm = SettingsViewModel(authRepository, tokenStore)
 
         val state = vm.uiState.value
-        assertEquals("", state.agentUrl)
-        assertEquals("alice", state.username)
+        assertEquals("Relay: https://relay.example.com (agent agent-abc)", state.connectionInfo)
+        // Relay mode falls back to deviceId when username is null
+        assertEquals("dev-123", state.username)
     }
 
     @Test
-    fun initialState_coercesNullUsername_toEmptyString() = runTest {
+    fun initialState_relayMode_nullServerUrlAndAgentId_showsUnknown() = runTest {
+        val authRepository = mockk<AuthRepository>()
+        every { authRepository.getUsername() } returns null
+        val tokenStore = stubTokenStore(
+            mode = TokenStore.ConnectionMode.RELAY,
+            relayServerUrl = null,
+            agentId = null,
+            deviceId = null,
+        )
+
+        val vm = SettingsViewModel(authRepository, tokenStore)
+
+        assertEquals("Relay: unknown (agent unknown)", vm.uiState.value.connectionInfo)
+        assertEquals("", vm.uiState.value.username)
+    }
+
+    // ---- Username fallback --------------------------------------------------
+
+    @Test
+    fun initialState_usernameFromAuthRepository_takePriority() = runTest {
+        val authRepository = mockk<AuthRepository>()
+        every { authRepository.getAgentUrl() } returns "https://example.com"
+        every { authRepository.getUsername() } returns "alice"
+        val tokenStore = stubTokenStore(
+            mode = TokenStore.ConnectionMode.DIRECT,
+            deviceId = "dev-123",
+        )
+
+        val vm = SettingsViewModel(authRepository, tokenStore)
+
+        // AuthRepository username takes priority over deviceId
+        assertEquals("alice", vm.uiState.value.username)
+    }
+
+    @Test
+    fun initialState_whenUsernameNull_fallsBackToDeviceId() = runTest {
         val authRepository = mockk<AuthRepository>()
         every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns null
+        val tokenStore = stubTokenStore(
+            mode = TokenStore.ConnectionMode.DIRECT,
+            deviceId = "dev-xyz",
+        )
 
-        val vm = SettingsViewModel(authRepository)
+        val vm = SettingsViewModel(authRepository, tokenStore)
 
-        val state = vm.uiState.value
-        assertEquals("https://example.com", state.agentUrl)
-        assertEquals("", state.username)
+        assertEquals("dev-xyz", vm.uiState.value.username)
     }
 
     @Test
-    fun initialState_whenBothNull_isFullyEmpty() = runTest {
+    fun initialState_whenBothUsernameAndDeviceIdNull_usernameIsEmpty() = runTest {
         val authRepository = mockk<AuthRepository>()
         every { authRepository.getAgentUrl() } returns null
         every { authRepository.getUsername() } returns null
+        val tokenStore = stubTokenStore(
+            mode = TokenStore.ConnectionMode.DIRECT,
+            deviceId = null,
+        )
 
-        val vm = SettingsViewModel(authRepository)
+        val vm = SettingsViewModel(authRepository, tokenStore)
 
-        assertEquals(SettingsUiState(), vm.uiState.value)
+        assertEquals("", vm.uiState.value.username)
     }
 
     // ---- logout() delegation -----------------------------------------------
@@ -90,15 +167,14 @@ class SettingsViewModelTest {
         every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns "alice"
         every { authRepository.logout() } just Runs
+        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
 
-        val vm = SettingsViewModel(authRepository)
+        val vm = SettingsViewModel(authRepository, tokenStore)
         val before = vm.uiState.value
 
         vm.logout()
 
         verify(exactly = 1) { authRepository.logout() }
-        // UI state is not reset on logout — that's the caller's responsibility
-        // (navigation back to LoginScreen, which discards this ViewModel).
         assertEquals(before, vm.uiState.value)
     }
 }

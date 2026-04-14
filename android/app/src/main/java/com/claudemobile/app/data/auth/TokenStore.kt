@@ -12,6 +12,8 @@ import kotlinx.serialization.json.long
 
 class TokenStore(context: Context) {
 
+    enum class ConnectionMode { DIRECT, RELAY }
+
     private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
         "claude_mobile_auth",
         MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
@@ -37,18 +39,69 @@ class TokenStore(context: Context) {
 
     fun getAgentUrl(): String? = prefs.getString(KEY_AGENT_URL, null)
 
+    // -- Connection mode -------------------------------------------------------
+
+    fun getConnectionMode(): ConnectionMode =
+        if (prefs.getString(KEY_CONNECTION_MODE, null) == "relay") ConnectionMode.RELAY
+        else ConnectionMode.DIRECT
+
+    fun saveRelayCredentials(
+        serverUrl: String,
+        agentId: String,
+        pairingId: String,
+        deviceId: String,
+        accessToken: String,
+        refreshToken: String,
+    ) {
+        prefs.edit()
+            .putString(KEY_CONNECTION_MODE, "relay")
+            .putString(KEY_RELAY_SERVER_URL, serverUrl.trimEnd('/'))
+            .putString(KEY_AGENT_ID, agentId)
+            .putString(KEY_PAIRING_ID, pairingId)
+            .putString(KEY_DEVICE_ID, deviceId)
+            .putString(KEY_ACCESS_TOKEN, accessToken)
+            .putString(KEY_REFRESH_TOKEN, refreshToken)
+            .apply()
+    }
+
+    fun getRelayServerUrl(): String? = prefs.getString(KEY_RELAY_SERVER_URL, null)
+
+    fun getAgentId(): String? = prefs.getString(KEY_AGENT_ID, null)
+
+    fun getPairingId(): String? = prefs.getString(KEY_PAIRING_ID, null)
+
+    fun getDeviceId(): String? = prefs.getString(KEY_DEVICE_ID, null)
+
     /**
-     * "Logged in" means we have **all three** persisted values required to
-     * recover a session silently: access token, refresh token, and agent
-     * URL. Dropping the refresh-token check here meant a previously
-     * invalidated session (access-token-present, refresh-token-cleared) was
-     * still reported as logged in, and the UI would navigate to the
-     * authenticated graph before firing doomed API calls.
+     * Returns the base URL for REST API calls, adapting to connection mode.
+     * - DIRECT: agent URL (e.g. `https://my-agent.example.com`)
+     * - RELAY:  proxy URL (e.g. `https://relay.example.com/proxy/abc123`)
      */
-    fun isLoggedIn(): Boolean =
-        getAccessToken() != null &&
-            getRefreshToken() != null &&
-            getAgentUrl() != null
+    fun getEffectiveBaseUrl(): String? = when (getConnectionMode()) {
+        ConnectionMode.DIRECT -> getAgentUrl()
+        ConnectionMode.RELAY -> {
+            val server = getRelayServerUrl() ?: return null
+            val agentId = getAgentId() ?: return null
+            "$server/proxy/$agentId"
+        }
+    }
+
+    /**
+     * "Logged in" means we have **all** persisted values required to
+     * recover a session silently for the active connection mode.
+     */
+    fun isLoggedIn(): Boolean = when (getConnectionMode()) {
+        ConnectionMode.DIRECT ->
+            getAccessToken() != null &&
+                getRefreshToken() != null &&
+                getAgentUrl() != null
+
+        ConnectionMode.RELAY ->
+            getAccessToken() != null &&
+                getRefreshToken() != null &&
+                getRelayServerUrl() != null &&
+                getAgentId() != null
+    }
 
     fun clear() {
         prefs.edit().clear().apply()
@@ -84,5 +137,10 @@ class TokenStore(context: Context) {
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_AGENT_URL = "agent_url"
+        private const val KEY_CONNECTION_MODE = "connection_mode"
+        private const val KEY_RELAY_SERVER_URL = "relay_server_url"
+        private const val KEY_AGENT_ID = "agent_id"
+        private const val KEY_PAIRING_ID = "pairing_id"
+        private const val KEY_DEVICE_ID = "device_id"
     }
 }

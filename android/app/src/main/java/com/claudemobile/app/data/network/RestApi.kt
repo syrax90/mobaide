@@ -29,7 +29,7 @@ class RestApi(
     private val json = Json { ignoreUnknownKeys = true }
     private val jsonMediaType = "application/json".toMediaType()
 
-    private fun baseUrl(): String = tokenStore.getAgentUrl()
+    private fun baseUrl(): String = tokenStore.getEffectiveBaseUrl()
         ?: throw IllegalStateException("Agent URL not configured")
 
     // Auth

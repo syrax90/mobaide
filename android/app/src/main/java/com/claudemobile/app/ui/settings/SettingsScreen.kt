@@ -31,6 +31,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     onBack: () -> Unit,
     onLogout: () -> Unit,
+    onManageConnections: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -55,8 +56,8 @@ fun SettingsScreen(
                 .padding(padding),
         ) {
             ListItem(
-                headlineContent = { Text("Agent") },
-                supportingContent = { Text(uiState.agentUrl) },
+                headlineContent = { Text("Connection") },
+                supportingContent = { Text(uiState.connectionInfo) },
             )
             HorizontalDivider()
             ListItem(
@@ -65,7 +66,18 @@ fun SettingsScreen(
             )
             HorizontalDivider()
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onManageConnections,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            ) {
+                Text("Manage Connections")
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             Button(
                 onClick = {

@@ -15,7 +15,11 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.ui.autoscan.AutoScanDetailScreen
+import com.claudemobile.app.ui.connections.ConnectionsScreen
 import com.claudemobile.app.ui.login.LoginScreen
+import com.claudemobile.app.ui.pairing.ManualPairingScreen
+import com.claudemobile.app.ui.pairing.PairingViewModel
+import com.claudemobile.app.ui.pairing.QrScannerScreen
 import com.claudemobile.app.ui.sessions.CreateSessionScreen
 import com.claudemobile.app.ui.sessions.SessionListScreen
 import com.claudemobile.app.ui.settings.SettingsScreen
@@ -32,7 +36,7 @@ fun AppNavigation(sessionManager: SessionManager) {
         Routes.LOGIN
     }
 
-    // Only react to the LoggedIn → LoggedOut transition, not to cold
+    // Only react to the LoggedIn -> LoggedOut transition, not to cold
     // starts where the initial state is already LoggedOut (which is
     // handled by `startDestination` above). Tracking the previous value
     // in a remember avoids re-navigating on process recreation and on
@@ -61,6 +65,38 @@ fun AppNavigation(sessionManager: SessionManager) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
+                onScanQrClick = {
+                    navController.navigate(Routes.QR_SCANNER)
+                },
+            )
+        }
+
+        composable(Routes.QR_SCANNER) {
+            val pairingViewModel: PairingViewModel = hiltViewModel()
+            QrScannerScreen(
+                viewModel = pairingViewModel,
+                onPairingComplete = {
+                    navController.navigate(Routes.SESSION_LIST) {
+                        popUpTo(Routes.LOGIN) { inclusive = true }
+                    }
+                },
+                onManualEntry = {
+                    navController.navigate(Routes.MANUAL_PAIRING)
+                },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.MANUAL_PAIRING) {
+            val pairingViewModel: PairingViewModel = hiltViewModel()
+            ManualPairingScreen(
+                viewModel = pairingViewModel,
+                onPairingComplete = {
+                    navController.navigate(Routes.SESSION_LIST) {
+                        popUpTo(Routes.LOGIN) { inclusive = true }
+                    }
+                },
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -125,15 +161,23 @@ fun AppNavigation(sessionManager: SessionManager) {
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 onLogout = {
-                    // SessionManager.forceLogout (via
-                    // SettingsViewModel.logout → AuthRepository.logout)
-                    // flips authState to LoggedOut, and the LaunchedEffect
-                    // above handles the actual navigation. The explicit
-                    // navigate call here is left as a belt-and-suspenders
-                    // fallback so the UX doesn't depend on the auth
-                    // observer being wired.
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(0) { inclusive = true }
+                    }
+                },
+                onManageConnections = {
+                    navController.navigate(Routes.CONNECTIONS)
+                },
+            )
+        }
+
+        composable(Routes.CONNECTIONS) {
+            ConnectionsScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+                onAddConnection = {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(Routes.SESSION_LIST)
                     }
                 },
             )

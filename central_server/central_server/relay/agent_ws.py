@@ -236,6 +236,12 @@ async def _handle_control_json(
         })
         await websocket.send_text(resp)
 
+    elif msg_type == "proxy_response":
+        request_id = ctrl.get("request_id")
+        if request_id:
+            mobile_proxy = websocket.app.state.mobile_proxy
+            mobile_proxy.resolve(request_id, ctrl)
+
 
 def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
     """Non-blocking enqueue to a mobile client's send queue.
