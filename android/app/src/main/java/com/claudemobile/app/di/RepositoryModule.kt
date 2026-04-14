@@ -8,10 +8,13 @@ import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketManager
+import com.claudemobile.app.data.auth.ConnectionStore
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.data.repository.AutoScanRepository
+import com.claudemobile.app.data.repository.PairingRepository
 import com.claudemobile.app.data.repository.ProjectsRepository
 import com.claudemobile.app.data.repository.SessionRepository
+import javax.inject.Named
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -46,8 +49,9 @@ object RepositoryModule {
         restApi: RestApi,
         tokenStore: TokenStore,
         sessionManager: SessionManager,
+        connectionStore: ConnectionStore,
     ): AuthRepository {
-        return AuthRepository(restApi, tokenStore, sessionManager)
+        return AuthRepository(restApi, tokenStore, sessionManager, connectionStore)
     }
 
     @Provides
@@ -95,5 +99,16 @@ object RepositoryModule {
     @Singleton
     fun providePreferencesStore(@ApplicationContext context: Context): PreferencesStore {
         return PreferencesStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun providePairingRepository(
+        @Named("refresh") refreshClient: OkHttpClient,
+        tokenStore: TokenStore,
+        sessionManager: SessionManager,
+        connectionStore: ConnectionStore,
+    ): PairingRepository {
+        return PairingRepository(refreshClient, tokenStore, sessionManager, connectionStore)
     }
 }

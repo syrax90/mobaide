@@ -1,5 +1,6 @@
 package com.claudemobile.app.data.repository
 
+import com.claudemobile.app.data.auth.ConnectionStore
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.network.ApiException
@@ -32,6 +33,11 @@ import org.junit.Test
  */
 class AuthRepositoryTest {
 
+    // ---- Helpers ------------------------------------------------------------
+
+    private fun newConnectionStore(): ConnectionStore =
+        mockk<ConnectionStore>(relaxed = true)
+
     // ---- login --------------------------------------------------------------
 
     @Test
@@ -39,7 +45,7 @@ class AuthRepositoryTest {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
         val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
-        val repo = AuthRepository(restApi, tokenStore, sessionManager)
+        val repo = AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore())
 
         coEvery {
             restApi.login("https://example.com", "alice", "hunter2")
@@ -68,7 +74,7 @@ class AuthRepositoryTest {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
         val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
-        val repo = AuthRepository(restApi, tokenStore, sessionManager)
+        val repo = AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore())
 
         coEvery {
             restApi.login(any(), any(), any())
@@ -97,7 +103,7 @@ class AuthRepositoryTest {
         val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>(relaxUnitFun = true)
         val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
-        val repo = AuthRepository(restApi, tokenStore, sessionManager)
+        val repo = AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore())
 
         coEvery {
             restApi.login("https://example.com/", "bob", "pw")
@@ -120,7 +126,7 @@ class AuthRepositoryTest {
         val sessionManager = mockk<SessionManager>()
         every { sessionManager.forceLogout() } just Runs
 
-        AuthRepository(restApi, tokenStore, sessionManager).logout()
+        AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore()).logout()
 
         // The forceLogout contract (clear tokens + emit LoggedOut) is
         // verified in SessionManagerTest; here we only pin that the
@@ -138,7 +144,7 @@ class AuthRepositoryTest {
         val sessionManager = mockk<SessionManager>()
         every { sessionManager.isLoggedIn() } returns true
 
-        assertTrue(AuthRepository(restApi, tokenStore, sessionManager).isLoggedIn())
+        assertTrue(AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore()).isLoggedIn())
         verify(exactly = 1) { sessionManager.isLoggedIn() }
     }
 
@@ -149,7 +155,7 @@ class AuthRepositoryTest {
         val sessionManager = mockk<SessionManager>()
         every { sessionManager.isLoggedIn() } returns false
 
-        assertFalse(AuthRepository(restApi, tokenStore, sessionManager).isLoggedIn())
+        assertFalse(AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore()).isLoggedIn())
     }
 
     @Test
@@ -161,7 +167,7 @@ class AuthRepositoryTest {
 
         assertEquals(
             "https://example.com",
-            AuthRepository(restApi, tokenStore, sessionManager).getAgentUrl(),
+            AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore()).getAgentUrl(),
         )
     }
 
@@ -172,6 +178,6 @@ class AuthRepositoryTest {
         val sessionManager = mockk<SessionManager>()
         every { tokenStore.getUsername() } returns null
 
-        assertNull(AuthRepository(restApi, tokenStore, sessionManager).getUsername())
+        assertNull(AuthRepository(restApi, tokenStore, sessionManager, newConnectionStore()).getUsername())
     }
 }

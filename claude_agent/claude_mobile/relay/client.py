@@ -289,6 +289,9 @@ class RelayClient:
         elif msg_type == "stop_session":
             await self._handle_stop_session(ctrl, ws)
 
+        elif msg_type == "proxy_request":
+            await self._handle_proxy_request(ctrl, ws)
+
     async def _handle_create_session(
         self, ctrl: dict, ws: ClientConnection
     ) -> None:
@@ -350,6 +353,229 @@ class RelayClient:
                 "error": str(exc),
             }
         await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+
+    # -- Proxy request handling -----------------------------------------------
+
+    async def _handle_proxy_request(
+        self, ctrl: dict, ws: ClientConnection
+    ) -> None:
+        """Handle a proxy_request forwarded from a mobile client via the
+        central server.  Dispatches on (method, path) and returns a
+        proxy_response control message with the result."""
+        request_id = ctrl.get("request_id", "")
+        method = ctrl.get("method", "GET").upper()
+        path: str = ctrl.get("path", "")
+        body: dict | None = ctrl.get("body")
+        query: dict | None = ctrl.get("query")
+
+        try:
+            result = await self._dispatch_proxy(method, path, body, query, ws)
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": result.get("status", 200),
+                "body": result.get("body"),
+            }
+        except Exception as exc:
+            logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 500,
+                "body": {"detail": str(exc)},
+            }
+
+        await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+
+    async def _dispatch_proxy(
+        self,
+        method: str,
+        path: str,
+        body: dict | None,
+        query: dict | None,
+        ws: ClientConnection,
+    ) -> dict:
+        """Route a proxy request to the appropriate internal handler."""
+        import re as _re
+
+        # GET /api/sessions
+        if method == "GET" and path == "/api/sessions":
+            sessions = self._session_manager.list_sessions()
+            return {
+                "status": 200,
+                "body": [
+                    {
+                        "session_id": s.session_id,
+                        "state": s.state.value,
+                        "created_at": s.created_at.isoformat(),
+                        "pid": s.pid,
+                        "command": s.command,
+                        "cwd": s.cwd,
+                    }
+                    for s in sessions
+                ],
+            }
+
+        # POST /api/sessions
+        if method == "POST" and path == "/api/sessions":
+            body = body or {}
+            session_id = uuid.uuid4().hex[:12]
+            config = SessionConfig(
+                session_id=session_id,
+                command=body.get("command") or _DEFAULT_SHELL,
+                cwd=body.get("cwd"),
+                env=body.get("env"),
+                rows=body.get("rows", 24),
+                cols=body.get("cols", 80),
+                project_name=body.get("project_name"),
+            )
+            session = await self._session_manager.create_session(config)
+            self._bridge_session(session, ws)
+            info = session.to_info()
+            return {
+                "status": 201,
+                "body": {
+                    "session_id": info.session_id,
+                    "state": info.state.value,
+                    "created_at": info.created_at.isoformat(),
+                    "pid": info.pid,
+                    "command": info.command,
+                    "cwd": info.cwd,
+                },
+            }
+
+        # DELETE /api/sessions/{session_id}
+        m = _re.match(r"^/api/sessions/([^/]+)$", path)
+        if m and method == "DELETE":
+            session_id = m.group(1)
+            force = (query or {}).get("force", "false").lower() == "true"
+            try:
+                await self._session_manager.stop_session(
+                    session_id, force=force
+                )
+                return {"status": 204, "body": None}
+            except KeyError:
+                return {
+                    "status": 404,
+                    "body": {"detail": "Session not found"},
+                }
+
+        # GET /api/sessions/{session_id}/scrollback
+        m = _re.match(r"^/api/sessions/([^/]+)/scrollback$", path)
+        if m and method == "GET":
+            session_id = m.group(1)
+            lines_param = int((query or {}).get("lines", 1000))
+            session = await self._session_manager.get_session(session_id)
+            if session is None:
+                return {
+                    "status": 404,
+                    "body": {"detail": "Session not found"},
+                }
+            scrollback = session.get_scrollback()
+            # Respect lines limit
+            if len(scrollback) > lines_param:
+                scrollback = scrollback[-lines_param:]
+            return {
+                "status": 200,
+                "body": {
+                    "session_id": session_id,
+                    "lines": scrollback,
+                    "total": len(scrollback),
+                },
+            }
+
+        # GET /api/projects
+        if method == "GET" and path == "/api/projects":
+            pc = getattr(self._app_state, "projects_config", None)
+            projects = pc.list_public() if pc else []
+            return {"status": 200, "body": projects}
+
+        # GET /api/autoscan/list
+        if method == "GET" and path == "/api/autoscan/list":
+            mgr = getattr(self._app_state, "autoscan_manager", None)
+            if mgr is None:
+                return {
+                    "status": 200,
+                    "body": {
+                        "scans": [],
+                        "capacity": 0,
+                        "max_scans": 0,
+                        "available_projects": [],
+                    },
+                }
+            return {"status": 200, "body": mgr.list_response()}
+
+        # POST /api/autoscan/start
+        if method == "POST" and path == "/api/autoscan/start":
+            mgr = getattr(self._app_state, "autoscan_manager", None)
+            if mgr is None:
+                return {
+                    "status": 503,
+                    "body": {"detail": "Auto-scan not available"},
+                }
+            body = body or {}
+            project_name = body.get("project_name", "")
+            claude_options = body.get("claude_options")
+            try:
+                instance = await mgr.start(
+                    project_name, client_options=claude_options
+                )
+                return {"status": 200, "body": instance.to_dto()}
+            except ValueError as exc:
+                return {"status": 400, "body": {"detail": str(exc)}}
+            except Exception as exc:
+                return {"status": 409, "body": {"detail": str(exc)}}
+
+        # POST /api/autoscan/stop
+        if method == "POST" and path == "/api/autoscan/stop":
+            mgr = getattr(self._app_state, "autoscan_manager", None)
+            if mgr is None:
+                return {
+                    "status": 503,
+                    "body": {"detail": "Auto-scan not available"},
+                }
+            body = body or {}
+            project_name = body.get("project_name", "")
+            try:
+                await mgr.stop(project_name)
+                return {"status": 200, "body": {"status": "stopped"}}
+            except KeyError:
+                return {
+                    "status": 404,
+                    "body": {"detail": "No active scan for project"},
+                }
+
+        # POST /api/autoscan/run-now
+        if method == "POST" and path == "/api/autoscan/run-now":
+            mgr = getattr(self._app_state, "autoscan_manager", None)
+            if mgr is None:
+                return {
+                    "status": 503,
+                    "body": {"detail": "Auto-scan not available"},
+                }
+            body = body or {}
+            project_name = body.get("project_name", "")
+            instance = mgr.get(project_name)
+            if instance is None:
+                return {
+                    "status": 404,
+                    "body": {"detail": "No active scan for project"},
+                }
+            instance.request_immediate_scan()
+            dto = instance.to_dto()
+            return {
+                "status": 200,
+                "body": {
+                    "ok": True,
+                    "project_name": project_name,
+                    "next_scan_at": dto.get("next_scan_at"),
+                },
+            }
+
+        return {
+            "status": 404,
+            "body": {"detail": f"Unknown proxy route: {method} {path}"},
+        }
 
     # -- Session input from relay ---------------------------------------------
 

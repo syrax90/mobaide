@@ -84,6 +84,13 @@ dependencies {
     // DataStore (last-used project / session persistence)
     implementation(libs.androidx.datastore.preferences)
 
+    // CameraX + ML Kit (QR pairing)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
+    implementation(libs.camerax.mlkit.vision)
+    implementation(libs.mlkit.barcode)
+
     // Vendored Termux terminal renderer (Apache-2.0)
     implementation(project(":terminal-view"))
 

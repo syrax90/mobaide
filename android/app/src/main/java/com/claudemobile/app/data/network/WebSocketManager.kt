@@ -178,17 +178,12 @@ class WebSocketManager(
 ) {
     /**
      * Build a [WebSocketConnection] whose URL provider pulls the latest
-     * agent URL + access token from [TokenStore] every reconnect, so a
-     * token rotated by [SessionManager] is picked up on the next
-     * handshake without rebuilding the connection object.
+     * credentials from [TokenStore] every reconnect, so a token rotated
+     * by [SessionManager] is picked up on the next handshake without
+     * rebuilding the connection object.
      *
-     * The provider blocks briefly on [SessionManager.refresh] if the
-     * access token is expiring soon — single-flight ensures that at
-     * most one refresh HTTP call is issued even if multiple connections
-     * reconnect simultaneously. Previously this was done by an
-     * in-file `refreshTokenIfNeeded()` using its own OkHttpClient call,
-     * which was one of the two independent refresh paths that raced at
-     * startup.
+     * In relay mode, the [path] is rewritten to use the central server's
+     * relay WebSocket endpoints with the paired agent's ID.
      */
     fun createConnection(path: String): WebSocketConnection {
         // Use an anonymous function instead of a lambda so early `return null`
@@ -197,22 +192,34 @@ class WebSocketManager(
             if (!sessionManager.isLoggedIn()) return null
 
             if (tokenStore.isAccessTokenExpiringSoon()) {
-                // Run on the caller's thread — WebSocketConnection.doConnect
-                // already executes inside a coroutine scope, so runBlocking
-                // here only parks that single coroutine worker, not the
-                // Android main thread.
                 when (runBlocking { sessionManager.refresh() }) {
                     SessionManager.RefreshResult.Terminal -> return null
                     else -> Unit
                 }
             }
 
-            val agentUrl = tokenStore.getAgentUrl() ?: return null
             val token = tokenStore.getAccessToken() ?: return null
-            val wsScheme = if (agentUrl.startsWith("https")) "wss" else "ws"
-            val host = agentUrl.removePrefix("https://").removePrefix("http://")
-            val separator = if (path.contains("?")) "&" else "?"
-            return "$wsScheme://$host/$path${separator}token=$token"
+
+            val url = when (tokenStore.getConnectionMode()) {
+                TokenStore.ConnectionMode.DIRECT -> {
+                    val agentUrl = tokenStore.getAgentUrl() ?: return null
+                    val wsScheme = if (agentUrl.startsWith("https")) "wss" else "ws"
+                    val host = agentUrl.removePrefix("https://").removePrefix("http://")
+                    "$wsScheme://$host/$path"
+                }
+
+                TokenStore.ConnectionMode.RELAY -> {
+                    val serverUrl = tokenStore.getRelayServerUrl() ?: return null
+                    val agentId = tokenStore.getAgentId() ?: return null
+                    val wsScheme = if (serverUrl.startsWith("https")) "wss" else "ws"
+                    val host = serverUrl.removePrefix("https://").removePrefix("http://")
+                    val relayPath = mapToRelayPath(path, agentId)
+                    "$wsScheme://$host/$relayPath"
+                }
+            }
+
+            val separator = if (url.contains("?")) "&" else "?"
+            return "$url${separator}token=$token"
         }
 
         return WebSocketConnection(
@@ -220,5 +227,29 @@ class WebSocketManager(
             sessionManager = sessionManager,
             urlProvider = provider,
         )
+    }
+
+    /**
+     * Map a direct-mode WebSocket path to its relay equivalent.
+     *
+     * | Direct Path              | Relay Path                                    |
+     * |--------------------------|-----------------------------------------------|
+     * | `ws/session/{sid}`       | `relay/ws/session/{agentId}/{sid}`             |
+     * | `ws/events`              | `relay/ws/events/{agentId}`                   |
+     * | `ws/sessions`            | `relay/ws/sessions/{agentId}`                 |
+     */
+    private fun mapToRelayPath(path: String, agentId: String): String {
+        if (path.startsWith("ws/session/")) {
+            val sessionId = path.removePrefix("ws/session/")
+            return "relay/ws/session/$agentId/$sessionId"
+        }
+        if (path == "ws/events") {
+            return "relay/ws/events/$agentId"
+        }
+        if (path == "ws/sessions") {
+            return "relay/ws/sessions/$agentId"
+        }
+        // Fallback: prepend relay prefix
+        return "relay/$path/$agentId"
     }
 }

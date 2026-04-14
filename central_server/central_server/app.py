@@ -61,6 +61,11 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.auth_service = AuthService(config, db)
         app.state.pairing_service = PairingService(db, config)
 
+        # Mobile REST proxy for forwarding operations to agents
+        from .relay.mobile_proxy import MobileProxy
+
+        app.state.mobile_proxy = MobileProxy(app.state.routing)
+
         # Background task: cleanup expired pairing tokens every 60s
         cleanup_task = asyncio.create_task(
             _token_cleanup_loop(db), name="token-cleanup"
@@ -147,10 +152,12 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .dashboard.router import router as dashboard_router
     from .pairing.router import router as pairing_router
     from .relay.agent_ws import router as agent_ws_router
+    from .relay.mobile_proxy import router as mobile_proxy_router
     from .relay.mobile_ws import router as mobile_ws_router
 
     app.include_router(agent_ws_router)
     app.include_router(mobile_ws_router)
+    app.include_router(mobile_proxy_router)
     app.include_router(pairing_router)
     app.include_router(dashboard_router)
 

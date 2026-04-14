@@ -40,7 +40,9 @@ class AuthInterceptor @Inject constructor(
         // refresh, this prevents the interceptor from recursing into
         // itself if SessionManager somehow routes refresh back through
         // this client.
-        if (path.endsWith("/api/auth/token") || path.endsWith("/api/auth/refresh")) {
+        if (path.endsWith("/api/auth/token") || path.endsWith("/api/auth/refresh") ||
+            path.endsWith("/api/pairing/complete") || path.endsWith("/api/mobile/refresh")
+        ) {
             return chain.proceed(request)
         }
 

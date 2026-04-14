@@ -149,14 +149,25 @@ class SessionManager @Inject constructor(
 
     private fun doRefresh(): RefreshResult {
         val refreshToken = tokenStore.getRefreshToken() ?: return terminal()
-        val agentUrl = tokenStore.getAgentUrl() ?: return terminal()
 
         val payload = json.encodeToString(
             RefreshRequestDto.serializer(),
             RefreshRequestDto(refreshToken),
         )
+
+        val refreshUrl = when (tokenStore.getConnectionMode()) {
+            TokenStore.ConnectionMode.DIRECT -> {
+                val agentUrl = tokenStore.getAgentUrl() ?: return terminal()
+                "$agentUrl/api/auth/refresh"
+            }
+            TokenStore.ConnectionMode.RELAY -> {
+                val serverUrl = tokenStore.getRelayServerUrl() ?: return terminal()
+                "$serverUrl/api/mobile/refresh"
+            }
+        }
+
         val request = Request.Builder()
-            .url("$agentUrl/api/auth/refresh")
+            .url(refreshUrl)
             .post(payload.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 

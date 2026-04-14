@@ -1,5 +1,6 @@
 package com.claudemobile.app.data.repository
 
+import com.claudemobile.app.data.auth.ConnectionStore
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.network.RestApi
@@ -8,15 +9,25 @@ class AuthRepository(
     private val restApi: RestApi,
     private val tokenStore: TokenStore,
     private val sessionManager: SessionManager,
+    private val connectionStore: ConnectionStore,
 ) {
     suspend fun login(agentUrl: String, username: String, password: String) {
         val response = restApi.login(agentUrl, username, password)
+        // Clear any relay-mode keys from a previous session so that
+        // getConnectionMode() returns DIRECT after a direct login.
+        tokenStore.clear()
         // Persist first, then flip the observable state. Ordering matters
         // so that any observer that races on LoggedIn can read the tokens
         // it needs without seeing a half-initialised session.
         tokenStore.saveAgentUrl(agentUrl)
         tokenStore.saveTokens(response.access_token, response.refresh_token)
         sessionManager.markLoggedIn()
+
+        // Auto-save to ConnectionStore for multi-connection management
+        connectionStore.captureActiveProfile(
+            tokenStore,
+            label = "Direct: $agentUrl",
+        )
     }
 
     /**
