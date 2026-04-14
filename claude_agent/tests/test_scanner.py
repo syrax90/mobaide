@@ -22,7 +22,7 @@ from claude_mobile.linear.models import (
 from claude_mobile.linear.scanner import AutoScanInstance
 
 
-def _make_config(tmp_path) -> AutoScanConfig:
+def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanConfig:
     return AutoScanConfig(
         projects={
             "test-project": ProjectConfig(
@@ -37,6 +37,9 @@ def _make_config(tmp_path) -> AutoScanConfig:
         main_branch="main",
         linear_active_state="In Progress",
         auto_scan_prompt=None,
+        auto_remove_worktrees=auto_remove_worktrees,
+        linear_done_state="Done",
+        state_dir=str(tmp_path / "state"),
     )
 
 
@@ -60,11 +63,10 @@ def _make_issue(
 
 
 def _make_instance(tmp_path, *, client=None, worktree_mgr=None, session_manager=None,
-                   launcher=None) -> AutoScanInstance:
-    config = _make_config(tmp_path)
+                   launcher=None, config=None) -> AutoScanInstance:
     return AutoScanInstance(
         project_name="test-project",
-        config=config,
+        config=config or _make_config(tmp_path),
         session_manager=session_manager or AsyncMock(spec=SessionManager),
         launcher=launcher or AsyncMock(),
         client=client or AsyncMock(),
@@ -140,27 +142,34 @@ class TestRunNow:
         assert scan_calls == 2
 
 
-    def test_request_immediate_scan_clears_processed_items(self, tmp_path):
-        """request_immediate_scan() must clear _processed_items so that
-        manually-reset issues are picked up again."""
+    def test_request_immediate_scan_reanchors_next_scan_and_wakes_loop(self, tmp_path):
+        """request_immediate_scan() now only signals the wake event and
+        reanchors next_scan_at — the old in-memory dedup set was removed
+        so the bug where manually-reset issues were silently skipped no
+        longer exists."""
         inst = _make_instance(tmp_path)
-        inst._processed_items.add("uuid-1")
-        inst._processed_items.add("uuid-2")
-        assert len(inst._processed_items) == 2
+        assert not inst._run_now_event.is_set()
 
         inst.request_immediate_scan()
 
-        assert len(inst._processed_items) == 0
+        assert inst._run_now_event.is_set()
+        assert inst._next_scan_at is not None
 
     @pytest.mark.asyncio
-    async def test_run_now_reprocesses_previously_seen_issue(self, tmp_path):
-        """After Run-Now, an issue that was already processed should be
-        picked up again if it still matches the Linear query filters."""
+    async def test_reprocesses_same_issue_across_scans_without_run_now(self, tmp_path):
+        """Bug fix: an issue that Linear still reports as matching must be
+        processed on every scan cycle — there is no local dedup layer.
+
+        Previously, ``_processed_items`` filtered the issue out forever
+        until ``request_immediate_scan()`` cleared the set, so a user
+        resetting the issue back to Proposals + AutoPipeline in Linear
+        saw the scanner silently skip it."""
         client = AsyncMock()
         issue = _make_issue(issue_id="uuid-reprocess", identifier="CLA-99")
         client.get_auto_scan_issues.return_value = [issue]
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
+        client.get_issue_state.return_value = None
 
         wt_mgr = AsyncMock()
         wt_result = MagicMock()
@@ -186,19 +195,13 @@ class TestRunNow:
             launcher=launcher,
         )
 
-        # First scan: issue gets processed and added to dedup set
-        await inst._scan_once()
-        assert "uuid-reprocess" in inst._processed_items
-
-        # Second scan WITHOUT Run-Now: issue is filtered out (dedup)
+        # First scan — issue is processed.
         await inst._scan_once()
         assert client.update_issue_state.call_count == 1
 
-        # Simulate Run-Now: clears processed set
-        inst.request_immediate_scan()
-        assert "uuid-reprocess" not in inst._processed_items
-
-        # Third scan AFTER Run-Now: issue is reprocessed
+        # Second scan, no Run-Now: because the Linear query still returns
+        # the issue, it must be processed AGAIN (the bug would have
+        # skipped it silently).
         await inst._scan_once()
         assert client.update_issue_state.call_count == 2
 
@@ -259,6 +262,541 @@ class TestProcessIssueEmitsPerStepEvents:
         types = [e.type for e in inst._recent_events]
         assert "worktree" in types
         assert "session" in types
+
+
+class TestWorktreeCleanup:
+    """Coverage for the active_workitems.json + cleanup-on-Done feature."""
+
+    @pytest.mark.asyncio
+    async def test_process_issue_persists_workitem_when_worktree_created(self, tmp_path):
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "worktree")
+        wt_mgr.create_worktree.return_value = wt_result
+
+        sess_mgr = AsyncMock()
+        session_obj = MagicMock()
+        session_obj.pid = 1234
+        sess_mgr.create_session.return_value = session_obj
+
+        launcher = AsyncMock()
+        spec = MagicMock()
+        spec.argv = ["claude"]
+        spec.env = {}
+        launcher.build.return_value = spec
+
+        inst = _make_instance(
+            tmp_path, client=client, worktree_mgr=wt_mgr,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+
+        await inst._process_issue(_make_issue(issue_id="uuid-1", identifier="CLA-100"))
+
+        items = await inst._workitems_store.read()
+        assert len(items) == 1
+        assert items[0].id == "CLA-100"
+        assert items[0].uuid == "uuid-1"
+        assert items[0].worktree_path == str(tmp_path / "worktree")
+
+    @pytest.mark.asyncio
+    async def test_process_issue_dedups_on_repeat_persistence(self, tmp_path):
+        """If the same issue is processed twice (the bug-fix scenario),
+        the JSON must not contain duplicate entries."""
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "worktree")
+        wt_mgr.create_worktree.return_value = wt_result
+
+        sess_mgr = AsyncMock()
+        session_obj = MagicMock()
+        session_obj.pid = 1234
+        sess_mgr.create_session.return_value = session_obj
+
+        launcher = AsyncMock()
+        spec = MagicMock()
+        spec.argv = ["claude"]
+        spec.env = {}
+        launcher.build.return_value = spec
+
+        inst = _make_instance(
+            tmp_path, client=client, worktree_mgr=wt_mgr,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+
+        issue = _make_issue(issue_id="uuid-x", identifier="CLA-200")
+        await inst._process_issue(issue)
+        await inst._process_issue(issue)
+
+        items = await inst._workitems_store.read()
+        assert len(items) == 1
+
+    @pytest.mark.asyncio
+    async def test_process_issue_does_not_persist_when_worktree_creation_fails(self, tmp_path):
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_mgr.create_worktree.return_value = None  # creation failed
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = AsyncMock()
+        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+
+        inst = _make_instance(
+            tmp_path, client=client, worktree_mgr=wt_mgr,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+
+        await inst._process_issue(_make_issue(issue_id="uuid-noWT"))
+
+        assert await inst._workitems_store.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_worktree_when_issue_state_is_done(self, tmp_path):
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        client = AsyncMock()
+        client.get_issue_state.return_value = IssueState(id="state-done", name="Done")
+
+        wt_mgr = AsyncMock()
+        wt_mgr.cleanup_worktree.return_value = True
+
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        item = ActiveWorkItem(
+            id="CLA-7", uuid="uuid-7", slug="cla-7-x",
+            worktree_path=str(tmp_path / "wt-7"),
+            project_root=str(tmp_path / "repo"),
+            added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([item])
+
+        await inst._cleanup_completed_worktrees()
+
+        wt_mgr.cleanup_worktree.assert_awaited_once_with(
+            item.worktree_path, str(tmp_path / "repo"),
+        )
+        assert await inst._workitems_store.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_item_when_issue_state_is_not_done(self, tmp_path):
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        client = AsyncMock()
+        client.get_issue_state.return_value = IssueState(
+            id="state-prog", name="In Progress",
+        )
+
+        wt_mgr = AsyncMock()
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        item = ActiveWorkItem(
+            id="CLA-9", uuid="uuid-9", slug="cla-9",
+            worktree_path=str(tmp_path / "wt-9"),
+            project_root=str(tmp_path / "repo"),
+            added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([item])
+
+        await inst._cleanup_completed_worktrees()
+
+        wt_mgr.cleanup_worktree.assert_not_called()
+        assert await inst._workitems_store.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_item_when_linear_query_returns_none(self, tmp_path):
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        client = AsyncMock()
+        client.get_issue_state.return_value = None
+
+        wt_mgr = AsyncMock()
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        item = ActiveWorkItem(
+            id="CLA-X", uuid="uuid-x", slug="cla-x",
+            worktree_path=str(tmp_path / "wt-x"),
+            project_root=str(tmp_path / "repo"),
+            added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([item])
+
+        await inst._cleanup_completed_worktrees()
+
+        wt_mgr.cleanup_worktree.assert_not_called()
+        assert await inst._workitems_store.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_item_when_worktree_remove_fails(self, tmp_path):
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        client = AsyncMock()
+        client.get_issue_state.return_value = IssueState(id="state-done", name="Done")
+
+        wt_mgr = AsyncMock()
+        wt_mgr.cleanup_worktree.return_value = False  # removal failed
+
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        item = ActiveWorkItem(
+            id="CLA-FAIL", uuid="uuid-fail", slug="cla-fail",
+            worktree_path=str(tmp_path / "wt-fail"),
+            project_root=str(tmp_path / "repo"),
+            added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([item])
+
+        await inst._cleanup_completed_worktrees()
+
+        assert await inst._workitems_store.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_scan_once_skips_cleanup_when_auto_remove_disabled(self, tmp_path):
+        client = AsyncMock()
+        client.get_auto_scan_issues.return_value = []
+        client.get_issue_state.return_value = IssueState(id="state-done", name="Done")
+
+        wt_mgr = AsyncMock()
+        config = _make_config(tmp_path, auto_remove_worktrees=False)
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr, config=config)
+
+        await inst._scan_once()
+
+        client.get_issue_state.assert_not_called()
+        wt_mgr.cleanup_worktree.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_item_when_get_issue_state_raises(self, tmp_path):
+        """Distinct branch from ``returns None``: exception path must log
+        ``query_failed`` and preserve the item for retry on the next cycle."""
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        client = AsyncMock()
+        client.get_issue_state.side_effect = RuntimeError("boom")
+
+        wt_mgr = AsyncMock()
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        item = ActiveWorkItem(
+            id="CLA-RAISE", uuid="uuid-raise", slug="cla-raise",
+            worktree_path=str(tmp_path / "wt-raise"),
+            project_root=str(tmp_path / "repo"),
+            added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([item])
+
+        # Must NOT propagate — the cycle-level try/except in _scan_once is
+        # a last-resort; per-item errors are handled inside the method.
+        await inst._cleanup_completed_worktrees()
+
+        wt_mgr.cleanup_worktree.assert_not_called()
+        assert await inst._workitems_store.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_cleanup_keeps_item_when_cleanup_worktree_raises(self, tmp_path):
+        """Distinct branch from ``returns False``: if the worktree manager
+        raises, the item must be preserved (retry next cycle)."""
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        client = AsyncMock()
+        client.get_issue_state.return_value = IssueState(id="state-done", name="Done")
+
+        wt_mgr = AsyncMock()
+        wt_mgr.cleanup_worktree.side_effect = OSError("fs locked")
+
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        item = ActiveWorkItem(
+            id="CLA-OS", uuid="uuid-os", slug="cla-os",
+            worktree_path=str(tmp_path / "wt-os"),
+            project_root=str(tmp_path / "repo"),
+            added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([item])
+
+        await inst._cleanup_completed_worktrees()
+
+        wt_mgr.cleanup_worktree.assert_awaited_once()
+        assert await inst._workitems_store.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_cleanup_batch_removes_only_done_items(self, tmp_path):
+        """With multiple tracked items, only those reporting Done are removed."""
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        repo_root = str(tmp_path / "repo")
+        items = [
+            ActiveWorkItem(id="CLA-A", uuid="u-a", slug="a",
+                           worktree_path=str(tmp_path / "wt-a"),
+                           project_root=repo_root, added_at=now_iso_utc()),
+            ActiveWorkItem(id="CLA-B", uuid="u-b", slug="b",
+                           worktree_path=str(tmp_path / "wt-b"),
+                           project_root=repo_root, added_at=now_iso_utc()),
+            ActiveWorkItem(id="CLA-C", uuid="u-c", slug="c",
+                           worktree_path=str(tmp_path / "wt-c"),
+                           project_root=repo_root, added_at=now_iso_utc()),
+        ]
+
+        state_map = {
+            "u-a": IssueState(id="s1", name="Done"),
+            "u-b": IssueState(id="s2", name="In Progress"),
+            "u-c": IssueState(id="s3", name="Done"),
+        }
+
+        async def fake_get_state(uuid):
+            return state_map[uuid]
+
+        client = AsyncMock()
+        client.get_issue_state.side_effect = fake_get_state
+
+        wt_mgr = AsyncMock()
+        wt_mgr.cleanup_worktree.return_value = True
+
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+        await inst._workitems_store.write(items)
+
+        await inst._cleanup_completed_worktrees()
+
+        # Only A and C (Done) should have been removed.
+        remaining = await inst._workitems_store.read()
+        assert [i.id for i in remaining] == ["CLA-B"]
+        assert wt_mgr.cleanup_worktree.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cleanup_ignores_items_from_other_projects(self, tmp_path):
+        """The cleanup loop filters on ``project_root`` so a shared state
+        file cannot cause one project's scanner to tear down another
+        project's worktrees."""
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        our_root = str(tmp_path / "repo")  # matches _make_config's project path
+        foreign_root = str(tmp_path / "other-repo")
+
+        client = AsyncMock()
+        client.get_issue_state.return_value = IssueState(id="s", name="Done")
+
+        wt_mgr = AsyncMock()
+        wt_mgr.cleanup_worktree.return_value = True
+
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        foreign_item = ActiveWorkItem(
+            id="OTHER-1", uuid="u-other", slug="other",
+            worktree_path=str(tmp_path / "wt-other"),
+            project_root=foreign_root, added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([foreign_item])
+
+        await inst._cleanup_completed_worktrees()
+
+        # Foreign item must not be queried, not be removed from disk,
+        # and not be dropped from the store.
+        client.get_issue_state.assert_not_called()
+        wt_mgr.cleanup_worktree.assert_not_called()
+        remaining = await inst._workitems_store.read()
+        assert [i.id for i in remaining] == ["OTHER-1"]
+
+    @pytest.mark.asyncio
+    async def test_process_issue_does_not_persist_when_auto_remove_disabled(self, tmp_path):
+        """When the feature is disabled globally, _process_issue must not
+        write to the workitems store even if the worktree was created."""
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "worktree")
+        wt_mgr.create_worktree.return_value = wt_result
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=7)
+
+        launcher = AsyncMock()
+        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+
+        config = _make_config(tmp_path, auto_remove_worktrees=False)
+        inst = _make_instance(
+            tmp_path, client=client, worktree_mgr=wt_mgr,
+            session_manager=sess_mgr, launcher=launcher, config=config,
+        )
+
+        await inst._process_issue(_make_issue(issue_id="uuid-dis", identifier="CLA-DIS"))
+
+        assert await inst._workitems_store.count() == 0
+
+
+class TestProcessedCountDTO:
+    """The DTO field ``processed_count`` was repurposed: it now reflects
+    the number of active work items currently tracked for this project.
+    The Android client reads this field — its meaning must not silently
+    drift. The implementation caches the count in-memory and updates it
+    via ``_process_issue`` (increment) and ``_cleanup_completed_worktrees``
+    (decrement); this test exercises both paths end-to-end."""
+
+    @pytest.mark.asyncio
+    async def test_processed_count_tracks_add_and_cleanup(self, tmp_path):
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "wt")
+        wt_mgr.create_worktree.return_value = wt_result
+        wt_mgr.cleanup_worktree.return_value = True
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = AsyncMock()
+        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+
+        inst = _make_instance(
+            tmp_path, client=client, worktree_mgr=wt_mgr,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+        assert inst.to_dto()["processed_count"] == 0
+
+        await inst._process_issue(_make_issue(issue_id="u1", identifier="CLA-1"))
+        await inst._process_issue(_make_issue(issue_id="u2", identifier="CLA-2"))
+        assert inst.to_dto()["processed_count"] == 2
+
+        # Re-processing an already-tracked issue must NOT double-count
+        # (dedup happens inside the store).
+        await inst._process_issue(_make_issue(issue_id="u1", identifier="CLA-1"))
+        assert inst.to_dto()["processed_count"] == 2
+
+        # Clean up one via the Done-state path.
+        client.get_issue_state.side_effect = [
+            IssueState(id="s1", name="Done"),
+            IssueState(id="s2", name="In Progress"),
+        ]
+        await inst._cleanup_completed_worktrees()
+        assert inst.to_dto()["processed_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_processed_count_not_decremented_when_cleanup_fails(self, tmp_path):
+        """The cache must only decrement when ``store.remove()`` actually
+        dropped an entry. If the Linear query fails, the worktree removal
+        fails, or the state is not Done, the cached count must stay put —
+        otherwise a long-running agent with transient cleanup errors
+        would report ``processed_count=0`` while the store still holds
+        items."""
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        # Seed one item that cleanup will attempt and fail to remove.
+        client = AsyncMock()
+        client.get_issue_state.return_value = IssueState(id="s-done", name="Done")
+
+        wt_mgr = AsyncMock()
+        wt_mgr.cleanup_worktree.return_value = False  # removal fails
+
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+
+        item = ActiveWorkItem(
+            id="CLA-STUCK", uuid="u-stuck", slug="cla-stuck",
+            worktree_path=str(tmp_path / "wt-stuck"),
+            project_root=str(tmp_path / "repo"),
+            added_at=now_iso_utc(),
+        )
+        await inst._workitems_store.write([item])
+        # Simulate the cache being primed by a prior process/cycle.
+        inst._active_workitem_count = 1
+
+        await inst._cleanup_completed_worktrees()
+
+        # Store still has the item AND the cached count is unchanged.
+        assert await inst._workitems_store.count() == 1
+        assert inst.processed_count == 1
+        assert inst.to_dto()["processed_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_processed_count_batch_decrements_only_for_removed_items(self, tmp_path):
+        """With a mix of Done / not-Done items, the cache must decrement
+        by exactly the number of successful removals — not by the number
+        of items examined."""
+        from claude_mobile.linear.workitems import ActiveWorkItem, now_iso_utc
+
+        repo_root = str(tmp_path / "repo")
+        items = [
+            ActiveWorkItem(id="CLA-A", uuid="u-a", slug="a",
+                           worktree_path=str(tmp_path / "wt-a"),
+                           project_root=repo_root, added_at=now_iso_utc()),
+            ActiveWorkItem(id="CLA-B", uuid="u-b", slug="b",
+                           worktree_path=str(tmp_path / "wt-b"),
+                           project_root=repo_root, added_at=now_iso_utc()),
+            ActiveWorkItem(id="CLA-C", uuid="u-c", slug="c",
+                           worktree_path=str(tmp_path / "wt-c"),
+                           project_root=repo_root, added_at=now_iso_utc()),
+        ]
+        state_map = {
+            "u-a": IssueState(id="s1", name="Done"),
+            "u-b": IssueState(id="s2", name="In Progress"),
+            "u-c": IssueState(id="s3", name="Done"),
+        }
+
+        async def fake_get_state(uuid):
+            return state_map[uuid]
+
+        client = AsyncMock()
+        client.get_issue_state.side_effect = fake_get_state
+
+        wt_mgr = AsyncMock()
+        wt_mgr.cleanup_worktree.return_value = True
+
+        inst = _make_instance(tmp_path, client=client, worktree_mgr=wt_mgr)
+        await inst._workitems_store.write(items)
+        inst._active_workitem_count = 3  # prime as if added in prior cycles
+
+        await inst._cleanup_completed_worktrees()
+
+        # Only A and C were Done → cache dropped by 2, not 3.
+        assert inst.processed_count == 1
+        assert inst.to_dto()["processed_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_processed_count_primed_from_disk_on_construction(self, tmp_path):
+        """When the agent restarts, the cache must reflect items already
+        persisted by a previous process, not start at zero."""
+        from claude_mobile.linear.workitems import (
+            ActiveWorkItem,
+            ActiveWorkItemsStore,
+            active_workitems_path,
+            now_iso_utc,
+        )
+
+        state_dir = tmp_path / "state"
+        pre_store = ActiveWorkItemsStore(
+            active_workitems_path(state_dir, "test-project")
+        )
+        await pre_store.write([
+            ActiveWorkItem(
+                id="CLA-PRIOR", uuid="u-prior", slug="cla-prior",
+                worktree_path=str(tmp_path / "wt-prior"),
+                project_root=str(tmp_path / "repo"),
+                added_at=now_iso_utc(),
+            ),
+        ])
+
+        config = _make_config(tmp_path)
+        # Point config at the pre-populated state dir.
+        from dataclasses import replace
+        config = replace(config, state_dir=str(state_dir))
+
+        inst = _make_instance(tmp_path, config=config)
+        assert inst.to_dto()["processed_count"] == 1
 
 
 class TestStopEmitsPhase:

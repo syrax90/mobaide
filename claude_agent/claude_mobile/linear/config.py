@@ -12,6 +12,14 @@ _DEFAULT_AUTO_SCAN_PROMPT = (
     "Analyze the issue deeply. Resolve the issue (task). WORK in GOP Development Mode."
 )
 
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def _parse_bool(raw: str | None, *, default: bool) -> bool:
+    if raw is None:
+        return default
+    return raw.strip().lower() in _TRUTHY
+
 
 @dataclass(frozen=True)
 class AutoScanConfig:
@@ -27,6 +35,9 @@ class AutoScanConfig:
     main_branch: str = "main"
     linear_active_state: str = "In Progress"
     auto_scan_prompt: str | None = _DEFAULT_AUTO_SCAN_PROMPT
+    auto_remove_worktrees: bool = True
+    linear_done_state: str = "Done"
+    state_dir: str = "state"
 
     @classmethod
     def from_env(cls) -> AutoScanConfig | None:
@@ -60,4 +71,9 @@ class AutoScanConfig:
             main_branch=os.getenv("MAIN_BRANCH", "main"),
             linear_active_state=os.getenv("LINEAR_ACTIVE_STATE", "In Progress"),
             auto_scan_prompt=prompt,
+            auto_remove_worktrees=_parse_bool(
+                os.getenv("AUTO_REMOVE_WORKTREES"), default=True,
+            ),
+            linear_done_state=os.getenv("LINEAR_DONE_STATE", "Done"),
+            state_dir=os.getenv("AGENT_STATE_DIR", "state"),
         )

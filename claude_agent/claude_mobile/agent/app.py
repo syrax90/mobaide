@@ -56,21 +56,6 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
-        # One-time legacy migration: drop the old global processed_items.json.
-        # Per-project state lives under claude_agent/state/<project>/processed_items.json now.
-        from pathlib import Path as _Path
-        legacy = _Path("processed_items.json")
-        if legacy.exists():
-            try:
-                legacy.unlink()
-                logger.warning(
-                    "autoscan.legacy_state.deleted path=%s — first scan per "
-                    "project will re-emit previously processed issues once.",
-                    legacy,
-                )
-            except OSError as exc:
-                logger.warning("autoscan.legacy_state.delete_failed: %s", exc)
-
         await app.state.session_manager.start_liveness_monitor()
         # Start relay client if configured (connects to Central Server).
         if config.relay_config is not None:
