@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from claude_mobile.core.projects_config import ProjectsConfig
 from claude_mobile.linear.config import AutoScanConfig
+from claude_mobile.relay.config import RelayConfig
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class AgentConfig:
     log_sample_ws: bool = False
     auto_scan_config: AutoScanConfig | None = None
     projects_config: ProjectsConfig | None = None
+    relay_config: RelayConfig | None = None
 
     @classmethod
     def from_env(cls) -> AgentConfig:
@@ -55,4 +57,5 @@ class AgentConfig:
             log_sample_ws=os.getenv("LOG_SAMPLE_WS", "").lower() in ("1", "true", "yes"),
             auto_scan_config=AutoScanConfig.from_env(),
             projects_config=ProjectsConfig.from_env(),
+            relay_config=RelayConfig.from_env(),
         )
