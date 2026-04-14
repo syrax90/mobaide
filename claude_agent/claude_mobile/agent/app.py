@@ -72,8 +72,26 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 logger.warning("autoscan.legacy_state.delete_failed: %s", exc)
 
         await app.state.session_manager.start_liveness_monitor()
+        # Start relay client if configured (connects to Central Server).
+        if config.relay_config is not None:
+            from claude_mobile.relay.client import RelayClient
+
+            app.state.relay_client = RelayClient(
+                config=config.relay_config,
+                session_manager=app.state.session_manager,
+                event_bus=app.state.event_bus,
+                broadcaster=app.state.broadcaster,
+                app_state=app.state,
+            )
+            await app.state.relay_client.start()
+        else:
+            app.state.relay_client = None
         yield
         logger.info("agent.shutting_down")
+        # Stop relay client first (unsubscribes from fanouts/buses).
+        relay_client = getattr(app.state, "relay_client", None)
+        if relay_client is not None:
+            await relay_client.stop()
         autoscan_mgr = getattr(app.state, "autoscan_manager", None)
         if autoscan_mgr is not None:
             await autoscan_mgr.shutdown()

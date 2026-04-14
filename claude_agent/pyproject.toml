@@ -19,6 +19,7 @@ dependencies = [
     "structlog>=24.1",
     "asgi-correlation-id>=4.3",
     "orjson",
+    "websockets>=13.0",
 ]
 
 [project.optional-dependencies]

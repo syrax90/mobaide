@@ -33,6 +33,12 @@ _ENV_VARS = (
     "BRANCH_PREFIX",
     "MAIN_BRANCH",
     "LINEAR_ACTIVE_STATE",
+    "RELAY_SERVER_URL",
+    "RELAY_AGENT_ID",
+    "RELAY_AGENT_TOKEN",
+    "RELAY_HEARTBEAT_INTERVAL",
+    "RELAY_RECONNECT_BASE",
+    "RELAY_RECONNECT_MAX",
 )
 
 
@@ -252,3 +258,33 @@ class TestAgentConfigStringPassThrough:
 
         assert cfg.log_level == "DEBUG"
         assert cfg.log_format == "console"
+
+
+class TestAgentConfigRelayIntegration:
+    def test_relay_config_none_when_not_configured(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.relay_config is None
+
+    def test_relay_config_populated_when_env_vars_set(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
+        monkeypatch.setenv("RELAY_AGENT_ID", "agent-1")
+        monkeypatch.setenv("RELAY_AGENT_TOKEN", "secret-tok")
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.relay_config is not None
+        assert cfg.relay_config.server_url == "wss://relay.example.com"
+        assert cfg.relay_config.agent_id == "agent-1"
+        assert cfg.relay_config.agent_token == "secret-tok"
+
+    def test_relay_config_raises_on_partial_env(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
+        # Missing RELAY_AGENT_ID and RELAY_AGENT_TOKEN
+
+        with pytest.raises(RuntimeError, match="RELAY_AGENT_ID"):
+            AgentConfig.from_env()
