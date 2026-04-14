@@ -66,6 +66,16 @@ mutation ($issueId: String!, $labelId: String!) {
 }
 """)
 
+_QUERY_ISSUE_STATE = gql("""
+query ($id: String!) {
+  issue(id: $id) {
+    id
+    identifier
+    state { id name }
+  }
+}
+""")
+
 
 class LinearApiClient:
     """Async GraphQL client for the Linear API.
@@ -150,6 +160,45 @@ class LinearApiClient:
                 state_id=state_id,
             )
         return success
+
+    @log_call(name="linear.get_issue_state", log_args=("issue_uuid",))
+    async def get_issue_state(self, issue_uuid: str) -> IssueState | None:
+        """Query the current workflow state of a single Linear issue.
+
+        Returns the issue's current :class:`IssueState`, or ``None`` if
+        the query fails or the issue cannot be found. Errors are logged
+        as warnings — callers should treat ``None`` as "unknown" and
+        typically retry on the next scan cycle.
+        """
+        await self._gate()
+        try:
+            async with self._client as session:
+                result = await session.execute(
+                    _QUERY_ISSUE_STATE,
+                    variable_values={"id": issue_uuid},
+                )
+        except Exception as exc:
+            logger.warning(
+                "linear.get_issue_state.failed uuid=%s error=%s",
+                issue_uuid, exc,
+            )
+            return None
+        issue = (result or {}).get("issue")
+        if not issue:
+            logger.warning(
+                "linear.get_issue_state.not_found uuid=%s", issue_uuid,
+            )
+            return None
+        state = issue.get("state") or {}
+        name = state.get("name")
+        sid = state.get("id")
+        if not isinstance(name, str) or not isinstance(sid, str):
+            logger.warning(
+                "linear.get_issue_state.malformed uuid=%s payload=%s",
+                issue_uuid, issue,
+            )
+            return None
+        return IssueState(id=sid, name=name)
 
     @log_call(name="linear.remove_issue_label", log_args=("issue_id", "label_id"))
     async def remove_issue_label(self, issue_id: str, label_id: str) -> bool:

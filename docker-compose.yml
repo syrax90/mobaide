@@ -11,7 +11,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - USER_STORE_PATH=/app/data/users.json
-      - PROCESSED_ITEMS_PATH=/app/data/processed_items.json
+      - AGENT_STATE_DIR=/app/data/state
     volumes:
       - agent-data:/app/data
     # Ports are NOT published — all external access goes through cloudflared.

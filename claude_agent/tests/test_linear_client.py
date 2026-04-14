@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from claude_mobile.linear.client import LinearApiClient
-from claude_mobile.linear.models import LinearIssue
+from claude_mobile.linear.models import IssueState, LinearIssue
 
 
 @pytest.fixture
@@ -120,6 +120,40 @@ class TestUpdateIssueState:
         result = await client.update_issue_state("issue-1", "state-2")
 
         assert result is False
+
+
+class TestGetIssueState:
+    async def test_returns_issue_state_when_found(self, client, mock_session):
+        mock_session.execute.return_value = {
+            "issue": {
+                "id": "issue-uuid-1",
+                "identifier": "CLA-8",
+                "state": {"id": "state-done", "name": "Done"},
+            }
+        }
+        state = await client.get_issue_state("issue-uuid-1")
+
+        assert isinstance(state, IssueState)
+        assert state.id == "state-done"
+        assert state.name == "Done"
+
+    async def test_returns_none_when_issue_missing(self, client, mock_session):
+        mock_session.execute.return_value = {"issue": None}
+        assert await client.get_issue_state("missing-uuid") is None
+
+    async def test_returns_none_on_empty_payload(self, client, mock_session):
+        mock_session.execute.return_value = {}
+        assert await client.get_issue_state("whatever") is None
+
+    async def test_returns_none_when_execute_raises(self, client, mock_session):
+        mock_session.execute.side_effect = RuntimeError("network down")
+        assert await client.get_issue_state("uuid") is None
+
+    async def test_returns_none_on_malformed_state(self, client, mock_session):
+        mock_session.execute.return_value = {
+            "issue": {"id": "x", "identifier": "CLA-1", "state": {}}
+        }
+        assert await client.get_issue_state("uuid") is None
 
 
 class TestRemoveIssueLabel:

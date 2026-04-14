@@ -18,6 +18,9 @@ _ENV_VARS = (
     "BRANCH_PREFIX",
     "MAIN_BRANCH",
     "LINEAR_ACTIVE_STATE",
+    "AUTO_REMOVE_WORKTREES",
+    "LINEAR_DONE_STATE",
+    "AGENT_STATE_DIR",
 )
 
 
@@ -160,6 +163,9 @@ class TestAutoScanConfigDefaults:
         assert cfg.branch_prefix == ""
         assert cfg.main_branch == "main"
         assert cfg.linear_active_state == "In Progress"
+        assert cfg.auto_remove_worktrees is True
+        assert cfg.linear_done_state == "Done"
+        assert cfg.state_dir == "state"
 
     def test_env_overrides_applied(self, monkeypatch):
         monkeypatch.setenv("PROJECTS", _projects_json())
@@ -167,6 +173,8 @@ class TestAutoScanConfigDefaults:
         monkeypatch.setenv("BRANCH_PREFIX", "feat/")
         monkeypatch.setenv("MAIN_BRANCH", "develop")
         monkeypatch.setenv("LINEAR_ACTIVE_STATE", "Doing")
+        monkeypatch.setenv("LINEAR_DONE_STATE", "Completed")
+        monkeypatch.setenv("AGENT_STATE_DIR", "/tmp/my-state")
 
         cfg = AutoScanConfig.from_env()
 
@@ -175,3 +183,31 @@ class TestAutoScanConfigDefaults:
         assert cfg.branch_prefix == "feat/"
         assert cfg.main_branch == "develop"
         assert cfg.linear_active_state == "Doing"
+        assert cfg.linear_done_state == "Completed"
+        assert cfg.state_dir == "/tmp/my-state"
+
+
+class TestAutoScanConfigWorktreeCleanup:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("true", True), ("TRUE", True), ("1", True),
+            ("yes", True), ("on", True),
+            ("false", False), ("0", False), ("no", False),
+            ("off", False), ("", False), ("garbage", False),
+        ],
+    )
+    def test_auto_remove_worktrees_boolean_parsing(self, monkeypatch, raw, expected):
+        monkeypatch.setenv("PROJECTS", _projects_json())
+        monkeypatch.setenv("AUTO_REMOVE_WORKTREES", raw)
+
+        cfg = AutoScanConfig.from_env()
+
+        assert cfg is not None
+        assert cfg.auto_remove_worktrees is expected
+
+    def test_auto_remove_worktrees_defaults_true_when_unset(self, monkeypatch):
+        monkeypatch.setenv("PROJECTS", _projects_json())
+        cfg = AutoScanConfig.from_env()
+        assert cfg is not None
+        assert cfg.auto_remove_worktrees is True

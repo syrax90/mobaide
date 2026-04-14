@@ -38,6 +38,12 @@ from .models import (
     now_iso,
 )
 from .rate_limiter import LinearRateLimiter
+from .workitems import (
+    ActiveWorkItem,
+    ActiveWorkItemsStore,
+    active_workitems_path,
+    now_iso_utc,
+)
 from .worktree import WorktreeManager, convert_to_worktree_slug
 
 logger = get_logger(__name__)
@@ -75,10 +81,24 @@ class AutoScanInstance:
         self._event_bus = event_bus
         self._client_options = client_options
 
-        # In-memory dedup only — purges when the AutoScanInstance stops.
-        # Source of truth for "needs processing" is the Linear issue's state +
-        # AutoPipeline label, which the pipeline transitions away after work.
-        self._processed_items: set[str] = set()
+        # Per-project persistent record of issues whose worktrees have been
+        # created by auto-scan. The scanner consults this file AFTER the
+        # processing loop each cycle to detect issues that reached the
+        # configured Done state and tear down their worktrees.
+        #
+        # It is intentionally NOT used as a dedup gate for the processing
+        # loop — the source of truth for "needs processing" is the Linear
+        # query filter (state=Proposals + label=AutoPipeline). The processing
+        # step itself transitions state and removes the label, which
+        # naturally prevents the issue from reappearing unless the user
+        # explicitly resets it in Linear.
+        self._workitems_store = ActiveWorkItemsStore(
+            active_workitems_path(config.state_dir, project_name)
+        )
+        # Cache of ``len(workitems_store)`` kept in sync by every add/remove
+        # call in this class. Primed lazily from disk on first read to cover
+        # the case where the store was populated in a previous process.
+        self._active_workitem_count: int = self._workitems_store.peek_count()
         self._status = ScanStatus.IDLE
         self._poll_task: asyncio.Task[None] | None = None
         self._last_scan_time: float | None = None
@@ -105,7 +125,14 @@ class AutoScanInstance:
 
     @property
     def processed_count(self) -> int:
-        return len(self._processed_items)
+        """Number of currently tracked active work items for this project.
+
+        Name kept for DTO compatibility with the Android client, which
+        reads ``processed_count`` from the auto-scan status payload. The
+        value is updated in-memory at every add/remove to avoid a
+        synchronous disk read on the status-rendering hot path.
+        """
+        return self._active_workitem_count
 
     @property
     def current_seq(self) -> int:
@@ -162,14 +189,14 @@ class AutoScanInstance:
     def request_immediate_scan(self) -> None:
         """Wake the polling loop to run a scan cycle immediately.
 
-        Clears the in-memory dedup set so that previously-processed issues
-        whose state was manually reset in Linear will be picked up again.
-
-        Also reanchors ``next_scan_at`` to "now" and republishes status so
+        Reanchors ``next_scan_at`` to "now" and republishes status so
         the Android client's countdown can reset synchronously without
         having to wait for the next poll cycle to emit a phase event.
+
+        Re-processing of previously-seen issues is now driven purely by
+        the Linear query filters (state=Proposals + label=AutoPipeline) —
+        there is no in-memory dedup set to clear.
         """
-        self._processed_items.clear()
         self._run_now_event.set()
         self._next_scan_at = datetime.now(timezone.utc)
         self._publish_status()
@@ -216,14 +243,23 @@ class AutoScanInstance:
         self._emit_phase("scan_started")
 
         issues = await self._client.get_auto_scan_issues()
-        new_issues = [i for i in issues if i.id not in self._processed_items]
 
         processed_count = 0
-        if new_issues:
-            logger.info("Found %d new issue(s) to process", len(new_issues))
-            for issue in new_issues:
+        if issues:
+            logger.info("Found %d matching issue(s) to process", len(issues))
+            for issue in issues:
                 await self._process_issue(issue)
                 processed_count += 1
+        else:
+            logger.info("No matching AutoPipeline issues found")
+
+        # Worktree cleanup runs every cycle, even when no new issues were
+        # processed — items added in earlier cycles may now be Done.
+        if self._config.auto_remove_worktrees:
+            try:
+                await self._cleanup_completed_worktrees()
+            except Exception:
+                logger.exception("autoscan.cleanup.failed")
 
         self._emit_phase("scan_completed", issues_processed=processed_count)
 
@@ -275,6 +311,7 @@ class AutoScanInstance:
         # 3) Worktree create
         slug = convert_to_worktree_slug(issue.identifier, issue.title)
         self._emit_issue(issue, "worktree_create", "started")
+        wt_result = None
         try:
             wt_result = await self._worktree_mgr.create_worktree(slug, project.path)
             target_dir = wt_result.path if wt_result else project.path
@@ -285,6 +322,28 @@ class AutoScanInstance:
         except Exception as exc:
             self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
             target_dir = project.path
+
+        # 3b) Persist to active_workitems.json for later cleanup.
+        # Only track when a worktree actually exists on disk and the
+        # feature is enabled.
+        if self._config.auto_remove_worktrees and wt_result is not None:
+            try:
+                added = await self._workitems_store.add(
+                    ActiveWorkItem(
+                        id=issue.identifier,
+                        uuid=issue.id,
+                        slug=slug,
+                        worktree_path=str(wt_result.path),
+                        project_root=project.path,
+                        added_at=now_iso_utc(),
+                    )
+                )
+                if added:
+                    self._active_workitem_count += 1
+            except Exception:
+                logger.exception(
+                    "autoscan.workitem.persist_failed id=%s", issue.identifier,
+                )
 
         # 4) Session spawn
         self._emit_issue(issue, "session_spawn", "started")
@@ -325,8 +384,97 @@ class AutoScanInstance:
                 "Failed to start session for %s", issue.identifier, exc_info=True
             )
 
-        self._processed_items.add(issue.id)
         self._last_activity_at = time.time()
+
+    async def _cleanup_completed_worktrees(self) -> None:
+        """Remove worktrees for tracked issues that reached the Done state.
+
+        Mirrors the PowerShell ``Remove-CompletedWorktrees`` function: for
+        each item in ``active_workitems.json`` belonging to the current
+        project, query Linear for the issue's current workflow state;
+        if it matches ``config.linear_done_state``, remove the git
+        worktree and drop the entry from the store. Items for other
+        projects are preserved (the same file is shared per-project in
+        practice, but the guard is kept for safety).
+        """
+        project = self._config.projects[self._project_name]
+        project_root = project.path
+        done_state_name = self._config.linear_done_state
+
+        items = await self._workitems_store.read()
+        tracked = [i for i in items if i.project_root == project_root]
+        if not tracked:
+            logger.info(
+                "autoscan.cleanup.start project=%s tracked=0 — nothing to check",
+                self._project_name,
+            )
+            return
+
+        logger.info(
+            "autoscan.cleanup.start project=%s tracked=%d",
+            self._project_name, len(tracked),
+        )
+
+        removed = 0
+        kept = 0
+        for item in tracked:
+            try:
+                state = await self._client.get_issue_state(item.uuid)
+            except Exception as exc:
+                logger.warning(
+                    "autoscan.cleanup.query_failed id=%s error=%s — keeping for retry",
+                    item.id, exc,
+                )
+                kept += 1
+                continue
+
+            if state is None:
+                logger.warning(
+                    "autoscan.cleanup.query_failed id=%s — Linear returned no state; keeping",
+                    item.id,
+                )
+                kept += 1
+                continue
+
+            if state.name != done_state_name:
+                logger.info(
+                    "autoscan.cleanup.keep id=%s state=%s",
+                    item.id, state.name,
+                )
+                kept += 1
+                continue
+
+            logger.info(
+                "autoscan.cleanup.remove id=%s state=%s worktree=%s",
+                item.id, state.name, item.worktree_path,
+            )
+            try:
+                ok = await self._worktree_mgr.cleanup_worktree(
+                    item.worktree_path, project_root,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "autoscan.cleanup.remove_failed id=%s error=%s — keeping for retry",
+                    item.id, exc,
+                )
+                kept += 1
+                continue
+            if not ok:
+                logger.warning(
+                    "autoscan.cleanup.remove_failed id=%s — keeping for retry", item.id,
+                )
+                kept += 1
+                continue
+            if await self._workitems_store.remove(item.id):
+                self._active_workitem_count = max(
+                    0, self._active_workitem_count - 1,
+                )
+            removed += 1
+
+        logger.info(
+            "autoscan.cleanup.summary project=%s removed=%d remaining=%d",
+            self._project_name, removed, kept,
+        )
 
     # -- Event pub-sub --
 
@@ -411,7 +559,7 @@ class AutoScanInstance:
             "status": self._status.value,
             "started_at": self._started_at,
             "last_activity_at": self._last_activity_at,
-            "processed_count": len(self._processed_items),
+            "processed_count": self.processed_count,
             "last_scan_time": self._last_scan_time,
             "scan_interval_seconds": self._config.scan_interval_seconds,
             "next_scan_at": self._next_scan_at.isoformat() if self._next_scan_at else None,
