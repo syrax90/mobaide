@@ -1,8 +1,10 @@
 .mcp.json
 .claude
 **/__pycache__
+**/.pytest_cache
 **/venv/
 claude_agent/.env
+central_server/.env
 deploy/tunnel.env
 claude_agent/users.json
 android/app/src/main/res/xml/network_security_config.xml
