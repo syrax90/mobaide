@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Agents — Central Server{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Registered Agents</h1>
+    <a href="/dashboard/agents/register" class="btn btn-primary">Register Agent</a>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Agent ID</th>
+            <th>Status</th>
+            <th>Last Seen</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody hx-get="/dashboard" hx-trigger="every 10s" hx-select="tbody tr" hx-swap="innerHTML">
+        {% for agent in agents %}
+        <tr>
+            <td><a href="/dashboard/agents/{{ agent.agent_id }}">{{ agent.name }}</a></td>
+            <td><code>{{ agent.agent_id }}</code></td>
+            <td>
+                {% if agent.online %}
+                <span class="badge badge-online">Online</span>
+                {% else %}
+                <span class="badge badge-offline">Offline</span>
+                {% endif %}
+            </td>
+            <td>{{ agent.last_seen_at or "Never" }}</td>
+            <td><a href="/dashboard/agents/{{ agent.agent_id }}" class="btn btn-sm">Details</a></td>
+        </tr>
+        {% endfor %}
+        {% if not agents %}
+        <tr><td colspan="5" class="empty">No agents registered yet.</td></tr>
+        {% endif %}
+    </tbody>
+</table>
+{% endblock %}

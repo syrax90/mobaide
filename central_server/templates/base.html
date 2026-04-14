@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Central Server{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="/dashboard" class="logo">Central Server</a>
+            {% if username %}
+            <div class="nav-right">
+                <span class="user">{{ username }}</span>
+                <form method="post" action="/dashboard/logout" style="display:inline">
+                    <button type="submit" class="btn btn-sm">Logout</button>
+                </form>
+            </div>
+            {% endif %}
+        </nav>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

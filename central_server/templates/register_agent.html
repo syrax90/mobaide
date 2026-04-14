@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Register Agent — Central Server{% endblock %}
+{% block content %}
+<div class="card">
+    <h2>Register New Agent</h2>
+
+    {% if token %}
+    <div class="alert alert-success">
+        <p><strong>Agent registered successfully!</strong></p>
+        <p>Agent ID: <code>{{ agent_id }}</code></p>
+        <p>Token (copy now — shown only once):</p>
+        <pre class="token-display">{{ token }}</pre>
+        <p>Configure your agent with these values in its environment.</p>
+    </div>
+    <a href="/dashboard" class="btn">&larr; Back to agents</a>
+    {% else %}
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/dashboard/agents/register">
+        <label for="name">Agent Name</label>
+        <input type="text" id="name" name="name" placeholder="e.g. home-desktop" required autofocus>
+        <button type="submit" class="btn btn-primary">Register</button>
+    </form>
+    <p><a href="/dashboard">&larr; Back to agents</a></p>
+    {% endif %}
+</div>
+{% endblock %}

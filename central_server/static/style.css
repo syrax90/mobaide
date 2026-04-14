@@ -1,0 +1,129 @@
+/* Central Server Dashboard — Minimal CSS */
+:root {
+    --bg: #f8f9fa;
+    --surface: #fff;
+    --text: #212529;
+    --text-muted: #6c757d;
+    --border: #dee2e6;
+    --primary: #0d6efd;
+    --primary-hover: #0b5ed7;
+    --danger: #dc3545;
+    --success: #198754;
+    --success-bg: #d1e7dd;
+    --error-bg: #f8d7da;
+    --radius: 6px;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    line-height: 1.5;
+}
+header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 1.5rem;
+}
+nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 960px;
+    margin: 0 auto;
+}
+.logo {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--text);
+    text-decoration: none;
+}
+.nav-right { display: flex; align-items: center; gap: 0.75rem; }
+.user { color: var(--text-muted); font-size: 0.9rem; }
+main { max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; }
+h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+h2 { margin: 1.5rem 0 0.75rem; font-size: 1.2rem; }
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+/* Buttons */
+.btn {
+    display: inline-block;
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-decoration: none;
+    line-height: 1.5;
+}
+.btn:hover { background: var(--bg); }
+.btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn-sm { padding: 0.2rem 0.5rem; font-size: 0.8rem; }
+/* Cards */
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    max-width: 420px;
+}
+.login-card { margin: 4rem auto; }
+/* Forms */
+label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 500; font-size: 0.9rem; }
+input[type="text"], input[type="password"] {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.95rem;
+}
+form button[type="submit"] { margin-top: 1rem; }
+/* Tables */
+table { width: 100%; border-collapse: collapse; background: var(--surface); border-radius: var(--radius); overflow: hidden; }
+thead { background: var(--bg); }
+th, td { padding: 0.6rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
+th { font-weight: 600; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+td { font-size: 0.9rem; }
+.empty { color: var(--text-muted); text-align: center; padding: 2rem; }
+code { background: var(--bg); padding: 0.15rem 0.35rem; border-radius: 3px; font-size: 0.85rem; }
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.badge-online { background: var(--success); color: #fff; }
+.badge-offline { background: var(--text-muted); color: #fff; }
+/* Alerts */
+.alert {
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius);
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+.alert-error { background: var(--error-bg); color: var(--danger); }
+.alert-success { background: var(--success-bg); color: var(--success); }
+/* QR / Token display */
+.qr-result { display: flex; gap: 1.5rem; align-items: flex-start; margin-top: 1rem; padding: 1rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.qr-image { width: 200px; height: 200px; image-rendering: pixelated; }
+.qr-details { flex: 1; }
+.token-display {
+    background: var(--bg);
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius);
+    font-family: monospace;
+    font-size: 0.85rem;
+    word-break: break-all;
+    user-select: all;
+}
+.text-muted { color: var(--text-muted); font-size: 0.85rem; }
+.info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem; margin-bottom: 1rem; }
+section { margin-bottom: 2rem; }

@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "central-server"
+version = "0.1.0"
+description = "Central relay server for Claude Mobile — WebSocket relay with agent registration and QR pairing"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "PyJWT",
+    "aiosqlite",
+    "structlog>=24.1",
+    "asgi-correlation-id>=4.3",
+    "orjson",
+    "python-dotenv",
+    "bcrypt",
+    "jinja2",
+    "python-multipart",
+    "qrcode[pil]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-timeout",
+    "httpx",
+    "httpx-ws",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
