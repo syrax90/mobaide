@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -23,6 +24,7 @@ _MOBILE_QUEUE_SIZE = 5_000
 class AgentConnection:
     agent_id: str
     websocket: WebSocket
+    conn_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     send_queue: asyncio.Queue[bytes] = field(
         default_factory=lambda: asyncio.Queue(maxsize=_AGENT_QUEUE_SIZE)
     )
@@ -62,8 +64,26 @@ class RoutingTable:
         logger.info("routing.agent_registered agent_id=%s", agent_id)
         return conn
 
-    def unregister_agent(self, agent_id: str) -> list[MobileClient]:
-        """Remove agent and return all its mobile clients (for cleanup)."""
+    def unregister_agent(
+        self, agent_id: str, conn_id: str | None = None
+    ) -> list[MobileClient]:
+        """Remove agent and return all its mobile clients (for cleanup).
+
+        If *conn_id* is provided, the removal is a no-op when the current
+        connection has a different ID (prevents a stale disconnect handler
+        from evicting a newer re-connection).
+        """
+        current = self._agents.get(agent_id)
+        if current is None:
+            return []
+        if conn_id is not None and current.conn_id != conn_id:
+            logger.debug(
+                "routing.unregister_skipped agent_id=%s stale_conn=%s current_conn=%s",
+                agent_id,
+                conn_id,
+                current.conn_id,
+            )
+            return []
         self._agents.pop(agent_id, None)
         channels = self._mobile_clients.pop(agent_id, {})
         all_clients = []

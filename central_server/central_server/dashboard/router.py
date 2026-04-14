@@ -48,6 +48,7 @@ async def login_submit(request: Request):
         key="dashboard_token",
         value=token,
         httponly=True,
+        secure=True,
         samesite="lax",
         max_age=request.app.state.config.dashboard_token_expire_minutes * 60,
     )

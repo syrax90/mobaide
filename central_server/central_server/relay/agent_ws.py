@@ -99,7 +99,7 @@ async def agent_tunnel(websocket: WebSocket) -> None:
             task.cancel()
     finally:
         # -- Step 4: Cleanup on disconnect -------------------------------------
-        disconnected_clients = routing.unregister_agent(agent_id)
+        disconnected_clients = routing.unregister_agent(agent_id, conn.conn_id)
         for client in disconnected_clients:
             try:
                 await client.websocket.close(
@@ -192,7 +192,6 @@ async def _pinger(
 ) -> None:
     """Send WebSocket pings and monitor for agent liveness."""
     interval = config.ws_ping_interval
-    timeout = config.agent_disconnect_timeout
     try:
         while True:
             await asyncio.sleep(interval)
