@@ -30,9 +30,12 @@ logger = get_logger(__name__)
 
 _HTTP_LOG_SKIP_PATHS = frozenset({"/api/health"})
 
-# Static files and templates live alongside the package directory.
+# Static files and templates live alongside the package directory in a source
+# checkout, or alongside the working directory when packaged into a Docker
+# image that only ships site-packages.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_STATIC_DIR = _PROJECT_ROOT / "static"
+_CWD_STATIC = Path.cwd() / "static"
+_STATIC_DIR = _CWD_STATIC if _CWD_STATIC.is_dir() else _PROJECT_ROOT / "static"
 
 
 def _generate_correlation_id() -> str:

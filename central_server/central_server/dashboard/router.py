@@ -12,8 +12,12 @@ from ..auth.dependencies import get_dashboard_user
 
 logger = logging.getLogger(__name__)
 
-# Templates live in central_server/templates/ (sibling of the package dir).
-_TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+# Templates live in central_server/templates/ (sibling of the package dir for
+# source checkouts, or alongside the working directory when packaged into a
+# Docker image that only ships site-packages).
+_CWD_TEMPLATES = Path.cwd() / "templates"
+_SIBLING_TEMPLATES = Path(__file__).resolve().parent.parent.parent / "templates"
+_TEMPLATES_DIR = _CWD_TEMPLATES if _CWD_TEMPLATES.is_dir() else _SIBLING_TEMPLATES
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 router = APIRouter(prefix="/dashboard")
