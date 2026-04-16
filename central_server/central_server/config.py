@@ -9,8 +9,13 @@ class CentralServerConfig:
     """Central relay server configuration loaded from environment variables."""
 
     jwt_secret_key: str
-    dashboard_username: str
-    dashboard_password_hash: str
+
+    # Admin seeding (optional — used on first startup to create admin user)
+    admin_seed_email: str | None = None
+    admin_seed_password: str | None = None
+
+    # Google OAuth (optional — enables POST /api/auth/google)
+    google_client_id: str | None = None
 
     jwt_algorithm: str = "HS256"
     mobile_token_expire_minutes: int = 1440  # 24 hours
@@ -31,16 +36,11 @@ class CentralServerConfig:
         secret = os.getenv("JWT_SECRET_KEY")
         if not secret:
             raise RuntimeError("JWT_SECRET_KEY environment variable is required")
-        dashboard_user = os.getenv("DASHBOARD_USERNAME")
-        if not dashboard_user:
-            raise RuntimeError("DASHBOARD_USERNAME environment variable is required")
-        dashboard_hash = os.getenv("DASHBOARD_PASSWORD_HASH")
-        if not dashboard_hash:
-            raise RuntimeError("DASHBOARD_PASSWORD_HASH environment variable is required")
         return cls(
             jwt_secret_key=secret,
-            dashboard_username=dashboard_user,
-            dashboard_password_hash=dashboard_hash,
+            admin_seed_email=os.getenv("ADMIN_SEED_EMAIL"),
+            admin_seed_password=os.getenv("ADMIN_SEED_PASSWORD"),
+            google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
             mobile_token_expire_minutes=int(
                 os.getenv("MOBILE_TOKEN_EXPIRE_MINUTES", "1440"),

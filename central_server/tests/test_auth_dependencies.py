@@ -1,8 +1,9 @@
 """Tests for auth/dependencies.py — FastAPI dependency functions.
 
-Covers the three auth dependency paths:
-- get_dashboard_user: cookie-based JWT for dashboard
+Covers the auth dependency paths:
+- get_dashboard_user: cookie-based JWT for dashboard (returns UserTokenPayload)
 - get_mobile_user: Bearer token for mobile REST
+- require_role: RBAC dependency factory
 
 (ws_authenticate_mobile requires a real WebSocket and is tested via integration.)
 """
@@ -15,28 +16,27 @@ import jwt
 import pytest
 from fastapi import HTTPException
 
-from central_server.auth.dependencies import get_dashboard_user, get_mobile_user
+from central_server.auth.dependencies import (
+    get_dashboard_user,
+    get_mobile_user,
+    require_role,
+)
+from central_server.auth.models import UserTokenPayload
 from central_server.auth.service import AuthService
 from central_server.config import CentralServerConfig
 from central_server.db.database import Database
-from tests.conftest import (
-    TEST_DASHBOARD_PASSWORD,
-    TEST_DASHBOARD_USER,
-    TEST_JWT_SECRET,
-)
+from tests.conftest import TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD, TEST_JWT_SECRET
 
-# Build a stable hash for tests (avoids the per-test bcrypt cost of conftest).
-import bcrypt
-
-_DASH_HASH = bcrypt.hashpw(TEST_DASHBOARD_PASSWORD.encode(), bcrypt.gensalt()).decode()
+TEST_USER_EMAIL = "user@test.local"
+TEST_USER_PASSWORD = "userpass123"
 
 
 @pytest.fixture
 def auth_config() -> CentralServerConfig:
     return CentralServerConfig(
         jwt_secret_key=TEST_JWT_SECRET,
-        dashboard_username=TEST_DASHBOARD_USER,
-        dashboard_password_hash=_DASH_HASH,
+        admin_seed_email=TEST_ADMIN_EMAIL,
+        admin_seed_password=TEST_ADMIN_PASSWORD,
     )
 
 
@@ -49,8 +49,10 @@ async def auth_db(tmp_path) -> Database:
 
 
 @pytest.fixture
-def auth_service(auth_config, auth_db) -> AuthService:
-    return AuthService(auth_config, auth_db)
+async def auth_service(auth_config, auth_db) -> AuthService:
+    svc = AuthService(auth_config, auth_db)
+    await svc.seed_admin_user()
+    return svc
 
 
 class _FakeApp:
@@ -77,13 +79,17 @@ class _FakeRequest:
 
 class TestGetDashboardUser:
     async def test_valid_cookie(self, auth_service):
-        token = auth_service.create_dashboard_token(TEST_DASHBOARD_USER)
+        _user_id, _role, token = await auth_service.login_user(
+            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+        )
         fake_app = _FakeApp(auth_service)
         request = _FakeRequest(
             cookies={"dashboard_token": token}, app=fake_app
         )
-        username = await get_dashboard_user(request)
-        assert username == TEST_DASHBOARD_USER
+        user = await get_dashboard_user(request)
+        assert isinstance(user, UserTokenPayload)
+        assert user.email == TEST_ADMIN_EMAIL
+        assert user.role == "admin"
 
     async def test_missing_cookie_raises_redirect(self, auth_service):
         fake_app = _FakeApp(auth_service)
@@ -106,8 +112,10 @@ class TestGetDashboardUser:
         """An expired JWT in the cookie should redirect to login."""
         expired_token = jwt.encode(
             {
-                "sub": TEST_DASHBOARD_USER,
+                "sub": "user-id",
                 "type": "dashboard",
+                "email": "admin@test.local",
+                "role": "admin",
                 "iat": int(time.time()) - 7200,
                 "exp": int(time.time()) - 3600,
             },
@@ -142,6 +150,47 @@ class TestGetDashboardUser:
         with pytest.raises(HTTPException) as exc_info:
             await get_dashboard_user(request)
         assert exc_info.value.status_code == 303
+
+
+class TestRequireRole:
+    async def test_admin_allowed(self, auth_service):
+        _user_id, _role, token = await auth_service.login_user(
+            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            cookies={"dashboard_token": token}, app=fake_app
+        )
+        check = require_role("admin")
+        user = await check(user=await get_dashboard_user(request))
+        assert user.role == "admin"
+
+    async def test_viewer_blocked_from_admin(self, auth_service):
+        _user_id, token = await auth_service.register_user(
+            TEST_USER_EMAIL, TEST_USER_PASSWORD
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            cookies={"dashboard_token": token}, app=fake_app
+        )
+        check = require_role("admin")
+        user_payload = await get_dashboard_user(request)
+        with pytest.raises(HTTPException) as exc_info:
+            await check(user=user_payload)
+        assert exc_info.value.status_code == 403
+        assert "admin" in exc_info.value.detail
+
+    async def test_multiple_roles_allowed(self, auth_service):
+        _user_id, token = await auth_service.register_user(
+            TEST_USER_EMAIL, TEST_USER_PASSWORD
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            cookies={"dashboard_token": token}, app=fake_app
+        )
+        check = require_role("admin", "viewer")
+        user = await check(user=await get_dashboard_user(request))
+        assert user.role == "viewer"
 
 
 class TestGetMobileUser:
@@ -187,7 +236,9 @@ class TestGetMobileUser:
 
     async def test_dashboard_token_rejected_for_mobile(self, auth_service):
         """A dashboard token should not pass mobile auth (wrong type)."""
-        dashboard_token = auth_service.create_dashboard_token(TEST_DASHBOARD_USER)
+        _user_id, _role, dashboard_token = await auth_service.login_user(
+            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+        )
         fake_app = _FakeApp(auth_service)
         request = _FakeRequest(
             headers={"Authorization": f"Bearer {dashboard_token}"},

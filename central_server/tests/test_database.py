@@ -114,6 +114,66 @@ class TestPairings:
         assert await db.revoke_pairing(pairing_id) is False
 
 
+class TestUserCRUD:
+    async def test_create_and_get_by_email(self, db: Database):
+        user_id = await db.create_user(
+            email="user@example.com",
+            password_hash="$argon2id$fake",
+            role="viewer",
+        )
+        assert len(user_id) == 12
+        user = await db.get_user_by_email("user@example.com")
+        assert user is not None
+        assert user["id"] == user_id
+        assert user["email"] == "user@example.com"
+        assert user["role"] == "viewer"
+        assert user["password_hash"] == "$argon2id$fake"
+        assert user["google_sub"] is None
+
+    async def test_get_by_id(self, db: Database):
+        user_id = await db.create_user(email="user@example.com")
+        user = await db.get_user_by_id(user_id)
+        assert user is not None
+        assert user["id"] == user_id
+
+    async def test_get_by_google_sub(self, db: Database):
+        user_id = await db.create_user(
+            email="google@example.com", google_sub="g-12345"
+        )
+        user = await db.get_user_by_google_sub("g-12345")
+        assert user is not None
+        assert user["id"] == user_id
+        assert user["email"] == "google@example.com"
+
+    async def test_get_nonexistent(self, db: Database):
+        assert await db.get_user_by_email("nobody@example.com") is None
+        assert await db.get_user_by_id("nonexistent") is None
+        assert await db.get_user_by_google_sub("nosub") is None
+
+    async def test_duplicate_email_raises(self, db: Database):
+        await db.create_user(email="dup@example.com")
+        with pytest.raises(Exception):  # aiosqlite raises IntegrityError
+            await db.create_user(email="dup@example.com")
+
+    async def test_link_google_to_user(self, db: Database):
+        user_id = await db.create_user(
+            email="user@example.com", password_hash="hash"
+        )
+        assert await db.get_user_by_google_sub("g-abc") is None
+
+        await db.link_google_to_user(user_id, "g-abc")
+        user = await db.get_user_by_google_sub("g-abc")
+        assert user is not None
+        assert user["id"] == user_id
+        assert user["google_sub"] == "g-abc"
+
+    async def test_schema_migration_version(self, db: Database):
+        """Verify that PRAGMA user_version is set after migration."""
+        cursor = await db.conn.execute("PRAGMA user_version")
+        row = await cursor.fetchone()
+        assert row[0] == 2
+
+
 class TestRefreshTokens:
     async def test_store_and_validate(self, db: Database):
         agent_id, _ = await db.register_agent("test")

@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ..auth.dependencies import get_dashboard_user
+from ..auth.models import UserTokenPayload
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,15 @@ async def login_page(request: Request):
 @router.post("/login")
 async def login_submit(request: Request):
     form = await request.form()
-    username = form.get("username", "")
+    email = form.get("username", "")  # form field is still named "username"
     password = form.get("password", "")
     auth_service = request.app.state.auth_service
 
-    if not auth_service.verify_dashboard_credentials(str(username), str(password)):
+    try:
+        user_id, role, token = await auth_service.login_user(
+            str(email), str(password)
+        )
+    except ValueError:
         return templates.TemplateResponse(
             request,
             "login.html",
@@ -46,7 +51,6 @@ async def login_submit(request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    token = auth_service.create_dashboard_token(str(username))
     response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         key="dashboard_token",
@@ -73,7 +77,7 @@ async def logout():
 
 @router.get("", response_class=HTMLResponse)
 async def agents_page(
-    request: Request, username: str = Depends(get_dashboard_user)
+    request: Request, user: UserTokenPayload = Depends(get_dashboard_user)
 ):
     db = request.app.state.db
     routing = request.app.state.routing
@@ -83,7 +87,7 @@ async def agents_page(
     return templates.TemplateResponse(
         request,
         "agents.html",
-        {"agents": agents, "username": username},
+        {"agents": agents, "username": user.email},
     )
 
 
@@ -92,16 +96,16 @@ async def agents_page(
 
 @router.get("/agents/register", response_class=HTMLResponse)
 async def register_agent_page(
-    request: Request, username: str = Depends(get_dashboard_user)
+    request: Request, user: UserTokenPayload = Depends(get_dashboard_user)
 ):
     return templates.TemplateResponse(
-        request, "register_agent.html", {"username": username}
+        request, "register_agent.html", {"username": user.email}
     )
 
 
 @router.post("/agents/register", response_class=HTMLResponse)
 async def register_agent_submit(
-    request: Request, username: str = Depends(get_dashboard_user)
+    request: Request, user: UserTokenPayload = Depends(get_dashboard_user)
 ):
     form = await request.form()
     name = str(form.get("name", ""))
@@ -109,7 +113,7 @@ async def register_agent_submit(
         return templates.TemplateResponse(
             request,
             "register_agent.html",
-            {"username": username, "error": "Name is required"},
+            {"username": user.email, "error": "Name is required"},
         )
 
     db = request.app.state.db
@@ -118,7 +122,7 @@ async def register_agent_submit(
     return templates.TemplateResponse(
         request,
         "register_agent.html",
-        {"username": username, "agent_id": agent_id, "token": raw_token},
+        {"username": user.email, "agent_id": agent_id, "token": raw_token},
     )
 
 
@@ -129,7 +133,7 @@ async def register_agent_submit(
 async def agent_detail_page(
     request: Request,
     agent_id: str,
-    username: str = Depends(get_dashboard_user),
+    user: UserTokenPayload = Depends(get_dashboard_user),
 ):
     db = request.app.state.db
     routing = request.app.state.routing
@@ -151,7 +155,7 @@ async def agent_detail_page(
             "agent": agent,
             "pairings": active_pairings,
             "pending_tokens": pending_tokens,
-            "username": username,
+            "username": user.email,
         },
     )
 
@@ -163,7 +167,7 @@ async def agent_detail_page(
 async def generate_pairing_qr(
     request: Request,
     agent_id: str,
-    username: str = Depends(get_dashboard_user),
+    user: UserTokenPayload = Depends(get_dashboard_user),
 ):
     pairing_service = request.app.state.pairing_service
     raw_token, expires_at = await pairing_service.create_pairing_token(agent_id)
@@ -191,7 +195,7 @@ async def generate_pairing_qr(
 async def revoke_pairing_htmx(
     request: Request,
     pairing_id: str,
-    username: str = Depends(get_dashboard_user),
+    user: UserTokenPayload = Depends(get_dashboard_user),
 ):
     pairing_service = request.app.state.pairing_service
     await pairing_service.revoke_pairing(pairing_id)

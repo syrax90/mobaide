@@ -62,6 +62,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         # Initialize services
         app.state.routing = RoutingTable()
         app.state.auth_service = AuthService(config, db)
+        await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db, config)
 
         # Mobile REST proxy for forwarding operations to agents
@@ -152,12 +153,14 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     # Import and include routers
+    from .auth.router import router as auth_router
     from .dashboard.router import router as dashboard_router
     from .pairing.router import router as pairing_router
     from .relay.agent_ws import router as agent_ws_router
     from .relay.mobile_proxy import router as mobile_proxy_router
     from .relay.mobile_ws import router as mobile_ws_router
 
+    app.include_router(auth_router)
     app.include_router(agent_ws_router)
     app.include_router(mobile_ws_router)
     app.include_router(mobile_proxy_router)

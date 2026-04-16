@@ -16,6 +16,18 @@ class MobileTokenPayload:
     iat: int
 
 
+@dataclass
+class UserTokenPayload:
+    """Decoded JWT payload for user (dashboard) session tokens."""
+
+    sub: str  # user_id
+    email: str
+    role: str  # "admin" | "viewer"
+    token_type: str  # "dashboard"
+    exp: int
+    iat: int
+
+
 # -- Pydantic request/response models -----------------------------------------
 
 
@@ -43,11 +55,6 @@ class MobileTokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-class DashboardLoginRequest(BaseModel):
-    username: str
-    password: str
-
-
 class AgentRegisterRequest(BaseModel):
     name: str
 
@@ -55,3 +62,28 @@ class AgentRegisterRequest(BaseModel):
 class AgentRegisterResponse(BaseModel):
     agent_id: str
     token: str
+
+
+# -- User auth request/response models ----------------------------------------
+
+
+class UserRegisterRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UserLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class GoogleAuthRequest(BaseModel):
+    id_token: str
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: str
+    email: str
+    role: str

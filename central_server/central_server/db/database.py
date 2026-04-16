@@ -1,7 +1,7 @@
 """SQLite database layer via aiosqlite.
 
 Manages persistent state: agent registry, pairings, pairing tokens,
-and mobile refresh tokens.
+mobile refresh tokens, and user accounts.
 """
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 import aiosqlite
 import bcrypt
 
-_SCHEMA = """
+# -- Schema versions ----------------------------------------------------------
+
+_SCHEMA_V0 = """
 CREATE TABLE IF NOT EXISTS agents (
     agent_id   TEXT PRIMARY KEY,
     name       TEXT NOT NULL,
@@ -57,6 +59,22 @@ CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
 """
 
+_SCHEMA_V1 = """
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT,
+    google_sub    TEXT UNIQUE,
+    role          TEXT NOT NULL DEFAULT 'viewer',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_google_sub
+    ON users(google_sub) WHERE google_sub IS NOT NULL;
+"""
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -79,7 +97,20 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
-        await self._conn.executescript(_SCHEMA)
+
+        # Schema migration via PRAGMA user_version
+        cursor = await self._conn.execute("PRAGMA user_version")
+        row = await cursor.fetchone()
+        version = row[0] if row else 0
+
+        if version < 1:
+            await self._conn.executescript(_SCHEMA_V0)
+            await self._conn.execute("PRAGMA user_version = 1")
+
+        if version < 2:
+            await self._conn.executescript(_SCHEMA_V1)
+            await self._conn.execute("PRAGMA user_version = 2")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -91,6 +122,62 @@ class Database:
     def conn(self) -> aiosqlite.Connection:
         assert self._conn is not None, "Database not connected"
         return self._conn
+
+    # -- Users -----------------------------------------------------------------
+
+    async def create_user(
+        self,
+        email: str,
+        password_hash: str | None = None,
+        google_sub: str | None = None,
+        role: str = "viewer",
+    ) -> str:
+        """Create a new user. Returns user_id."""
+        user_id = uuid.uuid4().hex[:12]
+        now = _now_iso()
+        await self.conn.execute(
+            "INSERT INTO users (id, email, password_hash, google_sub, role, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, email, password_hash, google_sub, role, now, now),
+        )
+        await self.conn.commit()
+        return user_id
+
+    async def get_user_by_email(self, email: str) -> dict | None:
+        cursor = await self.conn.execute(
+            "SELECT id, email, password_hash, google_sub, role, created_at, updated_at "
+            "FROM users WHERE email = ?",
+            (email,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_user_by_google_sub(self, google_sub: str) -> dict | None:
+        cursor = await self.conn.execute(
+            "SELECT id, email, password_hash, google_sub, role, created_at, updated_at "
+            "FROM users WHERE google_sub = ?",
+            (google_sub,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_user_by_id(self, user_id: str) -> dict | None:
+        cursor = await self.conn.execute(
+            "SELECT id, email, password_hash, google_sub, role, created_at, updated_at "
+            "FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def link_google_to_user(self, user_id: str, google_sub: str) -> None:
+        """Link a Google account to an existing user."""
+        now = _now_iso()
+        await self.conn.execute(
+            "UPDATE users SET google_sub = ?, updated_at = ? WHERE id = ?",
+            (google_sub, now, user_id),
+        )
+        await self.conn.commit()
 
     # -- Agents ----------------------------------------------------------------
 

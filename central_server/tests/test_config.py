@@ -8,11 +8,11 @@ from central_server.config import CentralServerConfig
 
 def test_from_env_with_required_vars(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.setenv("DASHBOARD_USERNAME", "admin")
-    monkeypatch.setenv("DASHBOARD_PASSWORD_HASH", "$2b$12$fakehash")
     config = CentralServerConfig.from_env()
     assert config.jwt_secret_key == "test-secret"
-    assert config.dashboard_username == "admin"
+    assert config.admin_seed_email is None
+    assert config.admin_seed_password is None
+    assert config.google_client_id is None
     assert config.port == 9000
 
 
@@ -22,29 +22,27 @@ def test_from_env_missing_secret(monkeypatch):
         CentralServerConfig.from_env()
 
 
-def test_from_env_missing_dashboard_username(monkeypatch):
+def test_from_env_with_admin_seed(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("DASHBOARD_USERNAME", raising=False)
-    with pytest.raises(RuntimeError, match="DASHBOARD_USERNAME"):
-        CentralServerConfig.from_env()
+    monkeypatch.setenv("ADMIN_SEED_EMAIL", "admin@example.com")
+    monkeypatch.setenv("ADMIN_SEED_PASSWORD", "secretpass")
+    config = CentralServerConfig.from_env()
+    assert config.admin_seed_email == "admin@example.com"
+    assert config.admin_seed_password == "secretpass"
 
 
 def test_from_env_custom_values(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "s")
-    monkeypatch.setenv("DASHBOARD_USERNAME", "u")
-    monkeypatch.setenv("DASHBOARD_PASSWORD_HASH", "h")
     monkeypatch.setenv("PORT", "8888")
     monkeypatch.setenv("PAIRING_TOKEN_TTL_SECONDS", "600")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "my-client-id.apps.googleusercontent.com")
     config = CentralServerConfig.from_env()
     assert config.port == 8888
     assert config.pairing_token_ttl_seconds == 600
+    assert config.google_client_id == "my-client-id.apps.googleusercontent.com"
 
 
 def test_frozen_config():
-    config = CentralServerConfig(
-        jwt_secret_key="s",
-        dashboard_username="u",
-        dashboard_password_hash="h",
-    )
+    config = CentralServerConfig(jwt_secret_key="s")
     with pytest.raises(AttributeError):
         config.port = 1234  # type: ignore[misc]

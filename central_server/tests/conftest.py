@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import bcrypt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -12,19 +11,16 @@ from central_server.pairing.service import PairingService
 from central_server.relay.routing import RoutingTable
 
 TEST_JWT_SECRET = "test-secret-key-for-central-server-do-not-use-in-prod"
-TEST_DASHBOARD_USER = "admin"
-TEST_DASHBOARD_PASSWORD = "testpass123"
-TEST_DASHBOARD_HASH = bcrypt.hashpw(
-    TEST_DASHBOARD_PASSWORD.encode(), bcrypt.gensalt()
-).decode()
+TEST_ADMIN_EMAIL = "admin@test.local"
+TEST_ADMIN_PASSWORD = "testpass123"
 
 
 @pytest.fixture
 def config(tmp_path) -> CentralServerConfig:
     return CentralServerConfig(
         jwt_secret_key=TEST_JWT_SECRET,
-        dashboard_username=TEST_DASHBOARD_USER,
-        dashboard_password_hash=TEST_DASHBOARD_HASH,
+        admin_seed_email=TEST_ADMIN_EMAIL,
+        admin_seed_password=TEST_ADMIN_PASSWORD,
         db_path=str(tmp_path / "test.db"),
         log_level="DEBUG",
         log_format="console",
@@ -56,6 +52,8 @@ async def app(config, db):
     application.state.routing = RoutingTable()
     application.state.auth_service = AuthService(config, db)
     application.state.pairing_service = PairingService(db, config)
+    # Seed admin user (mirrors lifespan)
+    await application.state.auth_service.seed_admin_user()
     yield application
 
 
@@ -67,9 +65,12 @@ async def client(app):
 
 
 @pytest.fixture
-def dashboard_headers(app) -> dict[str, str]:
+async def dashboard_headers(app) -> dict[str, str]:
     """Return dashboard auth cookie as a header dict."""
-    token = app.state.auth_service.create_dashboard_token(TEST_DASHBOARD_USER)
+    auth_service = app.state.auth_service
+    _user_id, _role, token = await auth_service.login_user(
+        TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+    )
     return {"Cookie": f"dashboard_token={token}"}
 
 

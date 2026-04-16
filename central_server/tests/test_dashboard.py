@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import TEST_DASHBOARD_PASSWORD, TEST_DASHBOARD_USER
+from tests.conftest import TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
 
 
 class TestDashboardLogin:
@@ -15,7 +15,7 @@ class TestDashboardLogin:
     async def test_login_success(self, client):
         resp = await client.post(
             "/dashboard/login",
-            data={"username": TEST_DASHBOARD_USER, "password": TEST_DASHBOARD_PASSWORD},
+            data={"username": TEST_ADMIN_EMAIL, "password": TEST_ADMIN_PASSWORD},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -25,7 +25,7 @@ class TestDashboardLogin:
     async def test_login_failure(self, client):
         resp = await client.post(
             "/dashboard/login",
-            data={"username": "wrong", "password": "wrong"},
+            data={"username": "wrong@test.com", "password": "wrong"},
         )
         assert resp.status_code == 401
         assert "Invalid" in resp.text
