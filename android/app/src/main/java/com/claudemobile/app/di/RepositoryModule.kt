@@ -11,6 +11,7 @@ import com.claudemobile.app.data.network.CentralApi
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketManager
 import com.claudemobile.app.data.auth.ConnectionStore
+import com.claudemobile.app.data.repository.AgentRepository
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.PairingRepository
@@ -103,6 +104,15 @@ object RepositoryModule {
     @Singleton
     fun providePreferencesStore(@ApplicationContext context: Context): PreferencesStore {
         return PreferencesStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAgentRepository(
+        centralApi: CentralApi,
+        userIdentityStore: UserIdentityStore,
+    ): AgentRepository {
+        return AgentRepository(centralApi, userIdentityStore)
     }
 
     @Provides

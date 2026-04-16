@@ -74,7 +74,7 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
             ) {
-                Text("Manage Connections")
+                Text("My Agents")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
