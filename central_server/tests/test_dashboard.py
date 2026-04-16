@@ -49,6 +49,11 @@ class TestDashboardPages:
         assert resp.status_code == 200
         assert "Agents" in resp.text
 
+    async def test_agents_page_shows_owner(self, client, dashboard_headers, registered_agent):
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        assert "Owner" in resp.text
+
     async def test_agent_detail(self, client, dashboard_headers, registered_agent):
         agent_id, _ = registered_agent
         resp = await client.get(
@@ -62,27 +67,3 @@ class TestDashboardPages:
             "/dashboard/agents/nonexistent", headers=dashboard_headers
         )
         assert resp.status_code == 404
-
-    async def test_register_agent_page(self, client, dashboard_headers):
-        resp = await client.get(
-            "/dashboard/agents/register", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-
-    async def test_register_agent_submit(self, client, dashboard_headers):
-        resp = await client.post(
-            "/dashboard/agents/register",
-            data={"name": "my-agent"},
-            headers=dashboard_headers,
-        )
-        assert resp.status_code == 200
-        assert "my-agent" in resp.text or "token" in resp.text.lower()
-
-    async def test_generate_qr(self, client, dashboard_headers, registered_agent):
-        agent_id, _ = registered_agent
-        resp = await client.post(
-            f"/dashboard/agents/{agent_id}/pair",
-            headers=dashboard_headers,
-        )
-        assert resp.status_code == 200
-        assert "data:image/png;base64" in resp.text

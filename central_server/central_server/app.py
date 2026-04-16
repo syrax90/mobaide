@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
+from .agents.service import AgentService
 from .auth.service import AuthService
 from .config import CentralServerConfig
 from .db.database import Database
@@ -63,7 +64,8 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.routing = RoutingTable()
         app.state.auth_service = AuthService(config, db)
         await app.state.auth_service.seed_admin_user()
-        app.state.pairing_service = PairingService(db, config)
+        app.state.pairing_service = PairingService(db)
+        app.state.agent_service = AgentService(db, app.state.routing)
 
         # Mobile REST proxy for forwarding operations to agents
         from .relay.mobile_proxy import MobileProxy
@@ -153,6 +155,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     # Import and include routers
+    from .agents.router import router as agents_router
     from .auth.router import router as auth_router
     from .dashboard.router import router as dashboard_router
     from .pairing.router import router as pairing_router
@@ -161,6 +164,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .relay.mobile_ws import router as mobile_ws_router
 
     app.include_router(auth_router)
+    app.include_router(agents_router)
     app.include_router(agent_ws_router)
     app.include_router(mobile_ws_router)
     app.include_router(mobile_proxy_router)

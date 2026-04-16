@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from central_server.agents.service import AgentService
 from central_server.app import create_app
 from central_server.auth.service import AuthService
 from central_server.config import CentralServerConfig
@@ -51,7 +52,8 @@ async def app(config, db):
     application.state.db = db
     application.state.routing = RoutingTable()
     application.state.auth_service = AuthService(config, db)
-    application.state.pairing_service = PairingService(db, config)
+    application.state.pairing_service = PairingService(db)
+    application.state.agent_service = AgentService(db, application.state.routing)
     # Seed admin user (mirrors lifespan)
     await application.state.auth_service.seed_admin_user()
     yield application
@@ -75,6 +77,17 @@ async def dashboard_headers(app) -> dict[str, str]:
 
 
 @pytest.fixture
-async def registered_agent(db) -> tuple[str, str]:
-    """Register a test agent. Returns (agent_id, raw_token)."""
-    return await db.register_agent("test-agent")
+async def api_auth_headers(app) -> dict[str, str]:
+    """Return Bearer auth header for the admin user."""
+    auth_service = app.state.auth_service
+    _user_id, _role, token = await auth_service.login_user(
+        TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+async def registered_agent(db, app) -> tuple[str, str]:
+    """Register a test agent owned by the admin. Returns (agent_id, raw_token)."""
+    admin = await db.get_user_by_email(TEST_ADMIN_EMAIL)
+    return await db.register_agent("test-agent", admin["id"])

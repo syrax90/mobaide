@@ -2,6 +2,7 @@
 
 Covers the auth dependency paths:
 - get_dashboard_user: cookie-based JWT for dashboard (returns UserTokenPayload)
+- get_api_user: Bearer token for user API (returns UserTokenPayload)
 - get_mobile_user: Bearer token for mobile REST
 - require_role: RBAC dependency factory
 
@@ -17,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 from central_server.auth.dependencies import (
+    get_api_user,
     get_dashboard_user,
     get_mobile_user,
     require_role,
@@ -193,10 +195,65 @@ class TestRequireRole:
         assert user.role == "viewer"
 
 
+class TestGetApiUser:
+    async def test_valid_bearer(self, auth_service):
+        _user_id, _role, token = await auth_service.login_user(
+            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {token}"}, app=fake_app
+        )
+        user = await get_api_user(request)
+        assert isinstance(user, UserTokenPayload)
+        assert user.email == TEST_ADMIN_EMAIL
+        assert user.role == "admin"
+
+    async def test_missing_auth_header(self, auth_service):
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(headers={}, app=fake_app)
+        with pytest.raises(HTTPException) as exc_info:
+            await get_api_user(request)
+        assert exc_info.value.status_code == 401
+
+    async def test_invalid_jwt(self, auth_service):
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            headers={"Authorization": "Bearer not-a-valid-jwt"},
+            app=fake_app,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await get_api_user(request)
+        assert exc_info.value.status_code == 401
+
+    async def test_mobile_token_rejected_for_api_user(self, auth_service):
+        """A mobile_access token should not pass get_api_user (wrong type)."""
+        mobile_token = jwt.encode(
+            {
+                "sub": "device-1",
+                "type": "mobile_access",
+                "agent_id": "agent-1",
+                "iat": int(time.time()),
+                "exp": int(time.time()) + 3600,
+            },
+            TEST_JWT_SECRET,
+            algorithm="HS256",
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {mobile_token}"},
+            app=fake_app,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await get_api_user(request)
+        assert exc_info.value.status_code == 401
+
+
 class TestGetMobileUser:
     async def test_valid_bearer(self, auth_service, auth_db):
-        agent_id, _ = await auth_db.register_agent("test-agent")
-        access, _ = await auth_service.create_mobile_tokens("dev-1", agent_id)
+        owner = await auth_db.create_user(email="owner@test.local", password_hash="h")
+        agent_id, _ = await auth_db.register_agent("test-agent", owner)
+        access, _ = await auth_service.create_mobile_tokens("dev-1", agent_id, owner)
         fake_app = _FakeApp(auth_service)
         request = _FakeRequest(
             headers={"Authorization": f"Bearer {access}"}, app=fake_app
@@ -204,6 +261,7 @@ class TestGetMobileUser:
         payload = await get_mobile_user(request)
         assert payload.sub == "dev-1"
         assert payload.agent_id == agent_id
+        assert payload.user_id == owner
         assert payload.token_type == "mobile_access"
 
     async def test_missing_auth_header(self, auth_service):

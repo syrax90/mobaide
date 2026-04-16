@@ -51,24 +51,6 @@ class TestAgentTunnel:
         # After disconnect, agent should be offline
         # (TestClient closes WS on exit, but routing cleanup may be async)
 
-    def test_pairing_token_request(self, app, registered_agent):
-        agent_id, raw_token = registered_agent
-        client = TestClient(app)
-        with client.websocket_connect("/ws/agent-tunnel") as ws:
-            ws.send_text(json.dumps({
-                "type": "auth",
-                "agent_id": agent_id,
-                "token": raw_token,
-            }))
-            ws.receive_text()  # auth_ok
-
-            # Request pairing token via control message
-            ws.send_text(json.dumps({"type": "request_pairing_token"}))
-            resp = json.loads(ws.receive_text())
-            assert resp["type"] == "pairing_token"
-            assert "token" in resp
-            assert "expires_at" in resp
-
 
 class TestHealthEndpoint:
     async def test_health(self, client):

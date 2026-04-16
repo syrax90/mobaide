@@ -12,20 +12,10 @@
 
 <div class="info-grid">
     <div><strong>Agent ID:</strong> <code>{{ agent.agent_id }}</code></div>
+    <div><strong>Owner:</strong> {{ owner_email or "—" }}</div>
     <div><strong>Created:</strong> {{ agent.created_at }}</div>
     <div><strong>Last Seen:</strong> {{ agent.last_seen_at or "Never" }}</div>
 </div>
-
-<section>
-    <h2>Pairing</h2>
-    <button class="btn btn-primary"
-            hx-post="/dashboard/agents/{{ agent.agent_id }}/pair"
-            hx-target="#qr-container"
-            hx-swap="innerHTML">
-        Generate QR Code
-    </button>
-    <div id="qr-container"></div>
-</section>
 
 <section>
     <h2>Paired Devices</h2>

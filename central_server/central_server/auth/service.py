@@ -1,8 +1,8 @@
 """Authentication service for the Central Server.
 
 Four distinct auth paths:
-1. Agent tokens — long-lived, bcrypt-hashed in DB
-2. Mobile session tokens — JWT issued after QR pairing, with refresh rotation
+1. Agent tokens — long-lived, SHA-256 hashed in DB, owned by users
+2. Mobile session tokens — JWT with user_id claim, refresh rotation
 3. User accounts — email/password (Argon2id) or Google OAuth, DB-backed
 4. Dashboard sessions — cookie-based JWT with user_id + role claims
 """
@@ -180,12 +180,13 @@ class AuthService:
     # -- Mobile JWT ------------------------------------------------------------
 
     async def create_mobile_tokens(
-        self, mobile_device_id: str, agent_id: str
+        self, mobile_device_id: str, agent_id: str, user_id: str
     ) -> tuple[str, str]:
         """Create access + refresh token pair for a mobile device."""
         access = self._create_jwt(
             sub=mobile_device_id,
             agent_id=agent_id,
+            user_id=user_id,
             token_type="mobile_access",
             expire_minutes=self._config.mobile_token_expire_minutes,
         )
@@ -204,12 +205,16 @@ class AuthService:
         """Exchange a refresh token for a new access+refresh pair.
 
         Returns None if the refresh token is invalid/expired/revoked.
+        Looks up the agent owner to include user_id in the new token.
         """
         result = await self._db.validate_and_consume_refresh(refresh_token)
         if result is None:
             return None
         mobile_device_id, agent_id = result
-        return await self.create_mobile_tokens(mobile_device_id, agent_id)
+        # Look up the agent owner to include user_id in the refreshed token
+        agent = await self._db.get_agent(agent_id)
+        user_id = agent["owner_user_id"] if agent else ""
+        return await self.create_mobile_tokens(mobile_device_id, agent_id, user_id)
 
     def decode_mobile_token(self, token: str) -> MobileTokenPayload:
         """Decode and validate a mobile access JWT. Raises jwt.InvalidTokenError."""
@@ -225,6 +230,7 @@ class AuthService:
         return MobileTokenPayload(
             sub=payload["sub"],
             agent_id=payload["agent_id"],
+            user_id=payload.get("user_id", ""),
             token_type=payload["type"],
             exp=payload["exp"],
             iat=payload["iat"],

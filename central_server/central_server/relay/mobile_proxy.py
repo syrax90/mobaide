@@ -121,12 +121,12 @@ async def proxy_to_agent(
             detail="Token not valid for this agent",
         )
 
-    # Verify pairing
+    # Verify user owns this agent
     db = request.app.state.db
-    if not await db.is_mobile_paired_to_agent(payload.sub, agent_id):
+    if not await db.is_agent_owner(agent_id, payload.user_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not paired to this agent",
+            detail="User does not own this agent",
         )
 
     # Read request body for non-GET methods

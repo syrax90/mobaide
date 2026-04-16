@@ -1,7 +1,7 @@
 """SQLite database layer via aiosqlite.
 
-Manages persistent state: agent registry, pairings, pairing tokens,
-mobile refresh tokens, and user accounts.
+Manages persistent state: agent registry (user-owned), pairings,
+pairing tokens, mobile refresh tokens, and user accounts.
 """
 from __future__ import annotations
 
@@ -11,17 +11,27 @@ import uuid
 from datetime import datetime, timezone
 
 import aiosqlite
-import bcrypt
 
-# -- Schema versions ----------------------------------------------------------
+# -- Schema -------------------------------------------------------------------
 
-_SCHEMA_V0 = """
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT,
+    google_sub    TEXT UNIQUE,
+    role          TEXT NOT NULL DEFAULT 'viewer',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agents (
-    agent_id   TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    token_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    last_seen_at TEXT
+    agent_id      TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    token_hash    TEXT NOT NULL,
+    owner_user_id TEXT REFERENCES users(id),
+    created_at    TEXT NOT NULL,
+    last_seen_at  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pairings (
@@ -51,28 +61,16 @@ CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
     revoked_at       TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_google_sub
+    ON users(google_sub) WHERE google_sub IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_pairings_agent
     ON pairings(agent_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_pairing_tokens_agent
     ON pairing_tokens(agent_id) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
-"""
-
-_SCHEMA_V1 = """
-CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT,
-    google_sub    TEXT UNIQUE,
-    role          TEXT NOT NULL DEFAULT 'viewer',
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_google_sub
-    ON users(google_sub) WHERE google_sub IS NOT NULL;
 """
 
 
@@ -103,13 +101,21 @@ class Database:
         row = await cursor.fetchone()
         version = row[0] if row else 0
 
-        if version < 1:
-            await self._conn.executescript(_SCHEMA_V0)
-            await self._conn.execute("PRAGMA user_version = 1")
+        if version < 3:
+            # Fresh DB or migrating: create all tables (IF NOT EXISTS is safe)
+            await self._conn.executescript(_SCHEMA)
 
-        if version < 2:
-            await self._conn.executescript(_SCHEMA_V1)
-            await self._conn.execute("PRAGMA user_version = 2")
+            # V2→V3: add owner_user_id column to existing agents table
+            if version >= 1:
+                # Check if column already exists (idempotent)
+                col_cursor = await self._conn.execute("PRAGMA table_info(agents)")
+                cols = {r[1] for r in await col_cursor.fetchall()}
+                if "owner_user_id" not in cols:
+                    await self._conn.execute(
+                        "ALTER TABLE agents ADD COLUMN owner_user_id TEXT REFERENCES users(id)"
+                    )
+
+            await self._conn.execute("PRAGMA user_version = 3")
 
         await self._conn.commit()
 
@@ -181,42 +187,101 @@ class Database:
 
     # -- Agents ----------------------------------------------------------------
 
-    async def register_agent(self, name: str) -> tuple[str, str]:
-        """Register a new agent. Returns (agent_id, raw_token)."""
+    async def register_agent(self, name: str, owner_user_id: str) -> tuple[str, str]:
+        """Register a new user-owned agent. Returns (agent_id, raw_token)."""
         agent_id = uuid.uuid4().hex[:12]
         raw_token = secrets.token_urlsafe(32)
-        token_hash = bcrypt.hashpw(raw_token.encode(), bcrypt.gensalt()).decode()
+        token_hash = _hash_token(raw_token)
         now = _now_iso()
         await self.conn.execute(
-            "INSERT INTO agents (agent_id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
-            (agent_id, name, token_hash, now),
+            "INSERT INTO agents (agent_id, name, token_hash, owner_user_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (agent_id, name, token_hash, owner_user_id, now),
         )
         await self.conn.commit()
         return agent_id, raw_token
 
     async def verify_agent_token(self, agent_id: str, raw_token: str) -> bool:
-        """Verify an agent's authentication token."""
+        """Verify an agent's authentication token (SHA-256 comparison)."""
         cursor = await self.conn.execute(
             "SELECT token_hash FROM agents WHERE agent_id = ?", (agent_id,)
         )
         row = await cursor.fetchone()
         if row is None:
             return False
-        return bcrypt.checkpw(raw_token.encode(), row["token_hash"].encode())
+        return secrets.compare_digest(_hash_token(raw_token), row["token_hash"])
+
+    async def reregister_agent(self, agent_id: str) -> str:
+        """Regenerate agent credentials. Returns new raw_token."""
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = _hash_token(raw_token)
+        await self.conn.execute(
+            "UPDATE agents SET token_hash = ? WHERE agent_id = ?",
+            (token_hash, agent_id),
+        )
+        await self.conn.commit()
+        return raw_token
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        """Delete an agent and cascade to pairings, tokens, refresh tokens."""
+        await self.conn.execute(
+            "DELETE FROM mobile_refresh_tokens WHERE agent_id = ?", (agent_id,)
+        )
+        await self.conn.execute(
+            "DELETE FROM pairing_tokens WHERE agent_id = ?", (agent_id,)
+        )
+        await self.conn.execute(
+            "DELETE FROM pairings WHERE agent_id = ?", (agent_id,)
+        )
+        cursor = await self.conn.execute(
+            "DELETE FROM agents WHERE agent_id = ?", (agent_id,)
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
 
     async def list_agents(self) -> list[dict]:
+        """List all agents (admin view)."""
         cursor = await self.conn.execute(
-            "SELECT agent_id, name, created_at, last_seen_at FROM agents ORDER BY created_at DESC"
+            "SELECT agent_id, name, owner_user_id, created_at, last_seen_at "
+            "FROM agents ORDER BY created_at DESC"
+        )
+        return [dict(row) async for row in cursor]
+
+    async def list_agents_with_owner(self) -> list[dict]:
+        """List all agents with owner email (admin dashboard view)."""
+        cursor = await self.conn.execute(
+            "SELECT a.agent_id, a.name, a.owner_user_id, a.created_at, a.last_seen_at, "
+            "u.email AS owner_email "
+            "FROM agents a LEFT JOIN users u ON a.owner_user_id = u.id "
+            "ORDER BY a.created_at DESC"
+        )
+        return [dict(row) async for row in cursor]
+
+    async def list_agents_for_user(self, user_id: str) -> list[dict]:
+        """List agents owned by a specific user."""
+        cursor = await self.conn.execute(
+            "SELECT agent_id, name, owner_user_id, created_at, last_seen_at "
+            "FROM agents WHERE owner_user_id = ? ORDER BY created_at DESC",
+            (user_id,),
         )
         return [dict(row) async for row in cursor]
 
     async def get_agent(self, agent_id: str) -> dict | None:
         cursor = await self.conn.execute(
-            "SELECT agent_id, name, created_at, last_seen_at FROM agents WHERE agent_id = ?",
+            "SELECT agent_id, name, owner_user_id, created_at, last_seen_at "
+            "FROM agents WHERE agent_id = ?",
             (agent_id,),
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    async def is_agent_owner(self, agent_id: str, user_id: str) -> bool:
+        """Check if a user owns the given agent."""
+        cursor = await self.conn.execute(
+            "SELECT 1 FROM agents WHERE agent_id = ? AND owner_user_id = ?",
+            (agent_id, user_id),
+        )
+        return await cursor.fetchone() is not None
 
     async def touch_agent_last_seen(self, agent_id: str) -> None:
         await self.conn.execute(

@@ -41,7 +41,6 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     auth_service = app.state.auth_service
     routing: RoutingTable = app.state.routing
     config = app.state.config
-    pairing_service = app.state.pairing_service
 
     # -- Step 1: Authenticate via first control message ------------------------
     try:
@@ -78,7 +77,7 @@ async def agent_tunnel(websocket: WebSocket) -> None:
 
     # -- Step 3: Run reader, writer, pinger concurrently -----------------------
     reader_task = asyncio.create_task(
-        _reader(websocket, agent_id, routing, pairing_service, config, db),
+        _reader(websocket, agent_id, routing, db),
         name=f"agent-reader-{agent_id}",
     )
     writer_task = asyncio.create_task(
@@ -115,8 +114,6 @@ async def _reader(
     websocket: WebSocket,
     agent_id: str,
     routing: RoutingTable,
-    pairing_service,
-    config,
     db,
 ) -> None:
     """Read frames from agent tunnel and dispatch to mobile clients."""
@@ -152,7 +149,7 @@ async def _reader(
 
                 elif channel == CH_CONTROL:
                     await _handle_control(
-                        websocket, agent_id, payload, routing, pairing_service, config, db
+                        websocket, agent_id, payload, routing, db
                     )
 
             # Text frames (control messages can also come as text)
@@ -163,7 +160,7 @@ async def _reader(
                 except (json.JSONDecodeError, TypeError):
                     continue
                 await _handle_control_json(
-                    websocket, agent_id, ctrl, routing, pairing_service, config, db
+                    websocket, agent_id, ctrl, routing, db
                 )
 
     except WebSocketDisconnect:
@@ -207,18 +204,18 @@ async def _pinger(
 
 
 async def _handle_control(
-    websocket, agent_id, payload, routing, pairing_service, config, db
+    websocket, agent_id, payload, routing, db
 ) -> None:
     """Handle a control message from the envelope binary channel."""
     try:
         ctrl = json.loads(payload)
     except (json.JSONDecodeError, TypeError):
         return
-    await _handle_control_json(websocket, agent_id, ctrl, routing, pairing_service, config, db)
+    await _handle_control_json(websocket, agent_id, ctrl, routing, db)
 
 
 async def _handle_control_json(
-    websocket, agent_id, ctrl, routing, pairing_service, config, db
+    websocket, agent_id, ctrl, routing, db
 ) -> None:
     """Process a parsed control JSON message."""
     msg_type = ctrl.get("type")
@@ -226,15 +223,6 @@ async def _handle_control_json(
     if msg_type == "heartbeat":
         routing.agent_heartbeat(agent_id)
         await db.touch_agent_last_seen(agent_id)
-
-    elif msg_type == "request_pairing_token":
-        raw_token, expires_at = await pairing_service.create_pairing_token(agent_id)
-        resp = json.dumps({
-            "type": "pairing_token",
-            "token": raw_token,
-            "expires_at": expires_at,
-        })
-        await websocket.send_text(resp)
 
     elif msg_type == "proxy_response":
         request_id = ctrl.get("request_id")

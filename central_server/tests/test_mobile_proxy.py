@@ -41,7 +41,6 @@ class TestMobileProxyForward:
 
         async def resolve_soon():
             await asyncio.sleep(0.01)
-            # Find the pending request_id and resolve it
             assert len(proxy._pending) == 1
             request_id = next(iter(proxy._pending))
             proxy.resolve(request_id, {"status": 200, "body": {"sessions": []}})
@@ -65,10 +64,8 @@ class TestMobileProxyForward:
 
         async def resolve_after_checking():
             await asyncio.sleep(0.01)
-            # The envelope should be on the agent's send_queue
             envelope = conn.send_queue.get_nowait()
             assert isinstance(envelope, bytes)
-            # Resolve
             request_id = next(iter(proxy._pending))
             proxy.resolve(request_id, {"status": 200, "body": {}})
 
@@ -110,7 +107,6 @@ class TestMobileProxyForward:
 
         with pytest.raises(HTTPException):
             await proxy.forward("agent-1", "GET", "/api/sessions", timeout=0.05)
-        # After timeout, pending dict should be empty
         assert len(proxy._pending) == 0
 
     async def test_forward_includes_query_and_body(
@@ -122,7 +118,6 @@ class TestMobileProxyForward:
         async def check_and_resolve():
             await asyncio.sleep(0.01)
             envelope = conn.send_queue.get_nowait()
-            # Decode the envelope: skip 1 byte channel + 1 byte sid_len + sid bytes
             ch = envelope[0]
             sid_len = envelope[1]
             payload_bytes = envelope[2 + sid_len:]
@@ -178,7 +173,6 @@ class TestMobileProxyResolve:
     """Tests for MobileProxy.resolve() — Future resolution."""
 
     async def test_resolve_unknown_request_id_is_noop(self, proxy: MobileProxy):
-        # Should not raise
         proxy.resolve("nonexistent-id", {"status": 200, "body": {}})
 
     async def test_resolve_already_done_future_is_noop(
@@ -191,7 +185,6 @@ class TestMobileProxyResolve:
             await asyncio.sleep(0.01)
             request_id = next(iter(proxy._pending))
             proxy.resolve(request_id, {"status": 200, "body": {"first": True}})
-            # Second resolve should be a no-op, not raise
             proxy.resolve(request_id, {"status": 500, "body": {"second": True}})
 
         task = asyncio.create_task(
@@ -201,7 +194,6 @@ class TestMobileProxyResolve:
 
         result = await task
         await resolve_task
-        # First resolution wins
         assert result["body"]["first"] is True
 
 
@@ -218,78 +210,55 @@ class TestProxyEndpoint:
     """
 
     async def test_proxy_requires_auth(self, client):
-        # No Authorization header → 401
         resp = await client.get("/proxy/agent-1/api/sessions")
         assert resp.status_code == 401
 
     async def test_proxy_agent_id_mismatch_returns_403(self, client, app, registered_agent):
         agent_id, _ = registered_agent
-        # Create a mobile token for this agent
-        raw_token, _ = await app.state.pairing_service.create_pairing_token(agent_id)
-        pair_resp = await client.post(
-            "/api/pairing/complete",
-            json={"token": raw_token, "device_id": "dev-1"},
+        # Get mobile tokens directly (no QR pairing)
+        admin = await app.state.db.get_user_by_email("admin@test.local")
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            admin["id"], agent_id, admin["id"]
         )
-        access_token = pair_resp.json()["access_token"]
-
         # Try to proxy to a different agent
         resp = await client.get(
             "/proxy/wrong-agent-id/api/sessions",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {access}"},
         )
         assert resp.status_code == 403
         assert "not valid for this agent" in resp.json()["detail"].lower()
 
-    async def test_proxy_unpaired_device_returns_403(self, client, app, registered_agent):
-        agent_id, _ = registered_agent
-        # Register a second agent and pair device to it
-        agent_id2, _ = await app.state.db.register_agent("other-agent")
-        raw_token, _ = await app.state.pairing_service.create_pairing_token(agent_id2)
-        pair_resp = await client.post(
-            "/api/pairing/complete",
-            json={"token": raw_token, "device_id": "dev-1"},
+    async def test_proxy_non_owner_returns_403(self, client, app, registered_agent):
+        """A user who doesn't own the agent gets 403 on the ownership check."""
+        agent_id, _ = registered_agent  # owned by admin
+        # Create a different user who does NOT own agent_id
+        other_user_id = await app.state.db.create_user(
+            email="other@test.local", password_hash="h"
         )
-        access_token = pair_resp.json()["access_token"]
-
-        # The token is for agent_id2, but even if we could forge agent_id
-        # in the path, the pairing check would fail. Let's hit agent_id2
-        # path but with dev-1 NOT paired to agent_id (the first one).
-        # Actually, dev-1 IS paired to agent_id2, so let's create a
-        # different scenario: pair dev-1 to agent-1, revoke, then try.
-        raw_token2, _ = await app.state.pairing_service.create_pairing_token(agent_id)
-        pair_resp2 = await client.post(
-            "/api/pairing/complete",
-            json={"token": raw_token2, "device_id": "dev-2"},
+        # Create a mobile token where user_id=other_user but agent_id=admin's agent
+        # This simulates a token that passes the agent_id match but fails ownership
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            other_user_id, agent_id, other_user_id
         )
-        access_token2 = pair_resp2.json()["access_token"]
+        app.state.mobile_proxy = MobileProxy(app.state.routing)
 
-        # Revoke the pairing
-        pairings = await app.state.pairing_service.list_pairings(agent_id)
-        for p in pairings:
-            await app.state.pairing_service.revoke_pairing(p["pairing_id"])
-
-        # Now dev-2 is no longer paired to agent_id
         resp = await client.get(
             f"/proxy/{agent_id}/api/sessions",
-            headers={"Authorization": f"Bearer {access_token2}"},
+            headers={"Authorization": f"Bearer {access}"},
         )
         assert resp.status_code == 403
-        assert "not paired" in resp.json()["detail"].lower()
+        assert "does not own" in resp.json()["detail"].lower()
 
     async def test_proxy_forwards_to_agent_and_returns_response(
         self, client, app, registered_agent
     ):
         agent_id, _ = registered_agent
-        # Set up pairing
-        raw_token, _ = await app.state.pairing_service.create_pairing_token(agent_id)
-        pair_resp = await client.post(
-            "/api/pairing/complete",
-            json={"token": raw_token, "device_id": "dev-1"},
+        # Get mobile tokens directly
+        admin = await app.state.db.get_user_by_email("admin@test.local")
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            admin["id"], agent_id, admin["id"]
         )
-        access_token = pair_resp.json()["access_token"]
 
-        # The conftest app fixture bypasses the lifespan, so mobile_proxy
-        # is not wired.  Install it manually from the routing table.
         app.state.mobile_proxy = MobileProxy(app.state.routing)
 
         # Register the agent in the routing table (simulating a connected agent)
@@ -304,7 +273,7 @@ class TestProxyEndpoint:
 
         resp = await client.get(
             f"/proxy/{agent_id}/api/sessions",
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={"Authorization": f"Bearer {access}"},
         )
         assert resp.status_code == 200
         data = resp.json()

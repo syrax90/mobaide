@@ -3,7 +3,6 @@
 {% block content %}
 <div class="page-header">
     <h1>Registered Agents</h1>
-    <a href="/dashboard/agents/register" class="btn btn-primary">Register Agent</a>
 </div>
 
 <table>
@@ -11,6 +10,7 @@
         <tr>
             <th>Name</th>
             <th>Agent ID</th>
+            <th>Owner</th>
             <th>Status</th>
             <th>Last Seen</th>
             <th>Actions</th>
@@ -21,6 +21,7 @@
         <tr>
             <td><a href="/dashboard/agents/{{ agent.agent_id }}">{{ agent.name }}</a></td>
             <td><code>{{ agent.agent_id }}</code></td>
+            <td>{{ agent.owner_email or "—" }}</td>
             <td>
                 {% if agent.online %}
                 <span class="badge badge-online">Online</span>
@@ -33,7 +34,7 @@
         </tr>
         {% endfor %}
         {% if not agents %}
-        <tr><td colspan="5" class="empty">No agents registered yet.</td></tr>
+        <tr><td colspan="6" class="empty">No agents registered yet.</td></tr>
         {% endif %}
     </tbody>
 </table>

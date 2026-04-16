@@ -102,6 +102,35 @@ def require_role(*allowed_roles: str) -> Callable:
     return _check_role
 
 
+# -- User API auth (Bearer header with dashboard token) -----------------------
+
+
+async def get_api_user(request: Request) -> UserTokenPayload:
+    """FastAPI dependency: extract user JWT from Authorization Bearer header.
+
+    Accepts dashboard-type tokens via Bearer header for API access
+    (used by mobile app and API clients for agent management).
+    """
+    auth_service = _get_auth_service(request)
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = auth_header.removeprefix("Bearer ")
+    try:
+        user_payload = auth_service.decode_dashboard_token(token)
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid token: {exc}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user_payload
+
+
 # -- Mobile REST auth (Bearer header) -----------------------------------------
 
 
