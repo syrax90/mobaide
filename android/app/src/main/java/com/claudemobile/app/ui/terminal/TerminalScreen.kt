@@ -57,6 +57,7 @@ fun TerminalScreen(
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var requestInputFocus by remember { mutableStateOf(false) }
+    var showFullScreenInput by remember { mutableStateOf(false) }
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -133,8 +134,24 @@ fun TerminalScreen(
                 enabled = isConnected && sessionState == "running",
                 requestFocus = requestInputFocus,
                 onFocusHandled = { requestInputFocus = false },
+                onExpand = { showFullScreenInput = true },
             )
         }
+    }
+
+    // ── Full-screen expandable input editor ─────────────────────────────────────
+    if (showFullScreenInput) {
+        FullScreenInputSheet(
+            text = inputText,
+            onTextChange = { inputText = it },
+            onSend = { text ->
+                viewModel.sendInput(text)
+                inputText = TextFieldValue("")
+                showFullScreenInput = false
+            },
+            onDismiss = { showFullScreenInput = false },
+            enabled = isConnected && sessionState == "running",
+        )
     }
 
     // ── Prompt detection bottom sheets ───────────────────────────────────────────
