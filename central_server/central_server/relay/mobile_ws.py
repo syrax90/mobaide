@@ -38,10 +38,10 @@ async def _validate_mobile_connection(
         await websocket.close(code=4003, reason="Token not valid for this agent")
         return None
 
-    # Check pairing exists
+    # Check user owns this agent
     db = websocket.app.state.db
-    if not await db.is_mobile_paired_to_agent(payload.sub, agent_id):
-        await websocket.close(code=4003, reason="Not paired to this agent")
+    if not await db.is_agent_owner(agent_id, payload.user_id):
+        await websocket.close(code=4003, reason="User does not own this agent")
         return None
 
     # Check agent is online

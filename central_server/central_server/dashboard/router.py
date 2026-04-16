@@ -72,7 +72,7 @@ async def logout():
     return response
 
 
-# -- Agent list ----------------------------------------------------------------
+# -- Agent list (admin read-only view) -----------------------------------------
 
 
 @router.get("", response_class=HTMLResponse)
@@ -81,7 +81,7 @@ async def agents_page(
 ):
     db = request.app.state.db
     routing = request.app.state.routing
-    agents = await db.list_agents()
+    agents = await db.list_agents_with_owner()
     for agent in agents:
         agent["online"] = routing.is_agent_online(agent["agent_id"])
     return templates.TemplateResponse(
@@ -91,42 +91,7 @@ async def agents_page(
     )
 
 
-# -- Agent registration (dashboard form) — MUST be before {agent_id} routes ---
-
-
-@router.get("/agents/register", response_class=HTMLResponse)
-async def register_agent_page(
-    request: Request, user: UserTokenPayload = Depends(get_dashboard_user)
-):
-    return templates.TemplateResponse(
-        request, "register_agent.html", {"username": user.email}
-    )
-
-
-@router.post("/agents/register", response_class=HTMLResponse)
-async def register_agent_submit(
-    request: Request, user: UserTokenPayload = Depends(get_dashboard_user)
-):
-    form = await request.form()
-    name = str(form.get("name", ""))
-    if not name:
-        return templates.TemplateResponse(
-            request,
-            "register_agent.html",
-            {"username": user.email, "error": "Name is required"},
-        )
-
-    db = request.app.state.db
-    agent_id, raw_token = await db.register_agent(name)
-    logger.info("dashboard.agent_registered agent_id=%s name=%s", agent_id, name)
-    return templates.TemplateResponse(
-        request,
-        "register_agent.html",
-        {"username": user.email, "agent_id": agent_id, "token": raw_token},
-    )
-
-
-# -- Agent detail (parameterized — AFTER static /agents/register routes) -------
+# -- Agent detail (read-only — no QR, no token exposure) ----------------------
 
 
 @router.get("/agents/{agent_id}", response_class=HTMLResponse)
@@ -144,51 +109,30 @@ async def agent_detail_page(
         raise HTTPException(status_code=404, detail="Agent not found")
 
     agent["online"] = routing.is_agent_online(agent_id)
+
+    # Look up owner email
+    owner_email = None
+    if agent.get("owner_user_id"):
+        owner = await db.get_user_by_id(agent["owner_user_id"])
+        if owner:
+            owner_email = owner["email"]
+
     pairings = await pairing_service.list_pairings(agent_id)
     active_pairings = [p for p in pairings if p.get("revoked_at") is None]
-    pending_tokens = await pairing_service.list_pending_tokens(agent_id)
 
     return templates.TemplateResponse(
         request,
         "agent_detail.html",
         {
             "agent": agent,
+            "owner_email": owner_email,
             "pairings": active_pairings,
-            "pending_tokens": pending_tokens,
             "username": user.email,
         },
     )
 
 
 # -- Pairing actions (HTMX partials) ------------------------------------------
-
-
-@router.post("/agents/{agent_id}/pair", response_class=HTMLResponse)
-async def generate_pairing_qr(
-    request: Request,
-    agent_id: str,
-    user: UserTokenPayload = Depends(get_dashboard_user),
-):
-    pairing_service = request.app.state.pairing_service
-    raw_token, expires_at = await pairing_service.create_pairing_token(agent_id)
-
-    # Determine server URL from request
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-    host = request.headers.get("x-forwarded-host", request.headers.get("host", ""))
-    server_url = f"{scheme}://{host}"
-
-    qr_data = pairing_service.generate_qr_data(raw_token, agent_id, server_url)
-    qr_base64 = pairing_service.generate_qr_image_base64(qr_data)
-
-    return templates.TemplateResponse(
-        request,
-        "partials/pairing_qr.html",
-        {
-            "qr_base64": qr_base64,
-            "raw_token": raw_token,
-            "expires_at": expires_at,
-        },
-    )
 
 
 @router.delete("/pairings/{pairing_id}", response_class=HTMLResponse)

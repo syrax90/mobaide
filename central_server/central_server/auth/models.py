@@ -11,6 +11,7 @@ class MobileTokenPayload:
 
     sub: str  # mobile_device_id
     agent_id: str
+    user_id: str  # owner user_id
     token_type: str  # "mobile_access"
     exp: int
     iat: int
@@ -31,20 +32,6 @@ class UserTokenPayload:
 # -- Pydantic request/response models -----------------------------------------
 
 
-class PairingCompleteRequest(BaseModel):
-    token: str
-    device_id: str
-    device_name: str | None = None
-
-
-class PairingCompleteResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    agent_id: str
-    pairing_id: str
-    token_type: str = "bearer"
-
-
 class MobileRefreshRequest(BaseModel):
     refresh_token: str
 
@@ -55,11 +42,34 @@ class MobileTokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-class AgentRegisterRequest(BaseModel):
+# -- Agent management models --------------------------------------------------
+
+
+class CreateAgentRequest(BaseModel):
     name: str
 
 
-class AgentRegisterResponse(BaseModel):
+class CreateAgentResponse(BaseModel):
+    """Returned once on creation — includes raw token."""
+
+    agent_id: str
+    name: str
+    token: str
+
+
+class AgentSummary(BaseModel):
+    """Agent listing response — no token."""
+
+    agent_id: str
+    name: str
+    online: bool
+    created_at: str
+    last_seen_at: str | None
+
+
+class ReregisterAgentResponse(BaseModel):
+    """Returned on credential rotation — includes new raw token."""
+
     agent_id: str
     token: str
 

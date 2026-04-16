@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "central-server"
 version = "0.1.0"
-description = "Central relay server for Claude Mobile — WebSocket relay with agent registration and QR pairing"
+description = "Central relay server for Claude Mobile — WebSocket relay with user-owned agent management"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
@@ -16,11 +16,10 @@ dependencies = [
     "asgi-correlation-id>=4.3",
     "orjson",
     "python-dotenv",
-    "bcrypt",
     "jinja2",
     "python-multipart",
-    "qrcode[pil]",
     "argon2-cffi",
+    "alembic",
     "google-auth",
 ]
 

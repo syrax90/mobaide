@@ -40,22 +40,28 @@ def auth(config, db) -> AuthService:
 
 class TestAgentAuth:
     async def test_verify_agent_token(self, auth: AuthService, db: Database):
-        agent_id, raw_token = await db.register_agent("test")
+        owner = await db.create_user(email="owner@test.local", password_hash="h")
+        agent_id, raw_token = await db.register_agent("test", owner)
         assert await auth.verify_agent_token(agent_id, raw_token) is True
         assert await auth.verify_agent_token(agent_id, "wrong") is False
         assert await auth.verify_agent_token("no-such", raw_token) is False
 
 
 class TestMobileAuth:
-    async def test_create_and_decode(self, auth: AuthService):
-        access, refresh = await auth.create_mobile_tokens("device-1", "agent-1")
+    async def test_create_and_decode(self, auth: AuthService, db: Database):
+        owner = await db.create_user(email="owner@test.local", password_hash="h")
+        agent_id, _ = await db.register_agent("test", owner)
+        access, refresh = await auth.create_mobile_tokens("device-1", agent_id, owner)
         payload = auth.decode_mobile_token(access)
         assert payload.sub == "device-1"
-        assert payload.agent_id == "agent-1"
+        assert payload.agent_id == agent_id
+        assert payload.user_id == owner
         assert payload.token_type == "mobile_access"
 
-    async def test_refresh_rotation(self, auth: AuthService):
-        _, refresh = await auth.create_mobile_tokens("device-1", "agent-1")
+    async def test_refresh_rotation(self, auth: AuthService, db: Database):
+        owner = await db.create_user(email="owner@test.local", password_hash="h")
+        agent_id, _ = await db.register_agent("test", owner)
+        _, refresh = await auth.create_mobile_tokens("device-1", agent_id, owner)
         result = await auth.refresh_mobile_tokens(refresh)
         assert result is not None
         new_access, new_refresh = result
@@ -75,7 +81,6 @@ class TestUserRegistration:
         assert len(user_id) == 12
         assert len(token) > 20
 
-        # Login with same credentials
         login_id, role, login_token = await auth.login_user(
             "user@example.com", "pass123"
         )
@@ -169,7 +174,6 @@ class TestAdminSeeding:
         config = CentralServerConfig(jwt_secret_key=TEST_SECRET)
         auth = AuthService(config, db)
         await auth.seed_admin_user()
-        # No users created
         assert await db.get_user_by_email("anything") is None
 
     async def test_seeded_admin_can_login(self, auth: AuthService):
