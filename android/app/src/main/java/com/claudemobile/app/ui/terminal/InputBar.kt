@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -69,6 +70,7 @@ fun InputBar(
     enabled: Boolean = true,
     requestFocus: Boolean = false,
     onFocusHandled: () -> Unit = {},
+    onExpand: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -126,6 +128,15 @@ fun InputBar(
                 Icon(
                     Icons.Outlined.Keyboard,
                     contentDescription = if (panelExpanded) "Hide keys" else "Show keys",
+                )
+            }
+            IconButton(
+                onClick = onExpand,
+                enabled = enabled,
+            ) {
+                Icon(
+                    Icons.Default.OpenInFull,
+                    contentDescription = "Expand editor",
                 )
             }
             IconButton(
