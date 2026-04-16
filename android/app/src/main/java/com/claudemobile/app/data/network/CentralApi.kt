@@ -1,0 +1,75 @@
+package com.claudemobile.app.data.network
+
+import com.claudemobile.app.data.network.dto.GoogleAuthRequest
+import com.claudemobile.app.data.network.dto.UserAuthResponse
+import com.claudemobile.app.data.network.dto.UserLoginRequest
+import com.claudemobile.app.data.network.dto.UserRegisterRequest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+
+/**
+ * HTTP client for **central server** user-auth endpoints (register, login,
+ * Google OAuth). Uses a bare [OkHttpClient] without [com.claudemobile.app.data.auth.AuthInterceptor]
+ * because user-auth calls do not carry agent-connection tokens.
+ *
+ * This is the user-identity counterpart to [RestApi], which targets per-agent
+ * URLs for session management.
+ */
+class CentralApi(
+    private val client: OkHttpClient,
+    private val centralServerUrl: String,
+) {
+    private val json = Json { ignoreUnknownKeys = true }
+    private val jsonMediaType = "application/json".toMediaType()
+
+    private fun baseUrl(): String = centralServerUrl.trimEnd('/')
+
+    suspend fun register(email: String, password: String): UserAuthResponse {
+        val body = json.encodeToString(UserRegisterRequest(email, password))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/register")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun login(email: String, password: String): UserAuthResponse {
+        val body = json.encodeToString(UserLoginRequest(email, password))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/login")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun loginWithGoogle(idToken: String): UserAuthResponse {
+        val body = json.encodeToString(GoogleAuthRequest(idToken))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/google")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    private suspend inline fun <reified T> execute(request: Request): T =
+        withContext(Dispatchers.IO) {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string() ?: ""
+                    throw ApiException(response.code, errorBody)
+                }
+                val body = response.body?.string()
+                    ?: throw ApiException(response.code, "Empty response body")
+                json.decodeFromString<T>(body)
+            }
+        }
+}

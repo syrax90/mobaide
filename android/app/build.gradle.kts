@@ -17,6 +17,9 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+
+        buildConfigField("String", "CENTRAL_SERVER_URL", "\"https://api.claudemobile.example.com\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"YOUR_WEB_CLIENT_ID.apps.googleusercontent.com\"")
     }
 
     buildTypes {
@@ -40,6 +43,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     testOptions {
@@ -90,6 +94,11 @@ dependencies {
     implementation(libs.camerax.view)
     implementation(libs.camerax.mlkit.vision)
     implementation(libs.mlkit.barcode)
+
+    // Google Credential Manager (Sign-In with Google)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.google.googleid)
 
     // Vendored Termux terminal renderer (Apache-2.0)
     implementation(project(":terminal-view"))

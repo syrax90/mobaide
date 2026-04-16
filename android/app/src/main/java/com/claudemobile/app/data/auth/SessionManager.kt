@@ -24,6 +24,27 @@ import javax.inject.Singleton
  * Owns the app's authenticated session lifecycle: observable [authState],
  * single-flight token refresh, and atomic logout.
  *
+ * ## Three-tier auth state
+ *
+ * The session has two independent axes: **user identity** (central server)
+ * and **agent connection** (per-agent tokens). The combined state is:
+ *
+ * - [AuthState.Unauthenticated] — no user identity on file.
+ * - [AuthState.UserOnly] — user logged in (central server), but no agent
+ *   connection established yet.
+ * - [AuthState.FullyConnected] — user logged in AND agent-connection
+ *   tokens are on file.
+ *
+ * ### Backward compatibility
+ *
+ * [isLoggedIn] returns `true` **only** for [AuthState.FullyConnected].
+ * Every existing consumer (AuthInterceptor, WebSocketManager,
+ * AgentEventBus) depends on this meaning and continues to work without
+ * modification. New code should use [isUserAuthenticated] when it only
+ * needs to know whether a user identity exists.
+ *
+ * ## Token refresh
+ *
  * This is layered on top of [TokenStore] so that multiple concurrent
  * callers — the REST interceptor, the WebSocket URL provider, the UI —
  * can observe "am I logged in?" reactively and cooperate on a single
@@ -50,12 +71,19 @@ import javax.inject.Singleton
 @Singleton
 class SessionManager @Inject constructor(
     private val tokenStore: TokenStore,
+    private val userIdentityStore: UserIdentityStore,
     @Named("refresh") private val refreshClient: OkHttpClient,
 ) {
 
     sealed interface AuthState {
-        object LoggedIn : AuthState
-        object LoggedOut : AuthState
+        /** No user identity on file. */
+        object Unauthenticated : AuthState
+
+        /** User logged in to central server, no agent connection. */
+        object UserOnly : AuthState
+
+        /** User logged in AND agent connection established. */
+        object FullyConnected : AuthState
     }
 
     /** Terminal vs transient distinction lets callers decide whether to
@@ -75,30 +103,73 @@ class SessionManager @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlight = AtomicReference<Deferred<RefreshResult>?>(null)
 
-    private val _authState = MutableStateFlow<AuthState>(
-        if (tokenStore.isLoggedIn()) AuthState.LoggedIn else AuthState.LoggedOut
-    )
+    private val _authState = MutableStateFlow(resolveInitialState())
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
-    fun isLoggedIn(): Boolean = _authState.value is AuthState.LoggedIn
+    private fun resolveInitialState(): AuthState = when {
+        userIdentityStore.isUserLoggedIn() && tokenStore.isLoggedIn() -> AuthState.FullyConnected
+        userIdentityStore.isUserLoggedIn() -> AuthState.UserOnly
+        else -> AuthState.Unauthenticated
+    }
 
-    /** Called by [com.claudemobile.app.data.repository.AuthRepository] after a
-     *  successful login has persisted fresh tokens to [TokenStore]. */
-    fun markLoggedIn() {
-        _authState.value = AuthState.LoggedIn
+    /** Returns `true` when the agent connection is fully established.
+     *  Backward-compatible: matches the old LoggedIn semantic. */
+    fun isLoggedIn(): Boolean = _authState.value is AuthState.FullyConnected
+
+    /** Returns `true` when at least a user identity exists (UserOnly or FullyConnected). */
+    fun isUserAuthenticated(): Boolean =
+        _authState.value is AuthState.UserOnly || _authState.value is AuthState.FullyConnected
+
+    /** Called after a successful user register/login against the central server. */
+    @Synchronized
+    fun markUserLoggedIn() {
+        _authState.value = AuthState.UserOnly
+    }
+
+    /** Called after a successful agent login/pairing has persisted tokens to [TokenStore]. */
+    @Synchronized
+    fun markAgentConnected() {
+        _authState.value = AuthState.FullyConnected
     }
 
     /**
-     * Clear stored tokens and flip the observable state to [AuthState.LoggedOut]
-     * in one critical section. Also cancels any in-flight refresh so a late
-     * completer cannot resurrect state.
+     * Disconnect from the current agent but keep the user identity.
+     * Transitions FullyConnected → UserOnly.
+     */
+    @Synchronized
+    fun agentDisconnect() {
+        tokenStore.clear()
+        if (_authState.value is AuthState.FullyConnected) {
+            _authState.value = AuthState.UserOnly
+        }
+        inFlight.getAndSet(null)?.cancel()
+    }
+
+    /**
+     * Full logout: clear user identity AND agent-connection tokens.
+     * Transitions any state → Unauthenticated.
+     */
+    @Synchronized
+    fun userLogout() {
+        userIdentityStore.clearUserSession()
+        tokenStore.clear()
+        _authState.value = AuthState.Unauthenticated
+        inFlight.getAndSet(null)?.cancel()
+    }
+
+    /**
+     * Clear stored agent-connection tokens and flip the observable state
+     * to [AuthState.Unauthenticated] in one critical section. Also cancels
+     * any in-flight refresh so a late completer cannot resurrect state.
      *
-     * Safe to call repeatedly; idempotent.
+     * This is the legacy logout path, now equivalent to [userLogout] —
+     * it clears both stores.
      */
     @Synchronized
     fun forceLogout() {
+        userIdentityStore.clearUserSession()
         tokenStore.clear()
-        _authState.value = AuthState.LoggedOut
+        _authState.value = AuthState.Unauthenticated
         inFlight.getAndSet(null)?.cancel()
     }
 
@@ -118,7 +189,6 @@ class SessionManager @Inject constructor(
                 return try {
                     existing.await()
                 } catch (_: Exception) {
-                    // In-flight was cancelled (e.g. forceLogout) — treat as terminal.
                     RefreshResult.Terminal
                 }
             }
@@ -127,28 +197,18 @@ class SessionManager @Inject constructor(
                 return try {
                     fresh.await()
                 } catch (_: Exception) {
-                    // Symmetric with the follower path above: if another caller
-                    // invokes [forceLogout] while this coroutine is awaiting its
-                    // own Deferred, `fresh` is cancelled and `await()` throws a
-                    // `JobCancellationException`. Treat it as a terminal session
-                    // result instead of leaking the exception out of `refresh()`
-                    // and ultimately out of `runBlocking` inside the OkHttp
-                    // interceptor, which would surface as a misleading network
-                    // error rather than a clean "session expired" flow.
                     RefreshResult.Terminal
                 } finally {
                     inFlight.compareAndSet(fresh, null)
                 }
             } else {
-                // Lost the race — discard our deferred and loop to await the
-                // winning one. CoroutineStart.LAZY guarantees no wasted HTTP call.
                 fresh.cancel()
             }
         }
     }
 
     private fun doRefresh(): RefreshResult {
-        val refreshToken = tokenStore.getRefreshToken() ?: return terminal()
+        val refreshToken = tokenStore.getRefreshToken() ?: return terminalAgentOnly()
 
         val payload = json.encodeToString(
             RefreshRequestDto.serializer(),
@@ -157,11 +217,11 @@ class SessionManager @Inject constructor(
 
         val refreshUrl = when (tokenStore.getConnectionMode()) {
             TokenStore.ConnectionMode.DIRECT -> {
-                val agentUrl = tokenStore.getAgentUrl() ?: return terminal()
+                val agentUrl = tokenStore.getAgentUrl() ?: return terminalAgentOnly()
                 "$agentUrl/api/auth/refresh"
             }
             TokenStore.ConnectionMode.RELAY -> {
-                val serverUrl = tokenStore.getRelayServerUrl() ?: return terminal()
+                val serverUrl = tokenStore.getRelayServerUrl() ?: return terminalAgentOnly()
                 "$serverUrl/api/mobile/refresh"
             }
         }
@@ -183,69 +243,43 @@ class SessionManager @Inject constructor(
                         )
                         applyRefreshSuccess(dto.access_token, dto.refresh_token)
                     }
-                    response.code == 401 -> terminal()
+                    response.code == 401 -> terminalAgentOnly()
                     else -> RefreshResult.Transient
                 }
             }
         } catch (_: IOException) {
-            // Network errors are transient — don't log the user out because
-            // their wifi dropped for half a second.
             RefreshResult.Transient
         } catch (_: Exception) {
-            // Serialization errors, unexpected response shapes — treat as
-            // transient so we don't force-logout on a parser hiccup.
             RefreshResult.Transient
         }
     }
 
     /**
      * Atomically apply a successful refresh to `TokenStore` + `_authState`.
-     *
-     * Guards against the following race: `doRefresh()` runs on the IO
-     * dispatcher, blocked inside OkHttp's (non-suspending) `Call.execute()`.
-     * Meanwhile, `forceLogout()` is called from another thread — it sets
-     * `_authState = LoggedOut`, clears tokens, and cancels the `inFlight`
-     * Deferred. The winner path's `fresh.await()` catches the resulting
-     * `JobCancellationException` and returns `Terminal`. But `doRefresh()`
-     * is **not** cooperative with cancellation inside the blocking OkHttp
-     * call, so when the HTTP response eventually arrives it would continue
-     * down the 200 branch and blindly re-save tokens + flip state back to
-     * `LoggedIn`, resurrecting the session the user just killed.
-     *
-     * This helper runs the side effects inside a `@Synchronized` block
-     * that first checks whether the session is still alive. If
-     * `forceLogout()` won the race, we discard the freshly rotated
-     * tokens and return `Terminal` instead of `Success`. `forceLogout()`
-     * is also `@Synchronized` on the same monitor (the SessionManager
-     * instance), so the check-then-write is atomic with respect to
-     * concurrent logouts.
      */
     @Synchronized
     private fun applyRefreshSuccess(access: String, refresh: String): RefreshResult {
-        if (_authState.value is AuthState.LoggedOut) {
-            // forceLogout() won the race — the session is intentionally
-            // dead. Don't resurrect it with freshly rotated tokens.
+        if (_authState.value is AuthState.Unauthenticated) {
             return RefreshResult.Terminal
         }
         tokenStore.saveTokens(access, refresh)
-        _authState.value = AuthState.LoggedIn
+        _authState.value = AuthState.FullyConnected
         return RefreshResult.Success
     }
 
     /**
-     * Inline variant of [forceLogout] used from inside [doRefresh]. It
-     * performs the same tokenStore.clear() + state flip, but **must not**
-     * call `inFlight.getAndSet(null)?.cancel()` — that would cancel the
-     * Deferred this very function is executing inside, causing
-     * `fresh.await()` in [refresh] to throw `JobCancellationException`
-     * instead of returning `RefreshResult.Terminal`. The `finally` block
-     * in [refresh] already clears the `inFlight` reference on the winner
-     * path via `compareAndSet(fresh, null)`.
+     * Terminal result for agent-connection refresh failure. Clears only
+     * agent-connection tokens and transitions to [AuthState.UserOnly] if
+     * the user identity is still valid, otherwise to [AuthState.Unauthenticated].
      */
     @Synchronized
-    private fun terminal(): RefreshResult {
+    private fun terminalAgentOnly(): RefreshResult {
         tokenStore.clear()
-        _authState.value = AuthState.LoggedOut
+        _authState.value = if (userIdentityStore.isUserLoggedIn()) {
+            AuthState.UserOnly
+        } else {
+            AuthState.Unauthenticated
+        }
         return RefreshResult.Terminal
     }
 

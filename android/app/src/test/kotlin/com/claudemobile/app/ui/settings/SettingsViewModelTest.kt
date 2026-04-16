@@ -49,7 +49,7 @@ class SettingsViewModelTest {
 
     @Test
     fun initialState_directMode_showsDirectConnectionInfo() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns "alice"
         val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
@@ -63,7 +63,7 @@ class SettingsViewModelTest {
 
     @Test
     fun initialState_directMode_nullAgentUrl_showsUnknown() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getAgentUrl() } returns null
         every { authRepository.getUsername() } returns "alice"
         val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
@@ -77,7 +77,7 @@ class SettingsViewModelTest {
 
     @Test
     fun initialState_relayMode_showsRelayConnectionInfo() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getUsername() } returns null
         val tokenStore = stubTokenStore(
             mode = TokenStore.ConnectionMode.RELAY,
@@ -96,7 +96,7 @@ class SettingsViewModelTest {
 
     @Test
     fun initialState_relayMode_nullServerUrlAndAgentId_showsUnknown() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getUsername() } returns null
         val tokenStore = stubTokenStore(
             mode = TokenStore.ConnectionMode.RELAY,
@@ -115,7 +115,7 @@ class SettingsViewModelTest {
 
     @Test
     fun initialState_usernameFromAuthRepository_takePriority() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns "alice"
         val tokenStore = stubTokenStore(
@@ -131,7 +131,7 @@ class SettingsViewModelTest {
 
     @Test
     fun initialState_whenUsernameNull_fallsBackToDeviceId() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns null
         val tokenStore = stubTokenStore(
@@ -146,7 +146,7 @@ class SettingsViewModelTest {
 
     @Test
     fun initialState_whenBothUsernameAndDeviceIdNull_usernameIsEmpty() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getAgentUrl() } returns null
         every { authRepository.getUsername() } returns null
         val tokenStore = stubTokenStore(
@@ -163,10 +163,11 @@ class SettingsViewModelTest {
 
     @Test
     fun logout_delegatesToAuthRepository_withoutMutatingUiState() = runTest {
-        val authRepository = mockk<AuthRepository>()
+        val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUsername() } returns "alice"
-        every { authRepository.logout() } just Runs
+        every { authRepository.userLogout() } just Runs
+        every { authRepository.getUserEmail() } returns null
         val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
 
         val vm = SettingsViewModel(authRepository, tokenStore)
@@ -174,7 +175,7 @@ class SettingsViewModelTest {
 
         vm.logout()
 
-        verify(exactly = 1) { authRepository.logout() }
+        verify(exactly = 1) { authRepository.userLogout() }
         assertEquals(before, vm.uiState.value)
     }
 }

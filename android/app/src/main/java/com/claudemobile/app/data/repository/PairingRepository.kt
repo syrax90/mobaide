@@ -67,7 +67,7 @@ class PairingRepository(
             accessToken = response.access_token,
             refreshToken = response.refresh_token,
         )
-        sessionManager.markLoggedIn()
+        sessionManager.markAgentConnected()
 
         // Auto-save to ConnectionStore for multi-connection management
         connectionStore.captureActiveProfile(

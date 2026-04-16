@@ -1,6 +1,8 @@
 package com.claudemobile.app.di
 
+import com.claudemobile.app.BuildConfig
 import com.claudemobile.app.data.auth.AuthInterceptor
+import com.claudemobile.app.data.network.CentralApi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,10 +19,10 @@ object NetworkModule {
     /**
      * Bare OkHttpClient used exclusively by
      * [com.claudemobile.app.data.auth.SessionManager] to issue
-     * `/api/auth/refresh` calls. Must NOT include [AuthInterceptor]:
-     * routing refresh traffic back through the interceptor that
-     * depends on SessionManager would create a Hilt cycle and a
-     * runtime re-entrance loop.
+     * `/api/auth/refresh` calls AND by [CentralApi] for user-auth
+     * endpoints. Must NOT include [AuthInterceptor]: routing refresh
+     * traffic back through the interceptor that depends on SessionManager
+     * would create a Hilt cycle and a runtime re-entrance loop.
      */
     @Provides
     @Singleton
@@ -43,5 +45,11 @@ object NetworkModule {
             .writeTimeout(30, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
             .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideCentralApi(@Named("refresh") client: OkHttpClient): CentralApi {
+        return CentralApi(client, BuildConfig.CENTRAL_SERVER_URL)
     }
 }

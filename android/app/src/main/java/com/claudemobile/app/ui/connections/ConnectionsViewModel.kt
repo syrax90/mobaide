@@ -29,15 +29,15 @@ class ConnectionsViewModel @Inject constructor(
     val uiState: StateFlow<ConnectionsUiState> = _uiState.asStateFlow()
 
     fun switchProfile(profileId: String) {
-        // Tear down current connection
-        sessionManager.forceLogout()
+        // Tear down current agent connection (preserve user identity)
+        sessionManager.agentDisconnect()
         eventBus.stop()
 
         // Load new profile into TokenStore
         connectionStore.activateProfile(profileId, tokenStore)
 
         // Re-authenticate
-        sessionManager.markLoggedIn()
+        sessionManager.markAgentConnected()
         eventBus.start()
 
         _uiState.value = loadState()

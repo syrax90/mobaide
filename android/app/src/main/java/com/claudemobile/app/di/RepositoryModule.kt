@@ -3,9 +3,11 @@ package com.claudemobile.app.di
 import android.content.Context
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
+import com.claudemobile.app.data.auth.UserIdentityStore
 import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.AutoScanWsClient
+import com.claudemobile.app.data.network.CentralApi
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketManager
 import com.claudemobile.app.data.auth.ConnectionStore
@@ -47,11 +49,13 @@ object RepositoryModule {
     @Singleton
     fun provideAuthRepository(
         restApi: RestApi,
+        centralApi: CentralApi,
         tokenStore: TokenStore,
+        userIdentityStore: UserIdentityStore,
         sessionManager: SessionManager,
         connectionStore: ConnectionStore,
     ): AuthRepository {
-        return AuthRepository(restApi, tokenStore, sessionManager, connectionStore)
+        return AuthRepository(restApi, centralApi, tokenStore, userIdentityStore, sessionManager, connectionStore)
     }
 
     @Provides

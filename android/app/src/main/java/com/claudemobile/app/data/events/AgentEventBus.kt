@@ -71,8 +71,9 @@ class AgentEventBus @Inject constructor(
         scope.launch {
             sessionManager.authState.drop(1).collect { state ->
                 when (state) {
-                    SessionManager.AuthState.LoggedIn -> start()
-                    SessionManager.AuthState.LoggedOut -> stop()
+                    SessionManager.AuthState.FullyConnected -> start()
+                    SessionManager.AuthState.UserOnly -> stop()
+                    SessionManager.AuthState.Unauthenticated -> stop()
                 }
             }
         }
