@@ -12,6 +12,7 @@ import javax.inject.Inject
 data class SettingsUiState(
     val connectionInfo: String = "",
     val username: String = "",
+    val userEmail: String = "",
 )
 
 @HiltViewModel
@@ -24,12 +25,13 @@ class SettingsViewModel @Inject constructor(
         SettingsUiState(
             connectionInfo = buildConnectionInfo(),
             username = authRepository.getUsername() ?: tokenStore.getDeviceId() ?: "",
+            userEmail = authRepository.getUserEmail() ?: "",
         ),
     )
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
     fun logout() {
-        authRepository.logout()
+        authRepository.userLogout()
     }
 
     private fun buildConnectionInfo(): String = when (tokenStore.getConnectionMode()) {

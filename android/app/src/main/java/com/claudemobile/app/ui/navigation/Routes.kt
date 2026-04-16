@@ -4,6 +4,7 @@ import android.net.Uri
 
 object Routes {
     const val LOGIN = "login"
+    const val REGISTER = "register"
     const val SESSION_LIST = "session_list"
     const val SESSION_DETAIL = "session_detail/{sessionId}"
     const val CREATE_SESSION = "create_session"

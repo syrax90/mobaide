@@ -24,31 +24,39 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.claudemobile.app.data.auth.GoogleAuthClient
+import com.claudemobile.app.data.auth.GoogleAuthResult
+import kotlinx.coroutines.launch
 
 @Composable
 fun LoginScreen(
     viewModel: LoginViewModel,
     onLoginSuccess: () -> Unit,
-    onScanQrClick: () -> Unit = {},
+    onRegisterClick: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val loginSuccess by viewModel.loginSuccess.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var passwordVisible by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(loginSuccess) {
         if (loginSuccess) onLoginSuccess()
@@ -77,7 +85,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Connect to your Claude Agent",
+                text = "Sign in to your account",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -85,26 +93,15 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(32.dp))
 
             OutlinedTextField(
-                value = uiState.agentUrl,
-                onValueChange = viewModel::updateAgentUrl,
-                label = { Text("Agent URL") },
-                placeholder = { Text("https://your-agent.example.com") },
+                value = uiState.email,
+                onValueChange = viewModel::updateEmail,
+                label = { Text("Email") },
+                placeholder = { Text("you@example.com") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Uri,
+                    keyboardType = KeyboardType.Email,
                     imeAction = ImeAction.Next,
                 ),
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            OutlinedTextField(
-                value = uiState.username,
-                onValueChange = viewModel::updateUsername,
-                label = { Text("Username") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -136,14 +133,14 @@ fun LoginScreen(
                     keyboardType = KeyboardType.Password,
                     imeAction = ImeAction.Done,
                 ),
-                keyboardActions = KeyboardActions(onDone = { viewModel.login() }),
+                keyboardActions = KeyboardActions(onDone = { viewModel.loginWithPassword() }),
                 modifier = Modifier.fillMaxWidth(),
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
             Button(
-                onClick = viewModel::login,
+                onClick = viewModel::loginWithPassword,
                 enabled = !uiState.isLoading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
@@ -154,7 +151,7 @@ fun LoginScreen(
                         strokeWidth = 2.dp,
                     )
                 } else {
-                    Text("Connect")
+                    Text("Sign In")
                 }
             }
 
@@ -164,19 +161,29 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            Text(
-                text = "Or connect via relay",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
             OutlinedButton(
-                onClick = onScanQrClick,
+                onClick = {
+                    scope.launch {
+                        val client = GoogleAuthClient(context)
+                        when (val result = client.signIn()) {
+                            is GoogleAuthResult.Success ->
+                                viewModel.onGoogleIdToken(result.idToken)
+                            is GoogleAuthResult.Error ->
+                                viewModel.setError(result.message)
+                            is GoogleAuthResult.Cancelled -> { /* user dismissed */ }
+                        }
+                    }
+                },
+                enabled = !uiState.isLoading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Scan QR Code to Pair")
+                Text("Sign in with Google")
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            TextButton(onClick = onRegisterClick) {
+                Text("Don't have an account? Create one")
             }
         }
     }

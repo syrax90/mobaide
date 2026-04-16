@@ -71,7 +71,7 @@ class RestApiTest {
     private fun newApi(agentUrl: String? = "https://api.example.com"): Triple<RestApi, OkHttpClient, TokenStore> {
         val client = mockk<OkHttpClient>()
         val tokenStore = mockk<TokenStore>()
-        every { tokenStore.getAgentUrl() } returns agentUrl
+        every { tokenStore.getEffectiveBaseUrl() } returns agentUrl
         return Triple(RestApi(client, tokenStore), client, tokenStore)
     }
 
@@ -79,7 +79,7 @@ class RestApiTest {
 
     @Test
     fun baseUrl_withTrailingSlash_isNotDoubleSlashedInRequests() = runTest {
-        // tokenStore.getAgentUrl() is used verbatim in `${baseUrl()}/api/...`,
+        // tokenStore.getEffectiveBaseUrl() is used verbatim in `${baseUrl()}/api/...`,
         // so a trailing slash on the stored URL must NOT produce a double slash
         // in the final request path. [TokenStore.saveAgentUrl] trims trailing
         // slashes at store time — this test pins the store-side contract by
@@ -107,7 +107,7 @@ class RestApiTest {
         } catch (e: IllegalStateException) {
             assertEquals("Agent URL not configured", e.message)
         }
-        verify(exactly = 1) { tokenStore.getAgentUrl() }
+        verify(exactly = 1) { tokenStore.getEffectiveBaseUrl() }
     }
 
     // ---- login: URL, body, response decode ----------------------------------

@@ -64,9 +64,9 @@ class AgentEventBusTest {
         every { wsm.createConnection("ws/events") } returns conn
         val sessionManager = mockk<SessionManager>(relaxed = true)
         val initialState: SessionManager.AuthState = if (initiallyLoggedIn) {
-            SessionManager.AuthState.LoggedIn
+            SessionManager.AuthState.FullyConnected
         } else {
-            SessionManager.AuthState.LoggedOut
+            SessionManager.AuthState.Unauthenticated
         }
         val authStateFlow = MutableStateFlow<SessionManager.AuthState>(initialState)
         every { sessionManager.authState } returns authStateFlow
@@ -75,7 +75,7 @@ class AgentEventBusTest {
         // `sessionManager.isLoggedIn()`) agrees with whatever state the
         // test last emitted into `authStateFlow`.
         every { sessionManager.isLoggedIn() } answers {
-            authStateFlow.value is SessionManager.AuthState.LoggedIn
+            authStateFlow.value is SessionManager.AuthState.FullyConnected
         }
         val bus = AgentEventBus(wsm, sessionManager)
         return ReactiveBusFixture(bus, connEvents, conn, wsm, sessionManager, authStateFlow)
@@ -219,7 +219,7 @@ class AgentEventBusTest {
         // 3s timeout comfortably covers the `Dispatchers.Default` hop.
         bus.connection.test {
             assertEquals(AgentEventBus.ConnState.Disconnected, awaitItem())
-            authStateFlow.value = SessionManager.AuthState.LoggedIn
+            authStateFlow.value = SessionManager.AuthState.FullyConnected
             assertEquals(AgentEventBus.ConnState.Connecting, awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
@@ -248,7 +248,7 @@ class AgentEventBusTest {
         bus.connection.test {
             // Replay of the current value, then the LoggedOut-triggered stop.
             assertEquals(AgentEventBus.ConnState.Connecting, awaitItem())
-            authStateFlow.value = SessionManager.AuthState.LoggedOut
+            authStateFlow.value = SessionManager.AuthState.Unauthenticated
             assertEquals(AgentEventBus.ConnState.Disconnected, awaitItem())
             cancelAndIgnoreRemainingEvents()
         }

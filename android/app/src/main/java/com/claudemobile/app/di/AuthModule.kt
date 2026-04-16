@@ -3,6 +3,7 @@ package com.claudemobile.app.di
 import android.content.Context
 import com.claudemobile.app.data.auth.ConnectionStore
 import com.claudemobile.app.data.auth.TokenStore
+import com.claudemobile.app.data.auth.UserIdentityStore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -24,5 +25,11 @@ object AuthModule {
     @Singleton
     fun provideConnectionStore(@ApplicationContext context: Context): ConnectionStore {
         return ConnectionStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideUserIdentityStore(@ApplicationContext context: Context): UserIdentityStore {
+        return UserIdentityStore(context)
     }
 }

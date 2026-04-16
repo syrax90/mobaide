@@ -13,8 +13,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class LoginUiState(
-    val agentUrl: String = "https://",
-    val username: String = "",
+    val email: String = "",
     val password: String = "",
     val isLoading: Boolean = false,
     val error: String? = null,
@@ -31,41 +30,59 @@ class LoginViewModel @Inject constructor(
     private val _loginSuccess = MutableStateFlow(false)
     val loginSuccess: StateFlow<Boolean> = _loginSuccess.asStateFlow()
 
-    fun updateAgentUrl(url: String) {
-        _uiState.update { it.copy(agentUrl = url, error = null) }
-    }
-
-    fun updateUsername(username: String) {
-        _uiState.update { it.copy(username = username, error = null) }
+    fun updateEmail(email: String) {
+        _uiState.update { it.copy(email = email, error = null) }
     }
 
     fun updatePassword(password: String) {
         _uiState.update { it.copy(password = password, error = null) }
     }
 
-    fun login() {
+    fun loginWithPassword() {
         val state = _uiState.value
-        if (state.agentUrl.isBlank() || state.username.isBlank() || state.password.isBlank()) {
-            _uiState.update { it.copy(error = "All fields are required") }
+        if (state.email.isBlank() || state.password.isBlank()) {
+            _uiState.update { it.copy(error = "Email and password are required") }
             return
         }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                authRepository.login(state.agentUrl, state.username, state.password)
+                authRepository.loginWithPassword(state.email.trim(), state.password)
                 _loginSuccess.value = true
             } catch (e: ApiException) {
                 val message = when (e.code) {
-                    401 -> "Invalid credentials"
-                    else -> "Connection failed: ${e.message}"
+                    401 -> "Invalid email or password"
+                    else -> "Login failed: ${e.message}"
                 }
                 _uiState.update { it.copy(isLoading = false, error = message) }
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(isLoading = false, error = "Connection failed: ${e.message}")
+                    it.copy(isLoading = false, error = "Login failed: ${e.message}")
                 }
             }
         }
+    }
+
+    fun onGoogleIdToken(idToken: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            try {
+                authRepository.loginWithGoogle(idToken)
+                _loginSuccess.value = true
+            } catch (e: ApiException) {
+                _uiState.update {
+                    it.copy(isLoading = false, error = "Google Sign-In failed: ${e.message}")
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, error = "Google Sign-In failed: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun setError(message: String) {
+        _uiState.update { it.copy(error = message, isLoading = false) }
     }
 }

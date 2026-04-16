@@ -20,6 +20,7 @@ import com.claudemobile.app.ui.login.LoginScreen
 import com.claudemobile.app.ui.pairing.ManualPairingScreen
 import com.claudemobile.app.ui.pairing.PairingViewModel
 import com.claudemobile.app.ui.pairing.QrScannerScreen
+import com.claudemobile.app.ui.register.RegisterScreen
 import com.claudemobile.app.ui.sessions.CreateSessionScreen
 import com.claudemobile.app.ui.sessions.SessionListScreen
 import com.claudemobile.app.ui.settings.SettingsScreen
@@ -30,30 +31,41 @@ fun AppNavigation(sessionManager: SessionManager) {
     val navController = rememberNavController()
     val authState by sessionManager.authState.collectAsStateWithLifecycle()
 
-    val startDestination = if (sessionManager.isLoggedIn()) {
-        Routes.SESSION_LIST
-    } else {
-        Routes.LOGIN
+    // Three-tier start destination:
+    // Unauthenticated → LOGIN
+    // UserOnly         → SESSION_LIST (temporary until CLA-36 dashboard)
+    // FullyConnected   → SESSION_LIST
+    val startDestination = when (sessionManager.authState.value) {
+        SessionManager.AuthState.FullyConnected -> Routes.SESSION_LIST
+        SessionManager.AuthState.UserOnly -> Routes.SESSION_LIST
+        SessionManager.AuthState.Unauthenticated -> Routes.LOGIN
     }
 
-    // Only react to the LoggedIn -> LoggedOut transition, not to cold
-    // starts where the initial state is already LoggedOut (which is
-    // handled by `startDestination` above). Tracking the previous value
-    // in a remember avoids re-navigating on process recreation and on
-    // every LaunchedEffect re-key.
-    var wasLoggedIn by remember { mutableStateOf(sessionManager.isLoggedIn()) }
+    // React to state transitions. Tracks the previous state so that we
+    // only navigate on actual transitions, not cold starts (which are
+    // handled by `startDestination`).
+    var previousState by remember { mutableStateOf(sessionManager.authState.value) }
     LaunchedEffect(authState) {
-        val nowLoggedIn = authState is SessionManager.AuthState.LoggedIn
-        if (wasLoggedIn && !nowLoggedIn) {
-            navController.navigate(Routes.LOGIN) {
-                // Pop everything, including the start destination, so
-                // the user can't hit "back" from Login to a stale
-                // authenticated screen.
-                popUpTo(0) { inclusive = true }
-                launchSingleTop = true
+        val current = authState
+        when {
+            // User logged out entirely → go to login
+            current is SessionManager.AuthState.Unauthenticated
+                && previousState !is SessionManager.AuthState.Unauthenticated -> {
+                navController.navigate(Routes.LOGIN) {
+                    popUpTo(0) { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+            // Agent disconnected but user still authenticated → go to session list
+            current is SessionManager.AuthState.UserOnly
+                && previousState is SessionManager.AuthState.FullyConnected -> {
+                navController.navigate(Routes.SESSION_LIST) {
+                    popUpTo(0) { inclusive = true }
+                    launchSingleTop = true
+                }
             }
         }
-        wasLoggedIn = nowLoggedIn
+        previousState = current
     }
 
     NavHost(navController = navController, startDestination = startDestination) {
@@ -65,8 +77,24 @@ fun AppNavigation(sessionManager: SessionManager) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
-                onScanQrClick = {
-                    navController.navigate(Routes.QR_SCANNER)
+                onRegisterClick = {
+                    navController.navigate(Routes.REGISTER)
+                },
+            )
+        }
+
+        composable(Routes.REGISTER) {
+            RegisterScreen(
+                viewModel = hiltViewModel(),
+                onRegisterSuccess = {
+                    navController.navigate(Routes.SESSION_LIST) {
+                        popUpTo(Routes.REGISTER) { inclusive = true }
+                    }
+                },
+                onLoginClick = {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(Routes.REGISTER) { inclusive = true }
+                    }
                 },
             )
         }

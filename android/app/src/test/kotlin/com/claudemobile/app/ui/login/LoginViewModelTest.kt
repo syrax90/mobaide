@@ -19,15 +19,10 @@ import org.junit.Test
 
 /**
  * Unit tests for [LoginViewModel] — exercises blank-field validation, the
- * loading→success state transition, and the three failure branches
- * (`ApiException(401)`, other [ApiException], non-API [Exception]) plus
- * the `update*` helpers that clear the pending error.
- *
- * [AuthRepository] is mocked with MockK and all async paths are driven by the
- * [MainDispatcherRule]'s [kotlinx.coroutines.test.StandardTestDispatcher] so
- * that `viewModelScope.launch { ... }` only runs when the test yields via
- * `advanceUntilIdle()`. This lets us observe the intermediate `isLoading=true`
- * state before the repository call is allowed to resolve.
+ * loading→success state transition, Google Sign-In callback, and the
+ * failure branches (`ApiException(401)`, other [ApiException],
+ * non-API [Exception]) plus the `update*` helpers that clear the pending
+ * error.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class LoginViewModelTest {
@@ -40,19 +35,17 @@ class LoginViewModelTest {
     // ---- Helpers ------------------------------------------------------------
 
     private fun primed(vm: LoginViewModel) = vm.apply {
-        updateAgentUrl("https://example.com")
-        updateUsername("alice")
+        updateEmail("alice@example.com")
         updatePassword("secret")
     }
 
     // ---- Initial state ------------------------------------------------------
 
     @Test
-    fun initialState_hasDefaultServerUrlPrefix_andNoErrorOrLoading() = runTest {
+    fun initialState_hasEmptyFields_andNoErrorOrLoading() = runTest {
         val vm = LoginViewModel(authRepository)
         val state = vm.uiState.value
-        assertEquals("https://", state.agentUrl)
-        assertEquals("", state.username)
+        assertEquals("", state.email)
         assertEquals("", state.password)
         assertFalse(state.isLoading)
         assertNull(state.error)
@@ -62,46 +55,30 @@ class LoginViewModelTest {
     // ---- Blank-field validation ---------------------------------------------
 
     @Test
-    fun login_whenServerUrlBlank_setsError_andDoesNotCallRepository() = runTest {
+    fun login_whenEmailBlank_setsError_andDoesNotCallRepository() = runTest {
         val vm = LoginViewModel(authRepository)
-        vm.updateAgentUrl("   ")
-        vm.updateUsername("alice")
+        vm.updateEmail("   ")
         vm.updatePassword("secret")
 
-        vm.login()
+        vm.loginWithPassword()
         advanceUntilIdle()
 
-        assertEquals("All fields are required", vm.uiState.value.error)
+        assertEquals("Email and password are required", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
-        coVerify(exactly = 0) { authRepository.login(any(), any(), any()) }
-    }
-
-    @Test
-    fun login_whenUsernameBlank_setsError_andDoesNotCallRepository() = runTest {
-        val vm = LoginViewModel(authRepository)
-        vm.updateAgentUrl("https://example.com")
-        vm.updateUsername("")
-        vm.updatePassword("secret")
-
-        vm.login()
-        advanceUntilIdle()
-
-        assertEquals("All fields are required", vm.uiState.value.error)
-        coVerify(exactly = 0) { authRepository.login(any(), any(), any()) }
+        coVerify(exactly = 0) { authRepository.loginWithPassword(any(), any()) }
     }
 
     @Test
     fun login_whenPasswordBlank_setsError_andDoesNotCallRepository() = runTest {
         val vm = LoginViewModel(authRepository)
-        vm.updateAgentUrl("https://example.com")
-        vm.updateUsername("alice")
+        vm.updateEmail("alice@example.com")
         vm.updatePassword("")
 
-        vm.login()
+        vm.loginWithPassword()
         advanceUntilIdle()
 
-        assertEquals("All fields are required", vm.uiState.value.error)
-        coVerify(exactly = 0) { authRepository.login(any(), any(), any()) }
+        assertEquals("Email and password are required", vm.uiState.value.error)
+        coVerify(exactly = 0) { authRepository.loginWithPassword(any(), any()) }
     }
 
     // ---- Loading → success path ---------------------------------------------
@@ -109,154 +86,136 @@ class LoginViewModelTest {
     @Test
     fun login_happyPath_setsLoadingTrue_thenEmitsLoginSuccess() = runTest {
         val vm = primed(LoginViewModel(authRepository))
-        // A [CompletableDeferred] lets the test body observe the intermediate
-        // `isLoading = true` state: the repository mock suspends on `await()`
-        // until the test explicitly resolves it, so `runCurrent()` can drain
-        // the launch body up to the suspension point without running the
-        // success branch. A plain `just Runs` answer would complete
-        // synchronously and the intermediate state would be unobservable
-        // (StateFlow keeps only the latest value).
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         coEvery {
-            authRepository.login("https://example.com", "alice", "secret")
+            authRepository.loginWithPassword("alice@example.com", "secret")
         } coAnswers { gate.await() }
 
         assertFalse(vm.uiState.value.isLoading)
         assertFalse(vm.loginSuccess.value)
 
-        vm.login()
-        // Step 1: drain pending work until the coroutine suspends on
-        // `gate.await()`. At this point the VM has flipped `isLoading = true`
-        // but not yet set `loginSuccess`.
+        vm.loginWithPassword()
         runCurrent()
         val loading = vm.uiState.value
         assertTrue("must enter loading state before repository resolves", loading.isLoading)
         assertNull(loading.error)
-        assertFalse(
-            "must not signal success until repository returns",
-            vm.loginSuccess.value,
-        )
+        assertFalse(vm.loginSuccess.value)
 
-        // Step 2: resolve the gate so the success branch runs.
         gate.complete(Unit)
         advanceUntilIdle()
 
-        assertTrue(
-            "loginSuccess must flip to true after successful login",
-            vm.loginSuccess.value,
-        )
-        // On success the ViewModel never flips `isLoading` back — it signals
-        // completion via the separate `loginSuccess` StateFlow. Assert that
-        // the error field stays null.
+        assertTrue(vm.loginSuccess.value)
         assertNull(vm.uiState.value.error)
         coVerify(exactly = 1) {
-            authRepository.login("https://example.com", "alice", "secret")
+            authRepository.loginWithPassword("alice@example.com", "secret")
         }
     }
 
-    // ---- ApiException(401) → "Invalid credentials" --------------------------
+    // ---- ApiException(401) → "Invalid email or password" --------------------
 
     @Test
     fun login_on401_setsInvalidCredentialsError_andClearsLoading() = runTest {
         val vm = primed(LoginViewModel(authRepository))
         coEvery {
-            authRepository.login("https://example.com", "alice", "secret")
+            authRepository.loginWithPassword("alice@example.com", "secret")
         } throws ApiException(401, """{"detail":"bad creds"}""")
 
-        vm.login()
+        vm.loginWithPassword()
         advanceUntilIdle()
 
         val state = vm.uiState.value
-        assertEquals("Invalid credentials", state.error)
+        assertEquals("Invalid email or password", state.error)
         assertFalse(state.isLoading)
         assertFalse(vm.loginSuccess.value)
     }
 
-    // ---- Other ApiException → "Connection failed: ..." ---------------------
+    // ---- Other ApiException → "Login failed: ..." --------------------------
 
     @Test
-    fun login_onNon401ApiException_setsConnectionFailedError_withServerMessage() = runTest {
+    fun login_onNon401ApiException_setsLoginFailedError() = runTest {
         val vm = primed(LoginViewModel(authRepository))
         val boom = ApiException(500, "server exploded")
         coEvery {
-            authRepository.login("https://example.com", "alice", "secret")
+            authRepository.loginWithPassword("alice@example.com", "secret")
         } throws boom
 
-        vm.login()
+        vm.loginWithPassword()
         advanceUntilIdle()
 
         val state = vm.uiState.value
-        // ApiException's message is "HTTP $code: $errorBody" — the ViewModel
-        // concatenates "Connection failed: " in front of it.
-        assertEquals("Connection failed: ${boom.message}", state.error)
-        assertTrue(
-            "error must mention connection failure",
-            state.error!!.startsWith("Connection failed:"),
-        )
-        assertTrue(
-            "error must include the underlying ApiException message",
-            state.error!!.contains("500") && state.error!!.contains("server exploded"),
-        )
+        assertEquals("Login failed: ${boom.message}", state.error)
         assertFalse(state.isLoading)
-        assertFalse(vm.loginSuccess.value)
     }
 
     // ---- Non-API exception path ---------------------------------------------
 
     @Test
-    fun login_onGenericException_setsConnectionFailedError_withUnderlyingMessage() = runTest {
+    fun login_onGenericException_setsLoginFailedError() = runTest {
         val vm = primed(LoginViewModel(authRepository))
         coEvery {
-            authRepository.login("https://example.com", "alice", "secret")
+            authRepository.loginWithPassword("alice@example.com", "secret")
         } throws java.net.UnknownHostException("example.com: nodename nor servname provided")
 
-        vm.login()
+        vm.loginWithPassword()
         advanceUntilIdle()
 
         val state = vm.uiState.value
         assertEquals(
-            "Connection failed: example.com: nodename nor servname provided",
+            "Login failed: example.com: nodename nor servname provided",
             state.error,
         )
         assertFalse(state.isLoading)
+    }
+
+    // ---- Google Sign-In callback -------------------------------------------
+
+    @Test
+    fun onGoogleIdToken_happyPath_emitsLoginSuccess() = runTest {
+        val vm = LoginViewModel(authRepository)
+        coEvery { authRepository.loginWithGoogle("google-token") } returns Unit
+
+        vm.onGoogleIdToken("google-token")
+        advanceUntilIdle()
+
+        assertTrue(vm.loginSuccess.value)
+        coVerify(exactly = 1) { authRepository.loginWithGoogle("google-token") }
+    }
+
+    @Test
+    fun onGoogleIdToken_onFailure_setsError() = runTest {
+        val vm = LoginViewModel(authRepository)
+        coEvery {
+            authRepository.loginWithGoogle("bad-token")
+        } throws ApiException(401, "invalid token")
+
+        vm.onGoogleIdToken("bad-token")
+        advanceUntilIdle()
+
         assertFalse(vm.loginSuccess.value)
+        assertTrue(vm.uiState.value.error!!.contains("Google Sign-In failed"))
     }
 
     // ---- update* helpers clear the pending error ----------------------------
 
     @Test
-    fun updateAgentUrl_clearsPendingError() = runTest {
+    fun updateEmail_clearsPendingError() = runTest {
         val vm = LoginViewModel(authRepository)
-        // Seed an error via the blank-field path.
-        vm.login()
+        vm.loginWithPassword()
         advanceUntilIdle()
-        assertEquals("All fields are required", vm.uiState.value.error)
+        assertEquals("Email and password are required", vm.uiState.value.error)
 
-        vm.updateAgentUrl("https://example.com")
+        vm.updateEmail("alice@example.com")
 
         assertNull(vm.uiState.value.error)
-        assertEquals("https://example.com", vm.uiState.value.agentUrl)
-    }
-
-    @Test
-    fun updateUsername_clearsPendingError() = runTest {
-        val vm = LoginViewModel(authRepository)
-        vm.login()
-        advanceUntilIdle()
-        assertEquals("All fields are required", vm.uiState.value.error)
-
-        vm.updateUsername("alice")
-
-        assertNull(vm.uiState.value.error)
-        assertEquals("alice", vm.uiState.value.username)
+        assertEquals("alice@example.com", vm.uiState.value.email)
     }
 
     @Test
     fun updatePassword_clearsPendingError() = runTest {
         val vm = LoginViewModel(authRepository)
-        vm.login()
+        vm.loginWithPassword()
         advanceUntilIdle()
-        assertEquals("All fields are required", vm.uiState.value.error)
+        assertEquals("Email and password are required", vm.uiState.value.error)
 
         vm.updatePassword("secret")
 

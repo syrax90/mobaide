@@ -112,10 +112,10 @@ class ConnectionsViewModelTest {
 
         // Verify teardown → activate → re-login ordering
         verifyOrder {
-            deps.sessionManager.forceLogout()
+            deps.sessionManager.agentDisconnect()
             deps.eventBus.stop()
             deps.connectionStore.activateProfile("prof-2", deps.tokenStore)
-            deps.sessionManager.markLoggedIn()
+            deps.sessionManager.markAgentConnected()
             deps.eventBus.start()
         }
     }
