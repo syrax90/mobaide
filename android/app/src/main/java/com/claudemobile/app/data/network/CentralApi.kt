@@ -1,6 +1,11 @@
 package com.claudemobile.app.data.network
 
+import com.claudemobile.app.data.network.dto.AgentSummaryResponse
+import com.claudemobile.app.data.network.dto.CreateAgentRequest
+import com.claudemobile.app.data.network.dto.CreateAgentResponse
 import com.claudemobile.app.data.network.dto.GoogleAuthRequest
+import com.claudemobile.app.data.network.dto.MobileTokenResponse
+import com.claudemobile.app.data.network.dto.ReRegisterAgentResponse
 import com.claudemobile.app.data.network.dto.UserAuthResponse
 import com.claudemobile.app.data.network.dto.UserLoginRequest
 import com.claudemobile.app.data.network.dto.UserRegisterRequest
@@ -60,6 +65,57 @@ class CentralApi(
         return execute(request)
     }
 
+    // -- Agent management (requires user dashboard token) ---------------------
+
+    suspend fun listAgents(userToken: String): List<AgentSummaryResponse> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/agents")
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun createAgent(userToken: String, name: String): CreateAgentResponse {
+        val body = json.encodeToString(CreateAgentRequest(name))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/agents")
+            .post(body)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun reregisterAgent(userToken: String, agentId: String): ReRegisterAgentResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/agents/$agentId/reregister")
+            .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun deleteAgent(userToken: String, agentId: String) {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/agents/$agentId")
+            .delete()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
+    }
+
+    suspend fun getMobileTokens(userToken: String, agentId: String): MobileTokenResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/agents/$agentId/token")
+            .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    // -- Internal helpers ---------------------------------------------------
+
     private suspend inline fun <reified T> execute(request: Request): T =
         withContext(Dispatchers.IO) {
             client.newCall(request).execute().use { response ->
@@ -70,6 +126,16 @@ class CentralApi(
                 val body = response.body?.string()
                     ?: throw ApiException(response.code, "Empty response body")
                 json.decodeFromString<T>(body)
+            }
+        }
+
+    private suspend fun executeNoContent(request: Request) =
+        withContext(Dispatchers.IO) {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val errorBody = response.body?.string() ?: ""
+                    throw ApiException(response.code, errorBody)
+                }
             }
         }
 }

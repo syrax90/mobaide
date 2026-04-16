@@ -14,6 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.claudemobile.app.data.auth.SessionManager
+import com.claudemobile.app.ui.agents.AgentListScreen
 import com.claudemobile.app.ui.autoscan.AutoScanDetailScreen
 import com.claudemobile.app.ui.connections.ConnectionsScreen
 import com.claudemobile.app.ui.login.LoginScreen
@@ -33,11 +34,11 @@ fun AppNavigation(sessionManager: SessionManager) {
 
     // Three-tier start destination:
     // Unauthenticated → LOGIN
-    // UserOnly         → SESSION_LIST (temporary until CLA-36 dashboard)
-    // FullyConnected   → SESSION_LIST
+    // UserOnly         → AGENT_LIST (dashboard)
+    // FullyConnected   → AGENT_LIST (dashboard)
     val startDestination = when (sessionManager.authState.value) {
-        SessionManager.AuthState.FullyConnected -> Routes.SESSION_LIST
-        SessionManager.AuthState.UserOnly -> Routes.SESSION_LIST
+        SessionManager.AuthState.FullyConnected -> Routes.AGENT_LIST
+        SessionManager.AuthState.UserOnly -> Routes.AGENT_LIST
         SessionManager.AuthState.Unauthenticated -> Routes.LOGIN
     }
 
@@ -56,10 +57,10 @@ fun AppNavigation(sessionManager: SessionManager) {
                     launchSingleTop = true
                 }
             }
-            // Agent disconnected but user still authenticated → go to session list
+            // Agent disconnected but user still authenticated → go to agent list
             current is SessionManager.AuthState.UserOnly
                 && previousState is SessionManager.AuthState.FullyConnected -> {
-                navController.navigate(Routes.SESSION_LIST) {
+                navController.navigate(Routes.AGENT_LIST) {
                     popUpTo(0) { inclusive = true }
                     launchSingleTop = true
                 }
@@ -73,7 +74,7 @@ fun AppNavigation(sessionManager: SessionManager) {
             LoginScreen(
                 viewModel = hiltViewModel(),
                 onLoginSuccess = {
-                    navController.navigate(Routes.SESSION_LIST) {
+                    navController.navigate(Routes.AGENT_LIST) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
@@ -87,7 +88,7 @@ fun AppNavigation(sessionManager: SessionManager) {
             RegisterScreen(
                 viewModel = hiltViewModel(),
                 onRegisterSuccess = {
-                    navController.navigate(Routes.SESSION_LIST) {
+                    navController.navigate(Routes.AGENT_LIST) {
                         popUpTo(Routes.REGISTER) { inclusive = true }
                     }
                 },
@@ -104,7 +105,7 @@ fun AppNavigation(sessionManager: SessionManager) {
             QrScannerScreen(
                 viewModel = pairingViewModel,
                 onPairingComplete = {
-                    navController.navigate(Routes.SESSION_LIST) {
+                    navController.navigate(Routes.AGENT_LIST) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
@@ -120,11 +121,23 @@ fun AppNavigation(sessionManager: SessionManager) {
             ManualPairingScreen(
                 viewModel = pairingViewModel,
                 onPairingComplete = {
-                    navController.navigate(Routes.SESSION_LIST) {
+                    navController.navigate(Routes.AGENT_LIST) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.AGENT_LIST) {
+            AgentListScreen(
+                viewModel = hiltViewModel(),
+                onAgentConnected = {
+                    navController.navigate(Routes.SESSION_LIST)
+                },
+                onSettingsClick = {
+                    navController.navigate(Routes.SETTINGS)
+                },
             )
         }
 
@@ -143,6 +156,7 @@ fun AppNavigation(sessionManager: SessionManager) {
                 onAutoScanClick = { projectName ->
                     navController.navigate(Routes.autoScanDetail(projectName))
                 },
+                onBack = { navController.popBackStack() },
             )
         }
 
@@ -194,7 +208,9 @@ fun AppNavigation(sessionManager: SessionManager) {
                     }
                 },
                 onManageConnections = {
-                    navController.navigate(Routes.CONNECTIONS)
+                    navController.navigate(Routes.AGENT_LIST) {
+                        popUpTo(Routes.AGENT_LIST) { inclusive = true }
+                    }
                 },
             )
         }
