@@ -1,30 +1,176 @@
 """Authentication service for the Central Server.
 
-Three distinct auth paths:
+Four distinct auth paths:
 1. Agent tokens — long-lived, bcrypt-hashed in DB
 2. Mobile session tokens — JWT issued after QR pairing, with refresh rotation
-3. Dashboard credentials — owner account (bcrypt hash in config)
+3. User accounts — email/password (Argon2id) or Google OAuth, DB-backed
+4. Dashboard sessions — cookie-based JWT with user_id + role claims
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import secrets
 import time
 from typing import TYPE_CHECKING
 
-import bcrypt
 import jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 
-from .models import MobileTokenPayload
+from .models import MobileTokenPayload, UserTokenPayload
 
 if TYPE_CHECKING:
     from ..config import CentralServerConfig
     from ..db.database import Database
+
+logger = logging.getLogger(__name__)
+
+_ph = PasswordHasher()  # Thread-safe singleton
 
 
 class AuthService:
     def __init__(self, config: CentralServerConfig, db: Database) -> None:
         self._config = config
         self._db = db
+
+    # -- Password hashing (Argon2id, non-blocking) ----------------------------
+
+    async def _hash_password(self, password: str) -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _ph.hash, password)
+
+    async def _verify_password(self, hash: str, password: str) -> bool:
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, _ph.verify, hash, password)
+        except VerifyMismatchError:
+            return False
+
+    # -- User registration & login --------------------------------------------
+
+    async def register_user(self, email: str, password: str) -> tuple[str, str]:
+        """Register a new user with email+password.
+
+        Returns (user_id, jwt_token).
+        Raises ValueError if email already taken.
+        """
+        existing = await self._db.get_user_by_email(email)
+        if existing is not None:
+            raise ValueError("Email already registered")
+
+        password_hash = await self._hash_password(password)
+        user_id = await self._db.create_user(
+            email=email,
+            password_hash=password_hash,
+            role="viewer",
+        )
+        token = self._create_user_token(user_id, email, "viewer")
+        return user_id, token
+
+    async def login_user(self, email: str, password: str) -> tuple[str, str, str]:
+        """Authenticate a user by email+password.
+
+        Returns (user_id, role, jwt_token).
+        Raises ValueError if credentials are invalid.
+        """
+        user = await self._db.get_user_by_email(email)
+        if user is None or user["password_hash"] is None:
+            raise ValueError("Invalid email or password")
+
+        if not await self._verify_password(user["password_hash"], password):
+            raise ValueError("Invalid email or password")
+
+        token = self._create_user_token(user["id"], user["email"], user["role"])
+        return user["id"], user["role"], token
+
+    # -- Google OAuth ---------------------------------------------------------
+
+    async def google_authenticate(
+        self, token_str: str
+    ) -> tuple[str, str, str, bool]:
+        """Verify a Google ID token and return/create user.
+
+        Returns (user_id, role, jwt_token, is_new_user).
+        Raises ValueError if token is invalid or Google client ID not configured.
+        """
+        if not self._config.google_client_id:
+            raise ValueError("Google authentication is not configured")
+
+        # Defer import to avoid hard dependency when Google auth is unused
+        from google.auth.transport import requests as google_requests
+        from google.oauth2 import id_token as google_id_token
+
+        loop = asyncio.get_running_loop()
+        try:
+            idinfo = await loop.run_in_executor(
+                None,
+                lambda: google_id_token.verify_oauth2_token(
+                    token_str,
+                    google_requests.Request(),
+                    self._config.google_client_id,
+                ),
+            )
+        except Exception as exc:
+            raise ValueError(f"Invalid Google ID token: {exc}")
+
+        google_sub: str = idinfo["sub"]
+        email: str = idinfo["email"]
+        email_verified: bool = idinfo.get("email_verified", False)
+
+        # 1. Check by google_sub first (exact match)
+        user = await self._db.get_user_by_google_sub(google_sub)
+        if user is not None:
+            token = self._create_user_token(user["id"], user["email"], user["role"])
+            return user["id"], user["role"], token, False
+
+        # 2. Check by email (account linking) — only if email_verified
+        if email_verified:
+            user = await self._db.get_user_by_email(email)
+            if user is not None:
+                await self._db.link_google_to_user(user["id"], google_sub)
+                token = self._create_user_token(
+                    user["id"], user["email"], user["role"]
+                )
+                return user["id"], user["role"], token, False
+
+        # 3. Check if email already taken (edge case: unverified Google email)
+        existing = await self._db.get_user_by_email(email)
+        if existing is not None:
+            raise ValueError("Email already registered with a different account")
+
+        # 4. New user
+        user_id = await self._db.create_user(
+            email=email,
+            google_sub=google_sub,
+            role="viewer",
+        )
+        token = self._create_user_token(user_id, email, "viewer")
+        return user_id, "viewer", token, True
+
+    # -- Admin seeding --------------------------------------------------------
+
+    async def seed_admin_user(self) -> None:
+        """Seed the admin user from config env vars if no admin exists.
+
+        Called during app startup. Idempotent.
+        """
+        if not self._config.admin_seed_email or not self._config.admin_seed_password:
+            return
+
+        existing = await self._db.get_user_by_email(self._config.admin_seed_email)
+        if existing is not None:
+            return
+
+        password_hash = await self._hash_password(self._config.admin_seed_password)
+        await self._db.create_user(
+            email=self._config.admin_seed_email,
+            password_hash=password_hash,
+            role="admin",
+        )
+        logger.info(
+            "admin_user.seeded email=%s", self._config.admin_seed_email
+        )
 
     # -- Agent auth ------------------------------------------------------------
 
@@ -86,24 +232,8 @@ class AuthService:
 
     # -- Dashboard auth --------------------------------------------------------
 
-    def verify_dashboard_credentials(
-        self, username: str, password: str
-    ) -> bool:
-        if username != self._config.dashboard_username:
-            return False
-        return bcrypt.checkpw(
-            password.encode(), self._config.dashboard_password_hash.encode()
-        )
-
-    def create_dashboard_token(self, username: str) -> str:
-        return self._create_jwt(
-            sub=username,
-            token_type="dashboard",
-            expire_minutes=self._config.dashboard_token_expire_minutes,
-        )
-
-    def decode_dashboard_token(self, token: str) -> str:
-        """Decode a dashboard JWT. Returns username. Raises jwt.InvalidTokenError."""
+    def decode_dashboard_token(self, token: str) -> UserTokenPayload:
+        """Decode a dashboard JWT. Returns UserTokenPayload. Raises jwt.InvalidTokenError."""
         payload = jwt.decode(
             token,
             self._config.jwt_secret_key,
@@ -111,9 +241,27 @@ class AuthService:
         )
         if payload.get("type") != "dashboard":
             raise jwt.InvalidTokenError("Expected dashboard token")
-        return payload["sub"]
+        return UserTokenPayload(
+            sub=payload["sub"],
+            email=payload.get("email", payload["sub"]),
+            role=payload.get("role", "admin"),
+            token_type=payload["type"],
+            exp=payload["exp"],
+            iat=payload["iat"],
+        )
 
     # -- Internal --------------------------------------------------------------
+
+    def _create_user_token(self, user_id: str, email: str, role: str) -> str:
+        """Create a dashboard JWT with user identity claims."""
+        return self._create_jwt(
+            sub=user_id,
+            token_type="dashboard",
+            expire_minutes=self._config.dashboard_token_expire_minutes,
+            user_id=user_id,
+            email=email,
+            role=role,
+        )
 
     def _create_jwt(
         self,
@@ -122,6 +270,9 @@ class AuthService:
         token_type: str,
         expire_minutes: int,
         agent_id: str | None = None,
+        user_id: str | None = None,
+        email: str | None = None,
+        role: str | None = None,
     ) -> str:
         now = int(time.time())
         payload: dict = {
@@ -132,6 +283,12 @@ class AuthService:
         }
         if agent_id is not None:
             payload["agent_id"] = agent_id
+        if user_id is not None:
+            payload["user_id"] = user_id
+        if email is not None:
+            payload["email"] = email
+        if role is not None:
+            payload["role"] = role
         return jwt.encode(
             payload,
             self._config.jwt_secret_key,

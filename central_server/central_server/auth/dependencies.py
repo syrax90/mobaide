@@ -1,12 +1,13 @@
-"""FastAPI dependencies for the three auth paths."""
+"""FastAPI dependencies for the auth paths."""
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 import jwt
-from fastapi import HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, status
 
-from .models import MobileTokenPayload
+from .models import MobileTokenPayload, UserTokenPayload
 from .service import AuthService
 
 logger = logging.getLogger(__name__)
@@ -56,8 +57,11 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
 # -- Dashboard auth (cookie-based JWT) ----------------------------------------
 
 
-async def get_dashboard_user(request: Request) -> str:
-    """FastAPI dependency: validate dashboard JWT from cookie."""
+async def get_dashboard_user(request: Request) -> UserTokenPayload:
+    """FastAPI dependency: validate dashboard JWT from cookie.
+
+    Returns a UserTokenPayload with user_id, email, and role.
+    """
     auth_service = _get_auth_service(request)
     token = request.cookies.get("dashboard_token")
     if not token:
@@ -66,13 +70,36 @@ async def get_dashboard_user(request: Request) -> str:
             headers={"Location": "/dashboard/login"},
         )
     try:
-        username = auth_service.decode_dashboard_token(token)
+        user_payload = auth_service.decode_dashboard_token(token)
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER,
             headers={"Location": "/dashboard/login"},
         )
-    return username
+    return user_payload
+
+
+# -- RBAC dependency factory ---------------------------------------------------
+
+
+def require_role(*allowed_roles: str) -> Callable:
+    """Dependency factory: require the dashboard user to have one of the given roles.
+
+    Usage:
+        @router.get("/admin-only", dependencies=[Depends(require_role("admin"))])
+    """
+
+    async def _check_role(
+        user: UserTokenPayload = Depends(get_dashboard_user),
+    ) -> UserTokenPayload:
+        if user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Requires role: {', '.join(allowed_roles)}",
+            )
+        return user
+
+    return _check_role
 
 
 # -- Mobile REST auth (Bearer header) -----------------------------------------

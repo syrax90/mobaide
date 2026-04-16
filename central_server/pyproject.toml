@@ -20,6 +20,8 @@ dependencies = [
     "jinja2",
     "python-multipart",
     "qrcode[pil]",
+    "argon2-cffi",
+    "google-auth",
 ]
 
 [project.optional-dependencies]
