@@ -10,3 +10,5 @@ claude_agent/users.json
 claude_agent/state/
 **/active_workitems.json
 android/app/src/main/res/xml/network_security_config.xml
+start-all.ps1
+caddy-root.pem
