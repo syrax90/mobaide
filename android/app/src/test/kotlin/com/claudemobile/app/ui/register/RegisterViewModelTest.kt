@@ -1,5 +1,7 @@
 package com.claudemobile.app.ui.register
 
+import app.cash.turbine.test
+import com.claudemobile.app.data.auth.GoogleAuthResult
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.testing.MainDispatcherRule
@@ -209,11 +211,11 @@ class RegisterViewModelTest {
     // ---- Google Sign-In callback --------------------------------------------
 
     @Test
-    fun onGoogleIdToken_happyPath_emitsRegisterSuccess() = runTest {
+    fun onGoogleAuthResult_success_emitsRegisterSuccess() = runTest {
         val vm = RegisterViewModel(authRepository)
         coEvery { authRepository.loginWithGoogle("google-token") } returns Unit
 
-        vm.onGoogleIdToken("google-token")
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
         advanceUntilIdle()
 
         assertTrue(vm.registerSuccess.value)
@@ -221,13 +223,13 @@ class RegisterViewModelTest {
     }
 
     @Test
-    fun onGoogleIdToken_onApiFailure_setsError() = runTest {
+    fun onGoogleAuthResult_success_onApiFailure_setsError() = runTest {
         val vm = RegisterViewModel(authRepository)
         coEvery {
             authRepository.loginWithGoogle("bad-token")
         } throws ApiException(401, "invalid token")
 
-        vm.onGoogleIdToken("bad-token")
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
         advanceUntilIdle()
 
         assertFalse(vm.registerSuccess.value)
@@ -236,18 +238,97 @@ class RegisterViewModelTest {
     }
 
     @Test
-    fun onGoogleIdToken_onGenericFailure_setsError() = runTest {
+    fun onGoogleAuthResult_success_onGenericFailure_setsError() = runTest {
         val vm = RegisterViewModel(authRepository)
         coEvery {
             authRepository.loginWithGoogle("bad-token")
         } throws RuntimeException("network timeout")
 
-        vm.onGoogleIdToken("bad-token")
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
         advanceUntilIdle()
 
         assertFalse(vm.registerSuccess.value)
         assertEquals("Google Sign-In failed: network timeout", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
+    }
+
+    @Test
+    fun onGoogleAuthResult_notConfigured_emitsConfigError() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+            assertTrue(awaitItem().contains("not configured"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_noAccounts_emitsAccountMessage() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.NoAccounts("Add a Google account."))
+            assertEquals("Add a Google account.", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_playServicesUnavailable_emitsPlayServicesMessage() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.PlayServicesUnavailable)
+            assertTrue(awaitItem().contains("Google Play services"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_failed_emitsFailureMessage() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.Failed("boom"))
+            assertEquals("Google Sign-In failed: boom", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_cancelled_clearsLoading_andEmitsNoEvent() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.onGoogleAuthStart()
+        assertTrue(vm.uiState.value.isLoading)
+
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.Cancelled)
+            expectNoEvents()
+        }
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    @Test
+    fun onGoogleAuthResult_sameErrorTwice_emitsTwoEvents() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+            val first = awaitItem()
+            vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+            val second = awaitItem()
+            assertEquals(first, second)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthStart_setsLoading_andClearsError() = runTest {
+        val vm = RegisterViewModel(authRepository)
+        vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.error != null)
+
+        vm.onGoogleAuthStart()
+
+        assertTrue(vm.uiState.value.isLoading)
+        assertNull(vm.uiState.value.error)
     }
 
     // ---- update* helpers clear the pending error ----------------------------
@@ -291,15 +372,4 @@ class RegisterViewModelTest {
         assertEquals("secret", vm.uiState.value.confirmPassword)
     }
 
-    // ---- setError helper ----------------------------------------------------
-
-    @Test
-    fun setError_setsMessage_andClearsLoading() = runTest {
-        val vm = RegisterViewModel(authRepository)
-        vm.setError("something went wrong")
-
-        val state = vm.uiState.value
-        assertEquals("something went wrong", state.error)
-        assertFalse(state.isLoading)
-    }
 }

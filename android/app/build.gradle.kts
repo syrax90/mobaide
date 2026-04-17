@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,23 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt.android)
     alias(libs.plugins.ksp)
+}
+
+// Google OAuth 2.0 Web Client ID is resolved at build time from (in priority order):
+//   1. GOOGLE_WEB_CLIENT_ID environment variable (CI / release builds)
+//   2. android/local.properties key `GOOGLE_WEB_CLIENT_ID` (developer machines)
+//   3. Empty string (runtime code detects this and surfaces a clear config error)
+// It is intentionally never committed to VCS.
+val googleWebClientId: String = run {
+    val fromEnv = System.getenv("GOOGLE_WEB_CLIENT_ID")
+    if (!fromEnv.isNullOrBlank()) return@run fromEnv
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        val props = Properties().apply { localPropsFile.inputStream().use { load(it) } }
+        props.getProperty("GOOGLE_WEB_CLIENT_ID", "").orEmpty()
+    } else {
+        ""
+    }
 }
 
 android {
@@ -19,7 +38,7 @@ android {
         versionName = "1.0.0"
 
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"https://api.claudemobile.example.com\"")
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"YOUR_WEB_CLIENT_ID.apps.googleusercontent.com\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
     }
 
     buildTypes {
