@@ -71,9 +71,19 @@ async def agent_tunnel(websocket: WebSocket) -> None:
 
     # -- Step 2: Register in routing table -------------------------------------
     conn = routing.register_agent(agent_id, websocket)
+    # Resolve owner once at registration so the offline-broadcast path
+    # (which runs after the tunnel is torn down) doesn't have to hit the DB.
+    conn.owner_user_id = await db.get_agent_owner(agent_id)
     await db.touch_agent_last_seen(agent_id)
     await websocket.send_text(json.dumps({"type": "auth_ok"}))
     logger.info("agent_tunnel.authenticated agent_id=%s", agent_id)
+
+    # Notify all of the owner's user-scoped WebSocket clients that the
+    # agent just came online. Queue-only; if a client's queue is full we
+    # drop the notification (the client's reconnect logic will call
+    # `refreshAgents()` to resync).
+    if conn.owner_user_id:
+        _broadcast_status(routing, conn.owner_user_id, agent_id, online=True)
 
     # -- Step 3: Run reader, writer, pinger concurrently -----------------------
     reader_task = asyncio.create_task(
@@ -107,6 +117,17 @@ async def agent_tunnel(websocket: WebSocket) -> None:
                 )
             except Exception:
                 pass
+        # Notify the owner's user-scoped clients that the agent is now
+        # offline — but ONLY if no newer tunnel has already replaced this
+        # one. `unregister_agent` above short-circuits on conn_id mismatch
+        # (stale-disconnect guard) and doesn't tell us whether it removed
+        # anything, so we derive that by checking whether the agent_id is
+        # still registered. If it is, a newer coroutine is holding it and
+        # our stale teardown must not undo its online-broadcast.
+        if conn.owner_user_id and routing.get_agent(agent_id) is None:
+            _broadcast_status(
+                routing, conn.owner_user_id, agent_id, online=False
+            )
         logger.info("agent_tunnel.disconnected agent_id=%s", agent_id)
 
 
@@ -243,6 +264,34 @@ def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
             client.send_queue.put_nowait(payload.decode("utf-8"))
     except asyncio.QueueFull:
         pass
+
+
+def _broadcast_status(
+    routing: RoutingTable,
+    user_id: str,
+    agent_id: str,
+    *,
+    online: bool,
+) -> None:
+    """Push an ``agent.status_changed`` JSON envelope to every user-scoped
+    client of the given user. Non-blocking; drops on a full queue because
+    the client will re-sync via REST on its next reconnect anyway.
+    """
+    envelope = json.dumps(
+        {
+            "type": "agent.status_changed",
+            "payload": {"agent_id": agent_id, "online": online},
+        }
+    )
+    for client in routing.get_user_clients(user_id):
+        try:
+            client.send_queue.put_nowait(envelope)
+        except asyncio.QueueFull:
+            logger.warning(
+                "user_events.queue_full user_id=%s device=%s — dropping status event",
+                user_id,
+                client.device_id,
+            )
 
 
 async def _safe_close(websocket: WebSocket, code: int, reason: str) -> None:

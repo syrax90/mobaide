@@ -13,6 +13,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -196,6 +197,98 @@ class AgentRepositoryTest {
 
         coVerify(exactly = 1) { api.deleteAgent("tok-user-123", "a-1") }
         assertEquals(listOf("a-2"), repo.observeAgents().value.map { it.agent_id })
+    }
+
+    // ---- updateAgentOnline (user-scoped push from UserEventBus) ----------------
+
+    @Test
+    fun updateAgentOnline_togglesOnlineFlag_onMatchingAgent() = runTest {
+        // Happy path: a server-pushed status_changed event flips an agent
+        // from online=true to online=false. Only the matching entry is
+        // mutated; others are unchanged.
+        val (repo, api) = newFixture()
+        coEvery { api.listAgents(any()) } returns listOf(
+            agent("a-1", online = true),
+            agent("a-2", online = true),
+        )
+        repo.refreshAgents()
+
+        repo.updateAgentOnline("a-1", online = false)
+
+        val list = repo.observeAgents().value
+        assertEquals(2, list.size)
+        assertFalse(list.first { it.agent_id == "a-1" }.online)
+        assertTrue(list.first { it.agent_id == "a-2" }.online)
+    }
+
+    @Test
+    fun updateAgentOnline_flipsFromOfflineToOnline() = runTest {
+        // Symmetric of the previous test: offline → online transition
+        // (the reconnect path that reveals an agent came back).
+        val (repo, api) = newFixture()
+        coEvery { api.listAgents(any()) } returns listOf(agent("a-1", online = false))
+        repo.refreshAgents()
+
+        repo.updateAgentOnline("a-1", online = true)
+
+        assertTrue(repo.observeAgents().value.single().online)
+    }
+
+    @Test
+    fun updateAgentOnline_unknownAgentId_isNoOp() = runTest {
+        // An event for an agent we haven't fetched yet must not alter the
+        // list (and must not throw). The next `refreshAgents()` call will
+        // discover that agent naturally.
+        val (repo, api) = newFixture()
+        val original = listOf(agent("a-1", online = true))
+        coEvery { api.listAgents(any()) } returns original
+        repo.refreshAgents()
+        val before = repo.observeAgents().value
+
+        repo.updateAgentOnline("ghost-never-seen", online = true)
+
+        // List reference and contents are both unchanged.
+        assertSame(before, repo.observeAgents().value)
+    }
+
+    @Test
+    fun updateAgentOnline_idempotentOnMatchingState_doesNotEmitNewValue() = runTest {
+        // Critical: when the incoming event matches the cached state, the
+        // StateFlow must NOT emit a new value — otherwise every collector
+        // (AgentListViewModel, lazy list, etc.) would recompose/re-render
+        // on every heartbeat-like duplicate.
+        val (repo, api) = newFixture()
+        coEvery { api.listAgents(any()) } returns listOf(agent("a-1", online = true))
+        repo.refreshAgents()
+
+        repo.observeAgents().test {
+            val first = awaitItem()                // replayed current list
+            assertEquals(1, first.size)
+            assertTrue(first[0].online)
+
+            // Re-apply the same state. No new emission expected.
+            repo.updateAgentOnline("a-1", online = true)
+            expectNoEvents()
+
+            // Apply a different state — now a new emission must arrive.
+            repo.updateAgentOnline("a-1", online = false)
+            val second = awaitItem()
+            assertFalse(second[0].online)
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun updateAgentOnline_onEmptyCache_isNoOp() = runTest {
+        // Regression guard: before any refreshAgents() call the cache is
+        // empty. A status event arriving at that moment must not throw
+        // and must not leave the StateFlow in a non-empty state.
+        val (repo) = newFixture()
+
+        repo.updateAgentOnline("any-id", online = true)
+
+        assertEquals(emptyList<AgentSummaryResponse>(), repo.observeAgents().value)
     }
 
     // ---- getMobileTokensForAgent -----------------------------------------------

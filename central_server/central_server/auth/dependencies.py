@@ -54,6 +54,32 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
     return payload
 
 
+# -- User WebSocket auth (dashboard JWT via query param) ----------------------
+
+
+async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
+    """Authenticate a user-scoped WebSocket via ``?token=`` query param.
+
+    Accepts the same dashboard JWT used for REST API calls (see
+    ``get_api_user``). On success, calls ``websocket.accept()`` and returns
+    the decoded payload. Closes with 4001 on failure.
+    """
+    auth_service = _get_auth_service(websocket)
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing token query param")
+        raise _auth_failed("Missing token query param")
+
+    try:
+        payload = auth_service.decode_dashboard_token(token)
+    except jwt.InvalidTokenError as exc:
+        await websocket.close(code=4001, reason=str(exc))
+        raise _auth_failed(str(exc))
+
+    await websocket.accept()
+    return payload
+
+
 # -- Dashboard auth (cookie-based JWT) ----------------------------------------
 
 
