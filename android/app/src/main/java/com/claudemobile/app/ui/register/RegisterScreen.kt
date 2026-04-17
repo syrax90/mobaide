@@ -42,7 +42,6 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.claudemobile.app.data.auth.GoogleAuthClient
-import com.claudemobile.app.data.auth.GoogleAuthResult
 import kotlinx.coroutines.launch
 
 @Composable
@@ -59,12 +58,14 @@ fun RegisterScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val googleAuthClient = remember(context) { GoogleAuthClient(context) }
+
     LaunchedEffect(registerSuccess) {
         if (registerSuccess) onRegisterSuccess()
     }
 
-    LaunchedEffect(uiState.error) {
-        uiState.error?.let { snackbarHostState.showSnackbar(it) }
+    LaunchedEffect(Unit) {
+        viewModel.errorEvents.collect { snackbarHostState.showSnackbar(it) }
     }
 
     Scaffold(
@@ -196,20 +197,22 @@ fun RegisterScreen(
             OutlinedButton(
                 onClick = {
                     scope.launch {
-                        val client = GoogleAuthClient(context)
-                        when (val result = client.signIn()) {
-                            is GoogleAuthResult.Success ->
-                                viewModel.onGoogleIdToken(result.idToken)
-                            is GoogleAuthResult.Error ->
-                                viewModel.setError(result.message)
-                            is GoogleAuthResult.Cancelled -> { /* user dismissed */ }
-                        }
+                        viewModel.onGoogleAuthStart()
+                        val result = googleAuthClient.signIn()
+                        viewModel.onGoogleAuthResult(result)
                     }
                 },
                 enabled = !uiState.isLoading,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Sign up with Google")
+                if (uiState.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.height(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Text("Sign up with Google")
+                }
             }
 
             Spacer(modifier = Modifier.height(24.dp))

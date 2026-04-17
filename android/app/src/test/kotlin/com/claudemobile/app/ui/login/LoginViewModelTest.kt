@@ -1,5 +1,7 @@
 package com.claudemobile.app.ui.login
 
+import app.cash.turbine.test
+import com.claudemobile.app.data.auth.GoogleAuthResult
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.testing.MainDispatcherRule
@@ -170,11 +172,11 @@ class LoginViewModelTest {
     // ---- Google Sign-In callback -------------------------------------------
 
     @Test
-    fun onGoogleIdToken_happyPath_emitsLoginSuccess() = runTest {
+    fun onGoogleAuthResult_success_emitsLoginSuccess() = runTest {
         val vm = LoginViewModel(authRepository)
         coEvery { authRepository.loginWithGoogle("google-token") } returns Unit
 
-        vm.onGoogleIdToken("google-token")
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
         advanceUntilIdle()
 
         assertTrue(vm.loginSuccess.value)
@@ -182,17 +184,134 @@ class LoginViewModelTest {
     }
 
     @Test
-    fun onGoogleIdToken_onFailure_setsError() = runTest {
+    fun onGoogleAuthResult_success_onFailure_setsError() = runTest {
         val vm = LoginViewModel(authRepository)
         coEvery {
             authRepository.loginWithGoogle("bad-token")
         } throws ApiException(401, "invalid token")
 
-        vm.onGoogleIdToken("bad-token")
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
         advanceUntilIdle()
 
         assertFalse(vm.loginSuccess.value)
         assertTrue(vm.uiState.value.error!!.contains("Google Sign-In failed"))
+    }
+
+    @Test
+    fun onGoogleAuthResult_success_onGenericFailure_setsError_andClearsLoading() = runTest {
+        // Exercises the non-ApiException catch branch in onGoogleIdToken — symmetric
+        // to the RegisterViewModel test of the same name, and previously uncovered here.
+        val vm = LoginViewModel(authRepository)
+        coEvery {
+            authRepository.loginWithGoogle("bad-token")
+        } throws java.net.UnknownHostException("api.example.com")
+
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
+        advanceUntilIdle()
+
+        assertFalse(vm.loginSuccess.value)
+        assertEquals("Google Sign-In failed: api.example.com", vm.uiState.value.error)
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    @Test
+    fun onGoogleAuthResult_success_onApiFailure_alsoEmitsErrorEvent() = runTest {
+        // Regression: the snackbar-on-repeat-tap fix must also cover the
+        // Success→repository-throws branch, not just the pre-repo result cases.
+        val vm = LoginViewModel(authRepository)
+        coEvery {
+            authRepository.loginWithGoogle("bad-token")
+        } throws ApiException(401, "invalid token")
+
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
+            advanceUntilIdle()
+            val event = awaitItem()
+            assertTrue(event.contains("Google Sign-In failed"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_notConfigured_emitsConfigError() = runTest {
+        val vm = LoginViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+            val event = awaitItem()
+            assertTrue(event.contains("not configured"))
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    @Test
+    fun onGoogleAuthResult_noAccounts_emitsAccountMessage() = runTest {
+        val vm = LoginViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.NoAccounts("Add a Google account."))
+            assertEquals("Add a Google account.", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_playServicesUnavailable_emitsPlayServicesMessage() = runTest {
+        val vm = LoginViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.PlayServicesUnavailable)
+            assertTrue(awaitItem().contains("Google Play services"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_failed_emitsFailureMessage() = runTest {
+        val vm = LoginViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.Failed("boom"))
+            assertEquals("Google Sign-In failed: boom", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_cancelled_clearsLoading_andEmitsNoEvent() = runTest {
+        val vm = LoginViewModel(authRepository)
+        vm.onGoogleAuthStart()
+        assertTrue(vm.uiState.value.isLoading)
+
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.Cancelled)
+            expectNoEvents()
+        }
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    @Test
+    fun onGoogleAuthResult_sameErrorTwice_emitsTwoEvents() = runTest {
+        // Regression: the old LaunchedEffect(uiState.error) swallowed repeat clicks.
+        val vm = LoginViewModel(authRepository)
+        vm.errorEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+            val first = awaitItem()
+            vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+            val second = awaitItem()
+            assertEquals(first, second)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthStart_setsLoading_andClearsError() = runTest {
+        val vm = LoginViewModel(authRepository)
+        vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.error != null)
+
+        vm.onGoogleAuthStart()
+
+        assertTrue(vm.uiState.value.isLoading)
+        assertNull(vm.uiState.value.error)
     }
 
     // ---- update* helpers clear the pending error ----------------------------

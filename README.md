@@ -53,6 +53,24 @@ Claude Mobile bridges this gap with a client-agent architecture:
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
 | `docker-compose.yml` | Docker | Agent + Cloudflare Tunnel deployment |
 
+## Configuring Google Sign-In
+
+The Android "Sign in with Google" button uses the Credential Manager API and requires an OAuth 2.0 **Web** client ID provisioned in Google Cloud Console:
+
+1. In Google Cloud Console → **APIs & Services → Credentials**, create (or reuse) a project and add two OAuth 2.0 client IDs:
+   - **Web application** — copy its client ID (format `NNN-xxxxx.apps.googleusercontent.com`). This is the ID the Android app asks Credential Manager for AND the ID the server verifies ID tokens against.
+   - **Android application** — register package `com.claudemobile.app` and your debug + release signing-certificate SHA-1 fingerprints. Required by Google Play Services before any credential is returned even though the app only passes the Web client ID.
+2. On the Android developer machine, put the Web client ID in `android/local.properties` (git-ignored):
+   ```
+   GOOGLE_WEB_CLIENT_ID=NNN-xxxxx.apps.googleusercontent.com
+   ```
+   Alternatively, export it as the `GOOGLE_WEB_CLIENT_ID` environment variable (CI builds).
+3. In the server's `.env`, set the SAME value:
+   ```
+   GOOGLE_CLIENT_ID=NNN-xxxxx.apps.googleusercontent.com
+   ```
+4. Rebuild the APK. If the client ID is missing or still the placeholder, the app surfaces a clear config error instead of silently pretending no Google account exists on the device.
+
 ## Status
 
 Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and Cloudflare Tunnel deployment are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project).

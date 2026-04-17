@@ -2,11 +2,15 @@ package com.claudemobile.app.ui.register
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.claudemobile.app.data.auth.GoogleAuthResult
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -31,6 +35,9 @@ class RegisterViewModel @Inject constructor(
     private val _registerSuccess = MutableStateFlow(false)
     val registerSuccess: StateFlow<Boolean> = _registerSuccess.asStateFlow()
 
+    private val _errorEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val errorEvents: SharedFlow<String> = _errorEvents.asSharedFlow()
+
     fun updateEmail(email: String) {
         _uiState.update { it.copy(email = email, error = null) }
     }
@@ -46,11 +53,11 @@ class RegisterViewModel @Inject constructor(
     fun register() {
         val state = _uiState.value
         if (state.email.isBlank() || state.password.isBlank()) {
-            _uiState.update { it.copy(error = "Email and password are required") }
+            emitError("Email and password are required")
             return
         }
         if (state.password != state.confirmPassword) {
-            _uiState.update { it.copy(error = "Passwords do not match") }
+            emitError("Passwords do not match")
             return
         }
 
@@ -64,34 +71,50 @@ class RegisterViewModel @Inject constructor(
                     409 -> "An account with this email already exists"
                     else -> "Registration failed: ${e.message}"
                 }
-                _uiState.update { it.copy(isLoading = false, error = message) }
+                emitError(message)
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(isLoading = false, error = "Registration failed: ${e.message}")
-                }
+                emitError("Registration failed: ${e.message}")
             }
         }
     }
 
-    fun onGoogleIdToken(idToken: String) {
+    fun onGoogleAuthStart() {
+        _uiState.update { it.copy(isLoading = true, error = null) }
+    }
+
+    fun onGoogleAuthResult(result: GoogleAuthResult) {
+        when (result) {
+            is GoogleAuthResult.Success -> onGoogleIdToken(result.idToken)
+            GoogleAuthResult.Cancelled -> {
+                _uiState.update { it.copy(isLoading = false) }
+            }
+            GoogleAuthResult.NotConfigured -> emitError(
+                "Google Sign-In is not configured for this build. Contact the developer.",
+            )
+            is GoogleAuthResult.NoAccounts -> emitError(result.message)
+            GoogleAuthResult.PlayServicesUnavailable -> emitError(
+                "Google Play services are unavailable. Update Google Play services and try again.",
+            )
+            is GoogleAuthResult.Failed -> emitError("Google Sign-In failed: ${result.message}")
+        }
+    }
+
+    private fun onGoogleIdToken(idToken: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
                 authRepository.loginWithGoogle(idToken)
                 _registerSuccess.value = true
             } catch (e: ApiException) {
-                _uiState.update {
-                    it.copy(isLoading = false, error = "Google Sign-In failed: ${e.message}")
-                }
+                emitError("Google Sign-In failed: ${e.message}")
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(isLoading = false, error = "Google Sign-In failed: ${e.message}")
-                }
+                emitError("Google Sign-In failed: ${e.message}")
             }
         }
     }
 
-    fun setError(message: String) {
-        _uiState.update { it.copy(error = message, isLoading = false) }
+    private fun emitError(message: String) {
+        _uiState.update { it.copy(isLoading = false, error = message) }
+        _errorEvents.tryEmit(message)
     }
 }
