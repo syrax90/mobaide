@@ -290,6 +290,15 @@ class Database:
         )
         return await cursor.fetchone() is not None
 
+    async def get_agent_owner(self, agent_id: str) -> str | None:
+        """Return the owner user_id for the given agent, or None if unknown."""
+        cursor = await self.conn.execute(
+            "SELECT owner_user_id FROM agents WHERE agent_id = ?",
+            (agent_id,),
+        )
+        row = await cursor.fetchone()
+        return row["owner_user_id"] if row else None
+
     async def touch_agent_last_seen(self, agent_id: str) -> None:
         await self.conn.execute(
             "UPDATE agents SET last_seen_at = ? WHERE agent_id = ?",

@@ -5,6 +5,7 @@ import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.auth.UserIdentityStore
 import com.claudemobile.app.data.events.AgentEventBus
+import com.claudemobile.app.data.events.UserEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.AutoScanWsClient
 import com.claudemobile.app.data.network.CentralApi
@@ -42,8 +43,9 @@ object RepositoryModule {
         client: OkHttpClient,
         tokenStore: TokenStore,
         sessionManager: SessionManager,
+        userIdentityStore: UserIdentityStore,
     ): WebSocketManager {
-        return WebSocketManager(client, tokenStore, sessionManager)
+        return WebSocketManager(client, tokenStore, sessionManager, userIdentityStore)
     }
 
     @Provides
@@ -113,6 +115,22 @@ object RepositoryModule {
         userIdentityStore: UserIdentityStore,
     ): AgentRepository {
         return AgentRepository(centralApi, userIdentityStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideUserEventBus(
+        webSocketManager: WebSocketManager,
+        sessionManager: SessionManager,
+        userIdentityStore: UserIdentityStore,
+        agentRepository: AgentRepository,
+    ): UserEventBus {
+        return UserEventBus(
+            webSocketManager,
+            sessionManager,
+            userIdentityStore,
+            agentRepository,
+        )
     }
 
     @Provides

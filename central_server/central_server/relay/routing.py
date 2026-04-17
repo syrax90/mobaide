@@ -25,6 +25,9 @@ class AgentConnection:
     agent_id: str
     websocket: WebSocket
     conn_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # Owner resolved at registration time so status broadcasts don't require
+    # an async DB hit on the disconnect path.
+    owner_user_id: str | None = None
     send_queue: asyncio.Queue[bytes] = field(
         default_factory=lambda: asyncio.Queue(maxsize=_AGENT_QUEUE_SIZE)
     )
@@ -46,6 +49,23 @@ class MobileClient:
     )
 
 
+@dataclass(eq=False)
+class UserClient:
+    """User-scoped mobile connection for events that span all of a user's
+    agents (presence, ownership changes, etc.).
+
+    Uses identity-based equality so instances can be stored in sets despite
+    the mutable Queue field. Payload is text-only (JSON envelopes).
+    """
+
+    user_id: str
+    device_id: str
+    websocket: WebSocket
+    send_queue: asyncio.Queue[str] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=_MOBILE_QUEUE_SIZE)
+    )
+
+
 class RoutingTable:
     """Tracks connected agents and their paired mobile clients."""
 
@@ -54,6 +74,8 @@ class RoutingTable:
         self._agents: dict[str, AgentConnection] = {}
         # agent_id -> { channel_key -> set[MobileClient] }
         self._mobile_clients: dict[str, dict[str, set[MobileClient]]] = {}
+        # user_id -> set[UserClient] (user-scoped event channel)
+        self._user_clients: dict[str, set[UserClient]] = {}
 
     # -- Agent operations ------------------------------------------------------
 
@@ -151,3 +173,25 @@ class RoutingTable:
         for clients in channels.values():
             result.extend(clients)
         return result
+
+    # -- User-scoped client operations -----------------------------------------
+
+    def register_user_client(self, user_id: str, client: UserClient) -> None:
+        clients = self._user_clients.setdefault(user_id, set())
+        clients.add(client)
+        logger.debug(
+            "routing.user_client_registered user_id=%s device=%s",
+            user_id,
+            client.device_id,
+        )
+
+    def unregister_user_client(self, user_id: str, client: UserClient) -> None:
+        clients = self._user_clients.get(user_id)
+        if clients is None:
+            return
+        clients.discard(client)
+        if not clients:
+            self._user_clients.pop(user_id, None)
+
+    def get_user_clients(self, user_id: str) -> set[UserClient]:
+        return self._user_clients.get(user_id, set())

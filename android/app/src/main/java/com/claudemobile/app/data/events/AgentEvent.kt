@@ -52,7 +52,7 @@ sealed class ScanProgressPayload {
     data class Unknown(val type: String) : ScanProgressPayload()
 }
 
-/** Typed events emitted by [AgentEventBus]. */
+/** Typed events emitted by [AgentEventBus] and [UserEventBus]. */
 sealed class AgentEvent {
     data class SessionsChanged(val sessions: List<SessionResponse>) : AgentEvent()
     data class SessionUpdated(val session: SessionResponse) : AgentEvent()
@@ -65,6 +65,13 @@ sealed class AgentEvent {
         val ts: String,
         val payload: ScanProgressPayload,
     ) : AgentEvent()
+
+    /** Pushed by the server's user-scoped channel when any of the user's
+     *  agents transitions between online and offline. */
+    data class AgentStatusChanged(
+        val agentId: String,
+        val online: Boolean,
+    ) : AgentEvent()
 }
 
 @Serializable
@@ -75,3 +82,9 @@ data class SessionUpdatedPayload(val session: SessionResponse)
 
 @Serializable
 data class ProjectsChangedPayload(val projects: List<ProjectInfo>)
+
+@Serializable
+data class AgentStatusChangedPayload(
+    val agent_id: String,
+    val online: Boolean,
+)

@@ -2,6 +2,7 @@ package com.claudemobile.app.data.network
 
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
+import com.claudemobile.app.data.auth.UserIdentityStore
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,14 @@ class WebSocketConnection(
      * exception handler and crashed the app.
      */
     private val urlProvider: () -> String?,
+    /**
+     * Predicate that gates reconnection attempts. Defaults to the
+     * agent-scoped session check (`FullyConnected`) which is correct
+     * for per-agent channels, but user-scoped channels (see
+     * [WebSocketManager.createUserConnection]) override this to keep
+     * reconnecting while the user is merely logged in.
+     */
+    private val isAuthenticated: () -> Boolean = sessionManager::isLoggedIn,
 ) {
     /**
      * Defence-in-depth: without this handler, any uncaught exception in
@@ -154,13 +163,13 @@ class WebSocketConnection(
         // session is dead. This short-circuit is what prevents the
         // retry-spam loop that used to hammer `/ws/events` every second
         // after a failed refresh.
-        if (!shouldReconnect || !sessionManager.isLoggedIn()) return
+        if (!shouldReconnect || !isAuthenticated()) return
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
             delay(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(MAX_BACKOFF_MS)
             mutex.withLock {
-                if (shouldReconnect && sessionManager.isLoggedIn()) doConnect()
+                if (shouldReconnect && isAuthenticated()) doConnect()
             }
         }
     }
@@ -175,6 +184,7 @@ class WebSocketManager(
     private val client: OkHttpClient,
     private val tokenStore: TokenStore,
     private val sessionManager: SessionManager,
+    private val userIdentityStore: UserIdentityStore,
 ) {
     /**
      * Build a [WebSocketConnection] whose URL provider pulls the latest
@@ -226,6 +236,43 @@ class WebSocketManager(
             client = client,
             sessionManager = sessionManager,
             urlProvider = provider,
+        )
+    }
+
+    /**
+     * Build a WebSocket connection authenticated with the **user** JWT
+     * (central-server dashboard token), not the agent-scoped mobile
+     * token. Used for user-wide channels that span all of a user's
+     * agents — e.g. presence events on `ws/user-events`.
+     *
+     * The URL is always resolved against the central server (`relay mode`
+     * server URL in relay deployments; `agent URL` as a fallback in
+     * direct mode for single-agent dev setups where the agent itself
+     * fronts the user API).
+     */
+    fun createUserConnection(path: String): WebSocketConnection {
+        val provider: () -> String? = fun(): String? {
+            if (!userIdentityStore.isUserLoggedIn()) return null
+            val token = userIdentityStore.getUserAccessToken() ?: return null
+
+            val baseUrl = when (tokenStore.getConnectionMode()) {
+                TokenStore.ConnectionMode.RELAY -> tokenStore.getRelayServerUrl()
+                TokenStore.ConnectionMode.DIRECT -> tokenStore.getAgentUrl()
+            } ?: return null
+
+            val wsScheme = if (baseUrl.startsWith("https")) "wss" else "ws"
+            val host = baseUrl.removePrefix("https://").removePrefix("http://")
+            val url = "$wsScheme://$host/$path"
+
+            val separator = if (url.contains("?")) "&" else "?"
+            return "$url${separator}token=$token"
+        }
+
+        return WebSocketConnection(
+            client = client,
+            sessionManager = sessionManager,
+            urlProvider = provider,
+            isAuthenticated = { userIdentityStore.isUserLoggedIn() },
         )
     }
 
