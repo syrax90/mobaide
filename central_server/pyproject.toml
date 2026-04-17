@@ -21,6 +21,7 @@ dependencies = [
     "argon2-cffi",
     "alembic",
     "google-auth",
+    "requests",
 ]
 
 [project.optional-dependencies]

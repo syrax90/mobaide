@@ -26,6 +26,22 @@ val googleWebClientId: String = run {
     }
 }
 
+// Central Server base URL is resolved at build time from (in priority order):
+//   1. CENTRAL_SERVER_URL environment variable (CI / release builds)
+//   2. android/local.properties key `CENTRAL_SERVER_URL` (developer machines)
+//   3. Production default.
+val centralServerUrl: String = run {
+    val fromEnv = System.getenv("CENTRAL_SERVER_URL")
+    if (!fromEnv.isNullOrBlank()) return@run fromEnv
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        val props = Properties().apply { localPropsFile.inputStream().use { load(it) } }
+        val fromProps = props.getProperty("CENTRAL_SERVER_URL", "").orEmpty()
+        if (fromProps.isNotBlank()) return@run fromProps
+    }
+    "https://api.claudemobile.example.com"
+}
+
 android {
     namespace = "com.claudemobile.app"
     compileSdk = 35
@@ -37,7 +53,7 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        buildConfigField("String", "CENTRAL_SERVER_URL", "\"https://api.claudemobile.example.com\"")
+        buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
     }
 

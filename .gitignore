@@ -12,3 +12,4 @@ claude_agent/state/
 android/app/src/main/res/xml/network_security_config.xml
 start-all.ps1
 caddy-root.pem
+android/app/src/main/res/raw/caddy_root.crt

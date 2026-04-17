@@ -102,18 +102,25 @@ class Database:
         version = row[0] if row else 0
 
         if version < 3:
-            # Fresh DB or migrating: create all tables (IF NOT EXISTS is safe)
-            await self._conn.executescript(_SCHEMA)
-
-            # V2→V3: add owner_user_id column to existing agents table
-            if version >= 1:
-                # Check if column already exists (idempotent)
+            # Legacy DBs may have an `agents` table WITHOUT the `owner_user_id`
+            # column (created by pre-CLA-34 code that never set user_version).
+            # Add it first so the idx_agents_owner index in _SCHEMA below
+            # doesn't fail with "no such column" — CREATE INDEX IF NOT EXISTS
+            # still validates the referenced column even when the index exists.
+            agents_cursor = await self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='agents'"
+            )
+            agents_exists = await agents_cursor.fetchone() is not None
+            if agents_exists:
                 col_cursor = await self._conn.execute("PRAGMA table_info(agents)")
                 cols = {r[1] for r in await col_cursor.fetchall()}
                 if "owner_user_id" not in cols:
                     await self._conn.execute(
                         "ALTER TABLE agents ADD COLUMN owner_user_id TEXT REFERENCES users(id)"
                     )
+
+            # Fresh DB or after column added: create all tables/indexes (IF NOT EXISTS is safe)
+            await self._conn.executescript(_SCHEMA)
 
             await self._conn.execute("PRAGMA user_version = 3")
 
