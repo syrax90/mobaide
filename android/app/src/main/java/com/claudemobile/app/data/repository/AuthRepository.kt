@@ -20,6 +20,7 @@ class AuthRepository(
 
     suspend fun register(email: String, password: String) {
         val response = centralApi.register(email, password)
+        if (response.role == ROLE_ADMIN) throw AdminLoginNotSupportedException()
         userIdentityStore.saveUserSession(
             response.access_token, response.email, response.user_id, response.role,
         )
@@ -28,6 +29,7 @@ class AuthRepository(
 
     suspend fun loginWithPassword(email: String, password: String) {
         val response = centralApi.login(email, password)
+        if (response.role == ROLE_ADMIN) throw AdminLoginNotSupportedException()
         userIdentityStore.saveUserSession(
             response.access_token, response.email, response.user_id, response.role,
         )
@@ -36,10 +38,15 @@ class AuthRepository(
 
     suspend fun loginWithGoogle(idToken: String) {
         val response = centralApi.loginWithGoogle(idToken)
+        if (response.role == ROLE_ADMIN) throw AdminLoginNotSupportedException()
         userIdentityStore.saveUserSession(
             response.access_token, response.email, response.user_id, response.role,
         )
         sessionManager.markUserLoggedIn()
+    }
+
+    private companion object {
+        const val ROLE_ADMIN = "admin"
     }
 
     fun isUserAuthenticated(): Boolean = sessionManager.isUserAuthenticated()

@@ -216,9 +216,9 @@ class TestProxyEndpoint:
     async def test_proxy_agent_id_mismatch_returns_403(self, client, app, registered_agent):
         agent_id, _ = registered_agent
         # Get mobile tokens directly (no QR pairing)
-        admin = await app.state.db.get_user_by_email("admin@test.local")
+        owner = await app.state.db.get_user_by_email("viewer@test.local")
         access, _ = await app.state.auth_service.create_mobile_tokens(
-            admin["id"], agent_id, admin["id"]
+            owner["id"], agent_id, owner["id"]
         )
         # Try to proxy to a different agent
         resp = await client.get(
@@ -230,12 +230,12 @@ class TestProxyEndpoint:
 
     async def test_proxy_non_owner_returns_403(self, client, app, registered_agent):
         """A user who doesn't own the agent gets 403 on the ownership check."""
-        agent_id, _ = registered_agent  # owned by admin
+        agent_id, _ = registered_agent  # owned by viewer
         # Create a different user who does NOT own agent_id
         other_user_id = await app.state.db.create_user(
             email="other@test.local", password_hash="h"
         )
-        # Create a mobile token where user_id=other_user but agent_id=admin's agent
+        # Create a mobile token where user_id=other_user but agent_id=viewer's agent
         # This simulates a token that passes the agent_id match but fails ownership
         access, _ = await app.state.auth_service.create_mobile_tokens(
             other_user_id, agent_id, other_user_id
@@ -254,9 +254,9 @@ class TestProxyEndpoint:
     ):
         agent_id, _ = registered_agent
         # Get mobile tokens directly
-        admin = await app.state.db.get_user_by_email("admin@test.local")
+        owner = await app.state.db.get_user_by_email("viewer@test.local")
         access, _ = await app.state.auth_service.create_mobile_tokens(
-            admin["id"], agent_id, admin["id"]
+            owner["id"], agent_id, owner["id"]
         )
 
         app.state.mobile_proxy = MobileProxy(app.state.routing)

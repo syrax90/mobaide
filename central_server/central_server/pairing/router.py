@@ -5,8 +5,10 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from ..auth.dependencies import get_dashboard_user
+from ..auth.dependencies import require_role
 from ..auth.models import MobileRefreshRequest, MobileTokenResponse
+
+_require_admin = require_role("admin")
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +32,12 @@ async def refresh_mobile_token(request: Request, body: MobileRefreshRequest):
     return MobileTokenResponse(access_token=access, refresh_token=refresh)
 
 
-# -- Pairing management (dashboard auth required) -----------------------------
+# -- Pairing management (admin only — mirrors the HTMX dashboard route) ------
 
 
 @router.delete(
     "/api/pairings/{pairing_id}",
-    dependencies=[Depends(get_dashboard_user)],
+    dependencies=[Depends(_require_admin)],
 )
 async def revoke_pairing(request: Request, pairing_id: str):
     """Revoke a pairing between a mobile device and an agent."""

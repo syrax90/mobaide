@@ -21,8 +21,12 @@ class AgentService:
     async def create_agent(self, name: str, owner_user_id: str) -> tuple[str, str]:
         """Create a new agent owned by the given user.
 
-        Returns (agent_id, raw_token).
+        Returns (agent_id, raw_token). Raises ValueError if the owner is an
+        admin — admins never own agents.
         """
+        owner = await self._db.get_user_by_id(owner_user_id)
+        if owner is not None and owner["role"] == "admin":
+            raise ValueError("Admin accounts cannot own agents")
         agent_id, raw_token = await self._db.register_agent(name, owner_user_id)
         logger.info(
             "agent.created agent_id=%s owner=%s name=%s",

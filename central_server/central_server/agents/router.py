@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from ..auth.dependencies import get_api_user
+from ..auth.dependencies import get_non_admin_api_user
 from ..auth.models import (
     AgentSummary,
     CreateAgentRequest,
@@ -24,18 +24,23 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 async def create_agent(
     request: Request,
     body: CreateAgentRequest,
-    user: UserTokenPayload = Depends(get_api_user),
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
 ):
     """Create a new agent owned by the authenticated user. Returns credentials once."""
     agent_service = request.app.state.agent_service
-    agent_id, raw_token = await agent_service.create_agent(body.name, user.sub)
+    try:
+        agent_id, raw_token = await agent_service.create_agent(body.name, user.sub)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        )
     return CreateAgentResponse(agent_id=agent_id, name=body.name, token=raw_token)
 
 
 @router.get("", response_model=list[AgentSummary])
 async def list_agents(
     request: Request,
-    user: UserTokenPayload = Depends(get_api_user),
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
 ):
     """List agents owned by the authenticated user, with online status."""
     agent_service = request.app.state.agent_service
@@ -47,7 +52,7 @@ async def list_agents(
 async def reregister_agent(
     request: Request,
     agent_id: str,
-    user: UserTokenPayload = Depends(get_api_user),
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
 ):
     """Regenerate agent credentials. Owner only."""
     agent_service = request.app.state.agent_service
@@ -64,7 +69,7 @@ async def reregister_agent(
 async def delete_agent(
     request: Request,
     agent_id: str,
-    user: UserTokenPayload = Depends(get_api_user),
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
 ):
     """Delete an agent and cascade all related data. Owner only."""
     agent_service = request.app.state.agent_service
@@ -80,7 +85,7 @@ async def delete_agent(
 async def get_mobile_tokens(
     request: Request,
     agent_id: str,
-    user: UserTokenPayload = Depends(get_api_user),
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
 ):
     """Get mobile access + refresh tokens for an agent the user owns."""
     db = request.app.state.db

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.claudemobile.app.data.auth.GoogleAuthResult
 import com.claudemobile.app.data.network.ApiException
+import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
+import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
 import com.claudemobile.app.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -66,6 +68,8 @@ class RegisterViewModel @Inject constructor(
             try {
                 authRepository.register(state.email.trim(), state.password)
                 _registerSuccess.value = true
+            } catch (e: AdminLoginNotSupportedException) {
+                emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {
                 val message = when (e.code) {
                     409 -> "An account with this email already exists"
@@ -105,6 +109,8 @@ class RegisterViewModel @Inject constructor(
             try {
                 authRepository.loginWithGoogle(idToken)
                 _registerSuccess.value = true
+            } catch (e: AdminLoginNotSupportedException) {
+                emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {
                 emitError("Google Sign-In failed: ${e.message}")
             } catch (e: Exception) {

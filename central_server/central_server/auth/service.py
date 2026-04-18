@@ -153,13 +153,22 @@ class AuthService:
     async def seed_admin_user(self) -> None:
         """Seed the admin user from config env vars if no admin exists.
 
-        Called during app startup. Idempotent.
+        Called during app startup. Idempotent. If a user with the seed email
+        already exists, we leave it untouched — we do not flip an existing
+        viewer into admin because that viewer may own agents (admins must
+        not own agents; see migration 0003).
         """
         if not self._config.admin_seed_email or not self._config.admin_seed_password:
             return
 
         existing = await self._db.get_user_by_email(self._config.admin_seed_email)
         if existing is not None:
+            if existing["role"] != "admin":
+                logger.warning(
+                    "admin_user.seed_skipped email=%s reason=existing_non_admin_user "
+                    "(refusing to promote an existing account to admin)",
+                    self._config.admin_seed_email,
+                )
             return
 
         password_hash = await self._hash_password(self._config.admin_seed_password)

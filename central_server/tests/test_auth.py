@@ -183,3 +183,21 @@ class TestAdminSeeding:
         )
         assert role == "admin"
         assert len(token) > 20
+
+    async def test_seed_does_not_promote_existing_viewer(
+        self, auth: AuthService, db: Database
+    ):
+        """If the seed email is already a viewer, seed must NOT flip them to
+        admin — viewers may own agents, and admins never own agents.
+        """
+        # Pre-create the user as a viewer with the seed email.
+        await auth.register_user(TEST_ADMIN_EMAIL, "somepassword")
+        before = await db.get_user_by_email(TEST_ADMIN_EMAIL)
+        assert before is not None
+        assert before["role"] == "viewer"
+
+        await auth.seed_admin_user()
+
+        after = await db.get_user_by_email(TEST_ADMIN_EMAIL)
+        assert after is not None
+        assert after["role"] == "viewer"  # unchanged

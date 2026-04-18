@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from ..auth.dependencies import get_dashboard_user
+from ..auth.dependencies import require_role
 from ..auth.models import UserTokenPayload
+
+_require_admin = require_role("admin")
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ async def logout():
 
 @router.get("", response_class=HTMLResponse)
 async def agents_page(
-    request: Request, user: UserTokenPayload = Depends(get_dashboard_user)
+    request: Request, user: UserTokenPayload = Depends(_require_admin)
 ):
     db = request.app.state.db
     routing = request.app.state.routing
@@ -98,7 +100,7 @@ async def agents_page(
 async def agent_detail_page(
     request: Request,
     agent_id: str,
-    user: UserTokenPayload = Depends(get_dashboard_user),
+    user: UserTokenPayload = Depends(_require_admin),
 ):
     db = request.app.state.db
     routing = request.app.state.routing
@@ -139,8 +141,9 @@ async def agent_detail_page(
 async def revoke_pairing_htmx(
     request: Request,
     pairing_id: str,
-    user: UserTokenPayload = Depends(get_dashboard_user),
+    user: UserTokenPayload = Depends(_require_admin),
 ):
+    del user  # used only for admin-role gating
     pairing_service = request.app.state.pairing_service
     await pairing_service.revoke_pairing(pairing_id)
     return HTMLResponse("")  # HTMX removes the row

@@ -20,7 +20,12 @@ from central_server.db.database import Database
 from central_server.relay.agent_ws import _broadcast_status
 from central_server.relay.routing import RoutingTable, UserClient
 
-from tests.conftest import TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+from tests.conftest import (
+    TEST_ADMIN_EMAIL,
+    TEST_ADMIN_PASSWORD,
+    TEST_VIEWER_EMAIL,
+    TEST_VIEWER_PASSWORD,
+)
 
 
 # ---- Unit: RoutingTable user-client registry --------------------------------
@@ -371,8 +376,10 @@ class TestUserEventsEndpoint:
         yields the canary directly, no spurious offline was broadcast.
         """
         agent_id, raw_token = registered_agent
-        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
-        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        # Agent is owned by the viewer (admins never own agents); the
+        # user_ws observer must log in as the viewer to receive events.
+        token = await _user_token(app, TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD)
+        owner = await app.state.db.get_user_by_email(TEST_VIEWER_EMAIL)
 
         client = TestClient(app)
         with client.websocket_connect(
@@ -434,7 +441,7 @@ class TestUserEventsEndpoint:
                     # directly, no offline was broadcast.
                     _broadcast_status(
                         app.state.routing,
-                        admin["id"],
+                        owner["id"],
                         "canary-agent",
                         online=True,
                     )

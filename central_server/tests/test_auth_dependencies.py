@@ -21,6 +21,7 @@ from central_server.auth.dependencies import (
     get_api_user,
     get_dashboard_user,
     get_mobile_user,
+    get_non_admin_api_user,
     require_role,
 )
 from central_server.auth.models import UserTokenPayload
@@ -247,6 +248,35 @@ class TestGetApiUser:
         with pytest.raises(HTTPException) as exc_info:
             await get_api_user(request)
         assert exc_info.value.status_code == 401
+
+
+class TestGetNonAdminApiUser:
+    """Agent-ownership endpoints reject admin tokens with 403."""
+
+    async def test_admin_blocked(self, auth_service):
+        _user_id, _role, token = await auth_service.login_user(
+            TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {token}"}, app=fake_app
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await get_non_admin_api_user(user=await get_api_user(request))
+        assert exc_info.value.status_code == 403
+        assert "admin" in exc_info.value.detail.lower()
+
+    async def test_viewer_allowed(self, auth_service):
+        _user_id, token = await auth_service.register_user(
+            TEST_USER_EMAIL, TEST_USER_PASSWORD
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {token}"}, app=fake_app
+        )
+        user = await get_non_admin_api_user(user=await get_api_user(request))
+        assert user.role == "viewer"
+        assert user.email == TEST_USER_EMAIL
 
 
 class TestGetMobileUser:
