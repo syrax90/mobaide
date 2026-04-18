@@ -42,9 +42,10 @@ router = APIRouter(
 def _get_manager(request: Request) -> AutoScanSessionManager:
     mgr = getattr(request.app.state, "autoscan_manager", None)
     if mgr is None:
+        # Should not happen post-CLA-39 — the manager is always wired in.
         raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Auto scan is not configured (PROJECTS env var not set)",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Auto scan manager is not initialised",
         )
     return mgr
 

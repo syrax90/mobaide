@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from claude_mobile.core.projects_config import ProjectConfig, ProjectsConfig
+from claude_mobile.core.projects_config import ProjectConfig
 
 __all__ = ["ProjectConfig", "AutoScanConfig"]
 
@@ -25,10 +25,14 @@ def _parse_bool(raw: str | None, *, default: bool) -> bool:
 class AutoScanConfig:
     """Configuration for the Linear auto-scan engine.
 
-    Loaded from environment variables, mirroring the PS1 script's .env config.
+    Holds only the non-project settings (intervals, prompt, worktree base,
+    Linear workflow state names). The list of projects eligible for auto-scan
+    is read live from :class:`claude_mobile.core.projects_store.ProjectsStore`
+    by :class:`claude_mobile.linear.scanner.AutoScanSessionManager` — adding
+    a project with a ``linear_api_key`` after boot makes it immediately
+    available for auto-scan without a restart.
     """
 
-    projects: dict[str, ProjectConfig]
     worktree_base: str = "claude_worktree"
     scan_interval_seconds: int = 300
     branch_prefix: str = ""
@@ -40,29 +44,21 @@ class AutoScanConfig:
     state_dir: str = "state"
 
     @classmethod
-    def from_env(cls) -> AutoScanConfig | None:
+    def from_env(cls) -> AutoScanConfig:
         """Build config from environment variables.
 
-        Returns None if PROJECTS is not set (auto-scan not configured) or
-        if no project carries a Linear API key (auto-scan needs one).
+        Always returns an instance — the auto-scan engine is always wired in.
+        Whether it has any projects to operate on is a runtime question
+        answered by the projects store.
         """
-        projects_config = ProjectsConfig.from_env()
-        if projects_config is None:
-            return None
-        # Auto-scan only operates on projects that expose a Linear key.
-        projects: dict[str, ProjectConfig] = {
-            name: p
-            for name, p in projects_config.projects.items()
-            if p.linear_api_key
-        }
-        if not projects:
-            return None
-
         prompt_raw = os.getenv("AUTO_SCAN_PROMPT")
-        prompt = prompt_raw.replace("\\n", "\n") if prompt_raw else _DEFAULT_AUTO_SCAN_PROMPT
+        prompt = (
+            prompt_raw.replace("\\n", "\n")
+            if prompt_raw
+            else _DEFAULT_AUTO_SCAN_PROMPT
+        )
 
         return cls(
-            projects=projects,
             worktree_base=os.getenv("WORKTREE_BASE", "claude_worktree"),
             scan_interval_seconds=int(
                 os.getenv("SCAN_INTERVAL_SECONDS", "300"),

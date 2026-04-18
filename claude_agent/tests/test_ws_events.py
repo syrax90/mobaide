@@ -20,22 +20,23 @@ def auth_token(app) -> str:
 
 
 class TestWsEventsSnapshots:
-    def test_receives_initial_snapshots_without_autoscan(
+    def test_receives_initial_snapshots(
         self, test_client, auth_token, app,
     ):
-        """Default test app has no auto_scan_config -> autoscan_manager is None.
-
-        The handler must then send exactly two envelopes:
+        """Post-CLA-39: autoscan_manager is always wired in, so the handler
+        sends three snapshot envelopes on connect:
           1. sessions.changed
           2. projects.changed
+          3. autoscan.list.changed
         """
-        assert app.state.autoscan_manager is None
+        assert app.state.autoscan_manager is not None
 
         with test_client.websocket_connect(
             f"/ws/events?token={auth_token}",
         ) as ws:
             first = ws.receive_json()
             second = ws.receive_json()
+            third = ws.receive_json()
 
             assert first["type"] == "sessions.changed"
             assert "sessions" in first["payload"]
@@ -45,6 +46,10 @@ class TestWsEventsSnapshots:
             assert second["type"] == "projects.changed"
             assert "projects" in second["payload"]
             assert isinstance(second["payload"]["projects"], list)
+
+            assert third["type"] == "autoscan.list.changed"
+            assert "scans" in third["payload"]
+            assert third["payload"]["available_projects"] == []
 
     def test_connect_without_token_rejected(self, test_client, auth_token):
         """Missing token closes 4001 before accept(); connect raises."""
@@ -78,11 +83,13 @@ class TestWsEventsLiveForwarding:
         with test_client.websocket_connect(
             f"/ws/events?token={auth_token}",
         ) as ws:
-            # Drain initial snapshots (2 envelopes in test config).
+            # Drain initial snapshots (3 envelopes in test config post-CLA-39).
             snap1 = ws.receive_json()
             snap2 = ws.receive_json()
+            snap3 = ws.receive_json()
             assert snap1["type"] == "sessions.changed"
             assert snap2["type"] == "projects.changed"
+            assert snap3["type"] == "autoscan.list.changed"
 
             # Trigger a real event publish by creating a session from a worker
             # thread (TestClient blocks the current thread on receive_json).
@@ -132,6 +139,7 @@ class TestWsEventsLiveForwarding:
             # Drain initial snapshots so we know the handler has subscribed.
             ws.receive_json()
             ws.receive_json()
+            ws.receive_json()
             # While connected, the bus has exactly one more subscriber.
             assert bus.subscriber_count == baseline + 1
 
@@ -154,13 +162,17 @@ class TestWsEventsLiveForwarding:
                 # Drain snapshots for both.
                 a1 = ws_a.receive_json()
                 a2 = ws_a.receive_json()
+                a3 = ws_a.receive_json()
                 b1 = ws_b.receive_json()
                 b2 = ws_b.receive_json()
+                b3 = ws_b.receive_json()
 
                 assert a1["type"] == "sessions.changed"
                 assert a2["type"] == "projects.changed"
+                assert a3["type"] == "autoscan.list.changed"
                 assert b1["type"] == "sessions.changed"
                 assert b2["type"] == "projects.changed"
+                assert b3["type"] == "autoscan.list.changed"
 
                 # Both clients should be live subscribers on the bus.
                 assert bus.subscriber_count == baseline + 2

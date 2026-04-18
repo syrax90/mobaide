@@ -8,8 +8,11 @@ from asgi_correlation_id import CorrelationIdMiddleware
 from asgi_correlation_id.context import correlation_id
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
-from claude_mobile.core import ClaudeLauncher, SessionManager
+from claude_mobile.core import ClaudeLauncher, ProjectsStore, SessionManager
+from claude_mobile.linear.config import AutoScanConfig
 from claude_mobile.linear.rate_limiter import LinearRateLimiter
 from claude_mobile.linear.scanner import AutoScanSessionManager
 from claude_mobile.linear.worktree import WorktreeManager
@@ -88,6 +91,24 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app = FastAPI(title="Claude Mobile Agent", version="0.1.0", lifespan=lifespan)
 
+    # -- Exception handlers ---------------------------------------------------
+    # Strip raw `linear_api_key` input values from validation errors so a
+    # malformed request body cannot echo the secret back to the caller.
+    # Other fields keep their `input` value for debuggability.
+    _SECRET_FIELDS = frozenset({"linear_api_key"})
+
+    @app.exception_handler(RequestValidationError)
+    async def _scrub_validation_errors(
+        request: Request, exc: RequestValidationError,
+    ) -> JSONResponse:
+        scrubbed = []
+        for err in exc.errors():
+            loc = err.get("loc", ())
+            if any(part in _SECRET_FIELDS for part in loc):
+                err = {k: v for k, v in err.items() if k != "input"}
+            scrubbed.append(err)
+        return JSONResponse(status_code=422, content={"detail": scrubbed})
+
     # -- Middleware (added in reverse-execution order: outermost added last) --
 
     @app.middleware("http")
@@ -147,17 +168,25 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     # Shared state
     app.state.config = config
-    app.state.projects_config = config.projects_config
 
-    # Build a ClaudeLauncher (and a worktree manager if auto-scan settings
-    # are present so launcher-driven worktrees use the same conventions).
+    # Mutable, file-backed projects store (seeds from PROJECTS env var on
+    # first boot, then file wins forever). Every downstream consumer
+    # (SessionManager, auto-scan, relay proxy, WS snapshot) reads through
+    # this single reference.
+    projects_store = ProjectsStore(config.projects_store_path)
+    projects_store.load()
+    app.state.projects_store = projects_store
+
+    # Build a ClaudeLauncher (and a worktree manager using auto-scan
+    # settings so launcher-driven worktrees use the same conventions).
+    auto_scan_cfg = config.auto_scan_config
     worktree_mgr: WorktreeManager | None = None
-    if config.auto_scan_config is not None:
-        prefix = config.auto_scan_config.branch_prefix or "feature/claude"
+    if auto_scan_cfg is not None:
+        prefix = auto_scan_cfg.branch_prefix or "feature/claude"
         worktree_mgr = WorktreeManager(
-            worktree_base=config.auto_scan_config.worktree_base,
+            worktree_base=auto_scan_cfg.worktree_base,
             branch_prefix=prefix,
-            main_branch=config.auto_scan_config.main_branch,
+            main_branch=auto_scan_cfg.main_branch,
         )
     app.state.claude_launcher = ClaudeLauncher(worktree_mgr=worktree_mgr)
 
@@ -177,7 +206,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app.state.session_manager = SessionManager(
         max_sessions=config.max_sessions,
-        projects_config=config.projects_config,
+        projects_store=projects_store,
         launcher=app.state.claude_launcher,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,
@@ -192,19 +221,22 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     user_store = UserStore(config.user_store_path)
     user_store.load()
     app.state.user_store = user_store
-    # Auto-scan manager (optional — only if PROJECTS is configured).
-    # Multi-instance: one AutoScanInstance per active project, up to 5 concurrent.
-    if config.auto_scan_config is not None:
-        app.state.linear_rate_limiter = LinearRateLimiter()
-        app.state.autoscan_manager = AutoScanSessionManager(
-            config=config.auto_scan_config,
-            session_manager=app.state.session_manager,
-            launcher=app.state.claude_launcher,
-            event_bus=app.state.event_bus,
-            rate_limiter=app.state.linear_rate_limiter,
-        )
-    else:
-        app.state.autoscan_manager = None
+
+    # Auto-scan manager is always wired in. Whether it has any projects to
+    # operate on is a runtime question answered by the projects store —
+    # adding a Linear-keyed project via the CRUD API makes it immediately
+    # available for auto-scan without a restart.
+    if auto_scan_cfg is None:
+        auto_scan_cfg = AutoScanConfig()
+    app.state.linear_rate_limiter = LinearRateLimiter()
+    app.state.autoscan_manager = AutoScanSessionManager(
+        config=auto_scan_cfg,
+        session_manager=app.state.session_manager,
+        projects_store=projects_store,
+        launcher=app.state.claude_launcher,
+        event_bus=app.state.event_bus,
+        rate_limiter=app.state.linear_rate_limiter,
+    )
 
     # Routers
     app.include_router(auth_router)

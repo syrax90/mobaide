@@ -28,9 +28,9 @@ class SessionConfig:
     cols: int = 80
     scrollback_size: int = 10_000
     # Project-aware launch (CLA-12). When ``project_name`` is set, the
-    # SessionManager resolves the project via ``ProjectsConfig`` and uses
-    # ``ClaudeLauncher`` to build argv/cwd/env, overwriting the raw fields
-    # above before the PTY is spawned.
+    # SessionManager resolves the project via the ``ProjectsStore`` and
+    # uses ``ClaudeLauncher`` to build argv/cwd/env, overwriting the raw
+    # fields above before the PTY is spawned.
     project_name: str | None = None
     claude_options: ClaudeOptions | None = None
 

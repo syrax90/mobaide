@@ -172,21 +172,9 @@ class TestAuthAndConfiguration:
             ) as ws:
                 ws.receive_json()
 
-    def test_not_configured_closes_4002(self, test_client, auth_token, app):
-        """Default app fixture has ``autoscan_manager = None`` — handler must
-        send close 4002 "Auto scan not configured" right after auth.
-        """
-        assert app.state.autoscan_manager is None
-        from starlette.websockets import WebSocketDisconnect
-
-        with pytest.raises(WebSocketDisconnect) as excinfo:
-            with test_client.websocket_connect(
-                f"/ws/autoscan?token={auth_token}",
-            ) as ws:
-                # The 200ms initial-frame wait elapses, then the handler
-                # sends the close. ``receive_json`` raises.
-                ws.receive_json()
-        assert excinfo.value.code == 4002
+    # Post-CLA-39: ``autoscan_manager`` is always wired in — the legacy
+    # "close 4002 not configured" branch is unreachable. The previous
+    # ``test_not_configured_closes_4002`` test has been removed.
 
 
 # --------------------------------------------------------------------------- #

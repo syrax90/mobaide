@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-from claude_mobile.core.projects_config import ProjectsConfig
 from claude_mobile.linear.config import AutoScanConfig
 from claude_mobile.relay.config import RelayConfig
 
@@ -17,6 +16,7 @@ class AgentConfig:
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_minutes: int = 1440  # 24 hours
     user_store_path: str = "users.json"
+    projects_store_path: str = "projects.json"
     host: str = "0.0.0.0"
     port: int = 8000
     max_sessions: int = 16
@@ -26,7 +26,6 @@ class AgentConfig:
     audit_log_path: str | None = None
     log_sample_ws: bool = False
     auto_scan_config: AutoScanConfig | None = None
-    projects_config: ProjectsConfig | None = None
     relay_config: RelayConfig | None = None
 
     @classmethod
@@ -45,6 +44,7 @@ class AgentConfig:
                 os.getenv("JWT_REFRESH_TOKEN_EXPIRE_MINUTES", "1440"),
             ),
             user_store_path=os.getenv("USER_STORE_PATH", "users.json"),
+            projects_store_path=os.getenv("PROJECTS_STORE_PATH", "projects.json"),
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8000")),
             max_sessions=int(os.getenv("MAX_SESSIONS", "16")),
@@ -56,6 +56,5 @@ class AgentConfig:
             audit_log_path=os.getenv("AUDIT_LOG_PATH") or None,
             log_sample_ws=os.getenv("LOG_SAMPLE_WS", "").lower() in ("1", "true", "yes"),
             auto_scan_config=AutoScanConfig.from_env(),
-            projects_config=ProjectsConfig.from_env(),
             relay_config=RelayConfig.from_env(),
         )

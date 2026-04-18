@@ -21,6 +21,8 @@ except Exception:  # pragma: no cover
 from claude_mobile.core import (
     ClaudeLauncher,
     ClaudeOptions,
+    ProjectConfig,
+    ProjectsStore,
     SessionConfig,
     SessionManager,
 )
@@ -58,12 +60,20 @@ class AutoScanCapacityReached(Exception):
 
 
 class AutoScanInstance:
-    """One Auto Scan polling loop bound to a single project."""
+    """One Auto Scan polling loop bound to a single project.
+
+    The instance captures a :class:`ProjectConfig` snapshot at construction
+    time — mid-scan mutations of the project (path change, key rotation,
+    flags edit) do NOT affect the running loop. To pick up changes, the
+    operator must ``stop`` and ``start`` the scan. This gives predictable
+    behaviour and keeps the cycle loop from racing the projects store.
+    """
 
     def __init__(
         self,
         *,
         project_name: str,
+        project_config: ProjectConfig,
         config: AutoScanConfig,
         session_manager: SessionManager,
         launcher: ClaudeLauncher,
@@ -73,6 +83,7 @@ class AutoScanInstance:
         client_options: ClaudeOptions | None = None,
     ) -> None:
         self._project_name = project_name
+        self._project_config = project_config
         self._config = config
         self._session_manager = session_manager
         self._launcher = launcher
@@ -266,7 +277,7 @@ class AutoScanInstance:
     @log_call(name="autoscan.process_issue", log_args=("issue",))
     async def _process_issue(self, issue: LinearIssue) -> None:
         bind_request_context(issue_identifier=issue.identifier)
-        project = self._config.projects[self._project_name]
+        project = self._project_config
         logger.info("Processing: %s - %s", issue.identifier, issue.title)
 
         # 1) State update
@@ -397,7 +408,7 @@ class AutoScanInstance:
         projects are preserved (the same file is shared per-project in
         practice, but the guard is kept for safety).
         """
-        project = self._config.projects[self._project_name]
+        project = self._project_config
         project_root = project.path
         done_state_name = self._config.linear_done_state
 
@@ -574,12 +585,18 @@ class AutoScanInstance:
 
 
 class AutoScanSessionManager:
-    """Manages multiple concurrent AutoScanInstance objects."""
+    """Manages multiple concurrent AutoScanInstance objects.
+
+    The manager reads the list of scannable projects live from the injected
+    :class:`ProjectsStore` (filtered to those with a ``linear_api_key``), so
+    projects added via the REST CRUD API are picked up without a restart.
+    """
 
     def __init__(
         self,
         config: AutoScanConfig,
         session_manager: SessionManager,
+        projects_store: ProjectsStore,
         launcher: ClaudeLauncher | None = None,
         event_bus=None,
         rate_limiter: LinearRateLimiter | None = None,
@@ -587,6 +604,7 @@ class AutoScanSessionManager:
     ) -> None:
         self._config = config
         self._session_manager = session_manager
+        self._projects_store = projects_store
         self._launcher = launcher or ClaudeLauncher()
         self._event_bus = event_bus
         self._rate_limiter = rate_limiter or LinearRateLimiter()
@@ -600,7 +618,7 @@ class AutoScanSessionManager:
 
     @property
     def available_projects(self) -> list[str]:
-        return list(self._config.projects.keys())
+        return self._projects_store.list_with_linear_key()
 
     def get(self, project_name: str) -> AutoScanInstance | None:
         return self._scans.get(project_name)
@@ -623,10 +641,15 @@ class AutoScanSessionManager:
     async def start(
         self, project_name: str, *, client_options: ClaudeOptions | None = None,
     ) -> AutoScanInstance:
-        if project_name not in self._config.projects:
+        project = self._projects_store.get(project_name)
+        if project is None:
             raise ValueError(
-                f"Project '{project_name}' not found in config. "
-                f"Available: {list(self._config.projects.keys())}"
+                f"Project '{project_name}' not found in store. "
+                f"Available: {self.available_projects}",
+            )
+        if not project.linear_api_key:
+            raise ValueError(
+                f"Project '{project_name}' has no Linear API key configured.",
             )
 
         async with self._lock:
@@ -639,8 +662,6 @@ class AutoScanSessionManager:
                     f"Maximum {self._max_scans} concurrent auto scans reached"
                 )
 
-            project = self._config.projects[project_name]
-            assert project.linear_api_key is not None
             client = LinearApiClient(
                 api_key=project.linear_api_key,
                 rate_limiter=self._rate_limiter,
@@ -653,6 +674,7 @@ class AutoScanSessionManager:
             )
             instance = AutoScanInstance(
                 project_name=project_name,
+                project_config=project,
                 config=self._config,
                 session_manager=self._session_manager,
                 launcher=self._launcher,

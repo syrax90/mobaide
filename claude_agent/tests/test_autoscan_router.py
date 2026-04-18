@@ -97,56 +97,14 @@ def _make_dto_dict(project_name: str = "p") -> dict:
     }
 
 
-@pytest.fixture
-def app_no_manager():
-    """A fresh app wired to the router with auth bypassed but
-    ``autoscan_manager`` left as ``None`` — triggers the 501 branch.
-    """
-    app = FastAPI()
-    from claude_mobile.agent.auth import dependencies as auth_deps
-    app.dependency_overrides[auth_deps.get_current_user] = lambda: "test-user"
-    app.include_router(router)
-    app.state.autoscan_manager = None
-    return app
-
-
 # --------------------------------------------------------------------------- #
-# Common gating — 501 when manager missing, 401 when unauthenticated.
+# Common gating — 401 when unauthenticated.
+#
+# Post-CLA-39: ``autoscan_manager`` is always instantiated in ``app.py`` — the
+# legacy "501 not configured" branch is unreachable and those tests were
+# deleted. Empty ``available_projects`` is the new signal that no projects
+# have a Linear API key.
 # --------------------------------------------------------------------------- #
-
-
-class TestAutoScanManagerNotConfigured:
-    """Every REST endpoint should 501 when ``autoscan_manager`` is ``None``."""
-
-    def test_start_501(self, app_no_manager):
-        client = TestClient(app_no_manager)
-        resp = client.post("/api/autoscan/start", json={"project_name": "p"})
-        assert resp.status_code == 501
-        assert "Auto scan is not configured" in resp.json()["detail"]
-
-    def test_stop_501(self, app_no_manager):
-        client = TestClient(app_no_manager)
-        resp = client.post("/api/autoscan/stop", json={"project_name": "p"})
-        assert resp.status_code == 501
-        assert "Auto scan is not configured" in resp.json()["detail"]
-
-    def test_run_now_501(self, app_no_manager):
-        client = TestClient(app_no_manager)
-        resp = client.post("/api/autoscan/run-now", json={"project_name": "p"})
-        assert resp.status_code == 501
-        assert "Auto scan is not configured" in resp.json()["detail"]
-
-    def test_list_501(self, app_no_manager):
-        client = TestClient(app_no_manager)
-        resp = client.get("/api/autoscan/list")
-        assert resp.status_code == 501
-        assert "Auto scan is not configured" in resp.json()["detail"]
-
-    def test_status_501(self, app_no_manager):
-        client = TestClient(app_no_manager)
-        resp = client.get("/api/autoscan/status", params={"project_name": "p"})
-        assert resp.status_code == 501
-        assert "Auto scan is not configured" in resp.json()["detail"]
 
 
 def test_list_requires_auth_when_override_absent():
