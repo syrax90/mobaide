@@ -138,6 +138,9 @@ dependencies {
     // Vendored Termux terminal renderer (Apache-2.0)
     implementation(project(":terminal-view"))
 
+    // Drag-and-drop reordering in Compose LazyColumn (MIT, Calvin-LL/Reorderable)
+    implementation(libs.reorderable)
+
     // Unit testing
     testImplementation(libs.junit)
     testImplementation(libs.mockk)

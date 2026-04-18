@@ -1,6 +1,7 @@
 package com.claudemobile.app.data.network.dto
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 /** Mirror of the agent's `list_public()` entry — see core/projects_config.py. */
 @Serializable
@@ -9,5 +10,10 @@ data class ProjectInfo(
     val path: String,
     val has_linear_key: Boolean = false,
     val is_git: Boolean = false,
-    val default_flags: Map<String, String> = emptyMap(),
+    // `default_flags` values are heterogeneous on the wire (bool | int | float | str),
+    // so we keep them as raw JsonElement and let the UI layer coerce by FlagType.
+    val default_flags: Map<String, JsonElement> = emptyMap(),
+    val conda_env: String? = null,
+    val order: Int = 0,
+    val path_exists: Boolean = true,
 )

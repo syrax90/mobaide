@@ -14,6 +14,7 @@ object Routes {
     const val QR_SCANNER = "qr_scanner"
     const val MANUAL_PAIRING = "manual_pairing"
     const val CONNECTIONS = "connections"
+    const val PROJECTS = "projects"
 
     fun sessionDetail(sessionId: String) = "session_detail/$sessionId"
     fun autoScanDetail(projectName: String) =

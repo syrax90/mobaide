@@ -21,6 +21,7 @@ import com.claudemobile.app.ui.login.LoginScreen
 import com.claudemobile.app.ui.pairing.ManualPairingScreen
 import com.claudemobile.app.ui.pairing.PairingViewModel
 import com.claudemobile.app.ui.pairing.QrScannerScreen
+import com.claudemobile.app.ui.projects.ProjectsScreen
 import com.claudemobile.app.ui.register.RegisterScreen
 import com.claudemobile.app.ui.sessions.CreateSessionScreen
 import com.claudemobile.app.ui.sessions.SessionListScreen
@@ -153,9 +154,19 @@ fun AppNavigation(sessionManager: SessionManager) {
                 onSettingsClick = {
                     navController.navigate(Routes.SETTINGS)
                 },
+                onProjectsClick = {
+                    navController.navigate(Routes.PROJECTS)
+                },
                 onAutoScanClick = { projectName ->
                     navController.navigate(Routes.autoScanDetail(projectName))
                 },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.PROJECTS) {
+            ProjectsScreen(
+                viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
             )
         }
