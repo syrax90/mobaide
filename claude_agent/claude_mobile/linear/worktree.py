@@ -92,7 +92,11 @@ class WorktreeManager:
     async def create_worktree(
         self, slug: str, project_root: str
     ) -> WorktreeResult | None:
-        """Create a git worktree with a tracking branch for the given slug.
+        """Create a git worktree with an independent branch for the given slug.
+
+        The new branch is created from ``origin/<main_branch>`` with
+        ``--no-track``, so no upstream is configured and a stray ``git pull``
+        inside the worktree cannot merge the main branch into it.
 
         Returns WorktreeResult on success, None on failure.
         """
@@ -130,7 +134,7 @@ class WorktreeManager:
             start_point,
         )
         rc, _, stderr = await _run_git(
-            "worktree", "add", wt_dir, "-b", branch_name, start_point,
+            "worktree", "add", "--no-track", wt_dir, "-b", branch_name, start_point,
             cwd=project_root,
         )
         if rc == 0:

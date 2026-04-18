@@ -108,6 +108,10 @@ class TestWorktreeManager:
         assert result.branch == "feature/claude/cla-8-test"
         assert mock_git.call_count == 3
 
+        worktree_add_call = mock_git.call_args_list[2]
+        assert "--no-track" in worktree_add_call.args
+        assert "-b" in worktree_add_call.args
+
     @patch("claude_mobile.linear.worktree._run_git")
     async def test_create_worktree_existing_branch_fallback(
         self, mock_git, manager, tmp_path
