@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
+from tests.conftest import TEST_ADMIN_EMAIL
 
 
 class TestCreateAgent:
@@ -202,3 +202,61 @@ class TestGetMobileTokens:
             headers=api_auth_headers,
         )
         assert resp.status_code == 403
+
+
+class TestAdminBlocked:
+    """Admin users must not own or manage agents.
+
+    All ``/api/agents/*`` endpoints reject admin tokens with 403. Covered:
+    POST create, GET list, POST reregister, DELETE, POST token. Also covers
+    the service-layer guard in ``AgentService.create_agent``.
+    """
+
+    async def test_admin_cannot_create_agent(self, client, admin_api_auth_headers):
+        resp = await client.post(
+            "/api/agents",
+            json={"name": "forbidden"},
+            headers=admin_api_auth_headers,
+        )
+        assert resp.status_code == 403
+        assert "admin" in resp.json()["detail"].lower()
+
+    async def test_admin_cannot_list_agents(self, client, admin_api_auth_headers):
+        resp = await client.get("/api/agents", headers=admin_api_auth_headers)
+        assert resp.status_code == 403
+
+    async def test_admin_cannot_reregister_agent(
+        self, client, admin_api_auth_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent  # viewer-owned
+        resp = await client.post(
+            f"/api/agents/{agent_id}/reregister",
+            headers=admin_api_auth_headers,
+        )
+        assert resp.status_code == 403
+
+    async def test_admin_cannot_delete_agent(
+        self, client, admin_api_auth_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        resp = await client.delete(
+            f"/api/agents/{agent_id}",
+            headers=admin_api_auth_headers,
+        )
+        assert resp.status_code == 403
+
+    async def test_admin_cannot_get_mobile_tokens(
+        self, client, admin_api_auth_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        resp = await client.post(
+            f"/api/agents/{agent_id}/token",
+            headers=admin_api_auth_headers,
+        )
+        assert resp.status_code == 403
+
+    async def test_service_layer_rejects_admin_owner(self, app):
+        """Defense-in-depth: bypassing the router still fails."""
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        with pytest.raises(ValueError, match="[Aa]dmin"):
+            await app.state.agent_service.create_agent("x", admin["id"])

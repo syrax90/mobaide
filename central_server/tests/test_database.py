@@ -243,7 +243,81 @@ class TestUserCRUD:
         """Verify that PRAGMA user_version is set after migration."""
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 3
+        assert row[0] == 4
+
+
+class TestAdminOwnedAgentPurgeMigration:
+    """Verify that migration v4 purges admin-owned agents + dependents.
+
+    Simulates a pre-migration DB (user_version=3) that contains an
+    admin-owned agent with pairings, pairing tokens and mobile refresh
+    tokens. Opening the DB must cascade-delete all of them.
+    """
+
+    async def test_purges_admin_agent_and_all_dependents(self, tmp_path):
+        db_path = str(tmp_path / "pre_migration.db")
+
+        # Seed at version 3.
+        db = Database(db_path)
+        await db.connect()
+        admin_id = await db.create_user(
+            email="admin@legacy.local", password_hash="h", role="admin"
+        )
+        viewer_id = await db.create_user(
+            email="viewer@legacy.local", password_hash="h", role="viewer"
+        )
+        admin_agent_id, _ = await db.register_agent("admin-owned", admin_id)
+        viewer_agent_id, _ = await db.register_agent("viewer-owned", viewer_id)
+        admin_pairing_id = await db.create_pairing(admin_agent_id, "dev-a")
+        viewer_pairing_id = await db.create_pairing(viewer_agent_id, "dev-v")
+        await db.create_pairing_token(admin_agent_id, 300)
+        await db.create_pairing_token(viewer_agent_id, 300)
+        await db.store_refresh_token("r-admin", "dev-a", admin_agent_id, 60)
+        await db.store_refresh_token("r-viewer", "dev-v", viewer_agent_id, 60)
+        # Roll the schema version back to before the purge migration.
+        await db.conn.execute("PRAGMA user_version = 3")
+        await db.conn.commit()
+        await db.close()
+
+        # Reopen — should run the v4 migration.
+        db = Database(db_path)
+        await db.connect()
+
+        cursor = await db.conn.execute("PRAGMA user_version")
+        row = await cursor.fetchone()
+        assert row[0] == 4
+
+        assert await db.get_agent(admin_agent_id) is None
+        assert await db.list_pairings_for_agent(admin_agent_id) == []
+        assert await db.get_pending_pairing_tokens(admin_agent_id) == []
+        assert await db.validate_and_consume_refresh("r-admin") is None
+
+        # Viewer-owned data must be untouched.
+        viewer_agent = await db.get_agent(viewer_agent_id)
+        assert viewer_agent is not None
+        assert viewer_agent["name"] == "viewer-owned"
+        assert await db.validate_and_consume_refresh("r-viewer") == (
+            "dev-v",
+            viewer_agent_id,
+        )
+        # Pairing IDs are still meaningful references to the pre-purge data.
+        del admin_pairing_id, viewer_pairing_id
+
+        await db.close()
+
+    async def test_idempotent_on_already_migrated_db(self, tmp_path):
+        db_path = str(tmp_path / "post_migration.db")
+        db = Database(db_path)
+        await db.connect()
+        await db.close()
+
+        # Reopen — version is already 4, migration is a no-op.
+        db = Database(db_path)
+        await db.connect()
+        cursor = await db.conn.execute("PRAGMA user_version")
+        row = await cursor.fetchone()
+        assert row[0] == 4
+        await db.close()
 
 
 class TestRefreshTokens:

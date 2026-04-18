@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.claudemobile.app.data.auth.GoogleAuthResult
 import com.claudemobile.app.data.network.ApiException
+import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
+import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
 import com.claudemobile.app.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -58,6 +60,8 @@ class LoginViewModel @Inject constructor(
             try {
                 authRepository.loginWithPassword(state.email.trim(), state.password)
                 _loginSuccess.value = true
+            } catch (e: AdminLoginNotSupportedException) {
+                emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {
                 val message = when (e.code) {
                     401 -> "Invalid email or password"
@@ -97,6 +101,8 @@ class LoginViewModel @Inject constructor(
             try {
                 authRepository.loginWithGoogle(idToken)
                 _loginSuccess.value = true
+            } catch (e: AdminLoginNotSupportedException) {
+                emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {
                 emitError("Google Sign-In failed: ${e.message}")
             } catch (e: Exception) {

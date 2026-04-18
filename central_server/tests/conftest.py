@@ -14,6 +14,8 @@ from central_server.relay.routing import RoutingTable
 TEST_JWT_SECRET = "test-secret-key-for-central-server-do-not-use-in-prod"
 TEST_ADMIN_EMAIL = "admin@test.local"
 TEST_ADMIN_PASSWORD = "testpass123"
+TEST_VIEWER_EMAIL = "viewer@test.local"
+TEST_VIEWER_PASSWORD = "viewerpass123"
 
 
 @pytest.fixture
@@ -68,7 +70,7 @@ async def client(app):
 
 @pytest.fixture
 async def dashboard_headers(app) -> dict[str, str]:
-    """Return dashboard auth cookie as a header dict."""
+    """Return dashboard auth cookie for the admin user (web dashboard)."""
     auth_service = app.state.auth_service
     _user_id, _role, token = await auth_service.login_user(
         TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
@@ -77,8 +79,37 @@ async def dashboard_headers(app) -> dict[str, str]:
 
 
 @pytest.fixture
-async def api_auth_headers(app) -> dict[str, str]:
-    """Return Bearer auth header for the admin user."""
+async def viewer_user(app) -> dict:
+    """Create (once per app) and return the viewer test user row."""
+    existing = await app.state.db.get_user_by_email(TEST_VIEWER_EMAIL)
+    if existing is not None:
+        return existing
+    await app.state.auth_service.register_user(
+        TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD
+    )
+    user = await app.state.db.get_user_by_email(TEST_VIEWER_EMAIL)
+    assert user is not None
+    return user
+
+
+@pytest.fixture
+async def api_auth_headers(app, viewer_user) -> dict[str, str]:
+    """Bearer header for a non-admin (viewer) user.
+
+    Agent-ownership endpoints reject admin tokens with 403, so the default
+    "authenticated API user" fixture is a viewer. Use
+    ``admin_api_auth_headers`` to verify the admin-blocking behaviour.
+    """
+    auth_service = app.state.auth_service
+    _user_id, _role, token = await auth_service.login_user(
+        TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD
+    )
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+async def admin_api_auth_headers(app) -> dict[str, str]:
+    """Bearer header for the seeded admin user (for admin-blocked tests)."""
     auth_service = app.state.auth_service
     _user_id, _role, token = await auth_service.login_user(
         TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
@@ -87,7 +118,10 @@ async def api_auth_headers(app) -> dict[str, str]:
 
 
 @pytest.fixture
-async def registered_agent(db, app) -> tuple[str, str]:
-    """Register a test agent owned by the admin. Returns (agent_id, raw_token)."""
-    admin = await db.get_user_by_email(TEST_ADMIN_EMAIL)
-    return await db.register_agent("test-agent", admin["id"])
+async def registered_agent(db, viewer_user) -> tuple[str, str]:
+    """Register a test agent owned by the viewer user. Returns (agent_id, raw_token).
+
+    Admins never own agents (enforced by router + service + migration 0003);
+    ``viewer_user`` is the default agent owner for tests.
+    """
+    return await db.register_agent("test-agent", viewer_user["id"])

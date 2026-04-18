@@ -101,14 +101,14 @@ class AuthRepositoryTest {
             access_token = "user-token-2",
             user_id = "u2",
             email = "bob@test.com",
-            role = "admin",
+            role = "viewer",
         )
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
         repo.loginWithPassword("bob@test.com", "pw")
 
         verifyOrder {
-            userStore.saveUserSession("user-token-2", "bob@test.com", "u2", "admin")
+            userStore.saveUserSession("user-token-2", "bob@test.com", "u2", "viewer")
             sessionManager.markUserLoggedIn()
         }
     }
@@ -274,5 +274,82 @@ class AuthRepositoryTest {
         every { userStore.getUserEmail() } returns "user@test.com"
 
         assertEquals("user@test.com", newRepo(userIdentityStore = userStore).getUserEmail())
+    }
+
+    // ---- Admin login is blocked on mobile -----------------------------------
+
+    @Test
+    fun loginWithPassword_admin_throws_andDoesNotPersistSession() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+
+        coEvery { centralApi.login("root@test.com", "pw") } returns UserAuthResponse(
+            access_token = "admin-token",
+            user_id = "a1",
+            email = "root@test.com",
+            role = "admin",
+        )
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
+        try {
+            repo.loginWithPassword("root@test.com", "pw")
+            fail("expected AdminLoginNotSupportedException")
+        } catch (_: AdminLoginNotSupportedException) {
+            // expected
+        }
+
+        verify(exactly = 0) { userStore.saveUserSession(any(), any(), any(), any()) }
+        verify(exactly = 0) { sessionManager.markUserLoggedIn() }
+    }
+
+    @Test
+    fun loginWithGoogle_admin_throws_andDoesNotPersistSession() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+
+        coEvery { centralApi.loginWithGoogle("google-id-token") } returns UserAuthResponse(
+            access_token = "admin-token",
+            user_id = "a2",
+            email = "root@gmail.com",
+            role = "admin",
+        )
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
+        try {
+            repo.loginWithGoogle("google-id-token")
+            fail("expected AdminLoginNotSupportedException")
+        } catch (_: AdminLoginNotSupportedException) {
+            // expected
+        }
+
+        verify(exactly = 0) { userStore.saveUserSession(any(), any(), any(), any()) }
+        verify(exactly = 0) { sessionManager.markUserLoggedIn() }
+    }
+
+    @Test
+    fun register_admin_throws_andDoesNotPersistSession() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+
+        coEvery { centralApi.register("root@test.com", "pw") } returns UserAuthResponse(
+            access_token = "admin-token",
+            user_id = "a3",
+            email = "root@test.com",
+            role = "admin",
+        )
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
+        try {
+            repo.register("root@test.com", "pw")
+            fail("expected AdminLoginNotSupportedException")
+        } catch (_: AdminLoginNotSupportedException) {
+            // expected
+        }
+
+        verify(exactly = 0) { userStore.saveUserSession(any(), any(), any(), any()) }
+        verify(exactly = 0) { sessionManager.markUserLoggedIn() }
     }
 }

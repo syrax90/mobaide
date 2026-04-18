@@ -157,6 +157,24 @@ async def get_api_user(request: Request) -> UserTokenPayload:
     return user_payload
 
 
+async def get_non_admin_api_user(
+    user: UserTokenPayload = Depends(get_api_user),
+) -> UserTokenPayload:
+    """Variant of :func:`get_api_user` that rejects admin-role tokens.
+
+    Used on agent-ownership endpoints: admins are platform operators and
+    must not own or manage their own agents. They should use the web
+    dashboard for platform-wide visibility instead.
+    """
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin accounts cannot own or manage agents. "
+            "Use the web dashboard for platform operations.",
+        )
+    return user
+
+
 # -- Mobile REST auth (Bearer header) -----------------------------------------
 
 

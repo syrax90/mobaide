@@ -124,6 +124,30 @@ class Database:
 
             await self._conn.execute("PRAGMA user_version = 3")
 
+        if version < 4:
+            # Enforce invariant: admin users never own agents. Drop any
+            # admin-owned agents and their dependent rows (schema has no
+            # ON DELETE CASCADE, so cascade manually — mirrors delete_agent).
+            admin_agent_ids_sql = (
+                "SELECT a.agent_id FROM agents a "
+                "JOIN users u ON a.owner_user_id = u.id "
+                "WHERE u.role = 'admin'"
+            )
+            await self._conn.execute(
+                f"DELETE FROM mobile_refresh_tokens WHERE agent_id IN ({admin_agent_ids_sql})"
+            )
+            await self._conn.execute(
+                f"DELETE FROM pairing_tokens WHERE agent_id IN ({admin_agent_ids_sql})"
+            )
+            await self._conn.execute(
+                f"DELETE FROM pairings WHERE agent_id IN ({admin_agent_ids_sql})"
+            )
+            await self._conn.execute(
+                "DELETE FROM agents WHERE owner_user_id IN "
+                "(SELECT id FROM users WHERE role = 'admin')"
+            )
+            await self._conn.execute("PRAGMA user_version = 4")
+
         await self._conn.commit()
 
     async def close(self) -> None:

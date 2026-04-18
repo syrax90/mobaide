@@ -3,6 +3,8 @@ package com.claudemobile.app.ui.register
 import app.cash.turbine.test
 import com.claudemobile.app.data.auth.GoogleAuthResult
 import com.claudemobile.app.data.network.ApiException
+import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
+import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.testing.MainDispatcherRule
 import io.mockk.coEvery
@@ -329,6 +331,67 @@ class RegisterViewModelTest {
 
         assertTrue(vm.uiState.value.isLoading)
         assertNull(vm.uiState.value.error)
+    }
+
+    // ---- Admin-login mapping ------------------------------------------------
+
+    @Test
+    fun register_onAdminLoginNotSupported_setsFriendlySnackbarMessage_andClearsLoading() = runTest {
+        // Defensive: the server always returns role=viewer on register today,
+        // but if that ever changes the ViewModel must show the friendly
+        // message (NOT the generic "Registration failed: ...").
+        val vm = primed(RegisterViewModel(authRepository))
+        coEvery {
+            authRepository.register("alice@example.com", "secret")
+        } throws AdminLoginNotSupportedException()
+
+        vm.register()
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertEquals(
+            ADMIN_LOGIN_USER_MESSAGE,
+            state.error,
+        )
+        assertFalse(state.isLoading)
+        assertFalse(vm.registerSuccess.value)
+    }
+
+    @Test
+    fun register_onAdminLoginNotSupported_alsoEmitsErrorEvent() = runTest {
+        val vm = primed(RegisterViewModel(authRepository))
+        coEvery {
+            authRepository.register("alice@example.com", "secret")
+        } throws AdminLoginNotSupportedException()
+
+        vm.errorEvents.test {
+            vm.register()
+            advanceUntilIdle()
+            assertEquals(
+                ADMIN_LOGIN_USER_MESSAGE,
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onGoogleAuthResult_onAdminLoginNotSupported_setsFriendlySnackbarMessage() = runTest {
+        // Symmetric mapping must exist on the Google branch too.
+        val vm = RegisterViewModel(authRepository)
+        coEvery {
+            authRepository.loginWithGoogle("google-token")
+        } throws AdminLoginNotSupportedException()
+
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
+        advanceUntilIdle()
+
+        assertFalse(vm.registerSuccess.value)
+        assertEquals(
+            ADMIN_LOGIN_USER_MESSAGE,
+            vm.uiState.value.error,
+        )
+        assertFalse(vm.uiState.value.isLoading)
     }
 
     // ---- update* helpers clear the pending error ----------------------------
