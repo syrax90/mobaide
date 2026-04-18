@@ -3,12 +3,19 @@ package com.claudemobile.app.data.repository
 import app.cash.turbine.test
 import com.claudemobile.app.data.events.AgentEvent
 import com.claudemobile.app.data.events.AgentEventBus
+import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.dto.ProjectInfo
+import com.claudemobile.app.data.network.dto.ProjectOrderRequest
+import com.claudemobile.app.data.network.dto.ProjectUpdate
+import com.claudemobile.app.data.network.dto.ProjectWrite
+import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -169,6 +176,122 @@ class ProjectsRepositoryTest {
             cancelAndIgnoreRemainingEvents()
         }
     }
+
+    // ---- mutations: conflict mapping ---------------------------------------
+
+    @Test
+    fun createProject_delegatesToRestApi() = runTest {
+        val (repo, restApi) = newRepo()
+        val body = ProjectWrite(name = "alpha", path = "/p/alpha")
+        val expected = project("alpha")
+        coEvery { restApi.createProject(body) } returns expected
+
+        val returned = repo.createProject(body)
+        assertSame(expected, returned)
+        coVerify(exactly = 1) { restApi.createProject(body) }
+    }
+
+    @Test
+    fun createProject_409_mapsToProjectConflictException() = runTest {
+        val (repo, restApi) = newRepo()
+        val body = ProjectWrite(name = "alpha", path = "/p/alpha")
+        coEvery { restApi.createProject(body) } throws ApiException(
+            code = 409,
+            errorBody = "{\"detail\":\"Project 'alpha' already exists\"}",
+        )
+
+        try {
+            repo.createProject(body)
+            org.junit.Assert.fail("expected ProjectConflictException")
+        } catch (e: ProjectConflictException) {
+            assertEquals("Project 'alpha' already exists", e.detail)
+        }
+    }
+
+    @Test
+    fun updateProject_409_mapsToProjectConflictException_withDetail() = runTest {
+        val (repo, restApi) = newRepo()
+        val body = ProjectUpdate(name = "beta")
+        coEvery { restApi.updateProject("alpha", body) } throws ApiException(
+            code = 409,
+            errorBody = "{\"detail\":\"Cannot rename project 'alpha': auto-scan is active. Stop the scan first.\"}",
+        )
+
+        try {
+            repo.updateProject("alpha", body)
+            org.junit.Assert.fail("expected ProjectConflictException")
+        } catch (e: ProjectConflictException) {
+            assertTrue(e.detail.contains("auto-scan is active"))
+        }
+    }
+
+    @Test
+    fun updateProject_nonConflict_errorPassesThrough() = runTest {
+        val (repo, restApi) = newRepo()
+        val body = ProjectUpdate(path = "/new/path")
+        coEvery { restApi.updateProject("alpha", body) } throws ApiException(
+            code = 404,
+            errorBody = "{\"detail\":\"Project 'alpha' not found\"}",
+        )
+
+        try {
+            repo.updateProject("alpha", body)
+            org.junit.Assert.fail("expected ApiException")
+        } catch (e: ApiException) {
+            assertEquals(404, e.code)
+        }
+    }
+
+    @Test
+    fun deleteProject_409_mapsToProjectConflictException() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.deleteProject("alpha") } throws ApiException(
+            code = 409,
+            errorBody = "{\"detail\":\"Cannot delete project 'alpha': auto-scan is active.\"}",
+        )
+
+        try {
+            repo.deleteProject("alpha")
+            org.junit.Assert.fail("expected ProjectConflictException")
+        } catch (e: ProjectConflictException) {
+            assertTrue(e.detail.contains("Cannot delete"))
+        }
+    }
+
+    @Test
+    fun deleteProject_success_returnsUnit() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.deleteProject("alpha") } just Runs
+        repo.deleteProject("alpha")
+        coVerify(exactly = 1) { restApi.deleteProject("alpha") }
+    }
+
+    @Test
+    fun reorderProjects_forwardsNamesAsRequest() = runTest {
+        val (repo, restApi) = newRepo()
+        val captured = slot<ProjectOrderRequest>()
+        coEvery { restApi.reorderProjects(capture(captured)) } returns emptyList()
+
+        repo.reorderProjects(listOf("beta", "alpha"))
+        assertEquals(listOf("beta", "alpha"), captured.captured.names)
+    }
+
+    @Test
+    fun parseDetail_invalidJson_fallsBackToRawBody() = runTest {
+        val (repo, restApi) = newRepo()
+        coEvery { restApi.createProject(any()) } throws ApiException(
+            code = 409,
+            errorBody = "plain text body",
+        )
+        try {
+            repo.createProject(ProjectWrite(name = "a", path = "/p"))
+            org.junit.Assert.fail("expected ProjectConflictException")
+        } catch (e: ProjectConflictException) {
+            assertEquals("plain text body", e.detail)
+        }
+    }
+
+    // ---- event-bus refresh unchanged by mutations --------------------------
 
     @Test
     fun unrelatedAgentEvent_doesNotMutateProjectsState() = runTest {

@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Card
@@ -57,6 +58,7 @@ fun SessionListScreen(
     onSessionClick: (String) -> Unit,
     onCreateClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    onProjectsClick: () -> Unit = {},
     onAutoScanClick: (String) -> Unit = {},
     onBack: (() -> Unit)? = null,
 ) {
@@ -91,6 +93,9 @@ fun SessionListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onProjectsClick) {
+                        Icon(Icons.Default.Folder, contentDescription = "Projects")
+                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }

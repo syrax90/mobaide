@@ -5,6 +5,9 @@ import com.claudemobile.app.data.network.dto.AutoScanListResponse
 import com.claudemobile.app.data.network.dto.ClaudeOptionsModel
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
 import com.claudemobile.app.data.network.dto.ProjectInfo
+import com.claudemobile.app.data.network.dto.ProjectOrderRequest
+import com.claudemobile.app.data.network.dto.ProjectUpdate
+import com.claudemobile.app.data.network.dto.ProjectWrite
 import com.claudemobile.app.data.network.dto.ScrollbackResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
 import com.claudemobile.app.data.network.dto.RunNowRequest
@@ -21,12 +24,25 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.net.URLEncoder
 
 class RestApi(
     private val client: OkHttpClient,
     private val tokenStore: TokenStore,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    // Dedicated encoder for `ProjectUpdate`: `explicitNulls = false` +
+    // `encodeDefaults = false` drop null/default fields from the wire, so the
+    // server's "omitted = keep existing value" three-state semantics (rename,
+    // linear_api_key, conda_env, default_flags) work correctly. Do NOT use
+    // this for `ProjectWrite`: we want `default_flags = emptyMap()` to be
+    // encoded as `"default_flags": {}`, not dropped.
+    private val jsonForUpdate = Json {
+        ignoreUnknownKeys = true
+        explicitNulls = false
+        encodeDefaults = false
+    }
     private val jsonMediaType = "application/json".toMediaType()
 
     private fun baseUrl(): String = tokenStore.getEffectiveBaseUrl()
@@ -89,7 +105,7 @@ class RestApi(
         return execute(request)
     }
 
-    // Projects (CLA-12 / CLA-14)
+    // Projects (CLA-12 / CLA-14 / CLA-39 / CLA-40)
 
     suspend fun getProjects(): List<ProjectInfo> {
         val request = Request.Builder()
@@ -98,6 +114,44 @@ class RestApi(
             .build()
         return execute(request)
     }
+
+    suspend fun createProject(body: ProjectWrite): ProjectInfo {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects")
+            .post(payload)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun updateProject(currentName: String, body: ProjectUpdate): ProjectInfo {
+        val payload = jsonForUpdate.encodeToString(body).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects/${encodePathSegment(currentName)}")
+            .put(payload)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun deleteProject(name: String) {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects/${encodePathSegment(name)}")
+            .delete()
+            .build()
+        executeRaw(request)
+    }
+
+    suspend fun reorderProjects(body: ProjectOrderRequest): List<ProjectInfo> {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects/order")
+            .patch(payload)
+            .build()
+        return execute(request)
+    }
+
+    private fun encodePathSegment(name: String): String =
+        URLEncoder.encode(name, "UTF-8").replace("+", "%20")
 
     // Auto Scan
 
