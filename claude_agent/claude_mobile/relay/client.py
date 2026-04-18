@@ -22,6 +22,24 @@ from websockets.asyncio.client import ClientConnection
 
 from claude_mobile.core.models import SessionConfig, SessionEvent, SessionState
 
+from pydantic import ValidationError
+
+from claude_mobile.agent.projects.models import (
+    ProjectUpdateModel,
+    ProjectWriteModel,
+    ReorderRequest,
+)
+from claude_mobile.agent.projects.service import (
+    DuplicateProjectError,
+    ProjectInUseError,
+    ReorderSetMismatchError,
+    create_project,
+    delete_project,
+    list_projects,
+    reorder_projects,
+    update_project,
+)
+
 from .config import RelayConfig
 from .envelope import (
     CH_CONTROL,
@@ -47,6 +65,23 @@ _EVENT_TO_STATUS = {
     "stopped": "stopped",
     "error": "crashed",
 }
+
+# Fields whose raw input must never be echoed back in a validation error —
+# mirrors the handler registered in ``agent/app.py`` so direct HTTP and
+# relay-forwarded 422 responses have identical redaction guarantees.
+_SECRET_VALIDATION_FIELDS = frozenset({"linear_api_key"})
+
+
+def _scrub_validation_errors(exc: "ValidationError") -> list[dict[str, object]]:
+    """Return Pydantic error records with raw inputs stripped from secret fields."""
+    scrubbed: list[dict[str, object]] = []
+    for err in exc.errors():
+        loc = err.get("loc", ())
+        cleaned: dict[str, object] = dict(err)
+        if any(part in _SECRET_VALIDATION_FIELDS for part in loc):
+            cleaned.pop("input", None)
+        scrubbed.append(cleaned)
+    return scrubbed
 
 _STATE_MAP = {
     SessionState.STARTING: "starting",
@@ -484,11 +519,12 @@ class RelayClient:
                 },
             }
 
-        # GET /api/projects
-        if method == "GET" and path == "/api/projects":
-            pc = getattr(self._app_state, "projects_config", None)
-            projects = pc.list_public() if pc else []
-            return {"status": 200, "body": projects}
+        # Projects CRUD — delegate to the shared service layer so direct HTTP
+        # and relay-forwarded requests produce identical semantics, including
+        # audit events and bus broadcasts.
+        projects_resp = await self._dispatch_projects(method, path, body)
+        if projects_resp is not None:
+            return projects_resp
 
         # GET /api/autoscan/list
         if method == "GET" and path == "/api/autoscan/list":
@@ -576,6 +612,113 @@ class RelayClient:
             "status": 404,
             "body": {"detail": f"Unknown proxy route: {method} {path}"},
         }
+
+    # -- Projects CRUD proxy --------------------------------------------------
+
+    async def _dispatch_projects(
+        self,
+        method: str,
+        path: str,
+        body: dict | None,
+    ) -> dict | None:
+        """Handle ``/api/projects`` requests through the shared service layer.
+
+        Returns a proxy-response dict for a matching route, or ``None`` to
+        signal that the caller should fall through to the next handler.
+        """
+        import re as _re
+
+        store = getattr(self._app_state, "projects_store", None)
+        if store is None:
+            if path == "/api/projects" or path.startswith("/api/projects/"):
+                return {
+                    "status": 500,
+                    "body": {"detail": "projects store not configured"},
+                }
+            return None
+
+        autoscan_manager = getattr(self._app_state, "autoscan_manager", None)
+        event_bus = getattr(self._app_state, "event_bus", None)
+        # The relay channel has already authenticated the agent token but we
+        # don't thread a per-request username through the proxy today;
+        # audit events therefore carry ``actor=None`` from this code path.
+        actor: str | None = None
+
+        if path == "/api/projects":
+            if method == "GET":
+                return {"status": 200, "body": list_projects(store)}
+            if method == "POST":
+                try:
+                    model = ProjectWriteModel.model_validate(body or {})
+                except ValidationError as exc:
+                    return {
+                        "status": 422,
+                        "body": {"detail": _scrub_validation_errors(exc)},
+                    }
+                try:
+                    created = create_project(
+                        store, model, event_bus=event_bus, actor=actor,
+                    )
+                    return {"status": 201, "body": created}
+                except DuplicateProjectError as exc:
+                    return {"status": 409, "body": {"detail": str(exc)}}
+
+        if path == "/api/projects/order" and method == "PATCH":
+            try:
+                model = ReorderRequest.model_validate(body or {})
+            except ValidationError as exc:
+                return {
+                    "status": 422,
+                    "body": {"detail": _scrub_validation_errors(exc)},
+                }
+            try:
+                result = reorder_projects(
+                    store, model, event_bus=event_bus, actor=actor,
+                )
+                return {"status": 200, "body": result}
+            except ReorderSetMismatchError as exc:
+                return {"status": 400, "body": {"detail": str(exc)}}
+
+        m = _re.match(r"^/api/projects/([^/]+)$", path)
+        if m:
+            name = m.group(1)
+            if method == "PUT":
+                try:
+                    patch = ProjectUpdateModel.model_validate(body or {})
+                except ValidationError as exc:
+                    return {
+                        "status": 422,
+                        "body": {"detail": _scrub_validation_errors(exc)},
+                    }
+                try:
+                    updated = update_project(
+                        store, autoscan_manager, name, patch,
+                        event_bus=event_bus, actor=actor,
+                    )
+                    return {"status": 200, "body": updated}
+                except KeyError as exc:
+                    return {
+                        "status": 404,
+                        "body": {"detail": str(exc).strip("'")},
+                    }
+                except (ProjectInUseError, ValueError) as exc:
+                    return {"status": 409, "body": {"detail": str(exc)}}
+            if method == "DELETE":
+                try:
+                    delete_project(
+                        store, autoscan_manager, name,
+                        event_bus=event_bus, actor=actor,
+                    )
+                    return {"status": 204, "body": None}
+                except KeyError as exc:
+                    return {
+                        "status": 404,
+                        "body": {"detail": str(exc).strip("'")},
+                    }
+                except ProjectInUseError as exc:
+                    return {"status": 409, "body": {"detail": str(exc)}}
+
+        return None
 
     # -- Session input from relay ---------------------------------------------
 

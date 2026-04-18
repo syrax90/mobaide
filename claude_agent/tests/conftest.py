@@ -61,10 +61,11 @@ def short_lived_config() -> SessionConfig:
 
 @pytest.fixture
 def agent_config(tmp_path) -> AgentConfig:
-    """Create a test AgentConfig with a temp user store."""
+    """Create a test AgentConfig with a temp user store and projects store."""
     return AgentConfig(
         jwt_secret_key=TEST_JWT_SECRET,
         user_store_path=str(tmp_path / "users.json"),
+        projects_store_path=str(tmp_path / "projects.json"),
         max_sessions=4,
         log_level="DEBUG",
     )

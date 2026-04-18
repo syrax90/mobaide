@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from claude_mobile.core import SessionManager
-from claude_mobile.linear.config import AutoScanConfig, ProjectConfig
+from claude_mobile.core.projects_config import ProjectConfig
+from claude_mobile.linear.config import AutoScanConfig
 from claude_mobile.linear.models import (
     IssueLabel,
     IssueState,
@@ -24,13 +25,6 @@ from claude_mobile.linear.scanner import AutoScanInstance
 
 def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanConfig:
     return AutoScanConfig(
-        projects={
-            "test-project": ProjectConfig(
-                name="test-project",
-                path=str(tmp_path / "repo"),
-                linear_api_key="lin_api_test",
-            )
-        },
         worktree_base="claude_worktree",
         scan_interval_seconds=1,
         branch_prefix="feature/claude",
@@ -40,6 +34,14 @@ def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanCon
         auto_remove_worktrees=auto_remove_worktrees,
         linear_done_state="Done",
         state_dir=str(tmp_path / "state"),
+    )
+
+
+def _make_project_config(tmp_path) -> ProjectConfig:
+    return ProjectConfig(
+        name="test-project",
+        path=str(tmp_path / "repo"),
+        linear_api_key="lin_api_test",
     )
 
 
@@ -63,9 +65,10 @@ def _make_issue(
 
 
 def _make_instance(tmp_path, *, client=None, worktree_mgr=None, session_manager=None,
-                   launcher=None, config=None) -> AutoScanInstance:
+                   launcher=None, config=None, project_config=None) -> AutoScanInstance:
     return AutoScanInstance(
         project_name="test-project",
+        project_config=project_config or _make_project_config(tmp_path),
         config=config or _make_config(tmp_path),
         session_manager=session_manager or AsyncMock(spec=SessionManager),
         launcher=launcher or AsyncMock(),

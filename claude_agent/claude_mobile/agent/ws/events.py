@@ -16,10 +16,10 @@ router = APIRouter()
 
 
 def _serialize_projects(app) -> list[dict]:
-    pc = getattr(app.state, "projects_config", None)
-    if pc is None:
+    store = getattr(app.state, "projects_store", None)
+    if store is None:
         return []
-    return pc.list_public()
+    return store.list_public()
 
 
 @router.websocket("/ws/events")

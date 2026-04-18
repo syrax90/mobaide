@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover - logging package optional during isolated
 
 from .claude_launcher import ClaudeLauncher, ClaudeOptions
 from .models import SessionConfig, SessionInfo, SessionState
-from .projects_config import ProjectsConfig
+from .projects_store import ProjectsStore
 from .session import TerminalSession
 
 logger = get_logger(__name__)
@@ -31,7 +31,7 @@ class SessionManager:
     def __init__(
         self,
         max_sessions: int = 16,
-        projects_config: ProjectsConfig | None = None,
+        projects_store: ProjectsStore | None = None,
         launcher: ClaudeLauncher | None = None,
         event_bus: Any | None = None,
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
@@ -42,7 +42,7 @@ class SessionManager:
         self._lock = asyncio.Lock()
         self._max_sessions = max_sessions
         self._liveness_task: asyncio.Task[None] | None = None
-        self._projects_config = projects_config
+        self._projects_store = projects_store
         self._launcher = launcher
         self._event_bus = event_bus
         self._on_session_created = on_session_created
@@ -81,7 +81,7 @@ class SessionManager:
         """Create, start, and register a new terminal session.
 
         When ``config.project_name`` is set, ``ClaudeLauncher`` resolves the
-        project from ``ProjectsConfig`` and rewrites ``config.command``,
+        project through the ``ProjectsStore`` and rewrites ``config.command``,
         ``config.cwd`` and ``config.env`` to the launcher output before the
         PTY is spawned. This is the path that mirrors ``Start-StandardMode``
         in ``claude_auto_executor.ps1``.
@@ -122,12 +122,17 @@ class SessionManager:
 
     async def _apply_project_launch(self, config: SessionConfig) -> None:
         """Resolve a project + ClaudeOptions through the launcher and
-        overwrite the raw command/cwd/env on the SessionConfig in place."""
-        if self._projects_config is None or self._launcher is None:
+        overwrite the raw command/cwd/env on the SessionConfig in place.
+
+        The lookup goes through the live ``ProjectsStore`` so callers always
+        see post-mutation state (e.g. a project added via the REST CRUD API
+        is launchable without a restart).
+        """
+        if self._projects_store is None or self._launcher is None:
             raise ValueError(
-                "project_name set but agent has no projects configured"
+                "project_name set but agent has no projects store",
             )
-        project = self._projects_config.get(config.project_name or "")
+        project = self._projects_store.get(config.project_name or "")
         if project is None:
             raise KeyError(f"Project '{config.project_name}' not found")
         options = config.claude_options or ClaudeOptions()

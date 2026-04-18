@@ -1,23 +1,21 @@
 """Tests for AgentConfig.from_env — pure env-driven construction."""
 from __future__ import annotations
 
-import json
-
 import pytest
 
-from claude_mobile.core.projects_config import ProjectsConfig
-from claude_mobile.linear.config import AutoScanConfig
 from claude_mobile.agent.config import AgentConfig
+from claude_mobile.linear.config import AutoScanConfig
 
-# All env vars AgentConfig.from_env consults plus the downstream
-# PROJECTS / auto-scan vars, so that host-env values never leak into the
-# unit under test.
+# All env vars AgentConfig.from_env consults. Auto-scan-related settings
+# live on ``AutoScanConfig`` but are listed here so host-env values never
+# leak into the unit under test.
 _ENV_VARS = (
     "JWT_SECRET_KEY",
     "JWT_ALGORITHM",
     "JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
     "JWT_REFRESH_TOKEN_EXPIRE_MINUTES",
     "USER_STORE_PATH",
+    "PROJECTS_STORE_PATH",
     "HOST",
     "PORT",
     "MAX_SESSIONS",
@@ -44,14 +42,11 @@ _ENV_VARS = (
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    """Strip every env var AgentConfig / its dependencies read."""
     for var in _ENV_VARS:
         monkeypatch.delenv(var, raising=False)
 
 
-# Dummy reference: the autouse fixture is invoked by pytest via name-based
-# lookup, so Pyright's "not accessed" hint is a false positive.
-_ = _clean_env
+_ = _clean_env  # silence pyright "not accessed" hint
 
 
 class TestAgentConfigJwtSecretRequirement:
@@ -76,6 +71,7 @@ class TestAgentConfigDefaults:
         assert cfg.jwt_access_token_expire_minutes == 30
         assert cfg.jwt_refresh_token_expire_minutes == 1440
         assert cfg.user_store_path == "users.json"
+        assert cfg.projects_store_path == "projects.json"
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 8000
         assert cfg.max_sessions == 16
@@ -84,8 +80,8 @@ class TestAgentConfigDefaults:
         assert cfg.log_format == "json"
         assert cfg.audit_log_path is None
         assert cfg.log_sample_ws is False
-        assert cfg.auto_scan_config is None
-        assert cfg.projects_config is None
+        # Post-CLA-39: AutoScanConfig is always wired in (defaults applied).
+        assert isinstance(cfg.auto_scan_config, AutoScanConfig)
 
 
 class TestAgentConfigIntegerParsing:
@@ -187,49 +183,17 @@ class TestAgentConfigAuditLogPath:
         assert cfg.audit_log_path is None
 
 
-class TestAgentConfigProjectsIntegration:
-    def test_projects_and_auto_scan_populated_when_projects_env_has_key(
-        self, monkeypatch
-    ):
-        projects_json = json.dumps(
-            {
-                "My Project": {
-                    "path": "C:/workspace/my",
-                    "linear_api_key": "lin_api_xxx",
-                }
-            }
-        )
+class TestAgentConfigProjectsStorePath:
+    def test_unset_default(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("PROJECTS", projects_json)
-
         cfg = AgentConfig.from_env()
+        assert cfg.projects_store_path == "projects.json"
 
-        assert isinstance(cfg.projects_config, ProjectsConfig)
-        assert "My Project" in cfg.projects_config.projects
-        assert isinstance(cfg.auto_scan_config, AutoScanConfig)
-        assert "My Project" in cfg.auto_scan_config.projects
-
-    def test_projects_populated_but_auto_scan_none_without_linear_key(
-        self, monkeypatch
-    ):
-        projects_json = json.dumps(
-            {"My Project": {"path": "C:/workspace/my"}}
-        )
+    def test_env_overrides_default(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
-        monkeypatch.setenv("PROJECTS", projects_json)
-
+        monkeypatch.setenv("PROJECTS_STORE_PATH", "/var/agent/projects.json")
         cfg = AgentConfig.from_env()
-
-        assert isinstance(cfg.projects_config, ProjectsConfig)
-        assert cfg.auto_scan_config is None
-
-    def test_both_none_when_projects_env_unset(self, monkeypatch):
-        monkeypatch.setenv("JWT_SECRET_KEY", "s")
-
-        cfg = AgentConfig.from_env()
-
-        assert cfg.projects_config is None
-        assert cfg.auto_scan_config is None
+        assert cfg.projects_store_path == "/var/agent/projects.json"
 
 
 class TestAgentConfigStringPassThrough:
