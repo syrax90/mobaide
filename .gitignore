@@ -6,6 +6,9 @@
 claude_agent/.env
 central_server/.env
 deploy/tunnel.env
+deploy/prod/.env
+deploy/prod/tls/
+deploy/prod/*.pem
 claude_agent/users.json
 claude_agent/state/
 **/active_workitems.json

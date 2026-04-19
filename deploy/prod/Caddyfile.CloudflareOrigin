@@ -1,0 +1,15 @@
+# TLS mode: CloudflareOrigin
+# Requires: Cloudflare DNS for mobaide.com set to "Proxied" (orange cloud),
+#           SSL/TLS mode set to "Full (strict)" in the Cloudflare dashboard,
+#           a free 15-year Origin Certificate generated under
+#             SSL/TLS > Origin Server > Create Certificate
+#           and saved on the VPS as:
+#             /opt/claude-mobile/tls/origin-cert.pem
+#             /opt/claude-mobile/tls/origin-key.pem
+#           (both chmod 600, owner matches the user running docker compose).
+
+mobaide.com {
+    tls /etc/caddy/tls/origin-cert.pem /etc/caddy/tls/origin-key.pem
+    encode zstd gzip
+    reverse_proxy central-server:9000
+}
