@@ -1,0 +1,14 @@
+# TLS mode: LetsEncrypt
+# Requires: Cloudflare DNS for mobaide.com set to "DNS only" (gray cloud),
+#           ports 80 + 443 open in the server firewall.
+# Caddy auto-provisions and renews a Let's Encrypt cert via ACME HTTP-01.
+
+mobaide.com {
+    encode zstd gzip
+    reverse_proxy central-server:9000
+}
+
+# Redirect bare IP / unknown Host to a 404 so only requests for mobaide.com get a cert.
+:80 {
+    respond 404
+}

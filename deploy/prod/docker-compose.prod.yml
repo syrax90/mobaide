@@ -1,0 +1,66 @@
+# Production compose for mobaide.com — central-server + Caddy (TLS) only.
+# Deployed to /opt/claude-mobile/ on the server by deploy-central.ps1.
+#
+# Companion files expected in the same directory on the server:
+#   ./central_server/      source tree (synced from repo; Dockerfile lives here)
+#   ./Caddyfile            active Caddy config (copied from Caddyfile.<TlsMode>)
+#   ./.env                 secrets (NEVER synced; chmod 600; created once during bootstrap)
+#   ./tls/                 directory with origin-cert.pem/origin-key.pem when using
+#                          CloudflareOrigin TLS mode; empty otherwise
+#
+# Managed Docker volumes that survive upgrades (DO NOT run `compose down -v`):
+#   central-server-data    SQLite DB + Alembic state at /app/data
+#   caddy-data             Caddy's Let's Encrypt certs + OCSP cache
+#   caddy-config           Caddy's generated JSON config
+
+services:
+  central-server:
+    build:
+      context: ./central_server
+      dockerfile: Dockerfile
+    container_name: claude-mobile-central-server
+    restart: unless-stopped
+    env_file: ./.env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=9000
+      - DB_PATH=/app/data/central_server.db
+    volumes:
+      - central-server-data:/app/data
+    expose:
+      - "9000"
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: claude-mobile-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls:/etc/caddy/tls:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      central-server:
+        condition: service_healthy
+    networks:
+      - web
+
+volumes:
+  central-server-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  web:
+    driver: bridge
