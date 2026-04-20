@@ -53,6 +53,18 @@ Claude Mobile bridges this gap with a client-agent architecture:
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
 | `docker-compose.yml` | Docker | Agent + Cloudflare Tunnel deployment |
 
+## Configuration Profiles
+
+Environment-specific files (`claude_agent/.env`, `android/local.properties`, Android TLS trust config, Cloudflare tunnel token) are managed via named profiles under `config/profiles/`. One command swaps the whole bundle between, e.g., a local `start-all.ps1` stack and production (`mobaide.com`):
+
+```powershell
+./config/use-profile.ps1 -List           # see available profiles
+./config/use-profile.ps1 local           # apply the 'local' profile
+./config/use-profile.ps1 mobaide         # switch to production
+```
+
+See [`config/README.md`](config/README.md) for the full file mapping, merge semantics for `android/local.properties` (preserves `sdk.dir`), and how to create new profiles from the committed `_template`.
+
 ## Configuring Google Sign-In
 
 The Android "Sign in with Google" button uses the Credential Manager API and requires an OAuth 2.0 **Web** client ID provisioned in Google Cloud Console:
@@ -60,11 +72,11 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
 1. In Google Cloud Console → **APIs & Services → Credentials**, create (or reuse) a project and add two OAuth 2.0 client IDs:
    - **Web application** — copy its client ID (format `NNN-xxxxx.apps.googleusercontent.com`). This is the ID the Android app asks Credential Manager for AND the ID the server verifies ID tokens against.
    - **Android application** — register package `com.claudemobile.app` and your debug + release signing-certificate SHA-1 fingerprints. Required by Google Play Services before any credential is returned even though the app only passes the Web client ID.
-2. On the Android developer machine, put the Web client ID in `android/local.properties` (git-ignored):
+2. Put the Web client ID in your profile's `android.local.properties`:
    ```
    GOOGLE_WEB_CLIENT_ID=NNN-xxxxx.apps.googleusercontent.com
    ```
-   Alternatively, export it as the `GOOGLE_WEB_CLIENT_ID` environment variable (CI builds).
+   The profile switcher merges this into `android/local.properties` (git-ignored) without touching `sdk.dir`. For CI builds, export `GOOGLE_WEB_CLIENT_ID` as an environment variable instead.
 3. In the server's `.env`, set the SAME value:
    ```
    GOOGLE_CLIENT_ID=NNN-xxxxx.apps.googleusercontent.com

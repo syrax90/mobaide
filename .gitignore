@@ -17,3 +17,6 @@ start-all.ps1
 caddy-root.pem
 claude_worktree
 android/app/src/main/res/raw/caddy_root.crt
+config/profiles/*
+!config/profiles/_template/
+config/.active
