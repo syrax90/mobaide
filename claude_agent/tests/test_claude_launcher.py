@@ -186,3 +186,59 @@ async def test_cwd_resolution_with_worktree(tmp_path: Path):
         ClaudeOptions(worktree=True, identifier="CLA-99", title="My Task"),
     )
     assert "cla-99-my-task" in spec.cwd
+
+
+# ---------------------------------------------------------------------------
+# Pre-spawn cwd existence check (reconcile-project-path-format)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_cwd_missing_directory_raises_file_not_found(
+    tmp_path: Path,
+):
+    """The launcher must fail fast with a clean ``FileNotFoundError`` when
+    the project path does not exist — so the session router can surface a
+    readable 400 to the mobile client instead of letting ``pywinpty`` emit
+    a ``repr``-escaped path that the client renders with 4 backslashes."""
+    missing = tmp_path / "does" / "not" / "exist"
+    launcher = ClaudeLauncher()
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        await launcher.build(
+            _make_project(str(missing)),
+            ClaudeOptions(worktree=False),
+        )
+
+    # The ``filename`` attribute is the plain string the router wants to
+    # interpolate via f-string — not ``str(exc)``, which embeds ``repr``.
+    assert exc_info.value.filename == str(missing)
+    assert exc_info.value.errno == 2
+
+
+@pytest.mark.asyncio
+async def test_resolve_cwd_existing_directory_returns_path(tmp_path: Path):
+    """Regression: a real directory must pass the new existence gate."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(worktree=False),
+    )
+    assert spec.cwd == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_resolve_cwd_worktree_fallback_also_checks_existence(
+    tmp_path: Path,
+):
+    """When worktree is requested for a non-git project the launcher falls
+    back to ``project.path`` — the existence check must still apply on that
+    branch so the failure is reported at the same clean point."""
+    missing = tmp_path / "ghost"
+    launcher = ClaudeLauncher()
+
+    with pytest.raises(FileNotFoundError):
+        await launcher.build(
+            _make_project(str(missing)),
+            ClaudeOptions(worktree=True),
+        )

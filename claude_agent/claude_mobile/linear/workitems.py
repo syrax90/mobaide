@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from claude_mobile.core.projects_store import normalize_project_path
+
 try:
     from claude_mobile.agent.logging import audit_event, get_logger
 except Exception:  # pragma: no cover
@@ -36,12 +38,18 @@ class ActiveWorkItem:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ActiveWorkItem":
+        # Normalize ``project_root`` to POSIX on load so legacy backslash
+        # entries match projects stored in the new canonical form — without
+        # which the cleanup filter in ``scanner._cleanup_completed_worktrees``
+        # silently drops pre-existing items after the path reconciliation
+        # migration. ``worktree_path`` gets the same treatment so sibling
+        # string comparisons stay consistent.
         return cls(
             id=str(data["id"]),
             uuid=str(data["uuid"]),
             slug=str(data["slug"]),
-            worktree_path=str(data["worktree_path"]),
-            project_root=str(data["project_root"]),
+            worktree_path=normalize_project_path(str(data["worktree_path"])),
+            project_root=normalize_project_path(str(data["project_root"])),
             added_at=str(data["added_at"]),
         )
 

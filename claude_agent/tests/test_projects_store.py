@@ -17,6 +17,7 @@ from claude_mobile.core.projects_store import (
     ProjectsStore,
     ProjectUpdatePatch,
     _seed_from_env,
+    normalize_project_path,
 )
 
 
@@ -530,3 +531,124 @@ class TestSeedFromEnv:
 
         assert len(records) == 1
         assert records[0].default_flags == {"verbose": True, "n": 3}
+
+    def test_normalizes_backslash_paths_from_env(self, monkeypatch):
+        """Legacy users that set ``PROJECTS`` with Windows-native backslashes
+        still get POSIX paths seeded into the store on first boot."""
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps({"Win": {"path": "D:\\ML\\Projects\\x"}}),
+        )
+
+        records = _seed_from_env()
+
+        assert len(records) == 1
+        assert records[0].path == "D:/ML/Projects/x"
+
+    def test_seed_skips_entry_whose_path_is_whitespace_only(self, monkeypatch):
+        """A path consisting only of whitespace must not silently become ``.``;
+        the normalizer rejects it and the seed loop skips the entry."""
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps({"Blank": {"path": "   "}}),
+        )
+
+        assert _seed_from_env() == []
+
+
+# ---------------------------------------------------------------------------
+# Path normalization
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeProjectPath:
+    def test_windows_backslashes_become_forward_slashes(self):
+        assert (
+            normalize_project_path("D:\\ML\\Projects\\claude_mobile")
+            == "D:/ML/Projects/claude_mobile"
+        )
+
+    def test_posix_path_unchanged(self):
+        assert normalize_project_path("/home/user/repo") == "/home/user/repo"
+
+    def test_mixed_separators_collapse_to_posix(self):
+        assert (
+            normalize_project_path("D:/ML\\Projects/claude_mobile")
+            == "D:/ML/Projects/claude_mobile"
+        )
+
+    def test_strips_surrounding_whitespace(self):
+        assert normalize_project_path("  C:/a  ") == "C:/a"
+
+    def test_collapses_doubled_separators(self):
+        # ``D:\\\\ML`` in JSON source decodes to ``D:\\ML`` in memory (two
+        # backslashes per separator). ``PurePath`` normalizes these to a
+        # single separator on its native OS. Assert the idempotent POSIX form.
+        normalized = normalize_project_path("D:\\\\ML\\\\x")
+        # Regardless of the host OS, the POSIX form must not contain ``\``.
+        assert "\\" not in normalized
+
+    def test_is_idempotent(self):
+        once = normalize_project_path("D:\\ML\\x")
+        twice = normalize_project_path(once)
+        assert once == twice
+
+    def test_empty_string_raises_value_error(self):
+        with pytest.raises(ValueError, match="non-empty"):
+            normalize_project_path("")
+
+    def test_whitespace_only_raises_value_error(self):
+        with pytest.raises(ValueError, match="non-empty"):
+            normalize_project_path("   ")
+
+
+# ---------------------------------------------------------------------------
+# Legacy on-disk row migration
+# ---------------------------------------------------------------------------
+
+
+class TestLegacyBackslashRowsNormalizedOnLoad:
+    def test_existing_file_with_backslash_paths_is_normalized_on_load(
+        self, tmp_path,
+    ):
+        """Windows users with a pre-existing ``projects.json`` whose rows
+        store OS-native backslashes see them migrated to POSIX the first
+        time the store is loaded — without any explicit migration step."""
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "Legacy",
+                        "path": "D:\\ML\\Projects\\claude_mobile",
+                        "order": 0,
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        public = store.list_public()
+        assert len(public) == 1
+        assert public[0]["path"] == "D:/ML/Projects/claude_mobile"
+
+    def test_malformed_row_with_empty_path_is_dropped(self, tmp_path):
+        """A row whose path is an empty string cannot be normalized; the
+        loader must skip it rather than propagate the ValueError."""
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {"name": "OK", "path": "C:/ok", "order": 0},
+                    {"name": "Bad", "path": "", "order": 1},
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        names = [p["name"] for p in store.list_public()]
+        assert names == ["OK"]
