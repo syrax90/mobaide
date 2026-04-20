@@ -73,7 +73,19 @@ function Wait-Http {
 
 function Invoke-Ssh {
     param([Parameter(Mandatory)][string]$Cmd)
-    $out = & ssh $SshHost $Cmd 2>&1
+    # Ship the script as base64 inside a single-word ssh argument, then decode
+    # and pipe into bash on the server. Two Windows-specific problems vanish:
+    #   (1) CreateProcess wraps multi-word args in "..." without escaping
+    #       embedded " chars, so `echo "USER=$u"` reaches bash with a broken
+    #       quoting state -> `unexpected EOF while looking for matching "`.
+    #   (2) PowerShell's `| native.exe` re-inserts CRLF on Windows, so piping
+    #       the script to `bash -s` leaves \r at EOL and breaks args like
+    #       `head -5` (becomes `head -5\r`, "invalid trailing option").
+    # Base64 is printable ASCII with no shell metachars, no " and no newlines,
+    # so it survives both stages untouched.
+    $normalized = $Cmd -replace "`r`n", "`n"
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($normalized))
+    $out = & ssh $SshHost "echo $b64 | base64 -d | bash" 2>&1
     return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $out }
 }
 
@@ -83,6 +95,11 @@ function Invoke-SshOrFail {
     if ($r.ExitCode -ne 0) {
         Write-Fail "$FailMsg (exit $($r.ExitCode))"
         if ($r.Output) { $r.Output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } }
+        $joined = ($r.Output | Out-String)
+        if ($joined -match '(?i)Connection timed out|Connection refused|port 22') {
+            Write-Host "      Likely UFW rate-limit on $SshHost (server drops after 6 SSH connections in 30s)." -ForegroundColor DarkGray
+            Write-Host "      Wait 30s and retry. Persistent? Check ufw / fail2ban on the server." -ForegroundColor DarkGray
+        }
         throw $FailMsg
     }
     return $r.Output
@@ -118,21 +135,59 @@ if (-not $Force -and -not $Rollback) {
     } finally { Pop-Location }
 }
 
-Invoke-SshOrFail -Cmd "true" `
-    -FailMsg "Cannot ssh $SshHost. Check ~/.ssh/config; if it sets 'User root' the server may have PermitRootLogin no -- point at a non-root user that ran bootstrap-mobaide.sh."
-$sshUser = (& ssh $SshHost "whoami" 2>$null | Select-Object -Last 1)
-if ($sshUser) { $sshUser = $sshUser.Trim() }
-if (-not $sshUser) { $sshUser = '<unknown>' }
-Write-Ok "ssh $SshHost reachable as '$sshUser'"
+# No ssh multiplexing: Git's MSYS2 ssh and Windows OpenSSH disagree on
+# ControlPath syntax (Unix socket file vs `\\.\pipe\...`), and which one wins
+# depends on $env:PATH order. Rather than picking sides, run each call with
+# defaults and keep the total connection count low by batching server-side —
+# the server has `ufw limit 22/tcp`, which silently drops SYNs past 6
+# connections in 30s, so every saved round-trip matters.
 
-Invoke-SshOrFail -Cmd "test -d $RemoteBase" `
-    -FailMsg "$RemoteBase does not exist on $SshHost (run deploy/prod/bootstrap-mobaide.sh)"
-Invoke-SshOrFail -Cmd "test -w $RemoteBase" `
-    -FailMsg "$RemoteBase not writable by '$sshUser'. Bootstrap chowns it to the user who invoked sudo. Either deploy from that account or run: sudo chown -R ${sshUser}: $RemoteBase"
-Invoke-SshOrFail -Cmd "test -f $RemoteBase/.env" `
-    -FailMsg "$RemoteBase/.env missing on $SshHost (see bootstrap-mobaide.md)"
-Invoke-SshOrFail -Cmd "docker info >/dev/null 2>&1" `
-    -FailMsg "docker not usable by '$sshUser' on $SshHost. If installed: sudo usermod -aG docker $sshUser, then disconnect & reconnect ssh (group membership is per-session)."
+# Batched preflight: one SSH round-trip exercises the transport, reports the
+# remote user, and flags every failing prereq at once — so the operator fixes
+# them in a single pass instead of discovering them one connection at a time.
+# If ssh fails to even reach the remote bash, we surface that as a separate
+# reachability error (see the `-not $errs` branch below).
+$preflightScript = @"
+set +e
+user=`$(whoami)
+echo "USER=`$user"
+errs=""
+[ -d $RemoteBase ]          || errs="`$errs BASE_MISSING"
+[ -w $RemoteBase ]          || errs="`$errs BASE_NOT_WRITABLE"
+[ -f $RemoteBase/.env ]     || errs="`$errs ENV_MISSING"
+docker info >/dev/null 2>&1 || errs="`$errs DOCKER"
+if [ -n "`$errs" ]; then echo "ERRORS:`$errs"; exit 1; fi
+echo "OK"
+"@
+
+$probe = Invoke-Ssh -Cmd $preflightScript
+$userLine = $probe.Output | Select-String '^USER=' | Select-Object -First 1
+$sshUser = if ($userLine) { ($userLine.Line -replace '^USER=','').Trim() } else { '<unknown>' }
+if (-not $sshUser) { $sshUser = '<unknown>' }
+
+if ($probe.ExitCode -ne 0) {
+    $errLine = $probe.Output | Select-String '^ERRORS:' | Select-Object -First 1
+    $errs = if ($errLine) { ($errLine.Line -replace '^ERRORS:','').Trim() } else { '' }
+    if (-not $errs) {
+        # Probe never reached remote bash — SSH transport failure.
+        Write-Fail "Cannot ssh $SshHost. Raw error:"
+        $probe.Output | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        Write-Host "      Common causes:" -ForegroundColor DarkGray
+        Write-Host "      - Host '$SshHost' missing or misconfigured in ~/.ssh/config" -ForegroundColor DarkGray
+        Write-Host "      - Key auth failing (IdentityFile path / agent / server ~/.ssh/authorized_keys)" -ForegroundColor DarkGray
+        Write-Host "      - UFW rate-limit tripped: server drops after 6 SSH connections in 30s" -ForegroundColor DarkGray
+        Write-Host "      - Network / sshd unreachable (reboot, firewall)" -ForegroundColor DarkGray
+        Write-Host "      - 'User root' in ssh config but server has PermitRootLogin no (use the bootstrap user)" -ForegroundColor DarkGray
+    } else {
+        if ($errs -match 'BASE_MISSING')      { Write-Fail "$RemoteBase does not exist on $SshHost (run deploy/prod/bootstrap-mobaide.sh)" }
+        if ($errs -match 'BASE_NOT_WRITABLE') { Write-Fail "$RemoteBase not writable by '$sshUser'. Bootstrap chowns it to the user who invoked sudo. Either deploy from that account or run: sudo chown -R ${sshUser}: $RemoteBase" }
+        if ($errs -match 'ENV_MISSING')       { Write-Fail "$RemoteBase/.env missing on $SshHost (see bootstrap-mobaide.md)" }
+        if ($errs -match 'DOCKER')            { Write-Fail "docker not usable by '$sshUser' on $SshHost. If installed: sudo usermod -aG docker $sshUser, then disconnect & reconnect ssh (group membership is per-session)." }
+    }
+    exit 1
+}
+
+Write-Ok "ssh $SshHost reachable as '$sshUser'"
 Write-Ok "Server prereqs OK ($RemoteBase, .env, docker, writable by '$sshUser')"
 
 # ------------------------------------------------------------ rollback branch
@@ -203,15 +258,18 @@ if (-not $SkipBuild) {
         Write-Ok ("Archive built: {0} ({1:N0} bytes)" -f $tarLocal, $tarBytes)
 
         Write-Step "Uploading tarball to $SshHost and extracting atomically"
-        Invoke-SshOrFail -Cmd "rm -rf $RemoteBase/central_server.new $RemoteBase/central_server.new.tar && mkdir -p $RemoteBase/central_server.new" `
-            -FailMsg "Remote prep failed (check write perms on $RemoteBase as '$sshUser')"
-
+        # scp writes to a file path, not a directory, so it only needs $RemoteBase
+        # to exist (already verified by preflight). All staging prep (rm old
+        # central_server.new/, mkdir central_server.new + tls) is folded into the
+        # extract heredoc below to save two SSH round-trips under ufw's 6/30s limit.
         & scp $tarLocal "${SshHost}:$RemoteBase/central_server.new.tar"
         if ($LASTEXITCODE -ne 0) { Write-Fail "scp tar failed"; exit 1 }
 
         $extract = @"
 set -e
 cd $RemoteBase
+rm -rf central_server.new
+mkdir -p central_server.new tls
 tar -xf central_server.new.tar -C central_server.new --strip-components=1
 rm -f central_server.new.tar
 if [ -d central_server ]; then
@@ -228,12 +286,13 @@ echo $tag > .last_tag
     }
 
     Write-Step "Uploading docker-compose.prod.yml and Caddyfile ($TlsMode)"
-    & scp $ComposeFile "${SshHost}:$RemoteBase/docker-compose.prod.yml"
-    if ($LASTEXITCODE -ne 0) { Write-Fail "scp compose failed"; exit 1 }
-    & scp $CaddyFile "${SshHost}:$RemoteBase/Caddyfile"
-    if ($LASTEXITCODE -ne 0) { Write-Fail "scp Caddyfile failed"; exit 1 }
-    Invoke-SshOrFail -Cmd "mkdir -p $RemoteBase/tls" -FailMsg "mkdir tls failed"
-    Write-Ok "compose + Caddyfile uploaded; tls/ ensured"
+    # Single scp with two sources, trailing slash on dest => both files land in
+    # $RemoteBase/ with their local names. Caddyfile arrives as Caddyfile.$TlsMode;
+    # the deployCmd below copies it to `Caddyfile` (the name docker-compose mounts)
+    # just before `docker compose up`. tls/ is created by the $extract heredoc.
+    & scp $ComposeFile $CaddyFile "${SshHost}:$RemoteBase/"
+    if ($LASTEXITCODE -ne 0) { Write-Fail "scp compose+Caddyfile failed"; exit 1 }
+    Write-Ok "compose + Caddyfile.$TlsMode uploaded"
 } else {
     Write-Warn2 "-SkipBuild: reusing existing source on server"
 }
@@ -241,9 +300,14 @@ echo $tag > .last_tag
 # ------------------------------------------------------------ deploy
 Write-Step "docker compose up on $SshHost"
 $upArgs = if ($SkipBuild) { "up -d --remove-orphans" } else { "up -d --build --remove-orphans" }
-$deployCmd = "cd $RemoteBase && docker compose -f docker-compose.prod.yml $upArgs"
+# One SSH round-trip does: (a) copy Caddyfile.$TlsMode -> Caddyfile so docker-compose
+# can mount it, (b) compose up (streaming), (c) compose ps (replaces the ex-line-358
+# summary call). Strict `cp -f`: if Caddyfile.$TlsMode is missing (e.g. -SkipBuild
+# on a never-deployed $TlsMode), the deploy fails loudly instead of silently
+# running the wrong TLS mode against a stale Caddyfile.
+$deployCmd = "cd $RemoteBase && cp -f Caddyfile.$TlsMode Caddyfile && docker compose -f docker-compose.prod.yml $upArgs && docker compose -f docker-compose.prod.yml ps"
 
-& ssh $SshHost $deployCmd   # stream build output live
+& ssh $SshHost ($deployCmd -replace "`r`n", "`n")   # stream build output live
 $composeExit = $LASTEXITCODE
 
 if ($composeExit -ne 0) {
@@ -305,9 +369,9 @@ docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
 }
 
 # ------------------------------------------------------------ summary
+# `docker compose ps` was already streamed at the tail of $deployCmd above,
+# so the summary section is local-only (no SSH round-trip).
 Write-Step "Summary"
-& ssh $SshHost "cd $RemoteBase && docker compose -f docker-compose.prod.yml ps"
-Write-Host ""
 Write-Host "Deployed tag : $tag"           -ForegroundColor Cyan
 Write-Host "TLS mode     : $TlsMode"       -ForegroundColor Cyan
 Write-Host "Health       : $HealthUrl"     -ForegroundColor Cyan
