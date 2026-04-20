@@ -73,6 +73,24 @@ async def create_session(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         )
+    except FileNotFoundError as exc:
+        # Use ``exc.filename`` (plain str) rather than ``str(exc)`` which
+        # embeds ``repr(filename)`` and doubles backslashes — the mobile
+        # client would otherwise render ``D:\\\\ML\\\\...`` after one more
+        # JSON-encoding layer.
+        missing = exc.filename or "project path"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Project path not found: {missing}",
+        )
+    except OSError as exc:
+        strerror = exc.strerror or "cannot launch session"
+        filename = exc.filename or ""
+        detail = f"{strerror}: {filename}" if filename else strerror
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        )
 
     # SessionManager.create_session is the single source of truth for
     # `sessions.changed` (Domain Events). It also fires the eager fanout

@@ -268,6 +268,239 @@ class TestHandleControl:
         ws.send.assert_not_called()
 
 
+# -- _handle_create_session: OSError/FileNotFoundError branches ----------------
+
+
+class TestHandleCreateSessionPathErrors:
+    """Regression guards for WARN-01: the relay's ``_handle_create_session``
+    must not render ``FileNotFoundError``/``OSError`` via ``str(exc)``.
+
+    ``str(OSError)`` embeds ``repr(filename)`` — on Windows that doubles
+    backslashes once, JSON-encoding doubles them a second time, and the
+    mobile client parses one JSON layer leaving the user with ``D:\\\\...``.
+    The specialized branches build the error from ``exc.filename`` +
+    ``exc.strerror`` directly, so the on-the-wire payload contains exactly
+    one JSON-escape per literal backslash (2 chars per separator) — never 4.
+
+    The existing ``TestHandleControl.test_create_session_failure`` covers
+    only the generic ``Exception`` fallthrough (``RuntimeError``); none of
+    the OSError-family branches were exercised before.
+    """
+
+    async def test_file_not_found_uses_filename_not_str_exc(
+        self, client, mock_session_manager
+    ):
+        """``FileNotFoundError`` with a Windows-backslash ``filename``: the
+        response ``error`` must equal ``"Project path not found: <raw>"``
+        with a single layer of escaping on the wire, proving the handler
+        used ``f"{exc.filename}"`` — not ``str(exc)`` which would embed
+        ``repr(filename)`` and produce the 4-backslash symptom.
+        """
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=FileNotFoundError(
+                2, "No such file or directory", r"D:\raw\backslash\dir",
+            )
+        )
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "bad-path-sess"}
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        ws.send.assert_called_once()
+        sent_bytes = ws.send.call_args[0][0]
+        _, _, payload = decode(sent_bytes)
+        resp = json.loads(payload)
+
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "bad-path-sess"
+        # After JSON parsing, the raw backslash string is recovered verbatim.
+        assert resp["error"] == r"Project path not found: D:\raw\backslash\dir"
+
+        # On-the-wire JSON source: one literal backslash must encode as
+        # ``\\`` (2 characters). ``repr(filename)`` + JSON would produce
+        # ``\\\\`` (4 characters) — that sequence must NOT appear.
+        wire_json = payload.decode("utf-8")
+        assert r"D:\\raw\\backslash\\dir" in wire_json
+        assert r"D:\\\\raw\\\\backslash\\\\dir" not in wire_json
+
+    async def test_file_not_found_without_filename_uses_fallback(
+        self, client, mock_session_manager
+    ):
+        """When ``exc.filename`` is ``None`` the handler must not blow up —
+        it falls back to a readable string instead of emitting ``None``."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=FileNotFoundError("missing cwd"),  # no filename arg
+        )
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "no-fn-sess"}
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        # Must not render the literal string "None" into the user-facing
+        # error — the fallback text must appear instead.
+        assert "None" not in resp["error"]
+        assert "project path" in resp["error"]
+
+    async def test_non_fnf_oserror_uses_strerror_and_filename(
+        self, client, mock_session_manager
+    ):
+        """``PermissionError`` (OSError subclass that is NOT
+        ``FileNotFoundError``) hits the broader ``except OSError`` branch
+        and produces ``"<strerror>: <filename>"`` — again via direct
+        f-string interpolation, not ``str(exc)``.
+        """
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=PermissionError(13, "Permission denied", r"D:\locked\dir"),
+        )
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "denied-sess"}
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        sent_bytes = ws.send.call_args[0][0]
+        _, _, payload = decode(sent_bytes)
+        resp = json.loads(payload)
+
+        assert resp["type"] == "session_create_failed"
+        assert resp["error"] == r"Permission denied: D:\locked\dir"
+
+        # Same wire-form guard as the FileNotFoundError case.
+        wire_json = payload.decode("utf-8")
+        assert r"Permission denied: D:\\locked\\dir" in wire_json
+        assert r"D:\\\\locked\\\\dir" not in wire_json
+
+    async def test_oserror_without_filename_uses_strerror_only(
+        self, client, mock_session_manager
+    ):
+        """OSError with no ``filename``: detail should be ``strerror``
+        alone — no dangling ``": "`` separator, no empty filename segment.
+        """
+        exc = OSError(5, "I/O error")  # filename is None
+        mock_session_manager.create_session = AsyncMock(side_effect=exc)
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "io-sess"}
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["error"] == "I/O error"  # no trailing ": "
+
+
+# -- _handle_proxy_request: OSError/FileNotFoundError branches -----------------
+
+
+class TestHandleProxyRequestPathErrors:
+    """Regression guards for WARN-01 on the proxy path.
+
+    When a mobile client reaches the agent via the central relay server
+    (``POST /api/sessions`` proxied through a ``proxy_request`` control
+    frame), the same 4-backslash symptom could resurface in the
+    ``proxy_response.body.detail`` field. The new ``FileNotFoundError``
+    and ``OSError`` branches in ``_handle_proxy_request`` protect this
+    second path; prior to WARN-01 the method had zero test coverage at
+    all.
+    """
+
+    async def test_proxy_post_sessions_file_not_found_returns_400(
+        self, client, mock_session_manager
+    ):
+        """``POST /api/sessions`` proxied through the relay with a missing
+        cwd yields status=400 and a clean detail mirroring the REST route.
+        """
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=FileNotFoundError(
+                2, "No such file or directory", r"D:\raw\ghost\dir",
+            )
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-1",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        sent_bytes = ws.send.call_args[0][0]
+        _, _, payload = decode(sent_bytes)
+        resp = json.loads(payload)
+
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-1"
+        assert resp["status"] == 400
+        assert resp["body"]["detail"] == (
+            r"Project path not found: D:\raw\ghost\dir"
+        )
+
+        # Wire-form guard: exactly one layer of backslash escaping.
+        wire_json = payload.decode("utf-8")
+        assert r"D:\\raw\\ghost\\dir" in wire_json
+        assert r"D:\\\\raw\\\\ghost\\\\dir" not in wire_json
+
+    async def test_proxy_post_sessions_permission_error_returns_400(
+        self, client, mock_session_manager
+    ):
+        """Non-FileNotFoundError ``OSError`` on the proxy path goes through
+        the broader ``except OSError`` branch and still returns 400 with a
+        clean detail (strerror + filename, f-string, no ``repr``)."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=PermissionError(13, "Permission denied", r"D:\locked"),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-2",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        sent_bytes = ws.send.call_args[0][0]
+        _, _, payload = decode(sent_bytes)
+        resp = json.loads(payload)
+
+        assert resp["type"] == "proxy_response"
+        assert resp["status"] == 400
+        assert resp["body"]["detail"] == r"Permission denied: D:\locked"
+
+        wire_json = payload.decode("utf-8")
+        assert r"Permission denied: D:\\locked" in wire_json
+        assert r"D:\\\\locked" not in wire_json
+
+    async def test_proxy_generic_exception_still_returns_500(
+        self, client, mock_session_manager
+    ):
+        """Regression guard: non-OSError failures still fall through to the
+        existing ``except Exception`` branch and produce status=500 — the
+        new OSError branches must not accidentally swallow generic errors.
+        """
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=RuntimeError("boom"),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-3",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["status"] == 500
+        assert "boom" in resp["body"]["detail"]
+
+
 # -- _handle_session_input ------------------------------------------------------
 
 

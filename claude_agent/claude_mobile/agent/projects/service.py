@@ -19,6 +19,7 @@ from claude_mobile.core.projects_store import (
     ProjectRecord,
     ProjectsStore,
     ProjectUpdatePatch,
+    normalize_project_path,
 )
 
 from ..logging import audit_event, get_logger
@@ -87,9 +88,14 @@ def _patch_from_update_model(model: ProjectUpdateModel) -> ProjectUpdatePatch:
         lak: str | None = None
     else:
         lak = model.linear_api_key.get_secret_value()
+    # Normalize only when the caller is actually replacing the path; ``None``
+    # must round-trip as ``None`` to preserve the "keep existing" contract.
+    normalized_path = (
+        normalize_project_path(model.path) if model.path is not None else None
+    )
     return ProjectUpdatePatch(
         name=model.name,
-        path=model.path,
+        path=normalized_path,
         linear_api_key=lak,
         conda_env=model.conda_env,
         default_flags=cast("dict[str, object] | None", model.default_flags),
@@ -104,7 +110,7 @@ def _record_from_write_model(model: ProjectWriteModel) -> ProjectRecord:
     )
     return ProjectRecord(
         name=model.name,
-        path=model.path,
+        path=normalize_project_path(model.path),
         linear_api_key=lak or None,
         conda_env=model.conda_env or None,
         default_flags=cast("dict[str, object]", dict(model.default_flags)),

@@ -7,6 +7,7 @@ Mocks the Linear client, worktree manager, and session manager.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -38,9 +39,15 @@ def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanCon
 
 
 def _make_project_config(tmp_path) -> ProjectConfig:
+    # POSIX form matches the canonical path that flows through the real
+    # ``ProjectsStore`` after project-path reconciliation — keeps the
+    # synthetic fixture in sync with production, so string-equality
+    # comparisons (e.g. ``scanner._cleanup_completed_worktrees`` filter
+    # against ``ActiveWorkItem.project_root`` which is normalized on load)
+    # match as they would at runtime.
     return ProjectConfig(
         name="test-project",
-        path=str(tmp_path / "repo"),
+        path=Path(tmp_path / "repo").as_posix(),
         linear_api_key="lin_api_test",
     )
 
@@ -303,7 +310,9 @@ class TestWorktreeCleanup:
         assert len(items) == 1
         assert items[0].id == "CLA-100"
         assert items[0].uuid == "uuid-1"
-        assert items[0].worktree_path == str(tmp_path / "worktree")
+        # Loaded value is POSIX-normalized by ``ActiveWorkItem.from_dict``;
+        # compare against the same canonical form the loader produces.
+        assert items[0].worktree_path == Path(tmp_path / "worktree").as_posix()
 
     @pytest.mark.asyncio
     async def test_process_issue_dedups_on_repeat_persistence(self, tmp_path):
@@ -388,7 +397,7 @@ class TestWorktreeCleanup:
         await inst._cleanup_completed_worktrees()
 
         wt_mgr.cleanup_worktree.assert_awaited_once_with(
-            item.worktree_path, str(tmp_path / "repo"),
+            Path(tmp_path / "wt-7").as_posix(), Path(tmp_path / "repo").as_posix(),
         )
         assert await inst._workitems_store.count() == 0
 

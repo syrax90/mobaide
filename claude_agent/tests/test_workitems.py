@@ -165,3 +165,74 @@ class TestStoreConcurrency:
         ))
         items = await store.read()
         assert len({i.id for i in items}) == 20
+
+
+class TestLegacyProjectRootMigration:
+    """Pre-existing ``active_workitems.json`` files may hold OS-native
+    backslash paths in ``project_root`` / ``worktree_path`` from before the
+    project-path reconciliation. ``scanner._cleanup_completed_worktrees``
+    filters tracked items by string equality against the POSIX-form project
+    path, so these legacy entries would be silently dropped and the
+    associated worktrees would leak until manually cleaned up. The
+    ``ActiveWorkItem.from_dict`` loader therefore normalizes both fields to
+    POSIX on load so the comparison succeeds.
+    """
+
+    def test_from_dict_normalizes_backslash_project_root(self):
+        item = ActiveWorkItem.from_dict(
+            {
+                "id": "CLA-99",
+                "uuid": "u-99",
+                "slug": "cla-99",
+                "worktree_path": "D:\\ML\\Projects\\x\\wt\\cla-99",
+                "project_root": "D:\\ML\\Projects\\x",
+                "added_at": "2026-04-20T12:00:00+00:00",
+            },
+        )
+
+        assert item.project_root == "D:/ML/Projects/x"
+        assert item.worktree_path == "D:/ML/Projects/x/wt/cla-99"
+
+    def test_from_dict_posix_paths_unchanged(self):
+        """Idempotency: already-POSIX entries round-trip without mutation."""
+        item = ActiveWorkItem.from_dict(
+            {
+                "id": "CLA-1",
+                "uuid": "u-1",
+                "slug": "cla-1",
+                "worktree_path": "/home/user/repo/wt/cla-1",
+                "project_root": "/home/user/repo",
+                "added_at": "2026-04-20T12:00:00+00:00",
+            },
+        )
+
+        assert item.project_root == "/home/user/repo"
+        assert item.worktree_path == "/home/user/repo/wt/cla-1"
+
+    @pytest.mark.asyncio
+    async def test_legacy_file_on_disk_is_normalized_on_read(self, tmp_path):
+        """End-to-end: a file that pre-dates the migration produces normalized
+        items when ``ActiveWorkItemsStore.read`` loads it."""
+        path = tmp_path / "items.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "CLA-42",
+                        "uuid": "u-42",
+                        "slug": "cla-42",
+                        "worktree_path": "D:\\repo\\wt\\cla-42",
+                        "project_root": "D:\\repo",
+                        "added_at": "2026-04-20T12:00:00+00:00",
+                    },
+                ],
+            ),
+            encoding="utf-8",
+        )
+        store = ActiveWorkItemsStore(path)
+
+        items = await store.read()
+
+        assert len(items) == 1
+        assert items[0].project_root == "D:/repo"
+        assert items[0].worktree_path == "D:/repo/wt/cla-42"

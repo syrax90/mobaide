@@ -143,7 +143,7 @@ class ClaudeLauncher:
         self, project: ProjectConfig, options: ClaudeOptions
     ) -> str:
         if not options.worktree:
-            return project.path
+            return self._check_exists(project.path)
         # CLA-20: a stale client may still send worktree=true for a non-git
         # project. Log it for audit and fall back to the project root.
         if not (Path(project.path) / ".git").exists():
@@ -151,9 +151,9 @@ class ClaudeLauncher:
                 "worktree=true requested for non-git project %r; ignoring",
                 project.name,
             )
-            return project.path
+            return self._check_exists(project.path)
         if self._worktree_mgr is None:
-            return project.path
+            return self._check_exists(project.path)
         # Lazy import to avoid a hard dep when worktree path is unused.
         from claude_mobile.linear.worktree import convert_to_worktree_slug
 
@@ -162,8 +162,21 @@ class ClaudeLauncher:
         slug = convert_to_worktree_slug(identifier, title)
         result = await self._worktree_mgr.create_worktree(slug, project.path)
         if result is None:
-            return project.path
-        return result.path
+            return self._check_exists(project.path)
+        return self._check_exists(result.path)
+
+    @staticmethod
+    def _check_exists(cwd: str) -> str:
+        """Raise ``FileNotFoundError`` with a clean ``filename`` if ``cwd`` is missing.
+
+        This pre-empts ``pywinpty.PtyProcess.spawn`` / ``subprocess.Popen`` on
+        bad paths so the session router can map the error to a 400 with a
+        readable, unescaped path — rather than letting Starlette's default
+        500 handler surface a ``repr``-escaped filename.
+        """
+        if not Path(cwd).exists():
+            raise FileNotFoundError(2, "No such file or directory", cwd)
+        return cwd
 
     # -- project file generation --
 

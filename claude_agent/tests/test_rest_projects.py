@@ -459,6 +459,71 @@ class TestBroadcast:
 
 
 # ---------------------------------------------------------------------------
+# Path normalization across REST boundary
+# ---------------------------------------------------------------------------
+
+
+class TestPathNormalizationAcrossRest:
+    async def test_create_windows_path_is_normalized_to_posix(
+        self, client_with_projects, auth_headers_p,
+    ):
+        """A Windows-native path posted by the Android client is stored
+        and echoed back in POSIX form, so subsequent reads — and error
+        messages — show the same string everywhere."""
+        resp = await client_with_projects.post(
+            "/api/projects",
+            headers=auth_headers_p,
+            json={
+                "name": "win_project",
+                "path": "D:\\ML\\Projects\\claude_mobile",
+            },
+        )
+        assert resp.status_code == 201
+        assert resp.json()["path"] == "D:/ML/Projects/claude_mobile"
+
+        # GET round-trip confirms the stored form is POSIX, not the raw input.
+        listing = await client_with_projects.get(
+            "/api/projects", headers=auth_headers_p,
+        )
+        by_name = {p["name"]: p for p in listing.json()}
+        assert by_name["win_project"]["path"] == "D:/ML/Projects/claude_mobile"
+
+    async def test_update_normalizes_path(
+        self, app_with_projects, client_with_projects, auth_headers_p,
+    ):
+        resp = await client_with_projects.put(
+            "/api/projects/beta",
+            headers=auth_headers_p,
+            json={"path": "D:\\new\\beta"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["path"] == "D:/new/beta"
+        rec = app_with_projects.state.projects_store.get("beta")
+        assert rec is not None
+        assert rec.path == "D:/new/beta"
+
+    async def test_update_path_none_preserves_existing(
+        self, app_with_projects, client_with_projects, auth_headers_p,
+    ):
+        """Regression: the normalizer must not hijack the ``None`` = keep
+        contract. Omitting ``path`` from the body must leave it untouched."""
+        before = app_with_projects.state.projects_store.get("alpha")
+        assert before is not None
+        original_path = before.path
+
+        resp = await client_with_projects.put(
+            "/api/projects/alpha",
+            headers=auth_headers_p,
+            json={"conda_env": "irrelevant"},
+        )
+        assert resp.status_code == 200
+
+        after = app_with_projects.state.projects_store.get("alpha")
+        assert after is not None
+        assert after.path == original_path
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

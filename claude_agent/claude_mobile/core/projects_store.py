@@ -17,11 +17,31 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from .projects_config import ProjectConfig
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_project_path(raw: str) -> str:
+    """Return ``raw`` as a canonical POSIX path string.
+
+    Windows paths like ``D:\\ML\\Projects\\x`` become ``D:/ML/Projects/x``.
+    The forward-slash form works on both Windows (``CreateFile``, ``pywinpty``,
+    ``subprocess``) and POSIX, and survives JSON / ``repr`` / log formatting
+    without any escape layer — which is what kept ``[Errno 2]`` messages
+    rendering with quadruple backslashes on the mobile client.
+
+    Idempotent: calling this on an already-normalized path is a no-op, so
+    repeated loads of ``projects.json`` do not oscillate.
+    """
+    stripped = raw.strip()
+    if not stripped:
+        raise ValueError("project path must be non-empty")
+    # PurePath collapses doubled separators ("D:\\\\ML" on Windows,
+    # "////home" on POSIX) without touching the filesystem.
+    return PurePath(stripped).as_posix()
 
 
 @dataclass
@@ -300,13 +320,17 @@ def _record_from_dict(data: object) -> ProjectRecord | None:
         return None
     if not isinstance(path, str):
         return None
+    try:
+        normalized_path = normalize_project_path(path)
+    except ValueError:
+        return None
     api_key = data.get("linear_api_key")
     conda_env = data.get("conda_env")
     default_flags = data.get("default_flags") or {}
     order = data.get("order")
     return ProjectRecord(
         name=name,
-        path=path,
+        path=normalized_path,
         linear_api_key=api_key if isinstance(api_key, str) else None,
         conda_env=conda_env if isinstance(conda_env, str) else None,
         default_flags=default_flags if isinstance(default_flags, dict) else {},
@@ -385,13 +409,17 @@ def _seed_from_env() -> list[ProjectRecord]:
         path = value.get("path")
         if not isinstance(path, str):
             continue
+        try:
+            normalized_path = normalize_project_path(path)
+        except ValueError:
+            continue
         api_key = value.get("linear_api_key")
         conda_env = value.get("conda_env")
         default_flags = value.get("default_flags") or {}
         records.append(
             ProjectRecord(
                 name=name,
-                path=path,
+                path=normalized_path,
                 linear_api_key=api_key if isinstance(api_key, str) else None,
                 conda_env=conda_env if isinstance(conda_env, str) else None,
                 default_flags=(

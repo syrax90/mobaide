@@ -353,6 +353,34 @@ class RelayClient:
                 "session_id": session.session_id,
                 "pid": session.pid,
             }
+        except FileNotFoundError as exc:
+            # Mirror the HTTP router: interpolate ``exc.filename`` as a plain
+            # string rather than ``str(exc)``, which would embed
+            # ``repr(filename)`` and produce ``D:\\\\ML\\\\...`` on the wire
+            # once the relay frame is JSON-encoded.
+            missing = exc.filename or "project path"
+            logger.warning(
+                "relay.create_session_path_missing session_id=%s path=%s",
+                session_id, missing,
+            )
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": f"Project path not found: {missing}",
+            }
+        except OSError as exc:
+            strerror = exc.strerror or "cannot launch session"
+            filename = exc.filename or ""
+            error = f"{strerror}: {filename}" if filename else strerror
+            logger.warning(
+                "relay.create_session_oserror session_id=%s error=%s",
+                session_id, error,
+            )
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": error,
+            }
         except Exception as exc:
             logger.warning(
                 "relay.create_session_failed session_id=%s: %s",
@@ -410,6 +438,35 @@ class RelayClient:
                 "request_id": request_id,
                 "status": result.get("status", 200),
                 "body": result.get("body"),
+            }
+        except FileNotFoundError as exc:
+            # Same rationale as ``_handle_create_session``: mobile clients
+            # proxying ``POST /api/sessions`` through the central server
+            # otherwise re-hit the 4-backslash symptom via ``str(exc)``.
+            missing = exc.filename or "project path"
+            logger.warning(
+                "relay.proxy_request_path_missing path=%s missing=%s",
+                path, missing,
+            )
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 400,
+                "body": {"detail": f"Project path not found: {missing}"},
+            }
+        except OSError as exc:
+            strerror = exc.strerror or "cannot launch session"
+            filename = exc.filename or ""
+            detail = f"{strerror}: {filename}" if filename else strerror
+            logger.warning(
+                "relay.proxy_request_oserror path=%s detail=%s",
+                path, detail,
+            )
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 400,
+                "body": {"detail": detail},
             }
         except Exception as exc:
             logger.warning("relay.proxy_request_failed path=%s: %s", path, exc)
