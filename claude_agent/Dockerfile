@@ -43,6 +43,7 @@ RUN mkdir -p /app/data && chown app:app /app/data
 ENV HOST=0.0.0.0 \
     PORT=8000 \
     USER_STORE_PATH=/app/data/users.json \
+    PROJECTS_STORE_PATH=/app/data/projects.json \
     AGENT_STATE_DIR=/app/data/state \
     LOG_LEVEL=INFO
 

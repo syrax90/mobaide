@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Default variant: system-trust-only. Safe for profiles that target a
+    publicly-trusted HTTPS endpoint (LetsEncrypt, Cloudflare, etc.).
+
+    For profiles that need to trust a private CA (e.g. a local Caddy
+    self-signed root), replace the <trust-anchors> block with:
+
+        <trust-anchors>
+            <certificates src="@raw/caddy_root"/>
+            <certificates src="system"/>
+        </trust-anchors>
+
+    and drop the corresponding caddy_root.crt into this folder — the
+    switcher will copy it to android/app/src/main/res/raw/.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>
