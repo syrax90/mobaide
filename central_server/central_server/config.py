@@ -18,10 +18,18 @@ class CentralServerConfig:
     google_client_id: str | None = None
 
     jwt_algorithm: str = "HS256"
-    # TTLs are in minutes. 0 = never expires (the token is issued without
-    # an `exp` claim; refresh tokens are stored with a year-9999 sentinel
-    # in `mobile_refresh_tokens.expires_at`). Chosen as the default because
-    # the mobile app has to be re-paired by hand whenever tokens expire.
+    # TTLs are in minutes. 0 = never expires. The zero sentinel is
+    # translated in each consumer:
+    #   * JWTs omit the `exp` claim (PyJWT only validates `exp` when
+    #     present).
+    #   * Refresh tokens are stored with a year-9999 sentinel in
+    #     `mobile_refresh_tokens.expires_at`.
+    #   * The dashboard session cookie is set without a `Max-Age`
+    #     attribute, which per RFC 6265 §4.1.2 makes it a browser
+    #     session cookie (cleared on browser close). Max-Age=0 would
+    #     delete the cookie immediately (RFC 6265 §5.2.2).
+    # Chosen as the default because the mobile app has to be re-paired
+    # by hand whenever tokens expire.
     mobile_token_expire_minutes: int = 0
     mobile_refresh_expire_minutes: int = 0
     dashboard_token_expire_minutes: int = 0
