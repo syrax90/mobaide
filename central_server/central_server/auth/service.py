@@ -9,30 +9,97 @@ Four distinct auth paths:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import secrets
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
+from fastapi import BackgroundTasks
 
 from .models import MobileTokenPayload, UserTokenPayload
 
 if TYPE_CHECKING:
     from ..config import CentralServerConfig
     from ..db.database import Database
+    from .email import EmailSender
+    from .rate_limit import ResendRateLimiter
 
 logger = logging.getLogger(__name__)
 
 _ph = PasswordHasher()  # Thread-safe singleton
 
+# Strong references to fire-and-forget email tasks. asyncio's internal task
+# set only holds weak refs, so without this the GC can collect a task
+# mid-send (see Ruff RUF006 / CPython issue python/cpython#91887).
+_background_email_tasks: set[asyncio.Task] = set()
+
+
+# -- Error types ----------------------------------------------------------
+
+
+class VerificationRequiredError(Exception):
+    """Raised by ``login_user`` when the account is unverified."""
+
+    def __init__(self, email: str) -> None:
+        super().__init__(f"Email verification required for {email}")
+        self.email = email
+
+
+class InvalidVerificationCodeError(Exception):
+    """Supplied code did not match the active token."""
+
+
+class ExpiredVerificationCodeError(Exception):
+    """Active token has passed its TTL."""
+
+
+class VerificationAttemptsExhaustedError(Exception):
+    """Too many failed attempts against the current code; resend required."""
+
+
+class ResendRateLimitedError(Exception):
+    """Resend blocked by cooldown or hourly cap."""
+
+    def __init__(self, cooldown_seconds_remaining: int) -> None:
+        super().__init__(
+            f"Resend blocked for {cooldown_seconds_remaining}s"
+        )
+        self.cooldown_seconds_remaining = cooldown_seconds_remaining
+
+
+@dataclass
+class RegisterResult:
+    """Outcome of ``AuthService.register_user``.
+
+    ``status == "ok"`` → ``access_token`` is a valid JWT.
+    ``status == "verification_required"`` → ``access_token is None``.
+    """
+
+    user_id: str
+    email: str
+    role: str
+    status: str
+    access_token: str | None
+
 
 class AuthService:
-    def __init__(self, config: CentralServerConfig, db: Database) -> None:
+    def __init__(
+        self,
+        config: CentralServerConfig,
+        db: Database,
+        email_sender: "EmailSender | None" = None,
+        resend_limiter: "ResendRateLimiter | None" = None,
+    ) -> None:
         self._config = config
         self._db = db
+        self._email_sender = email_sender
+        self._resend_limiter = resend_limiter
 
     # -- Password hashing (Argon2id, non-blocking) ----------------------------
 
@@ -47,32 +114,139 @@ class AuthService:
         except VerifyMismatchError:
             return False
 
+    # -- Email verification helpers -------------------------------------------
+
+    def _hash_code(self, user_id: str, code: str) -> str:
+        """HMAC-SHA256 of ``code`` peppered with the server's JWT secret.
+
+        The pepper defends against DB-only leaks: even an attacker with the
+        full email_verification_tokens table cannot brute-force the 6-digit
+        code without also compromising the secret.
+        """
+        return hmac.new(
+            self._config.jwt_secret_key.encode(),
+            f"{user_id}:{code}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    @staticmethod
+    def _generate_code() -> str:
+        """Generate a cryptographically random 6-digit code."""
+        return f"{secrets.randbelow(1_000_000):06d}"
+
+    async def _issue_verification_code(
+        self,
+        user_id: str,
+        email: str,
+        background_tasks: BackgroundTasks | None,
+        consume_rate_limit_slot: bool = False,
+    ) -> None:
+        """Create a fresh verification token and schedule the email send.
+
+        When ``consume_rate_limit_slot`` is True the initial email consumes
+        a resend-rate-limit slot so that follow-up resends honour the
+        per-email cooldown. This is used by ``register_user``; resend
+        callers acquire the slot themselves (and may be blocked by it).
+        """
+        if consume_rate_limit_slot and self._resend_limiter is not None:
+            # Fresh registrations usually have empty limiter state so this
+            # is effectively "bump the counter". If a previous flow left
+            # state behind, we still proceed — the next explicit resend
+            # will enforce the cap.
+            await self._resend_limiter.try_acquire(email)
+        code = self._generate_code()
+        code_hash = self._hash_code(user_id, code)
+        ttl_seconds = self._config.email_verification_ttl_minutes * 60
+        await self._db.create_verification_token(user_id, code_hash, ttl_seconds)
+        if self._email_sender is None:
+            logger.warning(
+                "email_verification.no_sender_configured user_id=%s — "
+                "code was generated but not emailed",
+                user_id,
+            )
+            return
+        sender = self._email_sender
+        ttl_minutes = self._config.email_verification_ttl_minutes
+        if background_tasks is not None:
+            background_tasks.add_task(
+                sender.send_verification_email, email, code, ttl_minutes
+            )
+        else:
+            # Fallback path (e.g. dashboard form, tests) — fire-and-forget.
+            # Keep a strong reference so the GC can't drop the task mid-send.
+            task = asyncio.create_task(
+                sender.send_verification_email(email, code, ttl_minutes)
+            )
+            _background_email_tasks.add(task)
+            task.add_done_callback(_background_email_tasks.discard)
+
     # -- User registration & login --------------------------------------------
 
-    async def register_user(self, email: str, password: str) -> tuple[str, str]:
+    async def register_user(
+        self,
+        email: str,
+        password: str,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> RegisterResult:
         """Register a new user with email+password.
 
-        Returns (user_id, jwt_token).
-        Raises ValueError if email already taken.
+        When ``email_verification_required`` is True, the returned
+        ``RegisterResult`` has ``status="verification_required"`` and
+        ``access_token=None``; the client must call ``verify_email`` to
+        obtain a JWT. When False (CI bypass), the user is marked verified
+        immediately and a JWT is returned.
+
+        Raises ValueError if the email is already registered.
         """
         existing = await self._db.get_user_by_email(email)
         if existing is not None:
             raise ValueError("Email already registered")
 
         password_hash = await self._hash_password(password)
+
+        if self._config.email_verification_required:
+            user_id = await self._db.create_user(
+                email=email,
+                password_hash=password_hash,
+                role="viewer",
+                email_verified=False,
+            )
+            await self._issue_verification_code(
+                user_id,
+                email,
+                background_tasks,
+                consume_rate_limit_slot=True,
+            )
+            return RegisterResult(
+                user_id=user_id,
+                email=email,
+                role="viewer",
+                status="verification_required",
+                access_token=None,
+            )
+
+        # Bypass path: mark verified and issue a JWT immediately.
         user_id = await self._db.create_user(
             email=email,
             password_hash=password_hash,
             role="viewer",
+            email_verified=True,
         )
         token = self._create_user_token(user_id, email, "viewer")
-        return user_id, token
+        return RegisterResult(
+            user_id=user_id,
+            email=email,
+            role="viewer",
+            status="ok",
+            access_token=token,
+        )
 
     async def login_user(self, email: str, password: str) -> tuple[str, str, str]:
         """Authenticate a user by email+password.
 
         Returns (user_id, role, jwt_token).
         Raises ValueError if credentials are invalid.
+        Raises VerificationRequiredError if the user is unverified.
         """
         user = await self._db.get_user_by_email(email)
         if user is None or user["password_hash"] is None:
@@ -81,8 +255,77 @@ class AuthService:
         if not await self._verify_password(user["password_hash"], password):
             raise ValueError("Invalid email or password")
 
+        if self._config.email_verification_required and not user.get("email_verified"):
+            raise VerificationRequiredError(user["email"])
+
         token = self._create_user_token(user["id"], user["email"], user["role"])
         return user["id"], user["role"], token
+
+    # -- Email verification flow ----------------------------------------------
+
+    async def verify_email(
+        self, email: str, code: str
+    ) -> tuple[str, str, str]:
+        """Consume a verification code and mark the user verified.
+
+        Returns (user_id, role, jwt_token) on success. Raises one of
+        ``InvalidVerificationCodeError`` / ``ExpiredVerificationCodeError`` /
+        ``VerificationAttemptsExhaustedError`` on failure.
+        """
+        user = await self._db.get_user_by_email(email)
+        if user is None:
+            # Do not disclose whether the email exists — treat as invalid.
+            raise InvalidVerificationCodeError()
+
+        # NB: we do NOT short-circuit for already-verified users. Handing out
+        # a JWT to any caller who names a verified email would be an auth
+        # bypass. A legitimate retry hits the normal consume path; since the
+        # token is already consumed (or no active token exists), the CAS
+        # naturally fails and we raise InvalidVerificationCodeError.
+
+        code_hash = self._hash_code(user["id"], code)
+        outcome = await self._db.consume_verification_token(
+            user["id"],
+            code_hash,
+            self._config.email_verification_max_attempts,
+        )
+        if outcome == "ok":
+            await self._db.mark_user_verified(user["id"])
+            if self._resend_limiter is not None:
+                await self._resend_limiter.reset(email)
+            token = self._create_user_token(user["id"], user["email"], user["role"])
+            logger.info("email_verification.verified user_id=%s", user["id"])
+            return user["id"], user["role"], token
+        if outcome == "expired":
+            raise ExpiredVerificationCodeError()
+        if outcome == "exhausted":
+            raise VerificationAttemptsExhaustedError()
+        raise InvalidVerificationCodeError()
+
+    async def resend_verification(
+        self,
+        email: str,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        """Issue a new verification code (rate-limited).
+
+        Silently no-ops if the account is already verified or does not
+        exist — this prevents account-enumeration via the resend endpoint.
+        Raises ``ResendRateLimitedError`` when the per-email cooldown or
+        hourly cap is hit.
+        """
+        if self._resend_limiter is not None:
+            wait = await self._resend_limiter.try_acquire(email)
+            if wait is not None:
+                raise ResendRateLimitedError(wait)
+
+        user = await self._db.get_user_by_email(email)
+        if user is None or user.get("email_verified"):
+            # Silent no-op: the caller already "paid" the rate-limit slot
+            # above, which is fine because we still logged it.
+            return
+
+        await self._issue_verification_code(user["id"], user["email"], background_tasks)
 
     # -- Google OAuth ---------------------------------------------------------
 
@@ -121,6 +364,9 @@ class AuthService:
         # 1. Check by google_sub first (exact match)
         user = await self._db.get_user_by_google_sub(google_sub)
         if user is not None:
+            if email_verified and not user.get("email_verified"):
+                # Google vouches for the address → clear any pending OTP flow.
+                await self._db.mark_user_verified(user["id"])
             token = self._create_user_token(user["id"], user["email"], user["role"])
             return user["id"], user["role"], token, False
 
@@ -129,6 +375,8 @@ class AuthService:
             user = await self._db.get_user_by_email(email)
             if user is not None:
                 await self._db.link_google_to_user(user["id"], google_sub)
+                if not user.get("email_verified"):
+                    await self._db.mark_user_verified(user["id"])
                 token = self._create_user_token(
                     user["id"], user["email"], user["role"]
                 )
@@ -139,11 +387,12 @@ class AuthService:
         if existing is not None:
             raise ValueError("Email already registered with a different account")
 
-        # 4. New user
+        # 4. New user — trust Google's email_verified claim
         user_id = await self._db.create_user(
             email=email,
             google_sub=google_sub,
             role="viewer",
+            email_verified=email_verified,
         )
         token = self._create_user_token(user_id, email, "viewer")
         return user_id, "viewer", token, True
@@ -176,6 +425,7 @@ class AuthService:
             email=self._config.admin_seed_email,
             password_hash=password_hash,
             role="admin",
+            email_verified=True,
         )
         logger.info(
             "admin_user.seeded email=%s", self._config.admin_seed_email

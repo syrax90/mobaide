@@ -48,10 +48,10 @@ import kotlinx.coroutines.launch
 fun LoginScreen(
     viewModel: LoginViewModel,
     onLoginSuccess: () -> Unit,
+    onVerificationRequired: (String) -> Unit = {},
     onRegisterClick: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val loginSuccess by viewModel.loginSuccess.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var passwordVisible by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -59,8 +59,14 @@ fun LoginScreen(
 
     val googleAuthClient = remember(context) { GoogleAuthClient(context) }
 
-    LaunchedEffect(loginSuccess) {
-        if (loginSuccess) onLoginSuccess()
+    LaunchedEffect(Unit) {
+        viewModel.navEvents.collect { event ->
+            when (event) {
+                is LoginNavEvent.Success -> onLoginSuccess()
+                is LoginNavEvent.VerificationRequired ->
+                    onVerificationRequired(event.email)
+            }
+        }
     }
 
     LaunchedEffect(Unit) {

@@ -7,6 +7,7 @@ import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
 import com.claudemobile.app.data.repository.AuthRepository
+import com.claudemobile.app.data.repository.AuthResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +27,12 @@ data class RegisterUiState(
     val error: String? = null,
 )
 
+/** One-shot navigation events from the register screen. */
+sealed interface RegisterNavEvent {
+    data class Success(val email: String) : RegisterNavEvent
+    data class VerificationRequired(val email: String) : RegisterNavEvent
+}
+
 @HiltViewModel
 class RegisterViewModel @Inject constructor(
     private val authRepository: AuthRepository,
@@ -34,8 +41,8 @@ class RegisterViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(RegisterUiState())
     val uiState: StateFlow<RegisterUiState> = _uiState.asStateFlow()
 
-    private val _registerSuccess = MutableStateFlow(false)
-    val registerSuccess: StateFlow<Boolean> = _registerSuccess.asStateFlow()
+    private val _navEvents = MutableSharedFlow<RegisterNavEvent>(extraBufferCapacity = 1)
+    val navEvents: SharedFlow<RegisterNavEvent> = _navEvents.asSharedFlow()
 
     private val _errorEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val errorEvents: SharedFlow<String> = _errorEvents.asSharedFlow()
@@ -66,8 +73,14 @@ class RegisterViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                authRepository.register(state.email.trim(), state.password)
-                _registerSuccess.value = true
+                val result = authRepository.register(state.email.trim(), state.password)
+                _uiState.update { it.copy(isLoading = false) }
+                when (result) {
+                    is AuthResult.Success ->
+                        _navEvents.tryEmit(RegisterNavEvent.Success(result.email))
+                    is AuthResult.VerificationRequired ->
+                        _navEvents.tryEmit(RegisterNavEvent.VerificationRequired(result.email))
+                }
             } catch (e: AdminLoginNotSupportedException) {
                 emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {
@@ -107,8 +120,14 @@ class RegisterViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                authRepository.loginWithGoogle(idToken)
-                _registerSuccess.value = true
+                val result = authRepository.loginWithGoogle(idToken)
+                _uiState.update { it.copy(isLoading = false) }
+                when (result) {
+                    is AuthResult.Success ->
+                        _navEvents.tryEmit(RegisterNavEvent.Success(result.email))
+                    is AuthResult.VerificationRequired ->
+                        _navEvents.tryEmit(RegisterNavEvent.VerificationRequired(result.email))
+                }
             } catch (e: AdminLoginNotSupportedException) {
                 emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {

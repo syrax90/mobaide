@@ -6,6 +6,7 @@ import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
 import com.claudemobile.app.data.repository.AuthRepository
+import com.claudemobile.app.data.repository.AuthResult
 import com.claudemobile.app.testing.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -56,7 +57,6 @@ class RegisterViewModelTest {
         assertEquals("", state.confirmPassword)
         assertFalse(state.isLoading)
         assertNull(state.error)
-        assertFalse(vm.registerSuccess.value)
     }
 
     // ---- Blank-field validation ---------------------------------------------
@@ -115,22 +115,28 @@ class RegisterViewModelTest {
         val gate = CompletableDeferred<Unit>()
         coEvery {
             authRepository.register("alice@example.com", "secret")
-        } coAnswers { gate.await() }
+        } coAnswers {
+            gate.await()
+            AuthResult.Success("alice@example.com")
+        }
 
         assertFalse(vm.uiState.value.isLoading)
-        assertFalse(vm.registerSuccess.value)
 
-        vm.register()
-        runCurrent()
-        val loading = vm.uiState.value
-        assertTrue("must enter loading state before repository resolves", loading.isLoading)
-        assertNull(loading.error)
-        assertFalse(vm.registerSuccess.value)
+        vm.navEvents.test {
+            vm.register()
+            runCurrent()
+            val loading = vm.uiState.value
+            assertTrue("must enter loading state before repository resolves", loading.isLoading)
+            assertNull(loading.error)
 
-        gate.complete(Unit)
-        advanceUntilIdle()
+            gate.complete(Unit)
+            advanceUntilIdle()
 
-        assertTrue(vm.registerSuccess.value)
+            val event = awaitItem()
+            assertTrue(event is RegisterNavEvent.Success)
+            assertEquals("alice@example.com", (event as RegisterNavEvent.Success).email)
+            cancelAndIgnoreRemainingEvents()
+        }
         assertNull(vm.uiState.value.error)
         coVerify(exactly = 1) {
             authRepository.register("alice@example.com", "secret")
@@ -143,15 +149,41 @@ class RegisterViewModelTest {
         vm.updateEmail("  alice@example.com  ")
         vm.updatePassword("secret")
         vm.updateConfirmPassword("secret")
-        coEvery { authRepository.register("alice@example.com", "secret") } returns Unit
+        coEvery { authRepository.register("alice@example.com", "secret") } returns
+            AuthResult.Success("alice@example.com")
 
-        vm.register()
-        advanceUntilIdle()
-
-        assertTrue(vm.registerSuccess.value)
+        vm.navEvents.test {
+            vm.register()
+            advanceUntilIdle()
+            val event = awaitItem()
+            assertTrue(event is RegisterNavEvent.Success)
+            cancelAndIgnoreRemainingEvents()
+        }
         coVerify(exactly = 1) {
             authRepository.register("alice@example.com", "secret")
         }
+    }
+
+    @Test
+    fun register_whenVerificationRequired_emitsVerificationRequired_andNoError() = runTest {
+        val vm = primed(RegisterViewModel(authRepository))
+        coEvery {
+            authRepository.register("alice@example.com", "secret")
+        } returns AuthResult.VerificationRequired("alice@example.com")
+
+        vm.navEvents.test {
+            vm.register()
+            advanceUntilIdle()
+            val event = awaitItem()
+            assertTrue(event is RegisterNavEvent.VerificationRequired)
+            assertEquals(
+                "alice@example.com",
+                (event as RegisterNavEvent.VerificationRequired).email,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertFalse(vm.uiState.value.isLoading)
+        assertNull(vm.uiState.value.error)
     }
 
     // ---- ApiException(409) -> "already exists" ------------------------------
@@ -169,7 +201,6 @@ class RegisterViewModelTest {
         val state = vm.uiState.value
         assertEquals("An account with this email already exists", state.error)
         assertFalse(state.isLoading)
-        assertFalse(vm.registerSuccess.value)
     }
 
     // ---- Other ApiException -> "Registration failed: ..." -------------------
@@ -215,12 +246,16 @@ class RegisterViewModelTest {
     @Test
     fun onGoogleAuthResult_success_emitsRegisterSuccess() = runTest {
         val vm = RegisterViewModel(authRepository)
-        coEvery { authRepository.loginWithGoogle("google-token") } returns Unit
+        coEvery { authRepository.loginWithGoogle("google-token") } returns
+            AuthResult.Success("google-user@gmail.com")
 
-        vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
-        advanceUntilIdle()
-
-        assertTrue(vm.registerSuccess.value)
+        vm.navEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
+            advanceUntilIdle()
+            val event = awaitItem()
+            assertTrue(event is RegisterNavEvent.Success)
+            cancelAndIgnoreRemainingEvents()
+        }
         coVerify(exactly = 1) { authRepository.loginWithGoogle("google-token") }
     }
 
@@ -234,7 +269,6 @@ class RegisterViewModelTest {
         vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
         advanceUntilIdle()
 
-        assertFalse(vm.registerSuccess.value)
         assertTrue(vm.uiState.value.error!!.contains("Google Sign-In failed"))
         assertFalse(vm.uiState.value.isLoading)
     }
@@ -249,7 +283,6 @@ class RegisterViewModelTest {
         vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
         advanceUntilIdle()
 
-        assertFalse(vm.registerSuccess.value)
         assertEquals("Google Sign-In failed: network timeout", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
     }
@@ -354,7 +387,6 @@ class RegisterViewModelTest {
             state.error,
         )
         assertFalse(state.isLoading)
-        assertFalse(vm.registerSuccess.value)
     }
 
     @Test
@@ -386,7 +418,6 @@ class RegisterViewModelTest {
         vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
         advanceUntilIdle()
 
-        assertFalse(vm.registerSuccess.value)
         assertEquals(
             ADMIN_LOGIN_USER_MESSAGE,
             vm.uiState.value.error,

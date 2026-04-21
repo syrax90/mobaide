@@ -6,9 +6,12 @@ import com.claudemobile.app.data.network.dto.CreateAgentResponse
 import com.claudemobile.app.data.network.dto.GoogleAuthRequest
 import com.claudemobile.app.data.network.dto.MobileTokenResponse
 import com.claudemobile.app.data.network.dto.ReRegisterAgentResponse
+import com.claudemobile.app.data.network.dto.ResendVerificationRequest
+import com.claudemobile.app.data.network.dto.ResendVerificationResponse
 import com.claudemobile.app.data.network.dto.UserAuthResponse
 import com.claudemobile.app.data.network.dto.UserLoginRequest
 import com.claudemobile.app.data.network.dto.UserRegisterRequest
+import com.claudemobile.app.data.network.dto.VerifyEmailRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -60,6 +63,26 @@ class CentralApi(
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/google")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun verifyEmail(email: String, code: String): UserAuthResponse {
+        val body = json.encodeToString(VerifyEmailRequest(email, code))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/verify-email")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun resendVerification(email: String): ResendVerificationResponse {
+        val body = json.encodeToString(ResendVerificationRequest(email))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/resend-verification")
             .post(body)
             .build()
         return execute(request)

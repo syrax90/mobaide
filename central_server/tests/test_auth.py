@@ -22,6 +22,8 @@ def config() -> CentralServerConfig:
         jwt_secret_key=TEST_SECRET,
         admin_seed_email=TEST_ADMIN_EMAIL,
         admin_seed_password=TEST_ADMIN_PASSWORD,
+        # Bypass OTP flow for these non-verification tests.
+        email_verification_required=False,
     )
 
 
@@ -77,14 +79,16 @@ class TestMobileAuth:
 
 class TestUserRegistration:
     async def test_register_and_login(self, auth: AuthService):
-        user_id, token = await auth.register_user("user@example.com", "pass123")
-        assert len(user_id) == 12
-        assert len(token) > 20
+        result = await auth.register_user("user@example.com", "pass123")
+        assert result.status == "ok"
+        assert result.access_token is not None
+        assert len(result.user_id) == 12
+        assert len(result.access_token) > 20
 
         login_id, role, login_token = await auth.login_user(
             "user@example.com", "pass123"
         )
-        assert login_id == user_id
+        assert login_id == result.user_id
         assert role == "viewer"
         assert len(login_token) > 20
 
@@ -111,10 +115,11 @@ class TestUserRegistration:
 
 class TestDashboardToken:
     async def test_create_and_decode_user_token(self, auth: AuthService):
-        user_id, token = await auth.register_user("user@example.com", "pass123")
-        payload = auth.decode_dashboard_token(token)
+        result = await auth.register_user("user@example.com", "pass123")
+        assert result.access_token is not None
+        payload = auth.decode_dashboard_token(result.access_token)
         assert isinstance(payload, UserTokenPayload)
-        assert payload.sub == user_id
+        assert payload.sub == result.user_id
         assert payload.email == "user@example.com"
         assert payload.role == "viewer"
         assert payload.token_type == "dashboard"

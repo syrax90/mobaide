@@ -66,6 +66,25 @@ services:
       claude-agent:
         condition: service_healthy
 
+  # Mailpit — dev-only SMTP catcher. Only starts with `docker compose --profile dev up`.
+  # Web UI at http://localhost:8025; SMTP on localhost:1025 and mailpit:1025
+  # (inside the tunnel-net network). Bound to loopback so untrusted networks
+  # (café Wi-Fi, conferences) can't read captured OTPs off an exposed 0.0.0.0.
+  mailpit:
+    image: axllent/mailpit:v1.22
+    container_name: claude-mobile-mailpit
+    restart: unless-stopped
+    profiles: ["dev"]
+    environment:
+      # Allow plaintext AUTH — Mailpit does not do TLS in dev.
+      - MP_SMTP_AUTH_ALLOW_INSECURE=1
+      - MP_MAX_MESSAGES=500
+    ports:
+      - "127.0.0.1:1025:1025"  # SMTP — loopback only
+      - "127.0.0.1:8025:8025"  # Web UI + REST API — loopback only
+    networks:
+      - tunnel-net
+
 volumes:
   agent-data:
   central-server-data:

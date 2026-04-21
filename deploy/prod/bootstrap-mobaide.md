@@ -77,6 +77,20 @@ If you use Google-Sign-In on the Android app:
 GOOGLE_CLIENT_ID=<your-google-client-id.apps.googleusercontent.com>
 ```
 
+For email verification (enabled by default), configure SMTP so the server can send OTP codes to new users:
+
+```
+SMTP_HOST=<your-smtp-host>          # e.g. smtp.resend.com, smtp.postmarkapp.com
+SMTP_PORT=465
+SMTP_USERNAME=<api-key-or-user>
+SMTP_PASSWORD=<secret>
+SMTP_USE_TLS=true
+SMTP_FROM_ADDRESS=no-reply@yourdomain.com
+SMTP_FROM_NAME=Claude Mobile
+```
+
+Without SMTP configured, registrations will silently fail to deliver the OTP. Set `EMAIL_VERIFICATION_REQUIRED=false` only for non-production environments without a mail provider. See [`docs/email-verification-workflow.md`](../../docs/email-verification-workflow.md) for all knobs.
+
 All other settings (DB path, log format, etc.) can be left at their defaults — `config.py` has sane values. **JWT TTL exception:** the default TTL for all token types is now `0` (never-expires — no `exp` claim is issued). This is intentional for pre-production use. If you want tokens to expire, set one or more of the following in `.env` to a positive integer (minutes):
 
 ```

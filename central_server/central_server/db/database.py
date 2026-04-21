@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -16,13 +16,15 @@ import aiosqlite
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id            TEXT PRIMARY KEY,
-    email         TEXT NOT NULL UNIQUE,
-    password_hash TEXT,
-    google_sub    TEXT UNIQUE,
-    role          TEXT NOT NULL DEFAULT 'viewer',
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    id             TEXT PRIMARY KEY,
+    email          TEXT NOT NULL UNIQUE,
+    password_hash  TEXT,
+    google_sub     TEXT UNIQUE,
+    role           TEXT NOT NULL DEFAULT 'viewer',
+    email_verified INTEGER NOT NULL DEFAULT 0,
+    verified_at    TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -61,6 +63,15 @@ CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
     revoked_at       TEXT
 );
 
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(id),
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    consumed_at TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub
     ON users(google_sub) WHERE google_sub IS NOT NULL;
@@ -71,6 +82,8 @@ CREATE INDEX IF NOT EXISTS idx_pairing_tokens_agent
     ON pairing_tokens(agent_id) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_email_verification_user
+    ON email_verification_tokens(user_id) WHERE consumed_at IS NULL;
 """
 
 
@@ -156,6 +169,28 @@ class Database:
             )
             await self._conn.execute("PRAGMA user_version = 4")
 
+        if version < 5:
+            # Add email_verified + verified_at to users (pre-existing rows are
+            # grandfathered to email_verified=1 to avoid locking out dev accounts
+            # that were created before this migration existed) and create the
+            # email_verification_tokens table.
+            col_cursor = await self._conn.execute("PRAGMA table_info(users)")
+            user_cols = {r[1] for r in await col_cursor.fetchall()}
+            if "email_verified" not in user_cols:
+                await self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0"
+                )
+                # Backfill existing users to verified so they can still log in.
+                await self._conn.execute("UPDATE users SET email_verified = 1")
+            if "verified_at" not in user_cols:
+                await self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN verified_at TEXT"
+                )
+            # Creates the new email_verification_tokens table + index if missing
+            # (IF NOT EXISTS is a no-op on already-present tables).
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 5")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -170,28 +205,51 @@ class Database:
 
     # -- Users -----------------------------------------------------------------
 
+    _USER_COLUMNS = (
+        "id, email, password_hash, google_sub, role, "
+        "email_verified, verified_at, created_at, updated_at"
+    )
+
     async def create_user(
         self,
         email: str,
         password_hash: str | None = None,
         google_sub: str | None = None,
         role: str = "viewer",
+        email_verified: bool = False,
     ) -> str:
-        """Create a new user. Returns user_id."""
+        """Create a new user. Returns user_id.
+
+        ``email_verified=True`` is used by the admin seeder and by the
+        Google OAuth path (when Google vouches for the address), which both
+        bypass the OTP flow.
+        """
         user_id = uuid.uuid4().hex[:12]
         now = _now_iso()
+        verified_at = now if email_verified else None
         await self.conn.execute(
-            "INSERT INTO users (id, email, password_hash, google_sub, role, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, email, password_hash, google_sub, role, now, now),
+            "INSERT INTO users "
+            "(id, email, password_hash, google_sub, role, email_verified, verified_at, "
+            "created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                user_id,
+                email,
+                password_hash,
+                google_sub,
+                role,
+                1 if email_verified else 0,
+                verified_at,
+                now,
+                now,
+            ),
         )
         await self.conn.commit()
         return user_id
 
     async def get_user_by_email(self, email: str) -> dict | None:
         cursor = await self.conn.execute(
-            "SELECT id, email, password_hash, google_sub, role, created_at, updated_at "
-            "FROM users WHERE email = ?",
+            f"SELECT {self._USER_COLUMNS} FROM users WHERE email = ?",
             (email,),
         )
         row = await cursor.fetchone()
@@ -199,8 +257,7 @@ class Database:
 
     async def get_user_by_google_sub(self, google_sub: str) -> dict | None:
         cursor = await self.conn.execute(
-            "SELECT id, email, password_hash, google_sub, role, created_at, updated_at "
-            "FROM users WHERE google_sub = ?",
+            f"SELECT {self._USER_COLUMNS} FROM users WHERE google_sub = ?",
             (google_sub,),
         )
         row = await cursor.fetchone()
@@ -208,8 +265,7 @@ class Database:
 
     async def get_user_by_id(self, user_id: str) -> dict | None:
         cursor = await self.conn.execute(
-            "SELECT id, email, password_hash, google_sub, role, created_at, updated_at "
-            "FROM users WHERE id = ?",
+            f"SELECT {self._USER_COLUMNS} FROM users WHERE id = ?",
             (user_id,),
         )
         row = await cursor.fetchone()
@@ -221,6 +277,19 @@ class Database:
         await self.conn.execute(
             "UPDATE users SET google_sub = ?, updated_at = ? WHERE id = ?",
             (google_sub, now, user_id),
+        )
+        await self.conn.commit()
+
+    async def mark_user_verified(self, user_id: str) -> None:
+        """Mark a user as email-verified (idempotent)."""
+        now = _now_iso()
+        await self.conn.execute(
+            "UPDATE users "
+            "SET email_verified = 1, "
+            "    verified_at = COALESCE(verified_at, ?), "
+            "    updated_at = ? "
+            "WHERE id = ?",
+            (now, now, user_id),
         )
         await self.conn.commit()
 
@@ -395,14 +464,151 @@ class Database:
         )
         return [dict(row) async for row in cursor]
 
+    # Retention window for consumed verification-token rows. Kept deliberately
+    # long enough (24h) to help with live-incident forensics but short enough
+    # that stale code hashes don't pile up as a brute-force surface on a DB leak.
+    _VERIFICATION_TOKEN_RETENTION_SECONDS = 24 * 3600
+
     async def cleanup_expired_tokens(self) -> int:
+        """Delete expired pairing AND email-verification tokens.
+
+        Verification tokens are cleaned in two sweeps:
+          - expired but never consumed rows are dropped immediately;
+          - successfully consumed rows are dropped after the retention
+            window so old code hashes don't linger as brute-force fodder
+            on a DB dump.
+
+        Returns the total number of deleted rows across all sweeps.
+        """
         now = _now_iso()
-        cursor = await self.conn.execute(
+        retention_cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=self._VERIFICATION_TOKEN_RETENTION_SECONDS)
+        ).isoformat()
+        pairing_cursor = await self.conn.execute(
             "DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL",
             (now,),
         )
+        expired_cursor = await self.conn.execute(
+            "DELETE FROM email_verification_tokens "
+            "WHERE expires_at <= ? AND consumed_at IS NULL",
+            (now,),
+        )
+        consumed_cursor = await self.conn.execute(
+            "DELETE FROM email_verification_tokens "
+            "WHERE consumed_at IS NOT NULL AND consumed_at <= ?",
+            (retention_cutoff,),
+        )
         await self.conn.commit()
-        return cursor.rowcount
+        return (
+            pairing_cursor.rowcount
+            + expired_cursor.rowcount
+            + consumed_cursor.rowcount
+        )
+
+    # -- Email verification tokens --------------------------------------------
+
+    async def create_verification_token(
+        self,
+        user_id: str,
+        code_hash: str,
+        ttl_seconds: int,
+    ) -> str:
+        """Insert a new verification token. Returns the ``expires_at`` ISO string.
+
+        The caller supplies the already-hashed code (HMAC-SHA256 with a
+        server-side pepper). Any outstanding unconsumed tokens for this
+        user are invalidated first so only one live code exists at a time —
+        resend semantics MUST issue a fresh code.
+        """
+        now = datetime.now(timezone.utc)
+        expires_at = datetime.fromtimestamp(
+            now.timestamp() + ttl_seconds, tz=timezone.utc
+        )
+        now_iso = now.isoformat()
+        # Invalidate any outstanding tokens for this user.
+        await self.conn.execute(
+            "UPDATE email_verification_tokens "
+            "SET consumed_at = ? "
+            "WHERE user_id = ? AND consumed_at IS NULL",
+            (now_iso, user_id),
+        )
+        await self.conn.execute(
+            "INSERT INTO email_verification_tokens "
+            "(token_hash, user_id, created_at, expires_at, attempts) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (code_hash, user_id, now_iso, expires_at.isoformat()),
+        )
+        await self.conn.commit()
+        return expires_at.isoformat()
+
+    async def consume_verification_token(
+        self,
+        user_id: str,
+        code_hash: str,
+        max_attempts: int,
+    ) -> str:
+        """Atomically consume a verification token for ``user_id``.
+
+        Returns one of:
+          - ``"ok"``        — code matched, token now consumed.
+          - ``"invalid"``   — no matching unconsumed unexpired token.
+          - ``"expired"``   — a token exists for the user but is past TTL.
+          - ``"exhausted"`` — the user's active token has hit ``max_attempts``.
+
+        On ``"invalid"`` we also bump the ``attempts`` counter of the user's
+        active token so that brute-force tries count toward the cap.
+        """
+        now = _now_iso()
+        # Atomic CAS: consume iff matching hash + not consumed + not expired
+        # + attempts still below the cap. ``attempts`` is compared against the
+        # pre-increment value, which is what we want here (callers increment
+        # only on mismatch).
+        cursor = await self.conn.execute(
+            "UPDATE email_verification_tokens "
+            "SET consumed_at = ? "
+            "WHERE token_hash = ? AND user_id = ? "
+            "  AND consumed_at IS NULL AND expires_at > ? AND attempts < ?",
+            (now, code_hash, user_id, now, max_attempts),
+        )
+        await self.conn.commit()
+        if cursor.rowcount == 1:
+            return "ok"
+
+        # Miss — figure out why by looking at the active token (if any).
+        active_cursor = await self.conn.execute(
+            "SELECT expires_at, attempts FROM email_verification_tokens "
+            "WHERE user_id = ? AND consumed_at IS NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+        active = await active_cursor.fetchone()
+        if active is None:
+            return "invalid"
+        if active["expires_at"] <= now:
+            return "expired"
+        if active["attempts"] >= max_attempts:
+            return "exhausted"
+        # Token exists but the supplied hash doesn't match — count the attempt.
+        await self.conn.execute(
+            "UPDATE email_verification_tokens "
+            "SET attempts = attempts + 1 "
+            "WHERE user_id = ? AND consumed_at IS NULL",
+            (user_id,),
+        )
+        await self.conn.commit()
+        return "invalid"
+
+    async def invalidate_verification_tokens_for_user(self, user_id: str) -> None:
+        """Mark all active verification tokens for a user as consumed (used on resend)."""
+        now = _now_iso()
+        await self.conn.execute(
+            "UPDATE email_verification_tokens "
+            "SET consumed_at = ? "
+            "WHERE user_id = ? AND consumed_at IS NULL",
+            (now, user_id),
+        )
+        await self.conn.commit()
 
     # -- Pairings --------------------------------------------------------------
 
