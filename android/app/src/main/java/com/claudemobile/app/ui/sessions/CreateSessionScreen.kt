@@ -289,6 +289,7 @@ private fun StandardConfigSection(
         .firstOrNull { it.name == state.selectedProjectName }
         ?.is_git == true
 
+    ToggleRow("Max effort", state.maxEffort, viewModel::toggleMaxEffort)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
@@ -321,6 +322,7 @@ private fun AutoScanConfigSection(
     state: CreateSessionUiState,
     viewModel: CreateSessionViewModel,
 ) {
+    ToggleRow("Max effort", state.maxEffort, viewModel::toggleMaxEffort)
     ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)

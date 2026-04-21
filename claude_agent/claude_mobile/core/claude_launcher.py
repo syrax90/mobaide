@@ -30,6 +30,7 @@ class ClaudeOptions:
     branch_name: str | None = None
     identifier: str | None = None
     title: str | None = None
+    max_effort: bool = True
 
 
 @dataclass
@@ -96,6 +97,8 @@ class ClaudeLauncher:
             argv += ["--permission-mode", "plan"]
         elif options.skip_permissions:
             argv.append("--dangerously-skip-permissions")
+        if options.max_effort:
+            argv += ["--effort", "max"]
         if options.initial_prompt:
             argv += ["--", options.initial_prompt]
         return argv

@@ -14,6 +14,7 @@ class ClaudeOptionsModel(BaseModel):
     branch_name: str | None = None
     identifier: str | None = None
     title: str | None = None
+    max_effort: bool = True
 
 
 class CreateSessionRequest(BaseModel):

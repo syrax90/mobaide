@@ -210,11 +210,32 @@ class CreateSessionViewModelTest {
         assertNotNull(opts)
         assertTrue(opts!!.no_memory)
         assertTrue(opts.skip_permissions)
+        assertTrue("max_effort must default to ON", opts.max_effort)
         assertTrue(opts.worktree)
         assertEquals("feature/x", opts.branch_name)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-123") }
         assertFalse(vm.uiState.value.submitting)
+    }
+
+    @Test
+    fun submit_withMaxEffortOff_sendsMaxEffortFalse() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-m", "starting", "2026-04-21T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.toggleMaxEffort(false)
+        vm.submit()
+        advanceUntilIdle()
+
+        val opts = requestSlot.captured.claude_options
+        assertNotNull(opts)
+        assertFalse("max_effort must propagate as false when toggled off", opts!!.max_effort)
     }
 
     @Test
@@ -325,11 +346,34 @@ class CreateSessionViewModelTest {
 
         val opts = optsSlot.captured
         assertTrue(opts.skip_permissions)
+        assertTrue("max_effort must default to ON in Auto Scan payload", opts.max_effort)
         assertTrue(opts.worktree)
         assertNull(opts.branch_name)
         assertEquals("seed", opts.initial_prompt)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
         assertFalse(vm.uiState.value.autoScanStarting)
+    }
+
+    @Test
+    fun submitAutoScan_withMaxEffortOff_sendsMaxEffortFalse() = runTest {
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val optsSlot = slot<ClaudeOptionsModel>()
+        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        vm.toggleMaxEffort(false)
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertFalse(
+            "max_effort must propagate as false when toggled off in Auto Scan",
+            optsSlot.captured.max_effort,
+        )
     }
 
     @Test

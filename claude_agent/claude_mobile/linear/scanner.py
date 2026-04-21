@@ -374,6 +374,7 @@ class AutoScanInstance:
                     ),
                     identifier=issue.identifier,
                     title=issue.title,
+                    max_effort=base.max_effort if base else True,
                 ),
             )
             config = SessionConfig(
