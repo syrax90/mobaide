@@ -491,7 +491,7 @@ class AuthService:
             agent_id=payload["agent_id"],
             user_id=payload.get("user_id", ""),
             token_type=payload["type"],
-            exp=payload["exp"],
+            exp=payload.get("exp"),
             iat=payload["iat"],
         )
 
@@ -511,7 +511,7 @@ class AuthService:
             email=payload.get("email", payload["sub"]),
             role=payload.get("role", "admin"),
             token_type=payload["type"],
-            exp=payload["exp"],
+            exp=payload.get("exp"),
             iat=payload["iat"],
         )
 
@@ -544,8 +544,12 @@ class AuthService:
             "sub": sub,
             "type": token_type,
             "iat": now,
-            "exp": now + expire_minutes * 60,
         }
+        # expire_minutes == 0 means "never expires" — omit the `exp` claim
+        # entirely. PyJWT only validates `exp` when the claim is present,
+        # so a missing `exp` decodes as a non-expiring token.
+        if expire_minutes > 0:
+            payload["exp"] = now + expire_minutes * 60
         if agent_id is not None:
             payload["agent_id"] = agent_id
         if user_id is not None:

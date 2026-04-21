@@ -113,7 +113,9 @@ class TokenStore(context: Context) {
             val payload = token.split(".")[1]
             val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_PADDING)
             val json = Json.parseToJsonElement(String(decoded)).jsonObject
-            val exp = json["exp"]?.jsonPrimitive?.long ?: return true
+            // Tokens without an `exp` claim never expire — the server issues
+            // these when *_TOKEN_EXPIRE_MINUTES=0. Don't trigger a refresh.
+            val exp = json["exp"]?.jsonPrimitive?.long ?: return false
             val nowSeconds = System.currentTimeMillis() / 1000
             exp - nowSeconds < 60
         } catch (_: Exception) {

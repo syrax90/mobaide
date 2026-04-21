@@ -2,6 +2,7 @@ package com.claudemobile.app.ui.login
 
 import app.cash.turbine.test
 import com.claudemobile.app.data.auth.GoogleAuthResult
+import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
@@ -10,8 +11,11 @@ import com.claudemobile.app.data.repository.AuthResult
 import com.claudemobile.app.testing.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -24,10 +28,11 @@ import org.junit.Test
 
 /**
  * Unit tests for [LoginViewModel] — exercises blank-field validation, the
- * loading→success state transition, Google Sign-In callback, and the
- * failure branches (`ApiException(401)`, other [ApiException],
- * non-API [Exception]) plus the `update*` helpers that clear the pending
- * error.
+ * loading→success state transition, Google Sign-In callback, the failure
+ * branches (`ApiException(401)`, other [ApiException], non-API [Exception]),
+ * the `update*` helpers that clear the pending error, and the reactive
+ * "session expired" snackbar emitted when [SessionManager.sessionEvents]
+ * surfaces [SessionManager.InvalidationReason.TokenRejected].
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class LoginViewModelTest {
@@ -39,6 +44,26 @@ class LoginViewModelTest {
 
     // ---- Helpers ------------------------------------------------------------
 
+    /** Build a [SessionManager] whose [SessionManager.sessionEvents] is
+     *  a caller-controllable [MutableSharedFlow]. Tests that don't care
+     *  about that flow just ignore it. */
+    private fun newSessionManager(
+        events: MutableSharedFlow<SessionManager.InvalidationReason> =
+            MutableSharedFlow(extraBufferCapacity = 1),
+    ): Pair<SessionManager, MutableSharedFlow<SessionManager.InvalidationReason>> {
+        val sm = mockk<SessionManager>(relaxUnitFun = true)
+        every { sm.sessionEvents } returns events.asSharedFlow()
+        return sm to events
+    }
+
+    private fun newViewModel(
+        sessionEvents: MutableSharedFlow<SessionManager.InvalidationReason> =
+            MutableSharedFlow(extraBufferCapacity = 1),
+    ): LoginViewModel {
+        val (sm, _) = newSessionManager(sessionEvents)
+        return LoginViewModel(authRepository, sm)
+    }
+
     private fun primed(vm: LoginViewModel) = vm.apply {
         updateEmail("alice@example.com")
         updatePassword("secret")
@@ -48,7 +73,7 @@ class LoginViewModelTest {
 
     @Test
     fun initialState_hasEmptyFields_andNoErrorOrLoading() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         val state = vm.uiState.value
         assertEquals("", state.email)
         assertEquals("", state.password)
@@ -60,7 +85,7 @@ class LoginViewModelTest {
 
     @Test
     fun login_whenEmailBlank_setsError_andDoesNotCallRepository() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.updateEmail("   ")
         vm.updatePassword("secret")
 
@@ -74,7 +99,7 @@ class LoginViewModelTest {
 
     @Test
     fun login_whenPasswordBlank_setsError_andDoesNotCallRepository() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.updateEmail("alice@example.com")
         vm.updatePassword("")
 
@@ -89,7 +114,7 @@ class LoginViewModelTest {
 
     @Test
     fun login_happyPath_setsLoadingTrue_thenEmitsLoginSuccess() = runTest {
-        val vm = primed(LoginViewModel(authRepository))
+        val vm = primed(newViewModel())
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         coEvery {
             authRepository.loginWithPassword("alice@example.com", "secret")
@@ -125,7 +150,7 @@ class LoginViewModelTest {
 
     @Test
     fun login_on401_setsInvalidCredentialsError_andClearsLoading() = runTest {
-        val vm = primed(LoginViewModel(authRepository))
+        val vm = primed(newViewModel())
         coEvery {
             authRepository.loginWithPassword("alice@example.com", "secret")
         } throws ApiException(401, """{"detail":"bad creds"}""")
@@ -142,7 +167,7 @@ class LoginViewModelTest {
 
     @Test
     fun login_onNon401ApiException_setsLoginFailedError() = runTest {
-        val vm = primed(LoginViewModel(authRepository))
+        val vm = primed(newViewModel())
         val boom = ApiException(500, "server exploded")
         coEvery {
             authRepository.loginWithPassword("alice@example.com", "secret")
@@ -160,7 +185,7 @@ class LoginViewModelTest {
 
     @Test
     fun login_onGenericException_setsLoginFailedError() = runTest {
-        val vm = primed(LoginViewModel(authRepository))
+        val vm = primed(newViewModel())
         coEvery {
             authRepository.loginWithPassword("alice@example.com", "secret")
         } throws java.net.UnknownHostException("example.com: nodename nor servname provided")
@@ -200,7 +225,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthResult_success_onFailure_setsError() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         coEvery {
             authRepository.loginWithGoogle("bad-token")
         } throws ApiException(401, "invalid token")
@@ -215,7 +240,7 @@ class LoginViewModelTest {
     fun onGoogleAuthResult_success_onGenericFailure_setsError_andClearsLoading() = runTest {
         // Exercises the non-ApiException catch branch in onGoogleIdToken — symmetric
         // to the RegisterViewModel test of the same name, and previously uncovered here.
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         coEvery {
             authRepository.loginWithGoogle("bad-token")
         } throws java.net.UnknownHostException("api.example.com")
@@ -231,7 +256,7 @@ class LoginViewModelTest {
     fun onGoogleAuthResult_success_onApiFailure_alsoEmitsErrorEvent() = runTest {
         // Regression: the snackbar-on-repeat-tap fix must also cover the
         // Success→repository-throws branch, not just the pre-repo result cases.
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         coEvery {
             authRepository.loginWithGoogle("bad-token")
         } throws ApiException(401, "invalid token")
@@ -247,7 +272,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthResult_notConfigured_emitsConfigError() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.errorEvents.test {
             vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
             val event = awaitItem()
@@ -259,7 +284,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthResult_noAccounts_emitsAccountMessage() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.errorEvents.test {
             vm.onGoogleAuthResult(GoogleAuthResult.NoAccounts("Add a Google account."))
             assertEquals("Add a Google account.", awaitItem())
@@ -269,7 +294,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthResult_playServicesUnavailable_emitsPlayServicesMessage() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.errorEvents.test {
             vm.onGoogleAuthResult(GoogleAuthResult.PlayServicesUnavailable)
             assertTrue(awaitItem().contains("Google Play services"))
@@ -279,7 +304,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthResult_failed_emitsFailureMessage() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.errorEvents.test {
             vm.onGoogleAuthResult(GoogleAuthResult.Failed("boom"))
             assertEquals("Google Sign-In failed: boom", awaitItem())
@@ -289,7 +314,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthResult_cancelled_clearsLoading_andEmitsNoEvent() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.onGoogleAuthStart()
         assertTrue(vm.uiState.value.isLoading)
 
@@ -303,7 +328,7 @@ class LoginViewModelTest {
     @Test
     fun onGoogleAuthResult_sameErrorTwice_emitsTwoEvents() = runTest {
         // Regression: the old LaunchedEffect(uiState.error) swallowed repeat clicks.
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.errorEvents.test {
             vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
             val first = awaitItem()
@@ -316,7 +341,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthStart_setsLoading_andClearsError() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.onGoogleAuthResult(GoogleAuthResult.NotConfigured)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.error != null)
@@ -334,7 +359,7 @@ class LoginViewModelTest {
         // The repository throws AdminLoginNotSupportedException before persisting
         // a session; the ViewModel is responsible for translating that to a
         // specific user-facing message (NOT the generic "Login failed: ...").
-        val vm = primed(LoginViewModel(authRepository))
+        val vm = primed(newViewModel())
         coEvery {
             authRepository.loginWithPassword("alice@example.com", "secret")
         } throws AdminLoginNotSupportedException()
@@ -352,7 +377,7 @@ class LoginViewModelTest {
 
     @Test
     fun login_onAdminLoginNotSupported_alsoEmitsErrorEvent() = runTest {
-        val vm = primed(LoginViewModel(authRepository))
+        val vm = primed(newViewModel())
         coEvery {
             authRepository.loginWithPassword("alice@example.com", "secret")
         } throws AdminLoginNotSupportedException()
@@ -371,7 +396,7 @@ class LoginViewModelTest {
     @Test
     fun onGoogleAuthResult_onAdminLoginNotSupported_setsFriendlySnackbarMessage() = runTest {
         // Symmetric mapping must exist on the Google branch too.
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         coEvery {
             authRepository.loginWithGoogle("google-token")
         } throws AdminLoginNotSupportedException()
@@ -390,7 +415,7 @@ class LoginViewModelTest {
 
     @Test
     fun updateEmail_clearsPendingError() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.loginWithPassword()
         advanceUntilIdle()
         assertEquals("Email and password are required", vm.uiState.value.error)
@@ -403,7 +428,7 @@ class LoginViewModelTest {
 
     @Test
     fun updatePassword_clearsPendingError() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         vm.loginWithPassword()
         advanceUntilIdle()
         assertEquals("Email and password are required", vm.uiState.value.error)
@@ -412,5 +437,111 @@ class LoginViewModelTest {
 
         assertNull(vm.uiState.value.error)
         assertEquals("secret", vm.uiState.value.password)
+    }
+
+    // ---- Session-expired snackbar (reactive to SessionManager.sessionEvents) --
+
+    @Test
+    fun sessionEvents_tokenRejected_emitsSessionExpiredSnackbar() = runTest {
+        // The central-API interceptor or user-scoped WebSocket signals
+        // "server rejected my dashboard JWT" by emitting TokenRejected
+        // on SessionManager.sessionEvents. The login ViewModel must
+        // forward that to its errorEvents flow as a user-friendly
+        // "Please sign in again" snackbar.
+        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
+            extraBufferCapacity = 1,
+        )
+        val vm = newViewModel(events)
+
+        vm.errorEvents.test {
+            // Let the viewModelScope.launch in the VM init block start and subscribe
+            // to sessionEvents before we emit — without this the emit races the
+            // coroutine startup and the event is dropped.
+            advanceUntilIdle()
+            events.tryEmit(SessionManager.InvalidationReason.TokenRejected)
+            val first = awaitItem()
+            assertEquals(
+                "Your session has expired. Please sign in again.",
+                first,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun sessionEvents_manualLogout_emitsNoSnackbar() = runTest {
+        // Manual logout is user-initiated — the user pressed "Log out"
+        // in Settings, they don't need a redundant "session expired"
+        // toast for that.
+        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
+            extraBufferCapacity = 1,
+        )
+        val vm = newViewModel(events)
+
+        vm.errorEvents.test {
+            events.tryEmit(SessionManager.InvalidationReason.Manual)
+            expectNoEvents()
+        }
+    }
+
+    @Test
+    fun sessionEvents_bufferedBeforeCollection_isDeliveredOnAttach() = runTest {
+        // Cold-start race: the interceptor (or WS) invalidates the
+        // session BEFORE LoginViewModel's errorEvents is being collected.
+        // The production SessionManager._sessionEvents uses
+        // extraBufferCapacity=1 so a tryEmit() that races the init
+        // coroutine startup is buffered for the first subscriber.
+        // In the test we replicate that by emitting after the VM's init
+        // coroutine has subscribed (via advanceUntilIdle) but before the
+        // outer test code starts collecting errorEvents.
+        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
+            extraBufferCapacity = 1,
+        )
+        val vm = newViewModel(events)
+        // Let the viewModelScope.launch in VM init subscribe to sessionEvents.
+        advanceUntilIdle()
+        // Emit now: the init coroutine is subscribed, so tryEmit is buffered
+        // and will be forwarded to errorEvents when the test starts collecting.
+        events.tryEmit(SessionManager.InvalidationReason.TokenRejected)
+
+        vm.errorEvents.test {
+            assertEquals(
+                "Your session has expired. Please sign in again.",
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun sessionEvents_emittedBeforeViewModelExists_stillFiresSnackbar() = runTest {
+        // True cold-start: CentralAuthInterceptor fires its 401 handler
+        // from the OkHttp IO thread BEFORE any LoginViewModel is
+        // constructed (navigation to LOGIN runs reactively after the
+        // authState → Unauthenticated transition, which has not happened
+        // yet at emit time). The production SessionManager uses
+        // `replay = 1` on _sessionEvents specifically so a `TokenRejected`
+        // emitted in this window survives until a LoginViewModel arrives
+        // and subscribes. This test models that ordering directly —
+        // emit first, then construct the VM.
+        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
+            replay = 1,
+            extraBufferCapacity = 0,
+        )
+        // Emit BEFORE any ViewModel / subscriber exists. With replay=1
+        // the event sits in the replay cache until the first collector
+        // attaches.
+        events.tryEmit(SessionManager.InvalidationReason.TokenRejected)
+
+        val vm = newViewModel(events)
+
+        vm.errorEvents.test {
+            advanceUntilIdle()
+            assertEquals(
+                "Your session has expired. Please sign in again.",
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 }

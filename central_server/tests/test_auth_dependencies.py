@@ -230,6 +230,43 @@ class TestGetApiUser:
         with pytest.raises(HTTPException) as exc_info:
             await get_api_user(request)
         assert exc_info.value.status_code == 401
+        # Detail is a fixed, implementation-agnostic string — the PyJWT
+        # exception message (which might say "Signature has expired" or
+        # "Not enough segments" etc.) is logged for operators but never
+        # leaked to the client.
+        assert exc_info.value.detail == "Invalid token"
+
+    async def test_expired_dashboard_token(self, auth_service):
+        """Regression for the mobile-app 'Invalid token: Signature has expired' bug.
+
+        A dashboard JWT with ``exp`` in the past must yield a clean 401
+        with detail=='Invalid token' — no PyJWT internals leaked into
+        the response body. The mobile client keys off the 401 status to
+        invalidate the local session and route back to login.
+        """
+        expired_token = jwt.encode(
+            {
+                "sub": "user-id",
+                "type": "dashboard",
+                "email": "admin@test.local",
+                "role": "admin",
+                "iat": int(time.time()) - 7200,
+                "exp": int(time.time()) - 3600,
+            },
+            TEST_JWT_SECRET,
+            algorithm="HS256",
+        )
+        fake_app = _FakeApp(auth_service)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {expired_token}"},
+            app=fake_app,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await get_api_user(request)
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "Invalid token"
+        assert "Signature" not in str(exc_info.value.detail)
+        assert exc_info.value.headers == {"WWW-Authenticate": "Bearer"}
 
     async def test_mobile_token_rejected_for_api_user(self, auth_service):
         """A mobile_access token should not pass get_api_user (wrong type)."""
@@ -325,7 +362,7 @@ class TestGetMobileUser:
         with pytest.raises(HTTPException) as exc_info:
             await get_mobile_user(request)
         assert exc_info.value.status_code == 401
-        assert "Invalid token" in exc_info.value.detail
+        assert exc_info.value.detail == "Invalid token"
 
     async def test_dashboard_token_rejected_for_mobile(self, auth_service):
         """A dashboard token should not pass mobile auth (wrong type)."""
@@ -340,7 +377,10 @@ class TestGetMobileUser:
         with pytest.raises(HTTPException) as exc_info:
             await get_mobile_user(request)
         assert exc_info.value.status_code == 401
-        assert "mobile_access" in exc_info.value.detail
+        # Generic detail — type-mismatch and expired tokens share a
+        # single opaque 401 so the client treats all auth failures
+        # identically. The specific reason is logged for operators.
+        assert exc_info.value.detail == "Invalid token"
 
     async def test_expired_bearer(self, auth_service):
         expired_token = jwt.encode(

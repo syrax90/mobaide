@@ -343,3 +343,53 @@ class TestRefreshTokens:
         await db.revoke_mobile_tokens("device-1", agent_id)
         assert await db.validate_and_consume_refresh("r1") is None
         assert await db.validate_and_consume_refresh("r2") is None
+
+
+class TestRefreshTokenNeverExpires:
+    """store_refresh_token(expire_minutes=0) writes the year-9999 sentinel
+    and validate_and_consume_refresh still accepts the token.
+    """
+
+    async def test_zero_ttl_writes_sentinel_expires_at(self, db: Database):
+        from central_server.db.database import _NEVER_EXPIRES_AT, _hash_token
+
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
+
+        cursor = await db.conn.execute(
+            "SELECT expires_at FROM mobile_refresh_tokens WHERE token_hash = ?",
+            (_hash_token("r-forever"),),
+        )
+        row = await cursor.fetchone()
+        assert row is not None
+        assert row["expires_at"] == _NEVER_EXPIRES_AT
+        assert row["expires_at"].startswith("9999-12-31")
+
+    async def test_zero_ttl_token_validates_and_consumes(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
+
+        result = await db.validate_and_consume_refresh("r-forever")
+        assert result == ("device-1", agent_id)
+        # Rotation semantics still apply — single-use.
+        assert await db.validate_and_consume_refresh("r-forever") is None
+
+    async def test_zero_ttl_token_comparable_to_positive_ttl(self, db: Database):
+        """A 0-TTL token (sentinel) and a positive-TTL token live side-by-side
+        and both validate correctly.
+        """
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.store_refresh_token("r-forever", "device-1", agent_id, 0)
+        await db.store_refresh_token("r-short", "device-1", agent_id, 60)
+
+        assert await db.validate_and_consume_refresh("r-forever") == (
+            "device-1",
+            agent_id,
+        )
+        assert await db.validate_and_consume_refresh("r-short") == (
+            "device-1",
+            agent_id,
+        )

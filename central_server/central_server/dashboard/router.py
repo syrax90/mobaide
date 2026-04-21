@@ -55,6 +55,7 @@ async def login_submit(request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
+    ttl_minutes = request.app.state.config.dashboard_token_expire_minutes
     response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
     response.set_cookie(
         key="dashboard_token",
@@ -62,7 +63,11 @@ async def login_submit(request: Request):
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=request.app.state.config.dashboard_token_expire_minutes * 60,
+        # ttl_minutes == 0 means "never expires" — omit Max-Age so the
+        # browser treats this as a session cookie (RFC 6265 §4.1.2).
+        # Passing Max-Age=0 would instruct the browser to delete the
+        # cookie immediately (RFC 6265 §5.2.2).
+        max_age=ttl_minutes * 60 if ttl_minutes > 0 else None,
     )
     return response
 

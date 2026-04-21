@@ -67,7 +67,13 @@ async def app(config, db):
 @pytest.fixture
 async def client(app):
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    # base_url uses https:// so httpx's cookie jar will return cookies
+    # marked with the Secure attribute on follow-up requests. Dashboard
+    # login sets the cookie with ``secure=True`` (the production code
+    # path); under ``http://`` the jar accepts the cookie but refuses
+    # to send it back, breaking end-to-end round-trip tests. The ASGI
+    # transport itself is scheme-agnostic for routing.
+    async with AsyncClient(transport=transport, base_url="https://test") as c:
         yield c
 
 

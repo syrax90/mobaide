@@ -3,10 +3,14 @@ package com.claudemobile.app.data.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -99,12 +103,43 @@ class SessionManager @Inject constructor(
         object Transient : RefreshResult
     }
 
+    /** Why the session was invalidated. Consumers use this to decide
+     *  whether to surface a "session expired" notice (server rejected the
+     *  stored credentials) or stay silent (user asked to log out). */
+    sealed interface InvalidationReason {
+        /** Server rejected the dashboard JWT (401 on REST, 4001 on WS). */
+        object TokenRejected : InvalidationReason
+
+        /** User explicitly tapped logout. */
+        object Manual : InvalidationReason
+    }
+
     private val json = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlight = AtomicReference<Deferred<RefreshResult>?>(null)
 
     private val _authState = MutableStateFlow(resolveInitialState())
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
+
+    // `replay = 1` so that a [TokenRejected] invalidation fired before
+    // LoginViewModel subscribes (e.g. from the central-API interceptor on
+    // cold start, when the OkHttp IO thread runs its 401 handler before
+    // navigation has swapped in the LOGIN route and constructed the VM)
+    // is still delivered on first collection. `extraBufferCapacity = 0`
+    // because the `@Synchronized` guard on [invalidateUserSession] makes
+    // concurrent same-reason emits impossible.
+    //
+    // NOTE: a SharedFlow with `replay = 1` caches its last value *forever*,
+    // which would cause a stale `TokenRejected` to be re-delivered to a
+    // fresh [LoginViewModel] long after the user has re-logged-in. To
+    // prevent that, [markUserLoggedIn] clears the replay cache on every
+    // successful login/register/Google-auth so subsequent logouts start
+    // from a clean slate.
+    private val _sessionEvents = MutableSharedFlow<InvalidationReason>(
+        replay = 1,
+        extraBufferCapacity = 0,
+    )
+    val sessionEvents: SharedFlow<InvalidationReason> = _sessionEvents.asSharedFlow()
 
     private fun resolveInitialState(): AuthState = when {
         userIdentityStore.isUserLoggedIn() && tokenStore.isLoggedIn() -> AuthState.FullyConnected
@@ -121,8 +156,20 @@ class SessionManager @Inject constructor(
         _authState.value is AuthState.UserOnly || _authState.value is AuthState.FullyConnected
 
     /** Called after a successful user register/login against the central server. */
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Synchronized
     fun markUserLoggedIn() {
+        // Clear the replay cache so a stale [TokenRejected] from the
+        // previous session (cached to survive cold-start ordering —
+        // see [_sessionEvents] docs) cannot be re-delivered to the
+        // next LoginViewModel instance and fire a spurious "session
+        // expired" snackbar after a successful re-login.
+        //
+        // `resetReplayCache()` is `@ExperimentalCoroutinesApi` per
+        // kotlinx-coroutines 1.9.0. The API has been stable since 1.4.0
+        // and is the documented mechanism for this use case
+        // (https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-mutable-shared-flow/reset-replay-cache.html).
+        _sessionEvents.resetReplayCache()
         _authState.value = AuthState.UserOnly
     }
 
@@ -147,14 +194,14 @@ class SessionManager @Inject constructor(
 
     /**
      * Full logout: clear user identity AND agent-connection tokens.
-     * Transitions any state → Unauthenticated.
+     * Transitions any state → Unauthenticated. Delegates to
+     * [invalidateUserSession] with [InvalidationReason.Manual] so that
+     * consumers collecting [sessionEvents] (e.g. LoginViewModel) can
+     * distinguish user-initiated logout from server-forced logout and
+     * only show a "session expired" notice for the latter.
      */
-    @Synchronized
     fun userLogout() {
-        userIdentityStore.clearUserSession()
-        tokenStore.clear()
-        _authState.value = AuthState.Unauthenticated
-        inFlight.getAndSet(null)?.cancel()
+        invalidateUserSession(InvalidationReason.Manual)
     }
 
     /**
@@ -165,12 +212,33 @@ class SessionManager @Inject constructor(
      * This is the legacy logout path, now equivalent to [userLogout] —
      * it clears both stores.
      */
-    @Synchronized
     fun forceLogout() {
+        invalidateUserSession(InvalidationReason.Manual)
+    }
+
+    /**
+     * Atomically clear the entire session and signal why. Called from:
+     *  * [CentralAuthInterceptor] on a 401 from the central server
+     *    (dashboard JWT rejected);
+     *  * [com.claudemobile.app.data.network.WebSocketConnection] on a
+     *    4001 close on the user-scoped channel;
+     *  * [userLogout] / [forceLogout] for user-initiated logout.
+     *
+     * Idempotent: subsequent calls while already [AuthState.Unauthenticated]
+     * are a no-op and do NOT re-emit on [sessionEvents]. This makes the
+     * REST-401 / WS-4001 race on cold start emit the "session expired"
+     * snackbar exactly once even though both paths fire.
+     */
+    @Synchronized
+    fun invalidateUserSession(reason: InvalidationReason) {
+        if (_authState.value is AuthState.Unauthenticated) return
         userIdentityStore.clearUserSession()
         tokenStore.clear()
         _authState.value = AuthState.Unauthenticated
         inFlight.getAndSet(null)?.cancel()
+        if (reason is InvalidationReason.TokenRejected) {
+            _sessionEvents.tryEmit(reason)
+        }
     }
 
     /**

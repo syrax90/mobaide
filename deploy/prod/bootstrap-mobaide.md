@@ -91,7 +91,13 @@ SMTP_FROM_NAME=Claude Mobile
 
 Without SMTP configured, registrations will silently fail to deliver the OTP. Set `EMAIL_VERIFICATION_REQUIRED=false` only for non-production environments without a mail provider. See [`docs/email-verification-workflow.md`](../../docs/email-verification-workflow.md) for all knobs.
 
-All other settings (JWT TTLs, DB path, log format, etc.) can be left at their defaults — `config.py` has sane values.
+All other settings (DB path, log format, etc.) can be left at their defaults — `config.py` has sane values. **JWT TTL exception:** the default TTL for all token types is now `0` (never-expires — no `exp` claim is issued). This is intentional for pre-production use. If you want tokens to expire, set one or more of the following in `.env` to a positive integer (minutes):
+
+```
+MOBILE_TOKEN_EXPIRE_MINUTES=1440      # mobile access token  (e.g. 24 h)
+MOBILE_REFRESH_EXPIRE_MINUTES=10080   # mobile refresh token (e.g. 7 days)
+DASHBOARD_TOKEN_EXPIRE_MINUTES=480    # dashboard token      (e.g. 8 h)
+```
 
 ```bash
 nano /opt/claude-mobile/.env
