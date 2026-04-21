@@ -68,8 +68,9 @@ class TestAgentConfigDefaults:
 
         assert cfg.jwt_secret_key == "supersecret"
         assert cfg.jwt_algorithm == "HS256"
-        assert cfg.jwt_access_token_expire_minutes == 30
-        assert cfg.jwt_refresh_token_expire_minutes == 1440
+        # Default is 0 = never expires (issue JWTs without an `exp` claim).
+        assert cfg.jwt_access_token_expire_minutes == 0
+        assert cfg.jwt_refresh_token_expire_minutes == 0
         assert cfg.user_store_path == "users.json"
         assert cfg.projects_store_path == "projects.json"
         assert cfg.host == "0.0.0.0"

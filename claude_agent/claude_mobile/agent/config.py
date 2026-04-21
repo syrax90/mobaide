@@ -13,8 +13,11 @@ class AgentConfig:
 
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
-    jwt_access_token_expire_minutes: int = 30
-    jwt_refresh_token_expire_minutes: int = 1440  # 24 hours
+    # TTLs are in minutes. 0 = never expires (the JWT is issued without an
+    # `exp` claim). The default is 0 because re-entering credentials on a
+    # phone is painful; set a positive value to opt back into expiration.
+    jwt_access_token_expire_minutes: int = 0
+    jwt_refresh_token_expire_minutes: int = 0
     user_store_path: str = "users.json"
     projects_store_path: str = "projects.json"
     host: str = "0.0.0.0"
@@ -38,10 +41,10 @@ class AgentConfig:
             jwt_secret_key=secret,
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
             jwt_access_token_expire_minutes=int(
-                os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"),
+                os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "0"),
             ),
             jwt_refresh_token_expire_minutes=int(
-                os.getenv("JWT_REFRESH_TOKEN_EXPIRE_MINUTES", "1440"),
+                os.getenv("JWT_REFRESH_TOKEN_EXPIRE_MINUTES", "0"),
             ),
             user_store_path=os.getenv("USER_STORE_PATH", "users.json"),
             projects_store_path=os.getenv("PROJECTS_STORE_PATH", "projects.json"),
