@@ -1,5 +1,6 @@
 package com.claudemobile.app.data.auth
 
+import app.cash.turbine.test
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -200,7 +201,10 @@ class SessionManagerTest {
         sm.forceLogout()
         sm.forceLogout()
 
-        verify(exactly = 3) { store.clear() }
+        // forceLogout delegates to invalidateUserSession(Manual), which is idempotent:
+        // the second and third calls short-circuit because the state is already
+        // Unauthenticated after the first call — so store.clear() is called exactly once.
+        verify(exactly = 1) { store.clear() }
         assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
     }
 
@@ -413,6 +417,200 @@ class SessionManagerTest {
             val result = winner.await()
             assertEquals(SessionManager.RefreshResult.Terminal, result)
             assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+        }
+    }
+
+    // ---- invalidateUserSession / sessionEvents -----------------------------
+
+    @Test
+    fun invalidateUserSession_tokenRejected_clearsBothStores_andEmitsUnauthenticated() = runTest {
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+
+        verify(exactly = 1) { store.clear() }
+        verify(exactly = 1) { userStore.clearUserSession() }
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+    }
+
+    @Test
+    fun invalidateUserSession_tokenRejected_emitsOnSessionEvents() = runTest {
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        sm.sessionEvents.test {
+            sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+            val emitted = awaitItem()
+            assertEquals(
+                SessionManager.InvalidationReason.TokenRejected,
+                emitted,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun invalidateUserSession_manual_doesNotEmitOnSessionEvents() = runTest {
+        // Manual logout is user-initiated — no "session expired" toast needed.
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        sm.sessionEvents.test {
+            sm.invalidateUserSession(SessionManager.InvalidationReason.Manual)
+            expectNoEvents()
+        }
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+    }
+
+    @Test
+    fun invalidateUserSession_isIdempotent_onSecondCall_doesNotReEmit() = runTest {
+        // REST 401 and WS 4001 race on cold start. The second call finds
+        // state already Unauthenticated and must short-circuit WITHOUT
+        // re-emitting on sessionEvents — otherwise the snackbar fires twice.
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        sm.sessionEvents.test {
+            sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+            assertEquals(
+                SessionManager.InvalidationReason.TokenRejected,
+                awaitItem(),
+            )
+            // Second call on an already-Unauthenticated session: no-op.
+            sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        verify(exactly = 1) { store.clear() }
+        verify(exactly = 1) { userStore.clearUserSession() }
+    }
+
+    @Test
+    fun userLogout_delegatesToInvalidateUserSession_withManualReason() = runTest {
+        // Regression guard for the refactor: userLogout must still clear
+        // both stores and flip to Unauthenticated, and must NOT emit on
+        // sessionEvents (Manual reason).
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        sm.sessionEvents.test {
+            sm.userLogout()
+            expectNoEvents()
+        }
+        verify(exactly = 1) { store.clear() }
+        verify(exactly = 1) { userStore.clearUserSession() }
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+    }
+
+    @Test
+    fun markUserLoggedIn_clearsSessionEventsReplayCache() = runTest {
+        // The production SessionManager uses `replay = 1` on _sessionEvents
+        // so a TokenRejected emitted before LoginViewModel exists (cold
+        // start) is still delivered on first collection. Without explicit
+        // cache reset on login success, that cached TokenRejected would
+        // be re-delivered to the NEXT LoginViewModel instance the next
+        // time the user logs out, firing a spurious "session expired"
+        // snackbar. This test pins the reset-on-login contract.
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        // 1. Server invalidates — event cached in replay slot.
+        sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+
+        // 2. User re-logs-in.
+        sm.markUserLoggedIn()
+
+        // 3. Fresh subscriber (mirroring a newly-constructed LoginViewModel
+        //    at a later logout) must NOT see the stale TokenRejected.
+        sm.sessionEvents.test {
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun markAgentConnected_doesNotClearSessionEventsReplayCache() = runTest {
+        // Design invariant: only markUserLoggedIn resets the replay cache.
+        // markAgentConnected represents an agent-scoped connection event
+        // and MUST NOT touch dashboard-JWT session-event state. If a
+        // future refactor copy-pastes resetReplayCache() into
+        // markAgentConnected (e.g. by pattern-matching on markUserLoggedIn),
+        // this test catches it: after invalidate → markAgentConnected,
+        // a fresh subscriber should still see the cached TokenRejected
+        // (proving the replay slot was not disturbed).
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        // 1. Server invalidates — event cached in replay slot.
+        sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+
+        // 2. markAgentConnected runs (hypothetically; semantically it would
+        //    require UserOnly first, but we are asserting a pure behavioural
+        //    contract about the sessionEvents replay cache — that this method
+        //    does not call resetReplayCache).
+        sm.markAgentConnected()
+
+        // 3. Fresh subscriber still observes the cached TokenRejected —
+        //    proving the replay slot was not cleared by markAgentConnected.
+        sm.sessionEvents.test {
+            assertEquals(
+                SessionManager.InvalidationReason.TokenRejected,
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun secondInvalidationAfterReLogin_isDeliveredToFreshSubscriber() = runTest {
+        // End-to-end coverage of the full invalidate → re-login → invalidate
+        // cycle after the replay-cache reset was introduced. Confirms:
+        //   (1) resetReplayCache() in markUserLoggedIn clears stale events,
+        //   (2) the event pipeline is NOT broken by the reset — a brand-new
+        //       TokenRejected emitted after the reset is still delivered,
+        //   (3) a LoginViewModel subscribing AFTER the second invalidation
+        //       sees exactly that (second) event, not a stale one.
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        // 1. First server-forced invalidation (cached in replay slot).
+        sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+
+        // 2. User re-logs-in: replay cache cleared, state → UserOnly.
+        sm.markUserLoggedIn()
+        assertEquals(SessionManager.AuthState.UserOnly, sm.authState.value)
+
+        // 3. Second server-forced invalidation (e.g. the new JWT expires or
+        //    JWT_SECRET_KEY rotates again): must re-populate the replay slot.
+        sm.invalidateUserSession(SessionManager.InvalidationReason.TokenRejected)
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+
+        // 4. Fresh LoginViewModel subscribes AFTER the second invalidation
+        //    and must see the (new, not stale) TokenRejected.
+        sm.sessionEvents.test {
+            assertEquals(
+                SessionManager.InvalidationReason.TokenRejected,
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
         }
     }
 

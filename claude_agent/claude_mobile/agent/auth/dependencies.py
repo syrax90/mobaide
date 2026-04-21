@@ -29,15 +29,21 @@ async def get_current_user(request: Request) -> str:
     try:
         payload = jwt_service.decode_token(token)
     except jwt.InvalidTokenError as exc:
+        # Detail is a fixed, implementation-agnostic string; the specific
+        # PyJWT exception message ("Signature has expired", "Not enough
+        # segments", etc.) is logged for operators but never leaked to
+        # the client. The mobile app reacts to the 401 status code, not
+        # the detail text.
+        logger.warning("agent_access_token_rejected reason=%s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {exc}",
+            detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if payload.token_type != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Expected access token",
+            detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     request.state.username = payload.sub
@@ -67,11 +73,11 @@ async def ws_authenticate(websocket: WebSocket) -> str:
     try:
         payload = jwt_service.decode_token(token)
     except jwt.InvalidTokenError as exc:
-        await websocket.close(code=4001, reason=str(exc))
-        raise _auth_failed(str(exc))
+        await websocket.close(code=4001, reason="Invalid token")
+        raise _auth_failed(f"Invalid access token: {exc}")
 
     if payload.token_type != "access":
-        await websocket.close(code=4001, reason="Expected access token")
+        await websocket.close(code=4001, reason="Invalid token")
         raise _auth_failed("Expected access token")
 
     await websocket.accept()
