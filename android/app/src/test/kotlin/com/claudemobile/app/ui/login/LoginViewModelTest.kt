@@ -6,6 +6,7 @@ import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
 import com.claudemobile.app.data.repository.AuthRepository
+import com.claudemobile.app.data.repository.AuthResult
 import com.claudemobile.app.testing.MainDispatcherRule
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -53,7 +54,6 @@ class LoginViewModelTest {
         assertEquals("", state.password)
         assertFalse(state.isLoading)
         assertNull(state.error)
-        assertFalse(vm.loginSuccess.value)
     }
 
     // ---- Blank-field validation ---------------------------------------------
@@ -93,22 +93,28 @@ class LoginViewModelTest {
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
         coEvery {
             authRepository.loginWithPassword("alice@example.com", "secret")
-        } coAnswers { gate.await() }
+        } coAnswers {
+            gate.await()
+            AuthResult.Success("alice@example.com")
+        }
 
         assertFalse(vm.uiState.value.isLoading)
-        assertFalse(vm.loginSuccess.value)
 
-        vm.loginWithPassword()
-        runCurrent()
-        val loading = vm.uiState.value
-        assertTrue("must enter loading state before repository resolves", loading.isLoading)
-        assertNull(loading.error)
-        assertFalse(vm.loginSuccess.value)
+        vm.navEvents.test {
+            vm.loginWithPassword()
+            runCurrent()
+            val loading = vm.uiState.value
+            assertTrue("must enter loading state before repository resolves", loading.isLoading)
+            assertNull(loading.error)
 
-        gate.complete(Unit)
-        advanceUntilIdle()
+            gate.complete(Unit)
+            advanceUntilIdle()
 
-        assertTrue(vm.loginSuccess.value)
+            val event = awaitItem()
+            assertTrue(event is LoginNavEvent.Success)
+            assertEquals("alice@example.com", (event as LoginNavEvent.Success).email)
+            cancelAndIgnoreRemainingEvents()
+        }
         assertNull(vm.uiState.value.error)
         coVerify(exactly = 1) {
             authRepository.loginWithPassword("alice@example.com", "secret")
@@ -130,7 +136,6 @@ class LoginViewModelTest {
         val state = vm.uiState.value
         assertEquals("Invalid email or password", state.error)
         assertFalse(state.isLoading)
-        assertFalse(vm.loginSuccess.value)
     }
 
     // ---- Other ApiException → "Login failed: ..." --------------------------
@@ -176,12 +181,20 @@ class LoginViewModelTest {
     @Test
     fun onGoogleAuthResult_success_emitsLoginSuccess() = runTest {
         val vm = LoginViewModel(authRepository)
-        coEvery { authRepository.loginWithGoogle("google-token") } returns Unit
+        coEvery { authRepository.loginWithGoogle("google-token") } returns
+            AuthResult.Success("google-user@gmail.com")
 
-        vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
-        advanceUntilIdle()
-
-        assertTrue(vm.loginSuccess.value)
+        vm.navEvents.test {
+            vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
+            advanceUntilIdle()
+            val event = awaitItem()
+            assertTrue(event is LoginNavEvent.Success)
+            assertEquals(
+                "google-user@gmail.com",
+                (event as LoginNavEvent.Success).email,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
         coVerify(exactly = 1) { authRepository.loginWithGoogle("google-token") }
     }
 
@@ -195,7 +208,6 @@ class LoginViewModelTest {
         vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
         advanceUntilIdle()
 
-        assertFalse(vm.loginSuccess.value)
         assertTrue(vm.uiState.value.error!!.contains("Google Sign-In failed"))
     }
 
@@ -211,7 +223,6 @@ class LoginViewModelTest {
         vm.onGoogleAuthResult(GoogleAuthResult.Success("bad-token"))
         advanceUntilIdle()
 
-        assertFalse(vm.loginSuccess.value)
         assertEquals("Google Sign-In failed: api.example.com", vm.uiState.value.error)
         assertFalse(vm.uiState.value.isLoading)
     }
@@ -337,7 +348,6 @@ class LoginViewModelTest {
             state.error,
         )
         assertFalse(state.isLoading)
-        assertFalse(vm.loginSuccess.value)
     }
 
     @Test
@@ -369,7 +379,6 @@ class LoginViewModelTest {
         vm.onGoogleAuthResult(GoogleAuthResult.Success("google-token"))
         advanceUntilIdle()
 
-        assertFalse(vm.loginSuccess.value)
         assertEquals(
             ADMIN_LOGIN_USER_MESSAGE,
             vm.uiState.value.error,

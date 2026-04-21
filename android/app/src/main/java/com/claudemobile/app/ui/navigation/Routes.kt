@@ -5,6 +5,7 @@ import android.net.Uri
 object Routes {
     const val LOGIN = "login"
     const val REGISTER = "register"
+    const val VERIFY_EMAIL = "verify_email/{email}"
     const val AGENT_LIST = "agent_list"
     const val SESSION_LIST = "session_list"
     const val SESSION_DETAIL = "session_detail/{sessionId}"
@@ -19,4 +20,5 @@ object Routes {
     fun sessionDetail(sessionId: String) = "session_detail/$sessionId"
     fun autoScanDetail(projectName: String) =
         "auto_scan_detail/${Uri.encode(projectName)}"
+    fun verifyEmail(email: String) = "verify_email/${Uri.encode(email)}"
 }

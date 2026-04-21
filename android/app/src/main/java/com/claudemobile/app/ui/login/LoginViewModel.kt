@@ -7,6 +7,7 @@ import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.repository.ADMIN_LOGIN_USER_MESSAGE
 import com.claudemobile.app.data.repository.AdminLoginNotSupportedException
 import com.claudemobile.app.data.repository.AuthRepository
+import com.claudemobile.app.data.repository.AuthResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,6 +26,12 @@ data class LoginUiState(
     val error: String? = null,
 )
 
+/** One-shot navigation events from the login screen. */
+sealed interface LoginNavEvent {
+    data class Success(val email: String) : LoginNavEvent
+    data class VerificationRequired(val email: String) : LoginNavEvent
+}
+
 @HiltViewModel
 class LoginViewModel @Inject constructor(
     private val authRepository: AuthRepository,
@@ -33,8 +40,8 @@ class LoginViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(LoginUiState())
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
 
-    private val _loginSuccess = MutableStateFlow(false)
-    val loginSuccess: StateFlow<Boolean> = _loginSuccess.asStateFlow()
+    private val _navEvents = MutableSharedFlow<LoginNavEvent>(extraBufferCapacity = 1)
+    val navEvents: SharedFlow<LoginNavEvent> = _navEvents.asSharedFlow()
 
     // One-shot error channel so duplicate error messages still trigger the snackbar.
     private val _errorEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -58,8 +65,14 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                authRepository.loginWithPassword(state.email.trim(), state.password)
-                _loginSuccess.value = true
+                val result = authRepository.loginWithPassword(state.email.trim(), state.password)
+                _uiState.update { it.copy(isLoading = false) }
+                when (result) {
+                    is AuthResult.Success ->
+                        _navEvents.tryEmit(LoginNavEvent.Success(result.email))
+                    is AuthResult.VerificationRequired ->
+                        _navEvents.tryEmit(LoginNavEvent.VerificationRequired(result.email))
+                }
             } catch (e: AdminLoginNotSupportedException) {
                 emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {
@@ -99,8 +112,14 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                authRepository.loginWithGoogle(idToken)
-                _loginSuccess.value = true
+                val result = authRepository.loginWithGoogle(idToken)
+                _uiState.update { it.copy(isLoading = false) }
+                when (result) {
+                    is AuthResult.Success ->
+                        _navEvents.tryEmit(LoginNavEvent.Success(result.email))
+                    is AuthResult.VerificationRequired ->
+                        _navEvents.tryEmit(LoginNavEvent.VerificationRequired(result.email))
+                }
             } catch (e: AdminLoginNotSupportedException) {
                 emitError(ADMIN_LOGIN_USER_MESSAGE)
             } catch (e: ApiException) {

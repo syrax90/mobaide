@@ -40,6 +40,8 @@ def auth_config() -> CentralServerConfig:
         jwt_secret_key=TEST_JWT_SECRET,
         admin_seed_email=TEST_ADMIN_EMAIL,
         admin_seed_password=TEST_ADMIN_PASSWORD,
+        # Bypass OTP flow for auth-dependency tests (JWT focus, not OTP).
+        email_verification_required=False,
     )
 
 
@@ -169,9 +171,10 @@ class TestRequireRole:
         assert user.role == "admin"
 
     async def test_viewer_blocked_from_admin(self, auth_service):
-        _user_id, token = await auth_service.register_user(
+        result = await auth_service.register_user(
             TEST_USER_EMAIL, TEST_USER_PASSWORD
         )
+        token = result.access_token
         fake_app = _FakeApp(auth_service)
         request = _FakeRequest(
             cookies={"dashboard_token": token}, app=fake_app
@@ -184,9 +187,10 @@ class TestRequireRole:
         assert "admin" in exc_info.value.detail
 
     async def test_multiple_roles_allowed(self, auth_service):
-        _user_id, token = await auth_service.register_user(
+        result = await auth_service.register_user(
             TEST_USER_EMAIL, TEST_USER_PASSWORD
         )
+        token = result.access_token
         fake_app = _FakeApp(auth_service)
         request = _FakeRequest(
             cookies={"dashboard_token": token}, app=fake_app
@@ -267,9 +271,10 @@ class TestGetNonAdminApiUser:
         assert "admin" in exc_info.value.detail.lower()
 
     async def test_viewer_allowed(self, auth_service):
-        _user_id, token = await auth_service.register_user(
+        result = await auth_service.register_user(
             TEST_USER_EMAIL, TEST_USER_PASSWORD
         )
+        token = result.access_token
         fake_app = _FakeApp(auth_service)
         request = _FakeRequest(
             headers={"Authorization": f"Bearer {token}"}, app=fake_app

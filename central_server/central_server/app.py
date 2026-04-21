@@ -14,6 +14,8 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from .agents.service import AgentService
+from .auth.email import EmailSender
+from .auth.rate_limit import ResendRateLimiter
 from .auth.service import AuthService
 from .config import CentralServerConfig
 from .db.database import Database
@@ -62,7 +64,16 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
         # Initialize services
         app.state.routing = RoutingTable()
-        app.state.auth_service = AuthService(config, db)
+        email_sender = EmailSender(config)
+        resend_limiter = ResendRateLimiter(
+            cooldown_seconds=config.email_verification_resend_cooldown_seconds,
+            hourly_cap=config.email_verification_resend_hourly_cap,
+        )
+        app.state.email_sender = email_sender
+        app.state.resend_limiter = resend_limiter
+        app.state.auth_service = AuthService(
+            config, db, email_sender=email_sender, resend_limiter=resend_limiter
+        )
         await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db)
         app.state.agent_service = AgentService(db, app.state.routing)
@@ -189,7 +200,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
 
 async def _token_cleanup_loop(db: Database) -> None:
-    """Periodically clean up expired pairing tokens."""
+    """Periodically clean up expired pairing and email-verification tokens."""
     while True:
         try:
             await asyncio.sleep(60)

@@ -239,8 +239,9 @@ async def _make_second_user(app) -> tuple[str, str]:
     """Create a second user account and return (user_id, dashboard_token)."""
     email = "second@test.local"
     password = "secondpass123"
-    user_id, token = await app.state.auth_service.register_user(email, password)
-    return user_id, token
+    result = await app.state.auth_service.register_user(email, password)
+    assert result.access_token is not None
+    return result.user_id, result.access_token
 
 
 class TestUserEventsEndpoint:

@@ -23,6 +23,7 @@ import com.claudemobile.app.ui.pairing.PairingViewModel
 import com.claudemobile.app.ui.pairing.QrScannerScreen
 import com.claudemobile.app.ui.projects.ProjectsScreen
 import com.claudemobile.app.ui.register.RegisterScreen
+import com.claudemobile.app.ui.register.VerifyEmailScreen
 import com.claudemobile.app.ui.sessions.CreateSessionScreen
 import com.claudemobile.app.ui.sessions.SessionListScreen
 import com.claudemobile.app.ui.settings.SettingsScreen
@@ -79,6 +80,9 @@ fun AppNavigation(sessionManager: SessionManager) {
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
+                onVerificationRequired = { email ->
+                    navController.navigate(Routes.verifyEmail(email))
+                },
                 onRegisterClick = {
                     navController.navigate(Routes.REGISTER)
                 },
@@ -93,11 +97,30 @@ fun AppNavigation(sessionManager: SessionManager) {
                         popUpTo(Routes.REGISTER) { inclusive = true }
                     }
                 },
+                onVerificationRequired = { email ->
+                    navController.navigate(Routes.verifyEmail(email))
+                },
                 onLoginClick = {
                     navController.navigate(Routes.LOGIN) {
                         popUpTo(Routes.REGISTER) { inclusive = true }
                     }
                 },
+            )
+        }
+
+        composable(
+            route = Routes.VERIFY_EMAIL,
+            arguments = listOf(navArgument("email") { type = NavType.StringType }),
+        ) { entry ->
+            VerifyEmailScreen(
+                email = entry.arguments?.getString("email").orEmpty(),
+                viewModel = hiltViewModel(),
+                onVerificationSuccess = {
+                    navController.navigate(Routes.AGENT_LIST) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                onChangeEmail = { navController.popBackStack() },
             )
         }
 

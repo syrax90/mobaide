@@ -1,0 +1,13 @@
+Verify your email
+
+Use this code to finish signing up for {{ from_name }}:
+
+    {{ code }}
+
+This code expires in {{ ttl_minutes }} minutes.
+
+If you didn't ask for this, you can safely ignore this email —
+somebody may have typed the wrong address.
+
+—
+{{ from_name }}  ·  {{ from_domain }}

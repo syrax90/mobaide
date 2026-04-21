@@ -7,6 +7,7 @@ import com.claudemobile.app.data.auth.UserIdentityStore
 import com.claudemobile.app.data.network.ApiException
 import com.claudemobile.app.data.network.CentralApi
 import com.claudemobile.app.data.network.RestApi
+import com.claudemobile.app.data.network.dto.ResendVerificationResponse
 import com.claudemobile.app.data.network.dto.TokenResponse
 import com.claudemobile.app.data.network.dto.UserAuthResponse
 import io.mockk.Runs
@@ -326,6 +327,98 @@ class AuthRepositoryTest {
 
         verify(exactly = 0) { userStore.saveUserSession(any(), any(), any(), any()) }
         verify(exactly = 0) { sessionManager.markUserLoggedIn() }
+    }
+
+    // ---- Email verification -------------------------------------------------
+
+    @Test
+    fun register_whenVerificationRequired_doesNotPersistSession() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+
+        coEvery { centralApi.register("pending@test.com", "pw") } returns UserAuthResponse(
+            access_token = null,
+            user_id = "u7",
+            email = "pending@test.com",
+            role = "viewer",
+            status = "verification_required",
+        )
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
+        val result = repo.register("pending@test.com", "pw")
+
+        assertTrue(result is AuthResult.VerificationRequired)
+        assertEquals(
+            "pending@test.com",
+            (result as AuthResult.VerificationRequired).email,
+        )
+        verify(exactly = 0) { userStore.saveUserSession(any(), any(), any(), any()) }
+        verify(exactly = 0) { sessionManager.markUserLoggedIn() }
+    }
+
+    @Test
+    fun verifyEmail_success_savesSession_andMarksLoggedIn() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+
+        coEvery { centralApi.verifyEmail("v@test.com", "123456") } returns UserAuthResponse(
+            access_token = "verified-token",
+            user_id = "u8",
+            email = "v@test.com",
+            role = "viewer",
+        )
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
+        val result = repo.verifyEmail("v@test.com", "123456")
+
+        assertEquals("v@test.com", result.email)
+        verifyOrder {
+            userStore.saveUserSession("verified-token", "v@test.com", "u8", "viewer")
+            sessionManager.markUserLoggedIn()
+        }
+    }
+
+    @Test
+    fun loginWithPassword_on403VerificationRequired_returnsVerificationRequired() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        val sessionManager = mockk<SessionManager>(relaxUnitFun = true)
+
+        val body = """{"detail":{"error":"verification_required","email":"p@test.com"}}"""
+        coEvery { centralApi.login("p@test.com", "pw") } throws ApiException(403, body)
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore, sessionManager = sessionManager)
+        val result = repo.loginWithPassword("p@test.com", "pw")
+
+        assertTrue(result is AuthResult.VerificationRequired)
+        assertEquals("p@test.com", (result as AuthResult.VerificationRequired).email)
+        verify(exactly = 0) { userStore.saveUserSession(any(), any(), any(), any()) }
+        verify(exactly = 0) { sessionManager.markUserLoggedIn() }
+    }
+
+    @Test
+    fun resendVerification_onSent_returnsSent() = runTest {
+        val centralApi = newCentralApi()
+        coEvery { centralApi.resendVerification("r@test.com") } returns
+            ResendVerificationResponse(status = "sent")
+
+        val result = newRepo(centralApi = centralApi).resendVerification("r@test.com")
+
+        assertEquals(ResendOutcome.Sent, result)
+    }
+
+    @Test
+    fun resendVerification_on429_returnsRateLimitedWithCooldown() = runTest {
+        val centralApi = newCentralApi()
+        val body = """{"detail":{"error":"resend_rate_limited","cooldown_seconds_remaining":42}}"""
+        coEvery { centralApi.resendVerification("r2@test.com") } throws ApiException(429, body)
+
+        val result = newRepo(centralApi = centralApi).resendVerification("r2@test.com")
+
+        assertTrue(result is ResendOutcome.RateLimited)
+        assertEquals(42, (result as ResendOutcome.RateLimited).cooldownSecondsRemaining)
     }
 
     @Test

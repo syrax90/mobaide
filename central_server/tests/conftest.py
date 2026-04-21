@@ -30,6 +30,9 @@ def config(tmp_path) -> CentralServerConfig:
         pairing_token_ttl_seconds=300,
         ws_ping_interval=20,
         agent_disconnect_timeout=30,
+        # Bypass OTP flow for legacy tests — covered by the dedicated
+        # test_email_verification.py suite with this flag flipped back on.
+        email_verification_required=False,
     )
 
 

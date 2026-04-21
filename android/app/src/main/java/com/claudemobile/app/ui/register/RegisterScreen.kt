@@ -48,10 +48,10 @@ import kotlinx.coroutines.launch
 fun RegisterScreen(
     viewModel: RegisterViewModel,
     onRegisterSuccess: () -> Unit,
+    onVerificationRequired: (String) -> Unit = {},
     onLoginClick: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val registerSuccess by viewModel.registerSuccess.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var passwordVisible by remember { mutableStateOf(false) }
     var confirmPasswordVisible by remember { mutableStateOf(false) }
@@ -60,8 +60,14 @@ fun RegisterScreen(
 
     val googleAuthClient = remember(context) { GoogleAuthClient(context) }
 
-    LaunchedEffect(registerSuccess) {
-        if (registerSuccess) onRegisterSuccess()
+    LaunchedEffect(Unit) {
+        viewModel.navEvents.collect { event ->
+            when (event) {
+                is RegisterNavEvent.Success -> onRegisterSuccess()
+                is RegisterNavEvent.VerificationRequired ->
+                    onVerificationRequired(event.email)
+            }
+        }
     }
 
     LaunchedEffect(Unit) {

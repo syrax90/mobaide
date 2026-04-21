@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -10,18 +9,14 @@ from fastapi.templating import Jinja2Templates
 
 from ..auth.dependencies import require_role
 from ..auth.models import UserTokenPayload
+from ..auth.service import VerificationRequiredError
+from ..templates_dir import resolve_templates_dir
 
 _require_admin = require_role("admin")
 
 logger = logging.getLogger(__name__)
 
-# Templates live in central_server/templates/ (sibling of the package dir for
-# source checkouts, or alongside the working directory when packaged into a
-# Docker image that only ships site-packages).
-_CWD_TEMPLATES = Path.cwd() / "templates"
-_SIBLING_TEMPLATES = Path(__file__).resolve().parent.parent.parent / "templates"
-_TEMPLATES_DIR = _CWD_TEMPLATES if _CWD_TEMPLATES.is_dir() else _SIBLING_TEMPLATES
-templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+templates = Jinja2Templates(directory=str(resolve_templates_dir()))
 
 router = APIRouter(prefix="/dashboard")
 
@@ -44,6 +39,13 @@ async def login_submit(request: Request):
     try:
         user_id, role, token = await auth_service.login_user(
             str(email), str(password)
+        )
+    except VerificationRequiredError:
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"error": "Please verify your email before signing in."},
+            status_code=status.HTTP_403_FORBIDDEN,
         )
     except ValueError:
         return templates.TemplateResponse(

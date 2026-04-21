@@ -243,7 +243,7 @@ class TestUserCRUD:
         """Verify that PRAGMA user_version is set after migration."""
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 4
+        assert row[0] == 5
 
 
 class TestAdminOwnedAgentPurgeMigration:
@@ -285,7 +285,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 4
+        assert row[0] == 5
 
         assert await db.get_agent(admin_agent_id) is None
         assert await db.list_pairings_for_agent(admin_agent_id) == []
@@ -316,7 +316,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 4
+        assert row[0] == 5
         await db.close()
 
 
