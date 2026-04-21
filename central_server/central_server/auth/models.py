@@ -13,7 +13,7 @@ class MobileTokenPayload:
     agent_id: str
     user_id: str  # owner user_id
     token_type: str  # "mobile_access"
-    exp: int
+    exp: int | None  # None = token has no `exp` claim (never expires)
     iat: int
 
 
@@ -25,7 +25,7 @@ class UserTokenPayload:
     email: str
     role: str  # "admin" | "viewer"
     token_type: str  # "dashboard"
-    exp: int
+    exp: int | None  # None = token has no `exp` claim (never expires)
     iat: int
 
 

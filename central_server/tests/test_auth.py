@@ -201,3 +201,74 @@ class TestAdminSeeding:
         after = await db.get_user_by_email(TEST_ADMIN_EMAIL)
         assert after is not None
         assert after["role"] == "viewer"  # unchanged
+
+
+class TestZeroTtlTokens:
+    """Tokens issued with `*_expire_minutes == 0` omit the `exp` claim
+    entirely and decode with `payload.exp is None`.
+    """
+
+    async def test_mobile_token_with_zero_ttl_has_no_exp(
+        self, auth: AuthService, db: Database
+    ):
+        owner = await db.create_user(email="owner@test.local", password_hash="h")
+        agent_id, _ = await db.register_agent("test", owner)
+        # Default config has mobile_token_expire_minutes == 0.
+        access, _refresh = await auth.create_mobile_tokens(
+            "device-1", agent_id, owner
+        )
+
+        # Raw JWT must not contain an `exp` claim when TTL is 0.
+        raw_claims = jwt.decode(access, options={"verify_signature": False})
+        assert "exp" not in raw_claims
+        assert "iat" in raw_claims  # iat is always emitted
+
+        # Normal decode path exposes exp as None (not raising KeyError).
+        payload = auth.decode_mobile_token(access)
+        assert payload.exp is None
+        assert isinstance(payload.iat, int)
+
+    async def test_dashboard_token_with_zero_ttl_has_no_exp(
+        self, auth: AuthService
+    ):
+        _user_id, token = await auth.register_user("user@example.com", "pass123")
+
+        raw_claims = jwt.decode(token, options={"verify_signature": False})
+        assert "exp" not in raw_claims
+        assert "iat" in raw_claims
+
+        payload = auth.decode_dashboard_token(token)
+        assert payload.exp is None
+        assert isinstance(payload.iat, int)
+
+    async def test_nonzero_ttl_still_sets_exp(self, db: Database):
+        """With a positive TTL, `exp` must be set to iat + ttl*60."""
+        config = CentralServerConfig(
+            jwt_secret_key=TEST_SECRET,
+            mobile_token_expire_minutes=60,
+            dashboard_token_expire_minutes=120,
+        )
+        auth = AuthService(config, db)
+        owner = await db.create_user(email="owner2@test.local", password_hash="h")
+        agent_id, _ = await db.register_agent("test", owner)
+        access, _refresh = await auth.create_mobile_tokens(
+            "device-1", agent_id, owner
+        )
+
+        raw_claims = jwt.decode(access, options={"verify_signature": False})
+        assert "exp" in raw_claims
+        assert raw_claims["exp"] == raw_claims["iat"] + 60 * 60
+
+        payload = auth.decode_mobile_token(access)
+        assert payload.exp == raw_claims["exp"]
+
+    async def test_mobile_token_type_rejects_non_mobile(self, auth: AuthService):
+        """A dashboard token must not decode as a mobile access token, even
+        when it has no `exp` claim (guarding the type check under the new
+        missing-exp path).
+        """
+        _user_id, dashboard_token = await auth.register_user(
+            "x@example.com", "pass123"
+        )
+        with pytest.raises(jwt.InvalidTokenError, match="mobile_access"):
+            auth.decode_mobile_token(dashboard_token)

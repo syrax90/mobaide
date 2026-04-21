@@ -18,7 +18,7 @@ SECRET = "unit-test-secret-do-not-use-in-prod"
 
 class TestRoundTrip:
     def test_access_token_round_trip(self):
-        svc = JwtService(SECRET)
+        svc = JwtService(SECRET, access_ttl_minutes=30)
         token = svc.create_access_token("alice")
 
         payload = svc.decode_token(token)
@@ -39,16 +39,26 @@ class TestRoundTrip:
         assert payload.token_type == "refresh"
 
     def test_exp_and_iat_are_utc_aware(self):
-        svc = JwtService(SECRET)
+        svc = JwtService(SECRET, access_ttl_minutes=30)
         token = svc.create_access_token("alice")
 
         payload = svc.decode_token(token)
 
+        assert payload.exp is not None
         assert payload.exp.tzinfo is not None
         assert payload.iat.tzinfo is not None
         # Both should be UTC (offset zero)
         assert payload.exp.utcoffset() == timedelta(0)
         assert payload.iat.utcoffset() == timedelta(0)
+
+    def test_default_ttl_issues_non_expiring_token(self):
+        """Default TTL (0) means no `exp` claim — token never expires."""
+        svc = JwtService(SECRET)
+        token = svc.create_access_token("alice")
+
+        payload = svc.decode_token(token)
+
+        assert payload.exp is None
 
 
 class TestTtlBehavior:
@@ -58,6 +68,7 @@ class TestTtlBehavior:
 
         payload = svc.decode_token(token)
 
+        assert payload.exp is not None
         delta = payload.exp - payload.iat
         # Source calls datetime.now() exactly once per create_*_token, so exp - iat
         # should be the exact TTL.
@@ -69,17 +80,30 @@ class TestTtlBehavior:
 
         payload = svc.decode_token(token)
 
+        assert payload.exp is not None
         assert payload.exp - payload.iat == timedelta(minutes=120)
 
-    def test_refresh_ttl_longer_than_access_ttl_by_default(self):
-        svc = JwtService(SECRET)
+    def test_refresh_ttl_longer_than_access_ttl_when_both_set(self):
+        svc = JwtService(SECRET, access_ttl_minutes=30, refresh_ttl_minutes=1440)
 
         access_payload = svc.decode_token(svc.create_access_token("alice"))
         refresh_payload = svc.decode_token(svc.create_refresh_token("alice"))
 
+        assert access_payload.exp is not None
+        assert refresh_payload.exp is not None
         access_delta = access_payload.exp - access_payload.iat
         refresh_delta = refresh_payload.exp - refresh_payload.iat
         assert refresh_delta > access_delta
+
+    def test_ttl_zero_omits_exp_claim(self):
+        """access_ttl_minutes=0 and refresh_ttl_minutes=0 → no `exp` claim."""
+        svc = JwtService(SECRET, access_ttl_minutes=0, refresh_ttl_minutes=0)
+
+        access_payload = svc.decode_token(svc.create_access_token("alice"))
+        refresh_payload = svc.decode_token(svc.create_refresh_token("alice"))
+
+        assert access_payload.exp is None
+        assert refresh_payload.exp is None
 
 
 class TestExpiredToken:

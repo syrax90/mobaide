@@ -77,7 +77,13 @@ If you use Google-Sign-In on the Android app:
 GOOGLE_CLIENT_ID=<your-google-client-id.apps.googleusercontent.com>
 ```
 
-All other settings (JWT TTLs, DB path, log format, etc.) can be left at their defaults — `config.py` has sane values.
+All other settings (DB path, log format, etc.) can be left at their defaults — `config.py` has sane values. **JWT TTL exception:** the default TTL for all token types is now `0` (never-expires — no `exp` claim is issued). This is intentional for pre-production use. If you want tokens to expire, set one or more of the following in `.env` to a positive integer (minutes):
+
+```
+MOBILE_TOKEN_EXPIRE_MINUTES=1440      # mobile access token  (e.g. 24 h)
+MOBILE_REFRESH_EXPIRE_MINUTES=10080   # mobile refresh token (e.g. 7 days)
+DASHBOARD_TOKEN_EXPIRE_MINUTES=480    # dashboard token      (e.g. 8 h)
+```
 
 ```bash
 nano /opt/claude-mobile/.env

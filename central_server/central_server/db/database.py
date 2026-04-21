@@ -83,6 +83,14 @@ def _hash_token(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+# Sentinel timestamp used in `mobile_refresh_tokens.expires_at` when the caller
+# requests a non-expiring refresh token (expire_minutes == 0). ISO-8601 strings
+# sort lexically in SQLite, so any real `datetime.now(UTC)` compares strictly
+# less than this value and the existing `expires_at > now` query continues to
+# match.
+_NEVER_EXPIRES_AT = "9999-12-31T23:59:59.999999+00:00"
+
+
 class Database:
     """Async SQLite database for the central server."""
 
@@ -452,14 +460,17 @@ class Database:
     ) -> None:
         token_hash = _hash_token(raw_token)
         now = datetime.now(timezone.utc)
-        expires_at = datetime.fromtimestamp(
-            now.timestamp() + expire_minutes * 60, tz=timezone.utc
-        )
+        if expire_minutes == 0:
+            expires_at_iso = _NEVER_EXPIRES_AT
+        else:
+            expires_at_iso = datetime.fromtimestamp(
+                now.timestamp() + expire_minutes * 60, tz=timezone.utc
+            ).isoformat()
         await self.conn.execute(
             "INSERT INTO mobile_refresh_tokens "
             "(token_hash, mobile_device_id, agent_id, created_at, expires_at) "
             "VALUES (?, ?, ?, ?, ?)",
-            (token_hash, mobile_device_id, agent_id, now.isoformat(), expires_at.isoformat()),
+            (token_hash, mobile_device_id, agent_id, now.isoformat(), expires_at_iso),
         )
         await self.conn.commit()
 

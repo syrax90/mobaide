@@ -18,9 +18,13 @@ class CentralServerConfig:
     google_client_id: str | None = None
 
     jwt_algorithm: str = "HS256"
-    mobile_token_expire_minutes: int = 1440  # 24 hours
-    mobile_refresh_expire_minutes: int = 10080  # 7 days
-    dashboard_token_expire_minutes: int = 480  # 8 hours
+    # TTLs are in minutes. 0 = never expires (the token is issued without
+    # an `exp` claim; refresh tokens are stored with a year-9999 sentinel
+    # in `mobile_refresh_tokens.expires_at`). Chosen as the default because
+    # the mobile app has to be re-paired by hand whenever tokens expire.
+    mobile_token_expire_minutes: int = 0
+    mobile_refresh_expire_minutes: int = 0
+    dashboard_token_expire_minutes: int = 0
     db_path: str = "central_server.db"
     host: str = "0.0.0.0"
     port: int = 9000
@@ -43,13 +47,13 @@ class CentralServerConfig:
             google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
             mobile_token_expire_minutes=int(
-                os.getenv("MOBILE_TOKEN_EXPIRE_MINUTES", "1440"),
+                os.getenv("MOBILE_TOKEN_EXPIRE_MINUTES", "0"),
             ),
             mobile_refresh_expire_minutes=int(
-                os.getenv("MOBILE_REFRESH_EXPIRE_MINUTES", "10080"),
+                os.getenv("MOBILE_REFRESH_EXPIRE_MINUTES", "0"),
             ),
             dashboard_token_expire_minutes=int(
-                os.getenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "480"),
+                os.getenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "0"),
             ),
             db_path=os.getenv("DB_PATH", "central_server.db"),
             host=os.getenv("HOST", "0.0.0.0"),
