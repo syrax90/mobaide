@@ -123,7 +123,10 @@ class TestGetCurrentUser:
         assert resp.status_code == 200
         assert resp.json() == {"username": "alice"}
 
-    def test_refresh_token_rejected_with_expected_access_detail(self):
+    def test_refresh_token_rejected_with_invalid_token_detail(self):
+        # Type-mismatch and expired tokens now share a single opaque
+        # 401 body so the mobile client treats all auth failures
+        # identically (the specific reason is logged server-side).
         svc = JwtService(SECRET)
         refresh = svc.create_refresh_token("alice")
         client = TestClient(_make_test_app(svc))
@@ -133,7 +136,7 @@ class TestGetCurrentUser:
         )
 
         assert resp.status_code == 401
-        assert resp.json().get("detail") == "Expected access token"
+        assert resp.json().get("detail") == "Invalid token"
         assert resp.headers.get("www-authenticate") == "Bearer"
 
     def test_expired_access_token_returns_401(self):
@@ -213,7 +216,10 @@ class TestWsAuthenticate:
         assert ws.close.await_args.kwargs.get("code") == 4001
         ws.accept.assert_not_called()
 
-    async def test_refresh_token_closes_4001_with_expected_access_reason(self):
+    async def test_refresh_token_closes_4001_with_invalid_token_reason(self):
+        # WS auth mirrors REST: any rejection (wrong type, expired,
+        # forged signature) closes with a unified "Invalid token"
+        # reason; the specific cause is logged server-side.
         svc = JwtService(SECRET)
         refresh = svc.create_refresh_token("alice")
         ws = _make_fake_ws(svc, token=refresh)
@@ -224,7 +230,7 @@ class TestWsAuthenticate:
         ws.close.assert_awaited_once()
         kwargs = ws.close.await_args.kwargs
         assert kwargs.get("code") == 4001
-        assert kwargs.get("reason") == "Expected access token"
+        assert kwargs.get("reason") == "Invalid token"
         ws.accept.assert_not_called()
 
     async def test_valid_access_token_accepts_and_returns_username(self):

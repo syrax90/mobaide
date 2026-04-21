@@ -33,6 +33,10 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
     """Authenticate a mobile WebSocket via ``?token=`` query param.
 
     Calls ``websocket.accept()`` on success. Closes with code 4001 on failure.
+    The close ``reason`` is a generic ``"Invalid token"`` — the specific
+    PyJWT exception (``"Signature has expired"``, ``"Signature verification
+    failed"``, etc.) is logged at WARN for operators but never surfaced to
+    the client, which reacts only to the 4001 close code.
     """
     auth_service = _get_auth_service(websocket)
     token = websocket.query_params.get("token")
@@ -43,11 +47,11 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
     try:
         payload = auth_service.decode_mobile_token(token)
     except jwt.InvalidTokenError as exc:
-        await websocket.close(code=4001, reason=str(exc))
-        raise _auth_failed(str(exc))
+        await websocket.close(code=4001, reason="Invalid token")
+        raise _auth_failed(f"Invalid mobile token: {exc}")
 
     if payload.token_type != "mobile_access":
-        await websocket.close(code=4001, reason="Expected mobile_access token")
+        await websocket.close(code=4001, reason="Invalid token")
         raise _auth_failed("Expected mobile_access token")
 
     await websocket.accept()
@@ -63,6 +67,10 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     Accepts the same dashboard JWT used for REST API calls (see
     ``get_api_user``). On success, calls ``websocket.accept()`` and returns
     the decoded payload. Closes with 4001 on failure.
+
+    The close ``reason`` is a generic ``"Invalid token"`` — specific
+    PyJWT exception text is logged at WARN for operators but not exposed
+    to the client, which reacts only to the 4001 close code.
     """
     auth_service = _get_auth_service(websocket)
     token = websocket.query_params.get("token")
@@ -73,8 +81,8 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     try:
         payload = auth_service.decode_dashboard_token(token)
     except jwt.InvalidTokenError as exc:
-        await websocket.close(code=4001, reason=str(exc))
-        raise _auth_failed(str(exc))
+        await websocket.close(code=4001, reason="Invalid token")
+        raise _auth_failed(f"Invalid dashboard token: {exc}")
 
     await websocket.accept()
     return payload
@@ -149,9 +157,10 @@ async def get_api_user(request: Request) -> UserTokenPayload:
     try:
         user_payload = auth_service.decode_dashboard_token(token)
     except jwt.InvalidTokenError as exc:
+        logger.warning("dashboard_token_rejected reason=%s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {exc}",
+            detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user_payload
@@ -192,14 +201,15 @@ async def get_mobile_user(request: Request) -> MobileTokenPayload:
     try:
         payload = auth_service.decode_mobile_token(token)
     except jwt.InvalidTokenError as exc:
+        logger.warning("mobile_token_rejected reason=%s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {exc}",
+            detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if payload.token_type != "mobile_access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Expected mobile_access token",
+            detail="Invalid token",
         )
     return payload

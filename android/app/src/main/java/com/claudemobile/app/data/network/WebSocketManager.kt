@@ -51,6 +51,17 @@ class WebSocketConnection(
      * reconnecting while the user is merely logged in.
      */
     private val isAuthenticated: () -> Boolean = sessionManager::isLoggedIn,
+    /**
+     * Invoked exactly once when the server closes the handshake with
+     * code 4001 (authentication failed) or completes the HTTP upgrade
+     * with status 401. Used by user-scoped channels to invalidate the
+     * dashboard JWT — the matching REST interceptor does the same on
+     * 401, and the two paths race on cold start, so this callback must
+     * route through [SessionManager.invalidateUserSession] which is
+     * idempotent. Default is a no-op (agent-scoped channels rely on
+     * the pre-connect refresh in their URL provider instead).
+     */
+    private val onAuthFailure: (() -> Unit)? = null,
 ) {
     /**
      * Defence-in-depth: without this handler, any uncaught exception in
@@ -147,12 +158,24 @@ class WebSocketConnection(
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 _events.tryEmit(WsEvent.Disconnected)
+                if (code == AUTH_FAILED_CLOSE_CODE) {
+                    handleAuthFailure()
+                    return
+                }
                 scheduleReconnect()
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 _events.tryEmit(WsEvent.Error(t))
                 _events.tryEmit(WsEvent.Disconnected)
+                // okhttp surfaces a rejected WebSocket upgrade with the
+                // original HTTP status in `response.code`; 401 here means
+                // the server refused the handshake for the same reason a
+                // 4001 `onClosed` would — treat them identically.
+                if (response?.code == 401) {
+                    handleAuthFailure()
+                    return
+                }
                 scheduleReconnect()
             }
         })
@@ -174,9 +197,31 @@ class WebSocketConnection(
         }
     }
 
+    /**
+     * Stop reconnecting and notify the caller that the server rejected
+     * our credentials. Safe to call multiple times — the `onAuthFailure`
+     * callback routes through [SessionManager.invalidateUserSession]
+     * which is itself idempotent.
+     */
+    private fun handleAuthFailure() {
+        shouldReconnect = false
+        reconnectJob?.cancel()
+        reconnectJob = null
+        onAuthFailure?.invoke()
+    }
+
     companion object {
         private const val INITIAL_BACKOFF_MS = 1000L
         private const val MAX_BACKOFF_MS = 30_000L
+
+        /**
+         * Close code used by the central server's WebSocket auth
+         * dependencies (see `ws_authenticate_mobile` /
+         * `ws_authenticate_user` in the Python server) when the token
+         * is missing, malformed, or rejected. 4001 is in the 4000–4999
+         * application-private range per RFC 6455 §7.4.2.
+         */
+        private const val AUTH_FAILED_CLOSE_CODE = 4001
     }
 }
 
@@ -273,6 +318,16 @@ class WebSocketManager(
             sessionManager = sessionManager,
             urlProvider = provider,
             isAuthenticated = { userIdentityStore.isUserLoggedIn() },
+            // When the server closes with 4001 (or upgrades with 401) on
+            // the user-scoped channel, the dashboard JWT is dead. Mirror
+            // the REST-side [CentralAuthInterceptor]: flip the session
+            // to Unauthenticated so navigation routes back to LOGIN and
+            // the snackbar fires once.
+            onAuthFailure = {
+                sessionManager.invalidateUserSession(
+                    SessionManager.InvalidationReason.TokenRejected,
+                )
+            },
         )
     }
 
