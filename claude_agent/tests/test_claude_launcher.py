@@ -18,12 +18,17 @@ def _make_project(path: str, *, key: str | None = None, conda: str | None = None
 @pytest.mark.asyncio
 async def test_argv_minimal_adds_bypass(tmp_path: Path):
     """Default options now force bypass mode — the mobile client cannot mediate
-    approval dialogs, so sessions always start with permissions skipped."""
+    approval dialogs, so sessions always start with permissions skipped. Max
+    effort is also on by default."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)), ClaudeOptions()
     )
-    assert spec.argv == ["claude", "--debug", "--dangerously-skip-permissions"]
+    assert spec.argv == [
+        "claude", "--debug",
+        "--dangerously-skip-permissions",
+        "--effort", "max",
+    ]
 
 
 @pytest.mark.asyncio
@@ -39,6 +44,7 @@ async def test_argv_plan_mode_with_default_skip_permissions(tmp_path: Path):
         "claude", "--debug",
         "--permission-mode", "plan",
         "--allow-dangerously-skip-permissions",
+        "--effort", "max",
     ]
 
 
@@ -50,30 +56,39 @@ async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
         _make_project(str(tmp_path)),
         ClaudeOptions(plan_mode=True, skip_permissions=False),
     )
-    assert spec.argv == ["claude", "--debug", "--permission-mode", "plan"]
+    assert spec.argv == [
+        "claude", "--debug",
+        "--permission-mode", "plan",
+        "--effort", "max",
+    ]
 
 
 @pytest.mark.asyncio
 async def test_argv_no_plan_no_skip(tmp_path: Path):
-    """Neither plan_mode nor skip_permissions: bare claude --debug."""
+    """Neither plan_mode nor skip_permissions: bare claude --debug plus
+    the default --effort max."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
         ClaudeOptions(plan_mode=False, skip_permissions=False),
     )
-    assert spec.argv == ["claude", "--debug"]
+    assert spec.argv == ["claude", "--debug", "--effort", "max"]
 
 
 @pytest.mark.asyncio
 async def test_argv_no_skip_with_initial_prompt(tmp_path: Path):
     """skip_permissions=False with an initial_prompt: no permission flags,
-    but the ``--`` separator and prompt must still appear."""
+    but the ``--`` separator and prompt must still appear after --effort max."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
         ClaudeOptions(skip_permissions=False, initial_prompt="run it"),
     )
-    assert spec.argv == ["claude", "--debug", "--", "run it"]
+    assert spec.argv == [
+        "claude", "--debug",
+        "--effort", "max",
+        "--", "run it",
+    ]
 
 
 @pytest.mark.asyncio
@@ -93,10 +108,40 @@ async def test_argv_all_flags(tmp_path: Path):
         "--permission-mode",
         "plan",
         "--allow-dangerously-skip-permissions",
+        "--effort",
+        "max",
         "--",
         "hello world",
     ]
     assert spec.env["CLAUDE_NO_MEMORY"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_argv_max_effort_disabled_omits_flag(tmp_path: Path):
+    """When max_effort=False, the --effort flag is not emitted at all, so the
+    CLI falls back to its own default (xhigh for Opus 4.7, high elsewhere)."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(max_effort=False),
+    )
+    assert "--effort" not in spec.argv
+    assert "max" not in spec.argv
+
+
+@pytest.mark.asyncio
+async def test_argv_max_effort_placed_before_prompt_separator(tmp_path: Path):
+    """Regression guard: --effort max MUST appear before the ``--`` separator,
+    otherwise ``max`` would be interpreted as part of the prompt passthrough."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(max_effort=True, initial_prompt="go"),
+    )
+    effort_idx = spec.argv.index("--effort")
+    separator_idx = spec.argv.index("--")
+    assert effort_idx < separator_idx
+    assert spec.argv[effort_idx + 1] == "max"
 
 
 @pytest.mark.asyncio

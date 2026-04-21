@@ -13,4 +13,5 @@ data class ClaudeOptionsModel(
     val branch_name: String? = null,
     val identifier: String? = null,
     val title: String? = null,
+    val max_effort: Boolean = true,
 )

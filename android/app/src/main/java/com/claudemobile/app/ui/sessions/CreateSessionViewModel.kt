@@ -33,6 +33,7 @@ data class CreateSessionUiState(
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = true,
+    val maxEffort: Boolean = true,
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
@@ -153,6 +154,7 @@ class CreateSessionViewModel @Inject constructor(
                     plan_mode = state.planMode,
                     no_memory = state.noMemory,
                     skip_permissions = state.skipPermissions,
+                    max_effort = state.maxEffort,
                     worktree = true,
                     initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
                 )
@@ -186,6 +188,7 @@ class CreateSessionViewModel @Inject constructor(
     fun togglePlanMode(v: Boolean) = _uiState.update { it.copy(planMode = v) }
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
+    fun toggleMaxEffort(v: Boolean) = _uiState.update { it.copy(maxEffort = v) }
     fun toggleWorktree(v: Boolean) = _uiState.update { it.copy(worktree = v) }
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
@@ -206,6 +209,7 @@ class CreateSessionViewModel @Inject constructor(
                         claude_options = ClaudeOptionsModel(
                             no_memory = state.noMemory,
                             skip_permissions = state.skipPermissions,
+                            max_effort = state.maxEffort,
                             worktree = state.worktree,
                             branch_name = state.branchName.takeIf { it.isNotBlank() },
                         ),

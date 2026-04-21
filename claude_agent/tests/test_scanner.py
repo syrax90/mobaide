@@ -274,6 +274,95 @@ class TestProcessIssueEmitsPerStepEvents:
         assert "session" in types
 
 
+class TestProcessIssueForwardsClientOptions:
+    """The scanner's spawn path merges a ``ClaudeOptions`` from the client's
+    stored preferences with per-issue fields (identifier/title). The
+    ``max_effort`` flag must round-trip so that a user who toggled Max
+    effort OFF on the Auto Scan config screen actually gets a session
+    launched WITHOUT ``--effort max``. Nothing else in the suite asserts
+    what ``launcher.build`` receives, so this class is the regression
+    boundary for that wire-up."""
+
+    @pytest.mark.asyncio
+    async def test_process_issue_propagates_max_effort_false_from_client_options(
+        self, tmp_path,
+    ):
+        from claude_mobile.core.claude_launcher import ClaudeOptions
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "worktree")
+        wt_mgr.create_worktree.return_value = wt_result
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = AsyncMock()
+        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+
+        inst = _make_instance(
+            tmp_path, client=client, worktree_mgr=wt_mgr,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+        # Simulate the Auto Scan config-screen submit path where the user
+        # toggled Max effort OFF. The HTTP router stores the client-supplied
+        # options on ``_client_options``; the scanner reads them when it
+        # spawns a session for a matching issue.
+        inst._client_options = ClaudeOptions(max_effort=False)
+
+        await inst._process_issue(_make_issue(issue_id="uuid-off", identifier="CLA-OFF"))
+
+        # launcher.build was called with (project, options). Pull the
+        # second positional arg regardless of whether it was passed by
+        # keyword.
+        call = launcher.build.await_args
+        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
+        assert forwarded.max_effort is False
+        # And the per-issue fields must still be set correctly.
+        assert forwarded.identifier == "CLA-OFF"
+        assert forwarded.title == "Test issue"
+
+    @pytest.mark.asyncio
+    async def test_process_issue_defaults_max_effort_true_when_no_client_options(
+        self, tmp_path,
+    ):
+        """Covers the ``else True`` branch: when the scanner was started
+        without any stored client options (e.g. server restart before any
+        mobile client submitted), the spawned session must still get the
+        default-ON max-effort behavior."""
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        wt_mgr = AsyncMock()
+        wt_result = MagicMock()
+        wt_result.path = str(tmp_path / "worktree")
+        wt_mgr.create_worktree.return_value = wt_result
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = AsyncMock()
+        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+
+        inst = _make_instance(
+            tmp_path, client=client, worktree_mgr=wt_mgr,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+        # No inst._client_options assignment — the constructor default is None.
+        assert inst._client_options is None
+
+        await inst._process_issue(_make_issue(issue_id="uuid-def", identifier="CLA-DEF"))
+
+        call = launcher.build.await_args
+        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
+        assert forwarded.max_effort is True
+
+
 class TestWorktreeCleanup:
     """Coverage for the active_workitems.json + cleanup-on-Done feature."""
 
