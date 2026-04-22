@@ -57,7 +57,6 @@ class AutoScanWsClient(
             conn.events.collect { ev ->
                 when (ev) {
                     is WsEvent.Connected -> {
-                        // Send initial config frame
                         val cfg = buildJsonObject {
                             put("subscribe", json.encodeToJsonElement(subscribe))
                             val rfs = buildJsonObject {

@@ -6,9 +6,9 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 
 /**
- * Encrypted store for the **user identity** — the central-server JWT,
- * email, userId, and role. This is completely separate from [TokenStore],
- * which stores **agent-connection** tokens.
+ * Store the encrypted **user identity** — the central-server JWT, email,
+ * userId, and role. Completely separate from [TokenStore], which holds
+ * **agent-connection** tokens.
  *
  * User identity persists across agent switches: connecting to a different
  * agent clears [TokenStore] but never touches this store.

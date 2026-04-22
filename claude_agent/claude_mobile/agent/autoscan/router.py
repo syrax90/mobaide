@@ -42,7 +42,7 @@ router = APIRouter(
 def _get_manager(request: Request) -> AutoScanSessionManager:
     mgr = getattr(request.app.state, "autoscan_manager", None)
     if mgr is None:
-        # Should not happen post-CLA-39 — the manager is always wired in.
+        # Manager is always wired in at startup; absence means a misconfigured app.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Auto scan manager is not initialised",
@@ -125,8 +125,6 @@ async def scan_status(
     return AutoScanInstanceStatusResponse(**instance.get_status())
 
 
-# -- WebSocket for real-time scan events --
-
 ws_router = APIRouter(tags=["autoscan-ws"])
 
 
@@ -164,7 +162,7 @@ async def ws_autoscan(websocket: WebSocket) -> None:
         await websocket.close(code=4002, reason="Auto scan not configured")
         return
 
-    # Try to read an initial config frame (non-blocking-ish, 200 ms timeout).
+    # 200 ms grace window: client may send a config frame immediately after connect.
     resume_from_seq: dict[str, int] = {}
     subscribe_set: set[str] = set()
     try:
@@ -198,13 +196,12 @@ async def ws_autoscan(websocket: WebSocket) -> None:
 
     msg_count = 0
     try:
-        # Build snapshot
         events_snapshot: dict[str, list[dict]] = {}
         for name, inst in instances.items():
             ring = [e.to_dict() for e in inst.recent_events]
             resume_seq = resume_from_seq.get(name)
             if resume_seq is not None and ring:
-                # If the requested seq is still in (or one before) the ring, replay forward.
+                # Replay only events the client hasn't seen; silently drop the rest if the ring has been evicted.
                 first_seq = ring[0]["seq"]
                 if first_seq <= resume_seq + 1:
                     ring = [e for e in ring if e["seq"] > resume_seq]

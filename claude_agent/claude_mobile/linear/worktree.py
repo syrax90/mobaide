@@ -33,8 +33,6 @@ def convert_to_worktree_slug(identifier: str, title: str) -> str:
     Produces a lowercase, dash-separated slug. Non-alphanumeric characters
     (except dashes) are replaced with dashes. Limited to 10 tokens to keep
     paths manageable on Windows.
-
-    Mirrors PS1 ConvertTo-WorktreeSlug (lines 340-369).
     """
     slug = f"{identifier} {title}".lower()
     slug = re.sub(r"[^a-z0-9-]", "-", slug)
@@ -73,10 +71,7 @@ async def _run_git(
 
 
 class WorktreeManager:
-    """Creates and manages git worktrees for auto-scan issues.
-
-    Reimplements PS1 New-GitWorktree (lines 270-338).
-    """
+    """Create and manage git worktrees for auto-scan issues."""
 
     def __init__(
         self,
@@ -97,8 +92,6 @@ class WorktreeManager:
         The new branch is created from ``origin/<main_branch>`` with
         ``--no-track``, so no upstream is configured and a stray ``git pull``
         inside the worktree cannot merge the main branch into it.
-
-        Returns WorktreeResult on success, None on failure.
         """
         branch_name = f"{self._branch_prefix}/{slug}" if self._branch_prefix else slug
         resolved_base = os.path.join(project_root, self._worktree_base)
@@ -115,7 +108,6 @@ class WorktreeManager:
         if rc == 0:
             logger.debug("Enabled core.longpaths")
 
-        # Fetch from origin
         logger.debug("Fetching from origin...")
         rc, _, stderr = await _run_git("fetch", "origin", cwd=project_root)
         if rc != 0:

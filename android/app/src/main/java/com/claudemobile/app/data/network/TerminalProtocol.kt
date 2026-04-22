@@ -4,11 +4,10 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 
 /**
- * Binary WebSocket frame protocol for terminal I/O (CLA-13).
+ * Define the binary WebSocket frame protocol for terminal I/O.
  *
  * Every frame is a binary message whose first byte identifies the frame
- * type and whose remaining bytes carry the payload. This replaces the old
- * JSON+base64 wire format and lets raw PTY bytes round-trip end-to-end.
+ * type and whose remaining bytes carry the payload.
  *
  * | Byte | Char | Direction | Payload                                       |
  * |------|------|-----------|-----------------------------------------------|
@@ -36,9 +35,7 @@ object TerminalProtocol {
         return out.toByteString()
     }
 
-    /** Wrap a complete command in an `'x'` (execute) frame.
-     *  The server sends Ctrl+C to cancel stale PTY input, pauses to let
-     *  the TUI show a fresh prompt, then writes the payload. */
+    /** Wrap a complete command in an `'x'` (execute) frame; the server clears stale PTY input before writing the payload. */
     fun encodeExecute(bytes: ByteArray): ByteString {
         val out = ByteArray(bytes.size + 1)
         out[0] = TYPE_EXECUTE

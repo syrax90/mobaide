@@ -33,18 +33,15 @@ async def _validate_mobile_connection(
     except WebSocketAuthError:
         return None
 
-    # Verify the token's agent_id matches the requested agent
     if payload.agent_id != agent_id:
         await websocket.close(code=4003, reason="Token not valid for this agent")
         return None
 
-    # Check user owns this agent
     db = websocket.app.state.db
     if not await db.is_agent_owner(agent_id, payload.user_id):
         await websocket.close(code=4003, reason="User does not own this agent")
         return None
 
-    # Check agent is online
     routing: RoutingTable = websocket.app.state.routing
     if not routing.is_agent_online(agent_id):
         await websocket.close(code=4010, reason="Agent is offline")
@@ -123,9 +120,6 @@ async def relay_events(websocket: WebSocket, agent_id: str) -> None:
         routing.unregister_mobile(agent_id, channel_key, client)
 
 
-# -- Internal helpers ----------------------------------------------------------
-
-
 async def _session_reader(
     websocket: WebSocket,
     agent_id: str,
@@ -141,7 +135,6 @@ async def _session_reader(
             data = msg.get("bytes")
             if data is None:
                 continue
-            # Wrap in envelope and push to agent's send queue
             envelope = encode(CH_SESSION_IO, session_id, data)
             agent_conn = routing.get_agent(agent_id)
             if agent_conn is None:

@@ -39,8 +39,8 @@ async def user_events(websocket: WebSocket) -> None:
         return
 
     user_id = payload.sub
-    # The dashboard JWT doesn't carry a device_id, so generate a short
-    # correlation id purely for logging and set-identity purposes.
+    # The dashboard JWT carries no device_id, so generate a short token
+    # for log correlation and as a unique key within the user's connection set.
     device_id = secrets.token_hex(4)
 
     routing: RoutingTable = websocket.app.state.routing

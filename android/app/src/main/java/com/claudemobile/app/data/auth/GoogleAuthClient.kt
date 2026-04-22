@@ -51,18 +51,16 @@ class GoogleAuthClient(private val context: Context) {
 
         val nonce = generateNonce()
 
-        // Stage A: previously authorized accounts, auto-select.
         runStage(
             buildGoogleIdOption(filterByAuthorizedAccounts = true, nonce = nonce, autoSelect = true),
         )?.let { return it }
 
-        // Stage B: any Google account on the device (account picker).
         runStage(
             buildGoogleIdOption(filterByAuthorizedAccounts = false, nonce = nonce, autoSelect = false),
         )?.let { return it }
 
-        // Stage C: classic "Sign in with Google" button flow (works when bottom-sheet UI is disabled
-        // or when no accounts exist — this path also offers "Add account").
+        // Fallback: works when the bottom-sheet "Sign in with Google" toggle is disabled in Google
+        // account settings, and offers an "Add account" entry point when no accounts exist.
         runStage(
             GetSignInWithGoogleOption.Builder(clientId)
                 .setNonce(nonce)
@@ -128,8 +126,7 @@ class GoogleAuthClient(private val context: Context) {
 
     companion object {
         /**
-         * Detects whether [BuildConfig.GOOGLE_WEB_CLIENT_ID] has been wired to a real
-         * OAuth client. Exposed for unit testing.
+         * Return true if [BuildConfig.GOOGLE_WEB_CLIENT_ID] is wired to a real OAuth client.
          */
         fun isClientIdConfigured(clientId: String): Boolean {
             if (clientId.isBlank()) return false
@@ -138,8 +135,7 @@ class GoogleAuthClient(private val context: Context) {
         }
 
         /**
-         * Generate a SHA-256 hex nonce over 32 random bytes, per Google's recommended
-         * replay-protection pattern for Credential Manager sign-in. Exposed for testing.
+         * Generate a SHA-256 hex nonce over 32 random bytes for Credential Manager replay protection.
          */
         fun generateNonce(): String {
             val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }

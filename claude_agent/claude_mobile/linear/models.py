@@ -27,7 +27,7 @@ class LinearIssue:
     """A Linear issue returned by the auto-scan query."""
 
     id: str  # Linear internal UUID
-    identifier: str  # e.g. "CLA-8"
+    identifier: str  # e.g. "TEAM-8"
     title: str
     description: str | None
     state: IssueState
@@ -42,8 +42,6 @@ class ScanStatus(enum.Enum):
     ERROR = "error"
 
 
-# -- Structured event payloads --
-
 SCAN_EVENT_VERSION = 1
 
 
@@ -52,7 +50,7 @@ class ScanPhasePayload:
     phase: str  # "scan_started" | "scan_completed" | "scan_stopped"
     cycle_number: int
     next_scan_at: str | None = None  # ISO8601 UTC
-    issues_processed: int = 0  # # of issues processed in the just-completed cycle
+    issues_processed: int = 0  # count of issues processed in the just-completed cycle
 
 
 @dataclass

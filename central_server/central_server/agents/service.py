@@ -44,7 +44,6 @@ class AgentService:
     async def reregister_agent(self, agent_id: str, user_id: str) -> str:
         """Regenerate agent credentials. Only the owner may call this.
 
-        Returns the new raw_token.
         Raises ValueError if the user is not the owner.
         """
         if not await self._db.is_agent_owner(agent_id, user_id):
@@ -63,7 +62,6 @@ class AgentService:
         if not await self._db.is_agent_owner(agent_id, user_id):
             raise ValueError("Not the owner of this agent")
 
-        # Disconnect from routing table if online
         conn = self._routing.get_agent(agent_id)
         if conn is not None:
             disconnected = self._routing.unregister_agent(agent_id, conn.conn_id)

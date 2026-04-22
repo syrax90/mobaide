@@ -56,7 +56,6 @@ class AuthInterceptor @Inject constructor(
             return synthesizedUnauthorized(request, "Session expired")
         }
 
-        // Prefetch refresh if the access token is about to expire.
         var alreadyRefreshed = false
         if (tokenStore.isAccessTokenExpiringSoon()) {
             when (runBlocking { sessionManager.refresh() }) {

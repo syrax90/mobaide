@@ -32,8 +32,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.claudemobile.app.ui.common.copyToClipboard
 
-// -- Dialog state sealed interfaces ------------------------------------------
-
 sealed interface AddAgentDialogState {
     data object Hidden : AddAgentDialogState
     data object Input : AddAgentDialogState
@@ -53,8 +51,6 @@ sealed interface ReRegisterDialogState {
         val token: String,
     ) : ReRegisterDialogState
 }
-
-// -- Add Agent Dialog --------------------------------------------------------
 
 @Composable
 fun AddAgentDialog(
@@ -117,8 +113,6 @@ fun AddAgentDialog(
     }
 }
 
-// -- Re-Register Dialog ------------------------------------------------------
-
 @Composable
 fun ReRegisterDialog(
     state: ReRegisterDialogState,
@@ -173,8 +167,6 @@ fun ReRegisterDialog(
     }
 }
 
-// -- Delete Agent Dialog -----------------------------------------------------
-
 @Composable
 fun DeleteAgentDialog(
     agentName: String,
@@ -200,8 +192,6 @@ fun DeleteAgentDialog(
         },
     )
 }
-
-// -- Shared credentials display ----------------------------------------------
 
 @Composable
 private fun CredentialsDialog(

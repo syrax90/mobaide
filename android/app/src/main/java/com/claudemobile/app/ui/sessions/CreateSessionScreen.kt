@@ -256,7 +256,7 @@ private fun ModePickerSection(
         )
     }
 
-    // Per CLA-15 AC: hide Auto Scan entirely when no Linear key is configured.
+    // Hide Auto Scan entirely when no Linear key is configured.
     if (project?.has_linear_key == true) {
         ElevatedCard(
             onClick = { onPickMode(CreateSessionMode.AutoScan) },
@@ -293,7 +293,7 @@ private fun StandardConfigSection(
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
-    // CLA-20: worktree requires a git repo — hide the toggle for non-git projects.
+    // Worktree requires a git repo — hide the toggle for non-git projects.
     if (isGitProject) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 

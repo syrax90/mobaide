@@ -112,7 +112,6 @@ def configure_logging(config: "AgentConfig") -> None:
 
     queue_handler = _RawQueueHandler(log_queue)
 
-    # Reset root logger handlers, install our queue handler.
     root = logging.getLogger()
     for h in list(root.handlers):
         root.removeHandler(h)
@@ -127,7 +126,6 @@ def configure_logging(config: "AgentConfig") -> None:
         uv_logger.propagate = True
         uv_logger.setLevel(level)
 
-    # -- Audit logger --
     audit_logger = logging.getLogger("audit")
     for h in list(audit_logger.handlers):
         audit_logger.removeHandler(h)

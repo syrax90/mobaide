@@ -52,7 +52,7 @@ from .envelope import (
 
 logger = logging.getLogger(__name__)
 
-# --- PTY frame constants (mirrors agent/ws/session_io.py) --------------------
+# PTY frame type bytes — must stay in sync with agent/ws/session_io.py.
 FRAME_OUTPUT = b"o"
 FRAME_INPUT = b"i"
 FRAME_RESIZE = b"r"
@@ -91,12 +91,12 @@ _STATE_MAP = {
     SessionState.CRASHED: "crashed",
 }
 
-# DA reply strip (same as session_io.py safety net for ring buffer replay).
+# Strip DA capability-query replies before forwarding ring buffer content.
 _DA_REPLY_STRIP = re.compile(
     rb"\x1b\[\?[\d;]*c|\x1b\[>[\d;]*c|\x1bP![|][^\x1b]*\x1b\\",
 )
 
-# Default shell used when auto-creating sessions for relay traffic.
+# Platform default shell for auto-created sessions.
 _DEFAULT_SHELL = (
     ["cmd.exe"] if platform.system() == "Windows" else ["/bin/bash", "-l"]
 )
@@ -149,8 +149,6 @@ class RelayClient:
         # Track whether we've sent the handshake for a session through relay.
         self._handshake_sent: set[str] = set()
 
-    # -- Public API -----------------------------------------------------------
-
     async def start(self) -> None:
         """Start the relay client background task."""
         self._stopping = False
@@ -181,8 +179,6 @@ class RelayClient:
                 pass
             self._ws = None
         logger.info("relay.stopped")
-
-    # -- Connection lifecycle -------------------------------------------------
 
     async def _connect_loop(self) -> None:
         """Reconnect loop with exponential backoff."""
@@ -215,17 +211,14 @@ class RelayClient:
         ) as ws:
             self._ws = ws
 
-            # Authenticate
             await self._authenticate(ws)
             logger.info(
                 "relay.authenticated agent_id=%s",
                 self._config.agent_id,
             )
 
-            # Reset per-connection state
             self._handshake_sent.clear()
 
-            # Start concurrent sub-tasks
             self._heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(ws), name="relay-heartbeat"
             )
@@ -239,10 +232,8 @@ class RelayClient:
                 self._watch_session_changes(ws), name="relay-session-watch"
             )
 
-            # Bridge all existing sessions
             await self._bridge_existing_sessions(ws)
 
-            # Main reader loop (blocks until disconnect)
             try:
                 await self._reader(ws)
             finally:
@@ -263,8 +254,6 @@ class RelayClient:
         resp = json.loads(raw)
         if resp.get("type") != "auth_ok":
             raise ConnectionError(f"Relay auth failed: {resp}")
-
-    # -- Tunnel reader --------------------------------------------------------
 
     async def _reader(self, ws: ClientConnection) -> None:
         """Read messages from the relay tunnel and dispatch."""
@@ -301,8 +290,6 @@ class RelayClient:
                 "relay.pairing_token expires_at=%s",
                 msg.get("expires_at"),
             )
-
-    # -- Control message handling ---------------------------------------------
 
     async def _handle_control(
         self, payload: bytes, ws: ClientConnection
@@ -417,8 +404,6 @@ class RelayClient:
             }
         await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
 
-    # -- Proxy request handling -----------------------------------------------
-
     async def _handle_proxy_request(
         self, ctrl: dict, ws: ClientConnection
     ) -> None:
@@ -490,7 +475,6 @@ class RelayClient:
         """Route a proxy request to the appropriate internal handler."""
         import re as _re
 
-        # GET /api/sessions
         if method == "GET" and path == "/api/sessions":
             sessions = self._session_manager.list_sessions()
             return {
@@ -508,7 +492,6 @@ class RelayClient:
                 ],
             }
 
-        # POST /api/sessions
         if method == "POST" and path == "/api/sessions":
             body = body or {}
             session_id = uuid.uuid4().hex[:12]
@@ -536,7 +519,6 @@ class RelayClient:
                 },
             }
 
-        # DELETE /api/sessions/{session_id}
         m = _re.match(r"^/api/sessions/([^/]+)$", path)
         if m and method == "DELETE":
             session_id = m.group(1)
@@ -552,7 +534,6 @@ class RelayClient:
                     "body": {"detail": "Session not found"},
                 }
 
-        # GET /api/sessions/{session_id}/scrollback
         m = _re.match(r"^/api/sessions/([^/]+)/scrollback$", path)
         if m and method == "GET":
             session_id = m.group(1)
@@ -564,7 +545,6 @@ class RelayClient:
                     "body": {"detail": "Session not found"},
                 }
             scrollback = session.get_scrollback()
-            # Respect lines limit
             if len(scrollback) > lines_param:
                 scrollback = scrollback[-lines_param:]
             return {
@@ -583,7 +563,6 @@ class RelayClient:
         if projects_resp is not None:
             return projects_resp
 
-        # GET /api/autoscan/list
         if method == "GET" and path == "/api/autoscan/list":
             mgr = getattr(self._app_state, "autoscan_manager", None)
             if mgr is None:
@@ -598,7 +577,6 @@ class RelayClient:
                 }
             return {"status": 200, "body": mgr.list_response()}
 
-        # POST /api/autoscan/start
         if method == "POST" and path == "/api/autoscan/start":
             mgr = getattr(self._app_state, "autoscan_manager", None)
             if mgr is None:
@@ -619,7 +597,6 @@ class RelayClient:
             except Exception as exc:
                 return {"status": 409, "body": {"detail": str(exc)}}
 
-        # POST /api/autoscan/stop
         if method == "POST" and path == "/api/autoscan/stop":
             mgr = getattr(self._app_state, "autoscan_manager", None)
             if mgr is None:
@@ -638,7 +615,6 @@ class RelayClient:
                     "body": {"detail": "No active scan for project"},
                 }
 
-        # POST /api/autoscan/run-now
         if method == "POST" and path == "/api/autoscan/run-now":
             mgr = getattr(self._app_state, "autoscan_manager", None)
             if mgr is None:
@@ -669,8 +645,6 @@ class RelayClient:
             "status": 404,
             "body": {"detail": f"Unknown proxy route: {method} {path}"},
         }
-
-    # -- Projects CRUD proxy --------------------------------------------------
 
     async def _dispatch_projects(
         self,
@@ -777,8 +751,6 @@ class RelayClient:
 
         return None
 
-    # -- Session input from relay ---------------------------------------------
-
     async def _handle_session_input(
         self,
         session_id: str,
@@ -795,8 +767,7 @@ class RelayClient:
             if session is None:
                 return
 
-        # Send handshake (state + replay + ring) on first input for this
-        # session, so the mobile client gets initial state.
+        # Send state + replay + ring on first input so the client gets initial state.
         if session_id not in self._handshake_sent:
             await self._send_session_handshake(session_id, session, ws)
             self._handshake_sent.add(session_id)
@@ -851,15 +822,13 @@ class RelayClient:
     ) -> None:
         """Send state + replay marker + ring buffer for a session."""
         try:
-            # 1) State frame
             status = _STATE_MAP.get(session.state, "running")
             state = _state_frame(status, session.pid)
             await ws.send(encode(CH_SESSION_IO, session_id, state))
 
-            # 2) Replay marker
+            # Replay marker signals end-of-history to the client.
             await ws.send(encode(CH_SESSION_IO, session_id, FRAME_REPLAY))
 
-            # 3) Ring buffer as output frame
             ring = _DA_REPLY_STRIP.sub(b"", session.get_ring())
             await ws.send(
                 encode(CH_SESSION_IO, session_id, FRAME_OUTPUT + ring)
@@ -870,8 +839,6 @@ class RelayClient:
                 session_id,
                 exc,
             )
-
-    # -- Session output bridging ----------------------------------------------
 
     async def _bridge_existing_sessions(self, ws: ClientConnection) -> None:
         """Bridge all currently-active sessions to the relay tunnel."""
@@ -941,8 +908,6 @@ class RelayClient:
             fanout.unsubscribe(queue)
             self._bridges.pop(session_id, None)
 
-    # -- Session change watcher -----------------------------------------------
-
     async def _watch_session_changes(self, ws: ClientConnection) -> None:
         """Watch EventBus for new/removed sessions and auto-bridge."""
         q = self._event_bus.subscribe()
@@ -954,7 +919,6 @@ class RelayClient:
                 sessions = event.payload.get("sessions", [])
                 current_ids = {s["session_id"] for s in sessions}
 
-                # Bridge new sessions
                 for s in sessions:
                     sid = s["session_id"]
                     if sid not in self._bridges:
@@ -962,7 +926,6 @@ class RelayClient:
                         if session:
                             self._bridge_session(session, ws)
 
-                # Cleanup bridges for removed sessions
                 for sid in list(self._bridges):
                     if sid not in current_ids:
                         task = self._bridges.pop(sid, None)
@@ -974,11 +937,8 @@ class RelayClient:
         finally:
             self._event_bus.unsubscribe(q)
 
-    # -- Session list forwarding ----------------------------------------------
-
     async def _forward_session_list(self, ws: ClientConnection) -> None:
         """Forward session-list updates as CH_SESSIONS_LIST envelopes."""
-        # Send initial snapshot
         sessions = self._session_manager.list_sessions()
         session_dicts = [
             {
@@ -994,7 +954,6 @@ class RelayClient:
         initial = orjson.dumps(session_dicts)
         await ws.send(encode(CH_SESSIONS_LIST, "", initial))
 
-        # Subscribe and forward updates
         q = self._broadcaster.subscribe()
         try:
             while True:
@@ -1006,8 +965,6 @@ class RelayClient:
             pass
         finally:
             self._broadcaster.unsubscribe(q)
-
-    # -- Event forwarding -----------------------------------------------------
 
     async def _forward_events(self, ws: ClientConnection) -> None:
         """Forward EventBus events as CH_EVENTS envelopes."""
@@ -1024,8 +981,6 @@ class RelayClient:
         finally:
             self._event_bus.unsubscribe(q)
 
-    # -- Heartbeat ------------------------------------------------------------
-
     async def _heartbeat_loop(self, ws: ClientConnection) -> None:
         """Send periodic heartbeats via CH_CONTROL."""
         try:
@@ -1041,8 +996,6 @@ class RelayClient:
             CH_CONTROL, "", json.dumps({"type": "heartbeat"}).encode()
         )
         await ws.send(hb)
-
-    # -- Cleanup helpers ------------------------------------------------------
 
     def _cancel_all_subtasks(self) -> None:
         """Cancel all per-connection tasks and bridge pumps."""

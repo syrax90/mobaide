@@ -9,8 +9,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-// ── Prompt state hierarchy ──────────────────────────────────────────────────────
-
 sealed class PromptState {
     data object None : PromptState()
 
@@ -29,8 +27,6 @@ data class CheckboxItem(
     val selected: Boolean,
     val isCursor: Boolean,
 )
-
-// ── Prompt detector ─────────────────────────────────────────────────────────────
 
 /**
  * Reads the visible portion of the Termux [com.termux.terminal.TerminalBuffer] when terminal
@@ -58,8 +54,6 @@ class PromptDetector {
         _promptState.value = PromptState.None
     }
 
-    // ── Detection pipeline ──────────────────────────────────────────────────────
-
     private fun detectPrompt(session: TerminalSession): PromptState {
         val emulator = session.emulator ?: return PromptState.None
         val screen = emulator.screen
@@ -76,8 +70,6 @@ class PromptDetector {
             ?: detectTextInput(lines)
             ?: PromptState.None
     }
-
-    // ── Checkbox / multi-select prompts ─────────────────────────────────────────
 
     private fun detectCheckbox(lines: List<String>): PromptState.Checkbox? {
         val items = mutableListOf<CheckboxItem>()
@@ -119,8 +111,6 @@ class PromptDetector {
         )
     }
 
-    // ── Free-text input prompts ─────────────────────────────────────────────────
-
     private fun detectTextInput(lines: List<String>): PromptState.TextInput? {
         // Scan from bottom up — the question is usually the last non-blank line.
         for (line in lines.asReversed()) {
@@ -130,7 +120,6 @@ class PromptDetector {
                     return PromptState.TextInput(question = line.trim())
                 }
             }
-            // Only check the last non-blank line.
             break
         }
         return null

@@ -48,8 +48,6 @@ class ProjectsRepository(
 
     fun observeProjects(): StateFlow<List<ProjectInfo>> = _projects.asStateFlow()
 
-    // --- mutations (CLA-40) ---
-    //
     // None of these mutate `_projects` directly: the server emits a
     // `projects.changed` event after every successful mutation, which the
     // init-block collector above applies to the StateFlow. This keeps the

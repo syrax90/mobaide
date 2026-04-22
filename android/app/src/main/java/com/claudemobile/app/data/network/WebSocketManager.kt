@@ -64,11 +64,8 @@ class WebSocketConnection(
     private val onAuthFailure: (() -> Unit)? = null,
 ) {
     /**
-     * Defence-in-depth: without this handler, any uncaught exception in
-     * a coroutine launched on [scope] bubbles up to Android's default
-     * `Thread.uncaughtExceptionHandler` and terminates the process.
-     * With it, exotic failures inside the URL provider or the reconnect
-     * loop degrade to a [WsEvent.Error] instead.
+     * Degrade uncaught coroutine exceptions to [WsEvent.Error] instead of
+     * propagating to Android's default handler and terminating the process.
      */
     private val exceptionHandler = CoroutineExceptionHandler { _, t ->
         _events.tryEmit(WsEvent.Error(t))
@@ -121,18 +118,15 @@ class WebSocketConnection(
     }
 
     private fun doConnect() {
-        // Any throw from the URL provider (or its upstream dependencies)
-        // is caught here — letting it escape would tear down the
-        // coroutine scope and crash the app.
+        // Catch URL provider throws so they don't escape the coroutine scope.
         val url = try {
             urlProvider()
         } catch (t: Throwable) {
             _events.tryEmit(WsEvent.Error(t))
             return
         } ?: run {
-            // Logged out / no agent URL / session dead — don't connect
-            // and don't retry. A subsequent login will create a fresh
-            // WebSocketConnection anyway.
+            // No URL (logged out / no agent URL / session dead) — emit
+            // Disconnected and stop; a fresh login produces a new connection.
             _events.tryEmit(WsEvent.Disconnected)
             return
         }
@@ -182,10 +176,7 @@ class WebSocketConnection(
     }
 
     private fun scheduleReconnect() {
-        // Don't retry if the caller explicitly disconnected or the
-        // session is dead. This short-circuit is what prevents the
-        // retry-spam loop that used to hammer `/ws/events` every second
-        // after a failed refresh.
+        // Skip retry if the caller disconnected or the session is no longer valid.
         if (!shouldReconnect || !isAuthenticated()) return
         reconnectJob?.cancel()
         reconnectJob = scope.launch {
@@ -215,11 +206,9 @@ class WebSocketConnection(
         private const val MAX_BACKOFF_MS = 30_000L
 
         /**
-         * Close code used by the central server's WebSocket auth
-         * dependencies (see `ws_authenticate_mobile` /
-         * `ws_authenticate_user` in the Python server) when the token
-         * is missing, malformed, or rejected. 4001 is in the 4000–4999
-         * application-private range per RFC 6455 §7.4.2.
+         * Close code emitted by the server when the token is missing,
+         * malformed, or rejected. 4001 is in the application-private
+         * range 4000–4999 per RFC 6455 §7.4.2.
          */
         private const val AUTH_FAILED_CLOSE_CODE = 4001
     }
@@ -318,11 +307,9 @@ class WebSocketManager(
             sessionManager = sessionManager,
             urlProvider = provider,
             isAuthenticated = { userIdentityStore.isUserLoggedIn() },
-            // When the server closes with 4001 (or upgrades with 401) on
-            // the user-scoped channel, the dashboard JWT is dead. Mirror
-            // the REST-side [CentralAuthInterceptor]: flip the session
-            // to Unauthenticated so navigation routes back to LOGIN and
-            // the snackbar fires once.
+            // 4001/401 on the user-scoped channel means the dashboard JWT
+            // is dead; invalidate the session so navigation returns to
+            // login and the error snackbar fires exactly once.
             onAuthFailure = {
                 sessionManager.invalidateUserSession(
                     SessionManager.InvalidationReason.TokenRejected,

@@ -74,8 +74,6 @@ class SessionManager:
     def max_sessions(self) -> int:
         return self._max_sessions
 
-    # -- CRUD --
-
     @log_call(name="session_manager.create_session", log_args=("config",))
     async def create_session(self, config: SessionConfig) -> TerminalSession:
         """Create, start, and register a new terminal session.
@@ -83,8 +81,7 @@ class SessionManager:
         When ``config.project_name`` is set, ``ClaudeLauncher`` resolves the
         project through the ``ProjectsStore`` and rewrites ``config.command``,
         ``config.cwd`` and ``config.env`` to the launcher output before the
-        PTY is spawned. This is the path that mirrors ``Start-StandardMode``
-        in ``claude_auto_executor.ps1``.
+        PTY is spawned.
         """
         if config.project_name is not None:
             await self._apply_project_launch(config)
@@ -121,8 +118,7 @@ class SessionManager:
         return session
 
     async def _apply_project_launch(self, config: SessionConfig) -> None:
-        """Resolve a project + ClaudeOptions through the launcher and
-        overwrite the raw command/cwd/env on the SessionConfig in place.
+        """Resolve a project via the launcher and overwrite command/cwd/env on the config in place.
 
         The lookup goes through the live ``ProjectsStore`` so callers always
         see post-mutation state (e.g. a project added via the REST CRUD API
@@ -186,8 +182,6 @@ class SessionManager:
             )
             logger.info("All %d sessions stopped", len(sessions))
 
-    # -- Liveness monitoring --
-
     async def start_liveness_monitor(self, interval: float = 5.0) -> None:
         """Start a background task that checks session liveness periodically."""
         if self._liveness_task is not None and not self._liveness_task.done():
@@ -242,8 +236,6 @@ class SessionManager:
                 ):
                     self._sessions.pop(sid, None)
                     logger.info("Cleaned up dead session: %s", sid)
-
-    # -- Shutdown --
 
     async def shutdown(self) -> None:
         """Stop the liveness monitor and all sessions."""

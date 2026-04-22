@@ -63,14 +63,12 @@ fun AgentListScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Navigate to sessions when auto-connect completes
     LaunchedEffect(Unit) {
         viewModel.navigateToSessions.collect {
             onAgentConnected()
         }
     }
 
-    // Show errors in snackbar
     LaunchedEffect(uiState.error) {
         uiState.error?.let { error ->
             snackbarHostState.showSnackbar(error)
@@ -144,7 +142,6 @@ fun AgentListScreen(
             }
         }
 
-        // Connecting overlay
         if (uiState.isConnecting) {
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -155,7 +152,6 @@ fun AgentListScreen(
         }
     }
 
-    // -- Dialogs --
     AddAgentDialog(
         state = uiState.addDialogState,
         onCreateAgent = viewModel::createAgent,
@@ -176,8 +172,6 @@ fun AgentListScreen(
         )
     }
 }
-
-// -- Agent Card --------------------------------------------------------------
 
 @Composable
 private fun AgentCard(
@@ -202,7 +196,6 @@ private fun AgentCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Online status indicator
             val statusColor = if (agent.online) StateRunning else StateStopped
             Canvas(modifier = Modifier.size(12.dp)) {
                 drawCircle(color = statusColor)
@@ -210,7 +203,6 @@ private fun AgentCard(
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            // Agent info
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = agent.name,
@@ -233,7 +225,6 @@ private fun AgentCard(
                 )
             }
 
-            // Connected indicator
             if (isConnected) {
                 Icon(
                     Icons.Default.CheckCircle,
@@ -244,7 +235,6 @@ private fun AgentCard(
                 Spacer(modifier = Modifier.width(4.dp))
             }
 
-            // Overflow menu
             Box {
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(Icons.Default.MoreVert, contentDescription = "Options")

@@ -46,10 +46,8 @@ class TerminalSession:
         self._reader_task: asyncio.Task[None] | None = None
         self._created_at = datetime.now(UTC)
         # Intercepts DA1/2/3 queries from the child so they don't end up in
-        # the ring buffer leaking into the client input field. See da_responder.py.
+        # the ring buffer leaking into the client input field.
         self._da = DaResponder()
-
-    # -- Properties --
 
     @property
     def state(self) -> SessionState:
@@ -70,8 +68,6 @@ class TerminalSession:
     @property
     def event_queue(self) -> asyncio.Queue[SessionEvent]:
         return self._event_queue
-
-    # -- Lifecycle --
 
     async def start(self) -> None:
         """Spawn the PTY process and start the async reader loop."""
@@ -192,18 +188,17 @@ class TerminalSession:
         return [chunk.decode("utf-8", errors="replace") for chunk in self._scrollback]
 
     async def stop(self, force: bool = False) -> None:
-        """Stop the session: terminate PTY, cancel reader, clean up."""
+        """Stop the session, terminating the PTY process and cleaning up resources."""
         if self._state in (SessionState.STOPPED, SessionState.STOPPING):
             return
 
         self._state = SessionState.STOPPING
         logger.info("Stopping session %s (force=%s)", self.session_id, force)
 
-        # Terminate the PTY first — this unblocks the reader thread
+        # Terminate the PTY first — this unblocks the reader thread.
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.terminate, force)
 
-        # Cancel the reader task
         if self._reader_task is not None and not self._reader_task.done():
             self._reader_task.cancel()
             try:
@@ -211,7 +206,6 @@ class TerminalSession:
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 
-        # Close the backend
         await loop.run_in_executor(None, self._backend.close)
 
         self._state = SessionState.STOPPED

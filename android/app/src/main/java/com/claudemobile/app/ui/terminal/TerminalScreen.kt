@@ -139,7 +139,6 @@ fun TerminalScreen(
         }
     }
 
-    // ── Full-screen expandable input editor ─────────────────────────────────────
     if (showFullScreenInput) {
         FullScreenInputSheet(
             text = inputText,
@@ -154,7 +153,6 @@ fun TerminalScreen(
         )
     }
 
-    // ── Prompt detection bottom sheets ───────────────────────────────────────────
     when (val prompt = promptState) {
         is PromptState.Checkbox -> CheckboxPromptSheet(
             state = prompt,

@@ -12,8 +12,6 @@ from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
-# -- Schema -------------------------------------------------------------------
-
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     id             TEXT PRIMARY KEY,
@@ -124,10 +122,10 @@ class Database:
 
         if version < 3:
             # Legacy DBs may have an `agents` table WITHOUT the `owner_user_id`
-            # column (created by pre-CLA-34 code that never set user_version).
-            # Add it first so the idx_agents_owner index in _SCHEMA below
-            # doesn't fail with "no such column" — CREATE INDEX IF NOT EXISTS
-            # still validates the referenced column even when the index exists.
+            # column. Add it first so the idx_agents_owner index in _SCHEMA
+            # below doesn't fail with "no such column" — CREATE INDEX IF NOT
+            # EXISTS still validates the referenced column even when the index
+            # already exists.
             agents_cursor = await self._conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='agents'"
             )
@@ -140,7 +138,6 @@ class Database:
                         "ALTER TABLE agents ADD COLUMN owner_user_id TEXT REFERENCES users(id)"
                     )
 
-            # Fresh DB or after column added: create all tables/indexes (IF NOT EXISTS is safe)
             await self._conn.executescript(_SCHEMA)
 
             await self._conn.execute("PRAGMA user_version = 3")
@@ -170,9 +167,9 @@ class Database:
             await self._conn.execute("PRAGMA user_version = 4")
 
         if version < 5:
-            # Add email_verified + verified_at to users (pre-existing rows are
-            # grandfathered to email_verified=1 to avoid locking out dev accounts
-            # that were created before this migration existed) and create the
+            # Add email_verified + verified_at to users; pre-existing rows are
+            # grandfathered to email_verified=1 to avoid locking out accounts
+            # created before this migration. Also creates the
             # email_verification_tokens table.
             col_cursor = await self._conn.execute("PRAGMA table_info(users)")
             user_cols = {r[1] for r in await col_cursor.fetchall()}
@@ -186,8 +183,6 @@ class Database:
                 await self._conn.execute(
                     "ALTER TABLE users ADD COLUMN verified_at TEXT"
                 )
-            # Creates the new email_verification_tokens table + index if missing
-            # (IF NOT EXISTS is a no-op on already-present tables).
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 5")
 
@@ -202,8 +197,6 @@ class Database:
     def conn(self) -> aiosqlite.Connection:
         assert self._conn is not None, "Database not connected"
         return self._conn
-
-    # -- Users -----------------------------------------------------------------
 
     _USER_COLUMNS = (
         "id, email, password_hash, google_sub, role, "
@@ -292,8 +285,6 @@ class Database:
             (now, now, user_id),
         )
         await self.conn.commit()
-
-    # -- Agents ----------------------------------------------------------------
 
     async def register_agent(self, name: str, owner_user_id: str) -> tuple[str, str]:
         """Register a new user-owned agent. Returns (agent_id, raw_token)."""
@@ -407,8 +398,6 @@ class Database:
         )
         await self.conn.commit()
 
-    # -- Pairing tokens --------------------------------------------------------
-
     async def create_pairing_token(
         self, agent_id: str, ttl_seconds: int
     ) -> tuple[str, str]:
@@ -445,7 +434,6 @@ class Database:
         await self.conn.commit()
         if cursor.rowcount != 1:
             return None
-        # Fetch the agent_id for the consumed token.
         cursor2 = await self.conn.execute(
             "SELECT agent_id FROM pairing_tokens WHERE token_hash = ?",
             (token_hash,),
@@ -506,8 +494,6 @@ class Database:
             + consumed_cursor.rowcount
         )
 
-    # -- Email verification tokens --------------------------------------------
-
     async def create_verification_token(
         self,
         user_id: str,
@@ -526,7 +512,6 @@ class Database:
             now.timestamp() + ttl_seconds, tz=timezone.utc
         )
         now_iso = now.isoformat()
-        # Invalidate any outstanding tokens for this user.
         await self.conn.execute(
             "UPDATE email_verification_tokens "
             "SET consumed_at = ? "
@@ -560,10 +545,6 @@ class Database:
         active token so that brute-force tries count toward the cap.
         """
         now = _now_iso()
-        # Atomic CAS: consume iff matching hash + not consumed + not expired
-        # + attempts still below the cap. ``attempts`` is compared against the
-        # pre-increment value, which is what we want here (callers increment
-        # only on mismatch).
         cursor = await self.conn.execute(
             "UPDATE email_verification_tokens "
             "SET consumed_at = ? "
@@ -610,8 +591,6 @@ class Database:
         )
         await self.conn.commit()
 
-    # -- Pairings --------------------------------------------------------------
-
     async def create_pairing(
         self,
         agent_id: str,
@@ -655,8 +634,6 @@ class Database:
         )
         return await cursor.fetchone() is not None
 
-    # -- Mobile refresh tokens -------------------------------------------------
-
     async def store_refresh_token(
         self,
         raw_token: str,
@@ -697,7 +674,7 @@ class Database:
         row = await cursor.fetchone()
         if row is None:
             return None
-        # Revoke the used token (rotation).
+        # Rotate: revoke the consumed token so the caller must issue a fresh one.
         await self.conn.execute(
             "UPDATE mobile_refresh_tokens SET revoked_at = ? WHERE token_hash = ?",
             (now, token_hash),

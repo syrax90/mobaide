@@ -88,7 +88,7 @@ class CentralApi(
         return execute(request)
     }
 
-    // -- Agent management (requires user dashboard token) ---------------------
+    // Agent management endpoints require a user dashboard token in the Authorization header.
 
     suspend fun listAgents(userToken: String): List<AgentSummaryResponse> {
         val request = Request.Builder()
@@ -136,8 +136,6 @@ class CentralApi(
             .build()
         return execute(request)
     }
-
-    // -- Internal helpers ---------------------------------------------------
 
     private suspend inline fun <reified T> execute(request: Request): T =
         withContext(Dispatchers.IO) {

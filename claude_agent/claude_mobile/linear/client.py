@@ -78,11 +78,7 @@ query ($id: String!) {
 
 
 class LinearApiClient:
-    """Async GraphQL client for the Linear API.
-
-    Mirrors the PS1 script's Invoke-LinearGraphQL, Get-LinearAutoScanIssues,
-    Update-LinearIssueState, and Remove-LinearIssueLabel functions.
-    """
+    """Async GraphQL client for the Linear API."""
 
     def __init__(
         self,

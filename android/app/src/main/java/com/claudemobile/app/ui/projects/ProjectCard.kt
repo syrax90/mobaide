@@ -106,7 +106,6 @@ fun ProjectCard(
     }
 }
 
-/** Default drag-handle icon for use in the parent's [ReorderableItem] scope. */
 @Composable
 fun DragHandleIcon(modifier: Modifier = Modifier) {
     Icon(

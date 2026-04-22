@@ -48,8 +48,6 @@ class RestApi(
     private fun baseUrl(): String = tokenStore.getEffectiveBaseUrl()
         ?: throw IllegalStateException("Agent URL not configured")
 
-    // Auth
-
     suspend fun login(agentUrl: String, username: String, password: String): TokenResponse {
         val body = json.encodeToString(TokenRequest(username, password))
             .toRequestBody(jsonMediaType)
@@ -67,8 +65,6 @@ class RestApi(
     // method would go through the authenticated client and bypass that
     // coordination — exactly the second independent refresh path that
     // produced the original crash. Do not re-introduce it here.
-
-    // Sessions
 
     suspend fun createSession(createRequest: CreateSessionRequest): SessionResponse {
         val body = json.encodeToString(createRequest).toRequestBody(jsonMediaType)
@@ -104,8 +100,6 @@ class RestApi(
             .build()
         return execute(request)
     }
-
-    // Projects (CLA-12 / CLA-14 / CLA-39 / CLA-40)
 
     suspend fun getProjects(): List<ProjectInfo> {
         val request = Request.Builder()
@@ -153,8 +147,6 @@ class RestApi(
     private fun encodePathSegment(name: String): String =
         URLEncoder.encode(name, "UTF-8").replace("+", "%20")
 
-    // Auto Scan
-
     suspend fun getAutoScanList(): AutoScanListResponse {
         val request = Request.Builder()
             .url("${baseUrl()}/api/autoscan/list")
@@ -192,8 +184,6 @@ class RestApi(
             .build()
         return execute(request)
     }
-
-    // Helpers
 
     private suspend inline fun <reified T> execute(request: Request): T =
         withContext(Dispatchers.IO) {

@@ -23,9 +23,8 @@ class CreateSessionRequest(BaseModel):
     env: dict[str, str] | None = None
     rows: int = 24
     cols: int = 80
-    # CLA-12: project-aware launch. When set, ``command``/``cwd``/``env``
-    # are ignored and ``ClaudeLauncher`` builds them from the project +
-    # ``claude_options``.
+    # When set, ``command``/``cwd``/``env`` are ignored and
+    # ``ClaudeLauncher`` builds them from the project + ``claude_options``.
     project_name: str | None = None
     claude_options: ClaudeOptionsModel | None = None
 

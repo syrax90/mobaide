@@ -52,9 +52,7 @@ class SessionEventFanout:
                         q.put_nowait(event)
                     except asyncio.QueueFull:
                         pass  # drop for slow consumers
-                # Notify session-list broadcaster on state changes.
-                # Build the session dict list once and reuse for broadcaster
-                # and event bus to avoid redundant serialization.
+                # Build once; reused by broadcaster and event bus to avoid double serialization.
                 if event.event_type in _STATE_EVENTS and self._get_sessions:
                     sessions_now = self._get_sessions()
                     session_dicts = [

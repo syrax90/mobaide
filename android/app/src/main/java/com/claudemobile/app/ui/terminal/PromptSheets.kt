@@ -41,8 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 
-// ── Checkbox / multi-select prompt ──────────────────────────────────────────────
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheckboxPromptSheet(
@@ -125,8 +123,6 @@ fun CheckboxPromptSheet(
         }
     }
 }
-
-// ── Free-text input prompt ──────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

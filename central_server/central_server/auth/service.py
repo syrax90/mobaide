@@ -40,9 +40,6 @@ _ph = PasswordHasher()  # Thread-safe singleton
 _background_email_tasks: set[asyncio.Task] = set()
 
 
-# -- Error types ----------------------------------------------------------
-
-
 class VerificationRequiredError(Exception):
     """Raised by ``login_user`` when the account is unverified."""
 
@@ -101,8 +98,6 @@ class AuthService:
         self._email_sender = email_sender
         self._resend_limiter = resend_limiter
 
-    # -- Password hashing (Argon2id, non-blocking) ----------------------------
-
     async def _hash_password(self, password: str) -> str:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, _ph.hash, password)
@@ -113,8 +108,6 @@ class AuthService:
             return await loop.run_in_executor(None, _ph.verify, hash, password)
         except VerifyMismatchError:
             return False
-
-    # -- Email verification helpers -------------------------------------------
 
     def _hash_code(self, user_id: str, code: str) -> str:
         """HMAC-SHA256 of ``code`` peppered with the server's JWT secret.
@@ -149,10 +142,9 @@ class AuthService:
         callers acquire the slot themselves (and may be blocked by it).
         """
         if consume_rate_limit_slot and self._resend_limiter is not None:
-            # Fresh registrations usually have empty limiter state so this
-            # is effectively "bump the counter". If a previous flow left
-            # state behind, we still proceed — the next explicit resend
-            # will enforce the cap.
+            # Bump the counter even on fresh registration; if a previous
+            # incomplete flow left state, the next explicit resend enforces
+            # the cap.
             await self._resend_limiter.try_acquire(email)
         code = self._generate_code()
         code_hash = self._hash_code(user_id, code)
@@ -172,15 +164,13 @@ class AuthService:
                 sender.send_verification_email, email, code, ttl_minutes
             )
         else:
-            # Fallback path (e.g. dashboard form, tests) — fire-and-forget.
-            # Keep a strong reference so the GC can't drop the task mid-send.
+            # No BackgroundTasks context — fire-and-forget with a strong ref
+            # so the GC can't drop the task mid-send.
             task = asyncio.create_task(
                 sender.send_verification_email(email, code, ttl_minutes)
             )
             _background_email_tasks.add(task)
             task.add_done_callback(_background_email_tasks.discard)
-
-    # -- User registration & login --------------------------------------------
 
     async def register_user(
         self,
@@ -261,8 +251,6 @@ class AuthService:
         token = self._create_user_token(user["id"], user["email"], user["role"])
         return user["id"], user["role"], token
 
-    # -- Email verification flow ----------------------------------------------
-
     async def verify_email(
         self, email: str, code: str
     ) -> tuple[str, str, str]:
@@ -327,8 +315,6 @@ class AuthService:
 
         await self._issue_verification_code(user["id"], user["email"], background_tasks)
 
-    # -- Google OAuth ---------------------------------------------------------
-
     async def google_authenticate(
         self, token_str: str
     ) -> tuple[str, str, str, bool]:
@@ -361,7 +347,6 @@ class AuthService:
         email: str = idinfo["email"]
         email_verified: bool = idinfo.get("email_verified", False)
 
-        # 1. Check by google_sub first (exact match)
         user = await self._db.get_user_by_google_sub(google_sub)
         if user is not None:
             if email_verified and not user.get("email_verified"):
@@ -370,7 +355,7 @@ class AuthService:
             token = self._create_user_token(user["id"], user["email"], user["role"])
             return user["id"], user["role"], token, False
 
-        # 2. Check by email (account linking) — only if email_verified
+        # Link an existing email/password account when Google confirms the address.
         if email_verified:
             user = await self._db.get_user_by_email(email)
             if user is not None:
@@ -382,12 +367,12 @@ class AuthService:
                 )
                 return user["id"], user["role"], token, False
 
-        # 3. Check if email already taken (edge case: unverified Google email)
+        # Guard: email taken by a different account (unverified Google email edge case).
         existing = await self._db.get_user_by_email(email)
         if existing is not None:
             raise ValueError("Email already registered with a different account")
 
-        # 4. New user — trust Google's email_verified claim
+        # New user — trust Google's email_verified claim.
         user_id = await self._db.create_user(
             email=email,
             google_sub=google_sub,
@@ -397,15 +382,12 @@ class AuthService:
         token = self._create_user_token(user_id, email, "viewer")
         return user_id, "viewer", token, True
 
-    # -- Admin seeding --------------------------------------------------------
-
     async def seed_admin_user(self) -> None:
         """Seed the admin user from config env vars if no admin exists.
 
         Called during app startup. Idempotent. If a user with the seed email
-        already exists, we leave it untouched — we do not flip an existing
-        viewer into admin because that viewer may own agents (admins must
-        not own agents; see migration 0003).
+        already exists, we leave it untouched — we do not promote an existing
+        viewer to admin because viewers may own agents (admins must not).
         """
         if not self._config.admin_seed_email or not self._config.admin_seed_password:
             return
@@ -431,12 +413,8 @@ class AuthService:
             "admin_user.seeded email=%s", self._config.admin_seed_email
         )
 
-    # -- Agent auth ------------------------------------------------------------
-
     async def verify_agent_token(self, agent_id: str, raw_token: str) -> bool:
         return await self._db.verify_agent_token(agent_id, raw_token)
-
-    # -- Mobile JWT ------------------------------------------------------------
 
     async def create_mobile_tokens(
         self, mobile_device_id: str, agent_id: str, user_id: str
@@ -470,7 +448,6 @@ class AuthService:
         if result is None:
             return None
         mobile_device_id, agent_id = result
-        # Look up the agent owner to include user_id in the refreshed token
         agent = await self._db.get_agent(agent_id)
         user_id = agent["owner_user_id"] if agent else ""
         return await self.create_mobile_tokens(mobile_device_id, agent_id, user_id)
@@ -495,8 +472,6 @@ class AuthService:
             iat=payload["iat"],
         )
 
-    # -- Dashboard auth --------------------------------------------------------
-
     def decode_dashboard_token(self, token: str) -> UserTokenPayload:
         """Decode a dashboard JWT. Returns UserTokenPayload. Raises jwt.InvalidTokenError."""
         payload = jwt.decode(
@@ -514,8 +489,6 @@ class AuthService:
             exp=payload.get("exp"),
             iat=payload["iat"],
         )
-
-    # -- Internal --------------------------------------------------------------
 
     def _create_user_token(self, user_id: str, email: str, role: str) -> str:
         """Create a dashboard JWT with user identity claims."""

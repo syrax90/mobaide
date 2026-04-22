@@ -45,8 +45,6 @@ class AuthRepository(
 
     private val errorJson = Json { ignoreUnknownKeys = true }
 
-    // -- User identity (central server) --------------------------------------
-
     suspend fun register(email: String, password: String): AuthResult {
         val response = centralApi.register(email, password)
         return finaliseOrFlagVerification(email, response)
@@ -148,8 +146,6 @@ class AuthRepository(
         sessionManager.userLogout()
     }
 
-    // -- Agent connection (per-agent) ----------------------------------------
-
     suspend fun connectAgent(agentUrl: String, username: String, password: String) {
         val response = restApi.login(agentUrl, username, password)
         // Clear any relay-mode keys from a previous session so that
@@ -162,7 +158,6 @@ class AuthRepository(
         tokenStore.saveTokens(response.access_token, response.refresh_token)
         sessionManager.markAgentConnected()
 
-        // Auto-save to ConnectionStore for multi-connection management
         connectionStore.captureActiveProfile(
             tokenStore,
             label = "Direct: $agentUrl",
@@ -178,9 +173,8 @@ class AuthRepository(
     }
 
     /**
-     * Legacy tear-down. Routes through [SessionManager.forceLogout]
-     * so that token clearing and the state-flip happen in one critical
-     * section.
+     * Force full logout via [SessionManager.forceLogout] so token clearing
+     * and the state-flip happen atomically.
      */
     fun logout() {
         sessionManager.forceLogout()

@@ -59,9 +59,8 @@ async def ws_authenticate(websocket: WebSocket) -> str:
     """Authenticate a WebSocket connection via the ``?token=`` query param.
 
     The previous first-message JSON auth path was removed when the wire
-    protocol switched to binary frames (CLA-13) — there is no longer a JSON
-    layer to carry an auth handshake. Closes the connection with code 4001
-    on failure.
+    protocol switched to binary frames — there is no longer a JSON layer to
+    carry an auth handshake. Closes the connection with code 4001 on failure.
     """
     jwt_service = _get_jwt_service(websocket)
 

@@ -30,7 +30,6 @@ def _serialize_sessions(manager) -> list[dict]:
 @router.websocket("/ws/sessions")
 async def session_list(websocket: WebSocket) -> None:
     """Real-time session list updates — pushes on any session state change."""
-    # Authenticate
     try:
         username = await ws_authenticate(websocket)
     except WebSocketAuthError:
@@ -39,10 +38,8 @@ async def session_list(websocket: WebSocket) -> None:
     manager = websocket.app.state.session_manager
     broadcaster: SessionListBroadcaster = websocket.app.state.broadcaster
 
-    # Send initial state
     await websocket.send_json(_serialize_sessions(manager))
 
-    # Subscribe and forward updates
     q = broadcaster.subscribe()
     try:
         while True:

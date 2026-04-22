@@ -76,14 +76,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             app.state.relay_client = None
         yield
         logger.info("agent.shutting_down")
-        # Stop relay client first (unsubscribes from fanouts/buses).
+        # Relay client must stop first so it unsubscribes from fanouts/buses before they are torn down.
         relay_client = getattr(app.state, "relay_client", None)
         if relay_client is not None:
             await relay_client.stop()
         autoscan_mgr = getattr(app.state, "autoscan_manager", None)
         if autoscan_mgr is not None:
             await autoscan_mgr.shutdown()
-        # Cancel all fanout tasks
         for fanout in app.state.fanouts.values():
             fanout.stop()
         await app.state.session_manager.shutdown()
@@ -91,10 +90,8 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app = FastAPI(title="Claude Mobile Agent", version="0.1.0", lifespan=lifespan)
 
-    # -- Exception handlers ---------------------------------------------------
-    # Strip raw `linear_api_key` input values from validation errors so a
-    # malformed request body cannot echo the secret back to the caller.
-    # Other fields keep their `input` value for debuggability.
+    # Strip `linear_api_key` inputs from validation errors so a malformed body
+    # cannot echo the secret back to the caller; other fields keep `input`.
     _SECRET_FIELDS = frozenset({"linear_api_key"})
 
     @app.exception_handler(RequestValidationError)
@@ -109,8 +106,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             scrubbed.append(err)
         return JSONResponse(status_code=422, content={"detail": scrubbed})
 
-    # -- Middleware (added in reverse-execution order: outermost added last) --
-
+    # Middleware is added in reverse execution order: outermost registered last.
     @app.middleware("http")
     async def _http_logging_middleware(request: Request, call_next):
         if request.url.path in _HTTP_LOG_SKIP_PATHS:
@@ -166,7 +162,6 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         generator=_generate_correlation_id,
     )
 
-    # Shared state
     app.state.config = config
 
     # Mutable, file-backed projects store (seeds from PROJECTS env var on
@@ -177,8 +172,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     projects_store.load()
     app.state.projects_store = projects_store
 
-    # Build a ClaudeLauncher (and a worktree manager using auto-scan
-    # settings so launcher-driven worktrees use the same conventions).
+    # Worktree manager shares auto-scan conventions so launcher-driven worktrees stay consistent.
     auto_scan_cfg = config.auto_scan_config
     worktree_mgr: WorktreeManager | None = None
     if auto_scan_cfg is not None:
@@ -238,7 +232,6 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         rate_limiter=app.state.linear_rate_limiter,
     )
 
-    # Routers
     app.include_router(auth_router)
     app.include_router(sessions_router)
     app.include_router(projects_router)

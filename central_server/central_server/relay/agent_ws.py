@@ -42,7 +42,6 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     routing: RoutingTable = app.state.routing
     config = app.state.config
 
-    # -- Step 1: Authenticate via first control message ------------------------
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
     except (asyncio.TimeoutError, WebSocketDisconnect):
@@ -69,7 +68,6 @@ async def agent_tunnel(websocket: WebSocket) -> None:
         await _safe_close(websocket, 4001, "Invalid agent credentials")
         return
 
-    # -- Step 2: Register in routing table -------------------------------------
     conn = routing.register_agent(agent_id, websocket)
     # Resolve owner once at registration so the offline-broadcast path
     # (which runs after the tunnel is torn down) doesn't have to hit the DB.
@@ -85,7 +83,6 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     if conn.owner_user_id:
         _broadcast_status(routing, conn.owner_user_id, agent_id, online=True)
 
-    # -- Step 3: Run reader, writer, pinger concurrently -----------------------
     reader_task = asyncio.create_task(
         _reader(websocket, agent_id, routing, db),
         name=f"agent-reader-{agent_id}",
@@ -107,7 +104,6 @@ async def agent_tunnel(websocket: WebSocket) -> None:
         for task in pending:
             task.cancel()
     finally:
-        # -- Step 4: Cleanup on disconnect -------------------------------------
         disconnected_clients = routing.unregister_agent(agent_id, conn.conn_id)
         for client in disconnected_clients:
             try:

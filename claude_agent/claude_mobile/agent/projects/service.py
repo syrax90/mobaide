@@ -9,7 +9,7 @@ direct HTTP.
 
 The service raises structured exceptions (``DuplicateProjectError``,
 ``ProjectInUseError``, ``ReorderSetMismatchError``, ``KeyError``) that the
-callers map to the HTTP status codes documented in CLA-39.
+callers map to the appropriate HTTP status codes.
 """
 from __future__ import annotations
 
@@ -63,8 +63,8 @@ def _check_scan_active(
 ) -> None:
     """Raise ProjectInUseError if an auto-scan is running for ``project_name``.
 
-    ``verb`` is a short verb ("delete", "rename") used only for the error
-    message so clients can show the user a specific reason.
+    ``verb`` ("delete", "rename") appears only in the error message so
+    clients can surface a specific reason to the user.
     """
     if autoscan_manager is None:
         return
@@ -79,10 +79,10 @@ def _check_scan_active(
 
 
 def _patch_from_update_model(model: ProjectUpdateModel) -> ProjectUpdatePatch:
-    """Translate the Pydantic update DTO into a store patch.
+    """Build a store patch from the Pydantic update DTO.
 
-    ``None`` in the DTO is mapped to ``None`` in the patch (keep existing).
-    An empty-string secret is mapped to ``""`` in the patch (clear).
+    ``None`` in the DTO means "keep existing"; empty-string secret means
+    "clear the key" — both must round-trip faithfully to the store.
     """
     if model.linear_api_key is None:
         lak: str | None = None
@@ -124,11 +124,6 @@ def _public_view(store: ProjectsStore, name: str) -> dict[str, object]:
             return entry
     # Should never happen — the caller just wrote this record.
     raise KeyError(f"Project '{name}' not found after mutation")
-
-
-# ----------------------------------------------------------------------
-# Operations
-# ----------------------------------------------------------------------
 
 
 def list_projects(store: ProjectsStore) -> list[dict[str, object]]:

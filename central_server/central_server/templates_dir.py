@@ -12,9 +12,11 @@ from pathlib import Path
 
 
 def resolve_templates_dir() -> Path:
-    """Return the templates directory path, preferring `cwd/templates` over
-    the source-tree sibling. The preference order matches the Dockerfile
-    layout (which only ships site-packages)."""
+    """Return the templates directory path, preferring ``cwd/templates`` over the source-tree sibling.
+
+    The preference order matches the Dockerfile layout, which only ships
+    site-packages and not the source tree.
+    """
     cwd = Path.cwd() / "templates"
     if cwd.is_dir():
         return cwd

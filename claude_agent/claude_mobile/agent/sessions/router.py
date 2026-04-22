@@ -93,9 +93,8 @@ async def create_session(
         )
 
     # SessionManager.create_session is the single source of truth for
-    # `sessions.changed` (Domain Events). It also fires the eager fanout
-    # hook so headless sessions get a SessionEventFanout immediately.
-    # We only need the legacy `/ws/sessions` broadcaster nudge here.
+    # `sessions.changed` domain events and fires the eager fanout hook so
+    # headless sessions get a SessionEventFanout immediately.
     broadcaster = getattr(request.app.state, "broadcaster", None)
     if broadcaster:
         await broadcaster.notify(manager.list_sessions())
@@ -133,8 +132,8 @@ async def stop_session(
             detail=f"Session '{session_id}' not found",
         )
 
-    # Fanout cleanup is performed by the on_session_removed hook wired in
-    # app.py; SessionManager.stop_session also publishes `sessions.changed`.
+    # on_session_removed hook (wired in app.py) handles fanout cleanup;
+    # stop_session also publishes `sessions.changed`.
     broadcaster = getattr(request.app.state, "broadcaster", None)
     if broadcaster:
         await broadcaster.notify(manager.list_sessions())
@@ -163,7 +162,6 @@ async def get_scrollback(
             detail=f"Session '{session_id}' not found",
         )
     buf = session.get_scrollback()
-    # Return last N lines
     sliced = buf[-lines:] if lines < len(buf) else buf
     return ScrollbackResponse(
         session_id=session_id,

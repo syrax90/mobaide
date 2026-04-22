@@ -162,11 +162,7 @@ class AutoScanDetailViewModel @Inject constructor(
     private fun handlePhase(p: ScanProgressPayload.Phase, newSeq: Long) {
         when (p.phase) {
             "scan_started" -> {
-                // NOTE: we intentionally do NOT clear recentIssues here.
-                // Idle scans (0 new issues) would leave the list empty
-                // forever, making the user think "Run Now" didn't do
-                // anything. The 50-item cap in handleIssue rolls stale
-                // entries off naturally on any productive future scan.
+                // recentIssues is NOT cleared: idle scans (0 issues) must not blank the list.
                 _ui.update {
                     it.copy(
                         cycleNumber = p.cycleNumber,
@@ -257,8 +253,7 @@ class AutoScanDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val response = repository.runNow(projectName)
-                // Rebind countdown synchronously from the REST response so
-                // the user sees the reset before the bus event arrives.
+                // Update immediately from REST so the UI resets before the bus event arrives.
                 _ui.update { it.copy(nextScanAt = response.next_scan_at) }
             } catch (_: Exception) {
                 // Repository already emitted an AutoScanUiEvent.Error.

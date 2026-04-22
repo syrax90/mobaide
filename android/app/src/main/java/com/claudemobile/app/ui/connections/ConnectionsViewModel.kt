@@ -29,14 +29,12 @@ class ConnectionsViewModel @Inject constructor(
     val uiState: StateFlow<ConnectionsUiState> = _uiState.asStateFlow()
 
     fun switchProfile(profileId: String) {
-        // Tear down current agent connection (preserve user identity)
+        // Disconnect agent only; user identity tokens are not cleared.
         sessionManager.agentDisconnect()
         eventBus.stop()
 
-        // Load new profile into TokenStore
         connectionStore.activateProfile(profileId, tokenStore)
 
-        // Re-authenticate
         sessionManager.markAgentConnected()
         eventBus.start()
 

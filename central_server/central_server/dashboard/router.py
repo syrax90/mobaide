@@ -21,9 +21,6 @@ templates = Jinja2Templates(directory=str(resolve_templates_dir()))
 router = APIRouter(prefix="/dashboard")
 
 
-# -- Login/Logout --------------------------------------------------------------
-
-
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse(request, "login.html")
@@ -32,7 +29,7 @@ async def login_page(request: Request):
 @router.post("/login")
 async def login_submit(request: Request):
     form = await request.form()
-    email = form.get("username", "")  # form field is still named "username"
+    email = form.get("username", "")  # HTML field name is "username", not "email"
     password = form.get("password", "")
     auth_service = request.app.state.auth_service
 
@@ -81,9 +78,6 @@ async def logout():
     return response
 
 
-# -- Agent list (admin read-only view) -----------------------------------------
-
-
 @router.get("", response_class=HTMLResponse)
 async def agents_page(
     request: Request, user: UserTokenPayload = Depends(_require_admin)
@@ -98,9 +92,6 @@ async def agents_page(
         "agents.html",
         {"agents": agents, "username": user.email},
     )
-
-
-# -- Agent detail (read-only — no QR, no token exposure) ----------------------
 
 
 @router.get("/agents/{agent_id}", response_class=HTMLResponse)
@@ -119,7 +110,6 @@ async def agent_detail_page(
 
     agent["online"] = routing.is_agent_online(agent_id)
 
-    # Look up owner email
     owner_email = None
     if agent.get("owner_user_id"):
         owner = await db.get_user_by_id(agent["owner_user_id"])
@@ -141,16 +131,13 @@ async def agent_detail_page(
     )
 
 
-# -- Pairing actions (HTMX partials) ------------------------------------------
-
-
 @router.delete("/pairings/{pairing_id}", response_class=HTMLResponse)
 async def revoke_pairing_htmx(
     request: Request,
     pairing_id: str,
     user: UserTokenPayload = Depends(_require_admin),
 ):
-    del user  # used only for admin-role gating
+    del user  # suppress unused-variable warning; Depends() enforces the role
     pairing_service = request.app.state.pairing_service
     await pairing_service.revoke_pairing(pairing_id)
     return HTMLResponse("")  # HTMX removes the row

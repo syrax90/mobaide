@@ -39,8 +39,6 @@ class TokenStore(context: Context) {
 
     fun getAgentUrl(): String? = prefs.getString(KEY_AGENT_URL, null)
 
-    // -- Connection mode -------------------------------------------------------
-
     fun getConnectionMode(): ConnectionMode =
         if (prefs.getString(KEY_CONNECTION_MODE, null) == "relay") ConnectionMode.RELAY
         else ConnectionMode.DIRECT
@@ -73,7 +71,7 @@ class TokenStore(context: Context) {
     fun getDeviceId(): String? = prefs.getString(KEY_DEVICE_ID, null)
 
     /**
-     * Returns the base URL for REST API calls, adapting to connection mode.
+     * Return the base URL for REST API calls, adapting to the active connection mode.
      * - DIRECT: agent URL (e.g. `https://my-agent.example.com`)
      * - RELAY:  proxy URL (e.g. `https://relay.example.com/proxy/abc123`)
      */
@@ -87,8 +85,8 @@ class TokenStore(context: Context) {
     }
 
     /**
-     * "Logged in" means we have **all** persisted values required to
-     * recover a session silently for the active connection mode.
+     * Return true only when all values required to silently recover a session
+     * are present for the active connection mode.
      */
     fun isLoggedIn(): Boolean = when (getConnectionMode()) {
         ConnectionMode.DIRECT ->
