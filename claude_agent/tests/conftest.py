@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import tempfile
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -11,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from claude_mobile.core.models import SessionConfig
 from claude_mobile.agent.app import create_app
 from claude_mobile.agent.config import AgentConfig
+from claude_mobile.relay.config import RelayConfig
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -122,3 +124,64 @@ async def auth_headers(client) -> dict[str, str]:
 def access_token(app) -> str:
     """Return a valid access token string for WebSocket testing."""
     return app.state.jwt_service.create_access_token(TEST_USERNAME)
+
+
+# ---------- RelayClient mock collaborators ----------
+#
+# Shared across ``test_relay_client.py`` and
+# ``test_relay_client_autoscan.py``. Each test file composes its own
+# ``client`` / ``relay_client`` fixture on top of these to avoid colliding
+# with this conftest's existing async HTTP ``client`` fixture.
+
+
+@pytest.fixture
+def relay_config() -> RelayConfig:
+    return RelayConfig(
+        server_url="wss://relay.test.io",
+        agent_id="agent-42",
+        agent_token="tok-secret",
+        heartbeat_interval=15,
+        reconnect_base_delay=0.01,
+        reconnect_max_delay=0.05,
+    )
+
+
+@pytest.fixture
+def mock_session_manager():
+    mgr = AsyncMock()
+    mgr.list_sessions.return_value = []
+    mgr.get_session.return_value = None
+    return mgr
+
+
+@pytest.fixture
+def mock_event_bus():
+    bus = MagicMock()
+    q = asyncio.Queue()
+    bus.subscribe.return_value = q
+    bus.unsubscribe = MagicMock()
+    return bus
+
+
+@pytest.fixture
+def mock_broadcaster():
+    bc = MagicMock()
+    q = asyncio.Queue()
+    bc.subscribe.return_value = q
+    bc.unsubscribe = MagicMock()
+    return bc
+
+
+@pytest.fixture
+def mock_app_state():
+    """Default ``app_state`` carrying an ``autoscan_manager`` stub.
+
+    Unifies the two prior variants: ``test_relay_client.py`` used a bare
+    ``state.fanouts = {}`` and ``test_relay_client_autoscan.py`` also wired
+    in ``state.autoscan_manager``. The richer shape is backward-compatible
+    for the pre-existing tests since they never read ``autoscan_manager``.
+    """
+    state = MagicMock()
+    state.fanouts = {}
+    state.autoscan_manager = MagicMock(name="autoscan_manager")
+    return state

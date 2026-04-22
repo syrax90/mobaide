@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from claude_mobile.relay.envelope import (
+    CH_AUTOSCAN,
     CH_CONTROL,
     CH_EVENTS,
     CH_SESSION_IO,
@@ -49,6 +50,28 @@ class TestEnvelopeRoundtrip:
         assert channel == CH_CONTROL
         assert session_id == ""
         assert out_payload == payload
+
+    def test_autoscan_roundtrip(self):
+        """CH_AUTOSCAN carries a per-mobile subscription_id in session_id slot."""
+        payload = b'{"type":"event","project_name":"p","event":{"seq":1}}'
+        subscription_id = "abc123def456"
+        data = encode(CH_AUTOSCAN, subscription_id, payload)
+        channel, session_id, out_payload = decode(data)
+        assert channel == CH_AUTOSCAN
+        assert session_id == subscription_id
+        assert out_payload == payload
+
+    def test_autoscan_with_uuid_hex_subscription_id(self):
+        """The central server uses ``uuid4().hex`` (32 chars) as subscription_id."""
+        import uuid
+
+        sub_id = uuid.uuid4().hex
+        assert len(sub_id) == 32
+        data = encode(CH_AUTOSCAN, sub_id, b'{"type":"caught_up"}')
+        channel, decoded_sid, payload = decode(data)
+        assert channel == CH_AUTOSCAN
+        assert decoded_sid == sub_id
+        assert payload == b'{"type":"caught_up"}'
 
     def test_empty_payload(self):
         data = encode(CH_SESSION_IO, "s1", b"")
@@ -125,4 +148,5 @@ class TestChannelConstants:
         assert CH_SESSION_IO == 0x01
         assert CH_SESSIONS_LIST == 0x02
         assert CH_EVENTS == 0x03
+        assert CH_AUTOSCAN == 0x04
         assert CH_CONTROL == 0x10

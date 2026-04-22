@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
@@ -9,7 +7,6 @@ from claude_mobile.core.claude_launcher import ClaudeOptions
 from claude_mobile.linear.scanner import (
     AutoScanAlreadyRunning,
     AutoScanCapacityReached,
-    AutoScanInstance,
     AutoScanSessionManager,
 )
 
@@ -29,6 +26,7 @@ from .models import (
     StartScanRequest,
     StopScanRequest,
 )
+from .stream import run_autoscan_stream
 
 logger = get_logger(__name__)
 
@@ -130,19 +128,11 @@ ws_router = APIRouter(tags=["autoscan-ws"])
 
 @ws_router.websocket("/ws/autoscan")
 async def ws_autoscan(websocket: WebSocket) -> None:
-    """Stream auto-scan events.
+    """Stream auto-scan events over a direct mobile-to-agent WebSocket.
 
-    Protocol (v1):
-      Client may send (within 200ms of accept) a JSON text frame:
-        { "subscribe": ["projectA", ...],
-          "resume_from_seq": {"projectA": 42, ...} }
-      The agent then sends:
-        1. { "type": "snapshot",
-             "data": { "scans": [...DTOs...],
-                       "events": {projectName: [event,...]} } }
-        2. { "type": "caught_up" }
-        3. Live { "type": "event", "project_name": ..., "event": {...} } frames.
-      Clients NOT in `subscribe` get all event types except `log` filtered out.
+    Authenticates, resolves the ``AutoScanSessionManager``, then delegates
+    the wire protocol to :func:`run_autoscan_stream` so the relay-mode
+    bridge can share the same code path.
     """
     channel = "autoscan"
     log_ws_connect(channel, websocket)
@@ -162,115 +152,17 @@ async def ws_autoscan(websocket: WebSocket) -> None:
         await websocket.close(code=4002, reason="Auto scan not configured")
         return
 
-    # 200 ms grace window: client may send a config frame immediately after connect.
-    resume_from_seq: dict[str, int] = {}
-    subscribe_set: set[str] = set()
-    try:
-        first = await asyncio.wait_for(websocket.receive_text(), timeout=0.2)
-        try:
-            payload = json.loads(first)
-            rfs = payload.get("resume_from_seq") or {}
-            if isinstance(rfs, dict):
-                resume_from_seq = {str(k): int(v) for k, v in rfs.items()}
-            sub = payload.get("subscribe") or []
-            if isinstance(sub, list):
-                subscribe_set = {str(s) for s in sub}
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-    except asyncio.TimeoutError:
-        pass
-    except Exception:
-        pass
-
-    # Subscribe to all current instances; new instances are picked up via
-    # the central event_bus topic and we re-subscribe in the pump loop.
-    instances: dict[str, AutoScanInstance] = {
-        i.project_name: i for i in mgr.all_instances()
-    }
-    queues: dict[str, asyncio.Queue] = {
-        name: inst.subscribe_events() for name, inst in instances.items()
-    }
-
-    async def _send(obj: dict) -> None:
-        await websocket.send_text(json.dumps(obj))
-
     msg_count = 0
     try:
-        events_snapshot: dict[str, list[dict]] = {}
-        for name, inst in instances.items():
-            ring = [e.to_dict() for e in inst.recent_events]
-            resume_seq = resume_from_seq.get(name)
-            if resume_seq is not None and ring:
-                # Replay only events the client hasn't seen; silently drop the rest if the ring has been evicted.
-                first_seq = ring[0]["seq"]
-                if first_seq <= resume_seq + 1:
-                    ring = [e for e in ring if e["seq"] > resume_seq]
-            events_snapshot[name] = ring
-
-        await _send({
-            "type": "snapshot",
-            "data": {
-                "scans": mgr.list_response()["scans"],
-                "events": events_snapshot,
-            },
-        })
-        msg_count += 1
-
-        await _send({"type": "caught_up"})
-        msg_count += 1
-
-        async def _pump_one(project_name: str, q: asyncio.Queue) -> None:
-            nonlocal msg_count
-            while True:
-                evt = await q.get()
-                # Filter heavy `log` events for clients not subscribed.
-                if evt.type == "log" and project_name not in subscribe_set:
-                    continue
-                await _send({
-                    "type": "event",
-                    "project_name": project_name,
-                    "event": evt.to_dict(),
-                })
-                msg_count += 1
-
-        async def _reader() -> None:
-            # Continue accepting subscribe updates after snapshot.
-            # Returns cleanly on client disconnect so the surrounding
-            # asyncio.wait() does not surface a "Task exception was never
-            # retrieved" log entry on the normal close path.
-            nonlocal subscribe_set
-            try:
-                while True:
-                    text = await websocket.receive_text()
-                    try:
-                        obj = json.loads(text)
-                        sub = obj.get("subscribe")
-                        if isinstance(sub, list):
-                            subscribe_set = {str(s) for s in sub}
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-            except WebSocketDisconnect:
-                return
-
-        if not queues:
-            # No active scans — still keep the socket open for reader/late events.
-            await _reader()
-            return
-
-        pump_tasks = [
-            asyncio.create_task(_pump_one(n, q)) for n, q in queues.items()
-        ]
-        reader_task = asyncio.create_task(_reader())
-        done, pending = await asyncio.wait(
-            [*pump_tasks, reader_task], return_when=asyncio.FIRST_COMPLETED
+        msg_count = await run_autoscan_stream(
+            mgr,
+            websocket.send_text,
+            websocket.receive_text,
+            grace_timeout_s=0.2,
         )
-        for t in pending:
-            t.cancel()
+    except WebSocketDisconnect:
+        pass
     except Exception as exc:
         log_ws_error(channel, exc, stage="stream")
     finally:
-        for name, q in queues.items():
-            inst = mgr.get(name)
-            if inst is not None:
-                inst.unsubscribe_events(q)
         log_ws_disconnect(channel, username=username, msg_count=msg_count)

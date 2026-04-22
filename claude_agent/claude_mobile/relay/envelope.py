@@ -7,6 +7,7 @@ Channel types:
     0x01  session_io     -- session_id present, payload = binary PTY frame
     0x02  sessions_list  -- session_id_len=0, payload = JSON text
     0x03  events         -- session_id_len=0, payload = JSON text
+    0x04  autoscan       -- session_id = per-mobile subscription id, payload = JSON text
     0x10  control        -- session_id_len=0, payload = JSON control message
 
 Note: intentionally duplicated — the two packages are independent and cannot share code.
@@ -16,9 +17,16 @@ from __future__ import annotations
 CH_SESSION_IO = 0x01
 CH_SESSIONS_LIST = 0x02
 CH_EVENTS = 0x03
+CH_AUTOSCAN = 0x04
 CH_CONTROL = 0x10
 
-_VALID_CHANNELS = {CH_SESSION_IO, CH_SESSIONS_LIST, CH_EVENTS, CH_CONTROL}
+_VALID_CHANNELS = {
+    CH_SESSION_IO,
+    CH_SESSIONS_LIST,
+    CH_EVENTS,
+    CH_AUTOSCAN,
+    CH_CONTROL,
+}
 
 
 def encode(channel: int, session_id: str, payload: bytes) -> bytes:

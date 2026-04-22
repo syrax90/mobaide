@@ -25,7 +25,6 @@ from claude_mobile.relay.client import (
     _STATE_MAP,
     _state_frame,
 )
-from claude_mobile.relay.config import RelayConfig
 from claude_mobile.relay.envelope import (
     CH_CONTROL,
     CH_SESSION_IO,
@@ -35,49 +34,10 @@ from claude_mobile.relay.envelope import (
 from claude_mobile.core.models import SessionState
 
 
-@pytest.fixture
-def relay_config():
-    return RelayConfig(
-        server_url="wss://relay.test.io",
-        agent_id="agent-42",
-        agent_token="tok-secret",
-        heartbeat_interval=15,
-        reconnect_base_delay=0.01,
-        reconnect_max_delay=0.05,
-    )
-
-
-@pytest.fixture
-def mock_session_manager():
-    mgr = AsyncMock()
-    mgr.list_sessions.return_value = []
-    mgr.get_session.return_value = None
-    return mgr
-
-
-@pytest.fixture
-def mock_event_bus():
-    bus = MagicMock()
-    q = asyncio.Queue()
-    bus.subscribe.return_value = q
-    bus.unsubscribe = MagicMock()
-    return bus
-
-
-@pytest.fixture
-def mock_broadcaster():
-    bc = MagicMock()
-    q = asyncio.Queue()
-    bc.subscribe.return_value = q
-    bc.unsubscribe = MagicMock()
-    return bc
-
-
-@pytest.fixture
-def mock_app_state():
-    state = MagicMock()
-    state.fanouts = {}
-    return state
+# ``relay_config``, ``mock_session_manager``, ``mock_event_bus``,
+# ``mock_broadcaster``, and ``mock_app_state`` are defined in
+# ``tests/conftest.py``. The ``client`` fixture stays local so it doesn't
+# clash with the conftest's async HTTP ``client`` fixture.
 
 
 @pytest.fixture
