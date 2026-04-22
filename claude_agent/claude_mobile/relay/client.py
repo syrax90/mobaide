@@ -40,8 +40,11 @@ from claude_mobile.agent.projects.service import (
     update_project,
 )
 
+from claude_mobile.agent.autoscan.stream import run_autoscan_stream
+
 from .config import RelayConfig
 from .envelope import (
+    CH_AUTOSCAN,
     CH_CONTROL,
     CH_EVENTS,
     CH_SESSION_IO,
@@ -101,6 +104,8 @@ _DEFAULT_SHELL = (
     ["cmd.exe"] if platform.system() == "Windows" else ["/bin/bash", "-l"]
 )
 
+MAX_AUTOSCAN_STREAMS = 10
+
 
 def _state_frame(status: str, pid: int | None = None) -> bytes:
     payload: dict[str, object] = {"status": status}
@@ -148,6 +153,15 @@ class RelayClient:
         self._bridges: dict[str, asyncio.Task] = {}
         # Track whether we've sent the handshake for a session through relay.
         self._handshake_sent: set[str] = set()
+
+        # Per-mobile auto-scan subscriptions: subscription_id -> stream task.
+        # Each mobile device opens its own /relay/ws/autoscan/{agent_id}
+        # connection, which the central server tags with a fresh
+        # subscription_id and forwards as CH_AUTOSCAN envelopes; we run
+        # one run_autoscan_stream task per subscription, owning its own
+        # inbox queue for mobile-to-agent text frames.
+        self._autoscan_streams: dict[str, asyncio.Task] = {}
+        self._autoscan_inboxes: dict[str, asyncio.Queue[str]] = {}
 
     async def start(self) -> None:
         """Start the relay client background task."""
@@ -273,8 +287,28 @@ class RelayClient:
 
         if channel == CH_SESSION_IO:
             await self._handle_session_input(session_id, payload, ws)
+        elif channel == CH_AUTOSCAN:
+            self._deliver_autoscan_inbound(session_id, payload)
         elif channel == CH_CONTROL:
             await self._handle_control(payload, ws)
+
+    def _deliver_autoscan_inbound(self, subscription_id: str, payload: bytes) -> None:
+        """Drop a mobile-origin CH_AUTOSCAN payload into the matching inbox.
+
+        Silently ignores frames for unknown or closed subscriptions — those
+        are stale frames from a mobile that disconnected before its
+        ``close_autoscan`` reached us.
+        """
+        inbox = self._autoscan_inboxes.get(subscription_id)
+        if inbox is None:
+            return
+        try:
+            inbox.put_nowait(payload.decode("utf-8"))
+        except asyncio.QueueFull:
+            logger.warning(
+                "relay.autoscan.inbox_full subscription_id=%s — dropping mobile frame",
+                subscription_id,
+            )
 
     async def _handle_text(self, text: str, ws: ClientConnection) -> None:
         """Handle text-frame control messages (e.g. pairing_token response)."""
@@ -313,6 +347,130 @@ class RelayClient:
 
         elif msg_type == "proxy_request":
             await self._handle_proxy_request(ctrl, ws)
+
+        elif msg_type == "open_autoscan":
+            await self._handle_open_autoscan(ctrl, ws)
+
+        elif msg_type == "close_autoscan":
+            self._handle_close_autoscan(ctrl)
+
+    async def _handle_open_autoscan(
+        self, ctrl: dict, ws: ClientConnection
+    ) -> None:
+        """Spawn a per-subscription auto-scan stream task.
+
+        Uses the same ``run_autoscan_stream`` coroutine as the direct-mode
+        ``/ws/autoscan`` handler, wrapped in adapter callables that encode
+        outbound frames as CH_AUTOSCAN envelopes keyed on
+        ``subscription_id`` and dequeue inbound frames from the
+        per-subscription inbox.
+        """
+        subscription_id = ctrl.get("subscription_id")
+        if not subscription_id:
+            logger.warning("relay.autoscan.open_missing_subscription_id")
+            return
+        if subscription_id in self._autoscan_streams:
+            logger.warning(
+                "relay.autoscan.open_duplicate subscription_id=%s",
+                subscription_id,
+            )
+            return
+
+        if len(self._autoscan_streams) >= MAX_AUTOSCAN_STREAMS:
+            logger.warning(
+                "relay.autoscan.open_capacity_reached active=%d max=%d subscription_id=%s",
+                len(self._autoscan_streams),
+                MAX_AUTOSCAN_STREAMS,
+                subscription_id,
+            )
+            await self._send_autoscan_close(
+                ws, subscription_id, reason="capacity_reached"
+            )
+            return
+
+        mgr = getattr(self._app_state, "autoscan_manager", None)
+        if mgr is None:
+            await self._send_autoscan_close(
+                ws, subscription_id, reason="autoscan_not_configured"
+            )
+            return
+
+        inbox: asyncio.Queue[str] = asyncio.Queue(maxsize=1000)
+        self._autoscan_inboxes[subscription_id] = inbox
+
+        # Pre-compute the 34-byte CH_AUTOSCAN header (channel + sid_len + sid
+        # bytes) once per task rather than re-encoding the constant
+        # subscription_id on every live event frame. At verbose-scan rates
+        # (dozens of log events per second) this is a measurable allocation
+        # reduction on the hot send path.
+        sid_bytes = subscription_id.encode("utf-8")
+        header = bytes([CH_AUTOSCAN, len(sid_bytes)]) + sid_bytes
+
+        async def send_text(text: str) -> None:
+            await ws.send(header + text.encode("utf-8"))
+
+        async def receive_text() -> str:
+            return await inbox.get()
+
+        task = asyncio.create_task(
+            self._run_autoscan_subscription(
+                subscription_id, mgr, send_text, receive_text
+            ),
+            name=f"relay-autoscan-{subscription_id}",
+        )
+        self._autoscan_streams[subscription_id] = task
+
+    async def _send_autoscan_close(
+        self, ws: ClientConnection, subscription_id: str, *, reason: str
+    ) -> None:
+        """Send a ``close_autoscan`` control frame back to the central server.
+
+        Used when the agent declines to open a stream (cap reached,
+        autoscan not configured). The central server's control handler
+        closes the matching mobile WebSocket so the client sees a clean
+        disconnect rather than a silent hang.
+        """
+        close_msg = {
+            "type": "close_autoscan",
+            "subscription_id": subscription_id,
+            "reason": reason,
+        }
+        await ws.send(encode(CH_CONTROL, "", json.dumps(close_msg).encode()))
+
+    async def _run_autoscan_subscription(
+        self,
+        subscription_id: str,
+        mgr: Any,
+        send_text: Any,
+        receive_text: Any,
+    ) -> None:
+        """Run a single auto-scan stream until cancelled or the peer goes away."""
+        try:
+            await run_autoscan_stream(
+                mgr,
+                send_text,
+                receive_text,
+                grace_timeout_s=1.0,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "relay.autoscan.stream_error subscription_id=%s: %s",
+                subscription_id, exc,
+            )
+        finally:
+            self._autoscan_inboxes.pop(subscription_id, None)
+            self._autoscan_streams.pop(subscription_id, None)
+
+    def _handle_close_autoscan(self, ctrl: dict) -> None:
+        """Cancel the stream task for a subscription id; best-effort cleanup."""
+        subscription_id = ctrl.get("subscription_id")
+        if not subscription_id:
+            return
+        task = self._autoscan_streams.get(subscription_id)
+        if task is not None and not task.done():
+            task.cancel()
 
     async def _handle_create_session(
         self, ctrl: dict, ws: ClientConnection
@@ -1012,3 +1170,8 @@ class RelayClient:
                 task.cancel()
         self._bridges.clear()
         self._handshake_sent.clear()
+        for task in list(self._autoscan_streams.values()):
+            if not task.done():
+                task.cancel()
+        self._autoscan_streams.clear()
+        self._autoscan_inboxes.clear()

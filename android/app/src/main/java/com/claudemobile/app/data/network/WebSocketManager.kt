@@ -321,11 +321,12 @@ class WebSocketManager(
     /**
      * Map a direct-mode WebSocket path to its relay equivalent.
      *
-     * | Direct Path              | Relay Path                                    |
-     * |--------------------------|-----------------------------------------------|
+     * | Direct Path              | Relay Path                                     |
+     * |--------------------------|------------------------------------------------|
      * | `ws/session/{sid}`       | `relay/ws/session/{agentId}/{sid}`             |
-     * | `ws/events`              | `relay/ws/events/{agentId}`                   |
-     * | `ws/sessions`            | `relay/ws/sessions/{agentId}`                 |
+     * | `ws/events`              | `relay/ws/events/{agentId}`                    |
+     * | `ws/sessions`            | `relay/ws/sessions/{agentId}`                  |
+     * | `ws/autoscan`            | `relay/ws/autoscan/{agentId}`                  |
      */
     private fun mapToRelayPath(path: String, agentId: String): String {
         if (path.startsWith("ws/session/")) {
@@ -337,6 +338,9 @@ class WebSocketManager(
         }
         if (path == "ws/sessions") {
             return "relay/ws/sessions/$agentId"
+        }
+        if (path == "ws/autoscan") {
+            return "relay/ws/autoscan/$agentId"
         }
         // Fallback: prepend relay prefix
         return "relay/$path/$agentId"

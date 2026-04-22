@@ -14,6 +14,7 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .envelope import (
+    CH_AUTOSCAN,
     CH_CONTROL,
     CH_EVENTS,
     CH_SESSION_IO,
@@ -29,6 +30,10 @@ router = APIRouter()
 
 # Close code sent to mobile clients when their agent disconnects.
 AGENT_DISCONNECTED_CODE = 4010
+
+# Close code sent to mobile clients when the agent declines an autoscan
+# subscription (e.g. capacity reached, autoscan manager not configured).
+AUTOSCAN_DECLINED_CODE = 1013
 
 
 @router.websocket("/ws/agent-tunnel")
@@ -164,6 +169,12 @@ async def _reader(
                     for client in clients:
                         _try_enqueue(client, payload, binary=False)
 
+                elif channel == CH_AUTOSCAN:
+                    channel_key = f"autoscan:{session_id}"
+                    clients = routing.get_mobile_clients(agent_id, channel_key)
+                    for client in clients:
+                        _try_enqueue(client, payload, binary=False)
+
                 elif channel == CH_CONTROL:
                     await _handle_control(
                         websocket, agent_id, payload, routing, db
@@ -246,6 +257,23 @@ async def _handle_control_json(
         if request_id:
             mobile_proxy = websocket.app.state.mobile_proxy
             mobile_proxy.resolve(request_id, ctrl)
+
+    elif msg_type == "close_autoscan":
+        subscription_id = ctrl.get("subscription_id")
+        if not subscription_id:
+            return
+        reason = ctrl.get("reason", "agent_closed")
+        channel_key = f"autoscan:{subscription_id}"
+        # Snapshot the client set before we start closing sockets — the
+        # writer tasks of closed sockets will concurrently unregister
+        # themselves via their ``finally`` handlers.
+        for client in list(routing.get_mobile_clients(agent_id, channel_key)):
+            try:
+                await client.websocket.close(
+                    code=AUTOSCAN_DECLINED_CODE, reason=reason
+                )
+            except Exception:
+                pass
 
 
 def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:

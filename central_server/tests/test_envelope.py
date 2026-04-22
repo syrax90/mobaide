@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from central_server.relay.envelope import (
+    CH_AUTOSCAN,
     CH_CONTROL,
     CH_EVENTS,
     CH_SESSION_IO,
@@ -45,6 +46,27 @@ class TestEnvelope:
         assert channel == CH_CONTROL
         assert session_id == ""
         assert out_payload == payload
+
+    def test_autoscan_roundtrip(self):
+        """CH_AUTOSCAN (0x04) carries a per-mobile subscription_id.
+
+        This is the channel that the relay uses to fan out auto-scan events
+        (snapshot / caught_up / event frames) to the specific mobile that
+        subscribed with that id — it must survive a full encode+decode
+        round-trip with a non-empty session_id.
+        """
+        payload = b'{"type":"snapshot","data":{"scans":[]}}'
+        subscription_id = "f1e2d3c4b5a697887766554433221100"
+        data = encode(CH_AUTOSCAN, subscription_id, payload)
+        channel, session_id, out_payload = decode(data)
+        assert channel == CH_AUTOSCAN
+        assert session_id == subscription_id
+        assert out_payload == payload
+
+    def test_autoscan_channel_constant(self):
+        """Guard: channel byte stays 0x04 for wire compatibility with the
+        agent-side copy of the envelope protocol."""
+        assert CH_AUTOSCAN == 0x04
 
     def test_empty_payload(self):
         data = encode(CH_SESSION_IO, "s1", b"")

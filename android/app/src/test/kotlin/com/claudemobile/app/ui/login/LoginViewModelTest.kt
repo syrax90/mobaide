@@ -205,7 +205,7 @@ class LoginViewModelTest {
 
     @Test
     fun onGoogleAuthResult_success_emitsLoginSuccess() = runTest {
-        val vm = LoginViewModel(authRepository)
+        val vm = newViewModel()
         coEvery { authRepository.loginWithGoogle("google-token") } returns
             AuthResult.Success("google-user@gmail.com")
 

@@ -1,22 +1,25 @@
 """Mobile-facing WebSocket relay endpoints.
 
-Three endpoints that mirror the agent's existing WS API surface:
+Four endpoints that mirror the agent's existing WS API surface:
 - /relay/ws/session/{agent_id}/{session_id}  — binary PTY relay
 - /relay/ws/sessions/{agent_id}              — session list relay
 - /relay/ws/events/{agent_id}                — events relay
+- /relay/ws/autoscan/{agent_id}              — per-mobile auto-scan stream
 
 The relay never inspects inner frame content (opaque relay).
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import uuid
 
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from ..auth.dependencies import WebSocketAuthError, ws_authenticate_mobile
-from .envelope import CH_SESSION_IO, encode
+from .envelope import CH_AUTOSCAN, CH_CONTROL, CH_SESSION_IO, encode
 from .routing import MobileClient, RoutingTable
 
 logger = logging.getLogger(__name__)
@@ -118,6 +121,111 @@ async def relay_events(websocket: WebSocket, agent_id: str) -> None:
         await _mobile_writer(websocket, client, binary=False)
     finally:
         routing.unregister_mobile(agent_id, channel_key, client)
+
+
+@router.websocket("/ws/autoscan/{agent_id}")
+async def relay_autoscan(websocket: WebSocket, agent_id: str) -> None:
+    """Per-mobile auto-scan stream relay — bidirectional JSON text.
+
+    Allocates a fresh ``subscription_id`` for this connection so each
+    mobile owns independent ``resume_from_seq`` / ``subscribe_set`` state
+    on the agent side. The agent is notified by a CH_CONTROL
+    ``open_autoscan`` message on connect and a ``close_autoscan`` on
+    teardown so it can spawn / cancel the matching stream task.
+    """
+    device_id = await _validate_mobile_connection(websocket, agent_id)
+    if device_id is None:
+        return
+
+    routing: RoutingTable = websocket.app.state.routing
+    subscription_id = uuid.uuid4().hex
+    channel_key = f"autoscan:{subscription_id}"
+    client = MobileClient(device_id=device_id, websocket=websocket)
+    routing.register_mobile(agent_id, channel_key, client)
+
+    agent_conn = routing.get_agent(agent_id)
+    if agent_conn is None:
+        routing.unregister_mobile(agent_id, channel_key, client)
+        await websocket.close(code=4010, reason="Agent is offline")
+        return
+
+    open_msg = json.dumps({
+        "type": "open_autoscan",
+        "subscription_id": subscription_id,
+    }).encode()
+    try:
+        agent_conn.send_queue.put_nowait(encode(CH_CONTROL, "", open_msg))
+    except asyncio.QueueFull:
+        logger.warning(
+            "relay.autoscan.open_drop agent=%s device=%s — agent queue full",
+            agent_id, device_id,
+        )
+        routing.unregister_mobile(agent_id, channel_key, client)
+        await websocket.close(code=1013, reason="Agent busy")
+        return
+
+    reader_task = asyncio.create_task(
+        _autoscan_reader(websocket, agent_id, subscription_id, routing),
+        name=f"mobile-autoscan-reader-{device_id}-{subscription_id}",
+    )
+    writer_task = asyncio.create_task(
+        _mobile_writer(websocket, client, binary=False),
+        name=f"mobile-autoscan-writer-{device_id}-{subscription_id}",
+    )
+
+    try:
+        done, pending = await asyncio.wait(
+            {reader_task, writer_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+    finally:
+        routing.unregister_mobile(agent_id, channel_key, client)
+        current_agent = routing.get_agent(agent_id)
+        if current_agent is not None:
+            close_msg = json.dumps({
+                "type": "close_autoscan",
+                "subscription_id": subscription_id,
+            }).encode()
+            try:
+                current_agent.send_queue.put_nowait(
+                    encode(CH_CONTROL, "", close_msg)
+                )
+            except asyncio.QueueFull:
+                pass
+
+
+async def _autoscan_reader(
+    websocket: WebSocket,
+    agent_id: str,
+    subscription_id: str,
+    routing: RoutingTable,
+) -> None:
+    """Forward mobile text frames to the agent as CH_AUTOSCAN envelopes."""
+    try:
+        while True:
+            msg = await websocket.receive()
+            if msg.get("type") == "websocket.disconnect":
+                return
+            text = msg.get("text")
+            if text is None:
+                continue
+            envelope = encode(CH_AUTOSCAN, subscription_id, text.encode("utf-8"))
+            agent_conn = routing.get_agent(agent_id)
+            if agent_conn is None:
+                return
+            try:
+                agent_conn.send_queue.put_nowait(envelope)
+            except asyncio.QueueFull:
+                pass
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.exception(
+            "relay.autoscan.reader_error agent=%s sub=%s: %s",
+            agent_id, subscription_id, exc,
+        )
 
 
 async def _session_reader(
