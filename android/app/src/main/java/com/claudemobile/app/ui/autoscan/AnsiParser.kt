@@ -39,9 +39,8 @@ object AnsiParser {
         while (i < input.length) {
             val c = input[i]
             if (c == ESC && i + 1 < input.length && input[i + 1] == '[') {
-                // Flush pending text
                 applySpan(sb.toString()); sb.clear()
-                // Find terminator
+                // Scan for CSI final byte (0x40–0x7E)
                 val end = (i + 2 until input.length).firstOrNull { idx ->
                     val ch = input[idx]
                     ch in '\u0040'..'\u007E'

@@ -121,7 +121,6 @@ fun SessionListScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // Active Auto Scans (one card per running project)
                 if (uiState.activeScans.isNotEmpty()) {
                     item {
                         Text(
@@ -205,7 +204,6 @@ private fun SessionCard(
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // State indicator dot
             androidx.compose.foundation.Canvas(modifier = Modifier.size(12.dp)) {
                 drawCircle(color = stateColor)
             }

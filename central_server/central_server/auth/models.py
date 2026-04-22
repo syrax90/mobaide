@@ -21,15 +21,12 @@ class MobileTokenPayload:
 class UserTokenPayload:
     """Decoded JWT payload for user (dashboard) session tokens."""
 
-    sub: str  # user_id
+    sub: str
     email: str
     role: str  # "admin" | "viewer"
     token_type: str  # "dashboard"
     exp: int | None  # None = token has no `exp` claim (never expires)
     iat: int
-
-
-# -- Pydantic request/response models -----------------------------------------
 
 
 class MobileRefreshRequest(BaseModel):
@@ -40,9 +37,6 @@ class MobileTokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
-
-
-# -- Agent management models --------------------------------------------------
 
 
 class CreateAgentRequest(BaseModel):
@@ -72,9 +66,6 @@ class ReregisterAgentResponse(BaseModel):
 
     agent_id: str
     token: str
-
-
-# -- User auth request/response models ----------------------------------------
 
 
 class UserRegisterRequest(BaseModel):

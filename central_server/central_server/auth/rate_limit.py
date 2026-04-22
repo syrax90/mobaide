@@ -96,7 +96,7 @@ class ResendRateLimiter:
             return None
 
     async def reset(self, email: str) -> None:
-        """Clear the rate-limit state for an email (e.g. on successful verify)."""
+        """Clear the rate-limit state for an email."""
         key = self._normalise(email)
         async with self._lock:
             self._state.pop(key, None)

@@ -11,9 +11,9 @@ import kotlinx.coroutines.flow.map
 private val Context.dataStore by preferencesDataStore(name = "claude_mobile_prefs")
 
 /**
- * Lightweight Preferences DataStore for the few fields the Android client wants to remember
- * across launches: the most recently used project name (for pre-selecting the picker) and the
- * most recently created session id (for auto-resume on app restart). See CLA-14.
+ * Persist the two fields the Android client needs across launches: the most recently used
+ * project name (for pre-selecting the picker) and the most recently created session id
+ * (for auto-resume on app restart).
  */
 class PreferencesStore(private val context: Context) {
 

@@ -25,7 +25,6 @@ import javax.inject.Inject
 /**
  * Projects management screen state holder.
  *
- * Design principles (see CLA-40 plan):
  *  - Server-authoritative: create/update/delete never mutate the projects list
  *    locally. The repository's bus collector applies the server's
  *    `projects.changed` snapshot. The sheet closes on HTTP 2xx.
@@ -56,8 +55,7 @@ class ProjectsViewModel @Inject constructor(
     private val _pendingOrder = MutableStateFlow<List<String>?>(null)
 
     init {
-        // Derive busy-project set from auto-scan state. `distinctUntilChanged`
-        // prevents UI flicker when scan status transitions churn.
+        // `distinctUntilChanged` prevents UI flicker when scan status transitions churn.
         autoScanRepository.observeScans()
             .onEach { scans ->
                 val busy = scans.map { it.project_name }.toSet()
@@ -65,12 +63,7 @@ class ProjectsViewModel @Inject constructor(
             }
             .launchIn(viewModelScope)
 
-        // Merge the repo's list with any pending optimistic reorder. The
-        // display list is sorted by `order` ascending, unless we're holding
-        // a pending permutation — in that case it's sorted by the user's
-        // dragged arrangement. The pending override clears once the REPO's
-        // authoritative order matches it (i.e. the server's projects.changed
-        // event has landed).
+        // Pending override clears once the repo's order matches it (server's projects.changed landed).
         combine(projectsRepository.observeProjects(), _pendingOrder) { projects, pending ->
             val repoOrder = projects.sortedBy { it.order }
             val display = if (pending != null) {
@@ -94,7 +87,6 @@ class ProjectsViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val list = projectsRepository.listProjects()
-                // Only seed if the bus hasn't already populated the repo state.
                 if (_uiState.value.projects.isEmpty()) {
                     _uiState.update { it.copy(projects = list.sortedBy { p -> p.order }, isLoading = false) }
                 } else {
@@ -107,8 +99,6 @@ class ProjectsViewModel @Inject constructor(
         }
     }
 
-    // --- sheet lifecycle ---
-
     fun openCreateSheet() {
         _uiState.update { it.copy(form = ProjectFormState.forCreate()) }
     }
@@ -120,8 +110,6 @@ class ProjectsViewModel @Inject constructor(
     fun closeSheet() {
         _uiState.update { it.copy(form = null) }
     }
-
-    // --- form mutators ---
 
     private fun updateForm(mutator: (ProjectFormState) -> ProjectFormState) {
         _uiState.update { state ->
@@ -176,8 +164,6 @@ class ProjectsViewModel @Inject constructor(
         )
     }
 
-    // --- save ---
-
     fun save() {
         val form = _uiState.value.form ?: return
         val attempted = form.copy(submitAttempted = true)
@@ -208,9 +194,6 @@ class ProjectsViewModel @Inject constructor(
         }
     }
 
-    // --- delete / undo ---
-
-    /** Called by swipe-to-dismiss on a project card. */
     fun onSwipeDelete(project: ProjectInfo) {
         if (_uiState.value.busyProjectNames.contains(project.name)) {
             _uiState.update { it.copy(pendingDelete = project) }
@@ -268,12 +251,8 @@ class ProjectsViewModel @Inject constructor(
             default_flags = default_flags,
         )
 
-    // --- reorder ---
-
     fun reorder(newNameOrder: List<String>) {
         _pendingOrder.value = newNameOrder
-        // Re-apply the combine block by nudging the state (a new emission of
-        // the combine block happens because _pendingOrder changed).
         viewModelScope.launch {
             try {
                 projectsRepository.reorderProjects(newNameOrder)

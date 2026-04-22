@@ -62,12 +62,10 @@ class AgentEventBus @Inject constructor(
     private var collectorJob: Job? = null
 
     init {
-        // React to session-state transitions only. `drop(1)` skips the
-        // StateFlow's initial replay so construction doesn't race with
-        // the first explicit [start] call from [MainActivity]; cold-start
-        // is handled by that explicit call, while mid-session transitions
-        // (login after logout, forced logout after refresh failure) flow
-        // through this collector.
+        // `drop(1)` skips the StateFlow's initial replay so injection-time
+        // construction doesn't trigger a connect before the first explicit
+        // [start] call. Mid-session transitions (re-login, forced logout
+        // after refresh failure) flow through this collector.
         scope.launch {
             sessionManager.authState.drop(1).collect { state ->
                 when (state) {
@@ -83,8 +81,7 @@ class AgentEventBus @Inject constructor(
     fun start() {
         if (conn != null) return
         if (!sessionManager.isLoggedIn()) {
-            // No-op until the user authenticates. The authState collector
-            // above will call start() again when that happens.
+            // No-op until authenticated; the authState collector will retry.
             _connection.value = ConnState.Disconnected
             return
         }

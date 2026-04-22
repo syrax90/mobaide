@@ -58,5 +58,5 @@ def _walk(value: Any) -> Any:
 
 
 def redact_processor(logger, method_name, event_dict):
-    """structlog processor: walk the event_dict and redact sensitive data."""
+    """Redact sensitive values from a structlog event dict before rendering."""
     return _walk(event_dict)

@@ -34,24 +34,18 @@ fun AppNavigation(sessionManager: SessionManager) {
     val navController = rememberNavController()
     val authState by sessionManager.authState.collectAsStateWithLifecycle()
 
-    // Three-tier start destination:
-    // Unauthenticated → LOGIN
-    // UserOnly         → AGENT_LIST (dashboard)
-    // FullyConnected   → AGENT_LIST (dashboard)
+    // Both authenticated states land on AGENT_LIST; only Unauthenticated goes to LOGIN.
     val startDestination = when (sessionManager.authState.value) {
         SessionManager.AuthState.FullyConnected -> Routes.AGENT_LIST
         SessionManager.AuthState.UserOnly -> Routes.AGENT_LIST
         SessionManager.AuthState.Unauthenticated -> Routes.LOGIN
     }
 
-    // React to state transitions. Tracks the previous state so that we
-    // only navigate on actual transitions, not cold starts (which are
-    // handled by `startDestination`).
+    // Track previous state to skip navigation on cold start; only react to actual transitions.
     var previousState by remember { mutableStateOf(sessionManager.authState.value) }
     LaunchedEffect(authState) {
         val current = authState
         when {
-            // User logged out entirely → go to login
             current is SessionManager.AuthState.Unauthenticated
                 && previousState !is SessionManager.AuthState.Unauthenticated -> {
                 navController.navigate(Routes.LOGIN) {
@@ -59,7 +53,6 @@ fun AppNavigation(sessionManager: SessionManager) {
                     launchSingleTop = true
                 }
             }
-            // Agent disconnected but user still authenticated → go to agent list
             current is SessionManager.AuthState.UserOnly
                 && previousState is SessionManager.AuthState.FullyConnected -> {
                 navController.navigate(Routes.AGENT_LIST) {

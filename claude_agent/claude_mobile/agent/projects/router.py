@@ -1,7 +1,7 @@
 """REST endpoints for the mutable projects store.
 
-All handlers are thin — they delegate to :mod:`claude_mobile.agent.projects.service`
-so the same logic is shared with the central-server relay proxy.
+All handlers are thin wrappers around :mod:`claude_mobile.agent.projects.service`
+so the relay proxy can reuse the same business logic without going through HTTP.
 """
 from __future__ import annotations
 

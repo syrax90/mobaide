@@ -30,11 +30,9 @@ class AgentRepository(
 
     /**
      * Patch the online flag on a single agent in the cached list.
-     * Called by [com.claudemobile.app.data.events.UserEventBus] when the
-     * server pushes an ``agent.status_changed`` event. Idempotent; a
-     * no-op if the agent isn't in the cache (e.g. it was just created
-     * on another device and we haven't refreshed yet — the next
-     * `refreshAgents` call will pick it up).
+     * Idempotent; a no-op if the agent isn't in the cache (e.g. it was
+     * just created on another device and we haven't refreshed yet — the
+     * next `refreshAgents` call will pick it up).
      */
     fun updateAgentOnline(agentId: String, online: Boolean) {
         _agents.update { current ->

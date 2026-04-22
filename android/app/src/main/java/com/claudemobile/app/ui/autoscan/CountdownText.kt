@@ -13,8 +13,8 @@ import java.time.Instant
 import java.time.format.DateTimeParseException
 
 /**
- * Renders "Next scan in 1m 23s" / "Running…" / "Now" derived from an
- * ISO-8601 `next_scan_at` string. Ticks every 1 second on the main thread.
+ * Renders "Next scan in 1m 23s" / "Now" derived from an ISO-8601 `next_scan_at` string.
+ * Recomputes every second via a looping [LaunchedEffect].
  */
 @Composable
 fun CountdownText(

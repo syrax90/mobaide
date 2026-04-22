@@ -18,7 +18,7 @@ import javax.inject.Singleton
 object NetworkModule {
 
     /**
-     * Bare OkHttpClient used exclusively by
+     * Provide the bare OkHttpClient used by
      * [com.claudemobile.app.data.auth.SessionManager] to issue
      * `/api/auth/refresh` calls. Must NOT include [AuthInterceptor]:
      * routing refresh traffic back through the interceptor that depends
@@ -49,7 +49,7 @@ object NetworkModule {
     }
 
     /**
-     * OkHttpClient used by [CentralApi] for the user-scoped central-server
+     * Provide the OkHttpClient for [CentralApi] user-scoped central-server
      * REST endpoints (user auth + agent CRUD + mobile-token issuance).
      * Carries [CentralAuthInterceptor] so that a 401 on any authenticated
      * endpoint atomically invalidates the local session — the dashboard

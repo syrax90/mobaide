@@ -76,7 +76,7 @@ class ConnectionStore(context: Context) {
     }
 
     /**
-     * Snapshot the current [TokenStore] state into a [ConnectionProfile].
+     * Capture the current [TokenStore] state into a new [ConnectionProfile] and make it active.
      */
     fun captureActiveProfile(tokenStore: TokenStore, label: String): ConnectionProfile {
         val id = java.util.UUID.randomUUID().toString()

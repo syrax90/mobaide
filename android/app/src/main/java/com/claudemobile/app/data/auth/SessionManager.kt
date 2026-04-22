@@ -90,8 +90,8 @@ class SessionManager @Inject constructor(
         object FullyConnected : AuthState
     }
 
-    /** Terminal vs transient distinction lets callers decide whether to
-     *  surface "session expired" (terminal) or "network flake" (transient). */
+    /** Distinguish terminal from transient refresh failures so callers can decide
+     *  whether to surface "session expired" (terminal) or "network flake" (transient). */
     sealed interface RefreshResult {
         /** Tokens rotated successfully. */
         object Success : RefreshResult
@@ -103,7 +103,7 @@ class SessionManager @Inject constructor(
         object Transient : RefreshResult
     }
 
-    /** Why the session was invalidated. Consumers use this to decide
+    /** Carry the reason a session was invalidated so consumers can decide
      *  whether to surface a "session expired" notice (server rejected the
      *  stored credentials) or stay silent (user asked to log out). */
     sealed interface InvalidationReason {
@@ -147,15 +147,15 @@ class SessionManager @Inject constructor(
         else -> AuthState.Unauthenticated
     }
 
-    /** Returns `true` when the agent connection is fully established.
+    /** Return `true` when the agent connection is fully established.
      *  Backward-compatible: matches the old LoggedIn semantic. */
     fun isLoggedIn(): Boolean = _authState.value is AuthState.FullyConnected
 
-    /** Returns `true` when at least a user identity exists (UserOnly or FullyConnected). */
+    /** Return `true` when at least a user identity exists (UserOnly or FullyConnected). */
     fun isUserAuthenticated(): Boolean =
         _authState.value is AuthState.UserOnly || _authState.value is AuthState.FullyConnected
 
-    /** Called after a successful user register/login against the central server. */
+    /** Mark the user as logged in after a successful register/login against the central server. */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Synchronized
     fun markUserLoggedIn() {
@@ -173,7 +173,7 @@ class SessionManager @Inject constructor(
         _authState.value = AuthState.UserOnly
     }
 
-    /** Called after a successful agent login/pairing has persisted tokens to [TokenStore]. */
+    /** Mark the agent connection as established after tokens have been persisted to [TokenStore]. */
     @Synchronized
     fun markAgentConnected() {
         _authState.value = AuthState.FullyConnected
@@ -322,9 +322,7 @@ class SessionManager @Inject constructor(
         }
     }
 
-    /**
-     * Atomically apply a successful refresh to `TokenStore` + `_authState`.
-     */
+    /** Atomically apply a successful refresh to `TokenStore` + `_authState`. */
     @Synchronized
     private fun applyRefreshSuccess(access: String, refresh: String): RefreshResult {
         if (_authState.value is AuthState.Unauthenticated) {
@@ -336,9 +334,9 @@ class SessionManager @Inject constructor(
     }
 
     /**
-     * Terminal result for agent-connection refresh failure. Clears only
-     * agent-connection tokens and transitions to [AuthState.UserOnly] if
-     * the user identity is still valid, otherwise to [AuthState.Unauthenticated].
+     * Return a terminal refresh result after clearing only the agent-connection tokens.
+     * Transitions to [AuthState.UserOnly] if the user identity is still valid,
+     * otherwise to [AuthState.Unauthenticated].
      */
     @Synchronized
     private fun terminalAgentOnly(): RefreshResult {

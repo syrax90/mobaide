@@ -65,7 +65,6 @@ class CreateSessionViewModel @Inject constructor(
     val transientMessages: SharedFlow<String> = _transientMessages.asSharedFlow()
 
     init {
-        // Reactive: collect projects from the bus-backed repository.
         viewModelScope.launch {
             val last = preferencesStore.getLastUsedProjectName()
             projectsRepository.observeProjects().collect { projects ->
@@ -80,7 +79,7 @@ class CreateSessionViewModel @Inject constructor(
             }
         }
 
-        // Fallback REST seed if the bus snapshot hasn't arrived yet.
+        // REST seed: populates projects if the bus snapshot hasn't arrived yet.
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingProjects = true) }
             try {
@@ -107,10 +106,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun selectProject(name: String) = _uiState.update {
-        // CLA-21: pure setter — no auto-advance. The user commits the choice
-        // by pressing the explicit Continue button below the dropdown.
-        // CLA-20: clamp worktree off if the picked project is not a git repo,
-        // so the launch payload stays consistent with the (now hidden) toggle.
+        // Clamp worktree off for non-git projects so the launch payload stays consistent.
         val isGit = it.projects.firstOrNull { p -> p.name == name }?.is_git == true
         it.copy(
             selectedProjectName = name,

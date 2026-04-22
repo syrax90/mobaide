@@ -69,7 +69,7 @@ class PairingRepository(
         )
         sessionManager.markAgentConnected()
 
-        // Auto-save to ConnectionStore for multi-connection management
+        // Propagate to ConnectionStore so multi-connection switching can restore this profile
         connectionStore.captureActiveProfile(
             tokenStore,
             label = "Relay: ${response.agent_id}",

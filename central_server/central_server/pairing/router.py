@@ -15,9 +15,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# -- Mobile token refresh ------------------------------------------------------
-
-
 @router.post("/api/mobile/refresh", response_model=MobileTokenResponse)
 async def refresh_mobile_token(request: Request, body: MobileRefreshRequest):
     """Exchange a refresh token for a new access+refresh pair."""
@@ -30,9 +27,6 @@ async def refresh_mobile_token(request: Request, body: MobileRefreshRequest):
         )
     access, refresh = result
     return MobileTokenResponse(access_token=access, refresh_token=refresh)
-
-
-# -- Pairing management (admin only — mirrors the HTMX dashboard route) ------
 
 
 @router.delete(

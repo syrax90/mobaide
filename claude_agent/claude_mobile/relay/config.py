@@ -18,17 +18,10 @@ class RelayConfig:
 
     @classmethod
     def from_env(cls) -> RelayConfig | None:
-        """Build from environment variables. Returns None if not configured.
+        """Build from environment variables; return None if RELAY_SERVER_URL is unset.
 
-        Required (when RELAY_SERVER_URL is set):
-            RELAY_SERVER_URL  — Central Server URL (e.g. wss://relay.example.com)
-            RELAY_AGENT_ID    — Agent ID registered with Central Server
-            RELAY_AGENT_TOKEN — Auth token for the Central Server
-
-        Optional:
-            RELAY_HEARTBEAT_INTERVAL  — Heartbeat interval in seconds (default: 15)
-            RELAY_RECONNECT_BASE      — Base reconnect delay in seconds (default: 1.0)
-            RELAY_RECONNECT_MAX       — Max reconnect delay in seconds (default: 60.0)
+        RELAY_AGENT_ID and RELAY_AGENT_TOKEN are required whenever RELAY_SERVER_URL
+        is present — raises RuntimeError if either is missing.
         """
         url = os.getenv("RELAY_SERVER_URL")
         if not url:

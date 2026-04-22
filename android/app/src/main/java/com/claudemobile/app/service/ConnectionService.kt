@@ -70,8 +70,6 @@ class ConnectionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // -- Notifications --
-
     private fun createNotificationChannels() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(
@@ -108,7 +106,6 @@ class ConnectionService : Service() {
         val nm = NotificationManagerCompat.from(this)
         val activeNames = scans.map { it.project_name }.toSet()
 
-        // 1. Remove children for scans that no longer exist.
         val gone = visibleChildren - activeNames
         for (name in gone) {
             nm.cancel(notificationIdFor(name))
@@ -117,14 +114,12 @@ class ConnectionService : Service() {
         }
         visibleChildren.removeAll(gone)
 
-        // 2. Cancel summary if no scans remain.
         if (scans.isEmpty()) {
             nm.cancel(NOTIFICATION_ID_AUTOSCAN_SUMMARY)
             return
         }
 
-        // 3. Post / update child notifications (throttled to ≥1s per scan,
-        // but always flush on status transitions).
+        // Throttle child notification updates to ≥1s per scan, but always flush on status transitions.
         val now = SystemClock.elapsedRealtime()
         for (scan in scans) {
             val prevAt = lastUpdateAt[scan.project_name] ?: 0L
@@ -151,7 +146,6 @@ class ConnectionService : Service() {
             }
         }
 
-        // 4. Post / update group summary.
         val summary = NotificationCompat.Builder(this, CHANNEL_AUTOSCAN)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Auto Scan")

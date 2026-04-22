@@ -5,7 +5,7 @@ import kotlinx.serialization.json.JsonElement
 
 /**
  * Request body for `PUT /api/projects/{name}`. All fields optional with
- * three-state semantics (server-side contract from CLA-39):
+ * three-state semantics:
  *  - field omitted from the JSON body → keep existing value
  *  - field sent as `""` (empty string) → clear (store None server-side)
  *  - field sent as a non-empty value → replace

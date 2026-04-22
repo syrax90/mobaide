@@ -1,8 +1,7 @@
-"""structlog + stdlib logging configuration for the Central Server.
+"""Configure structlog + stdlib logging for the Central Server.
 
-Mirrors the agent's logging_setup pattern: structlog with contextvars,
-ISO timestamps, sensitive-data redaction, QueueHandler/QueueListener
-for async-safe I/O.
+Uses structlog with contextvars, ISO timestamps, sensitive-data redaction,
+and QueueHandler/QueueListener for async-safe I/O.
 """
 from __future__ import annotations
 
@@ -17,10 +16,6 @@ import structlog
 
 if TYPE_CHECKING:
     from .config import CentralServerConfig
-
-# ---------------------------------------------------------------------------
-# Redaction (inlined to avoid cross-package dependency on claude_agent)
-# ---------------------------------------------------------------------------
 
 REDACTED = "***REDACTED***"
 
@@ -69,13 +64,8 @@ def _walk(value: Any) -> Any:
 
 
 def redact_processor(logger, method_name, event_dict):
-    """structlog processor: walk event_dict and redact sensitive data."""
+    """Walk event_dict and redact sensitive data."""
     return _walk(event_dict)
-
-
-# ---------------------------------------------------------------------------
-# Logging helpers
-# ---------------------------------------------------------------------------
 
 
 def get_logger(name: str | None = None):
@@ -90,21 +80,12 @@ def clear_request_context() -> None:
     structlog.contextvars.clear_contextvars()
 
 
-# ---------------------------------------------------------------------------
-# QueueHandler that preserves structlog dict messages
-# ---------------------------------------------------------------------------
-
 _listener: logging.handlers.QueueListener | None = None
 
 
 class _RawQueueHandler(logging.handlers.QueueHandler):
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
         return record
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def configure_logging(config: CentralServerConfig) -> None:
@@ -186,7 +167,7 @@ def configure_logging(config: CentralServerConfig) -> None:
 
 
 def shutdown_logging() -> None:
-    """Stop the QueueListener thread (called during app shutdown)."""
+    """Stop the QueueListener thread."""
     global _listener
     if _listener is not None:
         try:

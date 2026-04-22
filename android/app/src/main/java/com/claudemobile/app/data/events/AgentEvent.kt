@@ -14,7 +14,7 @@ data class AgentEventEnvelope(
     val payload: JsonElement,
 )
 
-/** Structured payload for an auto-scan progress event (matches agent). */
+/** Represent the structured payload for an auto-scan progress event. */
 sealed class ScanProgressPayload {
     data class Phase(
         val phase: String,           // scan_started | scan_completed | scan_stopped

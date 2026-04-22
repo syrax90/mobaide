@@ -24,9 +24,7 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-# --- Binary frame protocol (ttyd / gotty style) ----------------------------
-# First byte = type, remainder = payload. All frames are sent as binary
-# WebSocket messages.
+# Binary frame protocol: first byte = type, remainder = payload; all frames sent as binary WebSocket messages.
 FRAME_OUTPUT = b"o"  # 0x6f  S->C  raw PTY bytes
 FRAME_INPUT = b"i"   # 0x69  C->S  raw input bytes
 FRAME_RESIZE = b"r"  # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
@@ -66,12 +64,11 @@ def _state_frame(status: str, pid: int | None = None) -> bytes:
 
 
 def ensure_fanout(app_state, session) -> SessionEventFanout:
-    """Get or eagerly create a SessionEventFanout for ``session``.
+    """Get or create a SessionEventFanout for ``session``.
 
-    Used both by the ``/ws/session/{id}`` handler and by the
-    ``SessionManager.on_session_created`` hook (registered in ``app.py``)
-    so headless sessions — including those spawned by Auto Scan — start
-    fanning out events the moment they are created.
+    Called both from the ``/ws/session/{id}`` handler and from the
+    ``SessionManager.on_session_created`` hook so headless sessions start
+    fanning out events the moment they are created, before any client connects.
     """
     fanouts: dict[str, SessionEventFanout] = app_state.fanouts
     fanout = fanouts.get(session.session_id)
@@ -107,7 +104,7 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
     log_ws_connect(channel, websocket, session_id=session_id)
     bind_request_context(session_id=session_id)
 
-    # Authenticate (also calls websocket.accept())
+    # ws_authenticate also calls websocket.accept()
     try:
         username = await ws_authenticate(websocket)
     except WebSocketAuthError as exc:
@@ -115,7 +112,6 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         return
     log_ws_authenticated(channel, username, session_id=session_id)
 
-    # Look up session
     manager = websocket.app.state.session_manager
     session = await manager.get_session(session_id)
     if session is None:
@@ -123,25 +119,16 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         await websocket.close(code=4004, reason="Session not found")
         return
 
-    # 1) Send current state immediately so the client knows what it's about
-    #    to receive.
     await websocket.send_bytes(_state_frame(_STATE_MAP[session.state], session.pid))
 
-    # 2) Send the ring-buffer replay marker, then the recent raw bytes as a
-    #    single output frame. The marker lets a future client distinguish
-    #    history from live output without changing the output frame shape.
     ring = _DA_REPLY_STRIP.sub(b"", session.get_ring())
     await websocket.send_bytes(FRAME_REPLAY)
-    # Always emit a single output frame after the replay marker — even if
-    # the ring is empty — so clients can rely on a fixed handshake shape
-    # (state, marker, output) before live frames begin.
+    # Always emit one output frame after the replay marker — even when empty —
+    # so clients can rely on a fixed handshake shape (state, marker, output)
+    # before live frames begin.
     await websocket.send_bytes(FRAME_OUTPUT + ring)
 
-    # Get or eagerly create the fanout. (Headless auto-scan sessions also
-    # come through here via the on_session_created hook in app.py.)
     fanout = ensure_fanout(websocket.app.state, session)
-
-    # Subscribe to events
     consumer_queue = fanout.subscribe()
 
     # Aggregated counters — emitted on disconnect, never per message.
@@ -171,9 +158,8 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     counters["bytes_in"] += len(payload)
                     counters["msg_count"] += 1
                     if payload:
-                        # Cancel stale input with Ctrl+C, pause for the TUI
-                        # to process and show a fresh prompt, then write the
-                        # new command.
+                        # Ctrl+C cancels stale input; brief pause lets the TUI
+                        # redraw a fresh prompt before the new command arrives.
                         await session.write(b"\x03")
                         await asyncio.sleep(0.1)
                         await session.write(payload)

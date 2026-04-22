@@ -6,7 +6,7 @@ data class ProjectsUiState(
     val projects: List<ProjectInfo> = emptyList(),
     val busyProjectNames: Set<String> = emptySet(),
     val form: ProjectFormState? = null,  // null = sheet closed
-    val pendingDelete: ProjectInfo? = null,  // triggered by swipe when project is busy → confirm dialog
+    val pendingDelete: ProjectInfo? = null,  // null = no pending confirmation
     val isLoading: Boolean = true,
 )
 

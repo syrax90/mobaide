@@ -45,12 +45,7 @@ class AutoScanConfig:
 
     @classmethod
     def from_env(cls) -> AutoScanConfig:
-        """Build config from environment variables.
-
-        Always returns an instance — the auto-scan engine is always wired in.
-        Whether it has any projects to operate on is a runtime question
-        answered by the projects store.
-        """
+        """Build config from environment variables; always returns an instance."""
         prompt_raw = os.getenv("AUTO_SCAN_PROMPT")
         prompt = (
             prompt_raw.replace("\\n", "\n")

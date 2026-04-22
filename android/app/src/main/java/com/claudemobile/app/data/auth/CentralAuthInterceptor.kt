@@ -6,8 +6,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Detects server-side invalidation of the user's **dashboard JWT** and
- * flips the local session to [SessionManager.AuthState.Unauthenticated].
+ * Invalidate the local session when the central server rejects the user's dashboard JWT.
  *
  * Scope: the OkHttpClient wired into
  * [com.claudemobile.app.data.network.CentralApi] — the user-scoped
@@ -29,8 +28,8 @@ import javax.inject.Singleton
  * [com.claudemobile.app.data.network.CentralApi] already attaches the
  * `Authorization: Bearer ...` header at each call site. Duplicating that
  * responsibility would require refactoring every method signature
- * (removing the explicit `userToken` parameter) plus every caller — out
- * of scope for this fix. The interceptor only reacts to 401s.
+ * (removing the explicit `userToken` parameter) plus every caller. The
+ * interceptor only reacts to 401s.
  */
 @Singleton
 class CentralAuthInterceptor @Inject constructor(

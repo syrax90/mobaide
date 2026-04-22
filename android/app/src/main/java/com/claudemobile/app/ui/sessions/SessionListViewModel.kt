@@ -52,7 +52,6 @@ class SessionListViewModel @Inject constructor(
             }
         }
 
-        // Reactive multi-scan list from the bus-backed repository.
         viewModelScope.launch {
             autoScanRepository.observeList().collect { list ->
                 _uiState.update {
@@ -97,6 +96,7 @@ class SessionListViewModel @Inject constructor(
             try {
                 autoScanRepository.refresh()
             } catch (_: Exception) {
+                // Auto scan may not be configured — ignore.
             }
         }
     }

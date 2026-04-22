@@ -39,8 +39,7 @@ class AgentConnection:
 
 @dataclass(eq=False)
 class MobileClient:
-    """Mobile client connection. Uses identity-based equality (eq=False)
-    so instances can be stored in sets despite mutable Queue fields."""
+    """Mobile client connection with identity-based equality so instances can be stored in sets despite mutable Queue fields."""
 
     device_id: str
     websocket: WebSocket
@@ -51,11 +50,10 @@ class MobileClient:
 
 @dataclass(eq=False)
 class UserClient:
-    """User-scoped mobile connection for events that span all of a user's
-    agents (presence, ownership changes, etc.).
+    """User-scoped connection for events spanning all of a user's agents (presence, ownership changes).
 
-    Uses identity-based equality so instances can be stored in sets despite
-    the mutable Queue field. Payload is text-only (JSON envelopes).
+    Payload is text-only (JSON envelopes); uses identity-based equality so instances can be stored
+    in sets despite the mutable Queue field.
     """
 
     user_id: str
@@ -70,14 +68,9 @@ class RoutingTable:
     """Tracks connected agents and their paired mobile clients."""
 
     def __init__(self) -> None:
-        # agent_id -> AgentConnection
         self._agents: dict[str, AgentConnection] = {}
-        # agent_id -> { channel_key -> set[MobileClient] }
         self._mobile_clients: dict[str, dict[str, set[MobileClient]]] = {}
-        # user_id -> set[UserClient] (user-scoped event channel)
         self._user_clients: dict[str, set[UserClient]] = {}
-
-    # -- Agent operations ------------------------------------------------------
 
     def register_agent(self, agent_id: str, ws: WebSocket) -> AgentConnection:
         conn = AgentConnection(agent_id=agent_id, websocket=ws)
@@ -132,8 +125,6 @@ class RoutingTable:
     def list_online_agents(self) -> list[AgentConnection]:
         return list(self._agents.values())
 
-    # -- Mobile client operations ----------------------------------------------
-
     def register_mobile(
         self, agent_id: str, channel_key: str, client: MobileClient
     ) -> None:
@@ -173,8 +164,6 @@ class RoutingTable:
         for clients in channels.values():
             result.extend(clients)
         return result
-
-    # -- User-scoped client operations -----------------------------------------
 
     def register_user_client(self, user_id: str, client: UserClient) -> None:
         clients = self._user_clients.setdefault(user_id, set())

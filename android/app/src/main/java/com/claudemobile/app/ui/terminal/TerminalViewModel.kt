@@ -44,14 +44,10 @@ class TerminalViewModel @Inject constructor(
      *  keep sends off the main thread while preserving FIFO ordering. */
     private val sendChannel = Channel<ByteString>(capacity = Channel.BUFFERED)
 
-    // ── Prompt detection ────────────────────────────────────────────────────────
-
     private val promptDetector = PromptDetector()
 
     /** Observable prompt state for the UI to render bottom-sheet overlays. */
     val promptState: StateFlow<PromptState> = promptDetector.promptState
-
-    // ── Terminal session ────────────────────────────────────────────────────────
 
     /** Exposed so the View layer can attach an invalidation hook. */
     val sessionCallback = TerminalSessionCallback(
@@ -85,8 +81,6 @@ class TerminalViewModel @Inject constructor(
             }
         }
     }
-
-    // ── Connection state ────────────────────────────────────────────────────────
 
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
@@ -154,8 +148,6 @@ class TerminalViewModel @Inject constructor(
         } catch (_: Exception) {
             "unknown"
         }
-
-    // ── Input ─────────────────────────────────────��─────────────────────────────
 
     /** Text from the last row-tap on the *current* input line (isCurrentInput). */
     private var tappedOriginal: String? = null

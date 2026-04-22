@@ -98,11 +98,6 @@ class MobileProxy:
             future.set_result(response)
 
 
-# ---------------------------------------------------------------------------
-# Generic catch-all proxy route
-# ---------------------------------------------------------------------------
-
-
 @router.api_route(
     "/{agent_id}/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE"],
@@ -114,14 +109,12 @@ async def proxy_to_agent(
     payload: MobileTokenPayload = Depends(get_mobile_user),
 ) -> JSONResponse:
     """Forward any REST request to the agent through the relay tunnel."""
-    # Verify the JWT's agent_id matches the requested agent
     if payload.agent_id != agent_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Token not valid for this agent",
         )
 
-    # Verify user owns this agent
     db = request.app.state.db
     if not await db.is_agent_owner(agent_id, payload.user_id):
         raise HTTPException(
@@ -129,7 +122,6 @@ async def proxy_to_agent(
             detail="User does not own this agent",
         )
 
-    # Read request body for non-GET methods
     body = None
     if request.method in ("POST", "PUT", "DELETE"):
         raw = await request.body()
@@ -139,10 +131,8 @@ async def proxy_to_agent(
             except (json.JSONDecodeError, TypeError):
                 body = None
 
-    # Collect query params
     query = dict(request.query_params) if request.query_params else None
 
-    # Forward through the proxy
     mobile_proxy: MobileProxy = request.app.state.mobile_proxy
     result = await mobile_proxy.forward(
         agent_id=agent_id,

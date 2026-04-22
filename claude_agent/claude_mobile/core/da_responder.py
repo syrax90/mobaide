@@ -43,9 +43,7 @@ _FINAL_HI = 0x7E
 
 
 def _csi_has_final(buf: bytes) -> bool:
-    """True if ``buf`` (which starts with ESC[) already contains a CSI
-    final byte. Used to decide whether a tail is "complete enough" to
-    process now or should be carried into the next chunk."""
+    """Return True if ``buf`` (starting with ESC[) contains a CSI final byte."""
     for ch in buf[2:]:
         if _FINAL_LO <= ch <= _FINAL_HI:
             return True

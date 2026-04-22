@@ -26,9 +26,6 @@ def _get_auth_service(request_or_ws: Request | WebSocket) -> AuthService:
     return request_or_ws.app.state.auth_service
 
 
-# -- Mobile WebSocket auth (mirrors agent's ws_authenticate pattern) -----------
-
-
 async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
     """Authenticate a mobile WebSocket via ``?token=`` query param.
 
@@ -58,19 +55,14 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
     return payload
 
 
-# -- User WebSocket auth (dashboard JWT via query param) ----------------------
-
-
 async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     """Authenticate a user-scoped WebSocket via ``?token=`` query param.
 
-    Accepts the same dashboard JWT used for REST API calls (see
-    ``get_api_user``). On success, calls ``websocket.accept()`` and returns
-    the decoded payload. Closes with 4001 on failure.
-
-    The close ``reason`` is a generic ``"Invalid token"`` — specific
-    PyJWT exception text is logged at WARN for operators but not exposed
-    to the client, which reacts only to the 4001 close code.
+    On success, calls ``websocket.accept()`` and returns the decoded payload.
+    Closes with 4001 on failure. The close ``reason`` is a generic
+    ``"Invalid token"`` — specific PyJWT exception text is logged at WARN for
+    operators but not exposed to the client, which reacts only to the 4001
+    close code.
     """
     auth_service = _get_auth_service(websocket)
     token = websocket.query_params.get("token")
@@ -88,14 +80,8 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     return payload
 
 
-# -- Dashboard auth (cookie-based JWT) ----------------------------------------
-
-
 async def get_dashboard_user(request: Request) -> UserTokenPayload:
-    """FastAPI dependency: validate dashboard JWT from cookie.
-
-    Returns a UserTokenPayload with user_id, email, and role.
-    """
+    """Validate the dashboard JWT from the session cookie."""
     auth_service = _get_auth_service(request)
     token = request.cookies.get("dashboard_token")
     if not token:
@@ -111,9 +97,6 @@ async def get_dashboard_user(request: Request) -> UserTokenPayload:
             headers={"Location": "/dashboard/login"},
         )
     return user_payload
-
-
-# -- RBAC dependency factory ---------------------------------------------------
 
 
 def require_role(*allowed_roles: str) -> Callable:
@@ -136,15 +119,8 @@ def require_role(*allowed_roles: str) -> Callable:
     return _check_role
 
 
-# -- User API auth (Bearer header with dashboard token) -----------------------
-
-
 async def get_api_user(request: Request) -> UserTokenPayload:
-    """FastAPI dependency: extract user JWT from Authorization Bearer header.
-
-    Accepts dashboard-type tokens via Bearer header for API access
-    (used by mobile app and API clients for agent management).
-    """
+    """Extract and validate the user JWT from the Authorization Bearer header."""
     auth_service = _get_auth_service(request)
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -184,11 +160,8 @@ async def get_non_admin_api_user(
     return user
 
 
-# -- Mobile REST auth (Bearer header) -----------------------------------------
-
-
 async def get_mobile_user(request: Request) -> MobileTokenPayload:
-    """FastAPI dependency: extract and validate mobile JWT from Authorization header."""
+    """Extract and validate the mobile JWT from the Authorization Bearer header."""
     auth_service = _get_auth_service(request)
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):

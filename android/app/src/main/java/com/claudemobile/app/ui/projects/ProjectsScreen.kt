@@ -61,8 +61,8 @@ fun ProjectsScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is ProjectsUiEvent.DeletedWithUndo -> {
-                    // CLA-40 AC#6 requires a 5s UNDO window. Material3's SnackbarDuration.Short
-                    // is 4s and Long is 10s, so use Indefinite racing a 5s timeout.
+                    // Material3's SnackbarDuration.Short is 4s and Long is 10s; use Indefinite
+                    // racing a 5s timeout to hit the exact 5s UNDO window.
                     val result = withTimeoutOrNull(5_000L) {
                         snackbarHostState.showSnackbar(
                             message = "Deleted '${event.snapshot.name}'",
@@ -189,11 +189,9 @@ private fun ProjectList(
     onReorder: (List<String>) -> Unit,
 ) {
     val lazyListState = rememberLazyListState()
-    // Local display list kept in Compose state so `onMove` can apply the reorder
-    // synchronously within the same frame — the Reorderable library will flicker
-    // if the list it renders is not updated before `onMove` returns. The VM's
-    // StateFlow-driven `projects` still drives truth; we sync it in via
-    // LaunchedEffect on every upstream change (including server-side reverts).
+    // Local display list updated synchronously in `onMove` so the Reorderable library
+    // sees the new order within the same frame. The VM's StateFlow remains the source
+    // of truth; LaunchedEffect re-syncs on every upstream change (including server reverts).
     var display by remember { mutableStateOf(projects) }
     LaunchedEffect(projects) { display = projects }
 

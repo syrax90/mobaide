@@ -135,13 +135,11 @@ class AutoScanRepository(
     }
 
     /**
-     * Returns the server's response so the caller (typically
-     * [com.claudemobile.app.ui.autoscan.AutoScanDetailViewModel]) can
+     * Trigger an immediate scan and return the server response so the caller can
      * rebind its countdown synchronously, without waiting for the bus event.
      */
     suspend fun runNow(projectName: String): RunNowResponse {
         val prev = _list.value
-        // Optimistic countdown reset.
         _list.value = prev.copy(
             scans = prev.scans.map {
                 if (it.project_name == projectName) it.copy(next_scan_at = null) else it
@@ -149,7 +147,6 @@ class AutoScanRepository(
         )
         return try {
             val response = restApi.runAutoScanNow(projectName)
-            // Reconcile from authoritative server response.
             _list.value = _list.value.copy(
                 scans = _list.value.scans.map {
                     if (it.project_name == projectName) it.copy(next_scan_at = response.next_scan_at) else it
@@ -164,8 +161,8 @@ class AutoScanRepository(
     }
 
     /**
-     * Open a /ws/autoscan stream subscribed to a single project (so the server
-     * also relays heavy `log` events). Caller cancels the flow to disconnect.
+     * Open a WebSocket stream subscribed to a single project, causing the server
+     * to also relay heavy `log` events. Caller cancels the flow to disconnect.
      */
     fun observeDetailFrames(
         projectName: String,

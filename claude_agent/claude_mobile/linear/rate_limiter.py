@@ -15,6 +15,13 @@ __all__ = ["LinearRateLimiter"]
 
 
 class _TokenBucket:
+    """Async token bucket that releases its lock before sleeping.
+
+    The lock is dropped before each ``asyncio.sleep`` so that other coroutines
+    waiting on the same bucket can refill and check tokens without being
+    blocked for the entire sleep duration.
+    """
+
     def __init__(self, capacity: float, refill_per_sec: float) -> None:
         self.capacity = capacity
         self.refill_per_sec = refill_per_sec
@@ -40,7 +47,7 @@ class _TokenBucket:
 
 
 class LinearRateLimiter:
-    """Per-API-key token bucket shared by all AutoScanInstances."""
+    """Manage per-API-key token buckets for Linear GraphQL requests."""
 
     def __init__(
         self,
@@ -53,6 +60,11 @@ class LinearRateLimiter:
         self._buckets_lock = asyncio.Lock()
 
     async def acquire(self, api_key: str) -> None:
+        """Block until one token is available for ``api_key``.
+
+        Uses double-checked locking: a fast unsynchronised lookup avoids
+        acquiring ``_buckets_lock`` on every call once the bucket exists.
+        """
         bucket = self._buckets.get(api_key)
         if bucket is None:
             async with self._buckets_lock:

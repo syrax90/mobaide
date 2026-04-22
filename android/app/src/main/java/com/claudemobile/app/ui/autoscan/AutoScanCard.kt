@@ -127,7 +127,7 @@ private fun relativeTime(epochSeconds: Double): String {
     if (epochSeconds <= 0) return ""
     val deltaSec = ((System.currentTimeMillis() / 1000.0) - epochSeconds).toLong()
     return when {
-        deltaSec < 0 -> "just now"
+        deltaSec < 0 -> "just now" // clock skew guard
         deltaSec < 5 -> "just now"
         deltaSec < 60 -> "${deltaSec}s ago"
         deltaSec < 3600 -> "${deltaSec / 60}m ago"

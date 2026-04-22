@@ -1,9 +1,7 @@
 """Outbound email helper.
 
 Thin wrapper around ``aiosmtplib`` + Jinja2 for rendering and sending the
-verification email. Kept deliberately small: a single ``send_verification_email``
-method, Jinja templates co-located with the dashboard HTML at
-``central_server/templates/email/``.
+verification email. Jinja templates live at ``central_server/templates/email/``.
 
 Errors from the SMTP transport are logged but never re-raised — this class is
 invoked from within ``fastapi.BackgroundTasks`` where exceptions would
@@ -27,7 +25,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Templates co-located with the dashboard HTML under `central_server/templates/`.
 _env = Environment(
     loader=FileSystemLoader(str(resolve_templates_dir())),
     autoescape=select_autoescape(["html", "xml"]),

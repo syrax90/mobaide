@@ -2,7 +2,7 @@ package com.claudemobile.app.data.network.dto
 
 import kotlinx.serialization.Serializable
 
-/** Agent listing response — no credentials. Matches server `AgentSummary`. */
+/** Represent a listed agent without credentials. Matches server `AgentSummary`. */
 @Serializable
 data class AgentSummaryResponse(
     val agent_id: String,
@@ -15,7 +15,7 @@ data class AgentSummaryResponse(
 @Serializable
 data class CreateAgentRequest(val name: String)
 
-/** Returned once on creation — includes raw token. */
+/** Carry the raw token returned once on agent creation. */
 @Serializable
 data class CreateAgentResponse(
     val agent_id: String,
@@ -23,14 +23,14 @@ data class CreateAgentResponse(
     val token: String,
 )
 
-/** Returned on credential rotation — includes new raw token. */
+/** Carry the new raw token issued after credential rotation. */
 @Serializable
 data class ReRegisterAgentResponse(
     val agent_id: String,
     val token: String,
 )
 
-/** Mobile access + refresh tokens for connecting to an agent via relay. */
+/** Hold mobile access and refresh tokens for connecting to an agent via relay. */
 @Serializable
 data class MobileTokenResponse(
     val access_token: String,

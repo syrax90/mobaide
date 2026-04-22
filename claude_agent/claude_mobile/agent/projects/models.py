@@ -14,8 +14,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field, SecretStr
 
 # Narrower than ``dict[str, object]`` but wider than plain strings — matches
-# the types the launcher's ``default_flags`` handler already accepts. Android
-# DTO widening is tracked separately (CLA-40).
+# the types the launcher's ``default_flags`` handler already accepts.
 FlagValue = str | int | float | bool
 
 

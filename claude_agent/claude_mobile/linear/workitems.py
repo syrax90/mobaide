@@ -29,8 +29,8 @@ class ActiveWorkItem:
     associated git worktree.
     """
 
-    id: str  # Linear identifier, e.g. "CLA-31"
-    uuid: str  # Linear internal UUID (used for single-issue queries)
+    id: str  # Human-readable identifier, e.g. "TEAM-31"
+    uuid: str  # Internal UUID used for single-issue API queries
     slug: str  # Worktree directory name
     worktree_path: str
     project_root: str
@@ -38,12 +38,9 @@ class ActiveWorkItem:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ActiveWorkItem":
-        # Normalize ``project_root`` to POSIX on load so legacy backslash
-        # entries match projects stored in the new canonical form — without
-        # which the cleanup filter in ``scanner._cleanup_completed_worktrees``
-        # silently drops pre-existing items after the path reconciliation
-        # migration. ``worktree_path`` gets the same treatment so sibling
-        # string comparisons stay consistent.
+        # Normalize both paths to POSIX on load so legacy backslash entries
+        # match the canonical form — without this, the cleanup filter silently
+        # drops pre-existing items after the path reconciliation migration.
         return cls(
             id=str(data["id"]),
             uuid=str(data["uuid"]),
@@ -72,12 +69,8 @@ def now_iso_utc() -> str:
 class ActiveWorkItemsStore:
     """Async-safe JSON store of active work items for one project.
 
-    The file format mirrors the PowerShell reference implementation
-    (``active_workitems.json``): a top-level JSON array of objects
-    keyed by the Linear issue identifier.
-
-    One store instance is created per ``AutoScanInstance``; callers
-    must not share stores across projects (the file is per-project).
+    Persists a top-level JSON array to ``active_workitems.json``.
+    One store instance per project — do not share across projects.
     """
 
     def __init__(self, path: Path) -> None:

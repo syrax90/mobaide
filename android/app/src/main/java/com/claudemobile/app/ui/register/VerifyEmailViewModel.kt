@@ -55,9 +55,7 @@ class VerifyEmailViewModel @Inject constructor(
     }
 
     fun updateCode(code: String) {
-        // Only keep digits, cap at 6. This works both for direct keystrokes
-        // and for paste: a full 6-digit paste lands as a single update that
-        // survives the filter.
+        // Handles paste: a full 6-digit paste lands as a single update that survives the filter.
         val digits = code.filter(Char::isDigit).take(CODE_LENGTH)
         _uiState.update { it.copy(code = digits, error = null) }
     }
@@ -135,9 +133,7 @@ class VerifyEmailViewModel @Inject constructor(
     }
 
     private fun emitError(message: String) {
-        // Always clear loading so the submit button re-enables — mirrors
-        // the pattern in RegisterViewModel / LoginViewModel. Every error
-        // path in this VM must leave the UI in an actionable state.
+        // Always clear loading so the submit button re-enables on any error path.
         _uiState.update { it.copy(isLoading = false, error = message) }
         _errorEvents.tryEmit(message)
     }

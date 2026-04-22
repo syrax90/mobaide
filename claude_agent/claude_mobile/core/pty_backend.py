@@ -160,7 +160,6 @@ class LinuxPtyBackend:
 
         master_fd, slave_fd = pty.openpty()
 
-        # Set initial terminal size
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
 

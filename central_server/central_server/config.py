@@ -17,11 +17,11 @@ class CentralServerConfig:
 
     jwt_secret_key: str
 
-    # Admin seeding (optional — used on first startup to create admin user)
+    # Admin seeding (optional — only takes effect on first startup)
     admin_seed_email: str | None = None
     admin_seed_password: str | None = None
 
-    # Google OAuth (optional — enables POST /api/auth/google)
+    # Google OAuth (optional)
     google_client_id: str | None = None
 
     jwt_algorithm: str = "HS256"
@@ -47,7 +47,7 @@ class CentralServerConfig:
     log_format: str = "json"  # "json" | "console"
     pairing_token_ttl_seconds: int = 300  # 5 minutes
     ws_ping_interval: int = 20  # seconds, within 15-30s spec
-    agent_disconnect_timeout: int = 30  # seconds
+    agent_disconnect_timeout: int = 30
 
     # SMTP (optional unless email_verification_required=True)
     smtp_host: str = "localhost"
@@ -60,7 +60,6 @@ class CentralServerConfig:
     smtp_from_name: str = "Claude Mobile"
     smtp_from_domain: str = "claude-mobile.local"
 
-    # Email verification knobs
     email_verification_required: bool = True
     email_verification_ttl_minutes: int = 15
     email_verification_max_attempts: int = 5

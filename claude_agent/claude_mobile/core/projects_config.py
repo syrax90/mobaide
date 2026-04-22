@@ -1,11 +1,4 @@
-"""Immutable per-project launcher snapshot.
-
-Historically this module also held a ``ProjectsConfig`` container that was
-populated once from the ``PROJECTS`` env var at startup. That container was
-removed by CLA-39 — the runtime source of truth is now
-:class:`claude_mobile.core.projects_store.ProjectsStore`, which hands out
-``ProjectConfig`` snapshots to the launcher and the auto-scan engine.
-"""
+"""Immutable per-project launcher snapshot."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,11 +6,10 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class ProjectConfig:
-    """Launcher-facing, immutable view of a single project.
+    """Provide a launcher-facing, immutable view of a single project.
 
-    Returned by ``ProjectsStore.get`` so the launcher can capture a coherent
-    snapshot of the project at session-start time and not worry about
-    subsequent in-flight mutations to the store.
+    The launcher captures this snapshot at session-start so subsequent
+    in-flight mutations to the store do not affect an active session.
     """
 
     name: str

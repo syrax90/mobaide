@@ -43,7 +43,6 @@ class LaunchSpec:
     created_files: list[str] = field(default_factory=list)
 
 
-# Mirrors PS1 lines 470-480.
 _LINEAR_MCP_TEMPLATE = {
     "mcpServers": {
         "linear": {
@@ -54,19 +53,13 @@ _LINEAR_MCP_TEMPLATE = {
     }
 }
 
-# Mirrors PS1 lines 486-488.
 _LOCAL_SETTINGS_TEMPLATE = {
     "enabledPlugins": {"linear@claude-plugins-official": False},
 }
 
 
 class ClaudeLauncher:
-    """Single source of truth for building a ``claude`` invocation.
-
-    Used by both ``POST /api/sessions`` (mobile) and the Linear auto-scan
-    pipeline so the two paths produce identical argv / env / cwd, mirroring
-    what ``Start-StandardMode`` would produce in ``claude_auto_executor.ps1``.
-    """
+    """Build a ``claude`` invocation (argv / env / cwd) from a project config and options."""
 
     def __init__(
         self,
@@ -85,8 +78,6 @@ class ClaudeLauncher:
         created = self._write_project_files(project, cwd)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
 
-    # -- argv --
-
     @staticmethod
     def _build_argv(options: ClaudeOptions) -> list[str]:
         argv: list[str] = ["claude", "--debug"]
@@ -102,8 +93,6 @@ class ClaudeLauncher:
         if options.initial_prompt:
             argv += ["--", options.initial_prompt]
         return argv
-
-    # -- env --
 
     @staticmethod
     def _build_env(project: ProjectConfig, options: ClaudeOptions) -> dict[str, str]:
@@ -140,15 +129,13 @@ class ClaudeLauncher:
         resolved = candidate / sub
         return str(resolved) if resolved.exists() else str(resolved)
 
-    # -- cwd / worktree --
-
     async def _resolve_cwd(
         self, project: ProjectConfig, options: ClaudeOptions
     ) -> str:
         if not options.worktree:
             return self._check_exists(project.path)
-        # CLA-20: a stale client may still send worktree=true for a non-git
-        # project. Log it for audit and fall back to the project root.
+        # A stale client may still send worktree=true for a non-git project;
+        # fall back to the project root.
         if not (Path(project.path) / ".git").exists():
             logger.warning(
                 "worktree=true requested for non-git project %r; ignoring",
@@ -181,15 +168,9 @@ class ClaudeLauncher:
             raise FileNotFoundError(2, "No such file or directory", cwd)
         return cwd
 
-    # -- project file generation --
-
     @staticmethod
     def _write_project_files(project: ProjectConfig, cwd: str) -> list[str]:
-        """Write ``.mcp.json`` and ``.claude/settings.local.json`` if needed.
-
-        Mirrors PS1 lines 464-491. Only fires when the project has a Linear
-        API key (the only thing currently injected via MCP).
-        """
+        """Write ``.mcp.json`` and ``.claude/settings.local.json`` when a Linear API key is present."""
         if not project.linear_api_key:
             return []
         created: list[str] = []

@@ -57,12 +57,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         logger.info("central_server.starting")
 
-        # Initialize database
         db = Database(config.db_path)
         await db.connect()
         app.state.db = db
 
-        # Initialize services
         app.state.routing = RoutingTable()
         email_sender = EmailSender(config)
         resend_limiter = ResendRateLimiter(
@@ -78,12 +76,11 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.pairing_service = PairingService(db)
         app.state.agent_service = AgentService(db, app.state.routing)
 
-        # Mobile REST proxy for forwarding operations to agents
         from .relay.mobile_proxy import MobileProxy
 
         app.state.mobile_proxy = MobileProxy(app.state.routing)
 
-        # Background task: cleanup expired pairing tokens every 60s
+        # Runs every 60 s; interval is not surfaced in the function signature.
         cleanup_task = asyncio.create_task(
             _token_cleanup_loop(db), name="token-cleanup"
         )
@@ -105,8 +102,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
-    # -- Middleware (added in reverse-execution order) --
-
+    # Middleware is executed in reverse registration order.
     @app.middleware("http")
     async def _http_logging_middleware(request: Request, call_next):
         if request.url.path in _HTTP_LOG_SKIP_PATHS:
@@ -158,14 +154,11 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         generator=_generate_correlation_id,
     )
 
-    # Shared state
     app.state.config = config
 
-    # Static files
     if _STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
-    # Import and include routers
     from .agents.router import router as agents_router
     from .auth.router import router as auth_router
     from .dashboard.router import router as dashboard_router
@@ -184,7 +177,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(pairing_router)
     app.include_router(dashboard_router)
 
-    # Health endpoint (no auth)
+    # Unauthenticated — intentionally public for load-balancer probes.
     @app.get("/api/health", tags=["health"])
     async def health():
         routing = app.state.routing

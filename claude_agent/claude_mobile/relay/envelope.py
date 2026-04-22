@@ -9,8 +9,7 @@ Channel types:
     0x03  events         -- session_id_len=0, payload = JSON text
     0x10  control        -- session_id_len=0, payload = JSON control message
 
-Note: this is a copy of central_server/central_server/relay/envelope.py.
-The two packages are independent and cannot share code.
+Note: intentionally duplicated — the two packages are independent and cannot share code.
 """
 from __future__ import annotations
 
@@ -23,13 +22,7 @@ _VALID_CHANNELS = {CH_SESSION_IO, CH_SESSIONS_LIST, CH_EVENTS, CH_CONTROL}
 
 
 def encode(channel: int, session_id: str, payload: bytes) -> bytes:
-    """Encode a relay envelope.
-
-    Args:
-        channel: Channel type (CH_SESSION_IO, CH_SESSIONS_LIST, etc.)
-        session_id: Session identifier (empty string for non-session channels)
-        payload: Raw payload bytes
-    """
+    """Encode a relay envelope."""
     sid_bytes = session_id.encode("utf-8") if session_id else b""
     if len(sid_bytes) > 255:
         raise ValueError(f"session_id too long: {len(sid_bytes)} bytes (max 255)")

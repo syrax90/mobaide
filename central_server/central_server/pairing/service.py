@@ -1,4 +1,4 @@
-"""Pairing service — device binding and management (QR flow removed)."""
+"""Pairing service — device binding and management."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

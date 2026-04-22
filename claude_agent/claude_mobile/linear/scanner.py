@@ -124,8 +124,6 @@ class AutoScanInstance:
         self._next_scan_at: datetime | None = None
         self._run_now_event: asyncio.Event = asyncio.Event()
 
-    # -- Properties --
-
     @property
     def project_name(self) -> str:
         return self._project_name
@@ -152,8 +150,6 @@ class AutoScanInstance:
     @property
     def recent_events(self) -> list[ScanEvent]:
         return list(self._recent_events)
-
-    # -- Lifecycle --
 
     async def start(self) -> None:
         viewer = await self._client.get_viewer()
@@ -212,8 +208,6 @@ class AutoScanInstance:
         self._next_scan_at = datetime.now(timezone.utc)
         self._publish_status()
 
-    # -- Polling --
-
     async def _poll_loop(self) -> None:
         try:
             while True:
@@ -264,8 +258,7 @@ class AutoScanInstance:
         else:
             logger.info("No matching AutoPipeline issues found")
 
-        # Worktree cleanup runs every cycle, even when no new issues were
-        # processed — items added in earlier cycles may now be Done.
+        # Run every cycle — items added in prior cycles may have reached Done.
         if self._config.auto_remove_worktrees:
             try:
                 await self._cleanup_completed_worktrees()
@@ -280,7 +273,6 @@ class AutoScanInstance:
         project = self._project_config
         logger.info("Processing: %s - %s", issue.identifier, issue.title)
 
-        # 1) State update
         target_state_name = self._config.linear_active_state
         target_state = next(
             (s for s in issue.team_states if s.name == target_state_name), None
@@ -303,7 +295,6 @@ class AutoScanInstance:
             except Exception as exc:
                 self._emit_issue(issue, "state_update", "failed", error=str(exc))
 
-        # 2) Label removal
         auto_label = next(
             (l for l in issue.labels if l.name == "AutoPipeline"), None
         )
@@ -319,7 +310,6 @@ class AutoScanInstance:
             except Exception as exc:
                 self._emit_issue(issue, "label_removal", "failed", error=str(exc))
 
-        # 3) Worktree create
         slug = convert_to_worktree_slug(issue.identifier, issue.title)
         self._emit_issue(issue, "worktree_create", "started")
         wt_result = None
@@ -334,9 +324,7 @@ class AutoScanInstance:
             self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
             target_dir = project.path
 
-        # 3b) Persist to active_workitems.json for later cleanup.
-        # Only track when a worktree actually exists on disk and the
-        # feature is enabled.
+        # Only track when a worktree was actually created on disk and cleanup is enabled.
         if self._config.auto_remove_worktrees and wt_result is not None:
             try:
                 added = await self._workitems_store.add(
@@ -356,7 +344,6 @@ class AutoScanInstance:
                     "autoscan.workitem.persist_failed id=%s", issue.identifier,
                 )
 
-        # 4) Session spawn
         self._emit_issue(issue, "session_spawn", "started")
         session_id = uuid.uuid4().hex[:12]
         try:
@@ -488,8 +475,6 @@ class AutoScanInstance:
             self._project_name, removed, kept,
         )
 
-    # -- Event pub-sub --
-
     def _emit(self, type_: str, payload: dict) -> ScanEvent:
         self._seq += 1
         evt = ScanEvent(
@@ -562,8 +547,6 @@ class AutoScanInstance:
 
     def unsubscribe_events(self, q: asyncio.Queue[ScanEvent]) -> None:
         self._event_subscribers.discard(q)
-
-    # -- DTO --
 
     def to_dto(self) -> dict:
         return {

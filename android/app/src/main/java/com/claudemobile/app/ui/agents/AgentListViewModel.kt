@@ -76,8 +76,6 @@ class AgentListViewModel @Inject constructor(
         _uiState.update { it.copy(error = null) }
     }
 
-    // -- Add agent -----------------------------------------------------------
-
     fun showAddDialog() {
         _uiState.update { it.copy(addDialogState = AddAgentDialogState.Input) }
     }
@@ -109,8 +107,6 @@ class AgentListViewModel @Inject constructor(
             }
         }
     }
-
-    // -- Re-register ---------------------------------------------------------
 
     fun showReRegisterDialog(agent: AgentSummaryResponse) {
         _uiState.update {
@@ -153,8 +149,6 @@ class AgentListViewModel @Inject constructor(
         }
     }
 
-    // -- Delete --------------------------------------------------------------
-
     fun showDeleteConfirm(agent: AgentSummaryResponse) {
         _uiState.update { it.copy(deleteConfirmAgent = agent) }
     }
@@ -182,8 +176,6 @@ class AgentListViewModel @Inject constructor(
         }
     }
 
-    // -- Connect to agent ----------------------------------------------------
-
     fun connectToAgent(agent: AgentSummaryResponse) {
         if (_uiState.value.isConnecting) return
         if (agent.agent_id == _uiState.value.connectedAgentId) {
@@ -194,17 +186,14 @@ class AgentListViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isConnecting = true, error = null) }
             try {
-                // 1. Disconnect current agent if connected
                 if (sessionManager.isLoggedIn()) {
                     agentEventBus.stop()
                     sessionManager.agentDisconnect()
                 }
 
-                // 2. Get mobile tokens for the target agent
                 val tokens = agentRepository.getMobileTokensForAgent(agent.agent_id)
                 val userId = userIdentityStore.getUserId() ?: agent.agent_id
 
-                // 3. Save relay credentials to TokenStore
                 tokenStore.saveRelayCredentials(
                     serverUrl = BuildConfig.CENTRAL_SERVER_URL,
                     agentId = agent.agent_id,
@@ -214,10 +203,8 @@ class AgentListViewModel @Inject constructor(
                     refreshToken = tokens.refresh_token,
                 )
 
-                // 4. Mark agent as connected
                 sessionManager.markAgentConnected()
 
-                // 5. Save connection profile (update existing or create new)
                 val existingProfile = connectionStore.listProfiles()
                     .find { it.agentId == agent.agent_id && it.mode == "relay" }
                 if (existingProfile != null) {
@@ -236,7 +223,6 @@ class AgentListViewModel @Inject constructor(
                     )
                 }
 
-                // 6. Start event bus for new agent
                 agentEventBus.start()
 
                 _uiState.update {
@@ -246,7 +232,6 @@ class AgentListViewModel @Inject constructor(
                     )
                 }
 
-                // 7. Navigate to sessions
                 _navigateToSessions.tryEmit(Unit)
             } catch (e: Exception) {
                 _uiState.update {

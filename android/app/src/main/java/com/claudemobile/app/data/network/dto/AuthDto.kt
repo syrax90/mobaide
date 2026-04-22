@@ -20,8 +20,6 @@ data class RefreshRequest(
     val refresh_token: String,
 )
 
-// -- Central server user auth DTOs -------------------------------------------
-
 @Serializable
 data class UserRegisterRequest(
     val email: String,
@@ -54,8 +52,6 @@ data class UserAuthResponse(
     val status: String = "ok",
 )
 
-// -- Email verification DTOs --------------------------------------------------
-
 @Serializable
 data class VerifyEmailRequest(
     val email: String,
@@ -74,8 +70,8 @@ data class ResendVerificationResponse(
 )
 
 /**
- * Parsed body of a 403 response from `/api/auth/login` when the account
- * is not yet verified. FastAPI wraps it as `{"detail": {"error": ..., "email": ...}}`.
+ * Represent the 403 error body from `/api/auth/login` when the account is not yet verified.
+ * FastAPI wraps it as `{"detail": {"error": ..., "email": ...}}`.
  */
 @Serializable
 data class VerificationRequiredDetail(
@@ -89,7 +85,7 @@ data class VerificationRequiredErrorBody(
 )
 
 /**
- * Body of a 429 response from `/api/auth/resend-verification`.
+ * Represent the 429 error body from `/api/auth/resend-verification`.
  */
 @Serializable
 data class ResendRateLimitedDetail(

@@ -1,10 +1,5 @@
 """Mutable, file-backed store for project definitions.
 
-Introduced by CLA-39 to replace the immutable ``ProjectsConfig`` loaded from
-the ``PROJECTS`` env var. The store is the single source of truth at runtime
-and is consumed by ``SessionManager``, the auto-scan engine, the relay proxy,
-and the REST/WS layers.
-
 The disk format is a JSON list of project records, each with an explicit
 ``order`` field. On first load, if ``projects.json`` is missing and the
 ``PROJECTS`` env var is set, the store seeds itself from the env var and
@@ -48,9 +43,8 @@ def normalize_project_path(raw: str) -> str:
 class ProjectRecord:
     """In-memory mutable representation of a project row.
 
-    Never escapes the store: callers receive ``ProjectConfig`` snapshots via
-    :meth:`ProjectsStore.get` or client-safe dicts via
-    :meth:`ProjectsStore.list_public`.
+    Never escapes the store: callers receive ``ProjectConfig`` snapshots or
+    client-safe dicts via the public read APIs.
     """
 
     name: str
@@ -98,10 +92,6 @@ class ProjectsStore:
         self._projects: dict[str, ProjectRecord] = {}
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------
-    # Load / save
-    # ------------------------------------------------------------------
-
     def load(self) -> None:
         """Populate the store from disk, seeding from ``PROJECTS`` if needed.
 
@@ -142,7 +132,7 @@ class ProjectsStore:
             )
 
     def save(self) -> None:
-        """Public save — used by tests that bypass CRUD."""
+        """Persist the current in-memory state to disk."""
         with self._lock:
             self._save_unlocked()
 
@@ -163,10 +153,6 @@ class ProjectsStore:
             sorted(self._projects.values(), key=lambda r: r.order),
         ):
             rec.order = i
-
-    # ------------------------------------------------------------------
-    # Read APIs
-    # ------------------------------------------------------------------
 
     def list_public(self) -> list[dict[str, object]]:
         """Return all projects as client-safe dicts (no ``linear_api_key``)."""
@@ -196,10 +182,6 @@ class ProjectsStore:
     def __len__(self) -> int:
         with self._lock:
             return len(self._projects)
-
-    # ------------------------------------------------------------------
-    # Write APIs
-    # ------------------------------------------------------------------
 
     def create(self, record: ProjectRecord) -> ProjectConfig:
         """Insert a new project; ``order`` is assigned automatically.
@@ -305,11 +287,6 @@ class ProjectsStore:
             self._save_unlocked()
 
 
-# ----------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------
-
-
 def _record_from_dict(data: object) -> ProjectRecord | None:
     """Parse one stored record. Returns ``None`` if invalid."""
     if not isinstance(data, dict):
@@ -378,16 +355,13 @@ def _record_to_public(r: ProjectRecord) -> dict[str, object]:
 
 
 def _seed_from_env() -> list[ProjectRecord]:
-    """Parse the legacy ``PROJECTS`` env var into records.
+    """Parse the ``PROJECTS`` env var into records.
 
-    Mirrors the skipping rules of the old ``ProjectsConfig.from_dict``:
-    legacy string values are dropped, non-dict values are dropped,
-    entries without a string ``path`` are dropped.
-
-    Returns an empty list if ``PROJECTS`` is unset, empty, or parses to a
-    non-dict. Raises ``RuntimeError`` on invalid JSON (same as the legacy
-    loader — surfacing the problem early is better than silently seeding
-    an empty store).
+    String values, non-dict values, and entries without a string ``path``
+    are silently dropped. Returns an empty list if ``PROJECTS`` is unset,
+    empty, or parses to a non-dict. Raises ``RuntimeError`` on invalid JSON
+    to surface misconfiguration early rather than silently seeding an empty
+    store.
     """
     raw = os.getenv("PROJECTS")
     if not raw:

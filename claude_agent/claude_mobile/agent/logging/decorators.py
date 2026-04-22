@@ -25,11 +25,10 @@ def log_call(
 ):
     """Decorate a function to emit ``call.start`` / ``call.end`` log records.
 
-    :param name: Logical call name. Defaults to ``module.qualname``.
-    :param level: Log level for the success record (``info``/``debug``).
-    :param log_args: Whitelist of argument *names* whose values are safe to log
-        (e.g. ``("session_id", "issue_identifier")``). Other arg values are NOT
-        captured — only the parameter names appear in the record.
+    Args:
+        log_args: Allowlist of parameter names whose values are safe to include
+            in the log record. All other argument values are suppressed; only
+            the parameter names appear.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
