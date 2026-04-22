@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
-from claude_mobile.core.claude_launcher import ClaudeOptions
 from claude_mobile.linear.scanner import (
     AutoScanAlreadyRunning,
     AutoScanCapacityReached,
@@ -53,7 +52,7 @@ async def start_scan(body: StartScanRequest, request: Request) -> dict:
     """Start an auto scan for a project. 409 if already running, 429 if at cap."""
     mgr = _get_manager(request)
     claude_options = (
-        ClaudeOptions(**body.claude_options.model_dump())
+        body.claude_options.to_options()
         if body.claude_options is not None
         else None
     )

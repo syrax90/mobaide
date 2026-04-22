@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -907,6 +908,81 @@ class TestStopEmitsPhase:
         await inst.stop()
         phase_events = [e for e in inst._recent_events if e.type == "phase"]
         assert any(e.payload["phase"] == "scan_stopped" for e in phase_events)
+
+
+class TestClientOptionsTypeGuard:
+    """``AutoScanInstance.__init__`` raises ``TypeError`` if ``client_options``
+    is anything other than a ``ClaudeOptions`` dataclass or ``None``.
+
+    Regression boundary for the Auto Scan relay-mode bug where a plain
+    ``dict`` was slipping through the API edge and surfacing deep inside
+    ``_process_issue`` as ``'dict' object has no attribute 'plan_mode'``.
+    The constructor-level guard is the domain-boundary backstop: if any
+    future transport (a new relay handler, a test harness, a CLI) ever
+    hands in a raw dict again, it must fail loudly at construction with a
+    message that names the offending type — not silently reach
+    ``base.plan_mode`` three call-stacks deep.
+    """
+
+    @staticmethod
+    def _build_instance(tmp_path, client_options: Any) -> AutoScanInstance:
+        """Build ``AutoScanInstance`` directly with the guard's input under
+        test. The module-local ``_make_instance`` helper swallows the
+        ``client_options`` kwarg, so these tests construct explicitly.
+        ``client_options`` is typed ``Any`` at the call boundary so the
+        tests can pass the very inputs the guard is supposed to reject
+        (dict, str) without fighting the static type checker."""
+        return AutoScanInstance(
+            project_name="test-project",
+            project_config=_make_project_config(tmp_path),
+            config=_make_config(tmp_path),
+            session_manager=AsyncMock(spec=SessionManager),
+            launcher=AsyncMock(),
+            client=AsyncMock(),
+            worktree_mgr=AsyncMock(),
+            client_options=client_options,
+        )
+
+    def test_dict_raises_typeerror_with_type_name_in_message(self, tmp_path):
+        """Passing a ``dict`` (the exact regression shape) must raise
+        ``TypeError``; the message must include ``dict`` so an operator
+        reading the log can pinpoint the offending type immediately."""
+        with pytest.raises(TypeError) as excinfo:
+            self._build_instance(tmp_path, {"plan_mode": True})
+
+        msg = str(excinfo.value)
+        assert "dict" in msg
+        assert "ClaudeOptions" in msg
+
+    def test_none_is_accepted(self, tmp_path):
+        """``client_options=None`` is the happy default path — no exception,
+        and the instance stores ``None`` on its private attribute."""
+        inst = self._build_instance(tmp_path, None)
+        assert inst._client_options is None
+
+    def test_real_claude_options_is_accepted_and_stored(self, tmp_path):
+        """A genuine ``ClaudeOptions`` dataclass must pass the guard and be
+        stored verbatim — the guard must not accidentally reject the
+        valid case (would break both direct and fixed relay paths)."""
+        from claude_mobile.core.claude_launcher import ClaudeOptions
+
+        opts = ClaudeOptions(plan_mode=True, max_effort=False)
+        inst = self._build_instance(tmp_path, opts)
+        assert inst._client_options is opts
+
+    def test_arbitrary_type_raises_typeerror_naming_that_type(self, tmp_path):
+        """Guard is a pure isinstance check: ANY non-None non-ClaudeOptions
+        value must be rejected with its type name in the error message,
+        not just ``dict``. This pins the guard's breadth so a future
+        refactor to a narrower check (e.g. ``isinstance(x, (dict,))``)
+        cannot silently regress.
+        """
+        with pytest.raises(TypeError) as excinfo:
+            self._build_instance(tmp_path, "not options")
+
+        msg = str(excinfo.value)
+        assert "str" in msg
+        assert "ClaudeOptions" in msg
 
 
 class TestPollLoopContextIsolation:

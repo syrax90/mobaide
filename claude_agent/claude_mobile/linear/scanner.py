@@ -82,6 +82,13 @@ class AutoScanInstance:
         event_bus=None,
         client_options: ClaudeOptions | None = None,
     ) -> None:
+        if client_options is not None and not isinstance(
+            client_options, ClaudeOptions
+        ):
+            raise TypeError(  # type: ignore[unreachable]
+                "client_options must be a ClaudeOptions instance or None, "
+                f"got {type(client_options).__name__}"
+            )
         self._project_name = project_name
         self._project_config = project_config
         self._config = config
