@@ -40,7 +40,13 @@ from claude_mobile.agent.projects.service import (
     update_project,
 )
 
+from claude_mobile.agent.autoscan.models import StartScanRequest
 from claude_mobile.agent.autoscan.stream import run_autoscan_stream
+from claude_mobile.agent.sessions.models import CreateSessionRequest
+from claude_mobile.linear.scanner import (
+    AutoScanAlreadyRunning,
+    AutoScanCapacityReached,
+)
 
 from .config import RelayConfig
 from .envelope import (
@@ -651,16 +657,28 @@ class RelayClient:
             }
 
         if method == "POST" and path == "/api/sessions":
-            body = body or {}
+            try:
+                parsed = CreateSessionRequest.model_validate(body or {})
+            except ValidationError as exc:
+                return {
+                    "status": 422,
+                    "body": {"detail": _scrub_validation_errors(exc)},
+                }
             session_id = uuid.uuid4().hex[:12]
+            claude_options = (
+                parsed.claude_options.to_options()
+                if parsed.claude_options is not None
+                else None
+            )
             config = SessionConfig(
                 session_id=session_id,
-                command=body.get("command") or _DEFAULT_SHELL,
-                cwd=body.get("cwd"),
-                env=body.get("env"),
-                rows=body.get("rows", 24),
-                cols=body.get("cols", 80),
-                project_name=body.get("project_name"),
+                command=parsed.command or _DEFAULT_SHELL,
+                cwd=parsed.cwd,
+                env=parsed.env,
+                rows=parsed.rows,
+                cols=parsed.cols,
+                project_name=parsed.project_name,
+                claude_options=claude_options,
             )
             session = await self._session_manager.create_session(config)
             self._bridge_session(session, ws)
@@ -742,18 +760,29 @@ class RelayClient:
                     "status": 503,
                     "body": {"detail": "Auto-scan not available"},
                 }
-            body = body or {}
-            project_name = body.get("project_name", "")
-            claude_options = body.get("claude_options")
+            try:
+                parsed = StartScanRequest.model_validate(body or {})
+            except ValidationError as exc:
+                return {
+                    "status": 422,
+                    "body": {"detail": _scrub_validation_errors(exc)},
+                }
+            claude_options = (
+                parsed.claude_options.to_options()
+                if parsed.claude_options is not None
+                else None
+            )
             try:
                 instance = await mgr.start(
-                    project_name, client_options=claude_options
+                    parsed.project_name, client_options=claude_options,
                 )
-                return {"status": 200, "body": instance.to_dto()}
-            except ValueError as exc:
-                return {"status": 400, "body": {"detail": str(exc)}}
-            except Exception as exc:
+            except AutoScanAlreadyRunning as exc:
                 return {"status": 409, "body": {"detail": str(exc)}}
+            except AutoScanCapacityReached as exc:
+                return {"status": 429, "body": {"detail": str(exc)}}
+            except ValueError as exc:
+                return {"status": 404, "body": {"detail": str(exc)}}
+            return {"status": 200, "body": instance.to_dto()}
 
         if method == "POST" and path == "/api/autoscan/stop":
             mgr = getattr(self._app_state, "autoscan_manager", None)

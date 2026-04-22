@@ -665,3 +665,388 @@ class TestStartStop:
     async def test_stop_without_start_is_safe(self, client):
         await client.stop()
         assert client._stopping is True
+
+
+class TestProxyAutoscanStart:
+    """Regression guards for the Auto Scan relay-mode bug: the proxy handler
+    for ``POST /api/autoscan/start`` had been extracting ``claude_options``
+    as a raw dict and forwarding it to ``AutoScanSessionManager.start``,
+    causing ``'dict' object has no attribute 'plan_mode'`` deep in the
+    scan loop. The fix mirrors the direct REST route: validate the body
+    via ``StartScanRequest.model_validate(...)`` and call
+    ``.to_options()`` to get a real ``ClaudeOptions`` dataclass.
+
+    Also locks down the error-code contract, which the previous handler
+    collapsed to a blanket 409: 404 (ValueError), 409
+    (AutoScanAlreadyRunning), 422 (Pydantic ValidationError), and 429
+    (AutoScanCapacityReached) must all round-trip distinctly so the
+    mobile client sees the same statuses over relay as it does direct.
+    Every assertion mirrors ``test_autoscan_router.py::TestStartScan``.
+    """
+
+    async def test_happy_path_forwards_claude_options_as_dataclass(
+        self, client, mock_app_state,
+    ):
+        """A body with full ``claude_options`` must reach ``mgr.start`` as a
+        ``ClaudeOptions`` dataclass, not a dict — this is the exact
+        regression boundary."""
+        from claude_mobile.core.claude_launcher import ClaudeOptions
+
+        fake_inst = MagicMock()
+        fake_inst.to_dto.return_value = {
+            "project_name": "proj",
+            "status": "running",
+        }
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock(return_value=fake_inst)
+
+        ws = AsyncMock()
+        body = {
+            "project_name": "proj",
+            "claude_options": {
+                "plan_mode": True,
+                "no_memory": False,
+                "skip_permissions": False,
+                "initial_prompt": "hello",
+                "worktree": True,
+                "branch_name": "feature/x",
+                "identifier": "CLA-7",
+                "title": "Some title",
+                "max_effort": False,
+            },
+        }
+
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", body, None, ws,
+        )
+
+        assert result["status"] == 200
+        assert result["body"] == {"project_name": "proj", "status": "running"}
+
+        mgr.start.assert_awaited_once()
+        call = mgr.start.await_args
+        assert call is not None
+        assert call.args == ("proj",)
+        opts = call.kwargs["client_options"]
+        # The whole point of the bug fix: a real dataclass, not a dict.
+        assert isinstance(opts, ClaudeOptions)
+        assert not isinstance(opts, dict)
+        assert opts.plan_mode is True
+        assert opts.no_memory is False
+        assert opts.skip_permissions is False
+        assert opts.initial_prompt == "hello"
+        assert opts.worktree is True
+        assert opts.branch_name == "feature/x"
+        assert opts.identifier == "CLA-7"
+        assert opts.title == "Some title"
+        assert opts.max_effort is False
+
+    async def test_happy_path_without_claude_options_passes_none(
+        self, client, mock_app_state,
+    ):
+        """When the body omits ``claude_options``, the handler must forward
+        ``client_options=None`` — not an empty dict, which would re-trigger
+        the original AttributeError class of bugs."""
+        fake_inst = MagicMock()
+        fake_inst.to_dto.return_value = {"project_name": "p", "status": "running"}
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock(return_value=fake_inst)
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", {"project_name": "p"}, None, ws,
+        )
+
+        assert result["status"] == 200
+        mgr.start.assert_awaited_once_with("p", client_options=None)
+
+    async def test_invalid_claude_options_returns_422_and_never_calls_mgr(
+        self, client, mock_app_state,
+    ):
+        """A body whose ``claude_options.plan_mode`` can't coerce to bool
+        (Pydantic rejects arbitrary strings like ``"not_a_bool"`` — note
+        that ``"yes"``/``"true"``/``"1"`` DO parse to ``True`` under the
+        default bool validator, so we pick a value that genuinely fails)
+        must surface as a 422 Pydantic error, and ``mgr.start`` must never
+        be awaited. Previously the handler would have reached the domain
+        layer with broken data."""
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock()
+
+        ws = AsyncMock()
+        body = {
+            "project_name": "p",
+            "claude_options": {"plan_mode": "not_a_bool"},
+        }
+
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", body, None, ws,
+        )
+
+        assert result["status"] == 422
+        assert "detail" in result["body"]
+        assert isinstance(result["body"]["detail"], list)
+        mgr.start.assert_not_awaited()
+
+    async def test_missing_project_name_returns_422(
+        self, client, mock_app_state,
+    ):
+        """``project_name`` is required — an empty body yields 422."""
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock()
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", {}, None, ws,
+        )
+
+        assert result["status"] == 422
+        mgr.start.assert_not_awaited()
+
+    async def test_wrong_type_project_name_returns_422(
+        self, client, mock_app_state,
+    ):
+        """``project_name: 123`` (non-string) is a validation error — 422,
+        and the handler never reaches the domain layer."""
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock()
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", {"project_name": 123}, None, ws,
+        )
+
+        assert result["status"] == 422
+        mgr.start.assert_not_awaited()
+
+    async def test_already_running_returns_409(self, client, mock_app_state):
+        """``AutoScanAlreadyRunning`` from ``mgr.start`` must surface as 409
+        — previously every exception collapsed to 409, so this test also
+        guarantees the happy-path conflict case still maps correctly."""
+        from claude_mobile.linear.scanner import AutoScanAlreadyRunning
+
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock(side_effect=AutoScanAlreadyRunning("already going"))
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", {"project_name": "p"}, None, ws,
+        )
+
+        assert result["status"] == 409
+        assert "already going" in result["body"]["detail"]
+
+    async def test_capacity_reached_returns_429(self, client, mock_app_state):
+        """``AutoScanCapacityReached`` must surface as 429. Previously the
+        generic ``except Exception`` collapsed this to 409, hiding
+        rate-limit signals from the mobile client."""
+        from claude_mobile.linear.scanner import AutoScanCapacityReached
+
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock(side_effect=AutoScanCapacityReached("at cap"))
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", {"project_name": "p"}, None, ws,
+        )
+
+        assert result["status"] == 429
+        assert "at cap" in result["body"]["detail"]
+
+    async def test_value_error_returns_404(self, client, mock_app_state):
+        """``ValueError`` (unknown project) must surface as 404 — previously
+        collapsed to 409, making it indistinguishable from the real
+        ``AutoScanAlreadyRunning`` conflict case."""
+        mgr = mock_app_state.autoscan_manager
+        mgr.start = AsyncMock(side_effect=ValueError("unknown project"))
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/autoscan/start", {"project_name": "nope"}, None, ws,
+        )
+
+        assert result["status"] == 404
+        assert "unknown project" in result["body"]["detail"]
+
+    async def test_no_manager_returns_503(
+        self, relay_config, mock_session_manager, mock_event_bus,
+        mock_broadcaster,
+    ):
+        """When ``app_state`` has no ``autoscan_manager`` (misconfigured
+        deployment), the handler returns 503 before any parsing — and
+        crucially, does NOT try to call ``mgr.start`` on ``None``."""
+        from claude_mobile.relay.client import RelayClient
+
+        state = MagicMock(spec=[])  # no attributes at all
+        cli = RelayClient(
+            config=relay_config,
+            session_manager=mock_session_manager,
+            event_bus=mock_event_bus,
+            broadcaster=mock_broadcaster,
+            app_state=state,
+        )
+
+        ws = AsyncMock()
+        result = await cli._dispatch_proxy(
+            "POST", "/api/autoscan/start", {"project_name": "p"}, None, ws,
+        )
+
+        assert result["status"] == 503
+        assert "not available" in result["body"]["detail"].lower()
+
+
+class TestProxyCreateSessionClaudeOptions:
+    """Regression guards for the latent relay ``POST /api/sessions`` bug:
+    the proxy handler previously hand-parsed the body and silently
+    dropped ``claude_options`` on the floor — a user creating a session
+    via relay with plan_mode/no_memory/etc selected never had them
+    reach ``SessionConfig``.
+
+    The fix validates through ``CreateSessionRequest`` (same model the
+    direct REST route uses) and forwards ``claude_options.to_options()``
+    into ``SessionConfig``. These tests assert the handed-off config, not
+    just the HTTP status, because the original bug was silent.
+    """
+
+    async def test_claude_options_forwarded_to_session_config(
+        self, client, mock_session_manager,
+    ):
+        """The ``SessionConfig`` passed to ``create_session`` must carry a
+        real ``ClaudeOptions`` populated from the body. This is the full
+        latent-bug regression assertion — previously ``config.claude_options``
+        would have been ``None`` and the selections vanished silently."""
+        from claude_mobile.core.claude_launcher import ClaudeOptions
+        from claude_mobile.core.models import SessionConfig, SessionState
+        from datetime import datetime, timezone
+
+        fake_info = MagicMock()
+        fake_info.session_id = "sid-12"
+        fake_info.state = SessionState.RUNNING
+        fake_info.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fake_info.pid = 4242
+        fake_info.command = ["/bin/bash"]
+        fake_info.cwd = "/tmp"
+
+        fake_session = MagicMock()
+        fake_session.to_info.return_value = fake_info
+        mock_session_manager.create_session = AsyncMock(return_value=fake_session)
+
+        ws = AsyncMock()
+        body = {
+            "project_name": "my-proj",
+            "claude_options": {
+                "plan_mode": True,
+                "no_memory": True,
+                "skip_permissions": False,
+                "initial_prompt": "hi",
+                "worktree": True,
+                "branch_name": "feature/relay",
+                "identifier": "CLA-8",
+                "title": "Relay fix",
+                "max_effort": False,
+            },
+            "rows": 30,
+            "cols": 120,
+        }
+
+        with patch.object(client, "_bridge_session"):
+            result = await client._dispatch_proxy(
+                "POST", "/api/sessions", body, None, ws,
+            )
+
+        assert result["status"] == 201
+        assert result["body"]["session_id"] == "sid-12"
+
+        mock_session_manager.create_session.assert_awaited_once()
+        call = mock_session_manager.create_session.await_args
+        assert call is not None
+        config = call.args[0]
+        assert isinstance(config, SessionConfig)
+        assert config.project_name == "my-proj"
+        assert config.rows == 30
+        assert config.cols == 120
+
+        opts = config.claude_options
+        assert isinstance(opts, ClaudeOptions)
+        assert opts.plan_mode is True
+        assert opts.no_memory is True
+        assert opts.skip_permissions is False
+        assert opts.initial_prompt == "hi"
+        assert opts.worktree is True
+        assert opts.branch_name == "feature/relay"
+        assert opts.identifier == "CLA-8"
+        assert opts.title == "Relay fix"
+        assert opts.max_effort is False
+
+    async def test_no_claude_options_passes_none_in_config(
+        self, client, mock_session_manager,
+    ):
+        """A body without ``claude_options`` must produce a ``SessionConfig``
+        whose ``claude_options`` is ``None`` — never ``{}``, never a bare
+        ``ClaudeOptionsModel`` instance."""
+        from claude_mobile.core.models import SessionState
+        from datetime import datetime, timezone
+
+        fake_info = MagicMock()
+        fake_info.session_id = "sid-none"
+        fake_info.state = SessionState.RUNNING
+        fake_info.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fake_info.pid = 1
+        fake_info.command = ["/bin/bash"]
+        fake_info.cwd = None
+
+        fake_session = MagicMock()
+        fake_session.to_info.return_value = fake_info
+        mock_session_manager.create_session = AsyncMock(return_value=fake_session)
+
+        ws = AsyncMock()
+        body = {"project_name": "my-proj"}
+
+        with patch.object(client, "_bridge_session"):
+            result = await client._dispatch_proxy(
+                "POST", "/api/sessions", body, None, ws,
+            )
+
+        assert result["status"] == 201
+        call = mock_session_manager.create_session.await_args
+        assert call is not None
+        config = call.args[0]
+        assert config.claude_options is None
+
+    async def test_malformed_body_returns_422_and_never_creates_session(
+        self, client, mock_session_manager,
+    ):
+        """A body with a wrong-typed field (e.g. ``rows`` as a string)
+        must return 422 via Pydantic validation, and ``create_session``
+        must never be awaited."""
+        mock_session_manager.create_session = AsyncMock()
+
+        ws = AsyncMock()
+        body = {"rows": "not-an-int"}
+
+        result = await client._dispatch_proxy(
+            "POST", "/api/sessions", body, None, ws,
+        )
+
+        assert result["status"] == 422
+        assert "detail" in result["body"]
+        assert isinstance(result["body"]["detail"], list)
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_invalid_claude_options_returns_422(
+        self, client, mock_session_manager,
+    ):
+        """Malformed nested ``claude_options`` also yields 422 — the
+        validation is deep, not just top-level. Parallels the
+        ``TestProxyAutoscanStart`` 422 case."""
+        mock_session_manager.create_session = AsyncMock()
+
+        ws = AsyncMock()
+        body = {"claude_options": {"plan_mode": "not_a_bool"}}
+
+        result = await client._dispatch_proxy(
+            "POST", "/api/sessions", body, None, ws,
+        )
+
+        assert result["status"] == 422
+        mock_session_manager.create_session.assert_not_awaited()

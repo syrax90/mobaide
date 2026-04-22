@@ -6,7 +6,6 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from claude_mobile.core import (
-    ClaudeOptions,
     MaxSessionsError,
     SessionConfig,
     SessionManager,
@@ -40,7 +39,7 @@ async def create_session(
     manager = _get_manager(request)
     session_id = uuid.uuid4().hex[:12]
     claude_options = (
-        ClaudeOptions(**body.claude_options.model_dump())
+        body.claude_options.to_options()
         if body.claude_options is not None
         else None
     )

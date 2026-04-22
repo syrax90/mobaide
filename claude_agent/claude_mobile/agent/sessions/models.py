@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
+from claude_mobile.core.claude_launcher import ClaudeOptions
 from claude_mobile.core.models import SessionInfo
 
 
@@ -15,6 +16,9 @@ class ClaudeOptionsModel(BaseModel):
     identifier: str | None = None
     title: str | None = None
     max_effort: bool = True
+
+    def to_options(self) -> ClaudeOptions:
+        return ClaudeOptions(**self.model_dump())
 
 
 class CreateSessionRequest(BaseModel):
