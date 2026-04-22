@@ -1,33 +1,4 @@
 services:
-  claude-agent:
-    build:
-      context: ./claude_agent
-      dockerfile: Dockerfile
-    container_name: claude-mobile-agent
-    restart: unless-stopped
-    env_file:
-      - ./claude_agent/.env
-    environment:
-      - HOST=0.0.0.0
-      - PORT=8000
-      - USER_STORE_PATH=/app/data/users.json
-      - PROJECTS_STORE_PATH=/app/data/projects.json
-      - AGENT_STATE_DIR=/app/data/state
-    volumes:
-      - agent-data:/app/data
-    # Ports are NOT published — all external access goes through cloudflared.
-    # Uncomment for local debugging without the tunnel:
-    # ports:
-    #   - "8000:8000"
-    networks:
-      - tunnel-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
   central-server:
     build:
       context: ./central_server
@@ -53,19 +24,6 @@ services:
       retries: 3
       start_period: 10s
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: claude-mobile-tunnel
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
-    networks:
-      - tunnel-net
-    depends_on:
-      claude-agent:
-        condition: service_healthy
-
   # Mailpit — dev-only SMTP catcher. Only starts with `docker compose --profile dev up`.
   # Web UI at http://localhost:8025; SMTP on localhost:1025 and mailpit:1025
   # (inside the tunnel-net network). Bound to loopback so untrusted networks
@@ -86,7 +44,6 @@ services:
       - tunnel-net
 
 volumes:
-  agent-data:
   central-server-data:
 
 networks:

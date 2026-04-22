@@ -63,10 +63,12 @@ it is not forgotten if the server ever scales out.
 ## Dev setup (local machine)
 
 1. `docker compose --profile dev up` from the repo root.
-   * Starts `central-server`, `claude-agent`, `cloudflared` (if tunnel token is
-     set), **and** `mailpit`.
-   * Mailpit without the `dev` profile stays off — production deployments using
-     plain `docker compose up` never start it.
+   * Starts `central-server` **and** `mailpit`. The `dev` profile is the only
+     way to bring up `mailpit` — production deployments using plain
+     `docker compose up` never start it.
+   * The agent runs natively (not in Docker) — start it separately via
+     `start-all.ps1`, or from the agent's conda env:
+     `cd claude_agent && python -m claude_mobile`.
 2. Mailpit's web UI: <http://localhost:8025>. Every email the server sends
    shows up here in real time, with both the rendered HTML and raw source.
 3. SMTP settings are already pointed at Mailpit in `central_server/.env.example`:

@@ -8,9 +8,11 @@
 #   1. Checks prerequisites (Python 3.12+, git, curl)
 #   2. Creates a system user and directory structure
 #   3. Sets up a Python virtual environment and installs the agent
-#   4. Generates configuration files
-#   5. Downloads cloudflared
-#   6. Installs and starts systemd services
+#   4. Generates an agent .env with a random JWT secret
+#   5. Installs and starts the claude-mobile-agent systemd service
+#
+# The agent dials OUT to central-server via WebSocket (relay architecture),
+# so no inbound tunnel / public hostname / reverse proxy is needed here.
 #
 set -euo pipefail
 
@@ -108,65 +110,22 @@ MAX_SESSIONS=16
 LOG_LEVEL=INFO
 EOF
     info "Generated JWT_SECRET_KEY automatically."
-fi
-
-# --- Tunnel token ---
-
-TUNNEL_ENV="${INSTALL_DIR}/tunnel.env"
-if [[ -f "$TUNNEL_ENV" ]]; then
-    info "tunnel.env already exists, skipping."
-else
-    echo ""
-    echo "============================================"
-    echo "  Cloudflare Tunnel Token Required"
-    echo "============================================"
-    echo "Create a tunnel at: https://one.dash.cloudflare.com -> Networks -> Tunnels"
-    echo "Set the service URL to: http://localhost:8000"
-    echo ""
-    read -rp "Enter your TUNNEL_TOKEN: " TOKEN
-    if [[ -z "$TOKEN" ]]; then
-        error "TUNNEL_TOKEN is required."
-        exit 1
-    fi
-    echo "TUNNEL_TOKEN=${TOKEN}" > "$TUNNEL_ENV"
-    chmod 600 "$TUNNEL_ENV"
-fi
-
-# --- cloudflared binary ---
-
-if command -v cloudflared &>/dev/null; then
-    info "cloudflared is already installed."
-else
-    info "Downloading cloudflared..."
-    ARCH=$(uname -m)
-    case "$ARCH" in
-        x86_64)  CF_ARCH="amd64" ;;
-        aarch64) CF_ARCH="arm64" ;;
-        armv7l)  CF_ARCH="arm"   ;;
-        *)       error "Unsupported architecture: $ARCH"; exit 1 ;;
-    esac
-    curl -fsSL -o /usr/local/bin/cloudflared \
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
-    chmod +x /usr/local/bin/cloudflared
-    info "cloudflared installed to /usr/local/bin/cloudflared."
+    info "NOTE: add RELAY_CENTRAL_URL, RELAY_AGENT_ID, RELAY_AGENT_TOKEN to ${ENV_FILE}"
+    info "      after pairing this agent with central-server."
 fi
 
 # --- Permissions ---
 
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
 
-# --- systemd services ---
+# --- systemd service ---
 
-info "Installing systemd services..."
+info "Installing systemd service..."
 cp "${REPO_ROOT}/deploy/claude-mobile-agent.service" /etc/systemd/system/
-cp "${REPO_ROOT}/deploy/cloudflared.service" /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable claude-mobile-agent cloudflared
+systemctl enable claude-mobile-agent
 systemctl start claude-mobile-agent
-# Wait briefly for the agent health check before starting the tunnel
-sleep 3
-systemctl start cloudflared
 
 # --- Done ---
 
@@ -176,8 +135,6 @@ echo "  Claude Mobile — Deployment Complete"
 echo "============================================"
 echo ""
 echo "  Agent status:  systemctl status claude-mobile-agent"
-echo "  Tunnel status:  systemctl status cloudflared"
 echo "  Agent logs:    journalctl -u claude-mobile-agent -f"
-echo "  Tunnel logs:    journalctl -u cloudflared -f"
-echo "  Health check:   curl http://localhost:8000/api/health"
+echo "  Health check:  curl http://localhost:8000/api/health"
 echo ""

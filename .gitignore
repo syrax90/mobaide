@@ -5,7 +5,6 @@
 **/venv/
 claude_agent/.env
 central_server/.env
-deploy/tunnel.env
 deploy/prod/.env
 deploy/prod/tls/
 deploy/prod/*.pem
