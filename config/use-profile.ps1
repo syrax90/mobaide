@@ -57,7 +57,6 @@ $TemplateName = '_template'
 #   copyOrDelete  : copy if present in profile, delete target if absent in profile
 $Mappings = @(
     [pscustomobject]@{ Source = 'claude_agent.env';                        Target = 'claude_agent/.env';                                                Mode = 'overwrite' }
-    [pscustomobject]@{ Source = 'tunnel.env';                              Target = 'deploy/tunnel.env';                                                Mode = 'overwrite' }
     [pscustomobject]@{ Source = 'android.local.properties';                Target = 'android/local.properties';                                          Mode = 'merge' }
     [pscustomobject]@{ Source = 'android-tls/network_security_config.xml'; Target = 'android/app/src/main/res/xml/network_security_config.xml';          Mode = 'overwrite' }
     [pscustomobject]@{ Source = 'android-tls/caddy_root.crt';              Target = 'android/app/src/main/res/raw/caddy_root.crt';                       Mode = 'copyOrDelete' }

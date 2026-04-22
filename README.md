@@ -11,8 +11,8 @@ Running Claude Code CLI sessions requires a desktop terminal. There's no way to 
 Claude Mobile bridges this gap with a client-agent architecture:
 
 - **Agent (Python / FastAPI)** — Runs on your workstation (Windows/Linux). Reimplements the `claude_auto_executor.ps1` logic natively in Python: manages cross-platform PTY terminal sessions (pywinpty on Windows, stdlib pty on Linux), streams I/O over WebSocket, handles Linear integration, git worktrees, and Auto Scan mode. Supports multiple concurrent Claude sessions.
-- **Client (Android / Kotlin)** — Connects to the agent via raw WebSocket (OkHttp). Provides a multi-session terminal UI to start, monitor, and interact with Claude Code sessions in real time. Built with Jetpack Compose and Material 3.
-- **NAT Traversal** — Uses Cloudflare Tunnel to securely expose the agent over the internet without a public IP or port forwarding. Deployed via Docker Compose (agent + cloudflared).
+- **Client (Android / Kotlin)** — Connects to the central server via WSS (OkHttp), which relays traffic to the paired agent. Provides a multi-session terminal UI to start, monitor, and interact with Claude Code sessions in real time. Built with Jetpack Compose and Material 3.
+- **Central Server (Python / FastAPI)** — Public relay hub (e.g. `mobaide.com`). The Android app talks to it over WSS/JSON, and each agent dials OUT to it over an authenticated WebSocket. No inbound ports, public IP, or reverse tunnel are needed on the workstation running the agent.
 
 ## Key Features
 
@@ -20,17 +20,25 @@ Claude Mobile bridges this gap with a client-agent architecture:
 - **Multi-Session** — Run and switch between up to 16 concurrent Claude sessions
 - **Auto Scan Mode** — Polls Linear for issues labeled "AutoPipeline", auto-creates git worktrees, and launches Claude sessions to work on them
 - **Reconnection** — Scrollback buffer (10K lines) per session ensures seamless reconnect after network drops
-- **Secure Access** — JWT authentication + Cloudflare Access service tokens (defense in depth)
+- **Secure Access** — JWT authentication end-to-end between Android, central-server, and agent; agent↔central-server relay is secured with a per-agent bearer token over WSS
 - **Cross-Platform** — Agent runs on both Windows and Linux out of the box via PTY abstraction (pywinpty / stdlib pty). iOS client planned via Kotlin Multiplatform shared layer.
 
 ## Architecture
 
 ```
-[ Android App ]  <--WebSocket/JSON-->  [ Python Agent ]  <--PTY-->  [ Claude CLI ]
-     (Kotlin/Compose)      |           (FastAPI/uvicorn)             (bash/cmd sessions)
-                           |
-                  [ Cloudflare Tunnel ]
-                  (NAT traversal, HTTPS)
+[ Android App ]          (Kotlin / Compose, OkHttp)
+      |
+      |  WSS / JSON
+      v
+[ Central Server ]       (FastAPI, public — e.g. mobaide.com)
+      |
+      |  WSS relay  (agent dials out, authenticated with RELAY_AGENT_TOKEN)
+      v
+[ Python Agent ]         (FastAPI / uvicorn, on the user's workstation)
+      |
+      |  PTY
+      v
+[ Claude CLI ]           (bash / cmd sessions)
 ```
 
 ## Agent Stack
@@ -51,11 +59,11 @@ Claude Mobile bridges this gap with a client-agent architecture:
 | `claude_mobile/agent/` | FastAPI | WebSocket endpoints, JWT auth, REST API |
 | `claude_mobile/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
-| `docker-compose.yml` | Docker | Agent + Cloudflare Tunnel deployment |
+| `central_server/` | Python 3.12+ / FastAPI | Multi-tenant relay hub; auth, projects, and agent↔client WebSocket broker |
 
 ## Configuration Profiles
 
-Environment-specific files (`claude_agent/.env`, `android/local.properties`, Android TLS trust config, Cloudflare tunnel token) are managed via named profiles under `config/profiles/`. One command swaps the whole bundle between, e.g., a local `start-all.ps1` stack and production (`mobaide.com`):
+Environment-specific files (`claude_agent/.env`, `android/local.properties`, Android TLS trust config) are managed via named profiles under `config/profiles/`. One command swaps the whole bundle between, e.g., a local `start-all.ps1` stack and production (`mobaide.com`):
 
 ```powershell
 ./config/use-profile.ps1 -List           # see available profiles
@@ -85,4 +93,4 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
 
 ## Status
 
-Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and Cloudflare Tunnel deployment are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project).
+Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project).

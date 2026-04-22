@@ -10,7 +10,6 @@ The repo has several files that differ by environment and are gitignored (since 
 - `android/local.properties` — two build-time keys (`CENTRAL_SERVER_URL`, `GOOGLE_WEB_CLIENT_ID`) used by `android/app/build.gradle.kts`
 - `android/app/src/main/res/xml/network_security_config.xml` — referenced by `AndroidManifest.xml`; must always exist
 - `android/app/src/main/res/raw/caddy_root.crt` — trusted CA for the local Caddy stack
-- `deploy/tunnel.env` — Cloudflare Tunnel token
 
 Manually editing each of them to switch between "local test stack (`start-all.ps1`)" and "production (mobaide.com)" is error-prone. This directory bundles the variants and swaps them in one command.
 
@@ -27,7 +26,6 @@ config/
         ├── profile.json
         ├── claude_agent.env
         ├── android.local.properties
-        ├── tunnel.env                                 # optional
         └── android-tls/
             ├── network_security_config.xml            # always required
             └── caddy_root.crt                         # only if xml references @raw/caddy_root
@@ -46,7 +44,6 @@ Then edit the files:
 - `config/profiles/local/profile.json` — set `description` to something useful (shown by `-List`).
 - `config/profiles/local/claude_agent.env` — fill in `JWT_SECRET_KEY`, `PROJECTS`, relay settings, etc.
 - `config/profiles/local/android.local.properties` — set `CENTRAL_SERVER_URL` (e.g. `https://test.claude-mobile.com`) and `GOOGLE_WEB_CLIENT_ID`.
-- `config/profiles/local/tunnel.env` — set `TUNNEL_TOKEN`, or delete the file if this profile has no tunnel.
 - `config/profiles/local/android-tls/network_security_config.xml` — for a local Caddy stack, swap the `<trust-anchors>` block to include `<certificates src="@raw/caddy_root"/>` (see the comments in the template file) and drop `caddy_root.crt` beside it.
 
 ### 2. Apply it
@@ -69,7 +66,6 @@ The script reports each operation (`create`, `overwrite`, `merge`, `delete`, `sk
 | Target                                                              | Mode           | Behavior                                                                                  |
 |---------------------------------------------------------------------|----------------|-------------------------------------------------------------------------------------------|
 | `claude_agent/.env`                                                 | overwrite      | Replaced verbatim from `claude_agent.env`.                                                |
-| `deploy/tunnel.env`                                                 | overwrite      | Replaced verbatim from `tunnel.env`. Skipped if profile has no `tunnel.env`.              |
 | `android/local.properties`                                          | **merge**      | Only `CENTRAL_SERVER_URL` and `GOOGLE_WEB_CLIENT_ID` are updated. `sdk.dir` is preserved. |
 | `android/app/src/main/res/xml/network_security_config.xml`          | overwrite      | Replaced from profile. Required by `AndroidManifest.xml` — must exist in every profile.   |
 | `android/app/src/main/res/raw/caddy_root.crt`                       | copy-or-delete | Copied if present in profile's `android-tls/`; **deleted** from target if absent.         |
@@ -83,7 +79,6 @@ Files missing from the profile folder are simply skipped (except `caddy_root.crt
 | `CENTRAL_SERVER_URL`            | `https://test.claude-mobile.com`                              | `https://mobaide.com`             |
 | `android-tls/caddy_root.crt`    | present (your Caddy root)                                     | absent                            |
 | `network_security_config.xml`   | includes `<certificates src="@raw/caddy_root"/>`              | system trust only                 |
-| `tunnel.env`                    | typically absent (local access)                               | depends on your setup             |
 | `claude_agent.env` `RELAY_*`    | pointed at local central server                               | pointed at mobaide.com            |
 
 After `./config/use-profile.ps1 local`, running `./start-all.ps1` and rebuilding the Android app will wire everything to the local stack. Switching with `./config/use-profile.ps1 mobaide` and rebuilding points the app at production.
