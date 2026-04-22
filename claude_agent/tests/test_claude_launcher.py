@@ -165,6 +165,42 @@ async def test_env_no_linear_key_omitted(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_env_prompt_caching_1h_always_set(tmp_path: Path):
+    """Every spawn MUST carry ENABLE_PROMPT_CACHING_1H=1 so the claude CLI
+    opts into the 1-hour prompt-cache TTL (v2.1.108+)."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_env_prompt_caching_1h_set_with_all_options(tmp_path: Path):
+    """The preset survives alongside every other optional env key — Linear
+    key, no_memory, conda env — so no caller path loses it."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path), key="lin_abc", conda="some_env"),
+        ClaudeOptions(no_memory=True),
+    )
+    assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
+    assert spec.env["CLAUDE_NO_MEMORY"] == "1"
+    assert spec.env["LINEAR_API_KEY"] == "lin_abc"
+
+
+@pytest.mark.asyncio
+async def test_env_prompt_caching_1h_overrides_outer_environment(
+    tmp_path: Path, monkeypatch,
+):
+    """The preset is authoritative: even if the operator has
+    ENABLE_PROMPT_CACHING_1H=0 in their shell, the spawn env must still be
+    forced to "1"."""
+    monkeypatch.setenv("ENABLE_PROMPT_CACHING_1H", "0")
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
+
+
+@pytest.mark.asyncio
 async def test_mcp_json_written_when_key_present(tmp_path: Path):
     launcher = ClaudeLauncher()
     spec = await launcher.build(

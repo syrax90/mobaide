@@ -58,6 +58,21 @@ _LOCAL_SETTINGS_TEMPLATE = {
 }
 
 
+# Preset environment applied to every Claude CLI session the agent spawns —
+# interactive, Auto Scan, or worktree alike. Values here are authoritative:
+# they override anything the operator's shell has set.
+#
+# ENABLE_PROMPT_CACHING_1H=1
+#     Opt into the 1-hour prompt-cache TTL introduced in claude-code v2.1.108
+#     (default is 5 minutes). Long / repeated sessions stop re-billing the
+#     system prompt, CLAUDE.md, and MCP config every ~5 min. Older CLIs
+#     simply ignore the variable, so this is safe across versions.
+#     https://github.com/anthropics/claude-code/releases/tag/v2.1.108
+CLAUDE_SESSION_PRESET_ENV: dict[str, str] = {
+    "ENABLE_PROMPT_CACHING_1H": "1",
+}
+
+
 class ClaudeLauncher:
     """Build a ``claude`` invocation (argv / env / cwd) from a project config and options."""
 
@@ -97,6 +112,7 @@ class ClaudeLauncher:
     @staticmethod
     def _build_env(project: ProjectConfig, options: ClaudeOptions) -> dict[str, str]:
         env = os.environ.copy()
+        env.update(CLAUDE_SESSION_PRESET_ENV)
         if project.linear_api_key:
             env["LINEAR_API_KEY"] = project.linear_api_key
         if options.no_memory:
