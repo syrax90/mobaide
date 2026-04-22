@@ -78,7 +78,7 @@ The Android app never talks to the agent directly; it always goes through `centr
 
 - Python 3.12+
 - `git`, `curl`
-- Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code)
+- Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code). **v2.1.108 or newer is recommended** — the agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)); older CLIs will simply ignore the variable.
 - A paired agent: `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` issued by `central-server`. Pair from the Android app: **Settings → Agents → Pair new**, or via the admin REST API.
 
 ### Windows (conda — recommended for development)
