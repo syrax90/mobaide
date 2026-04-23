@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import platform
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -159,16 +160,31 @@ class ClaudeLauncher:
             )
             return self._check_exists(project.path)
         if self._worktree_mgr is None:
-            return self._check_exists(project.path)
-        # Lazy import to avoid a hard dep when worktree path is unused.
+            raise RuntimeError(
+                "worktree=true requested but no WorktreeManager is configured; "
+                "this is a server misconfiguration"
+            )
         from claude_mobile.linear.worktree import convert_to_worktree_slug
 
-        identifier = options.identifier or "session"
-        title = options.title or (options.branch_name or "")
-        slug = convert_to_worktree_slug(identifier, title)
-        result = await self._worktree_mgr.create_worktree(slug, project.path)
-        if result is None:
-            return self._check_exists(project.path)
+        if options.identifier:
+            # Auto Scan path: derive slug + prefixed branch from the Linear
+            # issue identifier and title. The WorktreeManager applies its
+            # configured ``branch_prefix`` (e.g. ``feature/claude/<slug>``).
+            slug = convert_to_worktree_slug(
+                options.identifier, options.title or ""
+            )
+            result = await self._worktree_mgr.create_worktree(slug, project.path)
+        else:
+            # Standard path: honour the user's entered branch name verbatim.
+            # Empty branch_name gets a unique auto-generated default so two
+            # worktree-on Standard sessions never collide on the same dir.
+            branch = options.branch_name or (
+                f"claude-session-{uuid.uuid4().hex[:8]}"
+            )
+            slug = convert_to_worktree_slug("", branch)
+            result = await self._worktree_mgr.create_worktree(
+                slug, project.path, branch_name=branch,
+            )
         return self._check_exists(result.path)
 
     @staticmethod

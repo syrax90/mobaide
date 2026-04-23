@@ -5,7 +5,7 @@ import contextvars
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -46,7 +46,7 @@ from .workitems import (
     active_workitems_path,
     now_iso_utc,
 )
-from .worktree import WorktreeManager, convert_to_worktree_slug
+from .worktree import WorktreeCreationError, WorktreeManager, convert_to_worktree_slug
 
 logger = get_logger(__name__)
 
@@ -318,28 +318,51 @@ class AutoScanInstance:
                 self._emit_issue(issue, "label_removal", "failed", error=str(exc))
 
         slug = convert_to_worktree_slug(issue.identifier, issue.title)
+        base = self._client_options
+        opts = replace(
+            base if base is not None else ClaudeOptions(),
+            identifier=issue.identifier,
+            title=issue.title,
+            initial_prompt=(
+                base.initial_prompt
+                if base is not None and base.initial_prompt
+                else self._config.auto_scan_prompt
+            ),
+            worktree=True,
+        )
+
         self._emit_issue(issue, "worktree_create", "started")
-        wt_result = None
         try:
-            wt_result = await self._worktree_mgr.create_worktree(slug, project.path)
-            target_dir = wt_result.path if wt_result else project.path
-            self._emit_issue(issue, "worktree_create", "ok")
-            self._emit("worktree", asdict(ScanWorktreePayload(
-                identifier=issue.identifier, path=str(target_dir),
-            )))
+            spec = await self._launcher.build(project, opts)
+        except WorktreeCreationError as exc:
+            self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
+            logger.error(
+                "autoscan.worktree_create_failed id=%s: %s",
+                issue.identifier, exc.stderr,
+            )
+            self._last_activity_at = time.time()
+            return
         except Exception as exc:
             self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
-            target_dir = project.path
+            logger.error(
+                "autoscan.launcher_build_failed id=%s", issue.identifier,
+                exc_info=True,
+            )
+            self._last_activity_at = time.time()
+            return
+        self._emit_issue(issue, "worktree_create", "ok")
+        self._emit("worktree", asdict(ScanWorktreePayload(
+            identifier=issue.identifier, path=str(spec.cwd),
+        )))
 
-        # Only track when a worktree was actually created on disk and cleanup is enabled.
-        if self._config.auto_remove_worktrees and wt_result is not None:
+        if self._config.auto_remove_worktrees and spec.cwd != project.path:
             try:
                 added = await self._workitems_store.add(
                     ActiveWorkItem(
                         id=issue.identifier,
                         uuid=issue.id,
                         slug=slug,
-                        worktree_path=str(wt_result.path),
+                        worktree_path=str(spec.cwd),
                         project_root=project.path,
                         added_at=now_iso_utc(),
                     )
@@ -354,27 +377,10 @@ class AutoScanInstance:
         self._emit_issue(issue, "session_spawn", "started")
         session_id = uuid.uuid4().hex[:12]
         try:
-            base = self._client_options
-            spec = await self._launcher.build(
-                project,
-                ClaudeOptions(
-                    plan_mode=base.plan_mode if base else False,
-                    no_memory=base.no_memory if base else False,
-                    skip_permissions=base.skip_permissions if base else True,
-                    initial_prompt=(
-                        base.initial_prompt
-                        if base and base.initial_prompt
-                        else self._config.auto_scan_prompt
-                    ),
-                    identifier=issue.identifier,
-                    title=issue.title,
-                    max_effort=base.max_effort if base else True,
-                ),
-            )
             config = SessionConfig(
                 session_id=session_id,
                 command=spec.argv,
-                cwd=target_dir,
+                cwd=spec.cwd,
                 env=spec.env,
             )
             session = await self._session_manager.create_session(config)

@@ -42,11 +42,12 @@ from claude_mobile.agent.projects.service import (
 
 from claude_mobile.agent.autoscan.models import StartScanRequest
 from claude_mobile.agent.autoscan.stream import run_autoscan_stream
-from claude_mobile.agent.sessions.models import CreateSessionRequest
+from claude_mobile.agent.sessions.models import ClaudeOptionsModel, CreateSessionRequest
 from claude_mobile.linear.scanner import (
     AutoScanAlreadyRunning,
     AutoScanCapacityReached,
 )
+from claude_mobile.linear.worktree import WorktreeCreationError
 
 from .config import RelayConfig
 from .envelope import (
@@ -485,6 +486,26 @@ class RelayClient:
         session_id = ctrl.get("session_id") or uuid.uuid4().hex[:12]
         command = ctrl.get("command") or _DEFAULT_SHELL
 
+        claude_options = None
+        raw_options = ctrl.get("claude_options")
+        if raw_options is not None:
+            try:
+                claude_options = ClaudeOptionsModel.model_validate(
+                    raw_options
+                ).to_options()
+            except ValidationError as exc:
+                logger.warning(
+                    "relay.create_session_invalid_claude_options session_id=%s: %s",
+                    session_id, exc,
+                )
+                resp = {
+                    "type": "session_create_failed",
+                    "session_id": session_id,
+                    "error": f"Invalid claude_options: {exc}",
+                }
+                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                return
+
         config = SessionConfig(
             session_id=session_id,
             command=command,
@@ -493,6 +514,7 @@ class RelayClient:
             rows=ctrl.get("rows", 24),
             cols=ctrl.get("cols", 80),
             project_name=ctrl.get("project_name"),
+            claude_options=claude_options,
         )
         try:
             session = await self._session_manager.create_session(config)
@@ -518,6 +540,19 @@ class RelayClient:
                 "type": "session_create_failed",
                 "session_id": session_id,
                 "error": f"Project path not found: {missing}",
+            }
+        except WorktreeCreationError as exc:
+            logger.warning(
+                "relay.create_session_worktree_failed session_id=%s: %s",
+                session_id, exc.stderr,
+            )
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": (
+                    f"Could not create worktree on branch {exc.branch}: "
+                    f"{exc.stderr}"
+                ),
             }
         except OSError as exc:
             strerror = exc.strerror or "cannot launch session"
@@ -602,6 +637,22 @@ class RelayClient:
                 "request_id": request_id,
                 "status": 400,
                 "body": {"detail": f"Project path not found: {missing}"},
+            }
+        except WorktreeCreationError as exc:
+            logger.warning(
+                "relay.proxy_request_worktree_failed path=%s: %s",
+                path, exc.stderr,
+            )
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 400,
+                "body": {
+                    "detail": (
+                        f"Could not create worktree on branch {exc.branch}: "
+                        f"{exc.stderr}"
+                    ),
+                },
             }
         except OSError as exc:
             strerror = exc.strerror or "cannot launch session"

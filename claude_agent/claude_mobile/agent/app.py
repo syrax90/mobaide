@@ -172,16 +172,17 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     projects_store.load()
     app.state.projects_store = projects_store
 
-    # Worktree manager shares auto-scan conventions so launcher-driven worktrees stay consistent.
-    auto_scan_cfg = config.auto_scan_config
-    worktree_mgr: WorktreeManager | None = None
-    if auto_scan_cfg is not None:
-        prefix = auto_scan_cfg.branch_prefix or "feature/claude"
-        worktree_mgr = WorktreeManager(
-            worktree_base=auto_scan_cfg.worktree_base,
-            branch_prefix=prefix,
-            main_branch=auto_scan_cfg.main_branch,
-        )
+    # Worktree manager is always wired so Standard-mode sessions can create
+    # worktrees regardless of whether auto-scan is configured. Auto Scan
+    # conventions (``worktree_base``, ``branch_prefix``, ``main_branch``) come
+    # from AutoScanConfig when present; otherwise sensible defaults apply.
+    auto_scan_cfg = config.auto_scan_config or AutoScanConfig()
+    prefix = auto_scan_cfg.branch_prefix or "feature/claude"
+    worktree_mgr = WorktreeManager(
+        worktree_base=auto_scan_cfg.worktree_base,
+        branch_prefix=prefix,
+        main_branch=auto_scan_cfg.main_branch,
+    )
     app.state.claude_launcher = ClaudeLauncher(worktree_mgr=worktree_mgr)
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
@@ -220,8 +221,6 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     # operate on is a runtime question answered by the projects store —
     # adding a Linear-keyed project via the CRUD API makes it immediately
     # available for auto-scan without a restart.
-    if auto_scan_cfg is None:
-        auto_scan_cfg = AutoScanConfig()
     app.state.linear_rate_limiter = LinearRateLimiter()
     app.state.autoscan_manager = AutoScanSessionManager(
         config=auto_scan_cfg,

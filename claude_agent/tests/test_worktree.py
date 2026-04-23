@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from claude_mobile.linear.worktree import (
+    WorktreeCreationError,
     WorktreeManager,
-    WorktreeResult,
     convert_to_worktree_slug,
 )
 
@@ -91,26 +91,95 @@ class TestWorktreeManager:
 
     @patch("claude_mobile.linear.worktree._run_git")
     async def test_create_worktree_new_branch(self, mock_git, manager, tmp_path):
-        """Successful worktree creation with a new branch."""
+        """Successful worktree creation with a new branch — origin/main resolved."""
         project_root = str(tmp_path / "project")
         os.makedirs(project_root)
 
-        # config longpaths -> success, fetch -> success, worktree add -b -> success
         mock_git.side_effect = [
-            (0, "", ""),  # git config
-            (0, "", ""),  # git fetch
-            (0, "", ""),  # git worktree add -b
+            (0, "", ""),              # git config core.longpaths
+            (0, "", ""),              # git fetch origin
+            (0, "", ""),              # git rev-parse origin/main  (exists)
+            (0, "", ""),              # git worktree add --no-track -b
         ]
 
         result = await manager.create_worktree("cla-8-test", project_root)
-        assert result is not None
         assert result.is_new is True
         assert result.branch == "feature/claude/cla-8-test"
-        assert mock_git.call_count == 3
+        assert mock_git.call_count == 4
 
-        worktree_add_call = mock_git.call_args_list[2]
+        worktree_add_call = mock_git.call_args_list[3]
         assert "--no-track" in worktree_add_call.args
         assert "-b" in worktree_add_call.args
+        assert "origin/main" in worktree_add_call.args
+
+    @patch("claude_mobile.linear.worktree._run_git")
+    async def test_create_worktree_accepts_explicit_branch_name(
+        self, mock_git, manager, tmp_path,
+    ):
+        """Standard-mode path: explicit branch_name is used verbatim — no prefix."""
+        project_root = str(tmp_path / "project")
+        os.makedirs(project_root)
+
+        mock_git.side_effect = [
+            (0, "", ""),              # git config
+            (0, "", ""),              # git fetch
+            (0, "", ""),              # git rev-parse origin/main
+            (0, "", ""),              # git worktree add -b
+        ]
+
+        result = await manager.create_worktree(
+            "my-dir", project_root, branch_name="feature/user-typed",
+        )
+        assert result.branch == "feature/user-typed"
+        worktree_add_call = mock_git.call_args_list[3]
+        assert "feature/user-typed" in worktree_add_call.args
+        # The prefix must NOT be applied when branch_name is given explicitly.
+        assert "feature/claude/my-dir" not in worktree_add_call.args
+
+    @patch("claude_mobile.linear.worktree._run_git")
+    async def test_create_worktree_falls_back_to_local_main_when_no_origin(
+        self, mock_git, manager, tmp_path,
+    ):
+        """If ``origin/main`` doesn't resolve but local ``main`` does, branch
+        from the local ref so repos without a remote still work."""
+        project_root = str(tmp_path / "project")
+        os.makedirs(project_root)
+
+        mock_git.side_effect = [
+            (0, "", ""),                    # git config
+            (128, "", "network error"),     # git fetch (ignored)
+            (128, "", "no origin/main"),    # rev-parse origin/main (missing)
+            (0, "", ""),                    # rev-parse refs/heads/main (ok)
+            (0, "", ""),                    # git worktree add -b
+        ]
+
+        result = await manager.create_worktree("cla-1", project_root)
+        assert result.is_new is True
+        worktree_add_call = mock_git.call_args_list[4]
+        assert "main" in worktree_add_call.args
+        assert "origin/main" not in worktree_add_call.args
+
+    @patch("claude_mobile.linear.worktree._run_git")
+    async def test_create_worktree_falls_back_to_head_when_no_main(
+        self, mock_git, manager, tmp_path,
+    ):
+        """Final fallback: neither ``origin/main`` nor local ``main`` exists →
+        branch from ``HEAD`` so the worktree still gets created."""
+        project_root = str(tmp_path / "project")
+        os.makedirs(project_root)
+
+        mock_git.side_effect = [
+            (0, "", ""),                   # git config
+            (128, "", "no remote"),        # git fetch
+            (128, "", "no origin/main"),   # rev-parse origin/main
+            (128, "", "no local main"),   # rev-parse refs/heads/main
+            (0, "", ""),                   # git worktree add -b HEAD
+        ]
+
+        result = await manager.create_worktree("cla-1", project_root)
+        assert result.is_new is True
+        worktree_add_call = mock_git.call_args_list[4]
+        assert "HEAD" in worktree_add_call.args
 
     @patch("claude_mobile.linear.worktree._run_git")
     async def test_create_worktree_existing_branch_fallback(
@@ -121,32 +190,39 @@ class TestWorktreeManager:
         os.makedirs(project_root)
 
         mock_git.side_effect = [
-            (0, "", ""),   # git config
-            (0, "", ""),   # git fetch
-            (128, "", "fatal: branch already exists"),  # git worktree add -b fails
-            (0, "", ""),   # git worktree add (no -b) succeeds
+            (0, "", ""),                                  # git config
+            (0, "", ""),                                  # git fetch
+            (0, "", ""),                                  # rev-parse origin/main
+            (128, "", "fatal: branch already exists"),    # worktree add -b fails
+            (0, "", ""),                                  # worktree add (no -b)
         ]
 
         result = await manager.create_worktree("cla-8-test", project_root)
-        assert result is not None
         assert result.is_new is True
-        assert mock_git.call_count == 4
+        assert mock_git.call_count == 5
 
     @patch("claude_mobile.linear.worktree._run_git")
-    async def test_create_worktree_total_failure(self, mock_git, manager, tmp_path):
-        """Returns None when both attempts fail."""
+    async def test_create_worktree_raises_on_total_failure(
+        self, mock_git, manager, tmp_path,
+    ):
+        """Replaces the old ``returns None`` contract: hard failure surfaces
+        as ``WorktreeCreationError`` so the session router can return HTTP 400
+        with the git stderr instead of silently landing in the project root."""
         project_root = str(tmp_path / "project")
         os.makedirs(project_root)
 
         mock_git.side_effect = [
-            (0, "", ""),   # git config
-            (0, "", ""),   # git fetch
-            (128, "", "fatal: error"),  # first attempt
-            (128, "", "fatal: error"),  # second attempt
+            (0, "", ""),                   # git config
+            (0, "", ""),                   # git fetch
+            (0, "", ""),                   # rev-parse origin/main
+            (128, "", "fatal: boom"),      # worktree add -b fails
+            (128, "", "fatal: still no"), # worktree add fails too
         ]
 
-        result = await manager.create_worktree("cla-8-test", project_root)
-        assert result is None
+        with pytest.raises(WorktreeCreationError) as exc_info:
+            await manager.create_worktree("cla-8-test", project_root)
+        assert exc_info.value.branch == "feature/claude/cla-8-test"
+        assert "still no" in exc_info.value.stderr or "boom" in exc_info.value.stderr
 
     @patch("claude_mobile.linear.worktree._run_git")
     async def test_cleanup_worktree(self, mock_git, manager, tmp_path):
