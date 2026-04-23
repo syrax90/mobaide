@@ -55,6 +55,29 @@ def _send_session_lifecycle(
         )
 
 
+def _request_events_snapshot(routing: RoutingTable, agent_id: str) -> None:
+    """Ask the agent to republish the current sessions / projects snapshots.
+
+    The agent forwards only live ``event_bus`` updates to mobiles on the
+    ``events`` channel, so a mobile that connects after the last state
+    change would otherwise see an empty reactive store. This request tells
+    the agent to re-emit a ``sessions.changed`` (and ``projects.changed``)
+    envelope now so the fresh mobile seeds its repositories.
+
+    Silent drop on offline agent (mobiles are already being closed with
+    code 4010 in that case). Warn on saturated agent queue — the next agent
+    tunnel reconnect will still resend its full snapshot.
+    """
+    conn = routing.get_agent(agent_id)
+    if conn is None:
+        return
+    if not try_enqueue_control(conn, {"type": "request_events_snapshot"}):
+        logger.warning(
+            "relay.events_snapshot.drop agent=%s — agent queue full",
+            agent_id,
+        )
+
+
 async def _validate_mobile_connection(
     websocket: WebSocket, agent_id: str
 ) -> str | None:
@@ -134,6 +157,8 @@ async def relay_sessions_list(websocket: WebSocket, agent_id: str) -> None:
     channel_key = "sessions_list"
     routing.register_mobile(agent_id, channel_key, client)
 
+    _request_events_snapshot(routing, agent_id)
+
     try:
         await _mobile_writer(websocket, client, binary=False)
     finally:
@@ -151,6 +176,8 @@ async def relay_events(websocket: WebSocket, agent_id: str) -> None:
     client = MobileClient(device_id=device_id, websocket=websocket)
     channel_key = "events"
     routing.register_mobile(agent_id, channel_key, client)
+
+    _request_events_snapshot(routing, agent_id)
 
     try:
         await _mobile_writer(websocket, client, binary=False)

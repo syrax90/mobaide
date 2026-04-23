@@ -43,6 +43,9 @@ from claude_mobile.agent.projects.service import (
 from claude_mobile.agent.autoscan.models import StartScanRequest
 from claude_mobile.agent.autoscan.stream import run_autoscan_stream
 from claude_mobile.agent.sessions.models import ClaudeOptionsModel, CreateSessionRequest
+from claude_mobile.agent.ws.session_list import (
+    _serialize_sessions as _list_session_dicts,
+)
 from claude_mobile.linear.scanner import (
     AutoScanAlreadyRunning,
     AutoScanCapacityReached,
@@ -363,6 +366,9 @@ class RelayClient:
         elif msg_type == "mobile_session_detach":
             self._handle_mobile_detach(ctrl)
 
+        elif msg_type == "request_events_snapshot":
+            await self._handle_request_events_snapshot(ws)
+
     async def _handle_mobile_attach(
         self, ctrl: dict, ws: ClientConnection
     ) -> None:
@@ -375,10 +381,12 @@ class RelayClient:
         keyboard grayed out on exit-and-reopen because the in-memory
         idempotency cache kept the state frame from ever being re-sent.
 
-        If the session is unknown (stopped, never created, or bridged
-        through a relay that lost its state), silently no-op — the
-        ``_handle_session_input`` auto-create path still covers the
-        "mobile writes to a phantom session" edge case.
+        If the session is unknown (agent restarted, session crashed and was
+        cleaned up, or mobile is resuming a stale id from preferences), we
+        emit a synthetic ``stopped`` state frame back to the mobile so the
+        UI leaves the "Connecting" banner and renders a stopped session —
+        rather than hang forever waiting for a state frame that would never
+        come under the old silent-noop path.
         """
         session_id = ctrl.get("session_id", "")
         if not session_id:
@@ -389,8 +397,67 @@ class RelayClient:
                 "relay.mobile_attach.unknown_session session_id=%s",
                 session_id,
             )
+            try:
+                stopped = _state_frame("stopped", None)
+                await ws.send(encode(CH_SESSION_IO, session_id, stopped))
+            except Exception:
+                logger.debug(
+                    "relay.mobile_attach.stopped_frame_failed session_id=%s",
+                    session_id,
+                    exc_info=True,
+                )
             return
         await self._send_session_handshake(session_id, session, ws)
+
+    async def _handle_request_events_snapshot(
+        self, ws: ClientConnection
+    ) -> None:
+        """Re-publish the current sessions / projects snapshots on event_bus.
+
+        Central server emits this control message whenever a mobile opens
+        ``/relay/ws/events/{agent_id}`` or ``/relay/ws/sessions/{agent_id}``.
+        ``_forward_events`` is already subscribed to ``event_bus`` and will
+        turn the published envelopes into CH_EVENTS frames; the central
+        server then routes those frames to the newly-connected mobile.
+
+        Sending a direct CH_SESSIONS_LIST envelope additionally covers the
+        legacy sessions-list channel, where subscribers of
+        ``/relay/ws/sessions/{agent_id}`` don't go through event_bus.
+        """
+        session_dicts = _list_session_dicts(self._session_manager)
+
+        try:
+            self._event_bus.publish(
+                "sessions.changed", {"sessions": session_dicts}
+            )
+        except Exception:
+            logger.exception(
+                "relay.events_snapshot.sessions_publish_failed"
+            )
+
+        projects_store = getattr(self._app_state, "projects_store", None)
+        if projects_store is not None:
+            try:
+                projects = projects_store.list_public()
+                self._event_bus.publish(
+                    "projects.changed", {"projects": projects}
+                )
+            except Exception:
+                logger.exception(
+                    "relay.events_snapshot.projects_publish_failed"
+                )
+
+        try:
+            await ws.send(
+                encode(
+                    CH_SESSIONS_LIST, "", orjson.dumps(session_dicts)
+                )
+            )
+        except Exception:
+            logger.debug(
+                "relay.events_snapshot.sessions_list_send_failed",
+                exc_info=True,
+            )
 
     def _handle_mobile_detach(self, ctrl: dict) -> None:
         """Record that a mobile detached from a session.
@@ -1220,19 +1287,7 @@ class RelayClient:
 
     async def _forward_session_list(self, ws: ClientConnection) -> None:
         """Forward session-list updates as CH_SESSIONS_LIST envelopes."""
-        sessions = self._session_manager.list_sessions()
-        session_dicts = [
-            {
-                "session_id": s.session_id,
-                "state": s.state.value,
-                "created_at": s.created_at.isoformat(),
-                "pid": s.pid,
-                "command": s.command,
-                "cwd": s.cwd,
-            }
-            for s in sessions
-        ]
-        initial = orjson.dumps(session_dicts)
+        initial = orjson.dumps(_list_session_dicts(self._session_manager))
         await ws.send(encode(CH_SESSIONS_LIST, "", initial))
 
         q = self._broadcaster.subscribe()

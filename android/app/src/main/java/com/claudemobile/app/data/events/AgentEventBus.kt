@@ -10,6 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.long
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -19,7 +20,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -62,12 +62,14 @@ class AgentEventBus @Inject constructor(
     private var collectorJob: Job? = null
 
     init {
-        // `drop(1)` skips the StateFlow's initial replay so injection-time
-        // construction doesn't trigger a connect before the first explicit
-        // [start] call. Mid-session transitions (re-login, forced logout
-        // after refresh failure) flow through this collector.
+        // Observe the initial authState too: on cold-start with a restored
+        // token, the StateFlow's initial replay is already FullyConnected,
+        // and the previous `drop(1)` swallowed it — leaving this collector
+        // never calling start() on that path. start() is @Synchronized and
+        // idempotent, so observing the initial replay is safe even when
+        // SessionListViewModel.init also calls it.
         scope.launch {
-            sessionManager.authState.drop(1).collect { state ->
+            sessionManager.authState.collect { state ->
                 when (state) {
                     SessionManager.AuthState.FullyConnected -> start()
                     SessionManager.AuthState.UserOnly -> stop()
@@ -88,10 +90,17 @@ class AgentEventBus @Inject constructor(
         val c = webSocketManager.createConnection("ws/events")
         conn = c
         _connection.value = ConnState.Connecting
-        c.connect()
-        collectorJob = scope.launch {
+        // UNDISPATCHED so events.collect subscribes synchronously BEFORE
+        // connect() opens the WS. The alternative lets the server fire
+        // Connected + the initial sessions.changed / projects.changed
+        // envelopes into SharedFlow(replay=1) before this collector
+        // attaches, which drops every envelope except the last — losing
+        // the initial session list and leaving the UI empty after app
+        // restart.
+        collectorJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             c.events.collect { handle(it) }
         }
+        c.connect()
     }
 
     @Synchronized

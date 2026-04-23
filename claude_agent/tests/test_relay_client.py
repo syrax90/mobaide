@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,6 +29,7 @@ from claude_mobile.relay.client import (
 from claude_mobile.relay.envelope import (
     CH_CONTROL,
     CH_SESSION_IO,
+    CH_SESSIONS_LIST,
     decode,
     encode,
 )
@@ -342,9 +344,18 @@ class TestHandleMobileAttach:
         assert decoded[2][2][:1] == FRAME_OUTPUT
         assert decoded[2][2][1:] == b"hello world"
 
-    async def test_attach_for_unknown_session_is_silent_noop(
+    async def test_attach_for_unknown_session_sends_stopped_state_frame(
         self, client, mock_session_manager
     ):
+        """When the session is unknown (agent restart, liveness-cleanup, stale
+        mobile preference), the attach handler must send a synthetic
+        ``stopped`` state frame so the mobile's UI leaves the ``Connecting``
+        banner instead of hanging.
+
+        Wire shape: exactly one ``ws.send`` carrying a CH_SESSION_IO envelope
+        whose payload is ``FRAME_STATE + JSON{"status":"stopped"}`` (no
+        ``pid`` field — the session has no process).
+        """
         mock_session_manager.get_session = AsyncMock(return_value=None)
         ws = AsyncMock()
         payload = json.dumps(
@@ -353,7 +364,32 @@ class TestHandleMobileAttach:
 
         await client._handle_control(payload, ws)
 
-        ws.send.assert_not_called()
+        ws.send.assert_awaited_once()
+        sent = ws.send.call_args[0][0]
+        channel, sid, pl = decode(sent)
+        assert channel == CH_SESSION_IO
+        assert sid == "ghost"
+        assert pl[:1] == FRAME_STATE
+        state = json.loads(pl[1:])
+        assert state == {"status": "stopped"}
+
+    async def test_attach_for_unknown_session_does_not_crash_when_send_fails(
+        self, client, mock_session_manager
+    ):
+        """``ws.send`` failure (WS half-closed race) must be swallowed so the
+        relay reader loop keeps dispatching control frames for other
+        sessions.  The handler logs at debug and returns cleanly.
+        """
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+        ws.send = AsyncMock(side_effect=ConnectionError("WS closed"))
+        payload = json.dumps(
+            {"type": "mobile_session_attach", "session_id": "ghost"}
+        ).encode()
+
+        await client._handle_control(payload, ws)
+
+        ws.send.assert_awaited_once()
 
     async def test_attach_without_session_id_is_silent_noop(
         self, client, mock_session_manager
@@ -402,6 +438,215 @@ class TestHandleMobileAttach:
 
         ws.send.assert_not_called()
         mock_session_manager.get_session.assert_not_awaited()
+
+
+# -- _handle_request_events_snapshot ------------------------------------------
+
+
+class TestHandleRequestEventsSnapshot:
+    """The ``request_events_snapshot`` control message is what unblocks the
+    "sessions closed after app restart" bug in relay mode.  The central
+    server sends it every time a mobile opens ``/relay/ws/events/{aid}`` or
+    ``/relay/ws/sessions/{aid}``; the handler re-publishes the current
+    ``sessions.changed`` + ``projects.changed`` snapshots on ``event_bus``
+    (picked up by ``_forward_events`` → CH_EVENTS → mobile) and also sends
+    a direct ``CH_SESSIONS_LIST`` envelope for legacy sessions-list
+    channel subscribers.
+    """
+
+    async def test_publishes_sessions_changed_on_event_bus(
+        self, client, mock_session_manager, mock_event_bus
+    ):
+        """The primary path: a ``sessions.changed`` envelope is published on
+        ``event_bus`` so ``_forward_events`` can forward it through the
+        tunnel to the newly-connected mobile.  Without this, the mobile's
+        reactive store stays empty until the next real state change.
+        """
+        sess_info = MagicMock()
+        sess_info.session_id = "s-42"
+        sess_info.state = SessionState.RUNNING
+        sess_info.created_at = datetime(2026, 4, 11, 10, 0, 0, tzinfo=timezone.utc)
+        sess_info.pid = 9000
+        sess_info.command = ["/bin/bash"]
+        sess_info.cwd = "/tmp"
+        mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
+
+        ws = AsyncMock()
+        payload = json.dumps({"type": "request_events_snapshot"}).encode()
+
+        await client._handle_control(payload, ws)
+
+        sessions_calls = [
+            c for c in mock_event_bus.publish.call_args_list
+            if c[0][0] == "sessions.changed"
+        ]
+        assert len(sessions_calls) == 1
+        body = sessions_calls[0][0][1]
+        assert body == {
+            "sessions": [
+                {
+                    "session_id": "s-42",
+                    "state": "running",
+                    "created_at": "2026-04-11T10:00:00+00:00",
+                    "pid": 9000,
+                    "command": ["/bin/bash"],
+                    "cwd": "/tmp",
+                },
+            ],
+        }
+
+    async def test_publishes_projects_changed_on_event_bus(
+        self, client, mock_session_manager, mock_event_bus, mock_app_state
+    ):
+        """When ``app_state.projects_store`` is present, the handler must also
+        republish the projects snapshot so a mobile whose only recent event
+        is on the projects stream still rebuilds its local store on
+        reconnect.
+        """
+        mock_session_manager.list_sessions = MagicMock(return_value=[])
+        projects_store = MagicMock()
+        projects_store.list_public = MagicMock(
+            return_value=[{"name": "proj-a", "path": "/p/a"}]
+        )
+        mock_app_state.projects_store = projects_store
+
+        ws = AsyncMock()
+        payload = json.dumps({"type": "request_events_snapshot"}).encode()
+
+        await client._handle_control(payload, ws)
+
+        projects_calls = [
+            c for c in mock_event_bus.publish.call_args_list
+            if c[0][0] == "projects.changed"
+        ]
+        assert len(projects_calls) == 1
+        assert projects_calls[0][0][1] == {
+            "projects": [{"name": "proj-a", "path": "/p/a"}],
+        }
+
+    async def test_skips_projects_publish_when_store_missing(
+        self, client, mock_session_manager, mock_event_bus, mock_app_state
+    ):
+        """``projects_store`` is optional on ``app_state``. When absent the
+        handler must still publish ``sessions.changed`` and NOT raise or
+        emit a malformed ``projects.changed`` — otherwise central-server
+        deployments without a projects feature break the events channel.
+        """
+        mock_session_manager.list_sessions = MagicMock(return_value=[])
+        # Explicitly remove the optional attribute so ``getattr(..., None)``
+        # branches into the skip path.
+        if hasattr(mock_app_state, "projects_store"):
+            del mock_app_state.projects_store
+
+        ws = AsyncMock()
+        payload = json.dumps({"type": "request_events_snapshot"}).encode()
+
+        await client._handle_control(payload, ws)
+
+        published_types = [c[0][0] for c in mock_event_bus.publish.call_args_list]
+        assert "sessions.changed" in published_types
+        assert "projects.changed" not in published_types
+
+    async def test_sends_direct_sessions_list_envelope_on_tunnel(
+        self, client, mock_session_manager
+    ):
+        """Legacy sessions-list subscribers bypass ``event_bus``. The handler
+        must send a direct ``CH_SESSIONS_LIST`` envelope on the tunnel
+        carrying the same payload, encoded as orjson bytes.  Without it,
+        mobiles still on the legacy ``/relay/ws/sessions/{aid}`` channel
+        never get their initial list either.
+        """
+        sess_info = MagicMock()
+        sess_info.session_id = "s-1"
+        sess_info.state = SessionState.STARTING
+        sess_info.created_at = datetime(2026, 4, 11, 10, 0, 0, tzinfo=timezone.utc)
+        sess_info.pid = None
+        sess_info.command = ["/bin/sh"]
+        sess_info.cwd = None
+        mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
+
+        ws = AsyncMock()
+        payload = json.dumps({"type": "request_events_snapshot"}).encode()
+
+        await client._handle_control(payload, ws)
+
+        sessions_list_sends = []
+        for call in ws.send.call_args_list:
+            sent = call[0][0]
+            try:
+                channel, sid, pl = decode(sent)
+            except ValueError:
+                continue
+            if channel == CH_SESSIONS_LIST and sid == "":
+                sessions_list_sends.append(json.loads(pl))
+        assert len(sessions_list_sends) == 1
+        assert sessions_list_sends[0] == [
+            {
+                "session_id": "s-1",
+                "state": "starting",
+                "created_at": "2026-04-11T10:00:00+00:00",
+                "pid": None,
+                "command": ["/bin/sh"],
+                "cwd": None,
+            },
+        ]
+
+    async def test_event_bus_publish_failure_does_not_abort_snapshot(
+        self, client, mock_session_manager, mock_event_bus
+    ):
+        """If ``event_bus.publish`` raises (bus shut down, queue full), the
+        handler must still complete the other arms of the snapshot so the
+        failure mode degrades gracefully — losing a snapshot on one
+        channel but delivering it on every other.
+        """
+        mock_session_manager.list_sessions = MagicMock(return_value=[])
+        mock_event_bus.publish = MagicMock(
+            side_effect=[RuntimeError("bus dead"), None]
+        )
+
+        ws = AsyncMock()
+        payload = json.dumps({"type": "request_events_snapshot"}).encode()
+
+        # Must not raise.
+        await client._handle_control(payload, ws)
+
+        # Direct CH_SESSIONS_LIST envelope still went out despite the
+        # event_bus failure above.
+        sessions_list_sends = [
+            c for c in ws.send.call_args_list
+            if decode(c[0][0])[0] == CH_SESSIONS_LIST
+        ]
+        assert len(sessions_list_sends) == 1
+
+    async def test_empty_session_list_still_publishes_and_sends(
+        self, client, mock_session_manager, mock_event_bus
+    ):
+        """Happy path with no sessions: still publish ``sessions.changed``
+        with an empty list AND send the direct envelope, so a mobile whose
+        token survived across a full session-list clear still gets the
+        correct empty-state update (otherwise it would show stale cached
+        sessions).
+        """
+        mock_session_manager.list_sessions = MagicMock(return_value=[])
+
+        ws = AsyncMock()
+        payload = json.dumps({"type": "request_events_snapshot"}).encode()
+
+        await client._handle_control(payload, ws)
+
+        sessions_publishes = [
+            c for c in mock_event_bus.publish.call_args_list
+            if c[0][0] == "sessions.changed"
+        ]
+        assert len(sessions_publishes) == 1
+        assert sessions_publishes[0][0][1] == {"sessions": []}
+
+        sessions_list_sends = [
+            c for c in ws.send.call_args_list
+            if decode(c[0][0])[0] == CH_SESSIONS_LIST
+        ]
+        assert len(sessions_list_sends) == 1
+        assert json.loads(decode(sessions_list_sends[0][0][0])[2]) == []
 
 
 # -- _handle_create_session: OSError/FileNotFoundError branches ----------------

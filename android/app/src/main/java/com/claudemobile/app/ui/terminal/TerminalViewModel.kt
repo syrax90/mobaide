@@ -10,6 +10,7 @@ import com.claudemobile.app.data.network.WsEvent
 import com.claudemobile.app.data.repository.SessionRepository
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -96,9 +97,15 @@ class TerminalViewModel @Inject constructor(
 
     private fun connect() {
         connection = sessionRepository.createSessionIoConnection(sessionId)
-        connection?.connect()
 
-        viewModelScope.launch {
+        // UNDISPATCHED: the body runs inline on this thread until the first
+        // suspension point (events.collect), which subscribes synchronously
+        // to the SharedFlow. Without this, the WS can open and fire
+        // Connected + state + replay + output into a SharedFlow(replay=1)
+        // before the collector attaches, leaving the subscriber with only
+        // the last frame — the UI then sticks on "Connecting" because the
+        // state/replay transitions were lost.
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             connection?.events?.collect { event ->
                 when (event) {
                     is WsEvent.Connected -> {
@@ -118,9 +125,19 @@ class TerminalViewModel @Inject constructor(
                 }
             }
         }
+
+        connection?.connect()
     }
 
     private fun handleBinary(frame: ByteString) {
+        // Inbound binary traffic implies the WS is up — if we somehow
+        // missed the Connected event, upgrade out of Reconnecting so the
+        // overlay doesn't lie.
+        _isConnected.value = true
+        if (_connectionState.value == ConnectionState.Reconnecting) {
+            _connectionState.value = ConnectionState.Live
+        }
+
         when (val decoded = TerminalProtocol.decode(frame)) {
             is TerminalFrame.Output -> {
                 if (decoded.bytes.isNotEmpty()) {
