@@ -158,8 +158,6 @@ class RelayClient:
 
         # Session bridge state: session_id -> bridge pump task.
         self._bridges: dict[str, asyncio.Task] = {}
-        # Track whether we've sent the handshake for a session through relay.
-        self._handshake_sent: set[str] = set()
 
         # Per-mobile auto-scan subscriptions: subscription_id -> stream task.
         # Each mobile device opens its own /relay/ws/autoscan/{agent_id}
@@ -237,8 +235,6 @@ class RelayClient:
                 "relay.authenticated agent_id=%s",
                 self._config.agent_id,
             )
-
-            self._handshake_sent.clear()
 
             self._heartbeat_task = asyncio.create_task(
                 self._heartbeat_loop(ws), name="relay-heartbeat"
@@ -360,6 +356,55 @@ class RelayClient:
 
         elif msg_type == "close_autoscan":
             self._handle_close_autoscan(ctrl)
+
+        elif msg_type == "mobile_session_attach":
+            await self._handle_mobile_attach(ctrl, ws)
+
+        elif msg_type == "mobile_session_detach":
+            self._handle_mobile_detach(ctrl)
+
+    async def _handle_mobile_attach(
+        self, ctrl: dict, ws: ClientConnection
+    ) -> None:
+        """Re-send the PTY handshake because a mobile just attached to a session.
+
+        Emitted by the central server every time a mobile opens
+        ``/relay/ws/session/{agent_id}/{session_id}`` and on agent tunnel
+        reconnect for every already-attached mobile. Replaces the old lazy
+        "first-input triggers handshake" path, which left the mobile's
+        keyboard grayed out on exit-and-reopen because the in-memory
+        idempotency cache kept the state frame from ever being re-sent.
+
+        If the session is unknown (stopped, never created, or bridged
+        through a relay that lost its state), silently no-op — the
+        ``_handle_session_input`` auto-create path still covers the
+        "mobile writes to a phantom session" edge case.
+        """
+        session_id = ctrl.get("session_id", "")
+        if not session_id:
+            return
+        session = await self._session_manager.get_session(session_id)
+        if session is None:
+            logger.debug(
+                "relay.mobile_attach.unknown_session session_id=%s",
+                session_id,
+            )
+            return
+        await self._send_session_handshake(session_id, session, ws)
+
+    def _handle_mobile_detach(self, ctrl: dict) -> None:
+        """Record that a mobile detached from a session.
+
+        Present for protocol symmetry with ``mobile_session_attach`` so the
+        central server can notify the agent when a mobile goes away; the
+        agent currently has no per-mobile state to unwind, so this is a
+        debug log. Left as a named method so a future per-device routing
+        change has an obvious hook.
+        """
+        session_id = ctrl.get("session_id", "")
+        logger.debug(
+            "relay.mobile_detach session_id=%s", session_id,
+        )
 
     async def _handle_open_autoscan(
         self, ctrl: dict, ws: ClientConnection
@@ -1005,12 +1050,6 @@ class RelayClient:
             if session is None:
                 return
 
-        # Send state + replay + ring on first input so the client gets initial state.
-        if session_id not in self._handshake_sent:
-            await self._send_session_handshake(session_id, session, ws)
-            self._handshake_sent.add(session_id)
-
-        # Parse PTY frame: first byte = type, rest = data
         if not payload:
             return
         frame_type = payload[:1]
@@ -1043,6 +1082,11 @@ class RelayClient:
             session = await self._session_manager.create_session(config)
             self._bridge_session(session, ws)
             logger.info("relay.session_auto_created session_id=%s", session_id)
+            # The mobile that caused the auto-create is waiting for the same
+            # state/replay/ring frames that ``_handle_mobile_attach`` sends on
+            # the normal connect path; send them inline since attach already
+            # fired before the session existed.
+            await self._send_session_handshake(session_id, session, ws)
             return session
         except Exception as exc:
             logger.warning(
@@ -1169,7 +1213,6 @@ class RelayClient:
                         task = self._bridges.pop(sid, None)
                         if task and not task.done():
                             task.cancel()
-                        self._handshake_sent.discard(sid)
         except asyncio.CancelledError:
             pass
         finally:
@@ -1249,7 +1292,6 @@ class RelayClient:
             if not task.done():
                 task.cancel()
         self._bridges.clear()
-        self._handshake_sent.clear()
         for task in list(self._autoscan_streams.values()):
             if not task.done():
                 task.cancel()

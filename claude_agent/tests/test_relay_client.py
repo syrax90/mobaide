@@ -298,6 +298,112 @@ class TestHandleControl:
         ws.send.assert_not_called()
 
 
+# -- _handle_mobile_attach / _handle_mobile_detach -----------------------------
+
+
+class TestHandleMobileAttach:
+    """The ``mobile_session_attach`` handler is what unsticks a mobile's
+    keyboard on exit-and-reopen in relay mode. It must (1) re-send the full
+    PTY handshake every time it fires — without any per-session idempotency
+    cache — and (2) no-op safely when the session is unknown.
+    """
+
+    async def test_attach_sends_full_handshake_in_order(
+        self, client, mock_session_manager
+    ):
+        mock_session = AsyncMock()
+        mock_session.session_id = "s1"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 42
+        mock_session.get_ring = MagicMock(return_value=b"hello world")
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        payload = json.dumps(
+            {"type": "mobile_session_attach", "session_id": "s1"}
+        ).encode()
+        await client._handle_control(payload, ws)
+
+        assert ws.send.await_count == 3
+        sent = [ws.send.call_args_list[i][0][0] for i in range(3)]
+        decoded = [decode(b) for b in sent]
+
+        for ch, sid, _ in decoded:
+            assert ch == CH_SESSION_IO
+            assert sid == "s1"
+
+        assert decoded[0][2][:1] == FRAME_STATE
+        state_payload = json.loads(decoded[0][2][1:])
+        assert state_payload["status"] == "running"
+        assert state_payload["pid"] == 42
+
+        assert decoded[1][2] == FRAME_REPLAY
+
+        assert decoded[2][2][:1] == FRAME_OUTPUT
+        assert decoded[2][2][1:] == b"hello world"
+
+    async def test_attach_for_unknown_session_is_silent_noop(
+        self, client, mock_session_manager
+    ):
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+        payload = json.dumps(
+            {"type": "mobile_session_attach", "session_id": "ghost"}
+        ).encode()
+
+        await client._handle_control(payload, ws)
+
+        ws.send.assert_not_called()
+
+    async def test_attach_without_session_id_is_silent_noop(
+        self, client, mock_session_manager
+    ):
+        ws = AsyncMock()
+        payload = json.dumps({"type": "mobile_session_attach"}).encode()
+
+        await client._handle_control(payload, ws)
+
+        ws.send.assert_not_called()
+        mock_session_manager.get_session.assert_not_awaited()
+
+    async def test_attach_is_repeatable_no_idempotency_cache(
+        self, client, mock_session_manager
+    ):
+        """Regression guard for the bug this fix addresses: the old
+        ``_handshake_sent`` cache silently skipped the handshake on a
+        mobile reattach, leaving the keyboard grayed out. The new path
+        must send a fresh handshake for every attach.
+        """
+        mock_session = AsyncMock()
+        mock_session.session_id = "s1"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 42
+        mock_session.get_ring = MagicMock(return_value=b"")
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        payload = json.dumps(
+            {"type": "mobile_session_attach", "session_id": "s1"}
+        ).encode()
+
+        await client._handle_control(payload, ws)
+        await client._handle_control(payload, ws)
+        await client._handle_control(payload, ws)
+
+        assert ws.send.await_count == 9
+
+    async def test_detach_is_silent_noop(self, client, mock_session_manager):
+        ws = AsyncMock()
+        payload = json.dumps(
+            {"type": "mobile_session_detach", "session_id": "s1"}
+        ).encode()
+
+        await client._handle_control(payload, ws)
+
+        ws.send.assert_not_called()
+        mock_session_manager.get_session.assert_not_awaited()
+
+
 # -- _handle_create_session: OSError/FileNotFoundError branches ----------------
 
 
@@ -626,6 +732,60 @@ class TestHandleSessionInput:
 
         mock_session_manager.create_session.assert_awaited_once()
 
+    async def test_auto_create_sends_handshake_inline(
+        self, client, mock_session_manager
+    ):
+        """Regression guard: once ``_handshake_sent`` is gone, the auto-create
+        path must send the state/replay/ring handshake itself. Without it,
+        a mobile whose very first relay frame targets an unknown session
+        (the common "agent bounced, mobile is ahead of the session set"
+        race) would never receive a state frame and its keyboard would
+        stay grayed out — the exact bug this fix exists to prevent.
+        """
+        mock_new_session = AsyncMock()
+        mock_new_session.session_id = "unknown-1"
+        mock_new_session.state = SessionState.RUNNING
+        mock_new_session.pid = 200
+        mock_new_session.get_ring = MagicMock(return_value=b"cached-output")
+
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        mock_session_manager.create_session = AsyncMock(
+            return_value=mock_new_session
+        )
+
+        ws = AsyncMock()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_session_input(
+                "unknown-1", FRAME_INPUT + b"hi", ws
+            )
+
+        handshake_sends = [
+            call[0][0]
+            for call in ws.send.call_args_list
+        ]
+        decoded = [decode(b) for b in handshake_sends]
+        sid_frames = [d for d in decoded if d[0] == CH_SESSION_IO]
+        assert len(sid_frames) >= 3, (
+            f"expected state + replay + ring after auto-create, "
+            f"got {len(sid_frames)} session-io frames"
+        )
+
+        first_three = sid_frames[:3]
+        for ch, sid, _ in first_three:
+            assert ch == CH_SESSION_IO
+            assert sid == "unknown-1"
+
+        assert first_three[0][2][:1] == FRAME_STATE
+        state_payload = json.loads(first_three[0][2][1:])
+        assert state_payload["status"] == "running"
+        assert state_payload["pid"] == 200
+
+        assert first_three[1][2] == FRAME_REPLAY
+
+        assert first_three[2][2][:1] == FRAME_OUTPUT
+        assert first_three[2][2][1:] == b"cached-output"
+
 
 # -- _send_heartbeat ------------------------------------------------------------
 
@@ -660,7 +820,6 @@ class TestCancelAllSubtasks:
 
         bridge_task = asyncio.create_task(_forever())
         client._bridges["sess-1"] = bridge_task
-        client._handshake_sent.add("sess-1")
 
         all_tasks = [
             client._heartbeat_task,
@@ -672,11 +831,8 @@ class TestCancelAllSubtasks:
 
         client._cancel_all_subtasks()
 
-        # Verify bridges and handshake state were cleared
         assert len(client._bridges) == 0
-        assert len(client._handshake_sent) == 0
 
-        # Await tasks so they actually reach cancelled state
         for t in all_tasks:
             with pytest.raises(asyncio.CancelledError):
                 await t

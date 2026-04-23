@@ -1,11 +1,19 @@
 """Tests for the in-memory RoutingTable."""
 from __future__ import annotations
 
+import asyncio
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from central_server.relay.routing import AgentConnection, MobileClient, RoutingTable
+from central_server.relay.envelope import CH_CONTROL, decode
+from central_server.relay.routing import (
+    AgentConnection,
+    MobileClient,
+    RoutingTable,
+    try_enqueue_control,
+)
 
 
 @pytest.fixture
@@ -96,3 +104,94 @@ class TestMobileOps:
 
     def test_empty_channels(self, routing: RoutingTable):
         assert routing.get_mobile_clients("none", "none") == set()
+
+
+class TestListAttachedSessions:
+    """``list_attached_sessions`` is used on agent reconnect to replay
+    ``mobile_session_attach`` for every mobile that was already wired up
+    before the tunnel died. It must:
+
+    - project only ``session_io:*`` channels (not events, sessions_list, or autoscan);
+    - return the raw session id with the channel-key prefix stripped;
+    - ignore channels whose client set has been fully drained.
+    """
+
+    def test_returns_ids_for_session_io_channels(self, routing: RoutingTable):
+        routing.register_agent("agent-1", _mock_ws())
+        c1 = MobileClient(device_id="dev-1", websocket=_mock_ws())
+        c2 = MobileClient(device_id="dev-2", websocket=_mock_ws())
+        routing.register_mobile("agent-1", "session_io:s1", c1)
+        routing.register_mobile("agent-1", "session_io:s2", c2)
+
+        sids = sorted(routing.list_attached_sessions("agent-1"))
+        assert sids == ["s1", "s2"]
+
+    def test_excludes_non_session_io_channels(self, routing: RoutingTable):
+        routing.register_agent("agent-1", _mock_ws())
+        routing.register_mobile(
+            "agent-1", "events",
+            MobileClient(device_id="dev-1", websocket=_mock_ws()),
+        )
+        routing.register_mobile(
+            "agent-1", "sessions_list",
+            MobileClient(device_id="dev-1", websocket=_mock_ws()),
+        )
+        routing.register_mobile(
+            "agent-1", "autoscan:sub-1",
+            MobileClient(device_id="dev-1", websocket=_mock_ws()),
+        )
+        routing.register_mobile(
+            "agent-1", "session_io:s1",
+            MobileClient(device_id="dev-1", websocket=_mock_ws()),
+        )
+
+        assert list(routing.list_attached_sessions("agent-1")) == ["s1"]
+
+    def test_returns_empty_when_agent_unknown(self, routing: RoutingTable):
+        assert routing.list_attached_sessions("ghost") == []
+
+    def test_drops_ids_after_last_client_unregistered(
+        self, routing: RoutingTable,
+    ):
+        routing.register_agent("agent-1", _mock_ws())
+        client = MobileClient(device_id="dev-1", websocket=_mock_ws())
+        routing.register_mobile("agent-1", "session_io:s1", client)
+        assert routing.list_attached_sessions("agent-1") == ["s1"]
+
+        routing.unregister_mobile("agent-1", "session_io:s1", client)
+        assert routing.list_attached_sessions("agent-1") == []
+
+
+class TestTryEnqueueControl:
+    """``try_enqueue_control`` is the shared wire-format helper used by
+    both ``mobile_ws._send_session_lifecycle`` and
+    ``agent_ws._enqueue_attach`` to encode a JSON body onto the agent's
+    CH_CONTROL channel. It must return ``True`` on success, ``False``
+    on a missing agent or a saturated queue, and never raise.
+    """
+
+    def test_returns_false_when_conn_is_none(self):
+        assert try_enqueue_control(None, {"type": "ping"}) is False
+
+    def test_enqueues_and_returns_true_on_free_queue(
+        self, routing: RoutingTable,
+    ):
+        conn = routing.register_agent("agent-1", _mock_ws())
+
+        assert try_enqueue_control(conn, {"type": "noop", "x": 1}) is True
+
+        assert conn.send_queue.qsize() == 1
+        channel, sid, payload = decode(conn.send_queue.get_nowait())
+        assert channel == CH_CONTROL
+        assert sid == ""
+        assert json.loads(payload) == {"type": "noop", "x": 1}
+
+    def test_returns_false_on_saturated_queue(self, routing: RoutingTable):
+        conn = routing.register_agent("agent-1", _mock_ws())
+        conn.send_queue = asyncio.Queue(maxsize=1)
+        conn.send_queue.put_nowait(b"already-full")
+
+        assert try_enqueue_control(conn, {"type": "ping"}) is False
+        # Helper must not eat or replace the queued item.
+        assert conn.send_queue.qsize() == 1
+        assert conn.send_queue.get_nowait() == b"already-full"
