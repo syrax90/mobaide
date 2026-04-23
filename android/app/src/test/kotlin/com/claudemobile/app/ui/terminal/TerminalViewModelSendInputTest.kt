@@ -11,6 +11,9 @@ import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import okio.ByteString
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -18,11 +21,18 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Unit tests for [TerminalViewModel.sendInput] — verifies the three send paths:
+ * Unit tests for [TerminalViewModel]'s send paths.
  *
- * 1. **Unchanged tap**: text matches [TerminalViewModel.onRowTapped] → bare CR via 'i' frame
- * 2. **Edited tap**: text differs from tapped original → 'x' (execute) frame
- * 3. **Fresh text**: no prior [onRowTapped] call → text + CR via 'i' frame
+ * [TerminalViewModel.sendInput] always encodes the fresh typed text + CR as a single
+ * 'i' (input) frame. [TerminalViewModel.sendTappedRow] is the "tap `❯` row = Enter"
+ * entrypoint; it dispatches on its `isCurrentInput` flag:
+ *
+ * - `isCurrentInput = true`  → bare CR via 'i' frame (PTY already holds the text).
+ * - `isCurrentInput = false` → `text + "\r"` via 'x' (execute) frame so the server
+ *   Ctrl+C-clears stale input before writing.
+ *
+ * [TerminalViewModel.sendTappedRow] also no-ops when the socket is not Live, to avoid
+ * queueing frames during reconnect / replay-buffer playback.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelSendInputTest {
@@ -44,13 +54,21 @@ class TerminalViewModelSendInputTest {
             sessionRepository = sessionRepository,
         )
 
+    /**
+     * Drive the VM's `_connectionState` to [ConnectionState.Live] by emitting a
+     * [WsEvent.Connected] and yielding to the test dispatcher so the VM's collector
+     * can consume it.
+     */
+    private suspend fun TestScope.goLive() {
+        eventsFlow.emit(WsEvent.Connected)
+        advanceUntilIdle()
+    }
+
     /** Strip the frame-type prefix byte to get the raw PTY payload. */
     private fun payloadOf(frame: ByteString): ByteArray =
         frame.toByteArray().let { it.copyOfRange(1, it.size) }
 
     private fun frameTypeOf(frame: ByteString): Byte = frame.toByteArray()[0]
-
-    // ── Path 1: Fresh text (no tap) ────────────────────────────────────────────
 
     @Test
     fun sendInput_freshText_sendsTextPlusCR() {
@@ -100,122 +118,86 @@ class TerminalViewModelSendInputTest {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
-        vm.sendInput("\u00e9")
+        vm.sendInput("é")
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "\u00e9\r".toByteArray(Charsets.UTF_8),
+            "é\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
 
-    // ── Path 2: Unchanged tap → bare CR ────────────────────────────────────────
-
     @Test
-    fun sendInput_unchangedTap_sendsBareCR() {
+    fun sendTappedRow_currentInput_sendsBareCR() = runTest {
         val vm = createViewModel()
+        goLive()
         val captured = slot<ByteString>()
 
-        vm.onRowTapped("/stats")
-        vm.sendInput("/stats")
+        vm.sendTappedRow("/stats", isCurrentInput = true)
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "unchanged tap on current input must send bare CR",
+            "tap on the current input row must submit with a bare CR",
             "\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
 
     @Test
-    fun sendInput_unchangedTap_usesInputFrame() {
+    fun sendTappedRow_currentInput_usesInputFrame() = runTest {
         val vm = createViewModel()
+        goLive()
         val captured = slot<ByteString>()
 
-        vm.onRowTapped("/stats")
-        vm.sendInput("/stats")
+        vm.sendTappedRow("/stats", isCurrentInput = true)
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals(
-            "unchanged tap must use 'i' (input) frame",
+            "current-input tap must use 'i' (input) frame",
             'i'.code.toByte(),
             frameTypeOf(captured.captured),
         )
     }
 
-    // ── Path 3: Edited tap → 'x' (execute) frame ──────────────────────────────
-
     @Test
-    fun sendInput_editedTap_sendsEditedTextPlusCR() {
+    fun sendTappedRow_historicalInput_sendsTextPlusCR() = runTest {
         val vm = createViewModel()
+        goLive()
         val captured = slot<ByteString>()
 
-        vm.onRowTapped("/stats")
-        vm.sendInput("/help")
+        vm.sendTappedRow("/help", isCurrentInput = false)
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "edited tap must send the new text + CR",
+            "historical-row tap must send the tapped text + CR",
             "/help\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
 
     @Test
-    fun sendInput_editedTap_usesExecuteFrame() {
+    fun sendTappedRow_historicalInput_usesExecuteFrame() = runTest {
         val vm = createViewModel()
+        goLive()
         val captured = slot<ByteString>()
 
-        vm.onRowTapped("/stats")
-        vm.sendInput("/help")
+        vm.sendTappedRow("/help", isCurrentInput = false)
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals(
-            "edited tap must use 'x' (execute) frame for server-side Ctrl+C clear",
+            "historical-row tap must use 'x' (execute) frame so server Ctrl+C-clears stale input",
             'x'.code.toByte(),
             frameTypeOf(captured.captured),
         )
     }
 
-    // ── tappedOriginal reset ───────────────────────────────────────────────────
-
     @Test
-    fun sendInput_consumesTappedOriginal_subsequentSendIsFresh() {
+    fun sendTappedRow_whenNotLive_doesNotSend() {
         val vm = createViewModel()
-        val captured = mutableListOf<ByteString>()
 
-        vm.onRowTapped("/stats")
-        vm.sendInput("/stats")  // consumes tappedOriginal
+        vm.sendTappedRow("/stats", isCurrentInput = true)
+        vm.sendTappedRow("/help", isCurrentInput = false)
 
-        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
-
-        vm.sendInput("/stats")  // should be fresh (no tappedOriginal)
-
-        verify(timeout = 2000, atLeast = 2) { connection.sendBinary(capture(captured)) }
-        val second = captured.last()
-        assertArrayEquals(
-            "second send after tap consumed should be fresh text + CR",
-            "/stats\r".toByteArray(Charsets.UTF_8),
-            payloadOf(second),
-        )
-    }
-
-    @Test
-    fun sendBytes_resetsTappedOriginal() {
-        val vm = createViewModel()
-        val captured = mutableListOf<ByteString>()
-
-        vm.onRowTapped("/stats")
-        vm.sendBytes(byteArrayOf(0x03))  // Ctrl+C invalidates tap state
-
-        vm.sendInput("/stats")  // should be fresh now
-
-        verify(timeout = 2000, atLeast = 2) { connection.sendBinary(capture(captured)) }
-        val sendInputFrame = captured.last()
-        assertEquals(
-            "sendBytes must reset tappedOriginal — subsequent sendInput uses 'i' frame",
-            'i'.code.toByte(),
-            frameTypeOf(sendInputFrame),
-        )
+        verify(exactly = 0) { connection.sendBinary(any()) }
     }
 }
