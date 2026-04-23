@@ -20,11 +20,39 @@ from starlette.websockets import WebSocketDisconnect
 
 from ..auth.dependencies import WebSocketAuthError, ws_authenticate_mobile
 from .envelope import CH_AUTOSCAN, CH_CONTROL, CH_SESSION_IO, encode
-from .routing import MobileClient, RoutingTable
+from .routing import MobileClient, RoutingTable, try_enqueue_control
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/relay")
+
+
+def _send_session_lifecycle(
+    routing: RoutingTable,
+    agent_id: str,
+    session_id: str,
+    event: str,
+) -> None:
+    """Push a session-lifecycle control frame onto the agent's send queue.
+
+    Best-effort: silently drops when the agent is offline; warns when the
+    queue is saturated. A saturated queue requires ~10k pending frames,
+    which implies a stuck agent — the agent's next tunnel reconnect will
+    replay attach for every still-attached mobile via the loop in
+    ``agent_ws.agent_tunnel``.
+    """
+    conn = routing.get_agent(agent_id)
+    if conn is None:
+        return
+    if not try_enqueue_control(
+        conn, {"type": event, "session_id": session_id}
+    ):
+        logger.warning(
+            "relay.session_lifecycle.drop agent=%s session=%s event=%s — agent queue full",
+            agent_id,
+            session_id,
+            event,
+        )
 
 
 async def _validate_mobile_connection(
@@ -67,6 +95,10 @@ async def relay_session_io(
     channel_key = f"session_io:{session_id}"
     routing.register_mobile(agent_id, channel_key, client)
 
+    _send_session_lifecycle(
+        routing, agent_id, session_id, "mobile_session_attach"
+    )
+
     reader_task = asyncio.create_task(
         _session_reader(websocket, agent_id, session_id, routing),
         name=f"mobile-reader-{device_id}-{session_id}",
@@ -85,6 +117,9 @@ async def relay_session_io(
             task.cancel()
     finally:
         routing.unregister_mobile(agent_id, channel_key, client)
+        _send_session_lifecycle(
+            routing, agent_id, session_id, "mobile_session_detach"
+        )
 
 
 @router.websocket("/ws/sessions/{agent_id}")

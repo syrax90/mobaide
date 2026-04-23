@@ -22,7 +22,7 @@ from .envelope import (
     decode,
     encode,
 )
-from .routing import MobileClient, RoutingTable
+from .routing import MobileClient, RoutingTable, try_enqueue_control
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,14 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     # `refreshAgents()` to resync).
     if conn.owner_user_id:
         _broadcast_status(routing, conn.owner_user_id, agent_id, online=True)
+
+    # The previous agent tunnel may have died while mobiles stayed put.
+    # Replay ``mobile_session_attach`` for each currently-attached mobile
+    # session so the new agent re-sends the PTY handshake (state/replay/ring)
+    # and those mobiles don't get stuck on a grayed-out keyboard waiting
+    # for a state frame that will never arrive.
+    for sid in routing.list_attached_sessions(agent_id):
+        _enqueue_attach(conn, sid)
 
     reader_task = asyncio.create_task(
         _reader(websocket, agent_id, routing, db),
@@ -288,6 +296,24 @@ def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
             client.send_queue.put_nowait(payload.decode("utf-8"))
     except asyncio.QueueFull:
         pass
+
+
+def _enqueue_attach(conn, session_id: str) -> None:
+    """Queue a ``mobile_session_attach`` CH_CONTROL frame for the agent.
+
+    Used on agent reconnect to replay attach for every mobile that was
+    already registered before the tunnel died. Best-effort: logs on a
+    full queue and otherwise drops silently (the caller already resolved
+    ``conn`` from routing, so ``None`` cannot occur here).
+    """
+    if not try_enqueue_control(
+        conn, {"type": "mobile_session_attach", "session_id": session_id}
+    ):
+        logger.warning(
+            "agent_tunnel.attach_replay_drop agent=%s session=%s — agent queue full",
+            conn.agent_id,
+            session_id,
+        )
 
 
 def _broadcast_status(

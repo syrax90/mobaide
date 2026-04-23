@@ -6,6 +6,7 @@ asyncio event loop without locks.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -13,7 +14,31 @@ from datetime import datetime, timezone
 
 from fastapi import WebSocket
 
+from .envelope import CH_CONTROL, encode
+
 logger = logging.getLogger(__name__)
+
+
+def try_enqueue_control(
+    conn: "AgentConnection | None", body: dict
+) -> bool:
+    """Encode a JSON ``body`` as a CH_CONTROL envelope and enqueue on ``conn``.
+
+    Returns ``True`` if the frame was accepted by the queue, ``False`` if
+    ``conn`` is ``None`` (agent offline) or the queue is saturated.
+    Callers log their own context-specific warning on ``False`` because
+    the two places this helper is called from (mobile connect in
+    ``mobile_ws`` vs. agent reconnect replay in ``agent_ws``) want
+    different operator-facing log messages.
+    """
+    if conn is None:
+        return False
+    envelope = encode(CH_CONTROL, "", json.dumps(body).encode())
+    try:
+        conn.send_queue.put_nowait(envelope)
+        return True
+    except asyncio.QueueFull:
+        return False
 
 # Bounded queues to prevent memory exhaustion from slow clients.
 _AGENT_QUEUE_SIZE = 10_000
@@ -164,6 +189,21 @@ class RoutingTable:
         for clients in channels.values():
             result.extend(clients)
         return result
+
+    def list_attached_sessions(self, agent_id: str) -> list[str]:
+        """Session ids with at least one mobile attached on ``session_io:*``.
+
+        Used on agent reconnect to replay ``mobile_session_attach`` control
+        frames so the agent re-sends the PTY handshake and the mobile's
+        keyboard is unblocked without waiting for another first-input frame.
+        """
+        channels = self._mobile_clients.get(agent_id, {})
+        prefix = "session_io:"
+        return [
+            key[len(prefix) :]
+            for key, clients in channels.items()
+            if key.startswith(prefix) and clients
+        ]
 
     def register_user_client(self, user_id: str, client: UserClient) -> None:
         clients = self._user_clients.setdefault(user_id, set())
