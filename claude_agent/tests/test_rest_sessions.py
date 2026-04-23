@@ -138,6 +138,57 @@ class TestCreateSessionProjectPathErrors:
         # being replaced by an escaped backslash sequence.
         assert "\\\\" not in resp.text
 
+    async def test_worktree_creation_error_is_mapped_to_400_with_branch_and_stderr(
+        self, app, client, auth_headers,
+    ):
+        """Regression guard for the ``fix-worktree-starting`` bug class.
+
+        When the user explicitly toggled ``worktree=true`` and the
+        launcher-owned worktree creation fails (e.g. ``git worktree add``
+        errors, no resolvable start point, broken git binary),
+        ``WorktreeCreationError`` must surface as HTTP 400 with the branch
+        name and git stderr interpolated directly into ``detail`` — not a
+        500 from Starlette, and not a silent fallback to project root that
+        the user would never see.
+
+        This test pins the router's ``except WorktreeCreationError`` branch:
+        the failure bubbles from ``SessionManager.create_session`` through
+        ``router.create_session`` and lands as a clean readable 400. It is
+        distinct from the ``OSError`` branches (which test project-path
+        existence) and the ``FileNotFoundError`` branches (which test the
+        cwd-existence gate) — prior to this test nothing exercised the
+        worktree-creation failure edge at the HTTP boundary.
+        """
+        from claude_mobile.linear.worktree import WorktreeCreationError
+
+        async def _raise_worktree_error(*args, **kwargs):
+            raise WorktreeCreationError(
+                branch="feature/users-typed-branch",
+                path="/tmp/some-worktree",
+                stderr="fatal: could not create worktree: permission denied",
+            )
+
+        app.state.session_manager.create_session = _raise_worktree_error
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "claude_options": {
+                    "worktree": True,
+                    "branch_name": "feature/users-typed-branch",
+                },
+            },
+        )
+
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "Could not create worktree" in detail
+        assert "feature/users-typed-branch" in detail
+        # The raw git stderr must survive so the user sees the actual cause
+        # — not a generic "worktree failed" placeholder.
+        assert "permission denied" in detail
+
     async def test_raw_backslash_filename_is_not_repr_escaped_in_detail(
         self, app, client, auth_headers,
     ):

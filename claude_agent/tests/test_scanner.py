@@ -182,31 +182,26 @@ class TestRunNow:
         client.remove_issue_label.return_value = True
         client.get_issue_state.return_value = None
 
-        wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "wt")
-        wt_mgr.create_worktree.return_value = wt_result
-
         sess_mgr = AsyncMock()
         session_obj = MagicMock()
         session_obj.pid = 999
         sess_mgr.create_session.return_value = session_obj
 
+        # Each call to launcher.build returns a fresh spec so subsequent
+        # _scan_once cycles don't clobber each other's cwd state.
         launcher = AsyncMock()
-        spec = MagicMock()
-        spec.argv = ["claude"]
-        spec.env = {}
-        launcher.build.return_value = spec
+        launcher.build.side_effect = [
+            MagicMock(argv=["claude"], env={}, cwd=str(tmp_path / "wt")),
+            MagicMock(argv=["claude"], env={}, cwd=str(tmp_path / "wt")),
+        ]
 
         inst = _make_instance(
             tmp_path,
             client=client,
-            worktree_mgr=wt_mgr,
             session_manager=sess_mgr,
             launcher=launcher,
         )
 
-        # First scan — issue is processed.
         await inst._scan_once()
         assert client.update_issue_state.call_count == 1
 
@@ -217,6 +212,21 @@ class TestRunNow:
         assert client.update_issue_state.call_count == 2
 
 
+def _launcher_with_worktree(path: str) -> AsyncMock:
+    """Launcher stub that mirrors the new scanner → launcher contract.
+
+    The launcher now owns worktree creation, so the scanner only sees
+    ``spec.cwd`` — wired to the caller-supplied ``path`` here.
+    """
+    launcher = AsyncMock()
+    spec = MagicMock()
+    spec.argv = ["claude"]
+    spec.env = {}
+    spec.cwd = path
+    launcher.build.return_value = spec
+    return launcher
+
+
 class TestProcessIssueEmitsPerStepEvents:
     @pytest.mark.asyncio
     async def test_emits_state_label_worktree_session_in_order(self, tmp_path):
@@ -224,39 +234,27 @@ class TestProcessIssueEmitsPerStepEvents:
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
 
-        wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "worktree")
-        wt_mgr.create_worktree.return_value = wt_result
-
         sess_mgr = AsyncMock()
         session_obj = MagicMock()
         session_obj.pid = 12345
         sess_mgr.create_session.return_value = session_obj
 
-        launcher = AsyncMock()
-        spec = MagicMock()
-        spec.argv = ["claude"]
-        spec.env = {}
-        launcher.build.return_value = spec
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
         inst = _make_instance(
             tmp_path,
             client=client,
-            worktree_mgr=wt_mgr,
             session_manager=sess_mgr,
             launcher=launcher,
         )
 
         await inst._process_issue(_make_issue())
 
-        # Collect step ordering from issue events.
         steps = [
             (e.payload["step"], e.payload["status"])
             for e in inst._recent_events
             if e.type == "issue"
         ]
-        # Expected: each step has a started + ok pair, in this order
         expected_order = [
             ("state_update", "started"),
             ("state_update", "ok"),
@@ -269,10 +267,45 @@ class TestProcessIssueEmitsPerStepEvents:
         ]
         assert steps == expected_order
 
-        # And worktree + session payloads were emitted
         types = [e.type for e in inst._recent_events]
         assert "worktree" in types
         assert "session" in types
+
+    @pytest.mark.asyncio
+    async def test_emits_worktree_failed_when_launcher_raises(self, tmp_path):
+        """When the launcher raises ``WorktreeCreationError``, the scanner
+        must emit ``worktree_create/failed`` (not ``/ok``), skip the session
+        spawn for this issue, and let the poll loop continue."""
+        from claude_mobile.linear.worktree import WorktreeCreationError
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+
+        launcher = AsyncMock()
+        launcher.build.side_effect = WorktreeCreationError(
+            branch="feature/claude/cla-8-test-issue", path="/x", stderr="boom",
+        )
+
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            session_manager=sess_mgr,
+            launcher=launcher,
+        )
+
+        await inst._process_issue(_make_issue())
+
+        steps = [
+            (e.payload["step"], e.payload["status"])
+            for e in inst._recent_events
+            if e.type == "issue"
+        ]
+        assert ("worktree_create", "failed") in steps
+        assert ("session_spawn", "started") not in steps
+        sess_mgr.create_session.assert_not_awaited()
 
 
 class TestProcessIssueForwardsClientOptions:
@@ -294,19 +327,13 @@ class TestProcessIssueForwardsClientOptions:
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
 
-        wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "worktree")
-        wt_mgr.create_worktree.return_value = wt_result
-
         sess_mgr = AsyncMock()
         sess_mgr.create_session.return_value = MagicMock(pid=1)
 
-        launcher = AsyncMock()
-        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
         inst = _make_instance(
-            tmp_path, client=client, worktree_mgr=wt_mgr,
+            tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
         )
         # Simulate the Auto Scan config-screen submit path where the user
@@ -339,22 +366,15 @@ class TestProcessIssueForwardsClientOptions:
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
 
-        wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "worktree")
-        wt_mgr.create_worktree.return_value = wt_result
-
         sess_mgr = AsyncMock()
         sess_mgr.create_session.return_value = MagicMock(pid=1)
 
-        launcher = AsyncMock()
-        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
         inst = _make_instance(
-            tmp_path, client=client, worktree_mgr=wt_mgr,
+            tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
         )
-        # No inst._client_options assignment — the constructor default is None.
         assert inst._client_options is None
 
         await inst._process_issue(_make_issue(issue_id="uuid-def", identifier="CLA-DEF"))
@@ -362,6 +382,10 @@ class TestProcessIssueForwardsClientOptions:
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
         assert forwarded.max_effort is True
+        assert forwarded.worktree is True, (
+            "scanner must always set worktree=True so the launcher creates "
+            "the per-issue worktree — regression guard for the dropped-field bug"
+        )
 
 
 class TestWorktreeCleanup:
@@ -373,24 +397,15 @@ class TestWorktreeCleanup:
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
 
-        wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "worktree")
-        wt_mgr.create_worktree.return_value = wt_result
-
         sess_mgr = AsyncMock()
         session_obj = MagicMock()
         session_obj.pid = 1234
         sess_mgr.create_session.return_value = session_obj
 
-        launcher = AsyncMock()
-        spec = MagicMock()
-        spec.argv = ["claude"]
-        spec.env = {}
-        launcher.build.return_value = spec
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
         inst = _make_instance(
-            tmp_path, client=client, worktree_mgr=wt_mgr,
+            tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
         )
 
@@ -400,8 +415,6 @@ class TestWorktreeCleanup:
         assert len(items) == 1
         assert items[0].id == "CLA-100"
         assert items[0].uuid == "uuid-1"
-        # Loaded value is POSIX-normalized by ``ActiveWorkItem.from_dict``;
-        # compare against the same canonical form the loader produces.
         assert items[0].worktree_path == Path(tmp_path / "worktree").as_posix()
 
     @pytest.mark.asyncio
@@ -412,24 +425,15 @@ class TestWorktreeCleanup:
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
 
-        wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "worktree")
-        wt_mgr.create_worktree.return_value = wt_result
-
         sess_mgr = AsyncMock()
         session_obj = MagicMock()
         session_obj.pid = 1234
         sess_mgr.create_session.return_value = session_obj
 
-        launcher = AsyncMock()
-        spec = MagicMock()
-        spec.argv = ["claude"]
-        spec.env = {}
-        launcher.build.return_value = spec
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
         inst = _make_instance(
-            tmp_path, client=client, worktree_mgr=wt_mgr,
+            tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
         )
 
@@ -442,27 +446,31 @@ class TestWorktreeCleanup:
 
     @pytest.mark.asyncio
     async def test_process_issue_does_not_persist_when_worktree_creation_fails(self, tmp_path):
+        """Worktree creation failure surfaces as ``WorktreeCreationError`` from
+        the launcher — the scanner must skip both the persistence step AND the
+        session spawn for this issue, but keep the poll loop alive."""
+        from claude_mobile.linear.worktree import WorktreeCreationError
+
         client = AsyncMock()
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
 
-        wt_mgr = AsyncMock()
-        wt_mgr.create_worktree.return_value = None  # creation failed
-
         sess_mgr = AsyncMock()
-        sess_mgr.create_session.return_value = MagicMock(pid=1)
 
         launcher = AsyncMock()
-        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+        launcher.build.side_effect = WorktreeCreationError(
+            branch="feature/claude/cla-noWT-test-issue", path="/x", stderr="boom",
+        )
 
         inst = _make_instance(
-            tmp_path, client=client, worktree_mgr=wt_mgr,
+            tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher,
         )
 
-        await inst._process_issue(_make_issue(issue_id="uuid-noWT"))
+        await inst._process_issue(_make_issue(issue_id="uuid-noWT", identifier="CLA-noWT"))
 
         assert await inst._workitems_store.count() == 0
+        sess_mgr.create_session.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cleanup_removes_worktree_when_issue_state_is_done(self, tmp_path):
@@ -717,20 +725,14 @@ class TestWorktreeCleanup:
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
 
-        wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "worktree")
-        wt_mgr.create_worktree.return_value = wt_result
-
         sess_mgr = AsyncMock()
         sess_mgr.create_session.return_value = MagicMock(pid=7)
 
-        launcher = AsyncMock()
-        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
 
         config = _make_config(tmp_path, auto_remove_worktrees=False)
         inst = _make_instance(
-            tmp_path, client=client, worktree_mgr=wt_mgr,
+            tmp_path, client=client,
             session_manager=sess_mgr, launcher=launcher, config=config,
         )
 
@@ -754,16 +756,12 @@ class TestProcessedCountDTO:
         client.remove_issue_label.return_value = True
 
         wt_mgr = AsyncMock()
-        wt_result = MagicMock()
-        wt_result.path = str(tmp_path / "wt")
-        wt_mgr.create_worktree.return_value = wt_result
         wt_mgr.cleanup_worktree.return_value = True
 
         sess_mgr = AsyncMock()
         sess_mgr.create_session.return_value = MagicMock(pid=1)
 
-        launcher = AsyncMock()
-        launcher.build.return_value = MagicMock(argv=["claude"], env={})
+        launcher = _launcher_with_worktree(str(tmp_path / "wt"))
 
         inst = _make_instance(
             tmp_path, client=client, worktree_mgr=wt_mgr,

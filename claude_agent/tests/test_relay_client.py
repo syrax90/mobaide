@@ -194,6 +194,76 @@ class TestHandleControl:
         assert resp["session_id"] == "fail-sess"
         assert "out of resources" in resp["error"]
 
+    async def test_create_session_forwards_claude_options(
+        self, client, mock_session_manager,
+    ):
+        """The ``create_session`` control message must parse ``claude_options``
+        and hand them to ``SessionConfig`` — otherwise the worktree toggle
+        (and every other option) is silently dropped when a central relay
+        uses this path instead of the proxy_request path."""
+        from claude_mobile.core.claude_launcher import ClaudeOptions
+        from claude_mobile.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "sid"
+            s.pid = 1
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "sid",
+            "claude_options": {
+                "worktree": True,
+                "branch_name": "feature/relay-ctrl",
+                "plan_mode": True,
+            },
+        }
+        payload = json.dumps(ctrl).encode()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(payload, ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert isinstance(cfg.claude_options, ClaudeOptions)
+        assert cfg.claude_options.worktree is True
+        assert cfg.claude_options.branch_name == "feature/relay-ctrl"
+        assert cfg.claude_options.plan_mode is True
+
+    async def test_create_session_returns_failure_on_worktree_error(
+        self, client, mock_session_manager,
+    ):
+        """When the launcher raises ``WorktreeCreationError``, the relay must
+        respond with ``session_create_failed`` carrying the git stderr so the
+        mobile client sees the real cause instead of a silent project-root
+        fallback."""
+        from claude_mobile.linear.worktree import WorktreeCreationError
+
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=WorktreeCreationError(
+                branch="feature/broken", path="/bad", stderr="fatal: whoops",
+            )
+        )
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "wt-fail",
+            "claude_options": {"worktree": True, "branch_name": "feature/broken"},
+        }
+        payload = json.dumps(ctrl).encode()
+
+        await client._handle_control(payload, ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert "feature/broken" in resp["error"]
+        assert "whoops" in resp["error"]
+
     async def test_stop_session_success(self, client, mock_session_manager):
         mock_session_manager.stop_session = AsyncMock()
         ws = AsyncMock()

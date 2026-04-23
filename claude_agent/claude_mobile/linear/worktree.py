@@ -27,6 +27,22 @@ class WorktreeResult:
     branch: str
 
 
+class WorktreeCreationError(RuntimeError):
+    """Raised when ``git worktree add`` cannot produce a usable worktree.
+
+    The launcher converts this into an HTTP 400 so the mobile client sees the
+    real git stderr instead of silently landing in the project root.
+    """
+
+    def __init__(self, *, branch: str, path: str, stderr: str) -> None:
+        super().__init__(
+            f"Failed to create worktree at {path} on branch {branch}: {stderr}"
+        )
+        self.branch = branch
+        self.path = path
+        self.stderr = stderr
+
+
 def convert_to_worktree_slug(identifier: str, title: str) -> str:
     """Convert a Linear issue identifier and title into a safe worktree directory name.
 
@@ -83,17 +99,59 @@ class WorktreeManager:
         self._branch_prefix = branch_prefix
         self._main_branch = main_branch
 
-    @log_call(name="worktree.create_worktree", log_args=("slug",))
-    async def create_worktree(
-        self, slug: str, project_root: str
-    ) -> WorktreeResult | None:
-        """Create a git worktree with an independent branch for the given slug.
+    async def _resolve_start_point(self, project_root: str) -> str:
+        """Pick a commit-ish to branch from that actually exists in this repo.
 
-        The new branch is created from ``origin/<main_branch>`` with
-        ``--no-track``, so no upstream is configured and a stray ``git pull``
-        inside the worktree cannot merge the main branch into it.
+        The historical behavior — always branching from ``origin/<main>`` —
+        silently failed in common environments (repos using ``master``, no
+        ``origin`` remote, offline or auth-broken fetch). We now fall back
+        through origin → local → ``HEAD`` so a worktree can still be created.
         """
-        branch_name = f"{self._branch_prefix}/{slug}" if self._branch_prefix else slug
+        await _run_git("fetch", "origin", cwd=project_root)
+        origin_ref = f"origin/{self._main_branch}"
+        rc, _, _ = await _run_git(
+            "rev-parse", "--verify", "--quiet", origin_ref, cwd=project_root
+        )
+        if rc == 0:
+            return origin_ref
+
+        local_ref = f"refs/heads/{self._main_branch}"
+        rc, _, _ = await _run_git(
+            "rev-parse", "--verify", "--quiet", local_ref, cwd=project_root
+        )
+        if rc == 0:
+            return self._main_branch
+
+        logger.warning(
+            "No origin/%s or local %s found, branching from HEAD",
+            self._main_branch, self._main_branch,
+        )
+        return "HEAD"
+
+    @log_call(name="worktree.create_worktree", log_args=("slug", "branch_name"))
+    async def create_worktree(
+        self,
+        slug: str,
+        project_root: str,
+        *,
+        branch_name: str | None = None,
+    ) -> WorktreeResult:
+        """Create a git worktree with an independent branch.
+
+        When ``branch_name`` is None (Auto Scan path), the branch is derived
+        from ``{branch_prefix}/{slug}`` — the existing auto-scan convention.
+        When ``branch_name`` is provided (Standard-mode path), it is used
+        verbatim, with no prefix applied, so the user's entered branch name
+        actually becomes the git branch name.
+
+        Raises ``WorktreeCreationError`` if the worktree cannot be created.
+        The launcher surfaces this as HTTP 400 so the user sees the real
+        git stderr instead of silently landing in the project root.
+        """
+        if branch_name is None:
+            branch_name = (
+                f"{self._branch_prefix}/{slug}" if self._branch_prefix else slug
+            )
         resolved_base = os.path.join(project_root, self._worktree_base)
         wt_dir = os.path.join(resolved_base, slug)
 
@@ -103,22 +161,10 @@ class WorktreeManager:
             logger.warning("Worktree already exists at %s, reusing it", wt_dir)
             return WorktreeResult(path=wt_dir, is_new=False, branch=branch_name)
 
-        # Enable long paths (Windows)
-        rc, _, _ = await _run_git("config", "core.longpaths", "true", cwd=project_root)
-        if rc == 0:
-            logger.debug("Enabled core.longpaths")
+        await _run_git("config", "core.longpaths", "true", cwd=project_root)
 
-        logger.debug("Fetching from origin...")
-        rc, _, stderr = await _run_git("fetch", "origin", cwd=project_root)
-        if rc != 0:
-            logger.warning(
-                "git fetch failed, worktree will branch from local state: %s",
-                stderr.strip(),
-            )
+        start_point = await self._resolve_start_point(project_root)
 
-        start_point = f"origin/{self._main_branch}"
-
-        # Attempt 1: create new branch
         logger.info(
             "Creating worktree at %s with branch %s from %s",
             wt_dir,
@@ -139,8 +185,8 @@ class WorktreeManager:
             )
             return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
-        # Attempt 2: branch may already exist — retry without -b
-        logger.warning("Branch may already exist, retrying without -b: %s", stderr.strip())
+        first_err = stderr.strip()
+        logger.warning("Branch may already exist, retrying without -b: %s", first_err)
         rc, _, stderr = await _run_git(
             "worktree", "add", wt_dir, branch_name,
             cwd=project_root,
@@ -156,11 +202,21 @@ class WorktreeManager:
             )
             return WorktreeResult(path=wt_dir, is_new=True, branch=branch_name)
 
+        combined_stderr = stderr.strip() or first_err
         logger.error(
-            "Failed to create worktree: %s. Falling back to project root.",
-            stderr.strip(),
+            "Failed to create worktree at %s: %s",
+            wt_dir, combined_stderr,
         )
-        return None
+        audit_event(
+            "audit.worktree.create_failed",
+            target=wt_dir,
+            outcome="error",
+            branch=branch_name,
+            error=combined_stderr,
+        )
+        raise WorktreeCreationError(
+            branch=branch_name, path=wt_dir, stderr=combined_stderr,
+        )
 
     @log_call(name="worktree.cleanup_worktree", log_args=("path",))
     async def cleanup_worktree(self, path: str, project_root: str) -> bool:

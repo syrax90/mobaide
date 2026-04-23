@@ -10,6 +10,7 @@ from claude_mobile.core import (
     SessionConfig,
     SessionManager,
 )
+from claude_mobile.linear.worktree import WorktreeCreationError
 
 from ..auth.dependencies import get_current_user
 from ..logging import audit_event, get_logger
@@ -81,6 +82,14 @@ async def create_session(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Project path not found: {missing}",
+        )
+    except WorktreeCreationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Could not create worktree on branch {exc.branch}: "
+                f"{exc.stderr}"
+            ),
         )
     except OSError as exc:
         strerror = exc.strerror or "cannot launch session"

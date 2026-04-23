@@ -249,16 +249,34 @@ async def test_cwd_resolution_no_worktree(tmp_path: Path):
     assert spec.cwd == str(tmp_path)
 
 
+class _FakeWorktreeMgr:
+    """Test double capturing calls to ``create_worktree``.
+
+    Mirrors the real signature (``slug``, ``project_root``, ``branch_name=``)
+    so tests can assert what the launcher handed off.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def create_worktree(
+        self, slug, project_root, *, branch_name=None,
+    ):
+        from claude_mobile.linear.worktree import WorktreeResult
+
+        effective_branch = branch_name if branch_name is not None else slug
+        self.calls.append(
+            {"slug": slug, "project_root": project_root, "branch_name": branch_name}
+        )
+        wt = Path(project_root) / "wt" / slug
+        wt.mkdir(parents=True, exist_ok=True)
+        return WorktreeResult(
+            path=str(wt), is_new=True, branch=effective_branch
+        )
+
+
 @pytest.mark.asyncio
 async def test_cwd_resolution_with_worktree(tmp_path: Path):
-    class _FakeWorktreeMgr:
-        async def create_worktree(self, slug, project_root):
-            from claude_mobile.linear.worktree import WorktreeResult
-
-            wt = Path(project_root) / "wt" / slug
-            wt.mkdir(parents=True, exist_ok=True)
-            return WorktreeResult(path=str(wt), is_new=True, branch=slug)
-
     # CLA-20: launcher now skips worktree creation for non-git projects.
     (tmp_path / ".git").mkdir()
     launcher = ClaudeLauncher(worktree_mgr=_FakeWorktreeMgr())  # type: ignore[arg-type]
@@ -267,6 +285,116 @@ async def test_cwd_resolution_with_worktree(tmp_path: Path):
         ClaudeOptions(worktree=True, identifier="CLA-99", title="My Task"),
     )
     assert "cla-99-my-task" in spec.cwd
+
+
+@pytest.mark.asyncio
+async def test_cwd_resolution_autoscan_uses_slug_no_explicit_branch(tmp_path: Path):
+    """Auto Scan (``identifier`` set) calls ``create_worktree`` without the
+    ``branch_name`` kwarg so the WorktreeManager applies its prefix convention
+    (``feature/claude/<slug>``)."""
+    (tmp_path / ".git").mkdir()
+    mgr = _FakeWorktreeMgr()
+    launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
+    await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(worktree=True, identifier="CLA-99", title="My Task"),
+    )
+    assert len(mgr.calls) == 1
+    assert mgr.calls[0]["branch_name"] is None
+    assert mgr.calls[0]["slug"] == "cla-99-my-task"
+
+
+@pytest.mark.asyncio
+async def test_cwd_resolution_standard_uses_branch_name_verbatim(tmp_path: Path):
+    """Standard mode: the user's entered ``branch_name`` is passed verbatim
+    as the branch — no prefix applied, no slug wrapping. The worktree directory
+    name is derived from the branch by slugifying it (so ``feature/my-fix``
+    becomes dir ``feature-my-fix``)."""
+    (tmp_path / ".git").mkdir()
+    mgr = _FakeWorktreeMgr()
+    launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
+    await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(worktree=True, branch_name="feature/my-fix"),
+    )
+    assert len(mgr.calls) == 1
+    assert mgr.calls[0]["branch_name"] == "feature/my-fix"
+    assert mgr.calls[0]["slug"] == "feature-my-fix"
+
+
+@pytest.mark.asyncio
+async def test_cwd_resolution_standard_empty_branch_auto_generates(tmp_path: Path):
+    """With ``worktree=True`` and no identifier/branch_name, the launcher must
+    still create a worktree — auto-generating a unique branch name so two
+    consecutive Standard sessions never collide on the same directory."""
+    (tmp_path / ".git").mkdir()
+    mgr = _FakeWorktreeMgr()
+    launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
+    await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(worktree=True),
+    )
+    assert len(mgr.calls) == 1
+    branch = mgr.calls[0]["branch_name"]
+    assert isinstance(branch, str)
+    assert branch.startswith("claude-session-")
+
+
+@pytest.mark.asyncio
+async def test_cwd_resolution_worktree_true_without_mgr_raises(tmp_path: Path):
+    """Dropping the silent fallback: when ``worktree=True`` but no
+    ``WorktreeManager`` is wired, fail loud rather than landing the user
+    back in project root."""
+    (tmp_path / ".git").mkdir()
+    launcher = ClaudeLauncher()
+
+    with pytest.raises(RuntimeError, match="WorktreeManager"):
+        await launcher.build(
+            _make_project(str(tmp_path)),
+            ClaudeOptions(worktree=True, branch_name="x"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_cwd_resolution_worktree_propagates_creation_error(tmp_path: Path):
+    """When ``create_worktree`` raises ``WorktreeCreationError``, the launcher
+    propagates it — the router maps it to HTTP 400 so the user sees the git
+    stderr."""
+    from claude_mobile.linear.worktree import WorktreeCreationError
+
+    class _FailingMgr:
+        async def create_worktree(self, slug, project_root, *, branch_name=None):
+            raise WorktreeCreationError(
+                branch=branch_name or slug, path="/x", stderr="boom"
+            )
+
+    (tmp_path / ".git").mkdir()
+    launcher = ClaudeLauncher(worktree_mgr=_FailingMgr())  # type: ignore[arg-type]
+    with pytest.raises(WorktreeCreationError):
+        await launcher.build(
+            _make_project(str(tmp_path)),
+            ClaudeOptions(worktree=True, branch_name="my-branch"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_mcp_json_written_into_worktree_dir(tmp_path: Path):
+    """Regression for Bug 6: when a worktree is created, ``.mcp.json`` must
+    land inside the worktree directory (the session's actual CWD), not in the
+    project root."""
+    (tmp_path / ".git").mkdir()
+    mgr = _FakeWorktreeMgr()
+    launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
+    spec = await launcher.build(
+        _make_project(str(tmp_path), key="lin_k"),
+        ClaudeOptions(worktree=True, branch_name="feat/x"),
+    )
+    mcp = Path(spec.cwd) / ".mcp.json"
+    assert mcp.exists()
+    project_root_mcp = tmp_path / ".mcp.json"
+    assert not project_root_mcp.exists(), (
+        ".mcp.json must not leak to the project root"
+    )
 
 
 # ---------------------------------------------------------------------------
