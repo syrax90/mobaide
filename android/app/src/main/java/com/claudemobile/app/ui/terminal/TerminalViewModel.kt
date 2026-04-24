@@ -166,41 +166,37 @@ class TerminalViewModel @Inject constructor(
             "unknown"
         }
 
-    /** Text from the last row-tap on the *current* input line (isCurrentInput). */
-    private var tappedOriginal: String? = null
-
-    /** Called by TerminalScreen when the user taps the current PTY input line. */
-    fun onRowTapped(text: String) {
-        tappedOriginal = text
-    }
-
     fun sendInput(text: String) {
-        val tapped = tappedOriginal
-        tappedOriginal = null
-
         // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
-        val frame = if (tapped != null && text == tapped) {
-            // Unchanged tap on current input — text is already in the PTY,
-            // just press Enter to execute it.
-            TerminalProtocol.encodeInput("\r".toByteArray(Charsets.UTF_8))
-        } else if (tapped != null) {
-            // Edited after tapping current input — the PTY still holds the
-            // old text. Use 'x' (execute) frame so the server sends Ctrl+C
-            // to cancel the stale input, pauses, then writes the new command.
-            TerminalProtocol.encodeExecute((text + "\r").toByteArray(Charsets.UTF_8))
-        } else {
-            // Fresh typed text (no tap involved) — send as regular input.
+        sendChannel.trySend(
             TerminalProtocol.encodeInput((text + "\r").toByteArray(Charsets.UTF_8))
-        }
-        sendChannel.trySend(frame)
+        )
     }
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
-        // Any direct terminal interaction invalidates the tap state — the
-        // PTY's input may have changed since the row was tapped.
-        tappedOriginal = null
         sendChannel.trySend(TerminalProtocol.encodeInput(bytes))
+    }
+
+    /**
+     * Submit a `❯`-prefixed row the user tapped in the terminal as if they pressed Enter.
+     *
+     * When [isCurrentInput] is true the PTY already holds [text] as its active input —
+     * only a bare CR is needed. When false, the tap is on a historical row and the PTY's
+     * input buffer holds something else, so an 'x' (execute) frame is used: the server
+     * sends Ctrl+C to clear, pauses for the TUI to redraw, then writes [text] + CR.
+     *
+     * Gated on [ConnectionState.Live] so a tap during reconnect or replay-buffer
+     * playback does not queue a send that would land in an unexpected state.
+     */
+    fun sendTappedRow(text: String, isCurrentInput: Boolean) {
+        if (_connectionState.value != ConnectionState.Live) return
+        val frame = if (isCurrentInput) {
+            TerminalProtocol.encodeInput("\r".toByteArray(Charsets.UTF_8))
+        } else {
+            TerminalProtocol.encodeExecute((text + "\r").toByteArray(Charsets.UTF_8))
+        }
+        sendChannel.trySend(frame)
     }
 
     /** Manually dismiss the currently detected prompt (e.g. user swiped the sheet away). */
