@@ -16,9 +16,11 @@ object Routes {
     const val MANUAL_PAIRING = "manual_pairing"
     const val CONNECTIONS = "connections"
     const val PROJECTS = "projects"
+    const val GIT_MANAGEMENT = "git/{projectName}"
 
     fun sessionDetail(sessionId: String) = "session_detail/$sessionId"
     fun autoScanDetail(projectName: String) =
         "auto_scan_detail/${Uri.encode(projectName)}"
     fun verifyEmail(email: String) = "verify_email/${Uri.encode(email)}"
+    fun gitManagement(projectName: String) = "git/${Uri.encode(projectName)}"
 }

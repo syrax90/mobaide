@@ -22,6 +22,7 @@ import com.claudemobile.app.ui.pairing.ManualPairingScreen
 import com.claudemobile.app.ui.pairing.PairingViewModel
 import com.claudemobile.app.ui.pairing.QrScannerScreen
 import com.claudemobile.app.ui.projects.ProjectsScreen
+import com.claudemobile.app.ui.projects.git.GitScreen
 import com.claudemobile.app.ui.register.RegisterScreen
 import com.claudemobile.app.ui.register.VerifyEmailScreen
 import com.claudemobile.app.ui.sessions.CreateSessionScreen
@@ -182,6 +183,20 @@ fun AppNavigation(sessionManager: SessionManager) {
 
         composable(Routes.PROJECTS) {
             ProjectsScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+                onOpenGit = { name ->
+                    navController.navigate(Routes.gitManagement(name))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.GIT_MANAGEMENT,
+            arguments = listOf(navArgument("projectName") { type = NavType.StringType }),
+        ) { entry ->
+            GitScreen(
+                projectName = entry.arguments?.getString("projectName").orEmpty(),
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
             )

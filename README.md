@@ -22,6 +22,7 @@ Claude Mobile bridges this gap with a client-agent architecture:
 - **Reconnection** — Scrollback buffer (10K lines) per session ensures seamless reconnect after network drops
 - **Secure Access** — JWT authentication end-to-end between Android, central-server, and agent; agent↔central-server relay is secured with a per-agent bearer token over WSS
 - **Cross-Platform** — Agent runs on both Windows and Linux out of the box via PTY abstraction (pywinpty / stdlib pty). iOS client planned via Kotlin Multiplatform shared layer.
+- **Git Management** — In-app screen (reachable from Edit Project on git-backed projects) lists local branches and worktrees; supports long-press multi-select and batch delete with undo Snackbar and force-delete confirmation
 - **1-hour Prompt Cache** — Every spawned Claude session runs with `ENABLE_PROMPT_CACHING_1H=1` preset, so the 1-hour prompt-cache TTL ([claude-code ≥ v2.1.108](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)) is always on — lower cost and lower latency on long sessions
 
 ## Architecture

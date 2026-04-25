@@ -158,6 +158,14 @@ class AutoScanInstance:
     def recent_events(self) -> list[ScanEvent]:
         return list(self._recent_events)
 
+    async def list_workitems(self) -> list[ActiveWorkItem]:
+        """Return the persisted active work items for this scan instance.
+
+        The git management screen consults this list (across all running
+        scans) to refuse deletes of worktrees that auto-scan still owns.
+        """
+        return await self._workitems_store.read()
+
     async def start(self) -> None:
         viewer = await self._client.get_viewer()
         logger.info(
@@ -622,6 +630,13 @@ class AutoScanSessionManager:
 
     def all_instances(self) -> list[AutoScanInstance]:
         return list(self._scans.values())
+
+    async def list_all_workitems(self) -> dict[str, list[ActiveWorkItem]]:
+        """Return ``{project_name: [work_items]}`` across every running scan."""
+        result: dict[str, list[ActiveWorkItem]] = {}
+        for inst in self._scans.values():
+            result[inst.project_name] = await inst.list_workitems()
+        return result
 
     def list(self) -> list[dict]:
         return [inst.to_dto() for inst in self._scans.values()]

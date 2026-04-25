@@ -23,6 +23,7 @@ from .auth.user_store import UserStore
 from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .config import AgentConfig
+from .git.router import router as git_router
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
@@ -183,6 +184,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         branch_prefix=prefix,
         main_branch=auto_scan_cfg.main_branch,
     )
+    app.state.worktree_manager = worktree_mgr
     app.state.claude_launcher = ClaudeLauncher(worktree_mgr=worktree_mgr)
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
@@ -234,6 +236,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(sessions_router)
     app.include_router(projects_router)
+    app.include_router(git_router)
     app.include_router(ws_session_io_router)
     app.include_router(ws_session_list_router)
     app.include_router(ws_events_router)
