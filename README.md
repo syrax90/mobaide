@@ -72,7 +72,7 @@ Environment-specific files (`claude_agent/.env`, `android/local.properties`, And
 ./config/use-profile.ps1 mobaide         # switch to production
 ```
 
-See [`config/README.md`](config/README.md) for the full file mapping, merge semantics for `android/local.properties` (preserves `sdk.dir`), and how to create new profiles from the committed `_template`.
+See [`docs/configuration-profiles.md`](docs/configuration-profiles.md) for the full file mapping, merge semantics for `android/local.properties` (preserves `sdk.dir`), and how to create new profiles from the committed `_template`.
 
 ## Configuring Google Sign-In
 
