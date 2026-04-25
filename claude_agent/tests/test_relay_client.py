@@ -1521,3 +1521,270 @@ class TestProxyCreateSessionClaudeOptions:
 
         assert result["status"] == 422
         mock_session_manager.create_session.assert_not_awaited()
+
+
+class TestProxyGitItems:
+    """Regression guards for the missing relay route bug: the FastAPI git
+    router (``/api/projects/{name}/git/items`` GET, ``items:delete`` POST,
+    added in CLA-46) was registered for direct HTTP but the relay's
+    ``_dispatch_proxy`` allowlist was never extended. Mobile clients
+    (which always route through the relay) hit "Unknown proxy route"
+    404s on every Git button tap.
+
+    These tests lock down the relay-path contract: shape parity with the
+    direct HTTP path, project-resolution semantics (404 / 400), Pydantic
+    422 on malformed bodies, and — most importantly — the nested
+    ``detail.busy_by`` shape on 409 responses, which the mobile
+    busy-conflict dialog parses.
+    """
+
+    def _make_project(self, tmp_path, name="proj", with_git=True):
+        from unittest.mock import MagicMock
+        if with_git:
+            (tmp_path / ".git").mkdir(exist_ok=True)
+        project = MagicMock()
+        project.name = name
+        project.path = str(tmp_path)
+        return project
+
+    async def test_get_items_happy_path(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """Happy path: 200 with a Pydantic-serialized items list. Body
+        shape must round-trip through ``GitItemsResponse.model_dump`` so
+        it matches the FastAPI router's response byte-for-byte."""
+        from claude_mobile.agent.git.models import GitItemRead
+
+        project = self._make_project(tmp_path, name="proj")
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+
+        items = [GitItemRead(kind="branch_only", branch="main")]
+        ws = AsyncMock()
+        with patch(
+            "claude_mobile.relay.client.list_git_items",
+            new=AsyncMock(return_value=items),
+        ) as mock_list:
+            result = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/git/items", None, None, ws,
+            )
+
+        assert result["status"] == 200
+        assert result["body"]["items"][0]["kind"] == "branch_only"
+        assert result["body"]["items"][0]["branch"] == "main"
+        mock_list.assert_awaited_once()
+
+    async def test_get_items_unknown_project_returns_404(
+        self, client, mock_app_state,
+    ):
+        """``store.get`` returning ``None`` must surface as 404 with the
+        same detail string as the FastAPI router (``router.py:84-87``)."""
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=None)
+        mock_app_state.worktree_manager = MagicMock()
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "GET", "/api/projects/missing/git/items", None, None, ws,
+        )
+
+        assert result["status"] == 404
+        assert "not found" in result["body"]["detail"]
+
+    async def test_get_items_non_git_project_returns_400(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """A project whose ``.path`` lacks a ``.git`` entry must surface
+        as 400 (matches ``router.py:89-93``); ``.git`` may be a directory
+        or a file (worktrees), so we use ``Path.exists`` not ``is_dir``."""
+        project = self._make_project(tmp_path, name="proj", with_git=False)
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "GET", "/api/projects/proj/git/items", None, None, ws,
+        )
+
+        assert result["status"] == 400
+        assert "not a git repository" in result["body"]["detail"]
+
+    async def test_post_delete_happy_path(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """POST ``items:delete`` with a single branch delete returns the
+        Pydantic-serialized ``GitDeleteResponse`` body."""
+        from claude_mobile.agent.git.models import (
+            GitDeleteResponse,
+            GitDeleteResultItem,
+        )
+
+        project = self._make_project(tmp_path, name="proj")
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+        mock_app_state.session_manager = MagicMock()
+        mock_app_state.event_bus = MagicMock()
+
+        resp = GitDeleteResponse(results=[
+            GitDeleteResultItem(kind="branch_only", target="x", ok=True),
+        ])
+        ws = AsyncMock()
+        with patch(
+            "claude_mobile.relay.client.delete_git_items",
+            new=AsyncMock(return_value=resp),
+        ) as mock_delete:
+            result = await client._dispatch_proxy(
+                "POST",
+                "/api/projects/proj/git/items:delete",
+                {"items": [{"kind": "branch_only", "branch": "x"}]},
+                None,
+                ws,
+            )
+
+        assert result["status"] == 200
+        assert result["body"]["results"][0]["ok"] is True
+        assert result["body"]["results"][0]["target"] == "x"
+        mock_delete.assert_awaited_once()
+        await_args = mock_delete.await_args
+        assert await_args is not None
+        assert await_args.kwargs["project_name"] == "proj"
+        assert await_args.kwargs["actor"] is None
+
+    async def test_post_delete_busy_returns_409_with_nested_detail(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """**Load-bearing test for the 409 nesting.** The FastAPI router
+        does ``HTTPException(detail=BusyByResponse(...).model_dump())``,
+        which FastAPI serializes as ``{"detail": {"busy_by": [...]}}``.
+        The relay must produce the exact same shape — the mobile client
+        reads ``body.detail.busy_by``, NOT ``body.busy_by``. Putting the
+        ``busy_by`` array at top level is the most likely regression in
+        this fix and would silently break the busy-conflict dialog."""
+        from claude_mobile.agent.git.models import BusyHolder
+        from claude_mobile.agent.git.service import GitItemBusyError
+
+        project = self._make_project(tmp_path, name="proj")
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+        mock_app_state.session_manager = MagicMock()
+        mock_app_state.event_bus = MagicMock()
+
+        busy_by = [
+            BusyHolder(
+                kind="session",
+                session_id="s1",
+                cwd="/p",
+                worktree_path=str(tmp_path / "wt"),
+            ),
+        ]
+        ws = AsyncMock()
+        with patch(
+            "claude_mobile.relay.client.delete_git_items",
+            new=AsyncMock(side_effect=GitItemBusyError(busy_by=busy_by)),
+        ):
+            result = await client._dispatch_proxy(
+                "POST",
+                "/api/projects/proj/git/items:delete",
+                {"items": [{"kind": "branch_with_worktree",
+                            "branch": "x",
+                            "worktree_path": str(tmp_path / "wt")}]},
+                None,
+                ws,
+            )
+
+        assert result["status"] == 409
+        # Nested under "detail" — guards against the most-likely regression.
+        assert "detail" in result["body"]
+        assert "busy_by" in result["body"]["detail"]
+        assert result["body"]["detail"]["busy_by"][0]["kind"] == "session"
+        assert result["body"]["detail"]["busy_by"][0]["session_id"] == "s1"
+        # Negative assertion: must NOT be at top level.
+        assert "busy_by" not in result["body"]
+
+    async def test_post_delete_malformed_returns_422(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """A body whose ``items[].kind`` isn't a valid ``ItemKind``
+        literal yields 422 from Pydantic, and the service must never be
+        invoked. Mirrors how ``TestProxyAutoscanStart`` validates."""
+        project = self._make_project(tmp_path, name="proj")
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+
+        ws = AsyncMock()
+        with patch(
+            "claude_mobile.relay.client.delete_git_items",
+            new=AsyncMock(),
+        ) as mock_delete:
+            result = await client._dispatch_proxy(
+                "POST",
+                "/api/projects/proj/git/items:delete",
+                {"items": [{"kind": "not_a_kind"}]},
+                None,
+                ws,
+            )
+
+        assert result["status"] == 422
+        assert isinstance(result["body"]["detail"], list)
+        mock_delete.assert_not_awaited()
+
+    async def test_unsupported_method_falls_through_to_unknown_route(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """A path that matches the git regex but with a method other than
+        GET / POST should NOT short-circuit with a git-flavored error —
+        ``_dispatch_git`` returns ``None`` so the catch-all "Unknown
+        proxy route" 404 fires. This documents the existing dispatcher
+        contract: it is not method-aware per route, only path-aware."""
+        project = self._make_project(tmp_path, name="proj")
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "PUT", "/api/projects/proj/git/items", None, None, ws,
+        )
+
+        assert result["status"] == 404
+        assert "Unknown proxy route" in result["body"]["detail"]
+
+    async def test_url_decoded_space_in_project_name(
+        self, client, mock_app_state, tmp_path,
+    ):
+        """The central server's ``{path:path}`` route URL-decodes path
+        params before forwarding through the relay envelope, so a
+        project named ``Claude Mobile`` arrives at ``_dispatch_proxy``
+        with a literal space (the symptom in the original bug report).
+        The regex ``[^/]+`` accepts spaces, and the captured name must
+        be passed *as-is* to ``store.get`` (do NOT call
+        ``urllib.parse.unquote`` — that would double-decode legit ``%xx``
+        bytes inside names)."""
+        from claude_mobile.agent.git.models import GitItemRead
+
+        project = self._make_project(tmp_path, name="Claude Mobile")
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+        mock_app_state.worktree_manager = MagicMock()
+
+        ws = AsyncMock()
+        with patch(
+            "claude_mobile.relay.client.list_git_items",
+            new=AsyncMock(return_value=[GitItemRead(kind="branch_only",
+                                                    branch="main")]),
+        ):
+            result = await client._dispatch_proxy(
+                "GET",
+                "/api/projects/Claude Mobile/git/items",
+                None, None, ws,
+            )
+
+        assert result["status"] == 200
+        mock_app_state.projects_store.get.assert_called_once_with(
+            "Claude Mobile",
+        )

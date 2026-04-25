@@ -14,6 +14,7 @@ import platform
 import re
 import struct
 import uuid
+from pathlib import Path
 from typing import Any
 
 import orjson
@@ -38,6 +39,17 @@ from claude_mobile.agent.projects.service import (
     list_projects,
     reorder_projects,
     update_project,
+)
+
+from claude_mobile.agent.git.models import (
+    BusyByResponse,
+    GitDeleteRequest,
+    GitItemsResponse,
+)
+from claude_mobile.agent.git.service import (
+    GitItemBusyError,
+    delete_git_items,
+    list_git_items,
 )
 
 from claude_mobile.agent.autoscan.models import StartScanRequest
@@ -902,6 +914,10 @@ class RelayClient:
         if projects_resp is not None:
             return projects_resp
 
+        git_resp = await self._dispatch_git(method, path, body)
+        if git_resp is not None:
+            return git_resp
+
         if method == "GET" and path == "/api/autoscan/list":
             mgr = getattr(self._app_state, "autoscan_manager", None)
             if mgr is None:
@@ -1098,6 +1114,99 @@ class RelayClient:
                     }
                 except ProjectInUseError as exc:
                     return {"status": 409, "body": {"detail": str(exc)}}
+
+        return None
+
+    async def _dispatch_git(
+        self,
+        method: str,
+        path: str,
+        body: dict | None,
+    ) -> dict | None:
+        """Handle ``/api/projects/{name}/git/...`` requests through the shared
+        service layer so direct HTTP and relay-forwarded requests produce
+        byte-identical responses (matters for the mobile busy-conflict dialog,
+        which expects ``body.detail.busy_by`` on 409, not ``body.busy_by``).
+
+        Returns a proxy-response dict for a matching route, or ``None`` to
+        signal that the caller should fall through to the next handler.
+        """
+        m_items = re.match(r"^/api/projects/([^/]+)/git/items$", path)
+        m_delete = re.match(r"^/api/projects/([^/]+)/git/items:delete$", path)
+        if not (m_items or m_delete):
+            return None
+
+        match = m_items or m_delete
+        assert match is not None  # narrow for type-checker
+        name = match.group(1)
+
+        store = getattr(self._app_state, "projects_store", None)
+        if store is None:
+            return {
+                "status": 500,
+                "body": {"detail": "projects store not configured"},
+            }
+
+        manager = getattr(self._app_state, "worktree_manager", None)
+        if manager is None:
+            return {
+                "status": 500,
+                "body": {"detail": "worktree manager not configured"},
+            }
+
+        project = store.get(name)
+        if project is None:
+            return {
+                "status": 404,
+                "body": {"detail": f"Project '{name}' not found"},
+            }
+        project_root = project.path
+        if not (Path(project_root) / ".git").exists():
+            return {
+                "status": 400,
+                "body": {"detail": f"Project '{name}' is not a git repository"},
+            }
+
+        if m_items and method == "GET":
+            items = await list_git_items(project_root, manager)
+            return {
+                "status": 200,
+                "body": GitItemsResponse(items=items).model_dump(),
+            }
+
+        if m_delete and method == "POST":
+            try:
+                req = GitDeleteRequest.model_validate(body or {})
+            except ValidationError as exc:
+                return {
+                    "status": 422,
+                    "body": {"detail": _scrub_validation_errors(exc)},
+                }
+            try:
+                resp = await delete_git_items(
+                    req,
+                    project_name=project.name,
+                    project_root=project_root,
+                    manager=manager,
+                    session_manager=getattr(
+                        self._app_state, "session_manager", None,
+                    ),
+                    autoscan_manager=getattr(
+                        self._app_state, "autoscan_manager", None,
+                    ),
+                    event_bus=getattr(self._app_state, "event_bus", None),
+                    actor=None,
+                )
+            except GitItemBusyError as exc:
+                return {
+                    "status": 409,
+                    "body": {
+                        "detail": BusyByResponse(
+                            busy_by=exc.busy_by,
+                        ).model_dump(),
+                    },
+                }
+            return {"status": 200, "body": resp.model_dump()}
 
         return None
 
