@@ -1,5 +1,10 @@
 package com.claudemobile.app.ui.terminal
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,11 +22,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Circle
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -54,6 +63,8 @@ fun TerminalScreen(
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
+    val followMode by viewModel.followMode.collectAsStateWithLifecycle()
+    val unreadRows by viewModel.unreadRows.collectAsStateWithLifecycle()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
     var requestInputFocus by remember { mutableStateOf(false) }
     var showFullScreenInput by remember { mutableStateOf(false) }
@@ -116,9 +127,19 @@ fun TerminalScreen(
                         onRowTapped = { text, isCurrentInput ->
                             viewModel.sendTappedRow(text, isCurrentInput)
                         },
+                        onScrollSettled = viewModel::onUserScrollSettled,
+                        followMode = followMode,
                         modifier = Modifier.fillMaxSize(),
                     )
                     ConnectionOverlay(state = connectionState)
+                    JumpToBottomFab(
+                        visible = !followMode,
+                        unreadRows = unreadRows,
+                        onClick = viewModel::jumpToBottom,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(12.dp),
+                    )
                 }
             }
             InputBar(
@@ -163,6 +184,36 @@ fun TerminalScreen(
             onDismiss = { viewModel.dismissPrompt() },
         )
         PromptState.None -> { /* no sheet */ }
+    }
+}
+
+@Composable
+private fun JumpToBottomFab(
+    visible: Boolean,
+    unreadRows: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + scaleIn(),
+        exit = fadeOut() + scaleOut(),
+        modifier = modifier,
+    ) {
+        BadgedBox(
+            badge = {
+                if (unreadRows > 0) {
+                    Badge { Text(text = if (unreadRows > 999) "999+" else unreadRows.toString()) }
+                }
+            },
+        ) {
+            SmallFloatingActionButton(onClick = onClick) {
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Jump to bottom",
+                )
+            }
+        }
     }
 }
 
