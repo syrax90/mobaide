@@ -40,6 +40,14 @@ public interface TerminalViewClient {
      */
     default void onTerminalRowTapped(String text, boolean isCurrentInput) {}
 
+    /**
+     * Called after a manual drag or fling has settled to a new {@code mTopRow} value
+     * (0 = pinned to bottom, negative = scrolled up by N rows). Not called for
+     * programmatic {@link TerminalView#setTopRow(int)} writes — those would create
+     * a feedback loop with hosts that drive the row from a state flow.
+     */
+    default void onScrollPositionChanged(int topRow) {}
+
     boolean shouldBackButtonBeMappedToEscape();
 
     boolean shouldEnforceCharBasedInput();

@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okio.ByteString
 import org.json.JSONObject
@@ -57,6 +58,14 @@ class TerminalViewModel @Inject constructor(
             if (_connectionState.value != ConnectionState.ReplayingBuffer) {
                 promptDetector.onScreenChanged(viewModelScope, session)
             }
+            // Runs on main BEFORE the View's onScreenUpdated() (which calls clearScrollCounter),
+            // so emulator.scrollCounter still holds the un-cleared row delta for this update.
+            if (!_followMode.value) {
+                val rowShift = session.emulator?.scrollCounter ?: 0
+                if (rowShift > 0) {
+                    _unreadRows.update { (it + rowShift).coerceAtMost(MAX_UNREAD_DISPLAY) }
+                }
+            }
         },
     )
 
@@ -91,6 +100,12 @@ class TerminalViewModel @Inject constructor(
 
     private val _connectionState = MutableStateFlow(ConnectionState.Reconnecting)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    private val _followMode = MutableStateFlow(true)
+    val followMode: StateFlow<Boolean> = _followMode.asStateFlow()
+
+    private val _unreadRows = MutableStateFlow(0)
+    val unreadRows: StateFlow<Int> = _unreadRows.asStateFlow()
 
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
@@ -153,6 +168,7 @@ class TerminalViewModel @Inject constructor(
             }
             TerminalFrame.ReplayMarker -> {
                 inReplay = true
+                setFollowMode(true)
                 _connectionState.value = ConnectionState.ReplayingBuffer
             }
             null -> { /* unknown frame type, ignore */ }
@@ -167,6 +183,7 @@ class TerminalViewModel @Inject constructor(
         }
 
     fun sendInput(text: String) {
+        setFollowMode(true)
         // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
         sendChannel.trySend(
             TerminalProtocol.encodeInput((text + "\r").toByteArray(Charsets.UTF_8))
@@ -175,6 +192,7 @@ class TerminalViewModel @Inject constructor(
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
+        setFollowMode(true)
         sendChannel.trySend(TerminalProtocol.encodeInput(bytes))
     }
 
@@ -191,12 +209,31 @@ class TerminalViewModel @Inject constructor(
      */
     fun sendTappedRow(text: String, isCurrentInput: Boolean) {
         if (_connectionState.value != ConnectionState.Live) return
+        setFollowMode(true)
         val frame = if (isCurrentInput) {
             TerminalProtocol.encodeInput("\r".toByteArray(Charsets.UTF_8))
         } else {
             TerminalProtocol.encodeExecute((text + "\r").toByteArray(Charsets.UTF_8))
         }
         sendChannel.trySend(frame)
+    }
+
+    fun setFollowMode(enabled: Boolean) {
+        if (_followMode.value == enabled) return
+        _followMode.value = enabled
+        session.emulator?.let { emu ->
+            if (emu.isAutoScrollDisabled != !enabled) emu.toggleAutoScrollDisabled()
+        }
+        if (enabled) _unreadRows.value = 0
+    }
+
+    fun onUserScrollSettled(topRow: Int) {
+        if (topRow == 0) setFollowMode(true)
+        else if (topRow < 0) setFollowMode(false)
+    }
+
+    fun jumpToBottom() {
+        setFollowMode(true)
     }
 
     /** Manually dismiss the currently detected prompt (e.g. user swiped the sheet away). */
@@ -220,5 +257,9 @@ class TerminalViewModel @Inject constructor(
         super.onCleared()
         sendChannel.close()
         connection?.disconnect()
+    }
+
+    private companion object {
+        const val MAX_UNREAD_DISPLAY = 9999
     }
 }

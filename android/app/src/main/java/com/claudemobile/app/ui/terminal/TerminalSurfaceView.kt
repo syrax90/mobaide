@@ -25,10 +25,13 @@ fun TerminalSurfaceView(
     sessionCallback: TerminalSessionCallback,
     onResize: (rows: Int, cols: Int) -> Unit,
     onRowTapped: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
+    onScrollSettled: (topRow: Int) -> Unit = {},
+    followMode: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
     client.onRowTapped = onRowTapped
+    client.onScrollSettled = onScrollSettled
 
     DisposableEffect(sessionCallback) {
         onDispose { sessionCallback.onInvalidate = null }
@@ -57,6 +60,10 @@ fun TerminalSurfaceView(
             if (view.mTermSession !== session) {
                 view.attachSession(session)
                 sessionCallback.onInvalidate = { view.onScreenUpdated() }
+            }
+            if (followMode && view.topRow != 0) {
+                view.topRow = 0
+                view.invalidate()
             }
         },
     )
@@ -105,10 +112,12 @@ private class TerminalViewClientImpl : TerminalViewClient {
     var altDown = false
     var fnDown = false
     var onRowTapped: (String, Boolean) -> Unit = { _, _ -> }
+    var onScrollSettled: (Int) -> Unit = {}
 
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: android.view.MotionEvent?) {}
     override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) { onRowTapped(text, isCurrentInput) }
+    override fun onScrollPositionChanged(topRow: Int) { onScrollSettled(topRow) }
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = true
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false

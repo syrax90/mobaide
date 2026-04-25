@@ -305,7 +305,9 @@ public final class TerminalView extends View {
      */
     public boolean attachSession(TerminalSession session) {
         if (session == mTermSession) return false;
-        mTopRow = 0;
+        if (mEmulator == null || !mEmulator.isAutoScrollDisabled()) {
+            mTopRow = 0;
+        }
 
         mTermSession = session;
         mEmulator = null;
@@ -714,6 +716,7 @@ public final class TerminalView extends View {
                 if (!awakenScrollBars()) invalidate();
             }
         }
+        mClient.onScrollPositionChanged(mTopRow);
     }
 
     /** Overriding {@link View#onGenericMotionEvent(MotionEvent)}. */
@@ -1127,8 +1130,10 @@ public final class TerminalView extends View {
             if (mTerminalCursorBlinkerRunnable != null)
                 mTerminalCursorBlinkerRunnable.setEmulator(mEmulator);
 
-            mTopRow = 0;
-            scrollTo(0, 0);
+            if (mEmulator == null || !mEmulator.isAutoScrollDisabled()) {
+                mTopRow = 0;
+                scrollTo(0, 0);
+            }
             invalidate();
         }
     }
