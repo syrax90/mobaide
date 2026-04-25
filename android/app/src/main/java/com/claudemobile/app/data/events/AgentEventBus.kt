@@ -149,6 +149,9 @@ class AgentEventBus @Inject constructor(
                 "projects.changed" -> AgentEvent.ProjectsChanged(
                     json.decodeFromJsonElement(ProjectsChangedPayload.serializer(), payload).projects
                 )
+                "git.changed" -> AgentEvent.GitChanged(
+                    payload["project_name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                )
                 "autoscan.status" -> AgentEvent.AutoScanStatus(
                     json.decodeFromJsonElement(AutoScanInstanceDto.serializer(), payload)
                 )

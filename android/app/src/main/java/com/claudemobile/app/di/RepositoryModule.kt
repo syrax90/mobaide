@@ -15,6 +15,7 @@ import com.claudemobile.app.data.auth.ConnectionStore
 import com.claudemobile.app.data.repository.AgentRepository
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.data.repository.AutoScanRepository
+import com.claudemobile.app.data.repository.GitRepository
 import com.claudemobile.app.data.repository.PairingRepository
 import com.claudemobile.app.data.repository.ProjectsRepository
 import com.claudemobile.app.data.repository.SessionRepository
@@ -100,6 +101,12 @@ object RepositoryModule {
     @Singleton
     fun provideProjectsRepository(restApi: RestApi, eventBus: AgentEventBus): ProjectsRepository {
         return ProjectsRepository(restApi, eventBus)
+    }
+
+    @Provides
+    @Singleton
+    fun provideGitRepository(restApi: RestApi, eventBus: AgentEventBus): GitRepository {
+        return GitRepository(restApi, eventBus)
     }
 
     @Provides

@@ -4,6 +4,9 @@ import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
 import com.claudemobile.app.data.network.dto.ClaudeOptionsModel
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
+import com.claudemobile.app.data.network.dto.GitDeleteRequest
+import com.claudemobile.app.data.network.dto.GitDeleteResponse
+import com.claudemobile.app.data.network.dto.GitItemsResponse
 import com.claudemobile.app.data.network.dto.ProjectInfo
 import com.claudemobile.app.data.network.dto.ProjectOrderRequest
 import com.claudemobile.app.data.network.dto.ProjectUpdate
@@ -146,6 +149,26 @@ class RestApi(
 
     private fun encodePathSegment(name: String): String =
         URLEncoder.encode(name, "UTF-8").replace("+", "%20")
+
+    suspend fun getGitItems(projectName: String): GitItemsResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/git/items")
+            .get()
+            .build()
+        return execute(request)
+    }
+
+    suspend fun deleteGitItems(
+        projectName: String,
+        body: GitDeleteRequest,
+    ): GitDeleteResponse {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/git/items:delete")
+            .post(payload)
+            .build()
+        return execute(request)
+    }
 
     suspend fun getAutoScanList(): AutoScanListResponse {
         val request = Request.Builder()

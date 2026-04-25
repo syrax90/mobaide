@@ -53,6 +53,7 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 fun ProjectsScreen(
     viewModel: ProjectsViewModel,
     onBack: () -> Unit,
+    onOpenGit: (String) -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -154,6 +155,10 @@ fun ProjectsScreen(
             onUpdateFlag = viewModel::updateFlag,
             onRemoveFlag = viewModel::removeFlag,
             onSave = viewModel::save,
+            onOpenGit = { name ->
+                viewModel.closeSheet()
+                onOpenGit(name)
+            },
         )
     }
 

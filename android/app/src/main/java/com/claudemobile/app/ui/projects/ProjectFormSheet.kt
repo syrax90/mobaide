@@ -52,6 +52,7 @@ fun ProjectFormSheet(
     onUpdateFlag: (Int, FlagEntry) -> Unit,
     onRemoveFlag: (Int) -> Unit,
     onSave: () -> Unit,
+    onOpenGit: (String) -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -141,6 +142,11 @@ fun ProjectFormSheet(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
             ) {
+                val gitProject = state.editing
+                if (gitProject?.is_git == true) {
+                    TextButton(onClick = { onOpenGit(gitProject.name) }) { Text("Git") }
+                    Spacer(Modifier.width(8.dp))
+                }
                 TextButton(onClick = onDismiss) { Text("Cancel") }
                 Spacer(Modifier.width(8.dp))
                 Button(

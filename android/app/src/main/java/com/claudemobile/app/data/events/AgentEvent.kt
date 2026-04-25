@@ -66,6 +66,10 @@ sealed class AgentEvent {
         val payload: ScanProgressPayload,
     ) : AgentEvent()
 
+    /** Server emits this after any successful git delete in a project so an
+     *  open Git management screen can refresh reactively. */
+    data class GitChanged(val projectName: String) : AgentEvent()
+
     /** Pushed by the server's user-scoped channel when any of the user's
      *  agents transitions between online and offline. */
     data class AgentStatusChanged(
