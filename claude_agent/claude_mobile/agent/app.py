@@ -11,11 +11,16 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from claude_mobile import __version__
 from claude_mobile.core import ClaudeLauncher, ProjectsStore, SessionManager
 from claude_mobile.linear.config import AutoScanConfig
 from claude_mobile.linear.rate_limiter import LinearRateLimiter
 from claude_mobile.linear.scanner import AutoScanSessionManager
 from claude_mobile.linear.worktree import WorktreeManager
+from claude_mobile.relay.envelope import (
+    MIN_CLIENT_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 
 from .auth.jwt_service import JwtService
 from .auth.router import router as auth_router
@@ -89,7 +94,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         await app.state.session_manager.shutdown()
         shutdown_logging()
 
-    app = FastAPI(title="Claude Mobile Agent", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Claude Mobile Agent", version=__version__, lifespan=lifespan)
 
     # Strip `linear_api_key` inputs from validation errors so a malformed body
     # cannot echo the secret back to the caller; other fields keep `input`.
@@ -256,5 +261,18 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         if autoscan_mgr is not None:
             result["auto_scans_active"] = len(autoscan_mgr.list())
         return result
+
+    @app.get("/api/version", tags=["version"])
+    async def version_info() -> dict[str, object]:
+        return {
+            "name": "claude_agent",
+            "server_version": __version__,
+            "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+            "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
+            "capabilities": {},
+            "latest_agent_version": None,
+            "manifest_url": None,
+            "manifest_signature": None,
+        }
 
     return app

@@ -62,6 +62,14 @@ class WebSocketConnection(
      * the pre-connect refresh in their URL provider instead).
      */
     private val onAuthFailure: (() -> Unit)? = null,
+    /**
+     * Invoked exactly once when the server closes with code 4002
+     * (PROTOCOL_INCOMPATIBLE). The receiver is expected to mark the session
+     * as [SessionManager.AuthState.IncompatibleServer] so the UI swaps to
+     * the upgrade screen. Reconnection is suppressed permanently for this
+     * connection.
+     */
+    private val onIncompatibleServer: ((reason: String) -> Unit)? = null,
 ) {
     /**
      * Degrade uncaught coroutine exceptions to [WsEvent.Error] instead of
@@ -156,6 +164,10 @@ class WebSocketConnection(
                     handleAuthFailure()
                     return
                 }
+                if (code == PROTOCOL_INCOMPATIBLE_CLOSE_CODE) {
+                    handleProtocolIncompatible(reason.ifBlank { "Server protocol incompatible" })
+                    return
+                }
                 scheduleReconnect()
             }
 
@@ -201,6 +213,13 @@ class WebSocketConnection(
         onAuthFailure?.invoke()
     }
 
+    private fun handleProtocolIncompatible(reason: String) {
+        shouldReconnect = false
+        reconnectJob?.cancel()
+        reconnectJob = null
+        onIncompatibleServer?.invoke(reason)
+    }
+
     companion object {
         private const val INITIAL_BACKOFF_MS = 1000L
         private const val MAX_BACKOFF_MS = 30_000L
@@ -211,6 +230,12 @@ class WebSocketConnection(
          * range 4000–4999 per RFC 6455 §7.4.2.
          */
         private const val AUTH_FAILED_CLOSE_CODE = 4001
+
+        /**
+         * Close code emitted by the server when the client's
+         * ``protocol_version`` is outside the server's supported range.
+         */
+        private const val PROTOCOL_INCOMPATIBLE_CLOSE_CODE = 4002
     }
 }
 
@@ -313,6 +338,17 @@ class WebSocketManager(
             onAuthFailure = {
                 sessionManager.invalidateUserSession(
                     SessionManager.InvalidationReason.TokenRejected,
+                )
+            },
+            onIncompatibleServer = { reason ->
+                sessionManager.markIncompatibleServer(
+                    SessionManager.AuthState.IncompatibleServer(
+                        reason = reason,
+                        minClientVersion = 0,
+                        playStoreUrl = "market://details?id=com.claudemobile.app",
+                        playStoreFallbackUrl =
+                            "https://play.google.com/store/apps/details?id=com.claudemobile.app",
+                    )
                 )
             },
         )

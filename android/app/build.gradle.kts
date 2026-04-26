@@ -42,6 +42,26 @@ val centralServerUrl: String = run {
     "https://api.claudemobile.example.com"
 }
 
+// Release signing config is resolved at build time from (in priority order):
+//   1. Environment variables (CI / release builds)
+//   2. android/signing.properties (developer machines; git-ignored)
+//   3. null — release variant falls back to debug signing for local-only builds
+val releaseSigningProps: Properties? = run {
+    val f = rootProject.file("signing.properties")
+    if (f.exists()) {
+        Properties().apply { f.inputStream().use { load(it) } }
+    } else {
+        null
+    }
+}
+
+fun signingValue(envName: String, propName: String): String? {
+    val fromEnv = System.getenv(envName)
+    if (!fromEnv.isNullOrBlank()) return fromEnv
+    val fromProps = releaseSigningProps?.getProperty(propName)
+    return if (fromProps.isNullOrBlank()) null else fromProps
+}
+
 android {
     namespace = "com.claudemobile.app"
     compileSdk = 35
@@ -55,6 +75,23 @@ android {
 
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
+        buildConfigField("int", "APP_PROTOCOL_VERSION", "1")
+        buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "1")
+    }
+
+    signingConfigs {
+        create("release") {
+            val storeFilePath = signingValue("ANDROID_KEYSTORE_PATH", "storeFile")
+            val storePassword = signingValue("ANDROID_KEYSTORE_PASSWORD", "storePassword")
+            val keyAlias = signingValue("ANDROID_KEY_ALIAS", "keyAlias")
+            val keyPassword = signingValue("ANDROID_KEY_PASSWORD", "keyPassword")
+            if (storeFilePath != null && storePassword != null && keyAlias != null && keyPassword != null) {
+                this.storeFile = rootProject.file(storeFilePath)
+                this.storePassword = storePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -64,6 +101,16 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Use the release config when fully configured; otherwise fall back
+            // to debug so `assembleRelease` keeps working for local-only smoke
+            // tests. CI builds always export the env vars and get a real
+            // upload-key signature.
+            val releaseConfig = signingConfigs.getByName("release")
+            signingConfig = if (releaseConfig.storeFile != null) {
+                releaseConfig
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
@@ -140,6 +187,9 @@ dependencies {
 
     // Drag-and-drop reordering in Compose LazyColumn (MIT, Calvin-LL/Reorderable)
     implementation(libs.reorderable)
+
+    // Google Play in-app updates (flexible + immediate flows)
+    implementation(libs.play.app.update.ktx)
 
     // Unit testing
     testImplementation(libs.junit)

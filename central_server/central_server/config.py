@@ -66,6 +66,11 @@ class CentralServerConfig:
     email_verification_resend_cooldown_seconds: int = 60
     email_verification_resend_hourly_cap: int = 3
 
+    # Release / manifest publishing
+    release_auth_token: str | None = None
+    manifest_signing_public_key_b64: str | None = None
+    manifest_store_path: str = "data/agent_manifest.json"
+
     @classmethod
     def from_env(cls) -> CentralServerConfig:
         """Build config from environment variables."""
@@ -124,5 +129,12 @@ class CentralServerConfig:
             ),
             email_verification_resend_hourly_cap=int(
                 os.getenv("EMAIL_VERIFICATION_RESEND_HOURLY_CAP", "3"),
+            ),
+            release_auth_token=os.getenv("RELEASE_AUTH_TOKEN") or None,
+            manifest_signing_public_key_b64=(
+                os.getenv("MANIFEST_SIGNING_PUBLIC_KEY") or None
+            ),
+            manifest_store_path=os.getenv(
+                "MANIFEST_STORE_PATH", "data/agent_manifest.json",
             ),
         )

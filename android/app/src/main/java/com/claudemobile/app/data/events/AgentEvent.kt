@@ -76,6 +76,23 @@ sealed class AgentEvent {
         val agentId: String,
         val online: Boolean,
     ) : AgentEvent()
+
+    /** Forward-compat fall-through: an envelope arrived with a ``type`` we do
+     *  not recognize. Surfaced as an event so a counter can track how often
+     *  this happens — never thrown so the user never sees a connection-level
+     *  error from a future-version envelope. */
+    data class UnknownEnvelopeType(
+        val type: String,
+        val raw: String,
+    ) : AgentEvent()
+
+    /** The agent (or central_server's relay hop) reports a newer
+     *  ``latest_agent_version`` than the one currently running. The UI shows
+     *  a dismissible banner with an optional "Install now" CTA. */
+    data class AgentOutdated(
+        val currentVersion: String,
+        val latestVersion: String,
+    ) : AgentEvent()
 }
 
 @Serializable

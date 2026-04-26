@@ -101,34 +101,43 @@ For the full local stack (Caddy + central-server in Docker + agent native), use 
 
 ### Linux (systemd, automated)
 
+**End-user / production install (recommended):** pull a signed release from `central_server` via the install script:
+
+```bash
+curl -fsSL https://get.claudemobile.io/install.sh | sudo bash
+```
+
+The script verifies the Ed25519 manifest signature, stages the release under `/opt/claude-mobile/releases/<version>/venv/`, writes `/opt/claude-mobile/current_version`, and installs `claude-mobile-agent.service`.
+
+After install, edit `/opt/claude-mobile/agent.env` (created by the script) and add the relay credentials (`RELAY_CENTRAL_URL`, `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`), then `sudo systemctl restart claude-mobile-agent`.
+
+**From-source / developer install:** use `deploy/setup.sh` (sets up a flat venv from the local repo checkout). Note that `setup.sh` installs the same service unit, which now expects the versioned `releases/` layout; use the end-user script above on production hosts.
+
 ```bash
 sudo bash deploy/setup.sh
 ```
 
-The script:
-
-- Checks prerequisites (Python 3.12+, git, curl)
-- Creates a `claude-mobile` system user
-- Sets up a venv at `/opt/claude-mobile/venv/`
-- Installs the agent package
-- Generates `/opt/claude-mobile/claude_agent/.env` with a random `JWT_SECRET_KEY`
-- Installs and starts `claude-mobile-agent.service`
-
-After setup, open `/opt/claude-mobile/claude_agent/.env` and add the relay credentials (`RELAY_CENTRAL_URL`, `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`), then `sudo systemctl restart claude-mobile-agent`.
-
 ### Linux (systemd, manual)
 
+The service unit (`deploy/claude-mobile-agent.service`) now expects the versioned release layout:
+`/opt/claude-mobile/releases/<version>/venv/` with a `current_version` pointer file.
+The steps below reflect that layout.
+
 ```bash
+VERSION="0.1.0"   # replace with the actual agent version being installed
+
 sudo useradd --system --shell /usr/sbin/nologin claude-mobile
 
-sudo mkdir -p /opt/claude-mobile/claude_agent
-sudo cp -r claude_agent/. /opt/claude-mobile/claude_agent/
+sudo mkdir -p /opt/claude-mobile/releases/${VERSION}
+sudo cp -r claude_agent/. /opt/claude-mobile/releases/${VERSION}/
 
-sudo python3 -m venv /opt/claude-mobile/venv
-sudo /opt/claude-mobile/venv/bin/pip install /opt/claude-mobile/claude_agent
+sudo python3 -m venv /opt/claude-mobile/releases/${VERSION}/venv
+sudo /opt/claude-mobile/releases/${VERSION}/venv/bin/pip install /opt/claude-mobile/releases/${VERSION}
 
-sudo cp claude_agent/.env.example /opt/claude-mobile/claude_agent/.env
-sudoedit /opt/claude-mobile/claude_agent/.env   # set JWT_SECRET_KEY and RELAY_* vars
+echo "${VERSION}" | sudo tee /opt/claude-mobile/current_version
+
+sudo cp claude_agent/.env.example /opt/claude-mobile/agent.env
+sudoedit /opt/claude-mobile/agent.env   # set JWT_SECRET_KEY and RELAY_* vars
 
 sudo cp deploy/claude-mobile-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -180,5 +189,8 @@ Check the agent's logs for `relay.connection_failed` entries. Common causes:
 
 ```bash
 curl http://localhost:8000/api/health
+# new install layout:
+cat /opt/claude-mobile/agent.env | grep -E '^(JWT_SECRET_KEY|RELAY_)'
+# legacy / from-source layout fallback:
 cat /opt/claude-mobile/claude_agent/.env | grep -E '^(JWT_SECRET_KEY|RELAY_)'
 ```

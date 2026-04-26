@@ -19,6 +19,7 @@ import com.claudemobile.app.data.repository.GitRepository
 import com.claudemobile.app.data.repository.PairingRepository
 import com.claudemobile.app.data.repository.ProjectsRepository
 import com.claudemobile.app.data.repository.SessionRepository
+import com.claudemobile.app.data.repository.VersionGateRepository
 import javax.inject.Named
 import dagger.Module
 import dagger.Provides
@@ -149,5 +150,11 @@ object RepositoryModule {
         connectionStore: ConnectionStore,
     ): PairingRepository {
         return PairingRepository(refreshClient, tokenStore, sessionManager, connectionStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideVersionGateRepository(centralApi: CentralApi): VersionGateRepository {
+        return VersionGateRepository(centralApi)
     }
 }

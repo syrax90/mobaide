@@ -23,7 +23,11 @@ dependencies = [
     "google-auth",
     "requests",
     "aiosmtplib>=3.0",
+    "cryptography>=43.0",
 ]
+
+[project.scripts]
+claude-central = "central_server.__main__:main"
 
 [project.optional-dependencies]
 dev = [

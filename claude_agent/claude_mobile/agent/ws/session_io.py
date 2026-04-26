@@ -8,7 +8,12 @@ import struct
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from claude_mobile import __version__
 from claude_mobile.core.models import SessionEvent, SessionState
+from claude_mobile.relay.envelope import (
+    PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 
 from ..auth.dependencies import WebSocketAuthError, ws_authenticate
 from ..logging import bind_request_context, get_logger
@@ -111,6 +116,18 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
         log_ws_error(channel, exc, session_id=session_id, stage="auth")
         return
     log_ws_authenticated(channel, username, session_id=session_id)
+
+    # Single text frame announcing this agent's identity and the wire-contract
+    # version range it speaks. The mobile reads this before any binary handshake
+    # frame so it can render an "agent outdated" banner without waiting for
+    # a separate /api/version round trip.
+    await websocket.send_text(json.dumps({
+        "type": "server_info",
+        "agent_version": __version__,
+        "protocol_version": PROTOCOL_VERSION,
+        "supported_protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+        "capabilities": {},
+    }))
 
     manager = websocket.app.state.session_manager
     session = await manager.get_session(session_id)

@@ -1,5 +1,6 @@
 package com.claudemobile.app.data.events
 
+import android.util.Log
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.network.WebSocketConnection
 import com.claudemobile.app.data.network.WebSocketManager
@@ -60,6 +61,7 @@ class AgentEventBus @Inject constructor(
 
     private var conn: WebSocketConnection? = null
     private var collectorJob: Job? = null
+    private var unknownEnvelopeTypeTotal: Long = 0
 
     init {
         // Observe the initial authState too: on cold-start with a restored
@@ -74,6 +76,7 @@ class AgentEventBus @Inject constructor(
                     SessionManager.AuthState.FullyConnected -> start()
                     SessionManager.AuthState.UserOnly -> stop()
                     SessionManager.AuthState.Unauthenticated -> stop()
+                    is SessionManager.AuthState.IncompatibleServer -> stop()
                 }
             }
         }
@@ -174,11 +177,19 @@ class AgentEventBus @Inject constructor(
                         )
                     }
                 }
-                else -> null
+                else -> AgentEvent.UnknownEnvelopeType(envelope.type, text)
             }
         } catch (_: Exception) {
             null
         }
+        if (typed is AgentEvent.UnknownEnvelopeType) {
+            unknownEnvelopeTypeTotal++
+            Log.w(TAG, "unknown envelope type=${typed.type} total=$unknownEnvelopeTypeTotal")
+        }
         if (typed != null) _events.emit(typed)
+    }
+
+    companion object {
+        private const val TAG = "AgentEventBus"
     }
 }

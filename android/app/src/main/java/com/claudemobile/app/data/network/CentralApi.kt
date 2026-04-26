@@ -12,6 +12,7 @@ import com.claudemobile.app.data.network.dto.UserAuthResponse
 import com.claudemobile.app.data.network.dto.UserLoginRequest
 import com.claudemobile.app.data.network.dto.UserRegisterRequest
 import com.claudemobile.app.data.network.dto.VerifyEmailRequest
+import com.claudemobile.app.data.network.dto.VersionInfoResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -37,6 +38,22 @@ class CentralApi(
     private val jsonMediaType = "application/json".toMediaType()
 
     private fun baseUrl(): String = centralServerUrl.trimEnd('/')
+
+    suspend fun getVersion(): VersionInfoResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/version")
+            .get()
+            .build()
+        return execute(request)
+    }
+
+    suspend fun getAgentVersion(agentBaseUrl: String): VersionInfoResponse {
+        val request = Request.Builder()
+            .url("${agentBaseUrl.trimEnd('/')}/api/version")
+            .get()
+            .build()
+        return execute(request)
+    }
 
     suspend fun register(email: String, password: String): UserAuthResponse {
         val body = json.encodeToString(UserRegisterRequest(email, password))

@@ -93,6 +93,15 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
    ```
 4. Rebuild the APK. If the client ID is missing or still the placeholder, the app surfaces a clear config error instead of silently pretending no Google account exists on the device.
 
+## Releases, versioning, and auto-update
+
+Each component (Android, `claude_agent`, `central_server`) ships on its own
+semver cadence; a single integer `protocol_version` is the only compatibility
+signal between them. See [docs/versioning-and-updates.md](docs/versioning-and-updates.md)
+for tag conventions, the staged-binary auto-updater, signed-manifest format,
+end-user install one-liners, and Android update flows.
+[PROTOCOL.md](PROTOCOL.md) tracks `protocol_version` history.
+
 ## Status
 
 Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project).
