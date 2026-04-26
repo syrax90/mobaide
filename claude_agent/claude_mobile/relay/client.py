@@ -64,6 +64,7 @@ from claude_mobile.linear.scanner import (
 )
 from claude_mobile.linear.worktree import WorktreeCreationError
 
+from claude_mobile import __version__
 from .config import RelayConfig
 from .envelope import (
     CH_AUTOSCAN,
@@ -71,6 +72,7 @@ from .envelope import (
     CH_EVENTS,
     CH_SESSION_IO,
     CH_SESSIONS_LIST,
+    PROTOCOL_VERSION,
     decode,
     encode,
 )
@@ -183,6 +185,13 @@ class RelayClient:
         self._autoscan_streams: dict[str, asyncio.Task] = {}
         self._autoscan_inboxes: dict[str, asyncio.Queue[str]] = {}
 
+        # Latest manifest pointer received from central_server (auth_ok or a
+        # mid-connection ``agent_manifest_update`` control frame). Consumed by
+        # the staged-binary auto-updater. Never raises on absence.
+        self._latest_manifest: dict[str, object] | None = None
+        self._on_manifest_update: Any | None = None
+        self._unknown_control_type_total = 0
+
     async def start(self) -> None:
         """Start the relay client background task."""
         self._stopping = False
@@ -272,20 +281,63 @@ class RelayClient:
                 self._cancel_all_subtasks()
                 self._ws = None
 
+    def set_manifest_update_callback(self, callback: Any) -> None:
+        """Register an async callback fired with (manifest_url, signature_b64,
+        latest_version) whenever the central server publishes a new agent
+        manifest, either at handshake time or via a mid-connection control
+        frame. The callback is best-effort — exceptions are logged and never
+        propagated to the relay reader loop."""
+        self._on_manifest_update = callback
+
+    @property
+    def latest_manifest(self) -> dict[str, object] | None:
+        return self._latest_manifest
+
     async def _authenticate(self, ws: ClientConnection) -> None:
         """Send auth message and wait for auth_ok."""
         auth_msg = json.dumps({
             "type": "auth",
             "agent_id": self._config.agent_id,
             "token": self._config.agent_token,
+            "protocol_version": PROTOCOL_VERSION,
+            "agent_version": __version__,
+            "capabilities": {},
         })
         await ws.send(auth_msg)
         raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
         resp = json.loads(raw)
-        if resp.get("type") != "auth_ok":
+        msg_type = resp.get("type")
+        if msg_type == "incompatible":
+            reason = resp.get("reason", "protocol incompatible")
+            raise ConnectionError(f"Relay rejected protocol version: {reason}")
+        if msg_type != "auth_ok":
             raise ConnectionError(f"Relay auth failed: {resp}")
+        self._latest_manifest = {
+            "version": resp.get("latest_agent_version"),
+            "manifest_url": resp.get("manifest_url"),
+            "manifest_signature": resp.get("manifest_signature"),
+        }
+        await self._maybe_dispatch_manifest_update(self._latest_manifest)
+
+    async def _maybe_dispatch_manifest_update(
+        self, manifest: dict[str, object]
+    ) -> None:
+        if self._on_manifest_update is None:
+            return
+        if not manifest.get("version") or not manifest.get("manifest_url"):
+            return
+        try:
+            await self._on_manifest_update(
+                manifest.get("manifest_url"),
+                manifest.get("manifest_signature"),
+                manifest.get("version"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "relay.manifest_update_callback_failed: %s", exc,
+            )
 
     async def _reader(self, ws: ClientConnection) -> None:
         """Read messages from the relay tunnel and dispatch."""
@@ -380,6 +432,22 @@ class RelayClient:
 
         elif msg_type == "request_events_snapshot":
             await self._handle_request_events_snapshot(ws)
+
+        elif msg_type == "agent_manifest_update":
+            manifest = {
+                "version": ctrl.get("version"),
+                "manifest_url": ctrl.get("manifest_url"),
+                "manifest_signature": ctrl.get("manifest_signature"),
+            }
+            self._latest_manifest = manifest
+            await self._maybe_dispatch_manifest_update(manifest)
+
+        else:
+            self._unknown_control_type_total += 1
+            logger.warning(
+                "relay.unknown_control_type type=%s total=%d",
+                msg_type, self._unknown_control_type_total,
+            )
 
     async def _handle_mobile_attach(
         self, ctrl: dict, ws: ClientConnection

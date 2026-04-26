@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .agents.service import AgentService
 from .auth.email import EmailSender
 from .auth.rate_limit import ResendRateLimiter
@@ -26,7 +27,12 @@ from .logging_setup import (
     get_logger,
     shutdown_logging,
 )
+from .manifest.store import ManifestStore
 from .pairing.service import PairingService
+from .relay.envelope import (
+    MIN_CLIENT_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 from .relay.routing import RoutingTable
 
 logger = get_logger(__name__)
@@ -62,6 +68,11 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.db = db
 
         app.state.routing = RoutingTable()
+        app.state.manifest_store = ManifestStore(config.manifest_store_path)
+        # Warm the on-disk manifest cache before the first /api/version
+        # request so the synchronous file read never blocks the asyncio
+        # event loop after startup.
+        app.state.manifest_store.read()
         email_sender = EmailSender(config)
         resend_limiter = ResendRateLimiter(
             cooldown_seconds=config.email_verification_resend_cooldown_seconds,
@@ -98,7 +109,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Central Server",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -162,6 +173,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .agents.router import router as agents_router
     from .auth.router import router as auth_router
     from .dashboard.router import router as dashboard_router
+    from .manifest.router import router as manifest_router
     from .pairing.router import router as pairing_router
     from .relay.agent_ws import router as agent_ws_router
     from .relay.mobile_proxy import router as mobile_proxy_router
@@ -176,6 +188,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(user_ws_router)
     app.include_router(pairing_router)
     app.include_router(dashboard_router)
+    app.include_router(manifest_router)
 
     # Unauthenticated — intentionally public for load-balancer probes.
     @app.get("/api/health", tags=["health"])
@@ -187,6 +200,25 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             "status": "ok",
             "agents_online": len(routing.list_online_agents()),
             "agents_registered": len(agents),
+        }
+
+    @app.get("/api/version", tags=["version"])
+    async def version_info() -> dict[str, object]:
+        manifest = app.state.manifest_store.read()
+        manifest_url: str | None
+        if manifest is not None:
+            manifest_url = "/api/v1/agent/manifest.json"
+        else:
+            manifest_url = None
+        return {
+            "name": "central_server",
+            "server_version": __version__,
+            "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+            "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
+            "capabilities": {},
+            "latest_agent_version": manifest.body.get("version") if manifest else None,
+            "manifest_url": manifest_url,
+            "manifest_signature": manifest.signature_b64 if manifest else None,
         }
 
     return app

@@ -88,6 +88,18 @@ class SessionManager @Inject constructor(
 
         /** User logged in AND agent connection established. */
         object FullyConnected : AuthState
+
+        /**
+         * Server reports a wire-contract that this build cannot speak. The
+         * navigation graph collapses to the upgrade screen and never advances
+         * out of this state without a manual app update.
+         */
+        data class IncompatibleServer(
+            val reason: String,
+            val minClientVersion: Int,
+            val playStoreUrl: String,
+            val playStoreFallbackUrl: String,
+        ) : AuthState
     }
 
     /** Distinguish terminal from transient refresh failures so callers can decide
@@ -177,6 +189,17 @@ class SessionManager @Inject constructor(
     @Synchronized
     fun markAgentConnected() {
         _authState.value = AuthState.FullyConnected
+    }
+
+    /**
+     * Pin the session to a terminal upgrade-required state. Cleared only by a
+     * successful version-gate probe (see [VersionGateRepository.reset]) — the
+     * UI is expected to direct the user to the Play Store before retry.
+     */
+    @Synchronized
+    fun markIncompatibleServer(state: AuthState.IncompatibleServer) {
+        _authState.value = state
+        inFlight.getAndSet(null)?.cancel()
     }
 
     /**

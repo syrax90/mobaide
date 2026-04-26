@@ -13,12 +13,16 @@ import logging
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
+from .. import __version__
 from .envelope import (
     CH_AUTOSCAN,
     CH_CONTROL,
     CH_EVENTS,
     CH_SESSION_IO,
     CH_SESSIONS_LIST,
+    MIN_CLIENT_PROTOCOL_VERSION,
+    PROTOCOL_INCOMPATIBLE_CLOSE_CODE,
+    SUPPORTED_PROTOCOL_VERSIONS,
     decode,
     encode,
 )
@@ -34,6 +38,8 @@ AGENT_DISCONNECTED_CODE = 4010
 # Close code sent to mobile clients when the agent declines an autoscan
 # subscription (e.g. capacity reached, autoscan manager not configured).
 AUTOSCAN_DECLINED_CODE = 1013
+
+_unknown_control_type_total = 0
 
 
 @router.websocket("/ws/agent-tunnel")
@@ -73,13 +79,61 @@ async def agent_tunnel(websocket: WebSocket) -> None:
         await _safe_close(websocket, 4001, "Invalid agent credentials")
         return
 
+    client_protocol_version = _coerce_int(
+        auth_msg.get("protocol_version"),
+        default=1,
+    )
+    if client_protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "incompatible",
+                "reason": (
+                    f"Server speaks protocol versions "
+                    f"{list(SUPPORTED_PROTOCOL_VERSIONS)}, agent sent "
+                    f"{client_protocol_version}"
+                ),
+                "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
+                "server_protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+            }))
+        except Exception:
+            pass
+        await _safe_close(
+            websocket,
+            PROTOCOL_INCOMPATIBLE_CLOSE_CODE,
+            "Protocol version not supported",
+        )
+        logger.warning(
+            "agent_tunnel.protocol_incompatible agent_id=%s client_version=%s",
+            agent_id, client_protocol_version,
+        )
+        return
+
     conn = routing.register_agent(agent_id, websocket)
     # Resolve owner once at registration so the offline-broadcast path
     # (which runs after the tunnel is torn down) doesn't have to hit the DB.
     conn.owner_user_id = await db.get_agent_owner(agent_id)
     await db.touch_agent_last_seen(agent_id)
-    await websocket.send_text(json.dumps({"type": "auth_ok"}))
-    logger.info("agent_tunnel.authenticated agent_id=%s", agent_id)
+
+    manifest_record = _read_manifest(websocket.app)
+    auth_ok_payload: dict[str, object] = {
+        "type": "auth_ok",
+        "server_protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+        "min_client_protocol_version": MIN_CLIENT_PROTOCOL_VERSION,
+        "server_version": __version__,
+        "capabilities": {},
+        "latest_agent_version": None,
+        "manifest_url": None,
+        "manifest_signature": None,
+    }
+    if manifest_record is not None:
+        auth_ok_payload["latest_agent_version"] = manifest_record.body.get("version")
+        auth_ok_payload["manifest_url"] = "/api/v1/agent/manifest.json"
+        auth_ok_payload["manifest_signature"] = manifest_record.signature_b64
+    await websocket.send_text(json.dumps(auth_ok_payload))
+    logger.info(
+        "agent_tunnel.authenticated agent_id=%s protocol=%s",
+        agent_id, client_protocol_version,
+    )
 
     # Notify all of the owner's user-scoped WebSocket clients that the
     # agent just came online. Queue-only; if a client's queue is full we
@@ -282,6 +336,32 @@ async def _handle_control_json(
                 )
             except Exception:
                 pass
+
+    else:
+        global _unknown_control_type_total
+        _unknown_control_type_total += 1
+        logger.warning(
+            "agent_tunnel.unknown_control_type agent_id=%s type=%s total=%d",
+            agent_id, msg_type, _unknown_control_type_total,
+        )
+
+
+def _coerce_int(value: object, *, default: int) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _read_manifest(app):
+    store = getattr(app.state, "manifest_store", None)
+    if store is None:
+        return None
+    return store.read()
 
 
 def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:

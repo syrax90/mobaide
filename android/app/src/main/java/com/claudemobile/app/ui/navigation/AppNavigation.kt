@@ -29,17 +29,27 @@ import com.claudemobile.app.ui.sessions.CreateSessionScreen
 import com.claudemobile.app.ui.sessions.SessionListScreen
 import com.claudemobile.app.ui.settings.SettingsScreen
 import com.claudemobile.app.ui.terminal.TerminalScreen
+import com.claudemobile.app.ui.update.IncompatibleServerScreen
 
 @Composable
 fun AppNavigation(sessionManager: SessionManager) {
     val navController = rememberNavController()
     val authState by sessionManager.authState.collectAsStateWithLifecycle()
 
-    // Both authenticated states land on AGENT_LIST; only Unauthenticated goes to LOGIN.
+    // IncompatibleServer collapses the entire navigation graph onto the
+    // upgrade screen. The user must update the app (via the Play Store deep
+    // link) before any other route renders.
+    val incompatible = authState as? SessionManager.AuthState.IncompatibleServer
+    if (incompatible != null) {
+        IncompatibleServerScreen(state = incompatible)
+        return
+    }
+
     val startDestination = when (sessionManager.authState.value) {
         SessionManager.AuthState.FullyConnected -> Routes.AGENT_LIST
         SessionManager.AuthState.UserOnly -> Routes.AGENT_LIST
         SessionManager.AuthState.Unauthenticated -> Routes.LOGIN
+        is SessionManager.AuthState.IncompatibleServer -> Routes.INCOMPATIBLE_SERVER
     }
 
     // Track previous state to skip navigation on cold start; only react to actual transitions.
@@ -47,6 +57,7 @@ fun AppNavigation(sessionManager: SessionManager) {
     LaunchedEffect(authState) {
         val current = authState
         when {
+            current is SessionManager.AuthState.IncompatibleServer -> Unit
             current is SessionManager.AuthState.Unauthenticated
                 && previousState !is SessionManager.AuthState.Unauthenticated -> {
                 navController.navigate(Routes.LOGIN) {

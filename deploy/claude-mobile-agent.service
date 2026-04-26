@@ -7,11 +7,14 @@ Wants=network-online.target
 Type=simple
 User=claude-mobile
 Group=claude-mobile
-WorkingDirectory=/opt/claude-mobile/claude_agent
-EnvironmentFile=/opt/claude-mobile/claude_agent/.env
-ExecStart=/opt/claude-mobile/venv/bin/python -m claude_mobile
+WorkingDirectory=/opt/claude-mobile
+EnvironmentFile=-/opt/claude-mobile/agent.env
+EnvironmentFile=-/opt/claude-mobile/claude_agent/.env
+Environment=CLAUDE_AGENT_PREFIX=/opt/claude-mobile
+ExecStart=/usr/bin/env bash -c '/opt/claude-mobile/releases/$(cat /opt/claude-mobile/current_version)/venv/bin/python -m claude_mobile.launcher'
 Restart=on-failure
 RestartSec=5
+RestartForceExitStatus=75
 StandardOutput=journal
 StandardError=journal
 

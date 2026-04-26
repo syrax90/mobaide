@@ -19,3 +19,16 @@ android/app/src/main/res/raw/caddy_root.crt
 config/profiles/*
 !config/profiles/_template/
 config/.active
+
+# Release artifacts and signing material — never commit
+*.aab
+*.apk
+*.jks
+*.keystore
+android/release.keystore
+android/signing.properties
+android/app/release/
+manifest_signing_key.pem
+deploy/get/install.sh.tmp
+central_server/data/agent_manifest.json
+.github/release.keystore

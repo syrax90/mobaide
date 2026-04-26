@@ -20,7 +20,12 @@ dependencies = [
     "asgi-correlation-id>=4.3",
     "orjson",
     "websockets>=13.0",
+    "cryptography>=43.0",
 ]
+
+[project.scripts]
+claude-agent = "claude_mobile.__main__:main"
+claude-agent-launcher = "claude_mobile.launcher.__main__:main"
 
 [project.optional-dependencies]
 dev = [

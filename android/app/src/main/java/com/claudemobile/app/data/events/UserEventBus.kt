@@ -65,6 +65,7 @@ class UserEventBus @Inject constructor(
             sessionManager.authState.drop(1).collect { state ->
                 when (state) {
                     SessionManager.AuthState.Unauthenticated -> stop()
+                    is SessionManager.AuthState.IncompatibleServer -> stop()
                     SessionManager.AuthState.UserOnly,
                     SessionManager.AuthState.FullyConnected -> start()
                 }

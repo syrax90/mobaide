@@ -8,6 +8,7 @@ from central_server.app import create_app
 from central_server.auth.service import AuthService
 from central_server.config import CentralServerConfig
 from central_server.db.database import Database
+from central_server.manifest.store import ManifestStore
 from central_server.pairing.service import PairingService
 from central_server.relay.routing import RoutingTable
 
@@ -56,6 +57,7 @@ async def app(config, db):
     # Manually wire up state that the lifespan would normally set.
     application.state.db = db
     application.state.routing = RoutingTable()
+    application.state.manifest_store = ManifestStore(config.manifest_store_path)
     application.state.auth_service = AuthService(config, db)
     application.state.pairing_service = PairingService(db)
     application.state.agent_service = AgentService(db, application.state.routing)

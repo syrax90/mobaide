@@ -1,0 +1,49 @@
+{
+  "protocol_version": 1,
+  "min_client_protocol_version": 1,
+  "supported_protocol_versions": [1],
+  "close_codes": {
+    "auth_failed": 4001,
+    "protocol_incompatible": 4002,
+    "agent_disconnected": 4010
+  },
+  "messages": {
+    "agent_to_relay_auth": {
+      "type": "auth",
+      "fields": ["agent_id", "token", "protocol_version", "agent_version", "capabilities"]
+    },
+    "relay_to_agent_auth_ok": {
+      "type": "auth_ok",
+      "fields": [
+        "type",
+        "server_protocol_versions",
+        "min_client_protocol_version",
+        "server_version",
+        "capabilities",
+        "latest_agent_version",
+        "manifest_url",
+        "manifest_signature"
+      ]
+    },
+    "relay_to_agent_incompatible": {
+      "type": "incompatible",
+      "fields": ["reason", "min_client_version", "server_protocol_versions"]
+    },
+    "agent_to_mobile_server_info": {
+      "type": "server_info",
+      "fields": ["agent_version", "protocol_version", "supported_protocol_versions", "capabilities"]
+    },
+    "version_endpoint_response": {
+      "fields": [
+        "name",
+        "server_version",
+        "protocol_versions",
+        "min_client_version",
+        "capabilities",
+        "latest_agent_version",
+        "manifest_url",
+        "manifest_signature"
+      ]
+    }
+  }
+}

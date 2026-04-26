@@ -6,3 +6,8 @@
 - docs/email-verification-workflow.md — Email OTP verification flow for email+password registration: happy/unhappy paths, SMTP setup (Mailpit dev, provider prod), rate-limiting knobs, security model.
 - docs/terminal-view-fork-changes.md — Changelog of edits applied to the vendored Termux `terminal-view` Java sources (`TerminalView.java`, `TerminalViewClient.java`); single source of truth for fork drift on upstream rebase.
 - deploy/prod/bootstrap-mobaide.md — One-time VPS bootstrap before deploy-central.ps1 runs: server prerequisites, /opt/claude-mobile layout, .env seeding, ufw rules, TLS mode choice, optional SQLite backup cron.
+- PROTOCOL.md — Wire-contract version history: the single integer protocol_version that gates Android / claude_agent / central_server compatibility, plus how to bump it.
+- android/CHANGELOG.md — Android app release notes (per android-vX.Y.Z tag).
+- claude_agent/CHANGELOG.md — claude_agent release notes (per agent-vX.Y.Z tag).
+- central_server/CHANGELOG.md — central_server release notes (per server-vX.Y.Z tag).
+- docs/get/README.md — GitHub Pages source for get.claudemobile.io install scripts.
