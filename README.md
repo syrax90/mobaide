@@ -93,43 +93,14 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
    ```
 4. Rebuild the APK. If the client ID is missing or still the placeholder, the app surfaces a clear config error instead of silently pretending no Google account exists on the device.
 
-## Releases & tagging convention
+## Releases, versioning, and auto-update
 
-Each component versions independently, but a single integer ``protocol_version``
-is the only compatibility signal between them (see [PROTOCOL.md](PROTOCOL.md)).
-
-| Tag prefix | Component | Workflow |
-|------------|-----------|----------|
-| ``android-vX.Y.Z`` | Android app | ``.github/workflows/release-android.yml`` — builds a signed ``.aab`` and uploads to Play Console internal track. |
-| ``agent-vX.Y.Z`` | ``claude_agent`` | ``.github/workflows/release-agent.yml`` — builds wheel + tarball, signs the manifest with Ed25519, creates a GitHub Release, POSTs the manifest to ``central_server``. Deployed agents auto-update within one heartbeat cycle. |
-| ``server-vX.Y.Z`` | ``central_server`` | ``.github/workflows/release-server.yml`` — builds wheel, builds + pushes Docker image to ``ghcr.io``. |
-| ``proto-vN`` | wire contract | informational — must touch BOTH ``claude_agent/.../envelope.py`` AND ``central_server/.../envelope.py`` with matching ``PROTOCOL_VERSION``. CI ``protocol-integrity`` enforces equality. |
-
-### Cutting a release
-
-1. Bump the version field in the relevant ``pyproject.toml`` (or
-   ``versionCode`` / ``versionName`` in ``android/app/build.gradle.kts``).
-2. Update the matching component's ``CHANGELOG.md``.
-3. Push the tag (``git tag agent-v0.2.0 && git push --tags``).
-
-## Installing the agent (end users)
-
-Linux / macOS:
-
-```bash
-curl -fsSL https://get.claudemobile.io/install.sh | bash
-```
-
-Windows (elevated PowerShell):
-
-```powershell
-irm https://get.claudemobile.io/install.ps1 | iex
-```
-
-Both install scripts pull the signed manifest from ``central_server``, verify
-the Ed25519 signature against the embedded public key, and register a native
-service (systemd / launchd / Windows SCM). Subsequent updates roll out
-silently via the staged-binary auto-updater.
+Each component (Android, `claude_agent`, `central_server`) ships on its own
+semver cadence; a single integer `protocol_version` is the only compatibility
+signal between them. See [docs/versioning-and-updates.md](docs/versioning-and-updates.md)
+for tag conventions, the staged-binary auto-updater, signed-manifest format,
+end-user install one-liners, and Android update flows.
+[PROTOCOL.md](PROTOCOL.md) tracks `protocol_version` history.
 
 ## Status
 

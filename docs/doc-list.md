@@ -5,6 +5,7 @@
 - docs/deployment.md — Central-server deployment to a VPS (deploy-central.ps1, LetsEncrypt or CloudflareOrigin TLS) and per-machine claude_agent deployment on Windows (conda) and Linux (systemd).
 - docs/email-verification-workflow.md — Email OTP verification flow for email+password registration: happy/unhappy paths, SMTP setup (Mailpit dev, provider prod), rate-limiting knobs, security model.
 - docs/terminal-view-fork-changes.md — Changelog of edits applied to the vendored Termux `terminal-view` Java sources (`TerminalView.java`, `TerminalViewClient.java`); single source of truth for fork drift on upstream rebase.
+- docs/versioning-and-updates.md — Release tag conventions (android-v / agent-v / server-v / proto-v), signed-manifest format, staged-binary auto-updater state machine, install-script + trust-key bootstrap, Android version-gate / Play in-app update / agent-outdated-banner flows, protocol-integrity CI gate.
 - deploy/prod/bootstrap-mobaide.md — One-time VPS bootstrap before deploy-central.ps1 runs: server prerequisites, /opt/claude-mobile layout, .env seeding, ufw rules, TLS mode choice, optional SQLite backup cron.
 - PROTOCOL.md — Wire-contract version history: the single integer protocol_version that gates Android / claude_agent / central_server compatibility, plus how to bump it.
 - android/CHANGELOG.md — Android app release notes (per android-vX.Y.Z tag).
