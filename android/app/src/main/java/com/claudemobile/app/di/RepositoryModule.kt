@@ -13,6 +13,8 @@ import com.claudemobile.app.data.network.RestApi
 import com.claudemobile.app.data.network.WebSocketManager
 import com.claudemobile.app.data.auth.ConnectionStore
 import com.claudemobile.app.data.repository.AgentRepository
+import com.claudemobile.app.data.repository.AgentUpdateRepository
+import com.claudemobile.app.data.repository.AgentVersionMonitor
 import com.claudemobile.app.data.repository.AuthRepository
 import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.GitRepository
@@ -156,5 +158,20 @@ object RepositoryModule {
     @Singleton
     fun provideVersionGateRepository(centralApi: CentralApi): VersionGateRepository {
         return VersionGateRepository(centralApi)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAgentVersionMonitor(
+        centralApi: CentralApi,
+        tokenStore: TokenStore,
+    ): AgentVersionMonitor {
+        return AgentVersionMonitor(centralApi, tokenStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAgentUpdateRepository(restApi: RestApi): AgentUpdateRepository {
+        return AgentUpdateRepository(restApi)
     }
 }

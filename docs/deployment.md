@@ -99,17 +99,38 @@ python -m claude_mobile
 
 For the full local stack (Caddy + central-server in Docker + agent native), use `start-all.ps1` from the repo root.
 
-### Linux (systemd, automated)
+### Linux (systemd) and macOS (launchd) — automated
 
 **End-user / production install (recommended):** pull a signed release from `central_server` via the install script:
 
 ```bash
+# Linux
 curl -fsSL https://get.claudemobile.io/install.sh | sudo bash
+
+# macOS — runs as the current user; no sudo required
+curl -fsSL https://get.claudemobile.io/install.sh | bash
 ```
 
-The script verifies the Ed25519 manifest signature, stages the release under `/opt/claude-mobile/releases/<version>/venv/`, writes `/opt/claude-mobile/current_version`, and installs `claude-mobile-agent.service`.
+The script detects the OS, verifies the Ed25519 manifest signature, stages the
+release under `<prefix>/releases/<version>/venv/` (`/opt/claude-mobile` on
+Linux, `/usr/local/claude-mobile` on macOS), writes `<prefix>/current_version`,
+and registers the supervisor:
 
-After install, edit `/opt/claude-mobile/agent.env` (created by the script) and add the relay credentials (`RELAY_CENTRAL_URL`, `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`), then `sudo systemctl restart claude-mobile-agent`.
+* **Linux** — installs `claude-mobile-agent.service` (systemd). The unit is
+  configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so the
+  launcher's 3-strike rollback heuristic has room to retry a stable sibling
+  release before systemd stops the unit, and `RestartForceExitStatus=75` so
+  the updater's restart trigger is honoured.
+* **macOS** — installs `~/Library/LaunchAgents/io.claudemobile.agent.plist`
+  (launchd). `ThrottleInterval=10` gives the boot journal the same rollback
+  window on macOS.
+
+After install, edit `<prefix>/agent.env` (created by the script) and add the relay credentials (`RELAY_CENTRAL_URL`, `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`), then restart the agent:
+
+```bash
+sudo systemctl restart claude-mobile-agent   # Linux
+launchctl kickstart -k gui/$(id -u)/io.claudemobile.agent  # macOS
+```
 
 **From-source / developer install:** use `deploy/setup.sh` (sets up a flat venv from the local repo checkout). Note that `setup.sh` installs the same service unit, which now expects the versioned `releases/` layout; use the end-user script above on production hosts.
 

@@ -15,6 +15,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -23,8 +24,16 @@ import androidx.compose.ui.unit.dp
 import com.claudemobile.app.data.auth.SessionManager
 
 @Composable
-fun IncompatibleServerScreen(state: SessionManager.AuthState.IncompatibleServer) {
+fun IncompatibleServerScreen(
+    state: SessionManager.AuthState.IncompatibleServer,
+    onImmediateUpdate: () -> Unit = {},
+) {
     val context = LocalContext.current
+    // Trigger Play Core's IMMEDIATE in-app update flow once on entry — the
+    // server-driven gate has already determined this app is too old, so we
+    // attempt a hard update before falling back to the Play Store deep link.
+    // Sideloaded builds (Play has no update record) silently no-op.
+    LaunchedEffect(Unit) { onImmediateUpdate() }
     Scaffold { padding ->
         Column(
             modifier = Modifier

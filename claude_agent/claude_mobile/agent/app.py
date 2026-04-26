@@ -29,11 +29,13 @@ from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .config import AgentConfig
 from .git.router import router as git_router
+from .install_paths import default_prefix, read_trust_public_key
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
 from .sessions.router import router as sessions_router
 from .events import EventBus
+from .updater_router import router as updater_router
 from .ws.event_fanout import SessionListBroadcaster
 from .ws.events import router as ws_events_router
 from .ws.session_io import (
@@ -52,6 +54,33 @@ _HTTP_LOG_SKIP_PATHS = frozenset({"/api/health"})
 def _generate_correlation_id() -> str:
     """16-byte hex (W3C trace-id shape) — forward-compatible with OpenTelemetry."""
     return secrets.token_hex(16)
+
+
+def _build_updater(app: FastAPI):
+    """Return a ``StagedBinaryUpdater`` bound to this agent's session
+    manager, or ``None`` if the install layout has no trust key.
+
+    When the agent runs from a developer checkout there is no
+    ``<prefix>/trust/central_server.pub`` and the auto-updater stays
+    disabled — manifests delivered over the relay are recorded but
+    never applied, fail-closed.
+    """
+    from claude_mobile.agent.updater import InstallLayout, StagedBinaryUpdater
+
+    layout = InstallLayout(prefix=default_prefix())
+    public_key_b64 = read_trust_public_key(layout)
+    if public_key_b64 is None:
+        logger.info(
+            "updater.disabled reason=no_trust_key prefix=%s",
+            layout.prefix,
+        )
+        return None
+    return StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=app.state.session_manager,
+        current_version=__version__,
+    )
 
 
 def create_app(config: AgentConfig | None = None) -> FastAPI:
@@ -78,8 +107,20 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 app_state=app.state,
             )
             await app.state.relay_client.start()
+            # Wire the staged-binary auto-updater into the relay's manifest
+            # callback so manifests delivered via auth_ok or
+            # ``agent_manifest_update`` control frames drive the updater
+            # state machine in production. The updater is None when the
+            # trust key is absent (development checkout, no install layout) —
+            # in that case auto-update stays disabled, fail-closed.
+            app.state.updater = _build_updater(app)
+            if app.state.updater is not None:
+                app.state.relay_client.set_manifest_update_callback(
+                    app.state.updater.consider_manifest
+                )
         else:
             app.state.relay_client = None
+            app.state.updater = None
         yield
         logger.info("agent.shutting_down")
         # Relay client must stop first so it unsubscribes from fanouts/buses before they are torn down.
@@ -247,6 +288,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.include_router(ws_events_router)
     app.include_router(autoscan_router)
     app.include_router(autoscan_ws_router)
+    app.include_router(updater_router)
 
     # Health endpoint (no auth)
     @app.get("/api/health", tags=["health"])
@@ -264,15 +306,17 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     @app.get("/api/version", tags=["version"])
     async def version_info() -> dict[str, object]:
+        relay_client = getattr(app.state, "relay_client", None)
+        manifest = relay_client.latest_manifest if relay_client else None
         return {
             "name": "claude_agent",
             "server_version": __version__,
             "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
             "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
             "capabilities": {},
-            "latest_agent_version": None,
-            "manifest_url": None,
-            "manifest_signature": None,
+            "latest_agent_version": (manifest or {}).get("version"),
+            "manifest_url": (manifest or {}).get("manifest_url"),
+            "manifest_signature": (manifest or {}).get("manifest_signature"),
         }
 
     return app

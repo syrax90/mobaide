@@ -55,7 +55,14 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             ClaudeMobileTheme {
-                AppNavigation(sessionManager = sessionManager)
+                AppNavigation(
+                    sessionManager = sessionManager,
+                    onImmediateUpdate = {
+                        lifecycleScope.launch {
+                            inAppUpdateManager.requestImmediateUpdate(this@MainActivity)
+                        }
+                    },
+                )
             }
         }
     }

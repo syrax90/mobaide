@@ -2,7 +2,7 @@
 
 - README.md — Project overview: problem statement, client-agent-relay architecture, feature list, agent stack, and Google Sign-In configuration.
 - docs/configuration-profiles.md — Configuration Profiles system: one PowerShell command swaps env-specific files (agent .env, android/local.properties, TLS trust config) between named profiles.
-- docs/deployment.md — Central-server deployment to a VPS (deploy-central.ps1, LetsEncrypt or CloudflareOrigin TLS) and per-machine claude_agent deployment on Windows (conda) and Linux (systemd).
+- docs/deployment.md — Central-server deployment to a VPS (deploy-central.ps1, LetsEncrypt or CloudflareOrigin TLS) and per-machine claude_agent deployment on Windows (conda), Linux (systemd), and macOS (launchd), including crash-loop supervisor settings.
 - docs/email-verification-workflow.md — Email OTP verification flow for email+password registration: happy/unhappy paths, SMTP setup (Mailpit dev, provider prod), rate-limiting knobs, security model.
 - docs/terminal-view-fork-changes.md — Changelog of edits applied to the vendored Termux `terminal-view` Java sources (`TerminalView.java`, `TerminalViewClient.java`); single source of truth for fork drift on upstream rebase.
 - docs/versioning-and-updates.md — Release tag conventions (android-v / agent-v / server-v / proto-v), signed-manifest format, staged-binary auto-updater state machine, install-script + trust-key bootstrap, Android version-gate / Play in-app update / agent-outdated-banner flows, protocol-integrity CI gate.

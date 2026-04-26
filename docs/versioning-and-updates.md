@@ -123,9 +123,11 @@ be running. It is a small JSON document:
   manifest is not stored.
 * **Distribution** — agents read the manifest from
   `GET /api/v1/agent/manifest.json` and via the `auth_ok` reply on the agent
-  tunnel. A mid-connection `agent_manifest_update` control frame is also
-  supported, so a freshly-published manifest reaches connected agents within
-  one heartbeat without a reconnect.
+  tunnel. After a successful `POST /api/internal/agent_manifest`, the
+  router fans out an `agent_manifest_update` CH_CONTROL frame to every
+  connected agent in the routing table (`broadcast_manifest_update`),
+  so a freshly-published manifest reaches running agents within one
+  heartbeat without a reconnect.
 * **Storage** — `ManifestStore` writes atomically via `os.replace`; reads are
   served from an in-memory last-good cache.
 
@@ -156,10 +158,22 @@ The platform-specific service unit (`systemd`, `launchd`, Windows SCM) does
 `python -m claude_mobile.launcher`, which:
 
 1. Reads `<prefix>/current_version`.
-2. `os.execv`s into `<prefix>/releases/<version>/venv/bin/python -m claude_mobile run`.
+2. Appends the boot attempt to `<prefix>/.boot_journal` (timestamp + version).
+3. If the current version has been booted **3 times within 60s**, picks the
+   highest-versioned sibling release from `<prefix>/releases/` (skipping any
+   that lacks a usable `venv`), atomically rewrites `current_version` to that
+   target, and logs `ERROR — version <X> crashed N+ times…; rolling back to
+   <Y>`. With no eligible sibling, it logs the rollback miss and continues
+   into the failing release; the supervisor's hard cap finally stops the loop.
+4. `os.execv`s into `<prefix>/releases/<version>/venv/bin/python -m claude_mobile run`.
 
 This means a swap of `current_version` followed by a process restart is the
-only thing required to roll forward (or back).
+only thing required to roll forward (or back). The launcher's rollback
+heuristic gives a deployed install one automatic recovery step before
+operator intervention is needed; matching supervisor settings —
+systemd `StartLimitBurst=10`/`StartLimitIntervalSec=600`, launchd
+`ThrottleInterval=10`, Windows SCM `sc failure … reset= 600` — give the
+rolled-back release time to prove stable.
 
 ### State machine
 
@@ -308,18 +322,25 @@ The Android client has three distinct update paths that work together:
   non-blocking download/install prompt. Failures are silent: the in-app
   update is best-effort, and Play's own update banner remains the fallback.
 * **Immediate Play in-app update** — `InAppUpdateManager.requestImmediateUpdate()`
-  is reserved for the recovery path from `IncompatibleServerScreen`, where
-  the user has already been told the app must update. The server-side gate is
-  the authoritative signal; if Play reports nothing, the gate still keeps the
-  user on the upgrade screen so a stale-cache Play response can't smuggle the
-  user back into a broken connection.
-* **Agent-outdated banner** — central server's `auth_ok` carries
-  `latest_agent_version`. When that exceeds the version reported by the
-  connected agent (received via the `server_info` text frame on
-  `/ws/session/<id>`), the UI emits `AgentEvent.AgentOutdated` and shows
-  `AgentOutdatedBanner`. The banner is non-blocking: the user can dismiss it,
-  and the staged-binary updater on the agent host will install silently when
-  the agent is idle anyway.
+  is reserved for the recovery path from `IncompatibleServerScreen` and is
+  triggered automatically on screen entry via a `LaunchedEffect` wired
+  from `MainActivity` through `AppNavigation`'s `onImmediateUpdate`
+  callback. Sideloaded builds (Play has no update record) silently no-op
+  and the user falls back to the screen's Play Store deep-link button.
+  The server-side gate is still the authoritative signal: if Play reports
+  nothing, the user stays on the upgrade screen so a stale-cache Play
+  response cannot smuggle them back into a broken connection.
+* **Agent-outdated banner** — `AgentVersionMonitor` fetches
+  `GET /api/version` from the authenticated agent (proxied through
+  `central_server`) and compares `server_version` (running agent) with
+  `latest_agent_version` (manifest pointer the agent received over its
+  relay). Mismatch → `SessionListScreen` renders `AgentOutdatedBanner`.
+  The banner is non-blocking: dismissing it suppresses the visible
+  prompt while the staged-binary updater on the agent host still
+  installs silently the moment the agent goes idle. The
+  banner's "Install now" CTA hits `POST /api/agent/update/force_now`
+  on the agent, which routes through `StagedBinaryUpdater.force_update_now`
+  to skip the idle deferral.
 
 ## Protocol-integrity CI gate
 

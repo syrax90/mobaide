@@ -15,6 +15,12 @@
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <!--
+    Throttle between restarts so the launcher's boot journal sees a
+    realistic window for the 3-strike rollback heuristic. Without this
+    launchd can re-exec instantly and hide a degraded boot loop.
+  -->
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>StandardOutPath</key>
   <string>/usr/local/claude-mobile/agent.out.log</string>
   <key>StandardErrorPath</key>

@@ -4,6 +4,7 @@ import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
 import com.claudemobile.app.data.network.dto.ClaudeOptionsModel
 import com.claudemobile.app.data.network.dto.CreateSessionRequest
+import com.claudemobile.app.data.network.dto.ForceUpdateResponse
 import com.claudemobile.app.data.network.dto.GitDeleteRequest
 import com.claudemobile.app.data.network.dto.GitDeleteResponse
 import com.claudemobile.app.data.network.dto.GitItemsResponse
@@ -56,6 +57,15 @@ class RestApi(
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${agentUrl.trimEnd('/')}/api/auth/token")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun forceAgentUpdate(): ForceUpdateResponse {
+        val body = "".toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/agent/update/force_now")
             .post(body)
             .build()
         return execute(request)

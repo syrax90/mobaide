@@ -13,6 +13,7 @@ import logging
 import platform
 import re
 import struct
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,9 @@ from .envelope import (
     CH_EVENTS,
     CH_SESSION_IO,
     CH_SESSIONS_LIST,
+    MIN_CLIENT_PROTOCOL_VERSION,
     PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
     decode,
     encode,
 )
@@ -881,6 +884,60 @@ class RelayClient:
     ) -> dict:
         """Route a proxy request to the appropriate internal handler."""
         import re as _re
+
+        if method == "GET" and path == "/api/version":
+            manifest = self._latest_manifest
+            return {
+                "status": 200,
+                "body": {
+                    "name": "claude_agent",
+                    "server_version": __version__,
+                    "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+                    "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "latest_agent_version": (manifest or {}).get("version"),
+                    "manifest_url": (manifest or {}).get("manifest_url"),
+                    "manifest_signature": (manifest or {}).get("manifest_signature"),
+                },
+            }
+
+        if method == "POST" and path == "/api/agent/update/force_now":
+            updater = getattr(self._app_state, "updater", None)
+            if updater is None:
+                return {
+                    "status": 503,
+                    "body": {
+                        "detail": "Auto-updater is not configured on this agent.",
+                    },
+                }
+            manifest = self._latest_manifest
+            if (
+                not manifest
+                or not manifest.get("manifest_url")
+                or not manifest.get("version")
+            ):
+                return {
+                    "status": 409,
+                    "body": {
+                        "detail": (
+                            "No manifest pointer available — agent has not "
+                            "received a rollout yet."
+                        ),
+                    },
+                }
+            outcome = await updater.force_update_now(
+                manifest["manifest_url"],
+                manifest.get("manifest_signature", ""),
+                manifest["version"],
+                exit_after_stage=False,
+            )
+            logger.info("relay.force_update_now outcome=%s", outcome)
+            if outcome == "staged":
+                # Defer the supervisor exit so the proxy_response frame
+                # has a chance to be written back to central_server before
+                # the worker dies.
+                asyncio.get_running_loop().call_later(1.0, sys.exit, 75)
+            return {"status": 200, "body": {"outcome": outcome}}
 
         if method == "GET" and path == "/api/sessions":
             sessions = self._session_manager.list_sessions()
