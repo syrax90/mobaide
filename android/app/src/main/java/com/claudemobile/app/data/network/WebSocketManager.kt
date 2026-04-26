@@ -3,6 +3,7 @@ package com.claudemobile.app.data.network
 import com.claudemobile.app.data.auth.SessionManager
 import com.claudemobile.app.data.auth.TokenStore
 import com.claudemobile.app.data.auth.UserIdentityStore
+import com.claudemobile.app.data.repository.VersionGateRepository
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -345,9 +346,8 @@ class WebSocketManager(
                     SessionManager.AuthState.IncompatibleServer(
                         reason = reason,
                         minClientVersion = 0,
-                        playStoreUrl = "market://details?id=com.claudemobile.app",
-                        playStoreFallbackUrl =
-                            "https://play.google.com/store/apps/details?id=com.claudemobile.app",
+                        playStoreUrl = VersionGateRepository.PLAY_DEEP_LINK_PRIMARY,
+                        playStoreFallbackUrl = VersionGateRepository.PLAY_DEEP_LINK_FALLBACK,
                     )
                 )
             },
