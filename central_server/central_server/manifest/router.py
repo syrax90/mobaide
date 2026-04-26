@@ -7,16 +7,25 @@ applying it via the staged-binary auto-updater.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
+import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..relay.envelope import CH_CONTROL, encode
+from ..relay.routing import RoutingTable
 from .store import (
     ManifestSignatureError,
     ManifestValidationError,
+    StoredManifest,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
@@ -72,4 +81,54 @@ async def publish_manifest(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ManifestSignatureError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Push the new manifest pointer to every connected agent over CH_CONTROL
+    # so updates apply within one heartbeat cycle without a reconnect.
+    # Best-effort: queue saturation is logged and never converted into an
+    # HTTP error — the manifest is durably stored either way and any agent
+    # missed by the broadcast picks it up at its next ``auth_ok``.
+    routing = getattr(request.app.state, "routing", None)
+    if routing is not None:
+        broadcast_manifest_update(routing, record)
+
     return ManifestResponse(body=record.body, signature_b64=record.signature_b64)
+
+
+def broadcast_manifest_update(
+    routing: RoutingTable, record: StoredManifest
+) -> int:
+    """Push ``agent_manifest_update`` to every online agent.
+
+    Returns the number of agents that accepted the frame. The frame is
+    enqueued without awaiting delivery; the agent's writer task picks it
+    up on the next loop iteration.
+
+    The agent set is snapshotted once and the envelope encoded once: the
+    same bytes are pushed onto every agent's queue, so the work is
+    constant per fan-out rather than O(N) JSON serialisations.
+    """
+    body = {
+        "type": "agent_manifest_update",
+        "version": record.body.get("version"),
+        "manifest_url": "/api/v1/agent/manifest.json",
+        "manifest_signature": record.signature_b64,
+    }
+    envelope = encode(CH_CONTROL, "", json.dumps(body).encode())
+    agents = routing.list_online_agents()
+    delivered = 0
+    for conn in agents:
+        try:
+            conn.send_queue.put_nowait(envelope)
+            delivered += 1
+        except asyncio.QueueFull:
+            logger.warning(
+                "manifest_broadcast.queue_full agent_id=%s — agent will pick up at next auth_ok",
+                conn.agent_id,
+            )
+    logger.info(
+        "manifest_broadcast.dispatched version=%s delivered=%d total_online=%d",
+        record.body.get("version"),
+        delivered,
+        len(agents),
+    )
+    return delivered

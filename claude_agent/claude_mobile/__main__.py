@@ -14,7 +14,6 @@ import argparse
 import asyncio
 import os
 import sys
-from pathlib import Path
 
 import uvicorn
 
@@ -67,14 +66,14 @@ def _run_update() -> int:
         3   no manifest pointer / cannot reach central_server.
         4   active sessions; deferred (use ``--force`` to override).
     """
-    from claude_mobile.agent.updater import (
-        InstallLayout,
-        StagedBinaryUpdater,
+    from claude_mobile.agent.install_paths import (
+        default_prefix,
+        read_trust_public_key,
     )
+    from claude_mobile.agent.updater import InstallLayout
 
-    prefix = _resolve_prefix()
-    layout = InstallLayout(prefix=prefix)
-    public_key_b64 = _read_public_key(layout)
+    layout = InstallLayout(prefix=default_prefix())
+    public_key_b64 = read_trust_public_key(layout)
     if public_key_b64 is None:
         sys.stderr.write(
             f"claude-agent update: missing public key at {layout.trust_public_key}\n"
@@ -130,28 +129,6 @@ def _outcome_exit_code(outcome: str) -> int:
     if outcome == "deferred":
         return 4
     return 1
-
-
-def _resolve_prefix() -> Path:
-    explicit = os.environ.get("CLAUDE_AGENT_PREFIX")
-    if explicit:
-        return Path(explicit)
-    if sys.platform == "win32":
-        program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
-        return Path(program_files) / "ClaudeAgent"
-    if sys.platform == "darwin":
-        return Path("/usr/local/claude-mobile")
-    return Path("/opt/claude-mobile")
-
-
-def _read_public_key(layout) -> str | None:
-    explicit = os.environ.get("CLAUDE_AGENT_TRUST_KEY")
-    if explicit:
-        return explicit
-    try:
-        return layout.trust_public_key.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
 
 
 if __name__ == "__main__":

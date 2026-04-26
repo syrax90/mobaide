@@ -6,6 +6,8 @@ import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.AutoScanListResponse
 import com.claudemobile.app.data.network.dto.SessionResponse
+import com.claudemobile.app.data.repository.AgentUpdateRepository
+import com.claudemobile.app.data.repository.AgentVersionMonitor
 import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.SessionRepository
 import com.claudemobile.app.testing.MainDispatcherRule
@@ -64,9 +66,12 @@ class SessionListViewModelTest {
         val autoScanRepo: AutoScanRepository,
         val prefs: PreferencesStore,
         val bus: AgentEventBus,
+        val versionMonitor: AgentVersionMonitor,
+        val updateRepo: AgentUpdateRepository,
         val sessionsFlow: MutableStateFlow<List<SessionResponse>>,
         val scanListFlow: MutableStateFlow<AutoScanListResponse>,
         val connectionFlow: MutableStateFlow<AgentEventBus.ConnState>,
+        val outdatedFlow: MutableStateFlow<AgentVersionMonitor.Outdated?>,
     )
 
     /**
@@ -88,29 +93,34 @@ class SessionListViewModelTest {
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
         val prefs = mockk<PreferencesStore>(relaxed = true)
         val bus = mockk<AgentEventBus>(relaxed = true)
+        val versionMonitor = mockk<AgentVersionMonitor>(relaxed = true)
+        val updateRepo = mockk<AgentUpdateRepository>(relaxed = true)
 
         val sessionsFlow = MutableStateFlow(initialSessions)
         val scanListFlow = MutableStateFlow(initialScanList)
         val connectionFlow = MutableStateFlow(initialConnection)
+        val outdatedFlow = MutableStateFlow<AgentVersionMonitor.Outdated?>(null)
 
         every { sessionRepo.observeSessionList() } returns sessionsFlow
         every { autoScanRepo.observeList() } returns scanListFlow
         every { bus.connection } returns connectionFlow
         every { bus.start() } just Runs
         every { bus.forceReconnect() } just Runs
+        every { versionMonitor.outdated } returns outdatedFlow
+        coEvery { versionMonitor.probe() } returns true
         coEvery { autoScanRepo.refresh() } returns initialScanList
         // Safe default — individual tests may re-stub with a real id.
         coEvery { prefs.getLastUsedSessionId() } returns null
         coEvery { prefs.setLastUsedSessionId(any()) } just Runs
 
         return Fixture(
-            sessionRepo, autoScanRepo, prefs, bus,
-            sessionsFlow, scanListFlow, connectionFlow,
+            sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo,
+            sessionsFlow, scanListFlow, connectionFlow, outdatedFlow,
         )
     }
 
     private fun Fixture.buildVm(): SessionListViewModel =
-        SessionListViewModel(sessionRepo, autoScanRepo, prefs, bus)
+        SessionListViewModel(sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo)
 
     // ---- init() side-effects -----------------------------------------------
 

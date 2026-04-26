@@ -32,7 +32,10 @@ import com.claudemobile.app.ui.terminal.TerminalScreen
 import com.claudemobile.app.ui.update.IncompatibleServerScreen
 
 @Composable
-fun AppNavigation(sessionManager: SessionManager) {
+fun AppNavigation(
+    sessionManager: SessionManager,
+    onImmediateUpdate: () -> Unit = {},
+) {
     val navController = rememberNavController()
     val authState by sessionManager.authState.collectAsStateWithLifecycle()
 
@@ -41,7 +44,7 @@ fun AppNavigation(sessionManager: SessionManager) {
     // link) before any other route renders.
     val incompatible = authState as? SessionManager.AuthState.IncompatibleServer
     if (incompatible != null) {
-        IncompatibleServerScreen(state = incompatible)
+        IncompatibleServerScreen(state = incompatible, onImmediateUpdate = onImmediateUpdate)
         return
     }
 

@@ -2,6 +2,12 @@
 Description=Claude Mobile Agent (FastAPI/uvicorn)
 After=network.target
 Wants=network-online.target
+# Crash-loop safety net. The launcher rolls back on its third boot
+# attempt within 60s; this raises systemd's hard cap to 10 starts in 10
+# minutes so the rollback path has room to retry the previous release
+# before the unit is shut off.
+StartLimitBurst=10
+StartLimitIntervalSec=600
 
 [Service]
 Type=simple

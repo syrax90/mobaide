@@ -6,6 +6,8 @@ import com.claudemobile.app.data.events.AgentEventBus
 import com.claudemobile.app.data.local.PreferencesStore
 import com.claudemobile.app.data.network.dto.AutoScanInstanceDto
 import com.claudemobile.app.data.network.dto.SessionResponse
+import com.claudemobile.app.data.repository.AgentUpdateRepository
+import com.claudemobile.app.data.repository.AgentVersionMonitor
 import com.claudemobile.app.data.repository.AutoScanRepository
 import com.claudemobile.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,6 +26,7 @@ data class SessionListUiState(
     val isReconnecting: Boolean = false,
     val error: String? = null,
     val activeScans: List<AutoScanInstanceDto> = emptyList(),
+    val outdated: AgentVersionMonitor.Outdated? = null,
 )
 
 @HiltViewModel
@@ -32,6 +35,8 @@ class SessionListViewModel @Inject constructor(
     private val autoScanRepository: AutoScanRepository,
     private val preferencesStore: PreferencesStore,
     private val agentEventBus: AgentEventBus,
+    private val agentVersionMonitor: AgentVersionMonitor,
+    private val agentUpdateRepository: AgentUpdateRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionListUiState())
@@ -76,6 +81,18 @@ class SessionListViewModel @Inject constructor(
                 }
             }
         }
+
+        // One-shot probe of the agent's running version vs. the rolled-out
+        // manifest pointer — drives the AgentOutdatedBanner. Failure is
+        // silent: the banner simply does not appear until a future probe
+        // succeeds (e.g. on pull-to-refresh).
+        viewModelScope.launch { agentVersionMonitor.probe() }
+
+        viewModelScope.launch {
+            agentVersionMonitor.outdated.collect { outdated ->
+                _uiState.update { it.copy(outdated = outdated) }
+            }
+        }
     }
 
     private suspend fun maybeAutoResume(sessions: List<SessionResponse>) {
@@ -98,6 +115,25 @@ class SessionListViewModel @Inject constructor(
             } catch (_: Exception) {
                 // Auto scan may not be configured — ignore.
             }
+        }
+        viewModelScope.launch { agentVersionMonitor.probe() }
+    }
+
+    fun forceUpdateNow() {
+        viewModelScope.launch {
+            val msg = agentUpdateRepository.forceUpdateNow().fold(
+                onSuccess = { resp ->
+                    when (resp.outcome) {
+                        "staged" -> "Update staged — agent restarting…"
+                        "no_change" -> "Agent is already up to date."
+                        "deferred" -> "Agent busy — will retry when idle."
+                        "signature_failed" -> "Update rejected: signature verification failed."
+                        else -> "Update outcome: ${resp.outcome}"
+                    }
+                },
+                onFailure = { e -> "Update failed: ${e.message ?: e::class.simpleName}" },
+            )
+            _uiState.update { it.copy(error = msg) }
         }
     }
 

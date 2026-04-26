@@ -46,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.claudemobile.app.data.network.dto.SessionResponse
 import com.claudemobile.app.ui.autoscan.AutoScanCard
 import com.claudemobile.app.ui.theme.StateCrashed
+import com.claudemobile.app.ui.update.AgentOutdatedBanner
 import com.claudemobile.app.ui.theme.StateRunning
 import com.claudemobile.app.ui.theme.StateStarting
 import com.claudemobile.app.ui.theme.StateStopped
@@ -109,18 +110,29 @@ fun SessionListScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        PullToRefreshBox(
-            isRefreshing = uiState.isReconnecting,
-            onRefresh = viewModel::refresh,
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            LazyColumn(
+            uiState.outdated?.let { outdated ->
+                AgentOutdatedBanner(
+                    currentVersion = outdated.currentVersion,
+                    latestVersion = outdated.latestVersion,
+                    onInstallNow = viewModel::forceUpdateNow,
+                    onDismiss = {},
+                )
+            }
+            PullToRefreshBox(
+                isRefreshing = uiState.isReconnecting,
+                onRefresh = viewModel::refresh,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
                 if (uiState.activeScans.isNotEmpty()) {
                     item {
                         Text(
@@ -171,6 +183,7 @@ fun SessionListScreen(
                         onClick = { onSessionClick(session.session_id) },
                         onStop = { viewModel.deleteSession(session.session_id) },
                     )
+                }
                 }
             }
         }

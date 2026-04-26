@@ -184,7 +184,11 @@ for /f %%v in (%CLAUDE_AGENT_PREFIX%\current_version) do set CLAUDE_VERSION=%%v
 
     Write-Info "Registering $Script:ServiceName service"
     & sc.exe create $Script:ServiceName binPath= "cmd.exe /c `"$launcherCmd`"" start= auto DisplayName= "Claude Mobile Agent" | Out-Null
-    & sc.exe failure $Script:ServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
+    # Three SCM-driven restarts at 5s spacing — the launcher rolls back
+    # on its third boot attempt within the same window. reset=600 keeps
+    # the failure counter alive long enough for the rolled-back release
+    # to prove stable before SCM forgets the prior crash burst.
+    & sc.exe failure $Script:ServiceName reset= 600 actions= restart/5000/restart/5000/restart/5000 | Out-Null
     Start-Service -Name $Script:ServiceName
 }
 

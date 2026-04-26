@@ -134,15 +134,19 @@ class StagedBinaryUpdater:
         latest_version: str,
         *,
         force: bool = False,
+        exit_after_stage: bool = True,
     ) -> str:
         """Apply the manifest if appropriate.
 
         Returns one of:
             ``"no_change"`` — already on this version.
             ``"deferred"`` — busy session; will retry later.
-            ``"staged"`` — release written + ``current_version`` swapped (the
-            caller is responsible for exiting the process; the default
-            implementation calls ``sys.exit(EXIT_RESTART_REQUESTED)``).
+            ``"staged"`` — release written + ``current_version`` swapped. When
+            ``exit_after_stage`` is ``True`` (the default — used by the relay
+            callback and the standalone CLI) ``self._exit_func`` is invoked
+            with ``EXIT_RESTART_REQUESTED`` before the function returns. HTTP
+            wrappers pass ``False`` so they can flush the response and then
+            schedule the exit on the event loop.
             ``"signature_failed"`` — fail-closed; agent stays on current.
         """
         if not latest_version:
@@ -194,7 +198,8 @@ class StagedBinaryUpdater:
                 "updater.staged from=%s to=%s release_dir=%s",
                 self._current_version, target_version, release_dir,
             )
-            self._exit_func(EXIT_RESTART_REQUESTED)
+            if exit_after_stage:
+                self._exit_func(EXIT_RESTART_REQUESTED)
             return "staged"
 
     async def force_update_now(
@@ -202,10 +207,16 @@ class StagedBinaryUpdater:
         manifest_url: str,
         signature_b64: str,
         latest_version: str,
+        *,
+        exit_after_stage: bool = True,
     ) -> str:
         """User-triggered update — skips activity-awareness."""
         return await self.consider_manifest(
-            manifest_url, signature_b64, latest_version, force=True,
+            manifest_url,
+            signature_b64,
+            latest_version,
+            force=True,
+            exit_after_stage=exit_after_stage,
         )
 
     def _is_idle(self) -> bool:
