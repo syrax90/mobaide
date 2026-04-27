@@ -56,9 +56,9 @@ class CentralServerConfig:
     smtp_password: str | None = None
     smtp_use_tls: bool = False
     smtp_starttls: bool = False
-    smtp_from_address: str = "no-reply@claude-mobile.local"
-    smtp_from_name: str = "Claude Mobile"
-    smtp_from_domain: str = "claude-mobile.local"
+    smtp_from_address: str = "no-reply@mobaide.local"
+    smtp_from_name: str = "Mobaide"
+    smtp_from_domain: str = "mobaide.local"
 
     email_verification_required: bool = True
     email_verification_ttl_minutes: int = 15
@@ -111,10 +111,10 @@ class CentralServerConfig:
             smtp_use_tls=_env_bool("SMTP_USE_TLS", False),
             smtp_starttls=_env_bool("SMTP_STARTTLS", False),
             smtp_from_address=os.getenv(
-                "SMTP_FROM_ADDRESS", "no-reply@claude-mobile.local"
+                "SMTP_FROM_ADDRESS", "no-reply@mobaide.local"
             ),
-            smtp_from_name=os.getenv("SMTP_FROM_NAME", "Claude Mobile"),
-            smtp_from_domain=os.getenv("SMTP_FROM_DOMAIN", "claude-mobile.local"),
+            smtp_from_name=os.getenv("SMTP_FROM_NAME", "Mobaide"),
+            smtp_from_domain=os.getenv("SMTP_FROM_DOMAIN", "mobaide.local"),
             email_verification_required=_env_bool(
                 "EMAIL_VERIFICATION_REQUIRED", True
             ),

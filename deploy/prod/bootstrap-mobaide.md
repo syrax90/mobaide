@@ -86,7 +86,7 @@ SMTP_USERNAME=<api-key-or-user>
 SMTP_PASSWORD=<secret>
 SMTP_USE_TLS=true
 SMTP_FROM_ADDRESS=no-reply@yourdomain.com
-SMTP_FROM_NAME=Claude Mobile
+SMTP_FROM_NAME=Mobaide
 ```
 
 Without SMTP configured, registrations will silently fail to deliver the OTP. Set `EMAIL_VERIFICATION_REQUIRED=false` only for non-production environments without a mail provider. See [`docs/email-verification-workflow.md`](../../docs/email-verification-workflow.md) for all knobs.

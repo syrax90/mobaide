@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <exclude domain="sharedpref" path="claude_mobile_auth.xml" />
+    <exclude domain="sharedpref" path="mobaide_auth.xml" />
 </full-backup-content>

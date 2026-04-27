@@ -1,6 +1,6 @@
 # Versioning & Auto-Update
 
-This document is the single reference for how Claude Mobile versions its three
+This document is the single reference for how Mobaide versions its three
 components, ships releases, and keeps deployed installations up to date.
 
 The system has **two orthogonal version concepts** and you should not conflate
@@ -130,7 +130,7 @@ The Android client (`VersionGateRepository`) compares
 * **Compatible** → connect normally; persist `latest_agent_version` for the
   agent-outdated banner.
 * **Incompatible** → switch to `IncompatibleServerScreen`. The user sees a
-  Play Store deep link (`market://details?id=com.claudemobile.app`) and a
+  Play Store deep link (`market://details?id=com.mobaide.app`) and a
   "What changed" link to `PROTOCOL.md`. No further WebSocket attempts.
 
 **Agent ↔ central server tunnel** (`/ws/agent-tunnel`): the agent sends

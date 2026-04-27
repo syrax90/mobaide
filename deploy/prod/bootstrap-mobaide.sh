@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Claude Mobile - one-time VPS bootstrap for mobaide.com
+# Mobaide - one-time VPS bootstrap for mobaide.com
 #
 # Usage (from your Windows workstation, root SSH is not required):
 #     scp deploy/prod/bootstrap-mobaide.sh mobaide:/tmp/

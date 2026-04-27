@@ -1,4 +1,4 @@
-# GitHub Pages source for `get.claudemobile.io`
+# GitHub Pages source for the Mobaide install endpoint (`get.claudemobile.io`)
 
 This directory is the GitHub Pages source for the install-script CDN. The
 release-agent workflow copies the canonical install scripts from

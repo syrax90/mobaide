@@ -1,6 +1,6 @@
 # Deployment Guide
 
-Claude Mobile has two separately deployable services:
+Mobaide has two separately deployable services:
 
 - **Central server** (`central_server/`) — multi-tenant relay hub. Runs on one Linux host with a public DNS name (e.g. `mobaide.com`). The Android app and every agent connect to it.
 - **Claude agent** (`claude_agent/`) — per-user-machine PTY runner. Runs natively on each user's own workstation and dials OUT to the central server over an authenticated WebSocket.
@@ -177,7 +177,7 @@ sudo systemctl restart claude-mobile-agent
 
 ### Android client configuration
 
-1. Open the Claude Mobile app
+1. Open the Mobaide app
 2. Go to **Settings → Add connection**
 3. Set the **Server URL** to your central-server base URL, e.g. `https://mobaide.com`
 4. Sign in (or sign up), then pair this agent under **Settings → Agents → Pair new** and copy the generated `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` into the agent's `.env`

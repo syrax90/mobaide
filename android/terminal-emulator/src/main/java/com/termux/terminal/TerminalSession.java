@@ -9,7 +9,7 @@ import java.util.UUID;
  * A terminal session backed by a <em>remote</em> PTY (CLA-14).
  *
  * Upstream Termux uses {@link com.termux.terminal.TerminalEmulator} together with a local
- * subprocess spawned via JNI. The Claude Mobile Android client does not run a local shell —
+ * subprocess spawned via JNI. The Mobaide Android client does not run a local shell —
  * the PTY lives on the server and bytes flow over a binary WebSocket. This stripped variant
  * keeps the same public surface that {@link com.termux.view.TerminalView} expects, but:
  *

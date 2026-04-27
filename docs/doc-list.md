@@ -11,4 +11,4 @@
 - android/CHANGELOG.md — Android app release notes (per android-vX.Y.Z tag).
 - claude_agent/CHANGELOG.md — claude_agent release notes (per agent-vX.Y.Z tag).
 - central_server/CHANGELOG.md — central_server release notes (per server-vX.Y.Z tag).
-- docs/get/README.md — GitHub Pages source for get.claudemobile.io install scripts.
+- docs/get/README.md — GitHub Pages source for the Mobaide install endpoint (get.claudemobile.io).

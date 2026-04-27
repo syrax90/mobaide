@@ -135,7 +135,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         await app.state.session_manager.shutdown()
         shutdown_logging()
 
-    app = FastAPI(title="Claude Mobile Agent", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Mobaide Agent", version=__version__, lifespan=lifespan)
 
     # Strip `linear_api_key` inputs from validation errors so a malformed body
     # cannot echo the secret back to the caller; other fields keep `input`.

@@ -1,6 +1,6 @@
 # Email verification workflow
 
-This document describes, at a high level, how Claude Mobile verifies that a
+This document describes, at a high level, how Mobaide verifies that a
 user actually owns the email address they used to register. Code-level details
 live in the source; this page is for people who want to understand the flow,
 configure it, or debug a failed delivery.
@@ -78,7 +78,7 @@ it is not forgotten if the server ever scales out.
    SMTP_PORT=1025
    SMTP_USE_TLS=false
    SMTP_STARTTLS=false
-   SMTP_FROM_ADDRESS=no-reply@claude-mobile.local
+   SMTP_FROM_ADDRESS=no-reply@mobaide.local
    ```
 
 4. Register a new user in the Android app. The `VerifyEmailScreen` shows up;

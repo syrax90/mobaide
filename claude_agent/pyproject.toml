@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "claude-mobile-agent"
 version = "0.1.0"
-description = "Claude Mobile agent — cross-platform PTY session manager with WebSocket API"
+description = "Mobaide agent — cross-platform PTY session manager with WebSocket API"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
