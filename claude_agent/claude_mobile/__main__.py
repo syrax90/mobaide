@@ -23,7 +23,7 @@ from claude_mobile import __version__
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="claude-agent",
-        description="Claude Mobile agent — terminal session manager.",
+        description="Mobaide agent — terminal session manager.",
     )
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command")

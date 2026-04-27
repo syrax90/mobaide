@@ -1,4 +1,4 @@
-# Claude Mobile agent install script (Windows).
+# Mobaide agent install script (Windows).
 #
 # Usage (PowerShell as Administrator):
 #     irm https://get.claudemobile.io/install.ps1 | iex
@@ -183,7 +183,7 @@ for /f %%v in (%CLAUDE_AGENT_PREFIX%\current_version) do set CLAUDE_VERSION=%%v
     }
 
     Write-Info "Registering $Script:ServiceName service"
-    & sc.exe create $Script:ServiceName binPath= "cmd.exe /c `"$launcherCmd`"" start= auto DisplayName= "Claude Mobile Agent" | Out-Null
+    & sc.exe create $Script:ServiceName binPath= "cmd.exe /c `"$launcherCmd`"" start= auto DisplayName= "Mobaide Agent" | Out-Null
     # Three SCM-driven restarts at 5s spacing — the launcher rolls back
     # on its third boot attempt within the same window. reset=600 keeps
     # the failure counter alive long enough for the rolled-back release
@@ -196,7 +196,7 @@ function Write-Completion {
     param($Version)
     Write-Host ""
     Write-Host "============================================"
-    Write-Host "  Claude Mobile agent installed"
+    Write-Host "  Mobaide agent installed"
     Write-Host "  Prefix:  $Script:Prefix"
     Write-Host "  Version: $Version"
     Write-Host "  Service: $Script:ServiceName"

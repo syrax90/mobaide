@@ -43,7 +43,7 @@ Then edit the files:
 
 - `config/profiles/local/profile.json` — set `description` to something useful (shown by `-List`).
 - `config/profiles/local/claude_agent.env` — fill in `JWT_SECRET_KEY`, `PROJECTS`, relay settings, etc.
-- `config/profiles/local/android.local.properties` — set `CENTRAL_SERVER_URL` (e.g. `https://test.claude-mobile.com`) and `GOOGLE_WEB_CLIENT_ID`.
+- `config/profiles/local/android.local.properties` — set `CENTRAL_SERVER_URL` (e.g. `https://test.mobaide.com`) and `GOOGLE_WEB_CLIENT_ID`.
 - `config/profiles/local/android-tls/network_security_config.xml` — for a local Caddy stack, swap the `<trust-anchors>` block to include `<certificates src="@raw/caddy_root"/>` (see the comments in the template file) and drop `caddy_root.crt` beside it.
 
 ### 2. Apply it
@@ -76,7 +76,7 @@ Files missing from the profile folder are simply skipped (except `caddy_root.crt
 
 | Aspect                          | `local`                                                       | `mobaide`                         |
 |---------------------------------|---------------------------------------------------------------|-----------------------------------|
-| `CENTRAL_SERVER_URL`            | `https://test.claude-mobile.com`                              | `https://mobaide.com`             |
+| `CENTRAL_SERVER_URL`            | `https://test.mobaide.com`                              | `https://mobaide.com`             |
 | `android-tls/caddy_root.crt`    | present (your Caddy root)                                     | absent                            |
 | `network_security_config.xml`   | includes `<certificates src="@raw/caddy_root"/>`              | system trust only                 |
 | `claude_agent.env` `RELAY_*`    | pointed at local central server                               | pointed at mobaide.com            |

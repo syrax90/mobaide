@@ -1,4 +1,4 @@
-"""Structured logging package for the Claude Mobile agent.
+"""Structured logging package for the Mobaide agent.
 
 Provides:
 - ``get_logger``: thin wrapper around ``structlog.get_logger``.

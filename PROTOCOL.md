@@ -1,6 +1,6 @@
 # Wire-protocol versions
 
-The Claude Mobile system uses a single **integer** ``protocol_version`` as the
+The Mobaide system uses a single **integer** ``protocol_version`` as the
 authoritative compatibility signal between the Android app, ``claude_agent``,
 and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own

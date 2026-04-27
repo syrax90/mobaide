@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Claude Mobile — bare-metal Linux deployment setup
+# Mobaide — bare-metal Linux deployment setup
 #
 # Usage: sudo bash deploy/setup.sh
 #
@@ -131,7 +131,7 @@ systemctl start claude-mobile-agent
 
 echo ""
 echo "============================================"
-echo "  Claude Mobile — Deployment Complete"
+echo "  Mobaide — Deployment Complete"
 echo "============================================"
 echo ""
 echo "  Agent status:  systemctl status claude-mobile-agent"

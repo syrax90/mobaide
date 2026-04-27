@@ -1759,7 +1759,7 @@ class TestProxyGitItems:
     ):
         """The central server's ``{path:path}`` route URL-decodes path
         params before forwarding through the relay envelope, so a
-        project named ``Claude Mobile`` arrives at ``_dispatch_proxy``
+        project named ``Mobaide Project`` arrives at ``_dispatch_proxy``
         with a literal space (the symptom in the original bug report).
         The regex ``[^/]+`` accepts spaces, and the captured name must
         be passed *as-is* to ``store.get`` (do NOT call
@@ -1767,7 +1767,7 @@ class TestProxyGitItems:
         bytes inside names)."""
         from claude_mobile.agent.git.models import GitItemRead
 
-        project = self._make_project(tmp_path, name="Claude Mobile")
+        project = self._make_project(tmp_path, name="Mobaide Project")
         mock_app_state.projects_store = MagicMock()
         mock_app_state.projects_store.get = MagicMock(return_value=project)
         mock_app_state.worktree_manager = MagicMock()
@@ -1780,11 +1780,11 @@ class TestProxyGitItems:
         ):
             result = await client._dispatch_proxy(
                 "GET",
-                "/api/projects/Claude Mobile/git/items",
+                "/api/projects/Mobaide Project/git/items",
                 None, None, ws,
             )
 
         assert result["status"] == 200
         mock_app_state.projects_store.get.assert_called_once_with(
-            "Claude Mobile",
+            "Mobaide Project",
         )

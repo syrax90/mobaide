@@ -21,7 +21,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ClaudeMobile"
+rootProject.name = "Mobaide"
 include(":app")
 include(":terminal-emulator")
 include(":terminal-view")

@@ -1,5 +1,5 @@
 [Unit]
-Description=Claude Mobile Agent (FastAPI/uvicorn)
+Description=Mobaide Agent (FastAPI/uvicorn)
 After=network.target
 Wants=network-online.target
 # Crash-loop safety net. The launcher rolls back on its third boot

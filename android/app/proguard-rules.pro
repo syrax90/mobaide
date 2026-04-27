@@ -9,11 +9,11 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
--keep,includedescriptorclasses class com.claudemobile.app.**$$serializer { *; }
--keepclassmembers class com.claudemobile.app.** {
+-keep,includedescriptorclasses class com.mobaide.app.**$$serializer { *; }
+-keepclassmembers class com.mobaide.app.** {
     *** Companion;
 }
--keepclasseswithmembers class com.claudemobile.app.** {
+-keepclasseswithmembers class com.mobaide.app.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
 

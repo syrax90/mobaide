@@ -1,4 +1,4 @@
-"""Claude Mobile agent package.
+"""Mobaide agent package.
 
 Exposes ``__version__`` resolved from the installed distribution metadata so
 ``FastAPI(version=...)``, ``/api/version`` and the wire-handshake

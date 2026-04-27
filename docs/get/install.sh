@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Claude Mobile agent install script (Linux + macOS).
+# Mobaide agent install script (Linux + macOS).
 #
 # Usage (curl|bash):
 #     curl -fsSL https://get.claudemobile.io/install.sh | bash
@@ -192,7 +192,7 @@ install_systemd_unit() {
     info "Installing systemd unit at $unit"
     cat > "$unit" <<EOF
 [Unit]
-Description=Claude Mobile Agent (FastAPI/uvicorn)
+Description=Mobaide Agent (FastAPI/uvicorn)
 After=network.target
 Wants=network-online.target
 
@@ -266,7 +266,7 @@ LAUNCHER
 print_completion() {
     echo
     echo "============================================"
-    echo "  Claude Mobile agent installed"
+    echo "  Mobaide agent installed"
     echo "  Prefix:  $CLAUDE_AGENT_PREFIX"
     echo "  Version: $(cat "$CLAUDE_AGENT_PREFIX/current_version")"
     if [ "$PLATFORM" = "linux" ]; then

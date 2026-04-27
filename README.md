@@ -1,4 +1,4 @@
-# Claude Mobile
+# Mobaide
 
 A mobile application (Android/iOS) for remotely controlling [Claude Code](https://claude.ai/code) sessions running on an agent, with full terminal I/O streaming and multi-session support.
 
@@ -8,7 +8,7 @@ Running Claude Code CLI sessions requires a desktop terminal. There's no way to 
 
 ## The Idea
 
-Claude Mobile bridges this gap with a client-agent architecture:
+Mobaide bridges this gap with a client-agent architecture:
 
 - **Agent (Python / FastAPI)** — Runs on your workstation (Windows/Linux). Reimplements the `claude_auto_executor.ps1` logic natively in Python: manages cross-platform PTY terminal sessions (pywinpty on Windows, stdlib pty on Linux), streams I/O over WebSocket, handles Linear integration, git worktrees, and Auto Scan mode. Supports multiple concurrent Claude sessions.
 - **Client (Android / Kotlin)** — Connects to the central server via WSS (OkHttp), which relays traffic to the paired agent. Provides a multi-session terminal UI to start, monitor, and interact with Claude Code sessions in real time. Built with Jetpack Compose and Material 3.
@@ -81,7 +81,7 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
 
 1. In Google Cloud Console → **APIs & Services → Credentials**, create (or reuse) a project and add two OAuth 2.0 client IDs:
    - **Web application** — copy its client ID (format `NNN-xxxxx.apps.googleusercontent.com`). This is the ID the Android app asks Credential Manager for AND the ID the server verifies ID tokens against.
-   - **Android application** — register package `com.claudemobile.app` and your debug + release signing-certificate SHA-1 fingerprints. Required by Google Play Services before any credential is returned even though the app only passes the Web client ID.
+   - **Android application** — register package `com.mobaide.app` and your debug + release signing-certificate SHA-1 fingerprints. Required by Google Play Services before any credential is returned even though the app only passes the Web client ID.
 2. Put the Web client ID in your profile's `android.local.properties`:
    ```
    GOOGLE_WEB_CLIENT_ID=NNN-xxxxx.apps.googleusercontent.com
@@ -120,4 +120,4 @@ chaining). [PROTOCOL.md](PROTOCOL.md) tracks `protocol_version` history.
 
 ## Status
 
-Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project).
+Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project — Linear team rename pending).

@@ -39,7 +39,7 @@ val centralServerUrl: String = run {
         val fromProps = props.getProperty("CENTRAL_SERVER_URL", "").orEmpty()
         if (fromProps.isNotBlank()) return@run fromProps
     }
-    "https://api.claudemobile.example.com"
+    "https://api.mobaide.com"
 }
 
 // Release signing config is resolved at build time from (in priority order):
@@ -63,11 +63,11 @@ fun signingValue(envName: String, propName: String): String? {
 }
 
 android {
-    namespace = "com.claudemobile.app"
+    namespace = "com.mobaide.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.claudemobile.app"
+        applicationId = "com.mobaide.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
