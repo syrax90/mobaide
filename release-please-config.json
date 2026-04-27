@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": true,
+  "separator": "-",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "draft": false,
+  "prerelease": false,
+  "packages": {
+    "claude_agent": {
+      "release-type": "python",
+      "package-name": "claude-mobile-agent",
+      "component": "agent",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "central_server": {
+      "release-type": "python",
+      "package-name": "central-server",
+      "component": "server",
+      "changelog-path": "CHANGELOG.md"
+    },
+    "android": {
+      "release-type": "simple",
+      "component": "android",
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

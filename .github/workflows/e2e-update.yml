@@ -1,0 +1,32 @@
+name: E2E auto-update
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: e2e-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install both packages with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e 'claude_agent[dev]'
+          python -m pip install -e 'central_server[dev]'
+
+      - name: Run E2E auto-update tests
+        timeout-minutes: 5
+        run: python -m pytest tests/test_e2e_autoupdate.py -v

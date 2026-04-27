@@ -5,12 +5,19 @@ on:
     tags:
       - "server-v*"
 
+concurrency:
+  group: release-server-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      image_tag: ${{ steps.version.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +27,7 @@ jobs:
           tag="${GITHUB_REF##*/}"
           version="${tag#server-v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=ghcr.io/${{ github.repository }}-server:v${version}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -57,3 +65,18 @@ jobs:
         with:
           files: |
             central_server/dist/*.whl
+
+  deploy:
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Record deploy approval
+        env:
+          IMAGE_TAG: ${{ needs.build-and-publish.outputs.image_tag }}
+          VERSION: ${{ needs.build-and-publish.outputs.version }}
+        run: |
+          echo "Deploy of central_server ${VERSION} approved."
+          echo "Image: ${IMAGE_TAG}"
+          echo "Operator must roll out via deploy/prod/deploy-central.ps1 or"
+          echo "by running: docker compose -f deploy/prod/docker-compose.prod.yml pull && up -d"
