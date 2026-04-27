@@ -22,22 +22,59 @@ dedicated workflow under `.github/workflows/`:
 
 | Tag prefix | Component | Workflow | What it produces |
 |------------|-----------|----------|------------------|
-| `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. |
-| `agent-vX.Y.Z` | `claude_agent` | `release-agent.yml` | Wheel + source tarball, **Ed25519-signed manifest**, GitHub Release, manifest POSTed to `central_server`. |
-| `server-vX.Y.Z` | `central_server` | `release-server.yml` | Wheel + Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). |
-| `proto-vN` | Wire contract | informational only | Marks the commit that bumps `PROTOCOL_VERSION`. Must change **both** `claude_agent/.../envelope.py` AND `central_server/.../envelope.py` in lockstep — `protocol-integrity.yml` rejects drift. |
+| `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is computed from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
+| `agent-vX.Y.Z` | `claude_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. The workflow also re-syncs `docs/get/install.sh` and `docs/get/install.ps1` from `deploy/` so GitHub Pages stays current. |
+| `server-vX.Y.Z` | `central_server` | `release-server.yml` | Wheel + Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy-central.ps1` or `docker compose pull && up -d` against the prod compose file). |
+| `proto-vN` | Wire contract | `release-protocol.yml` | Re-runs the lockstep envelope-integrity check defensively, then publishes a GitHub Release named `proto-vN` with the matching PROTOCOL.md section as the body and a diff vs the previous proto tag appended. Must change **both** `claude_agent/.../envelope.py` AND `central_server/.../envelope.py` in lockstep — `protocol-integrity.yml` rejects drift on every PR. |
 
 ### Cutting a release
 
-1. Bump the version field for the component:
-   * Python components — `pyproject.toml` `[project] version`. The runtime
-     reads it via `importlib.metadata.version(...)`.
-   * Android — `versionCode` + `versionName` in `android/app/build.gradle.kts`.
-2. Update the matching `CHANGELOG.md` (`android/`, `claude_agent/`, or
-   `central_server/`).
-3. Push the tag, e.g. `git tag agent-v0.2.0 && git push --tags`.
+There are two equivalent paths:
 
-The relevant workflow takes it from there. Required CI secrets:
+**Automated (preferred): release-please.** Land work on `main` using
+[Conventional Commits](https://www.conventionalcommits.org/) prefixed by
+component path (`feat(claude_agent): …`, `fix(central_server): …`,
+`feat(android): …`). The `release-please.yml` workflow opens or updates a
+release-PR per component that:
+
+* bumps `[project] version` in the component's `pyproject.toml` (or
+  `versionName`/`versionCode` for android — the simple release type tracks
+  the version in `.release-please-manifest.json` for the Android entry, so
+  `app/build.gradle.kts` must be bumped manually before tagging),
+* prepends the new `## [vX.Y.Z]` section to that component's `CHANGELOG.md`
+  derived from the commits since the last release tag,
+* on PR merge, pushes the corresponding `agent-vX.Y.Z` /
+  `server-vX.Y.Z` / `android-vX.Y.Z` tag, which fires the matching
+  release-* workflow.
+
+  **Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN`
+  cannot trigger downstream workflows from a tag it pushes. The
+  release-please workflow's `token` input falls back to `GITHUB_TOKEN` if
+  `RELEASE_PLEASE_TOKEN` is unset, but in that mode the operator must
+  push the tag manually after merging the release-PR (e.g.
+  `git fetch && git tag agent-v0.2.0 && git push origin agent-v0.2.0`).
+
+  **Recommended PAT shape.** Use a **fine-grained PAT** scoped to **this
+  repository only** with these permissions:
+
+  | Permission | Access |
+  |-----------|--------|
+  | Contents | Read and write |
+  | Pull requests | Read and write |
+  | Workflows | Read and write |
+
+  Do **not** use a classic PAT — those grant write access to every repo
+  the user owns and are unnecessarily broad. The fine-grained PAT also
+  needs `Workflows: write` so that release-please's tag-push triggers the
+  downstream `release-agent.yml` / `release-server.yml` /
+  `release-android.yml` workflows; without it, the tag is created but no
+  workflow fires.
+
+**Manual.** Bump the version field for the component, update the matching
+`CHANGELOG.md` by hand, push the tag (`git tag agent-v0.2.0 && git push --tags`).
+The relevant workflow takes it from there.
+
+Required CI secrets:
 
 | Secret | Used by | Purpose |
 |--------|---------|---------|
@@ -46,11 +83,24 @@ The relevant workflow takes it from there. Required CI secrets:
 | `AGENT_MANIFEST_PRIVATE_KEY` | `release-agent.yml` | Base64 Ed25519 private key. Signs the manifest body. |
 | `CENTRAL_SERVER_RELEASE_TOKEN` | `release-agent.yml` | Bearer token for `POST /api/internal/agent_manifest`. |
 | `CENTRAL_SERVER_URL` | `release-agent.yml` | Base URL of the production `central_server` that hosts the manifest. |
+| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent.yml` | PAT with `contents:write` + `workflow` scopes. Required only to chain release-please tag pushes into the downstream `release-*` workflows and for the agent release to push a Pages re-sync commit. |
 
 If `AGENT_MANIFEST_PRIVATE_KEY` or `CENTRAL_SERVER_*` is missing, the agent
 release still publishes a GitHub Release but skips signing / publishing the
 manifest. Deployed agents will not see the new version until the manifest is
 delivered.
+
+### Server-side deploy gate
+
+`release-server.yml` builds and pushes the Docker image to GHCR, then a
+second `deploy` job runs in the `production` environment. Configure
+required reviewers under repo Settings → Environments → production so the
+job blocks on a manual click before recording the rollout. The job itself
+does not SSH to the host — host-side rollout is operator-driven via
+`deploy/prod/deploy-central.ps1` (which preserves the previous image for
+one-step rollback) or, for the polling pattern, a watchtower-style
+container on the prod host that pulls `ghcr.io/<repo>-server:latest` on a
+timer.
 
 ## Compatibility gating: `protocol_version`
 
@@ -353,10 +403,46 @@ The Android client has three distinct update paths that work together:
 2. Runs `tests/test_protocol_integrity.py`, which compares the live wire
    shape against `tests/protocol_golden.json`. Any change to the handshake
    shape **must** update the golden file in the same commit.
+3. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
+   files, it must modify the other. Comparison uses
+   `${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}`
+   so the check is base-branch-agnostic. The same diff guard also asserts
+   that `deploy/install.{sh,ps1}` and `docs/get/install.{sh,ps1}` are
+   byte-identical — Pages serves the latter, and any drift between the
+   canonical source and the published mirror is flagged before the next
+   release re-syncs them.
 
 This is the safety net that lets the two component packages duplicate
 `envelope.py` (a deliberate constraint — the two packages are independent
 deployables and cannot share runtime code) without going out of sync.
+
+## End-to-end auto-update verification
+
+`tests/test_e2e_autoupdate.py` exercises the full release pipeline in a
+single in-process pytest run:
+
+1. Generates an Ed25519 signing keypair.
+2. Boots a fresh `central_server` `FastAPI` app (via `create_app()`) with
+   the public key wired into config and a tmp-path manifest store.
+3. Builds a synthetic agent v0.2.0 release artifact (tarball with a
+   `__version__ = "0.2.0"` payload + a placeholder wheel), signs the
+   manifest, and POSTs it to `/api/internal/agent_manifest`.
+4. Asserts `GET /api/v1/agent/manifest.json` returns the published record.
+5. Runs `StagedBinaryUpdater.consider_manifest()` against the served
+   manifest URL with a stubbed installer; asserts the staged release dir
+   was created, the staged `__init__.py` carries the expected version
+   string, and `current_version` was atomically swapped.
+6. **Negative cases:** corrupting the tarball sha256 in the manifest body
+   makes the updater return `signature_failed` and leaves
+   `current_version` untouched (fail-closed). An invalid `X-Release-Token`
+   makes the publish endpoint return 401 without persisting.
+
+The test is run by `.github/workflows/e2e-update.yml` on every PR and on
+push to `main`, with a 5-minute timeout. The implementation purposely
+does NOT spawn a real systemd / launchd / Windows SCM supervisor — that
+boundary is platform-coupled and is exercised separately by
+`claude_agent/tests/test_launcher_rollback.py` and the install scripts'
+own integration tests.
 
 ## See also
 
