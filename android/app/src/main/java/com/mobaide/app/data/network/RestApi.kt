@@ -20,6 +20,7 @@ import com.mobaide.app.data.network.dto.StartScanRequest
 import com.mobaide.app.data.network.dto.StopScanRequest
 import com.mobaide.app.data.network.dto.TokenRequest
 import com.mobaide.app.data.network.dto.TokenResponse
+import com.mobaide.app.data.network.dto.VersionInfoResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -67,6 +68,14 @@ class RestApi(
         val request = Request.Builder()
             .url("${baseUrl()}/api/agent/update/force_now")
             .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun getAgentVersion(): VersionInfoResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/version")
+            .get()
             .build()
         return execute(request)
     }

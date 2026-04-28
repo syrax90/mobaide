@@ -2,7 +2,7 @@ package com.mobaide.app.data.repository
 
 import app.cash.turbine.test
 import com.mobaide.app.data.auth.TokenStore
-import com.mobaide.app.data.network.CentralApi
+import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -44,17 +44,17 @@ class AgentVersionMonitorTest {
 
     private fun newMonitor(
         baseUrl: String? = "https://agent.example.com",
-    ): Triple<AgentVersionMonitor, CentralApi, TokenStore> {
-        val centralApi = mockk<CentralApi>()
+    ): Triple<AgentVersionMonitor, RestApi, TokenStore> {
+        val restApi = mockk<RestApi>()
         val tokenStore = mockk<TokenStore>()
         every { tokenStore.getEffectiveBaseUrl() } returns baseUrl
-        return Triple(AgentVersionMonitor(centralApi, tokenStore), centralApi, tokenStore)
+        return Triple(AgentVersionMonitor(restApi, tokenStore), restApi, tokenStore)
     }
 
     @Test
     fun probe_mismatchedVersions_emitsOutdated_andReturnsTrue() = runTest {
-        val (monitor, centralApi, _) = newMonitor()
-        coEvery { centralApi.getAgentVersion("https://agent.example.com") } returns
+        val (monitor, restApi, _) = newMonitor()
+        coEvery { restApi.getAgentVersion() } returns
             versionInfo(serverVersion = "0.1.0", latestAgent = "0.2.0")
 
         monitor.outdated.test {
@@ -70,13 +70,13 @@ class AgentVersionMonitorTest {
             )
             cancelAndIgnoreRemainingEvents()
         }
-        coVerify(exactly = 1) { centralApi.getAgentVersion("https://agent.example.com") }
+        coVerify(exactly = 1) { restApi.getAgentVersion() }
     }
 
     @Test
     fun probe_matchingVersions_keepsOutdatedNull_andReturnsTrue() = runTest {
-        val (monitor, centralApi, _) = newMonitor()
-        coEvery { centralApi.getAgentVersion(any()) } returns
+        val (monitor, restApi, _) = newMonitor()
+        coEvery { restApi.getAgentVersion() } returns
             versionInfo(serverVersion = "0.2.0", latestAgent = "0.2.0")
 
         val applied = monitor.probe()
@@ -87,8 +87,8 @@ class AgentVersionMonitorTest {
 
     @Test
     fun probe_nullLatestAgentVersion_keepsOutdatedNull() = runTest {
-        val (monitor, centralApi, _) = newMonitor()
-        coEvery { centralApi.getAgentVersion(any()) } returns
+        val (monitor, restApi, _) = newMonitor()
+        coEvery { restApi.getAgentVersion() } returns
             versionInfo(serverVersion = "0.1.0", latestAgent = null)
 
         val applied = monitor.probe()
@@ -99,8 +99,8 @@ class AgentVersionMonitorTest {
 
     @Test
     fun probe_blankLatestAgentVersion_keepsOutdatedNull() = runTest {
-        val (monitor, centralApi, _) = newMonitor()
-        coEvery { centralApi.getAgentVersion(any()) } returns
+        val (monitor, restApi, _) = newMonitor()
+        coEvery { restApi.getAgentVersion() } returns
             versionInfo(serverVersion = "0.1.0", latestAgent = "")
 
         val applied = monitor.probe()
@@ -111,8 +111,8 @@ class AgentVersionMonitorTest {
 
     @Test
     fun probe_clearsPreviouslySetOutdated_whenServerNowReportsMatch() = runTest {
-        val (monitor, centralApi, _) = newMonitor()
-        coEvery { centralApi.getAgentVersion(any()) } returnsMany listOf(
+        val (monitor, restApi, _) = newMonitor()
+        coEvery { restApi.getAgentVersion() } returnsMany listOf(
             versionInfo(serverVersion = "0.1.0", latestAgent = "0.2.0"),
             versionInfo(serverVersion = "0.2.0", latestAgent = "0.2.0"),
         )
@@ -129,19 +129,19 @@ class AgentVersionMonitorTest {
 
     @Test
     fun probe_noBaseUrl_returnsFalse_andSkipsApiCall() = runTest {
-        val (monitor, centralApi, _) = newMonitor(baseUrl = null)
+        val (monitor, restApi, _) = newMonitor(baseUrl = null)
 
         val applied = monitor.probe()
 
         assertFalse("probe must report skipped when no base URL is available", applied)
         assertNull(monitor.outdated.value)
-        coVerify(exactly = 0) { centralApi.getAgentVersion(any()) }
+        coVerify(exactly = 0) { restApi.getAgentVersion() }
     }
 
     @Test
     fun probe_apiThrows_returnsFalse_andPreservesPreviousState() = runTest {
-        val (monitor, centralApi, _) = newMonitor()
-        coEvery { centralApi.getAgentVersion(any()) } returnsMany listOf(
+        val (monitor, restApi, _) = newMonitor()
+        coEvery { restApi.getAgentVersion() } returnsMany listOf(
             versionInfo(serverVersion = "0.1.0", latestAgent = "0.2.0"),
         )
         assertTrue(monitor.probe())
@@ -151,7 +151,7 @@ class AgentVersionMonitorTest {
             firstSnapshot,
         )
 
-        coEvery { centralApi.getAgentVersion(any()) } throws RuntimeException("offline")
+        coEvery { restApi.getAgentVersion() } throws RuntimeException("offline")
         val applied = monitor.probe()
 
         assertFalse(applied)
@@ -164,8 +164,8 @@ class AgentVersionMonitorTest {
 
     @Test
     fun reset_clearsOutdated() = runTest {
-        val (monitor, centralApi, _) = newMonitor()
-        coEvery { centralApi.getAgentVersion(any()) } returns
+        val (monitor, restApi, _) = newMonitor()
+        coEvery { restApi.getAgentVersion() } returns
             versionInfo(serverVersion = "0.1.0", latestAgent = "0.2.0")
         monitor.probe()
         assertEquals(

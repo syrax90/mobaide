@@ -1,7 +1,7 @@
 package com.mobaide.app.data.repository
 
 import com.mobaide.app.data.auth.TokenStore
-import com.mobaide.app.data.network.CentralApi
+import com.mobaide.app.data.network.RestApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,16 +19,23 @@ import kotlinx.coroutines.flow.asStateFlow
  * banner exists to make the wait visible (and to expose the
  * "Install now" CTA that calls ``force_update_now`` on the agent).
  *
- * Lives alongside [VersionGateRepository] in the repository layer: both
- * wrap [CentralApi] and surface domain-state ``StateFlow``s; neither is
- * a raw network client.
+ * Lives alongside [VersionGateRepository] in the repository layer and
+ * surfaces a domain-state ``StateFlow``; not a raw network client.
+ *
+ * The probe goes through the agent-scoped [RestApi] (not [com.mobaide.app.data.network.CentralApi])
+ * so the request carries the mobile-access bearer token via
+ * [com.mobaide.app.data.auth.AuthInterceptor]. In relay mode the URL
+ * resolves to ``{central}/proxy/{agent_id}/api/version`` which requires
+ * that header; routing through [com.mobaide.app.data.network.CentralApi]
+ * would 401, and [com.mobaide.app.data.auth.CentralAuthInterceptor]
+ * treats any 401 as a terminal session-rejection and logs the user out.
  *
  * DI is wired exclusively through [com.mobaide.app.di.RepositoryModule]
  * (matching every other class in this package) — no class-level Hilt
  * annotations are needed.
  */
 class AgentVersionMonitor(
-    private val centralApi: CentralApi,
+    private val restApi: RestApi,
     private val tokenStore: TokenStore,
 ) {
     data class Outdated(val currentVersion: String, val latestVersion: String)
@@ -45,9 +52,9 @@ class AgentVersionMonitor(
      * the probe was skipped (no agent base URL) or the request failed.
      */
     suspend fun probe(): Boolean {
-        val baseUrl = tokenStore.getEffectiveBaseUrl() ?: return false
+        if (tokenStore.getEffectiveBaseUrl() == null) return false
         val info = try {
-            centralApi.getAgentVersion(baseUrl)
+            restApi.getAgentVersion()
         } catch (_: Throwable) {
             return false
         }
