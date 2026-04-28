@@ -47,14 +47,6 @@ class CentralApi(
         return execute(request)
     }
 
-    suspend fun getAgentVersion(agentBaseUrl: String): VersionInfoResponse {
-        val request = Request.Builder()
-            .url("${agentBaseUrl.trimEnd('/')}/api/version")
-            .get()
-            .build()
-        return execute(request)
-    }
-
     suspend fun register(email: String, password: String): UserAuthResponse {
         val body = json.encodeToString(UserRegisterRequest(email, password))
             .toRequestBody(jsonMediaType)

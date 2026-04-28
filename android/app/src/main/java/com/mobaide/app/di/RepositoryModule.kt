@@ -163,10 +163,10 @@ object RepositoryModule {
     @Provides
     @Singleton
     fun provideAgentVersionMonitor(
-        centralApi: CentralApi,
+        restApi: RestApi,
         tokenStore: TokenStore,
     ): AgentVersionMonitor {
-        return AgentVersionMonitor(centralApi, tokenStore)
+        return AgentVersionMonitor(restApi, tokenStore)
     }
 
     @Provides
