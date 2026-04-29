@@ -170,13 +170,6 @@ dependencies {
     // DataStore (last-used project / session persistence)
     implementation(libs.androidx.datastore.preferences)
 
-    // CameraX + ML Kit (QR pairing)
-    implementation(libs.camerax.camera2)
-    implementation(libs.camerax.lifecycle)
-    implementation(libs.camerax.view)
-    implementation(libs.camerax.mlkit.vision)
-    implementation(libs.mlkit.barcode)
-
     // Google Credential Manager (Sign-In with Google)
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services)

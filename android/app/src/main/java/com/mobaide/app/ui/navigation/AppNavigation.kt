@@ -18,9 +18,6 @@ import com.mobaide.app.ui.agents.AgentListScreen
 import com.mobaide.app.ui.autoscan.AutoScanDetailScreen
 import com.mobaide.app.ui.connections.ConnectionsScreen
 import com.mobaide.app.ui.login.LoginScreen
-import com.mobaide.app.ui.pairing.ManualPairingScreen
-import com.mobaide.app.ui.pairing.PairingViewModel
-import com.mobaide.app.ui.pairing.QrScannerScreen
 import com.mobaide.app.ui.projects.ProjectsScreen
 import com.mobaide.app.ui.projects.git.GitScreen
 import com.mobaide.app.ui.register.RegisterScreen
@@ -129,35 +126,6 @@ fun AppNavigation(
                     }
                 },
                 onChangeEmail = { navController.popBackStack() },
-            )
-        }
-
-        composable(Routes.QR_SCANNER) {
-            val pairingViewModel: PairingViewModel = hiltViewModel()
-            QrScannerScreen(
-                viewModel = pairingViewModel,
-                onPairingComplete = {
-                    navController.navigate(Routes.AGENT_LIST) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
-                    }
-                },
-                onManualEntry = {
-                    navController.navigate(Routes.MANUAL_PAIRING)
-                },
-                onBack = { navController.popBackStack() },
-            )
-        }
-
-        composable(Routes.MANUAL_PAIRING) {
-            val pairingViewModel: PairingViewModel = hiltViewModel()
-            ManualPairingScreen(
-                viewModel = pairingViewModel,
-                onPairingComplete = {
-                    navController.navigate(Routes.AGENT_LIST) {
-                        popUpTo(Routes.LOGIN) { inclusive = true }
-                    }
-                },
-                onBack = { navController.popBackStack() },
             )
         }
 

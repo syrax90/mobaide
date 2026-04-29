@@ -18,11 +18,9 @@ import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.GitRepository
-import com.mobaide.app.data.repository.PairingRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.VersionGateRepository
-import javax.inject.Named
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -141,17 +139,6 @@ object RepositoryModule {
             userIdentityStore,
             agentRepository,
         )
-    }
-
-    @Provides
-    @Singleton
-    fun providePairingRepository(
-        @Named("refresh") refreshClient: OkHttpClient,
-        tokenStore: TokenStore,
-        sessionManager: SessionManager,
-        connectionStore: ConnectionStore,
-    ): PairingRepository {
-        return PairingRepository(refreshClient, tokenStore, sessionManager, connectionStore)
     }
 
     @Provides

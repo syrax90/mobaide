@@ -12,8 +12,6 @@ object Routes {
     const val CREATE_SESSION = "create_session"
     const val SETTINGS = "settings"
     const val AUTO_SCAN_DETAIL = "auto_scan_detail/{projectName}"
-    const val QR_SCANNER = "qr_scanner"
-    const val MANUAL_PAIRING = "manual_pairing"
     const val CONNECTIONS = "connections"
     const val PROJECTS = "projects"
     const val GIT_MANAGEMENT = "git/{projectName}"
