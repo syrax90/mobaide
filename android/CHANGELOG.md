@@ -22,3 +22,12 @@
 - Release-signing config block in ``android/app/build.gradle.kts`` reads from
   env vars (CI) or ``signing.properties`` (local) and falls back to debug
   signing when neither is provided.
+
+### Removed
+- QR-based device-pairing flow (``QrScannerScreen``, ``ManualPairingScreen``,
+  ``PairingViewModel``, ``PairingRepository``, ``PairingDto``) deleted. The
+  feature had no reachable UI entry point and called a server endpoint
+  (``POST /api/pairing/complete``) that does not exist. Removing it drops the
+  ``CAMERA`` permission from ``AndroidManifest.xml`` (eliminating the Play
+  Store privacy-policy obligation and the install-time camera permission
+  prompt) and removes five CameraX/MLKit dependencies from the APK.

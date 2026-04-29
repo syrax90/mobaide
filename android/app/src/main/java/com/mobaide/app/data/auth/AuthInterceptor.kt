@@ -41,7 +41,7 @@ class AuthInterceptor @Inject constructor(
         // itself if SessionManager somehow routes refresh back through
         // this client.
         if (path.endsWith("/api/auth/token") || path.endsWith("/api/auth/refresh") ||
-            path.endsWith("/api/pairing/complete") || path.endsWith("/api/mobile/refresh") ||
+            path.endsWith("/api/mobile/refresh") ||
             path.endsWith("/api/auth/register") || path.endsWith("/api/auth/login") ||
             path.endsWith("/api/auth/google")
         ) {
