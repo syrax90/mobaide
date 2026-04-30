@@ -22,6 +22,9 @@
 - Release-signing config block in ``android/app/build.gradle.kts`` reads from
   env vars (CI) or ``signing.properties`` (local) and falls back to debug
   signing when neither is provided.
+- Double-tap on any ``❯ ``-prefixed terminal row (or its wrapped continuation
+  rows) copies the command text into the bottom InputBar and focuses it,
+  without submitting. Single-tap (submit-on-tap) behaviour is unchanged.
 
 ### Removed
 - QR-based device-pairing flow (``QrScannerScreen``, ``ManualPairingScreen``,
