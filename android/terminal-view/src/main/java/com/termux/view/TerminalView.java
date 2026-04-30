@@ -164,21 +164,9 @@ public final class TerminalView extends View {
                 }
                 mClient.onSingleTapUp(event);
 
-                // Try to find an input message at the tapped row.
-                // Only input lines (starting with "> ") are copyable via tap;
-                // output requires text-selection highlighting.
-                int[] colAndRow = getColumnAndRow(event, true);
-                int row = colAndRow[1];
-                String inputMessage = findInputMessage(row);
-                if (inputMessage != null && !inputMessage.isEmpty()) {
-                    int cursorRow = mEmulator.getCursorRow();
-                    boolean isCurrentInput = cursorRow >= mLastInputStartRow
-                            && cursorRow <= mLastInputEndRow;
-                    mClient.onTerminalRowTapped(inputMessage, isCurrentInput);
-                } else {
+                if (!dispatchInputRowGesture(event, false /* copyToInput */)) {
                     requestFocus();
                 }
-
                 return true;
             }
 
@@ -258,8 +246,14 @@ public final class TerminalView extends View {
 
             @Override
             public boolean onDoubleTap(MotionEvent event) {
-                // Do not treat is as a single confirmed tap - it may be followed by zoom.
-                return false;
+                if (mEmulator == null) return true;
+                if (isSelectingText()) {
+                    stopTextSelectionMode();
+                    return true;
+                }
+
+                dispatchInputRowGesture(event, true /* copyToInput */);
+                return true;
             }
 
             @Override
@@ -466,6 +460,33 @@ public final class TerminalView extends View {
     /** Row range of the last successful {@link #findInputMessage} call. */
     private int mLastInputStartRow = Integer.MIN_VALUE;
     private int mLastInputEndRow = Integer.MIN_VALUE;
+
+    /**
+     * Resolves the tapped row to an input message via {@link #findInputMessage}
+     * and forwards it to the appropriate {@link TerminalViewClient} callback.
+     * Shared by single-tap (submit) and double-tap (copy-to-input) so the row→
+     * message resolution stays in one place.
+     *
+     * @param copyToInput when true dispatches {@link TerminalViewClient#onTerminalRowCopyToInput};
+     *                    when false dispatches {@link TerminalViewClient#onTerminalRowTapped}
+     * @return {@code true} when an input message was found and dispatched
+     */
+    private boolean dispatchInputRowGesture(MotionEvent event, boolean copyToInput) {
+        int[] colAndRow = getColumnAndRow(event, true);
+        int row = colAndRow[1];
+        String inputMessage = findInputMessage(row);
+        if (inputMessage == null || inputMessage.isEmpty()) return false;
+
+        int cursorRow = mEmulator.getCursorRow();
+        boolean isCurrentInput = cursorRow >= mLastInputStartRow
+                && cursorRow <= mLastInputEndRow;
+        if (copyToInput) {
+            mClient.onTerminalRowCopyToInput(inputMessage, isCurrentInput);
+        } else {
+            mClient.onTerminalRowTapped(inputMessage, isCurrentInput);
+        }
+        return true;
+    }
 
     /**
      * Finds the complete input message that the given row belongs to.

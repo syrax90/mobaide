@@ -41,6 +41,20 @@ public interface TerminalViewClient {
     default void onTerminalRowTapped(String text, boolean isCurrentInput) {}
 
     /**
+     * Called when the user double-taps a terminal input line. Same row→message
+     * resolution as {@link #onTerminalRowTapped} (prompt-prefixed start row +
+     * wrapped continuation rows joined with newlines), but signals the host to
+     * <em>copy</em> the message into the editable input field rather than
+     * submit it. Single-tap and double-tap are mutually exclusive at the
+     * gesture-recognizer level: a confirmed single-tap fires only after the
+     * double-tap timeout expires, so a real double-tap suppresses the submit.
+     *
+     * @param text           the extracted message text
+     * @param isCurrentInput true when the cursor is on the tapped input line
+     */
+    default void onTerminalRowCopyToInput(String text, boolean isCurrentInput) {}
+
+    /**
      * Called after a manual drag or fling has settled to a new {@code mTopRow} value
      * (0 = pinned to bottom, negative = scrolled up by N rows). Not called for
      * programmatic {@link TerminalView#setTopRow(int)} writes — those would create
