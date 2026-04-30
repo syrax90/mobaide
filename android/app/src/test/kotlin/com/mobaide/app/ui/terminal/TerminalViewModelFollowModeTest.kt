@@ -42,11 +42,13 @@ class TerminalViewModelFollowModeTest {
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
     }
+    private val templatesRepository = mockk<com.mobaide.app.data.repository.TemplatesRepository>(relaxed = true)
 
     private fun createViewModel(): TerminalViewModel =
         TerminalViewModel(
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = sessionRepository,
+            templatesRepository = templatesRepository,
         )
 
     @Test

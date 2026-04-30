@@ -20,6 +20,7 @@ from .auth.rate_limit import ResendRateLimiter
 from .auth.service import AuthService
 from .config import CentralServerConfig
 from .db.database import Database
+from .templates.service import TemplateService
 from .logging_setup import (
     bind_request_context,
     clear_request_context,
@@ -86,6 +87,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db)
         app.state.agent_service = AgentService(db, app.state.routing)
+        app.state.template_service = TemplateService(db, app.state.routing)
 
         from .relay.mobile_proxy import MobileProxy
 
@@ -179,6 +181,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .relay.mobile_proxy import router as mobile_proxy_router
     from .relay.mobile_ws import router as mobile_ws_router
     from .relay.user_ws import router as user_ws_router
+    from .templates.router import router as templates_router
 
     app.include_router(auth_router)
     app.include_router(agents_router)
@@ -189,6 +192,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(pairing_router)
     app.include_router(dashboard_router)
     app.include_router(manifest_router)
+    app.include_router(templates_router)
 
     # Unauthenticated — intentionally public for load-balancer probes.
     @app.get("/api/health", tags=["health"])

@@ -32,6 +32,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onLogout: () -> Unit,
     onManageConnections: () -> Unit = {},
+    onManageTemplates: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
@@ -75,6 +76,17 @@ fun SettingsScreen(
                     .padding(horizontal = 16.dp),
             ) {
                 Text("My Agents")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = onManageTemplates,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            ) {
+                Text("Prompt templates")
             }
 
             Spacer(modifier = Modifier.height(16.dp))

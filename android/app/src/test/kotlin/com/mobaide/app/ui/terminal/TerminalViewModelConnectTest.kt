@@ -71,10 +71,13 @@ class TerminalViewModelConnectTest {
             every { createSessionIoConnection("test-session") } returns conn
         }
 
+    private val templatesRepository = mockk<com.mobaide.app.data.repository.TemplatesRepository>(relaxed = true)
+
     private fun newViewModel(repo: SessionRepository): TerminalViewModel =
         TerminalViewModel(
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = repo,
+            templatesRepository = templatesRepository,
         )
 
     // Encoders for the binary frames the server fires on attach.

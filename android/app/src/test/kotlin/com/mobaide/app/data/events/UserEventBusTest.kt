@@ -5,7 +5,9 @@ import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.TemplatesRepository
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import okio.ByteString
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
@@ -26,9 +29,14 @@ import org.junit.Test
  * Focuses on behavior unique to the user-events path:
  *   - `agent.status_changed` envelopes are forwarded to
  *     [AgentRepository.updateAgentOnline] with the correct args.
+ *   - `template.created` / `template.updated` envelopes are forwarded to
+ *     [TemplatesRepository.applyUpserted] with the parsed [TemplateDto].
+ *   - `template.deleted` envelopes are forwarded to
+ *     [TemplatesRepository.applyDeleted] with just the id.
  *   - Malformed envelopes / unknown types / wrong-typed payloads are
  *     silently dropped and do not crash the collector.
- *   - `WsEvent.Connected` triggers `refreshAgents()` (reconnect resync).
+ *   - `WsEvent.Connected` triggers `refreshAgents()` and
+ *     `refreshTemplates()` (reconnect resync).
  *   - `WsEvent.Binary` is ignored (channel is text-only).
  *
  * The connection state machine and auth-lifecycle wiring are already
@@ -51,6 +59,7 @@ class UserEventBusTest {
         val conn: WebSocketConnection,
         val wsm: WebSocketManager,
         val agentRepository: AgentRepository,
+        val templatesRepository: TemplatesRepository,
     )
 
     private fun newBus(initiallyLoggedIn: Boolean = true): Fixture {
@@ -75,8 +84,16 @@ class UserEventBusTest {
         every { agentRepository.updateAgentOnline(any(), any()) } just Runs
         coEvery { agentRepository.refreshAgents() } just Runs
 
-        val bus = UserEventBus(wsm, sessionManager, userIdentityStore, agentRepository)
-        return Fixture(bus, connEvents, conn, wsm, agentRepository)
+        val templatesRepository = mockk<TemplatesRepository>()
+        every { templatesRepository.applyUpserted(any()) } just Runs
+        every { templatesRepository.applyDeleted(any()) } just Runs
+        coEvery { templatesRepository.refreshTemplates() } just Runs
+
+        val bus = UserEventBus(
+            wsm, sessionManager, userIdentityStore,
+            agentRepository, templatesRepository,
+        )
+        return Fixture(bus, connEvents, conn, wsm, agentRepository, templatesRepository)
     }
 
     /** Emit a WS event from a real coroutine context.
@@ -114,7 +131,7 @@ class UserEventBusTest {
 
     @Test
     fun message_agentStatusChangedOnline_callsUpdateAgentOnline_withTrue() = runTest {
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -137,7 +154,7 @@ class UserEventBusTest {
 
     @Test
     fun message_agentStatusChangedOffline_callsUpdateAgentOnline_withFalse() = runTest {
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -155,7 +172,7 @@ class UserEventBusTest {
 
     @Test
     fun message_multipleAgentStatusChanges_areAllForwardedInOrder() = runTest {
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -189,7 +206,7 @@ class UserEventBusTest {
 
     @Test
     fun message_malformedEnvelopeJson_isSilentlySkipped_noRepoCall() = runTest {
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -220,7 +237,7 @@ class UserEventBusTest {
         // Envelope parses (has `type`) but `payload` is missing. The outer
         // decodeFromString call must throw MissingFieldException and the
         // catch block must swallow it.
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -242,7 +259,7 @@ class UserEventBusTest {
     @Test
     fun message_agentStatusChangedPayloadMissingAgentId_isSilentlySkipped() = runTest {
         // Valid envelope, matching type, but inner payload lacks `agent_id`.
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -270,7 +287,7 @@ class UserEventBusTest {
     fun message_agentStatusChangedPayloadWrongTypes_isSilentlySkipped() = runTest {
         // `online` as a string, not a bool — deserialization must fail
         // and the bus must remain alive for the next message.
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -299,7 +316,7 @@ class UserEventBusTest {
     fun message_unknownEventType_isIgnored_noRepoCall() = runTest {
         // Forward-compatibility: any type other than agent.status_changed
         // must fall through the `else -> Unit` branch.
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -335,7 +352,7 @@ class UserEventBusTest {
     fun connected_event_triggersRefreshAgents() = runTest {
         // On every WS reconnect, the bus must call refreshAgents() to
         // reconcile any transitions that happened while disconnected.
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -350,7 +367,7 @@ class UserEventBusTest {
     fun binary_event_isIgnored_noRepoCall() = runTest {
         // The user-events channel is text-only. Binary frames must not
         // reach the parser, and must not throw.
-        val (bus, connEvents, _, _, repo) = newBus()
+        val (bus, connEvents, _, _, repo, _) = newBus()
         bus.start()
         awaitSubscribed(connEvents)
 
@@ -372,6 +389,205 @@ class UserEventBusTest {
         // refreshAgents must NOT have been called — Binary is neither
         // Connected nor Message.
         coVerify(exactly = 0) { repo.refreshAgents() }
+
+        bus.stop()
+    }
+
+    @Test
+    fun connected_event_alsoTriggersRefreshTemplates() = runTest {
+        // On WS reconnect the bus must reconcile templates as well as
+        // agents — otherwise template.* events that fired while offline
+        // would be lost.
+        val (bus, connEvents, _, _, _, templates) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(connEvents, WsEvent.Connected)
+
+        coVerify(timeout = 2000, exactly = 1) { templates.refreshTemplates() }
+
+        bus.stop()
+    }
+
+    // ---- parse(): template.* envelopes -> TemplatesRepository --------------
+
+    private fun templateJson(
+        id: String = "t-1",
+        name: String = "tpl",
+        body: String = "body",
+        favorite: Boolean = false,
+        version: Int = 1,
+    ): String =
+        """
+        {
+          "template_id": "$id",
+          "name": "$name",
+          "body": "$body",
+          "is_favorite": $favorite,
+          "last_used_at": null,
+          "created_at": "2026-04-30T12:00:00Z",
+          "updated_at": "2026-04-30T12:00:00Z",
+          "version": $version
+        }
+        """.trimIndent()
+
+    @Test
+    fun message_templateCreated_callsApplyUpserted_withParsedDto() = runTest {
+        val (bus, connEvents, _, _, _, templates) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"template.created","payload":${templateJson(id = "t-42", name = "explain")}}""",
+            ),
+        )
+
+        // Using the equals-based matcher rather than a CapturingSlot keeps
+        // the verify path consistent with the existing
+        // `message_agentStatusChangedOnline_callsUpdateAgentOnline_withTrue`
+        // pattern in this file. TemplateDto is a data class so structural
+        // equality on the parsed payload is deterministic.
+        verify(timeout = 2000, exactly = 1) {
+            templates.applyUpserted(
+                match {
+                    it.template_id == "t-42" &&
+                        it.name == "explain" &&
+                        it.body == "body"
+                },
+            )
+        }
+        verify(exactly = 1) { templates.applyUpserted(any()) }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_templateUpdated_callsApplyUpserted_withParsedDto() = runTest {
+        val (bus, connEvents, _, _, _, templates) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"template.updated","payload":${templateJson(id = "t-9", favorite = true, version = 7)}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) {
+            templates.applyUpserted(
+                match {
+                    it.template_id == "t-9" &&
+                        it.is_favorite &&
+                        it.version == 7
+                },
+            )
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_templateDeleted_callsApplyDeleted_withTemplateId() = runTest {
+        val (bus, connEvents, _, _, _, templates) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """
+                {
+                  "type": "template.deleted",
+                  "payload": {
+                    "template_id": "t-doomed",
+                    "version": 5,
+                    "updated_at": "2026-04-30T13:00:00Z"
+                  }
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) { templates.applyDeleted("t-doomed") }
+        // applyUpserted must NOT fire for the delete envelope.
+        verify(exactly = 0) { templates.applyUpserted(any()) }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_templateCreatedMalformedPayload_isSilentlySkipped() = runTest {
+        // Wrong-typed inner payload (`is_favorite` as a string) — the inner
+        // decode must fail and the bus must remain alive for the next
+        // message. Mirrors the agent.status_changed wrong-type test above.
+        val (bus, connEvents, _, _, agentRepo, templates) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """
+                {
+                  "type": "template.created",
+                  "payload": {
+                    "template_id": "t-1",
+                    "name": "x",
+                    "body": "y",
+                    "is_favorite": "not-a-bool",
+                    "created_at": "2026-04-30T12:00:00Z",
+                    "updated_at": "2026-04-30T12:00:00Z",
+                    "version": 1
+                  }
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        // Synchronize on a valid follow-up agent.status_changed message —
+        // by the time it's processed the malformed template payload has
+        // also been observed by the collector. Then assert no template
+        // method was called.
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
+        verify(exactly = 0) { templates.applyUpserted(any()) }
+        verify(exactly = 0) { templates.applyDeleted(any()) }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_templateDeletedMissingId_isSilentlySkipped() = runTest {
+        // template.deleted envelope without the required `template_id` field —
+        // payload-level decode must throw and the bus must swallow it.
+        val (bus, connEvents, _, _, agentRepo, templates) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"template.deleted","payload":{"version":1,"updated_at":"x"}}""",
+            ),
+        )
+
+        // Sync on a valid follow-up.
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
+        verify(exactly = 0) { templates.applyDeleted(any()) }
 
         bus.stop()
     }

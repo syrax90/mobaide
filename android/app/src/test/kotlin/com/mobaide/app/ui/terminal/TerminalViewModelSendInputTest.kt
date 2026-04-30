@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.every
 import io.mockk.mockk
@@ -48,10 +49,13 @@ class TerminalViewModelSendInputTest {
         every { createSessionIoConnection("test-session") } returns connection
     }
 
+    private val templatesRepository = mockk<TemplatesRepository>(relaxed = true)
+
     private fun createViewModel(): TerminalViewModel =
         TerminalViewModel(
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = sessionRepository,
+            templatesRepository = templatesRepository,
         )
 
     /**

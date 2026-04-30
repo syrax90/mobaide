@@ -3,11 +3,14 @@ package com.mobaide.app.data.network
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
+import com.mobaide.app.data.network.dto.CreateTemplateRequest
 import com.mobaide.app.data.network.dto.GoogleAuthRequest
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.network.dto.ReRegisterAgentResponse
 import com.mobaide.app.data.network.dto.ResendVerificationRequest
 import com.mobaide.app.data.network.dto.ResendVerificationResponse
+import com.mobaide.app.data.network.dto.TemplateDto
+import com.mobaide.app.data.network.dto.UpdateTemplateRequest
 import com.mobaide.app.data.network.dto.UserAuthResponse
 import com.mobaide.app.data.network.dto.UserLoginRequest
 import com.mobaide.app.data.network.dto.UserRegisterRequest
@@ -140,6 +143,64 @@ class CentralApi(
     suspend fun getMobileTokens(userToken: String, agentId: String): MobileTokenResponse {
         val request = Request.Builder()
             .url("${baseUrl()}/api/agents/$agentId/token")
+            .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    // Prompt-template endpoints (per-user CRUD, JWT-authed via the user dashboard token).
+
+    suspend fun listTemplates(userToken: String): List<TemplateDto> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/templates")
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun createTemplate(
+        userToken: String,
+        name: String,
+        body: String,
+    ): TemplateDto {
+        val payload = json.encodeToString(CreateTemplateRequest(name, body))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/templates")
+            .post(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun updateTemplate(
+        userToken: String,
+        templateId: String,
+        update: UpdateTemplateRequest,
+    ): TemplateDto {
+        val payload = json.encodeToString(update).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/templates/$templateId")
+            .method("PATCH", payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun deleteTemplate(userToken: String, templateId: String) {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/templates/$templateId")
+            .delete()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
+    }
+
+    suspend fun touchTemplate(userToken: String, templateId: String): TemplateDto {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/templates/$templateId/touch")
             .post("".toRequestBody(jsonMediaType))
             .header("Authorization", "Bearer $userToken")
             .build()

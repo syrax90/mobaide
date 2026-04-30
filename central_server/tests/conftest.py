@@ -11,6 +11,7 @@ from central_server.db.database import Database
 from central_server.manifest.store import ManifestStore
 from central_server.pairing.service import PairingService
 from central_server.relay.routing import RoutingTable
+from central_server.templates.service import TemplateService
 
 TEST_JWT_SECRET = "test-secret-key-for-central-server-do-not-use-in-prod"
 TEST_ADMIN_EMAIL = "admin@test.local"
@@ -61,6 +62,9 @@ async def app(config, db):
     application.state.auth_service = AuthService(config, db)
     application.state.pairing_service = PairingService(db)
     application.state.agent_service = AgentService(db, application.state.routing)
+    application.state.template_service = TemplateService(
+        db, application.state.routing
+    )
     # Seed admin user (mirrors lifespan)
     await application.state.auth_service.seed_admin_user()
     yield application
