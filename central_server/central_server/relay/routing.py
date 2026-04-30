@@ -40,6 +40,35 @@ def try_enqueue_control(
     except asyncio.QueueFull:
         return False
 
+
+def broadcast_user_event(
+    routing: "RoutingTable",
+    user_id: str,
+    event_type: str,
+    payload: dict,
+) -> None:
+    """Push a JSON envelope ``{"type": event_type, "payload": payload}`` to
+    every user-scoped client of ``user_id``. Non-blocking; drops on a full
+    queue with a WARN log because the client re-syncs via REST on its next
+    reconnect.
+
+    This is the single fan-out helper for user-scoped events
+    (``agent.status_changed``, ``template.*``, ...). New event types add a
+    caller, never a copy of this loop.
+    """
+    envelope = json.dumps({"type": event_type, "payload": payload})
+    for client in routing.get_user_clients(user_id):
+        try:
+            client.send_queue.put_nowait(envelope)
+        except asyncio.QueueFull:
+            logger.warning(
+                "user_events.queue_full user_id=%s device=%s — "
+                "dropping %s event",
+                user_id,
+                client.device_id,
+                event_type,
+            )
+
 # Bounded queues to prevent memory exhaustion from slow clients.
 _AGENT_QUEUE_SIZE = 10_000
 _MOBILE_QUEUE_SIZE = 5_000

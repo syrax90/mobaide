@@ -16,6 +16,7 @@ object Routes {
     const val PROJECTS = "projects"
     const val GIT_MANAGEMENT = "git/{projectName}"
     const val INCOMPATIBLE_SERVER = "incompatible_server"
+    const val TEMPLATES = "templates"
 
     fun sessionDetail(sessionId: String) = "session_detail/$sessionId"
     fun autoScanDetail(projectName: String) =

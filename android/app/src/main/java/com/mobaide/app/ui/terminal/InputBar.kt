@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.FilledTonalButton
@@ -71,6 +73,8 @@ fun InputBar(
     requestFocus: Boolean = false,
     onFocusHandled: () -> Unit = {},
     onExpand: () -> Unit = {},
+    onOpenTemplates: () -> Unit = {},
+    onSaveAsTemplate: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -108,7 +112,13 @@ fun InputBar(
                     .weight(1f)
                     .focusRequester(focusRequester)
                     .onFocusChanged { focusState ->
-                        if (focusState.isFocused && !hasFocus && text.text.isNotEmpty()) {
+                        // Auto-place cursor at end on focus only when the
+                        // current selection is collapsed (a cursor). When
+                        // upstream code (e.g. the templates picker) has set
+                        // a non-collapsed range like select-all, preserve it.
+                        if (focusState.isFocused && !hasFocus
+                            && text.text.isNotEmpty()
+                            && text.selection.collapsed) {
                             onTextChange(text.copy(selection = TextRange(text.text.length)))
                         }
                         hasFocus = focusState.isFocused
@@ -121,6 +131,23 @@ fun InputBar(
                 ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
             )
+            IconButton(
+                onClick = onOpenTemplates,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.LibraryBooks,
+                    contentDescription = "Templates",
+                )
+            }
+            IconButton(
+                onClick = onSaveAsTemplate,
+                enabled = text.text.isNotEmpty(),
+            ) {
+                Icon(
+                    Icons.Default.BookmarkAdd,
+                    contentDescription = "Save as template",
+                )
+            }
             IconButton(
                 onClick = { panelExpanded = !panelExpanded },
                 enabled = enabled,

@@ -20,6 +20,7 @@ import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.data.repository.VersionGateRepository
 import dagger.Module
 import dagger.Provides
@@ -127,17 +128,28 @@ object RepositoryModule {
 
     @Provides
     @Singleton
+    fun provideTemplatesRepository(
+        centralApi: CentralApi,
+        userIdentityStore: UserIdentityStore,
+    ): TemplatesRepository {
+        return TemplatesRepository(centralApi, userIdentityStore)
+    }
+
+    @Provides
+    @Singleton
     fun provideUserEventBus(
         webSocketManager: WebSocketManager,
         sessionManager: SessionManager,
         userIdentityStore: UserIdentityStore,
         agentRepository: AgentRepository,
+        templatesRepository: TemplatesRepository,
     ): UserEventBus {
         return UserEventBus(
             webSocketManager,
             sessionManager,
             userIdentityStore,
             agentRepository,
+            templatesRepository,
         )
     }
 

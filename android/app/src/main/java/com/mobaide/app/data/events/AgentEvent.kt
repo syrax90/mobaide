@@ -4,6 +4,7 @@ import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.data.network.dto.TemplateDto
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
@@ -75,6 +76,22 @@ sealed class AgentEvent {
     data class AgentStatusChanged(
         val agentId: String,
         val online: Boolean,
+    ) : AgentEvent()
+
+    /** A prompt template was created by this user (possibly on another
+     *  device). Carries the full row so listeners can upsert without a
+     *  follow-up REST call. */
+    data class TemplateCreated(val template: TemplateDto) : AgentEvent()
+
+    /** A prompt template was updated (PATCH or /touch). */
+    data class TemplateUpdated(val template: TemplateDto) : AgentEvent()
+
+    /** A prompt template was soft-deleted on the server. The full row is
+     *  not transmitted — only an id and tombstone metadata. */
+    data class TemplateDeleted(
+        val templateId: String,
+        val version: Int,
+        val updatedAt: String,
     ) : AgentEvent()
 
     /** Forward-compat fall-through: an envelope arrived with a ``type`` we do

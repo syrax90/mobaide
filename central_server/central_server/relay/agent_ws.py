@@ -26,7 +26,12 @@ from .envelope import (
     decode,
     encode,
 )
-from .routing import MobileClient, RoutingTable, try_enqueue_control
+from .routing import (
+    MobileClient,
+    RoutingTable,
+    broadcast_user_event,
+    try_enqueue_control,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -403,25 +408,12 @@ def _broadcast_status(
     *,
     online: bool,
 ) -> None:
-    """Push an ``agent.status_changed`` JSON envelope to every user-scoped
-    client of the given user. Non-blocking; drops on a full queue because
-    the client will re-sync via REST on its next reconnect anyway.
-    """
-    envelope = json.dumps(
-        {
-            "type": "agent.status_changed",
-            "payload": {"agent_id": agent_id, "online": online},
-        }
+    broadcast_user_event(
+        routing,
+        user_id,
+        "agent.status_changed",
+        {"agent_id": agent_id, "online": online},
     )
-    for client in routing.get_user_clients(user_id):
-        try:
-            client.send_queue.put_nowait(envelope)
-        except asyncio.QueueFull:
-            logger.warning(
-                "user_events.queue_full user_id=%s device=%s — dropping status event",
-                user_id,
-                client.device_id,
-            )
 
 
 async def _safe_close(websocket: WebSocket, code: int, reason: str) -> None:

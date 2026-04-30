@@ -10,6 +10,10 @@ Message format mirrors the per-agent events channel: text JSON envelopes
 of the shape ``{"type": "...", "payload": {...}}``. Current event types:
 
 - ``agent.status_changed`` — payload: ``{"agent_id": str, "online": bool}``
+- ``template.created`` — payload: full template row
+- ``template.updated`` — payload: full template row (PATCH or /touch)
+- ``template.deleted`` — payload: ``{"template_id": str, "version": int,
+  "updated_at": str}``
 """
 from __future__ import annotations
 

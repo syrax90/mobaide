@@ -1,5 +1,7 @@
 package com.mobaide.app.ui.terminal
 
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -7,7 +9,9 @@ import com.mobaide.app.data.network.TerminalFrame
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.repository.TemplatesRepository
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
@@ -15,8 +19,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -31,6 +38,7 @@ enum class ConnectionState { Live, Reconnecting, ReplayingBuffer }
 class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
+    private val templatesRepository: TemplatesRepository,
 ) : ViewModel() {
 
     private val sessionId: String = savedStateHandle["sessionId"]
@@ -106,6 +114,17 @@ class TerminalViewModel @Inject constructor(
 
     private val _unreadRows = MutableStateFlow(0)
     val unreadRows: StateFlow<Int> = _unreadRows.asStateFlow()
+
+    private val _inputText = MutableStateFlow(TextFieldValue(""))
+    val inputText: StateFlow<TextFieldValue> = _inputText.asStateFlow()
+
+    private val _requestInputFocus = MutableStateFlow(false)
+    val requestInputFocus: StateFlow<Boolean> = _requestInputFocus.asStateFlow()
+
+    private val _userMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val userMessages: SharedFlow<String> = _userMessages.asSharedFlow()
+
+    val templates: StateFlow<List<TemplateDto>> = templatesRepository.observeTemplates()
 
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
@@ -188,6 +207,7 @@ class TerminalViewModel @Inject constructor(
         sendChannel.trySend(
             TerminalProtocol.encodeInput((text + "\r").toByteArray(Charsets.UTF_8))
         )
+        _inputText.value = TextFieldValue("")
     }
 
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
@@ -216,6 +236,79 @@ class TerminalViewModel @Inject constructor(
             TerminalProtocol.encodeExecute((text + "\r").toByteArray(Charsets.UTF_8))
         }
         sendChannel.trySend(frame)
+    }
+
+    fun updateInputText(value: TextFieldValue) {
+        _inputText.value = value
+    }
+
+    fun consumeFocusRequest() {
+        _requestInputFocus.value = false
+    }
+
+    /** Replace the input bar's contents with [text] and place the cursor at the
+     *  end. Used for "tap a row to copy into the input" (`onRowCopyToInput`). */
+    fun copyTextToInput(text: String) {
+        _inputText.value = TextFieldValue(text = text, selection = TextRange(text.length))
+        _requestInputFocus.value = true
+    }
+
+    /** Load a template body into the input bar with the inserted text fully
+     *  selected, so the user can either send as-is or immediately overtype.
+     *  Touches `last_used_at` fire-and-forget so a 5xx never blocks the UX. */
+    fun applyTemplate(template: TemplateDto) {
+        _inputText.value = TextFieldValue(
+            text = template.body,
+            selection = TextRange(0, template.body.length),
+        )
+        _requestInputFocus.value = true
+        viewModelScope.launch {
+            try {
+                templatesRepository.touchTemplate(template.template_id)
+            } catch (_: Throwable) {
+                // Touch is purely a UX nicety (recents ordering); silently
+                // ignore failures.
+            }
+        }
+    }
+
+    fun saveCurrentInputAsTemplate(name: String) {
+        val body = _inputText.value.text
+        val trimmedName = name.trim()
+        if (body.isEmpty() || trimmedName.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                templatesRepository.createTemplate(trimmedName, body)
+                _userMessages.tryEmit("Saved template \"$trimmedName\"")
+            } catch (t: Throwable) {
+                _userMessages.tryEmit(
+                    "Failed to save template: ${t.message ?: "unknown error"}",
+                )
+            }
+        }
+    }
+
+    fun deleteTemplate(templateId: String) {
+        viewModelScope.launch {
+            try {
+                templatesRepository.deleteTemplate(templateId)
+            } catch (_: Throwable) {
+                _userMessages.tryEmit("Failed to delete template")
+            }
+        }
+    }
+
+    fun toggleTemplateFavorite(template: TemplateDto) {
+        viewModelScope.launch {
+            try {
+                templatesRepository.updateTemplate(
+                    template.template_id,
+                    isFavorite = !template.is_favorite,
+                )
+            } catch (_: Throwable) {
+                _userMessages.tryEmit("Failed to update template")
+            }
+        }
     }
 
     fun setFollowMode(enabled: Boolean) {

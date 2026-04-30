@@ -25,6 +25,7 @@ import com.mobaide.app.ui.register.VerifyEmailScreen
 import com.mobaide.app.ui.sessions.CreateSessionScreen
 import com.mobaide.app.ui.sessions.SessionListScreen
 import com.mobaide.app.ui.settings.SettingsScreen
+import com.mobaide.app.ui.templates.TemplatesScreen
 import com.mobaide.app.ui.terminal.TerminalScreen
 import com.mobaide.app.ui.update.IncompatibleServerScreen
 
@@ -236,6 +237,16 @@ fun AppNavigation(
                         popUpTo(Routes.AGENT_LIST) { inclusive = true }
                     }
                 },
+                onManageTemplates = {
+                    navController.navigate(Routes.TEMPLATES)
+                },
+            )
+        }
+
+        composable(Routes.TEMPLATES) {
+            TemplatesScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
             )
         }
 

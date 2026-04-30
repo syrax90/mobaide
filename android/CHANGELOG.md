@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- Prompt-templates management screen (reachable from Settings → "Prompt
+  templates"): lists all saved templates with rename, delete, and
+  favorite-toggle actions backed by ``TemplatesRepository``.
+- In-terminal templates picker bottom-sheet: recents / favorites / all
+  sections with live search. Tapping a template inserts it into the input bar;
+  long-press surfaces a context menu for quick delete or favorite-toggle.
+- Save-as-template dialog: saves the current ``InputBar`` text as a new named
+  template via a single API call.
+- ``inputText`` hoisted from local ``remember`` state in ``TerminalScreen``
+  into ``TerminalViewModel`` (``StateFlow<TextFieldValue>``) so the templates
+  picker, the save-template action, ``InputBar``, and ``FullScreenInputSheet``
+  all share a single source of truth.
+- ``template.created``, ``template.updated``, and ``template.deleted`` push
+  events handled in ``UserEventBus``; forwarded to
+  ``TemplatesRepository.applyUpserted`` / ``applyDeleted`` for optimistic
+  local updates without a full refresh.
 - ``BuildConfig.APP_PROTOCOL_VERSION`` and ``BuildConfig.MIN_SERVER_PROTOCOL_VERSION``
   expose the wire-contract version so future ``server_info`` / ``/api/version``
   comparisons stay in lockstep with the Python side.

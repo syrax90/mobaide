@@ -70,6 +70,19 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
     attempts    INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS prompt_templates (
+    template_id   TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id),
+    name          TEXT NOT NULL,
+    body          TEXT NOT NULL,
+    is_favorite   INTEGER NOT NULL DEFAULT 0,
+    last_used_at  TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    deleted_at    TEXT,
+    version       INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub
     ON users(google_sub) WHERE google_sub IS NOT NULL;
@@ -82,6 +95,8 @@ CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_email_verification_user
     ON email_verification_tokens(user_id) WHERE consumed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_prompt_templates_owner
+    ON prompt_templates(owner_user_id) WHERE deleted_at IS NULL;
 """
 
 
@@ -185,6 +200,13 @@ class Database:
                 )
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 5")
+
+        if version < 6:
+            # Pure additive migration: only creates the new prompt_templates
+            # table and its index. No ALTER on existing tables, so this is
+            # safe and idempotent on populated dev databases.
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 6")
 
         await self._conn.commit()
 
@@ -397,6 +419,135 @@ class Database:
             (_now_iso(), agent_id),
         )
         await self.conn.commit()
+
+    _TEMPLATE_COLUMNS = (
+        "template_id, owner_user_id, name, body, is_favorite, "
+        "last_used_at, created_at, updated_at, deleted_at, version"
+    )
+
+    @staticmethod
+    def _row_to_template(row: aiosqlite.Row) -> dict:
+        d = dict(row)
+        d["is_favorite"] = bool(d["is_favorite"])
+        return d
+
+    async def create_template(
+        self, owner_user_id: str, name: str, body: str
+    ) -> dict:
+        """Create a new prompt template owned by ``owner_user_id``."""
+        template_id = uuid.uuid4().hex[:12]
+        now = _now_iso()
+        await self.conn.execute(
+            "INSERT INTO prompt_templates "
+            "(template_id, owner_user_id, name, body, is_favorite, "
+            "last_used_at, created_at, updated_at, deleted_at, version) "
+            "VALUES (?, ?, ?, ?, 0, NULL, ?, ?, NULL, 1)",
+            (template_id, owner_user_id, name, body, now, now),
+        )
+        await self.conn.commit()
+        row = await self.get_template(template_id)
+        assert row is not None
+        return row
+
+    async def get_template(self, template_id: str) -> dict | None:
+        cursor = await self.conn.execute(
+            f"SELECT {self._TEMPLATE_COLUMNS} "
+            "FROM prompt_templates WHERE template_id = ?",
+            (template_id,),
+        )
+        row = await cursor.fetchone()
+        return self._row_to_template(row) if row else None
+
+    async def list_templates_for_user(self, user_id: str) -> list[dict]:
+        cursor = await self.conn.execute(
+            f"SELECT {self._TEMPLATE_COLUMNS} "
+            "FROM prompt_templates "
+            "WHERE owner_user_id = ? AND deleted_at IS NULL "
+            "ORDER BY created_at DESC",
+            (user_id,),
+        )
+        return [self._row_to_template(row) async for row in cursor]
+
+    async def is_template_owner(
+        self, template_id: str, user_id: str
+    ) -> bool:
+        cursor = await self.conn.execute(
+            "SELECT 1 FROM prompt_templates "
+            "WHERE template_id = ? AND owner_user_id = ? "
+            "  AND deleted_at IS NULL",
+            (template_id, user_id),
+        )
+        return await cursor.fetchone() is not None
+
+    async def update_template(
+        self,
+        template_id: str,
+        *,
+        name: str | None = None,
+        body: str | None = None,
+        is_favorite: bool | None = None,
+    ) -> dict | None:
+        """Partial update. Bumps ``updated_at`` and ``version`` when at least
+        one field is provided. Returns the updated row, or None if the
+        template doesn't exist or has been soft-deleted."""
+        sets: list[str] = []
+        params: list[object] = []
+        if name is not None:
+            sets.append("name = ?")
+            params.append(name)
+        if body is not None:
+            sets.append("body = ?")
+            params.append(body)
+        if is_favorite is not None:
+            sets.append("is_favorite = ?")
+            params.append(1 if is_favorite else 0)
+        if not sets:
+            return await self.get_template(template_id)
+        sets.append("updated_at = ?")
+        params.append(_now_iso())
+        sets.append("version = version + 1")
+        params.append(template_id)
+        cursor = await self.conn.execute(
+            f"UPDATE prompt_templates SET {', '.join(sets)} "
+            "WHERE template_id = ? AND deleted_at IS NULL",
+            tuple(params),
+        )
+        await self.conn.commit()
+        if cursor.rowcount != 1:
+            return None
+        return await self.get_template(template_id)
+
+    async def soft_delete_template(self, template_id: str) -> dict | None:
+        """Mark a template as deleted. Returns the tombstone row (with
+        ``deleted_at`` and bumped ``version``/``updated_at``) or None if it
+        was already gone."""
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE prompt_templates "
+            "SET deleted_at = ?, updated_at = ?, version = version + 1 "
+            "WHERE template_id = ? AND deleted_at IS NULL",
+            (now, now, template_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount != 1:
+            return None
+        return await self.get_template(template_id)
+
+    async def touch_template(self, template_id: str) -> dict | None:
+        """Bump ``last_used_at`` (and ``updated_at`` + ``version``) on the
+        template. Used when a template is loaded into the input bar via the
+        picker."""
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE prompt_templates "
+            "SET last_used_at = ?, updated_at = ?, version = version + 1 "
+            "WHERE template_id = ? AND deleted_at IS NULL",
+            (now, now, template_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount != 1:
+            return None
+        return await self.get_template(template_id)
 
     async def create_pairing_token(
         self, agent_id: str, ttl_seconds: int

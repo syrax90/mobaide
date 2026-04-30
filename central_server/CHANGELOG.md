@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Added
+- Prompt-templates CRUD: ``GET/POST /api/templates``,
+  ``GET/PUT/DELETE /api/templates/{id}``, and
+  ``POST /api/templates/{id}/touch`` (updates ``last_used_at`` and bumps the
+  template to the top of the recents list).
+- ``prompt_templates`` SQLite table (schema v6 migration — pure additive; runs
+  automatically on startup alongside the existing v1-v5 migrations). Indexed
+  on ``owner_user_id`` for per-user scoped queries.
+- Three new push events broadcast over the existing ``/ws/user-events``
+  channel: ``template.created``, ``template.updated``, and
+  ``template.deleted`` — so all connected clients for a user stay in sync
+  without polling.
 - ``__version__`` exposed via ``importlib.metadata.version("central-server")``
   and used as the canonical source of truth for ``FastAPI(version=...)`` and
   the relay handshake ``server_version`` field.

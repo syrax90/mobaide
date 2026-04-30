@@ -31,16 +31,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -66,9 +67,17 @@ fun TerminalScreen(
     val promptState by viewModel.promptState.collectAsStateWithLifecycle()
     val followMode by viewModel.followMode.collectAsStateWithLifecycle()
     val unreadRows by viewModel.unreadRows.collectAsStateWithLifecycle()
-    var inputText by remember { mutableStateOf(TextFieldValue("")) }
-    var requestInputFocus by remember { mutableStateOf(false) }
+    val inputText by viewModel.inputText.collectAsStateWithLifecycle()
+    val requestInputFocus by viewModel.requestInputFocus.collectAsStateWithLifecycle()
+    val templates by viewModel.templates.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
+    var showTemplatesPicker by remember { mutableStateOf(false) }
+    var showSaveTemplateDialog by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        viewModel.userMessages.collect { snackbarHostState.showSnackbar(it) }
+    }
 
     val stateColor = when (sessionState) {
         "running" -> StateRunning
@@ -81,6 +90,7 @@ fun TerminalScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -129,8 +139,7 @@ fun TerminalScreen(
                             viewModel.sendTappedRow(text, isCurrentInput)
                         },
                         onRowCopyToInput = { text, _ ->
-                            inputText = TextFieldValue(text = text, selection = TextRange(text.length))
-                            requestInputFocus = true
+                            viewModel.copyTextToInput(text)
                         },
                         onScrollSettled = viewModel::onUserScrollSettled,
                         followMode = followMode,
@@ -149,13 +158,15 @@ fun TerminalScreen(
             }
             InputBar(
                 text = inputText,
-                onTextChange = { inputText = it },
+                onTextChange = viewModel::updateInputText,
                 onSend = { text -> viewModel.sendInput(text) },
                 onSendBytes = viewModel::sendBytes,
                 enabled = isConnected && sessionState == "running",
                 requestFocus = requestInputFocus,
-                onFocusHandled = { requestInputFocus = false },
+                onFocusHandled = viewModel::consumeFocusRequest,
                 onExpand = { showFullScreenInput = true },
+                onOpenTemplates = { showTemplatesPicker = true },
+                onSaveAsTemplate = { showSaveTemplateDialog = true },
             )
         }
     }
@@ -163,14 +174,39 @@ fun TerminalScreen(
     if (showFullScreenInput) {
         FullScreenInputSheet(
             text = inputText,
-            onTextChange = { inputText = it },
+            onTextChange = viewModel::updateInputText,
             onSend = { text ->
                 viewModel.sendInput(text)
-                inputText = TextFieldValue("")
                 showFullScreenInput = false
             },
             onDismiss = { showFullScreenInput = false },
             enabled = isConnected && sessionState == "running",
+        )
+    }
+
+    if (showTemplatesPicker) {
+        TemplatesPickerSheet(
+            templates = templates,
+            onPick = { template ->
+                viewModel.applyTemplate(template)
+                showTemplatesPicker = false
+            },
+            onToggleFavorite = viewModel::toggleTemplateFavorite,
+            onDelete = { template ->
+                viewModel.deleteTemplate(template.template_id)
+            },
+            onDismiss = { showTemplatesPicker = false },
+        )
+    }
+
+    if (showSaveTemplateDialog) {
+        SaveTemplateDialog(
+            bodyPreview = inputText.text,
+            onSave = { name ->
+                viewModel.saveCurrentInputAsTemplate(name)
+                showSaveTemplateDialog = false
+            },
+            onDismiss = { showSaveTemplateDialog = false },
         )
     }
 
