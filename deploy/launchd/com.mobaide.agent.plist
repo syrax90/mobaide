@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mobaide.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/mobaide/bin/mobaide-agent-launcher.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MOBAIDE_AGENT_PREFIX</key>
+    <string>/usr/local/mobaide</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!--
+    Throttle between restarts so the launcher's boot journal sees a
+    realistic window for the 3-strike rollback heuristic. Without this
+    launchd can re-exec instantly and hide a degraded boot loop.
+  -->
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/usr/local/mobaide/agent.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/mobaide/agent.err.log</string>
+</dict>
+</plist>

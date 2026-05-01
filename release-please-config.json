@@ -8,9 +8,9 @@
   "draft": false,
   "prerelease": false,
   "packages": {
-    "claude_agent": {
+    "mobaide_agent": {
       "release-type": "python",
-      "package-name": "claude-mobile-agent",
+      "package-name": "mobaide-agent",
       "component": "agent",
       "changelog-path": "CHANGELOG.md"
     },

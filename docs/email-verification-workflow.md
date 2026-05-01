@@ -68,7 +68,7 @@ it is not forgotten if the server ever scales out.
      `docker compose up` never start it.
    * The agent runs natively (not in Docker) — start it separately via
      `start-all.ps1`, or from the agent's conda env:
-     `cd claude_agent && python -m claude_mobile`.
+     `cd mobaide_agent && python -m mobaide`.
 2. Mailpit's web UI: <http://localhost:8025>. Every email the server sends
    shows up here in real time, with both the rendered HTML and raw source.
 3. SMTP settings are already pointed at Mailpit in `central_server/.env.example`:

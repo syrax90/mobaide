@@ -3,7 +3,7 @@ services:
     build:
       context: ./central_server
       dockerfile: Dockerfile
-    container_name: claude-mobile-central-server
+    container_name: mobaide-central-server
     restart: unless-stopped
     env_file:
       - ./central_server/.env
@@ -30,7 +30,7 @@ services:
   # (café Wi-Fi, conferences) can't read captured OTPs off an exposed 0.0.0.0.
   mailpit:
     image: axllent/mailpit:v1.22
-    container_name: claude-mobile-mailpit
+    container_name: mobaide-mailpit
     restart: unless-stopped
     profiles: ["dev"]
     environment:

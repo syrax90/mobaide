@@ -1,0 +1,784 @@
+"""End-to-end tests for the git management endpoints (CLA-46).
+
+The router is exercised through an ``ASGITransport`` so we go through the
+real auth dependency, the projects store, and the wired
+``app.state.worktree_manager``. The underlying ``_run_git`` is exercised
+both directly (against a real on-disk repo built with ``git init``) and
+indirectly through the merge logic in ``service._build_items``.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import shutil
+import sys
+import subprocess
+import types
+from typing import Any
+from unittest.mock import patch
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from mobaide.agent.app import create_app
+from mobaide.agent.config import AgentConfig
+from mobaide.agent.git.models import (
+    BusyHolder,
+    GitDeleteItem,
+    GitDeleteRequest,
+    GitItemRead,
+)
+from mobaide.agent.git.service import (
+    GitItemBusyError,
+    _build_items,
+    _busy_holders,
+    delete_git_items,
+    list_git_items,
+)
+from mobaide.core import ProjectRecord
+from mobaide.linear.worktree import (
+    BranchDeleteError,
+    BranchInfo,
+    WorktreeInfo,
+    WorktreeRemoveError,
+)
+
+from .conftest import TEST_JWT_SECRET, TEST_PASSWORD, TEST_USERNAME
+
+
+GIT_BIN = shutil.which("git")
+requires_git = pytest.mark.skipif(GIT_BIN is None, reason="git binary not on PATH")
+
+
+def _run_git_sync(repo: str, *args: str) -> None:
+    """Synchronous helper for fixture setup only — never used by SUT."""
+    env = dict(os.environ)
+    # Force-isolate from the developer's global git config so a missing
+    # user.name/user.email or commit signing setup doesn't break commits.
+    env.setdefault("GIT_AUTHOR_NAME", "Test")
+    env.setdefault("GIT_AUTHOR_EMAIL", "test@example.com")
+    env.setdefault("GIT_COMMITTER_NAME", "Test")
+    env.setdefault("GIT_COMMITTER_EMAIL", "test@example.com")
+    env.setdefault("GIT_CONFIG_GLOBAL", os.path.devnull)
+    env.setdefault("GIT_CONFIG_SYSTEM", os.path.devnull)
+    subprocess.run(
+        [GIT_BIN, *args],
+        cwd=repo,
+        check=True,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+
+@pytest.fixture
+def real_repo(tmp_path) -> str:
+    """A real git repository with two branches and one extra worktree.
+
+    Layout:
+        <repo>/.git
+        <repo>/  -- HEAD on main
+        <repo>/wt/topic  -- worktree on branch 'topic'
+        branches: main (current), topic (with worktree), stale (no worktree)
+    """
+    if GIT_BIN is None:
+        pytest.skip("git binary not on PATH")
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    _run_git_sync(repo, "init", "-b", "main")
+    # Ensure user identity is set on the repo as well, for safety.
+    _run_git_sync(repo, "config", "user.email", "test@example.com")
+    _run_git_sync(repo, "config", "user.name", "Test")
+    # Initial commit.
+    (tmp_path / "repo" / "README.md").write_text("hello")
+    _run_git_sync(repo, "add", "README.md")
+    _run_git_sync(repo, "commit", "-m", "initial")
+    # Create two extra branches.
+    _run_git_sync(repo, "branch", "topic")
+    _run_git_sync(repo, "branch", "stale")
+    # Add a worktree for 'topic' under <repo>/wt/topic.
+    wt_path = str(tmp_path / "repo" / "wt" / "topic")
+    _run_git_sync(repo, "worktree", "add", wt_path, "topic")
+    return repo
+
+
+@pytest.fixture
+async def app_with_git(tmp_path, real_repo):
+    cfg = AgentConfig(
+        jwt_secret_key=TEST_JWT_SECRET,
+        user_store_path=str(tmp_path / "users.json"),
+        projects_store_path=str(tmp_path / "projects.json"),
+        max_sessions=4,
+        log_level="DEBUG",
+    )
+    application = create_app(config=cfg)
+    application.state.user_store.add_user(TEST_USERNAME, TEST_PASSWORD)
+    store = application.state.projects_store
+    store.create(ProjectRecord(name="alpha", path=real_repo))
+    # Seed a non-git project to exercise the 400 path.
+    non_git = str(tmp_path / "plain")
+    os.makedirs(non_git, exist_ok=True)
+    store.create(ProjectRecord(name="plain", path=non_git))
+    yield application
+    await application.state.session_manager.shutdown()
+
+
+@pytest.fixture
+async def client_git(app_with_git):
+    transport = ASGITransport(app=app_with_git)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+@pytest.fixture
+async def auth_headers_g(client_git) -> dict[str, str]:
+    resp = await client_git.post(
+        "/api/auth/token",
+        json={"username": TEST_USERNAME, "password": TEST_PASSWORD},
+    )
+    assert resp.status_code == 200
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+class TestBuildItems:
+    def test_branch_with_worktree_merge(self):
+        branches = [
+            BranchInfo(
+                name="topic", sha="sha", upstream="origin/topic",
+                ahead=2, behind=1, gone=False, is_current=False,
+            ),
+        ]
+        worktrees = [
+            WorktreeInfo(
+                path="/repo/wt/topic", head="sha", branch="refs/heads/topic",
+                detached=False, locked=False, locked_reason=None,
+                prunable=False, prunable_reason=None,
+            ),
+        ]
+        items = _build_items(branches, worktrees)
+        assert len(items) == 1
+        item = items[0]
+        assert item.kind == "branch_with_worktree"
+        assert item.branch == "topic"
+        assert item.worktree_path == "/repo/wt/topic"
+        assert item.upstream == "origin/topic"
+        assert item.ahead == 2
+        assert item.behind == 1
+
+    def test_branch_only_when_no_worktree(self):
+        branches = [
+            BranchInfo(
+                name="stale", sha="sha", upstream=None,
+                ahead=0, behind=0, gone=True, is_current=False,
+            ),
+        ]
+        items = _build_items(branches, [])
+        assert len(items) == 1
+        item = items[0]
+        assert item.kind == "branch_only"
+        assert item.branch == "stale"
+        assert item.worktree_path is None
+        assert item.gone is True
+
+    def test_orphan_worktree_when_no_matching_branch(self):
+        # Worktree whose branch ref is not present in `for-each-ref refs/heads/`.
+        worktrees = [
+            WorktreeInfo(
+                path="/repo/wt/orphan", head="sha", branch="refs/heads/orphan",
+                detached=False, locked=False, locked_reason=None,
+                prunable=True, prunable_reason="gitdir missing",
+            ),
+        ]
+        items = _build_items([], worktrees)
+        assert len(items) == 1
+        item = items[0]
+        assert item.kind == "orphan_worktree"
+        assert item.worktree_path == "/repo/wt/orphan"
+        assert item.branch == "orphan"
+        assert item.prunable is True
+
+    def test_detached_worktree_classified_as_orphan(self):
+        # Detached HEADs have no branch ref; must not be matched against any
+        # branch and must surface as orphan_worktree with detached=True.
+        worktrees = [
+            WorktreeInfo(
+                path="/repo/wt/detached", head="sha", branch=None,
+                detached=True, locked=False, locked_reason=None,
+                prunable=False, prunable_reason=None,
+            ),
+        ]
+        items = _build_items([], worktrees)
+        assert len(items) == 1
+        assert items[0].kind == "orphan_worktree"
+        assert items[0].detached is True
+
+    def test_locked_reason_propagated(self):
+        branches = [
+            BranchInfo(
+                name="topic", sha="sha", upstream=None,
+                ahead=0, behind=0, gone=False, is_current=False,
+            ),
+        ]
+        worktrees = [
+            WorktreeInfo(
+                path="/repo/wt/topic", head="sha", branch="refs/heads/topic",
+                detached=False, locked=True, locked_reason="manual lock",
+                prunable=False, prunable_reason=None,
+            ),
+        ]
+        items = _build_items(branches, worktrees)
+        assert items[0].locked is True
+        assert items[0].locked_reason == "manual lock"
+
+    def test_is_current_propagated_from_branch_info(self):
+        """Regression: ``branch_with_worktree`` must not hardcode ``is_current``.
+
+        The Android client uses ``isDeletable = !is_current`` to gate
+        long-press selection — a hardcoded True breaks the entire delete
+        flow for any branch checked out in a worktree, which is the
+        primary use case (cleaning up auto-scan feature branches).
+        """
+        branches = [
+            BranchInfo(
+                name="main", sha="s1", upstream=None,
+                ahead=0, behind=0, gone=False, is_current=True,
+            ),
+            BranchInfo(
+                name="topic", sha="s2", upstream=None,
+                ahead=0, behind=0, gone=False, is_current=False,
+            ),
+        ]
+        worktrees = [
+            WorktreeInfo(
+                path="/repo", head="s1", branch="refs/heads/main",
+                detached=False, locked=False, locked_reason=None,
+                prunable=False, prunable_reason=None,
+            ),
+            WorktreeInfo(
+                path="/repo/wt/topic", head="s2", branch="refs/heads/topic",
+                detached=False, locked=False, locked_reason=None,
+                prunable=False, prunable_reason=None,
+            ),
+        ]
+        items = _build_items(branches, worktrees)
+        by_branch = {it.branch: it for it in items if it.branch}
+        assert by_branch["main"].is_current is True
+        assert by_branch["topic"].is_current is False
+
+    def test_three_kinds_combined(self):
+        branches = [
+            BranchInfo(
+                name="main", sha="s1", upstream=None,
+                ahead=0, behind=0, gone=False, is_current=True,
+            ),
+            BranchInfo(
+                name="topic", sha="s2", upstream=None,
+                ahead=0, behind=0, gone=False, is_current=False,
+            ),
+            BranchInfo(
+                name="stale", sha="s3", upstream=None,
+                ahead=0, behind=0, gone=True, is_current=False,
+            ),
+        ]
+        worktrees = [
+            WorktreeInfo(
+                path="/repo", head="s1", branch="refs/heads/main",
+                detached=False, locked=False, locked_reason=None,
+                prunable=False, prunable_reason=None,
+            ),
+            WorktreeInfo(
+                path="/repo/wt/topic", head="s2", branch="refs/heads/topic",
+                detached=False, locked=False, locked_reason=None,
+                prunable=False, prunable_reason=None,
+            ),
+            WorktreeInfo(
+                path="/repo/wt/orphan", head="s4", branch=None,
+                detached=True, locked=False, locked_reason=None,
+                prunable=False, prunable_reason=None,
+            ),
+        ]
+        items = _build_items(branches, worktrees)
+        kinds = [item.kind for item in items]
+        # 3 branches → 2 with worktree (main, topic), 1 branch_only (stale);
+        # 1 detached worktree → 1 orphan_worktree. Total 4.
+        assert kinds.count("branch_with_worktree") == 2
+        assert kinds.count("branch_only") == 1
+        assert kinds.count("orphan_worktree") == 1
+
+
+class TestBusyHolders:
+    async def test_no_affected_paths_returns_empty(self):
+        result = await _busy_holders(set(), session_manager=None, autoscan_manager=None)
+        assert result == []
+
+    async def test_no_managers_returns_empty(self):
+        result = await _busy_holders(
+            {"/some/path"},
+            session_manager=None,
+            autoscan_manager=None,
+        )
+        assert result == []
+
+    async def test_session_holder_matches_realpath_normalized(self, tmp_path):
+        # The busy-guard must compare paths after realpath+normcase normalization
+        # so trailing slashes / case differences don't false-negative.
+        wt_dir = tmp_path / "wt"
+        wt_dir.mkdir()
+        canonical = os.path.normcase(os.path.realpath(str(wt_dir)))
+
+        # Build a fake session_manager.list_sessions() that returns one
+        # session whose cwd points to the same path (with a trailing slash to
+        # exercise the normalizer).
+        session = types.SimpleNamespace(
+            session_id="s-1",
+            cwd=str(wt_dir) + os.sep,
+        )
+        session_manager = types.SimpleNamespace(list_sessions=lambda: [session])
+
+        result = await _busy_holders(
+            {canonical},
+            session_manager=session_manager,
+            autoscan_manager=None,
+        )
+        assert len(result) == 1
+        assert result[0].kind == "session"
+        assert result[0].session_id == "s-1"
+
+    async def test_session_with_unrelated_cwd_does_not_match(self, tmp_path):
+        canonical = os.path.normcase(os.path.realpath(str(tmp_path / "wt")))
+        session = types.SimpleNamespace(
+            session_id="s-2",
+            cwd="/totally/unrelated/path",
+        )
+        session_manager = types.SimpleNamespace(list_sessions=lambda: [session])
+
+        result = await _busy_holders(
+            {canonical},
+            session_manager=session_manager,
+            autoscan_manager=None,
+        )
+        assert result == []
+
+    async def test_session_with_none_cwd_skipped(self, tmp_path):
+        canonical = os.path.normcase(os.path.realpath(str(tmp_path / "wt")))
+        session = types.SimpleNamespace(session_id="s-3", cwd=None)
+        session_manager = types.SimpleNamespace(list_sessions=lambda: [session])
+
+        result = await _busy_holders(
+            {canonical},
+            session_manager=session_manager,
+            autoscan_manager=None,
+        )
+        assert result == []
+
+    async def test_autoscan_workitem_match(self, tmp_path):
+        wt_dir = tmp_path / "wt-autoscan"
+        wt_dir.mkdir()
+        canonical = os.path.normcase(os.path.realpath(str(wt_dir)))
+
+        workitem = types.SimpleNamespace(worktree_path=str(wt_dir))
+
+        async def list_all_workitems():
+            return {"alpha": [workitem]}
+
+        autoscan_manager = types.SimpleNamespace(
+            list_all_workitems=list_all_workitems,
+        )
+
+        result = await _busy_holders(
+            {canonical},
+            session_manager=None,
+            autoscan_manager=autoscan_manager,
+        )
+        assert len(result) == 1
+        assert result[0].kind == "auto_scan"
+        assert result[0].project_name == "alpha"
+
+    async def test_session_manager_exception_is_swallowed(self):
+        # The busy-guard must not crash if the session manager misbehaves; it
+        # simply contributes zero holders from that source.
+        def boom():
+            raise RuntimeError("session manager unavailable")
+        session_manager = types.SimpleNamespace(list_sessions=boom)
+
+        result = await _busy_holders(
+            {"/some/canonical/path"},
+            session_manager=session_manager,
+            autoscan_manager=None,
+        )
+        assert result == []
+
+
+class _FakeManager:
+    """Minimal stand-in for WorktreeManager exposing only what the service
+    calls. Delete operations are recorded so tests can assert ordering."""
+
+    def __init__(self) -> None:
+        self.delete_branch_calls: list[tuple[str, str, bool]] = []
+        self.remove_worktree_calls: list[tuple[str, str]] = []
+        self.delete_branch_error: Exception | None = None
+        self.remove_worktree_error: Exception | None = None
+
+    async def delete_branch(
+        self, project_root: str, name: str, *, force: bool = False,
+    ) -> None:
+        self.delete_branch_calls.append((project_root, name, force))
+        if self.delete_branch_error is not None:
+            raise self.delete_branch_error
+
+    async def remove_worktree(self, project_root: str, path: str) -> None:
+        self.remove_worktree_calls.append((project_root, path))
+        if self.remove_worktree_error is not None:
+            raise self.remove_worktree_error
+
+
+class _FakeBus:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict]] = []
+
+    def publish(self, topic: str, payload: dict) -> None:
+        self.published.append((topic, payload))
+
+
+class TestDeleteGitItems:
+    async def test_busy_guard_short_circuits_without_calling_manager(self, tmp_path):
+        wt_dir = tmp_path / "wt"
+        wt_dir.mkdir()
+        manager = _FakeManager()
+        bus = _FakeBus()
+        # A session holds the worktree path.
+        session = types.SimpleNamespace(session_id="s-1", cwd=str(wt_dir))
+        session_manager = types.SimpleNamespace(list_sessions=lambda: [session])
+
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(
+                kind="orphan_worktree", worktree_path=str(wt_dir),
+            ),
+        ])
+
+        with pytest.raises(GitItemBusyError) as exc_info:
+            await delete_git_items(
+                request,
+                project_name="alpha",
+                project_root=str(tmp_path),
+                manager=manager,
+                session_manager=session_manager,
+                autoscan_manager=None,
+                event_bus=bus,
+                actor="tester",
+            )
+        assert any(h.kind == "session" for h in exc_info.value.busy_by)
+        # Manager and bus must both be untouched.
+        assert manager.remove_worktree_calls == []
+        assert manager.delete_branch_calls == []
+        assert bus.published == []
+
+    async def test_branch_only_happy_path_publishes_event(self, tmp_path):
+        manager = _FakeManager()
+        bus = _FakeBus()
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(kind="branch_only", branch="feature/x"),
+        ])
+
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=bus,
+            actor="tester",
+        )
+
+        assert manager.delete_branch_calls == [(str(tmp_path), "feature/x", False)]
+        assert manager.remove_worktree_calls == []
+        assert len(response.results) == 1
+        assert response.results[0].ok is True
+        assert response.results[0].kind == "branch_only"
+        # git.changed must fire after a successful delete.
+        assert bus.published == [("git.changed", {"project_name": "alpha"})]
+
+    async def test_branch_only_unmerged_returns_force_required(self, tmp_path):
+        manager = _FakeManager()
+        manager.delete_branch_error = BranchDeleteError(
+            name="feature/x", stderr="not fully merged", unmerged=True,
+        )
+        bus = _FakeBus()
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(kind="branch_only", branch="feature/x"),
+        ])
+
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=bus,
+            actor="tester",
+        )
+        assert response.results[0].ok is False
+        assert response.results[0].error == "force_required"
+        # No state changed → must NOT publish git.changed.
+        assert bus.published == []
+
+    async def test_branch_with_worktree_removes_then_deletes_in_order(self, tmp_path):
+        # Order matters: removing the worktree must happen BEFORE the branch
+        # delete, otherwise git refuses to drop a branch that's still checked out.
+        # The worktree directory must exist on disk so the ``worktree_already_gone``
+        # guard in the service does not skip the remove_worktree call.
+        wt_dir = tmp_path / "wt" / "x"
+        wt_dir.mkdir(parents=True)
+        wt_path = str(wt_dir)
+
+        manager = _FakeManager()
+        bus = _FakeBus()
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(
+                kind="branch_with_worktree",
+                branch="feature/x",
+                worktree_path=wt_path,
+            ),
+        ])
+
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=bus,
+            actor="tester",
+        )
+        assert manager.remove_worktree_calls == [(str(tmp_path), wt_path)]
+        assert manager.delete_branch_calls == [(str(tmp_path), "feature/x", False)]
+        assert response.results[0].ok is True
+        assert bus.published == [("git.changed", {"project_name": "alpha"})]
+
+    async def test_orphan_worktree_lock_error_maps_to_locked(self, tmp_path):
+        manager = _FakeManager()
+        manager.remove_worktree_error = WorktreeRemoveError(
+            path="/repo/wt/x", stderr="fatal: '/repo/wt/x' is locked",
+        )
+        bus = _FakeBus()
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(
+                kind="orphan_worktree", worktree_path="/repo/wt/x",
+            ),
+        ])
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=bus,
+            actor="tester",
+        )
+        assert response.results[0].ok is False
+        assert response.results[0].error == "locked"
+        assert bus.published == []
+
+    async def test_invalid_branch_only_payload_returns_invalid(self, tmp_path):
+        manager = _FakeManager()
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(kind="branch_only", branch=None),
+        ])
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=None,
+            actor="tester",
+        )
+        assert response.results[0].ok is False
+        assert response.results[0].error == "invalid"
+        assert manager.delete_branch_calls == []
+
+    async def test_batch_partial_failure_publishes_only_when_anything_changed(
+        self, tmp_path,
+    ):
+        # Two items: one succeeds, one fails. git.changed must still publish
+        # because at least one delete completed.
+        manager = _FakeManager()
+        bus = _FakeBus()
+        # First call (delete_branch for "ok") succeeds; second call must fail.
+        # We toggle the error after the first call by clearing it via a side
+        # effect using a counter.
+        calls = {"n": 0}
+        original = manager.delete_branch
+
+        async def patched_delete_branch(root, name, *, force=False):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise BranchDeleteError(
+                    name=name, stderr="not fully merged", unmerged=True,
+                )
+            await original(root, name, force=force)
+
+        manager.delete_branch = patched_delete_branch  # type: ignore[method-assign]
+
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(kind="branch_only", branch="ok"),
+            GitDeleteItem(kind="branch_only", branch="bad"),
+        ])
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=bus,
+            actor="tester",
+        )
+        results = response.results
+        assert len(results) == 2
+        assert results[0].ok is True
+        assert results[1].ok is False
+        assert results[1].error == "force_required"
+        # Exactly one publish, since at least one delete succeeded.
+        assert bus.published == [("git.changed", {"project_name": "alpha"})]
+
+
+@requires_git
+class TestGitRouterEndpoints:
+    async def test_get_items_unknown_project_returns_404(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.get(
+            "/api/projects/does-not-exist/git/items",
+            headers=auth_headers_g,
+        )
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
+
+    async def test_get_items_non_git_project_returns_400(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.get(
+            "/api/projects/plain/git/items",
+            headers=auth_headers_g,
+        )
+        assert resp.status_code == 400
+        assert "not a git repository" in resp.json()["detail"]
+
+    async def test_get_items_requires_auth(self, client_git):
+        resp = await client_git.get("/api/projects/alpha/git/items")
+        assert resp.status_code in (401, 403)
+
+    async def test_get_items_returns_real_repo_shape(
+        self, client_git, auth_headers_g,
+    ):
+        # `alpha` was set up by real_repo fixture: branches main / topic / stale,
+        # one extra worktree (wt/topic). Plus the main repo as its own worktree.
+        resp = await client_git.get(
+            "/api/projects/alpha/git/items",
+            headers=auth_headers_g,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "items" in body
+        items = body["items"]
+        kinds = [i["kind"] for i in items]
+        # main and topic both have worktrees → 2 branch_with_worktree.
+        # stale has no worktree → 1 branch_only.
+        assert kinds.count("branch_with_worktree") == 2
+        assert kinds.count("branch_only") == 1
+        branches = {
+            i["branch"] for i in items if i.get("kind") != "orphan_worktree"
+        }
+        assert {"main", "topic", "stale"} <= branches
+
+    async def test_post_items_delete_branch_only_succeeds(
+        self, client_git, auth_headers_g,
+    ):
+        resp = await client_git.post(
+            "/api/projects/alpha/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [{"kind": "branch_only", "branch": "stale"}]},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert len(body["results"]) == 1
+        assert body["results"][0]["ok"] is True
+        assert body["results"][0]["kind"] == "branch_only"
+        assert body["results"][0]["target"] == "stale"
+
+        # Second list must no longer include 'stale'.
+        resp2 = await client_git.get(
+            "/api/projects/alpha/git/items",
+            headers=auth_headers_g,
+        )
+        branches = {
+            i["branch"] for i in resp2.json()["items"]
+            if i.get("kind") != "orphan_worktree"
+        }
+        assert "stale" not in branches
+
+    async def test_post_items_delete_publishes_git_changed_event(
+        self, client_git, auth_headers_g, app_with_git,
+    ):
+        # Subscribe to the event bus before the delete so we can capture the
+        # publish without racing the handler.
+        bus = app_with_git.state.event_bus
+        queue = bus.subscribe()
+
+        try:
+            resp = await client_git.post(
+                "/api/projects/alpha/git/items:delete",
+                headers=auth_headers_g,
+                json={"items": [{"kind": "branch_only", "branch": "stale"}]},
+            )
+            assert resp.status_code == 200
+
+            # The server publishes synchronously inside the request handler,
+            # so the queue must have the event by now.
+            event = await asyncio.wait_for(queue.get(), timeout=2.0)
+            assert event.type == "git.changed"
+            assert event.payload == {"project_name": "alpha"}
+        finally:
+            bus.unsubscribe(queue)
+
+    async def test_post_items_delete_busy_returns_409_with_busy_by(
+        self, client_git, auth_headers_g, app_with_git, real_repo,
+    ):
+        # Force a busy holder by stubbing session_manager.list_sessions to
+        # return a fake session whose cwd matches the topic worktree path.
+        topic_wt = os.path.join(real_repo, "wt", "topic")
+        fake_session = types.SimpleNamespace(
+            session_id="s-busy",
+            cwd=topic_wt,
+        )
+
+        original_list = app_with_git.state.session_manager.list_sessions
+        app_with_git.state.session_manager.list_sessions = (  # type: ignore[method-assign]
+            lambda: [fake_session]
+        )
+        try:
+            resp = await client_git.post(
+                "/api/projects/alpha/git/items:delete",
+                headers=auth_headers_g,
+                json={"items": [{
+                    "kind": "branch_with_worktree",
+                    "branch": "topic",
+                    "worktree_path": topic_wt,
+                }]},
+            )
+        finally:
+            app_with_git.state.session_manager.list_sessions = original_list  # type: ignore[method-assign]
+
+        assert resp.status_code == 409
+        body = resp.json()
+        # FastAPI wraps detail under "detail"; BusyByResponse goes under it.
+        detail = body["detail"]
+        assert "busy_by" in detail
+        assert any(h["kind"] == "session" for h in detail["busy_by"])
+        assert any(h.get("session_id") == "s-busy" for h in detail["busy_by"])

@@ -1,7 +1,7 @@
 # Wire-protocol versions
 
 The Mobaide system uses a single **integer** ``protocol_version`` as the
-authoritative compatibility signal between the Android app, ``claude_agent``,
+authoritative compatibility signal between the Android app, ``mobaide_agent``,
 and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own
 cadence; they do **not** gate compatibility.
@@ -10,7 +10,7 @@ cadence; they do **not** gate compatibility.
 
 * Introduced: 2026-04-26
 * App support: ``APP_PROTOCOL_VERSION = 1`` (Android), ``PROTOCOL_VERSION = 1``
-  (Python — both ``claude_agent`` and ``central_server``).
+  (Python — both ``mobaide_agent`` and ``central_server``).
 * Wire shape:
   * Auth handshake (agent ↔ central_server, text frame):
     * Agent sends ``{type:"auth", agent_id, token, protocol_version,
@@ -30,7 +30,7 @@ cadence; they do **not** gate compatibility.
 ## How to bump
 
 1. Increment ``PROTOCOL_VERSION`` and update ``SUPPORTED_PROTOCOL_VERSIONS``
-   in **both** ``claude_agent/claude_mobile/relay/envelope.py`` and
+   in **both** ``mobaide_agent/mobaide/relay/envelope.py`` and
    ``central_server/central_server/relay/envelope.py``. The CI
    ``protocol-integrity`` workflow rejects any commit that drifts the two.
 2. Update the ``BuildConfig.APP_PROTOCOL_VERSION`` field in

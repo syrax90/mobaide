@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Switch between named configuration profiles for claude_agent and the Android app.
+Switch between named configuration profiles for mobaide_agent and the Android app.
 
 .DESCRIPTION
 Copies (or merges) files from config/profiles/<name>/ into their canonical
@@ -56,7 +56,7 @@ $TemplateName = '_template'
 #   merge         : merge only known keys (CENTRAL_SERVER_URL, GOOGLE_WEB_CLIENT_ID) into an existing .properties file
 #   copyOrDelete  : copy if present in profile, delete target if absent in profile
 $Mappings = @(
-    [pscustomobject]@{ Source = 'claude_agent.env';                        Target = 'claude_agent/.env';                                                Mode = 'overwrite' }
+    [pscustomobject]@{ Source = 'mobaide_agent.env';                        Target = 'mobaide_agent/.env';                                                Mode = 'overwrite' }
     [pscustomobject]@{ Source = 'android.local.properties';                Target = 'android/local.properties';                                          Mode = 'merge' }
     [pscustomobject]@{ Source = 'android-tls/network_security_config.xml'; Target = 'android/app/src/main/res/xml/network_security_config.xml';          Mode = 'overwrite' }
     [pscustomobject]@{ Source = 'android-tls/caddy_root.crt';              Target = 'android/app/src/main/res/raw/caddy_root.crt';                       Mode = 'copyOrDelete' }

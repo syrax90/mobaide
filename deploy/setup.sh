@@ -9,16 +9,16 @@
 #   2. Creates a system user and directory structure
 #   3. Sets up a Python virtual environment and installs the agent
 #   4. Generates an agent .env with a random JWT secret
-#   5. Installs and starts the claude-mobile-agent systemd service
+#   5. Installs and starts the mobaide-agent systemd service
 #
 # The agent dials OUT to central-server via WebSocket (relay architecture),
 # so no inbound tunnel / public hostname / reverse proxy is needed here.
 #
 set -euo pipefail
 
-INSTALL_DIR="/opt/claude-mobile"
+INSTALL_DIR="/opt/mobaide"
 VENV_DIR="${INSTALL_DIR}/venv"
-SERVICE_USER="claude-mobile"
+SERVICE_USER="mobaide"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -75,8 +75,8 @@ fi
 # --- Directory structure ---
 
 info "Setting up ${INSTALL_DIR}..."
-mkdir -p "${INSTALL_DIR}/claude_agent"
-cp -r "${REPO_ROOT}/claude_agent/." "${INSTALL_DIR}/claude_agent/"
+mkdir -p "${INSTALL_DIR}/mobaide_agent"
+cp -r "${REPO_ROOT}/mobaide_agent/." "${INSTALL_DIR}/mobaide_agent/"
 
 # --- Virtual environment ---
 
@@ -89,11 +89,11 @@ fi
 
 info "Installing agent package..."
 "${VENV_DIR}/bin/pip" install --no-cache-dir --upgrade pip
-"${VENV_DIR}/bin/pip" install --no-cache-dir "${INSTALL_DIR}/claude_agent"
+"${VENV_DIR}/bin/pip" install --no-cache-dir "${INSTALL_DIR}/mobaide_agent"
 
 # --- Agent .env ---
 
-ENV_FILE="${INSTALL_DIR}/claude_agent/.env"
+ENV_FILE="${INSTALL_DIR}/mobaide_agent/.env"
 if [[ -f "$ENV_FILE" ]]; then
     info "Agent .env already exists, skipping generation."
 else
@@ -121,11 +121,11 @@ chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
 # --- systemd service ---
 
 info "Installing systemd service..."
-cp "${REPO_ROOT}/deploy/claude-mobile-agent.service" /etc/systemd/system/
+cp "${REPO_ROOT}/deploy/mobaide-agent.service" /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable claude-mobile-agent
-systemctl start claude-mobile-agent
+systemctl enable mobaide-agent
+systemctl start mobaide-agent
 
 # --- Done ---
 
@@ -134,7 +134,7 @@ echo "============================================"
 echo "  Mobaide — Deployment Complete"
 echo "============================================"
 echo ""
-echo "  Agent status:  systemctl status claude-mobile-agent"
-echo "  Agent logs:    journalctl -u claude-mobile-agent -f"
+echo "  Agent status:  systemctl status mobaide-agent"
+echo "  Agent logs:    journalctl -u mobaide-agent -f"
 echo "  Health check:  curl http://localhost:8000/api/health"
 echo ""

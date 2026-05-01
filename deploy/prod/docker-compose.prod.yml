@@ -1,5 +1,5 @@
 # Production compose for mobaide.com — central-server + Caddy (TLS) only.
-# Deployed to /opt/claude-mobile/ on the server by deploy-central.ps1.
+# Deployed to /opt/mobaide/ on the server by deploy-central.ps1.
 #
 # Companion files expected in the same directory on the server:
 #   ./central_server/      source tree (synced from repo; Dockerfile lives here)
@@ -18,7 +18,7 @@ services:
     build:
       context: ./central_server
       dockerfile: Dockerfile
-    container_name: claude-mobile-central-server
+    container_name: mobaide-central-server
     restart: unless-stopped
     env_file: ./.env
     environment:
@@ -40,7 +40,7 @@ services:
 
   caddy:
     image: caddy:2-alpine
-    container_name: claude-mobile-caddy
+    container_name: mobaide-caddy
     restart: unless-stopped
     ports:
       - "80:80"

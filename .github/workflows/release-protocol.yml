@@ -27,7 +27,7 @@ jobs:
       - name: Install runtime deps for envelope import
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e claude_agent
+          python -m pip install -e mobaide_agent
           python -m pip install -e central_server
           python -m pip install pytest
 
@@ -76,7 +76,7 @@ jobs:
               echo
               echo '```diff'
               git diff "${PREV_TAG}..${TAG}" -- \
-                'claude_agent/claude_mobile/relay/envelope.py' \
+                'mobaide_agent/mobaide/relay/envelope.py' \
                 'central_server/central_server/relay/envelope.py' \
                 'tests/protocol_golden.json' || true
               echo '```'

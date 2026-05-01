@@ -5,7 +5,7 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * Wire shape returned by ``GET /api/version`` on both ``central_server`` and
- * ``claude_agent``. ``latest_agent_version`` / ``manifest_url`` /
+ * ``mobaide_agent``. ``latest_agent_version`` / ``manifest_url`` /
  * ``manifest_signature`` are populated only on the central_server side; the
  * agent returns ``null`` for those fields.
  */

@@ -345,7 +345,7 @@ class TestEventsSnapshotRequest:
     handler then republishes fresh ``sessions.changed`` + ``projects.changed``
     envelopes on its bus.  These tests pin the CH_CONTROL emission at the
     central-server boundary — the agent-side half is covered by
-    ``claude_agent/tests/test_relay_client.py::TestHandleRequestEventsSnapshot``.
+    ``mobaide_agent/tests/test_relay_client.py::TestHandleRequestEventsSnapshot``.
     """
 
     async def test_mobile_events_connect_emits_snapshot_request_to_agent(

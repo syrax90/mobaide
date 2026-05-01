@@ -18,14 +18,14 @@ The script is idempotent (safe to re-run) and:
 - installs base apt packages (`curl`, `git`, `tar`, `ufw`, `cron`, `ca-certificates`),
 - verifies Docker Engine + Compose plugin and adds your user to the `docker` group,
 - configures ufw (default deny-in / allow-out, `limit 22/tcp`, `allow 80/tcp`, `allow 443/tcp`) and enables it,
-- creates `/opt/claude-mobile/`, `/opt/claude-mobile/tls/` (0700), and `/opt/claude-mobile/backups/`,
-- writes a skeleton `/opt/claude-mobile/.env` (chmod 600) with a fresh random `JWT_SECRET_KEY`.
+- creates `/opt/mobaide/`, `/opt/mobaide/tls/` (0700), and `/opt/mobaide/backups/`,
+- writes a skeleton `/opt/mobaide/.env` (chmod 600) with a fresh random `JWT_SECRET_KEY`.
 
 After the script finishes you still need to:
 
-1. Edit `/opt/claude-mobile/.env` on the VPS and uncomment/fill `ADMIN_SEED_EMAIL`, `ADMIN_SEED_PASSWORD`, and (if used) `GOOGLE_CLIENT_ID`.
+1. Edit `/opt/mobaide/.env` on the VPS and uncomment/fill `ADMIN_SEED_EMAIL`, `ADMIN_SEED_PASSWORD`, and (if used) `GOOGLE_CLIENT_ID`.
 2. Point `mobaide.com` at the VPS in Cloudflare DNS — see step 4 below for the Cloudflare proxy decision.
-3. If you chose `CloudflareOrigin` TLS mode, paste the origin cert + key into `/opt/claude-mobile/tls/` — see step 4 option B below.
+3. If you chose `CloudflareOrigin` TLS mode, paste the origin cert + key into `/opt/mobaide/tls/` — see step 4 option B below.
 4. (Optional) add the weekly SQLite backup cron — see step 5 below.
 
 The manual steps below remain the authoritative reference if you prefer to do everything by hand or need to understand what the script does.
@@ -51,12 +51,12 @@ The manual steps below remain the authoritative reference if you prefer to do ev
 
 ```bash
 ssh mobaide
-sudo mkdir -p /opt/claude-mobile
-sudo chown $USER:$USER /opt/claude-mobile
-cd /opt/claude-mobile
+sudo mkdir -p /opt/mobaide
+sudo chown $USER:$USER /opt/mobaide
+cd /opt/mobaide
 ```
 
-## 2. Create `/opt/claude-mobile/.env`
+## 2. Create `/opt/mobaide/.env`
 
 Copy the template from `central_server/.env.example` in your local checkout and paste the filled-in version on the server. Required:
 
@@ -100,8 +100,8 @@ DASHBOARD_TOKEN_EXPIRE_MINUTES=480    # dashboard token      (e.g. 8 h)
 ```
 
 ```bash
-nano /opt/claude-mobile/.env
-chmod 600 /opt/claude-mobile/.env
+nano /opt/mobaide/.env
+chmod 600 /opt/mobaide/.env
 ```
 
 **Never commit `.env` to any repo, and never rsync/scp it from your local machine.** The PowerShell deploy script explicitly excludes it.
@@ -130,11 +130,11 @@ sudo ufw enable
 - Create an Origin Certificate: **SSL/TLS** → **Origin Server** → **Create Certificate** (default RSA 2048, 15-year validity).
 - Save the two PEMs on the server:
   ```bash
-  mkdir -p /opt/claude-mobile/tls
-  chmod 700 /opt/claude-mobile/tls
-  nano /opt/claude-mobile/tls/origin-cert.pem   # paste certificate
-  nano /opt/claude-mobile/tls/origin-key.pem    # paste private key
-  chmod 600 /opt/claude-mobile/tls/origin-*.pem
+  mkdir -p /opt/mobaide/tls
+  chmod 700 /opt/mobaide/tls
+  nano /opt/mobaide/tls/origin-cert.pem   # paste certificate
+  nano /opt/mobaide/tls/origin-key.pem    # paste private key
+  chmod 600 /opt/mobaide/tls/origin-*.pem
   ```
 - You can keep Cloudflare's Universal SSL active for the edge; CF Origin Cert covers the CF→VPS leg.
 
@@ -147,17 +147,17 @@ crontab -e
 Add:
 
 ```
-0 3 * * 0 docker run --rm -v claude-mobile_central-server-data:/d -v /opt/claude-mobile/backups:/b alpine sh -c 'mkdir -p /b && cp /d/central_server.db /b/central_server.$(date +\%F).db && find /b -name "central_server.*.db" -mtime +28 -delete'
+0 3 * * 0 docker run --rm -v mobaide_central-server-data:/d -v /opt/mobaide/backups:/b alpine sh -c 'mkdir -p /b && cp /d/central_server.db /b/central_server.$(date +\%F).db && find /b -name "central_server.*.db" -mtime +28 -delete'
 ```
 
-(Keeps 4 weekly backups in `/opt/claude-mobile/backups/`.)
+(Keeps 4 weekly backups in `/opt/mobaide/backups/`.)
 
 ## 6. First deploy
 
 Back on Windows:
 
 ```powershell
-cd D:\ML\Projects\claude_mobile
+cd D:\ML\Projects\mobaide
 .\deploy\prod\deploy-central.ps1                             # LetsEncrypt
 # or
 .\deploy\prod\deploy-central.ps1 -TlsMode CloudflareOrigin
@@ -171,7 +171,7 @@ cd D:\ML\Projects\claude_mobile
 - **Manual inspection**:
   ```bash
   ssh mobaide
-  cd /opt/claude-mobile
+  cd /opt/mobaide
   docker compose -f docker-compose.prod.yml ps
   docker compose -f docker-compose.prod.yml logs --tail=100 central-server
   docker compose -f docker-compose.prod.yml logs --tail=100 caddy

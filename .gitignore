@@ -3,13 +3,13 @@
 **/__pycache__
 **/.pytest_cache
 **/venv/
-claude_agent/.env
+mobaide_agent/.env
 central_server/.env
 deploy/prod/.env
 deploy/prod/tls/
 deploy/prod/*.pem
-claude_agent/users.json
-claude_agent/state/
+mobaide_agent/users.json
+mobaide_agent/state/
 **/active_workitems.json
 android/app/src/main/res/xml/network_security_config.xml
 start-all.ps1
