@@ -32,7 +32,7 @@ class AgentVersionMonitorTest {
         serverVersion: String,
         latestAgent: String?,
     ) = VersionInfoResponse(
-        name = "claude_agent",
+        name = "mobaide_agent",
         server_version = serverVersion,
         protocol_versions = listOf(1),
         min_client_version = 1,

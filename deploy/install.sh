@@ -3,7 +3,7 @@
 # Mobaide agent install script (Linux + macOS).
 #
 # Usage (curl|bash):
-#     curl -fsSL https://get.claudemobile.io/install.sh | bash
+#     curl -fsSL https://get.mobaide.com/install.sh | bash
 #
 # Idempotent: re-running upgrades the agent in place. Each release is
 # staged into a sibling ``releases/<version>/`` directory and the
@@ -16,10 +16,10 @@
 set -euo pipefail
 
 # Defaults (override via env var).
-: "${CLAUDE_AGENT_PREFIX:=}"
-: "${CLAUDE_AGENT_MANIFEST_URL:=https://api.claudemobile.io/v1/agent/manifest.json}"
-: "${CLAUDE_AGENT_TRUST_KEY_B64:=}"
-: "${CLAUDE_AGENT_SERVICE_USER:=claude-mobile}"
+: "${MOBAIDE_AGENT_PREFIX:=}"
+: "${MOBAIDE_AGENT_MANIFEST_URL:=https://api.mobaide.com/v1/agent/manifest.json}"
+: "${MOBAIDE_AGENT_TRUST_KEY_B64:=}"
+: "${MOBAIDE_AGENT_SERVICE_USER:=mobaide}"
 
 info()  { printf '[INFO]  %s\n' "$*"; }
 warn()  { printf '[WARN]  %s\n' "$*" >&2; }
@@ -33,20 +33,20 @@ detect_platform() {
         *)      fail "Unsupported OS: $(uname -s). Linux and macOS only." ;;
     esac
 
-    if [ -z "$CLAUDE_AGENT_PREFIX" ]; then
+    if [ -z "$MOBAIDE_AGENT_PREFIX" ]; then
         if [ "$PLATFORM" = "linux" ]; then
-            CLAUDE_AGENT_PREFIX="/opt/claude-mobile"
+            MOBAIDE_AGENT_PREFIX="/opt/mobaide"
         else
-            CLAUDE_AGENT_PREFIX="/usr/local/claude-mobile"
+            MOBAIDE_AGENT_PREFIX="/usr/local/mobaide"
         fi
     fi
 }
 
 require_root_when_writing_system_dir() {
-    case "$CLAUDE_AGENT_PREFIX" in
+    case "$MOBAIDE_AGENT_PREFIX" in
         /opt/*|/usr/*|/etc/*)
             if [ "$(id -u)" -ne 0 ]; then
-                fail "Installing to $CLAUDE_AGENT_PREFIX requires root (sudo)."
+                fail "Installing to $MOBAIDE_AGENT_PREFIX requires root (sudo)."
             fi
             ;;
     esac
@@ -72,21 +72,21 @@ check_python() {
 
 fetch_manifest() {
     local manifest_path="$1"
-    info "Fetching manifest from $CLAUDE_AGENT_MANIFEST_URL"
-    if ! curl -fsSL --max-time 30 "$CLAUDE_AGENT_MANIFEST_URL" -o "$manifest_path"; then
-        fail "Could not fetch manifest from $CLAUDE_AGENT_MANIFEST_URL"
+    info "Fetching manifest from $MOBAIDE_AGENT_MANIFEST_URL"
+    if ! curl -fsSL --max-time 30 "$MOBAIDE_AGENT_MANIFEST_URL" -o "$manifest_path"; then
+        fail "Could not fetch manifest from $MOBAIDE_AGENT_MANIFEST_URL"
     fi
 }
 
 verify_manifest_signature() {
     local manifest_path="$1"
-    if [ -z "$CLAUDE_AGENT_TRUST_KEY_B64" ]; then
-        warn "CLAUDE_AGENT_TRUST_KEY_B64 not set — skipping manifest signature check."
+    if [ -z "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
+        warn "MOBAIDE_AGENT_TRUST_KEY_B64 not set — skipping manifest signature check."
         warn "First-install bootstrap; pin the public key in production install."
         return 0
     fi
     info "Verifying manifest signature"
-    python3 - "$manifest_path" "$CLAUDE_AGENT_TRUST_KEY_B64" <<'PY'
+    python3 - "$manifest_path" "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
 import base64, json, sys
 from pathlib import Path
 from cryptography.exceptions import InvalidSignature
@@ -113,7 +113,7 @@ stage_release() {
         fail "manifest is missing 'version'"
     fi
 
-    local release_dir="${CLAUDE_AGENT_PREFIX}/releases/${target_version}"
+    local release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${target_version}"
     info "Staging release $target_version into $release_dir"
 
     mkdir -p "$release_dir"
@@ -168,27 +168,27 @@ PY
     rm -rf "$tmpdir"
     trap - EXIT
 
-    printf '%s\n' "$target_version" > "${CLAUDE_AGENT_PREFIX}/current_version.tmp"
-    mv "${CLAUDE_AGENT_PREFIX}/current_version.tmp" "${CLAUDE_AGENT_PREFIX}/current_version"
+    printf '%s\n' "$target_version" > "${MOBAIDE_AGENT_PREFIX}/current_version.tmp"
+    mv "${MOBAIDE_AGENT_PREFIX}/current_version.tmp" "${MOBAIDE_AGENT_PREFIX}/current_version"
     info "Pinned current_version=$target_version"
 }
 
 write_trust_key() {
-    if [ -n "$CLAUDE_AGENT_TRUST_KEY_B64" ]; then
-        mkdir -p "${CLAUDE_AGENT_PREFIX}/trust"
-        printf '%s\n' "$CLAUDE_AGENT_TRUST_KEY_B64" > "${CLAUDE_AGENT_PREFIX}/trust/central_server.pub"
+    if [ -n "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
+        mkdir -p "${MOBAIDE_AGENT_PREFIX}/trust"
+        printf '%s\n' "$MOBAIDE_AGENT_TRUST_KEY_B64" > "${MOBAIDE_AGENT_PREFIX}/trust/central_server.pub"
     fi
 }
 
 ensure_service_user() {
     if [ "$PLATFORM" != "linux" ]; then return 0; fi
-    if id "$CLAUDE_AGENT_SERVICE_USER" >/dev/null 2>&1; then return 0; fi
-    info "Creating system user $CLAUDE_AGENT_SERVICE_USER"
-    useradd --system --shell /usr/sbin/nologin --home-dir "$CLAUDE_AGENT_PREFIX" "$CLAUDE_AGENT_SERVICE_USER"
+    if id "$MOBAIDE_AGENT_SERVICE_USER" >/dev/null 2>&1; then return 0; fi
+    info "Creating system user $MOBAIDE_AGENT_SERVICE_USER"
+    useradd --system --shell /usr/sbin/nologin --home-dir "$MOBAIDE_AGENT_PREFIX" "$MOBAIDE_AGENT_SERVICE_USER"
 }
 
 install_systemd_unit() {
-    local unit="/etc/systemd/system/claude-mobile-agent.service"
+    local unit="/etc/systemd/system/mobaide-agent.service"
     info "Installing systemd unit at $unit"
     cat > "$unit" <<EOF
 [Unit]
@@ -198,11 +198,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$CLAUDE_AGENT_SERVICE_USER
-Group=$CLAUDE_AGENT_SERVICE_USER
-EnvironmentFile=-$CLAUDE_AGENT_PREFIX/agent.env
-Environment=CLAUDE_AGENT_PREFIX=$CLAUDE_AGENT_PREFIX
-ExecStart=$CLAUDE_AGENT_PREFIX/releases/\$(cat $CLAUDE_AGENT_PREFIX/current_version)/venv/bin/python -m claude_mobile.launcher
+User=$MOBAIDE_AGENT_SERVICE_USER
+Group=$MOBAIDE_AGENT_SERVICE_USER
+EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/agent.env
+Environment=MOBAIDE_AGENT_PREFIX=$MOBAIDE_AGENT_PREFIX
+ExecStart=$MOBAIDE_AGENT_PREFIX/releases/\$(cat $MOBAIDE_AGENT_PREFIX/current_version)/venv/bin/python -m mobaide.launcher
 Restart=on-failure
 RestartSec=5
 RestartForceExitStatus=75
@@ -212,20 +212,20 @@ StandardError=journal
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=$CLAUDE_AGENT_PREFIX
+ReadWritePaths=$MOBAIDE_AGENT_PREFIX
 PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    chown -R "$CLAUDE_AGENT_SERVICE_USER:$CLAUDE_AGENT_SERVICE_USER" "$CLAUDE_AGENT_PREFIX"
+    chown -R "$MOBAIDE_AGENT_SERVICE_USER:$MOBAIDE_AGENT_SERVICE_USER" "$MOBAIDE_AGENT_PREFIX"
     systemctl daemon-reload
-    systemctl enable claude-mobile-agent
-    systemctl restart claude-mobile-agent
+    systemctl enable mobaide-agent
+    systemctl restart mobaide-agent
 }
 
 install_launchd_plist() {
-    local plist="$HOME/Library/LaunchAgents/io.claudemobile.agent.plist"
+    local plist="$HOME/Library/LaunchAgents/com.mobaide.agent.plist"
     info "Installing launchd plist at $plist"
     mkdir -p "$(dirname "$plist")"
     cat > "$plist" <<EOF
@@ -233,31 +233,31 @@ install_launchd_plist() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>io.claudemobile.agent</string>
+  <key>Label</key><string>com.mobaide.agent</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$CLAUDE_AGENT_PREFIX/bin/claude-agent-launcher.sh</string>
+    <string>$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>CLAUDE_AGENT_PREFIX</key><string>$CLAUDE_AGENT_PREFIX</string>
+    <key>MOBAIDE_AGENT_PREFIX</key><string>$MOBAIDE_AGENT_PREFIX</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$CLAUDE_AGENT_PREFIX/agent.out.log</string>
-  <key>StandardErrorPath</key><string>$CLAUDE_AGENT_PREFIX/agent.err.log</string>
+  <key>StandardOutPath</key><string>$MOBAIDE_AGENT_PREFIX/agent.out.log</string>
+  <key>StandardErrorPath</key><string>$MOBAIDE_AGENT_PREFIX/agent.err.log</string>
 </dict>
 </plist>
 EOF
-    mkdir -p "$CLAUDE_AGENT_PREFIX/bin"
-    cat > "$CLAUDE_AGENT_PREFIX/bin/claude-agent-launcher.sh" <<'LAUNCHER'
+    mkdir -p "$MOBAIDE_AGENT_PREFIX/bin"
+    cat > "$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh" <<'LAUNCHER'
 #!/usr/bin/env bash
 set -e
-prefix="${CLAUDE_AGENT_PREFIX:-/usr/local/claude-mobile}"
+prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
 version="$(cat "$prefix/current_version")"
-exec "$prefix/releases/$version/venv/bin/python" -m claude_mobile.launcher
+exec "$prefix/releases/$version/venv/bin/python" -m mobaide.launcher
 LAUNCHER
-    chmod +x "$CLAUDE_AGENT_PREFIX/bin/claude-agent-launcher.sh"
+    chmod +x "$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
 
     launchctl unload "$plist" 2>/dev/null || true
     launchctl load "$plist"
@@ -267,13 +267,13 @@ print_completion() {
     echo
     echo "============================================"
     echo "  Mobaide agent installed"
-    echo "  Prefix:  $CLAUDE_AGENT_PREFIX"
-    echo "  Version: $(cat "$CLAUDE_AGENT_PREFIX/current_version")"
+    echo "  Prefix:  $MOBAIDE_AGENT_PREFIX"
+    echo "  Version: $(cat "$MOBAIDE_AGENT_PREFIX/current_version")"
     if [ "$PLATFORM" = "linux" ]; then
-        echo "  Status:  systemctl status claude-mobile-agent"
-        echo "  Logs:    journalctl -u claude-mobile-agent -f"
+        echo "  Status:  systemctl status mobaide-agent"
+        echo "  Logs:    journalctl -u mobaide-agent -f"
     else
-        echo "  Logs:    tail -f $CLAUDE_AGENT_PREFIX/agent.err.log"
+        echo "  Logs:    tail -f $MOBAIDE_AGENT_PREFIX/agent.err.log"
     fi
     echo "============================================"
 }
@@ -281,12 +281,12 @@ print_completion() {
 main() {
     detect_platform
     require_root_when_writing_system_dir
-    info "Installing claude_agent into $CLAUDE_AGENT_PREFIX"
+    info "Installing mobaide_agent into $MOBAIDE_AGENT_PREFIX"
     check_command curl
     check_command tar
     check_python
 
-    mkdir -p "$CLAUDE_AGENT_PREFIX"
+    mkdir -p "$MOBAIDE_AGENT_PREFIX"
     write_trust_key
 
     local manifest

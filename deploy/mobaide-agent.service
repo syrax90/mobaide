@@ -1,0 +1,35 @@
+[Unit]
+Description=Mobaide Agent (FastAPI/uvicorn)
+After=network.target
+Wants=network-online.target
+# Crash-loop safety net. The launcher rolls back on its third boot
+# attempt within 60s; this raises systemd's hard cap to 10 starts in 10
+# minutes so the rollback path has room to retry the previous release
+# before the unit is shut off.
+StartLimitBurst=10
+StartLimitIntervalSec=600
+
+[Service]
+Type=simple
+User=mobaide
+Group=mobaide
+WorkingDirectory=/opt/mobaide
+EnvironmentFile=-/opt/mobaide/agent.env
+EnvironmentFile=-/opt/mobaide/mobaide_agent/.env
+Environment=MOBAIDE_AGENT_PREFIX=/opt/mobaide
+ExecStart=/usr/bin/env bash -c '/opt/mobaide/releases/$(cat /opt/mobaide/current_version)/venv/bin/python -m mobaide.launcher'
+Restart=on-failure
+RestartSec=5
+RestartForceExitStatus=75
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/mobaide
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

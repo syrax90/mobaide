@@ -1,6 +1,6 @@
 """File-backed manifest store with atomic writes.
 
-The manifest is a small JSON document that points at the latest ``claude_agent``
+The manifest is a small JSON document that points at the latest ``mobaide_agent``
 release tarball + wheel and carries a base64-encoded Ed25519 signature over the
 canonical JSON of the manifest body. Reads are non-blocking (last-good cache);
 writes are atomic via ``os.replace``.

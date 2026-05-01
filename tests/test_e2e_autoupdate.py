@@ -37,8 +37,8 @@ from httpx import ASGITransport, AsyncClient
 from central_server.app import create_app
 from central_server.config import CentralServerConfig
 from central_server.manifest.store import ManifestStore
-from claude_mobile.agent.updater import InstallLayout, StagedBinaryUpdater
-from claude_mobile.manifest_signing import canonical_json
+from mobaide.agent.updater import InstallLayout, StagedBinaryUpdater
+from mobaide.manifest_signing import canonical_json
 
 
 RELEASE_TOKEN = "e2e-release-token-do-not-use-in-prod"
@@ -66,7 +66,7 @@ def _build_tarball_and_wheel(target_dir: Path, version: str) -> tuple[Path, Path
     buf = BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         payload = f'__version__ = "{version}"\n'.encode()
-        info = tarfile.TarInfo(name="claude_mobile/__init__.py")
+        info = tarfile.TarInfo(name="mobaide/__init__.py")
         info.size = len(payload)
         tar.addfile(info, BytesIO(payload))
     tarball_path.write_bytes(buf.getvalue())
@@ -200,8 +200,8 @@ async def test_e2e_publish_and_swap(
     assert outcome == "staged"
     assert (agent_layout.releases_dir / version).is_dir()
     assert agent_layout.current_version_file.read_text().strip() == version
-    assert (agent_layout.releases_dir / version / "claude_mobile" / "__init__.py").is_file()
-    staged_init = (agent_layout.releases_dir / version / "claude_mobile" / "__init__.py").read_text()
+    assert (agent_layout.releases_dir / version / "mobaide" / "__init__.py").is_file()
+    staged_init = (agent_layout.releases_dir / version / "mobaide" / "__init__.py").read_text()
     assert f'__version__ = "{version}"' in staged_init
 
 

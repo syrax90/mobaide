@@ -58,15 +58,15 @@ Mobaide bridges this gap with a client-agent architecture:
 
 | Component | Tech | Description |
 |-----------|------|-------------|
-| `claude_mobile/core/` | Python 3.12+ | PTY backend abstraction, session manager, domain models |
-| `claude_mobile/agent/` | FastAPI | WebSocket endpoints, JWT auth, REST API |
-| `claude_mobile/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
+| `mobaide/core/` | Python 3.12+ | PTY backend abstraction, session manager, domain models |
+| `mobaide/agent/` | FastAPI | WebSocket endpoints, JWT auth, REST API |
+| `mobaide/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
 | `central_server/` | Python 3.12+ / FastAPI | Multi-tenant relay hub; auth, projects, and agent↔client WebSocket broker |
 
 ## Configuration Profiles
 
-Environment-specific files (`claude_agent/.env`, `android/local.properties`, Android TLS trust config) are managed via named profiles under `config/profiles/`. One command swaps the whole bundle between, e.g., a local `start-all.ps1` stack and production (`mobaide.com`):
+Environment-specific files (`mobaide_agent/.env`, `android/local.properties`, Android TLS trust config) are managed via named profiles under `config/profiles/`. One command swaps the whole bundle between, e.g., a local `start-all.ps1` stack and production (`mobaide.com`):
 
 ```powershell
 ./config/use-profile.ps1 -List           # see available profiles
@@ -96,7 +96,7 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
 
 ## Releases, versioning, and auto-update
 
-Each component (Android, `claude_agent`, `central_server`) ships on its own
+Each component (Android, `mobaide_agent`, `central_server`) ships on its own
 semver cadence; a single integer `protocol_version` is the only compatibility
 signal between them.
 
@@ -121,4 +121,4 @@ chaining). [PROTOCOL.md](PROTOCOL.md) tracks `protocol_version` history.
 
 ## Status
 
-Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear (Claude_mobile project — Linear team rename pending).
+Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear.

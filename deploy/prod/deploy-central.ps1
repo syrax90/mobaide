@@ -9,18 +9,18 @@
         .\deploy-central.ps1 -Force                    # allow dirty working tree
 
     What it does:
-      1) Preflight: local tools, clean tree, ssh mobaide reachable, /opt/claude-mobile/.env exists
+      1) Preflight: local tools, clean tree, ssh mobaide reachable, /opt/mobaide/.env exists
       2) Tar central_server/ (with excludes) -> scp -> remote atomic swap
-      3) scp docker-compose.prod.yml + Caddyfile.<TlsMode> to /opt/claude-mobile/
+      3) scp docker-compose.prod.yml + Caddyfile.<TlsMode> to /opt/mobaide/
       4) ssh: docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
       5) Poll https://mobaide.com/api/health for up to 120s
       6) On compose-up or health failure: auto-rollback by swapping central_server.prev back in
 
     Server-side artifacts (survive across runs):
-        /opt/claude-mobile/central_server/         current source
-        /opt/claude-mobile/central_server.prev/    previous source (rollback target)
-        /opt/claude-mobile/.env                    secrets (NEVER synced)
-        /opt/claude-mobile/.last_tag               short git sha of current deploy
+        /opt/mobaide/central_server/         current source
+        /opt/mobaide/central_server.prev/    previous source (rollback target)
+        /opt/mobaide/.env                    secrets (NEVER synced)
+        /opt/mobaide/.last_tag               short git sha of current deploy
         docker volumes: central-server-data, caddy-data, caddy-config
 #>
 
@@ -37,7 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $SshHost    = 'mobaide'
-$RemoteBase = '/opt/claude-mobile'
+$RemoteBase = '/opt/mobaide'
 $Domain     = 'mobaide.com'
 $HealthUrl  = "https://$Domain/api/health"
 
@@ -225,11 +225,11 @@ if (-not $SkipBuild) {
     Write-Step "Packaging central_server/ (tar + excludes)"
 
     # Sweep stale tarballs (>24h) from past crashed runs without racing a parallel deploy.
-    Get-ChildItem $env:TEMP -Filter 'claude-mobile-central-*.tar' -ErrorAction SilentlyContinue |
+    Get-ChildItem $env:TEMP -Filter 'mobaide-central-*.tar' -ErrorAction SilentlyContinue |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-24) } |
         Remove-Item -Force -ErrorAction SilentlyContinue
 
-    $tarLocal = Join-Path $env:TEMP "claude-mobile-central-$tag.tar"
+    $tarLocal = Join-Path $env:TEMP "mobaide-central-$tag.tar"
     if (Test-Path $tarLocal) { Remove-Item $tarLocal -Force }
 
     $excludeArgs = @(

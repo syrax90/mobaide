@@ -9,7 +9,7 @@ them:
 | Concept | Type | Purpose |
 |--------|------|---------|
 | Component semver (`android-vX.Y.Z`, `agent-vX.Y.Z`, `server-vX.Y.Z`) | Independent semver per component | Human-facing release identity. Ships on its own cadence. **Does not** gate compatibility. |
-| `protocol_version` | Single shared integer | The only compatibility signal between Android, `claude_agent`, and `central_server`. Bumped when the wire contract changes. |
+| `protocol_version` | Single shared integer | The only compatibility signal between Android, `mobaide_agent`, and `central_server`. Bumped when the wire contract changes. |
 
 Wire-contract details and the `protocol_version` history live in
 [PROTOCOL.md](../PROTOCOL.md). This doc covers the release machinery and the
@@ -23,9 +23,9 @@ dedicated workflow under `.github/workflows/`:
 | Tag prefix | Component | Workflow | What it produces |
 |------------|-----------|----------|------------------|
 | `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is computed from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
-| `agent-vX.Y.Z` | `claude_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. The workflow also re-syncs `docs/get/install.sh` and `docs/get/install.ps1` from `deploy/` so GitHub Pages stays current. |
+| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. The workflow also re-syncs `docs/get/install.sh` and `docs/get/install.ps1` from `deploy/` so GitHub Pages stays current. |
 | `server-vX.Y.Z` | `central_server` | `release-server.yml` | Wheel + Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy-central.ps1` or `docker compose pull && up -d` against the prod compose file). |
-| `proto-vN` | Wire contract | `release-protocol.yml` | Re-runs the lockstep envelope-integrity check defensively, then publishes a GitHub Release named `proto-vN` with the matching PROTOCOL.md section as the body and a diff vs the previous proto tag appended. Must change **both** `claude_agent/.../envelope.py` AND `central_server/.../envelope.py` in lockstep — `protocol-integrity.yml` rejects drift on every PR. |
+| `proto-vN` | Wire contract | `release-protocol.yml` | Re-runs the lockstep envelope-integrity check defensively, then publishes a GitHub Release named `proto-vN` with the matching PROTOCOL.md section as the body and a diff vs the previous proto tag appended. Must change **both** `mobaide_agent/.../envelope.py` AND `central_server/.../envelope.py` in lockstep — `protocol-integrity.yml` rejects drift on every PR. |
 
 ### Cutting a release
 
@@ -33,7 +33,7 @@ There are two equivalent paths:
 
 **Automated (preferred): release-please.** Land work on `main` using
 [Conventional Commits](https://www.conventionalcommits.org/) prefixed by
-component path (`feat(claude_agent): …`, `fix(central_server): …`,
+component path (`feat(mobaide_agent): …`, `fix(central_server): …`,
 `feat(android): …`). The `release-please.yml` workflow opens or updates a
 release-PR per component that:
 
@@ -150,9 +150,9 @@ be running. It is a small JSON document:
 {
   "body": {
     "version": "0.2.0",
-    "tarball_url": "https://github.com/.../claude-agent-0.2.0.tar.gz",
+    "tarball_url": "https://github.com/.../mobaide-agent-0.2.0.tar.gz",
     "tarball_sha256": "a1b2...",
-    "wheel_url": "https://github.com/.../claude_mobile_agent-0.2.0-py3-none-any.whl",
+    "wheel_url": "https://github.com/.../mobaide_agent-0.2.0-py3-none-any.whl",
     "wheel_sha256": "c3d4...",
     "released_at": "2026-04-26T10:30:00+00:00",
     "min_central_server_version": "0.1.0"
@@ -190,7 +190,7 @@ release lives in its own directory and a single pointer file selects the
 ### Install layout
 
 ```
-<prefix>/                            # /opt/claude-mobile, /usr/local/claude-mobile, or %ProgramFiles%\ClaudeAgent
+<prefix>/                            # /opt/mobaide, /usr/local/mobaide, or %ProgramFiles%\MobaideAgent
 ├── current_version                  # text file: "0.2.0"
 ├── trust/
 │   └── central_server.pub           # base64 Ed25519 public key, pinned at install time
@@ -205,7 +205,7 @@ release lives in its own directory and a single pointer file selects the
 
 The platform-specific service unit (`systemd`, `launchd`, Windows SCM) does
 **not** invoke a release directly. It calls
-`python -m claude_mobile.launcher`, which:
+`python -m mobaide.launcher`, which:
 
 1. Reads `<prefix>/current_version`.
 2. Appends the boot attempt to `<prefix>/.boot_journal` (timestamp + version).
@@ -215,7 +215,7 @@ The platform-specific service unit (`systemd`, `launchd`, Windows SCM) does
    target, and logs `ERROR — version <X> crashed N+ times…; rolling back to
    <Y>`. With no eligible sibling, it logs the rollback miss and continues
    into the failing release; the supervisor's hard cap finally stops the loop.
-4. `os.execv`s into `<prefix>/releases/<version>/venv/bin/python -m claude_mobile run`.
+4. `os.execv`s into `<prefix>/releases/<version>/venv/bin/python -m mobaide run`.
 
 This means a swap of `current_version` followed by a process restart is the
 only thing required to roll forward (or back). The launcher's rollback
@@ -255,7 +255,7 @@ rolled-back release time to prove stable.
                                +-----------------+
 ```
 
-Properties guaranteed by `StagedBinaryUpdater` (`claude_agent/.../updater.py`):
+Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 
 * **Fail-closed signature check** — a malformed or invalid Ed25519 signature
   rejects the manifest; the agent stays on the current version.
@@ -281,12 +281,12 @@ Properties guaranteed by `StagedBinaryUpdater` (`claude_agent/.../updater.py`):
 ### Forced update (operator escape hatch)
 
 ```bash
-CLAUDE_AGENT_MANIFEST_URL=https://api.claudemobile.io/v1/agent/manifest.json \
-  /opt/claude-mobile/releases/$(cat /opt/claude-mobile/current_version)/venv/bin/python \
-  -m claude_mobile update
+MOBAIDE_AGENT_MANIFEST_URL=https://api.mobaide.com/v1/agent/manifest.json \
+  /opt/mobaide/releases/$(cat /opt/mobaide/current_version)/venv/bin/python \
+  -m mobaide update
 ```
 
-`claude-agent update` skips activity-awareness and applies the manifest if a
+`mobaide-agent update` skips activity-awareness and applies the manifest if a
 new version is available. Exit codes:
 
 | Code | Meaning |
@@ -301,35 +301,35 @@ new version is available. Exit codes:
 Linux / macOS:
 
 ```bash
-curl -fsSL https://get.claudemobile.io/install.sh | bash
+curl -fsSL https://get.mobaide.com/install.sh | bash
 ```
 
 Windows (elevated PowerShell):
 
 ```powershell
-irm https://get.claudemobile.io/install.ps1 | iex
+irm https://get.mobaide.com/install.ps1 | iex
 ```
 
 Both scripts are mirrored from `deploy/install.sh` and `deploy/install.ps1`
-into `docs/get/` (the GitHub Pages source for `get.claudemobile.io`). They:
+into `docs/get/` (the GitHub Pages source for `get.mobaide.com`). They:
 
-1. Detect the OS and locate / create `<prefix>` (`/opt/claude-mobile`,
-   `/usr/local/claude-mobile`, or `%ProgramFiles%\ClaudeAgent`).
+1. Detect the OS and locate / create `<prefix>` (`/opt/mobaide`,
+   `/usr/local/mobaide`, or `%ProgramFiles%\MobaideAgent`).
 2. Pull the manifest from
-   `https://api.claudemobile.io/v1/agent/manifest.json` (override via
-   `CLAUDE_AGENT_MANIFEST_URL`).
-3. Verify the Ed25519 signature against `CLAUDE_AGENT_TRUST_KEY_B64` and
+   `https://api.mobaide.com/v1/agent/manifest.json` (override via
+   `MOBAIDE_AGENT_MANIFEST_URL`).
+3. Verify the Ed25519 signature against `MOBAIDE_AGENT_TRUST_KEY_B64` and
    persist the key at `<prefix>/trust/central_server.pub`.
 4. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
 5. Atomically pin `<prefix>/current_version`.
 6. Register the service:
-   * **Linux** — write `/etc/systemd/system/claude-mobile-agent.service`,
+   * **Linux** — write `/etc/systemd/system/mobaide-agent.service`,
      `daemon-reload`, `enable`, `restart`. The unit's `ExecStart` is the
      launcher shim and `RestartForceExitStatus=75` is set.
-   * **macOS** — write `~/Library/LaunchAgents/io.claudemobile.agent.plist`,
+   * **macOS** — write `~/Library/LaunchAgents/com.mobaide.agent.plist`,
      `launchctl load`.
-   * **Windows** — register the `ClaudeAgent` SCM service via `sc.exe create`,
+   * **Windows** — register the `MobaideAgent` SCM service via `sc.exe create`,
      with restart-on-failure tuned to recover from updater exit code 75.
 
 Re-running an install script is idempotent: a higher-versioned manifest stages
@@ -343,13 +343,13 @@ Two strategies:
 
 1. **Pinned at install time (recommended):**
    ```bash
-   CLAUDE_AGENT_TRUST_KEY_B64=<base64> \
-     curl -fsSL https://get.claudemobile.io/install.sh | bash
+   MOBAIDE_AGENT_TRUST_KEY_B64=<base64> \
+     curl -fsSL https://get.mobaide.com/install.sh | bash
    ```
    The script writes the key to `<prefix>/trust/central_server.pub` and uses
    it both for the install-time signature check and for every subsequent
    auto-update cycle.
-2. **Bootstrap install** (no `CLAUDE_AGENT_TRUST_KEY_B64`): the install script
+2. **Bootstrap install** (no `MOBAIDE_AGENT_TRUST_KEY_B64`): the install script
    warns and skips signature verification on the very first download. This is
    acceptable only if you trust the install channel itself (e.g. a private
    ZTNA URL) and you immediately publish a key into `<prefix>/trust/` before
@@ -396,7 +396,7 @@ The Android client has three distinct update paths that work together:
 
 `protocol-integrity.yml` runs on every push and PR to `main`:
 
-1. Imports `claude_agent/.../envelope.py` and
+1. Imports `mobaide_agent/.../envelope.py` and
    `central_server/.../envelope.py` and asserts that `PROTOCOL_VERSION`,
    `SUPPORTED_PROTOCOL_VERSIONS`, and `MIN_CLIENT_PROTOCOL_VERSION` match
    between the two — refuses any commit that drifts them.
@@ -441,7 +441,7 @@ The test is run by `.github/workflows/e2e-update.yml` on every PR and on
 push to `main`, with a 5-minute timeout. The implementation purposely
 does NOT spawn a real systemd / launchd / Windows SCM supervisor — that
 boundary is platform-coupled and is exercised separately by
-`claude_agent/tests/test_launcher_rollback.py` and the install scripts'
+`mobaide_agent/tests/test_launcher_rollback.py` and the install scripts'
 own integration tests.
 
 ## See also
@@ -452,6 +452,6 @@ own integration tests.
   central server and per-machine agents (legacy from-source layout, new
   versioned `releases/<v>/` layout, troubleshooting checklist).
 * [docs/get/README.md](get/README.md) — GitHub Pages source for
-  `get.claudemobile.io`, including the trust-key inline-pinning command.
-* `android/CHANGELOG.md`, `claude_agent/CHANGELOG.md`,
+  `get.mobaide.com`, including the trust-key inline-pinning command.
+* `android/CHANGELOG.md`, `mobaide_agent/CHANGELOG.md`,
   `central_server/CHANGELOG.md` — per-tag release notes.

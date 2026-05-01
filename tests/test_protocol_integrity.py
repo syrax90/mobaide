@@ -1,6 +1,6 @@
 """Lockstep test for the duplicated ``relay/envelope.py`` modules.
 
-Both ``claude_agent.claude_mobile.relay.envelope`` and
+Both ``mobaide_agent.mobaide.relay.envelope`` and
 ``central_server.central_server.relay.envelope`` are intentionally duplicated
 copies of the same wire-protocol codec. Any change that drifts the constants
 between them is a wire-contract violation; this test runs in CI on every PR
@@ -18,7 +18,7 @@ GOLDEN_PATH = Path(__file__).parent / "protocol_golden.json"
 
 
 def _import_agent():
-    from claude_mobile.relay import envelope as agent_envelope
+    from mobaide.relay import envelope as agent_envelope
 
     return agent_envelope
 
@@ -33,7 +33,7 @@ def test_protocol_version_constants_match() -> None:
     agent = _import_agent()
     central = _import_central()
     assert agent.PROTOCOL_VERSION == central.PROTOCOL_VERSION, (
-        "PROTOCOL_VERSION drift between claude_agent and central_server "
+        "PROTOCOL_VERSION drift between mobaide_agent and central_server "
         f"(agent={agent.PROTOCOL_VERSION}, central={central.PROTOCOL_VERSION}). "
         "Both envelope modules must move in lockstep."
     )

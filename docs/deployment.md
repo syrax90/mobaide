@@ -3,7 +3,7 @@
 Mobaide has two separately deployable services:
 
 - **Central server** (`central_server/`) — multi-tenant relay hub. Runs on one Linux host with a public DNS name (e.g. `mobaide.com`). The Android app and every agent connect to it.
-- **Claude agent** (`claude_agent/`) — per-user-machine PTY runner. Runs natively on each user's own workstation and dials OUT to the central server over an authenticated WebSocket.
+- **Mobaide agent** (`mobaide_agent/`) — per-user-machine PTY runner. Runs natively on each user's own workstation and dials OUT to the central server over an authenticated WebSocket.
 
 The **"Production (central server on a VPS)"** section below is the recommended path for the central server. The rest of this document covers per-machine agent deployment.
 
@@ -15,14 +15,14 @@ Deploy the central server only to a remote Ubuntu host (e.g. `mobaide.com`) from
 
 Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md):
 
-1. On the VPS: `mkdir /opt/claude-mobile`, populate `/opt/claude-mobile/.env` from `central_server/.env.example`, open ports 80/443.
+1. On the VPS: `mkdir /opt/mobaide`, populate `/opt/mobaide/.env` from `central_server/.env.example`, open ports 80/443.
 2. DNS: `A` record for your domain → VPS public IP. Cloudflare proxy can be on (use `CloudflareOrigin` TLS mode) or off (use `LetsEncrypt`).
 3. On Windows: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
 
 ### Deploy
 
 ```powershell
-cd D:\ML\Projects\claude_mobile
+cd D:\ML\Projects\mobaide
 .\deploy\prod\deploy-central.ps1                             # LetsEncrypt (Cloudflare gray cloud)
 .\deploy\prod\deploy-central.ps1 -TlsMode CloudflareOrigin   # CF Origin Cert (orange cloud)
 .\deploy\prod\deploy-central.ps1 -SkipBuild                  # restart without source re-sync
@@ -33,7 +33,7 @@ cd D:\ML\Projects\claude_mobile
 ### What's on the server
 
 ```
-/opt/claude-mobile/
+/opt/mobaide/
 ├── docker-compose.prod.yml      # synced from deploy/prod/ each run
 ├── Caddyfile                    # copied from deploy/prod/Caddyfile.<TlsMode>
 ├── .env                         # secrets, chmod 600, NEVER synced
@@ -60,8 +60,8 @@ The deploy script tars `central_server/` with excludes (`.env`, `__pycache__`, `
 ```powershell
 curl.exe https://mobaide.com/api/health          # 200 + {"status":"ok",...}
 curl.exe -I https://mobaide.com                  # cert issuer visible
-ssh mobaide 'docker compose -f /opt/claude-mobile/docker-compose.prod.yml ps'
-ssh mobaide 'docker compose -f /opt/claude-mobile/docker-compose.prod.yml logs --tail=60 central-server'
+ssh mobaide 'docker compose -f /opt/mobaide/docker-compose.prod.yml ps'
+ssh mobaide 'docker compose -f /opt/mobaide/docker-compose.prod.yml logs --tail=60 central-server'
 ```
 
 Then point the Android app (Settings → Add connection) at `https://mobaide.com`, log in with your seeded admin credentials, and pair a local agent from your workstation.
@@ -70,7 +70,7 @@ Then point the Android app (Settings → Add connection) at `https://mobaide.com
 
 ## Per-machine agent deployment
 
-The agent (`claude_agent/`) runs natively on the user's workstation as a long-lived process that dials OUT to `central-server` over WebSocket. No container, no inbound tunnel, no public hostname, and no port-forwarding are required on the workstation — the relay architecture handles NAT traversal for you.
+The agent (`mobaide_agent/`) runs natively on the user's workstation as a long-lived process that dials OUT to `central-server` over WebSocket. No container, no inbound tunnel, no public hostname, and no port-forwarding are required on the workstation — the relay architecture handles NAT traversal for you.
 
 The Android app never talks to the agent directly; it always goes through `central-server`.
 
@@ -84,17 +84,17 @@ The Android app never talks to the agent directly; it always goes through `centr
 ### Windows (conda — recommended for development)
 
 ```powershell
-conda create -n claude-mobile python=3.12 -y
-conda activate claude-mobile
-pip install -e .\claude_agent
+conda create -n mobaide python=3.12 -y
+conda activate mobaide
+pip install -e .\mobaide_agent
 
 # Copy .env template and fill in the relay credentials + JWT_SECRET_KEY
-Copy-Item .\claude_agent\.env.example .\claude_agent\.env
-notepad .\claude_agent\.env
+Copy-Item .\mobaide_agent\.env.example .\mobaide_agent\.env
+notepad .\mobaide_agent\.env
 
 # Run
-cd .\claude_agent
-python -m claude_mobile
+cd .\mobaide_agent
+python -m mobaide
 ```
 
 For the full local stack (Caddy + central-server in Docker + agent native), use `start-all.ps1` from the repo root.
@@ -105,31 +105,31 @@ For the full local stack (Caddy + central-server in Docker + agent native), use 
 
 ```bash
 # Linux
-curl -fsSL https://get.claudemobile.io/install.sh | sudo bash
+curl -fsSL https://get.mobaide.com/install.sh | sudo bash
 
 # macOS — runs as the current user; no sudo required
-curl -fsSL https://get.claudemobile.io/install.sh | bash
+curl -fsSL https://get.mobaide.com/install.sh | bash
 ```
 
 The script detects the OS, verifies the Ed25519 manifest signature, stages the
-release under `<prefix>/releases/<version>/venv/` (`/opt/claude-mobile` on
-Linux, `/usr/local/claude-mobile` on macOS), writes `<prefix>/current_version`,
+release under `<prefix>/releases/<version>/venv/` (`/opt/mobaide` on
+Linux, `/usr/local/mobaide` on macOS), writes `<prefix>/current_version`,
 and registers the supervisor:
 
-* **Linux** — installs `claude-mobile-agent.service` (systemd). The unit is
+* **Linux** — installs `mobaide-agent.service` (systemd). The unit is
   configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so the
   launcher's 3-strike rollback heuristic has room to retry a stable sibling
   release before systemd stops the unit, and `RestartForceExitStatus=75` so
   the updater's restart trigger is honoured.
-* **macOS** — installs `~/Library/LaunchAgents/io.claudemobile.agent.plist`
+* **macOS** — installs `~/Library/LaunchAgents/com.mobaide.agent.plist`
   (launchd). `ThrottleInterval=10` gives the boot journal the same rollback
   window on macOS.
 
 After install, edit `<prefix>/agent.env` (created by the script) and add the relay credentials (`RELAY_CENTRAL_URL`, `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`), then restart the agent:
 
 ```bash
-sudo systemctl restart claude-mobile-agent   # Linux
-launchctl kickstart -k gui/$(id -u)/io.claudemobile.agent  # macOS
+sudo systemctl restart mobaide-agent   # Linux
+launchctl kickstart -k gui/$(id -u)/com.mobaide.agent  # macOS
 ```
 
 **From-source / developer install:** use `deploy/setup.sh` (sets up a flat venv from the local repo checkout). Note that `setup.sh` installs the same service unit, which now expects the versioned `releases/` layout; use the end-user script above on production hosts.
@@ -140,39 +140,39 @@ sudo bash deploy/setup.sh
 
 ### Linux (systemd, manual)
 
-The service unit (`deploy/claude-mobile-agent.service`) now expects the versioned release layout:
-`/opt/claude-mobile/releases/<version>/venv/` with a `current_version` pointer file.
+The service unit (`deploy/mobaide-agent.service`) now expects the versioned release layout:
+`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer file.
 The steps below reflect that layout.
 
 ```bash
 VERSION="0.1.0"   # replace with the actual agent version being installed
 
-sudo useradd --system --shell /usr/sbin/nologin claude-mobile
+sudo useradd --system --shell /usr/sbin/nologin mobaide
 
-sudo mkdir -p /opt/claude-mobile/releases/${VERSION}
-sudo cp -r claude_agent/. /opt/claude-mobile/releases/${VERSION}/
+sudo mkdir -p /opt/mobaide/releases/${VERSION}
+sudo cp -r mobaide_agent/. /opt/mobaide/releases/${VERSION}/
 
-sudo python3 -m venv /opt/claude-mobile/releases/${VERSION}/venv
-sudo /opt/claude-mobile/releases/${VERSION}/venv/bin/pip install /opt/claude-mobile/releases/${VERSION}
+sudo python3 -m venv /opt/mobaide/releases/${VERSION}/venv
+sudo /opt/mobaide/releases/${VERSION}/venv/bin/pip install /opt/mobaide/releases/${VERSION}
 
-echo "${VERSION}" | sudo tee /opt/claude-mobile/current_version
+echo "${VERSION}" | sudo tee /opt/mobaide/current_version
 
-sudo cp claude_agent/.env.example /opt/claude-mobile/agent.env
-sudoedit /opt/claude-mobile/agent.env   # set JWT_SECRET_KEY and RELAY_* vars
+sudo cp mobaide_agent/.env.example /opt/mobaide/agent.env
+sudoedit /opt/mobaide/agent.env   # set JWT_SECRET_KEY and RELAY_* vars
 
-sudo cp deploy/claude-mobile-agent.service /etc/systemd/system/
+sudo cp deploy/mobaide-agent.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now claude-mobile-agent
+sudo systemctl enable --now mobaide-agent
 
-sudo chown -R claude-mobile:claude-mobile /opt/claude-mobile
+sudo chown -R mobaide:mobaide /opt/mobaide
 ```
 
 ### Service management
 
 ```bash
-systemctl status claude-mobile-agent
-journalctl -u claude-mobile-agent -f
-sudo systemctl restart claude-mobile-agent
+systemctl status mobaide-agent
+journalctl -u mobaide-agent -f
+sudo systemctl restart mobaide-agent
 ```
 
 ### Android client configuration
@@ -188,7 +188,7 @@ sudo systemctl restart claude-mobile-agent
 #### Agent won't start
 
 ```bash
-journalctl -u claude-mobile-agent -n 100
+journalctl -u mobaide-agent -n 100
 ```
 
 Common causes:
@@ -211,7 +211,7 @@ Check the agent's logs for `relay.connection_failed` entries. Common causes:
 ```bash
 curl http://localhost:8000/api/health
 # new install layout:
-cat /opt/claude-mobile/agent.env | grep -E '^(JWT_SECRET_KEY|RELAY_)'
+cat /opt/mobaide/agent.env | grep -E '^(JWT_SECRET_KEY|RELAY_)'
 # legacy / from-source layout fallback:
-cat /opt/claude-mobile/claude_agent/.env | grep -E '^(JWT_SECRET_KEY|RELAY_)'
+cat /opt/mobaide/mobaide_agent/.env | grep -E '^(JWT_SECRET_KEY|RELAY_)'
 ```

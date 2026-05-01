@@ -21,7 +21,7 @@ CH_CONTROL = 0x10
 # Wire-contract version. Single integer, monotonically incremented on any
 # breaking change to the JSON shapes carried over CH_CONTROL or CH_EVENTS,
 # or to the binary frame layout on CH_SESSION_IO. Mirrored in the matching
-# claude_agent envelope module — CI enforces equality.
+# mobaide_agent envelope module — CI enforces equality.
 PROTOCOL_VERSION: int = 1
 MIN_CLIENT_PROTOCOL_VERSION: int = 1
 SUPPORTED_PROTOCOL_VERSIONS: tuple[int, ...] = (1,)

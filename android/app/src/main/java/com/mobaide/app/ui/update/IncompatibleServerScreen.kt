@@ -62,7 +62,7 @@ fun IncompatibleServerScreen(
             OutlinedButton(onClick = {
                 openExternalUrl(
                     context,
-                    "https://github.com/syrax90/claude-mobile/blob/main/PROTOCOL.md",
+                    "https://mobaide.com/docs/protocol",
                 )
             }) {
                 Text("What changed")

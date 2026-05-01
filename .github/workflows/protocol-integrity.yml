@@ -26,7 +26,7 @@ jobs:
       - name: Install runtime deps for envelope import
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e claude_agent
+          python -m pip install -e mobaide_agent
           python -m pip install -e central_server
 
       - name: Validate envelope.py constants are mirrored
@@ -42,12 +42,12 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           changed=$(git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" -- \
-            'claude_agent/claude_mobile/relay/envelope.py' \
+            'mobaide_agent/mobaide/relay/envelope.py' \
             'central_server/central_server/relay/envelope.py' | sort -u)
-          agent_changed=$(printf '%s\n' "$changed" | grep -c '^claude_agent/claude_mobile/relay/envelope.py$' || true)
+          agent_changed=$(printf '%s\n' "$changed" | grep -c '^mobaide_agent/mobaide/relay/envelope.py$' || true)
           central_changed=$(printf '%s\n' "$changed" | grep -c '^central_server/central_server/relay/envelope.py$' || true)
           if [ "$agent_changed" != "$central_changed" ]; then
-            echo "::error::envelope.py files must be modified together — claude_agent and central_server copies are intentionally duplicated and any wire-shape change must touch both. agent_changed=${agent_changed} central_changed=${central_changed}."
+            echo "::error::envelope.py files must be modified together — mobaide_agent and central_server copies are intentionally duplicated and any wire-shape change must touch both. agent_changed=${agent_changed} central_changed=${central_changed}."
             exit 1
           fi
 

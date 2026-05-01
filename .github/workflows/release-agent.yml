@@ -43,23 +43,23 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Build wheel + sdist
-        working-directory: claude_agent
+        working-directory: mobaide_agent
         run: uv build --wheel --sdist
 
       - name: Create source tarball
-        working-directory: claude_agent
-        run: tar czf "claude-agent-${{ steps.version.outputs.version }}.tar.gz" --exclude=__pycache__ --exclude='*.pyc' claude_mobile
+        working-directory: mobaide_agent
+        run: tar czf "mobaide-agent-${{ steps.version.outputs.version }}.tar.gz" --exclude=__pycache__ --exclude='*.pyc' mobaide
 
       - name: Compute checksums
         id: checksum
-        working-directory: claude_agent
+        working-directory: mobaide_agent
         run: |
-          tarball="claude-agent-${{ steps.version.outputs.version }}.tar.gz"
+          tarball="mobaide-agent-${{ steps.version.outputs.version }}.tar.gz"
           wheel=$(ls dist/*.whl | head -n 1)
           tarball_sha=$(sha256sum "$tarball" | awk '{print $1}')
           wheel_sha=$(sha256sum "$wheel" | awk '{print $1}')
-          echo "tarball_path=claude_agent/${tarball}" >> "$GITHUB_OUTPUT"
-          echo "wheel_path=claude_agent/${wheel}" >> "$GITHUB_OUTPUT"
+          echo "tarball_path=mobaide_agent/${tarball}" >> "$GITHUB_OUTPUT"
+          echo "wheel_path=mobaide_agent/${wheel}" >> "$GITHUB_OUTPUT"
           echo "tarball_sha=${tarball_sha}" >> "$GITHUB_OUTPUT"
           echo "wheel_sha=${wheel_sha}" >> "$GITHUB_OUTPUT"
 
@@ -81,9 +81,9 @@ jobs:
           base = f"https://github.com/${{ github.repository }}/releases/download/agent-v{version}"
           body = {
               "version": version,
-              "tarball_url": f"{base}/claude-agent-{version}.tar.gz",
+              "tarball_url": f"{base}/mobaide-agent-{version}.tar.gz",
               "tarball_sha256": os.environ["TARBALL_SHA"],
-              "wheel_url": f"{base}/claude_mobile_agent-{version}-py3-none-any.whl",
+              "wheel_url": f"{base}/mobaide_agent-{version}-py3-none-any.whl",
               "wheel_sha256": os.environ["WHEEL_SHA"],
               "released_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "min_central_server_version": "0.1.0",

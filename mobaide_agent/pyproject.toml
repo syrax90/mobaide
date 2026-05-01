@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mobaide-agent"
+version = "0.1.0"
+description = "Mobaide agent — cross-platform PTY session manager with WebSocket API"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pywinpty; sys_platform == 'win32'",
+    "PyJWT",
+    "gql",
+    "httpx",
+    "python-dotenv",
+    "bcrypt",
+    "structlog>=24.1",
+    "asgi-correlation-id>=4.3",
+    "orjson",
+    "websockets>=13.0",
+    "cryptography>=43.0",
+]
+
+[project.scripts]
+mobaide-agent = "mobaide.__main__:main"
+mobaide-agent-launcher = "mobaide.launcher.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-timeout",
+    "httpx-ws",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["mobaide"]

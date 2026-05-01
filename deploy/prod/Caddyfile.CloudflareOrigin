@@ -4,8 +4,8 @@
 #           a free 15-year Origin Certificate generated under
 #             SSL/TLS > Origin Server > Create Certificate
 #           and saved on the VPS as:
-#             /opt/claude-mobile/tls/origin-cert.pem
-#             /opt/claude-mobile/tls/origin-key.pem
+#             /opt/mobaide/tls/origin-cert.pem
+#             /opt/mobaide/tls/origin-key.pem
 #           (both chmod 600, owner matches the user running docker compose).
 
 mobaide.com {

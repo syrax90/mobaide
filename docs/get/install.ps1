@@ -1,7 +1,7 @@
 # Mobaide agent install script (Windows).
 #
 # Usage (PowerShell as Administrator):
-#     irm https://get.claudemobile.io/install.ps1 | iex
+#     irm https://get.mobaide.com/install.ps1 | iex
 #
 # Idempotent: re-running upgrades the agent in place. Each release is staged
 # into a sibling releases\<version>\ directory and the current_version
@@ -14,18 +14,18 @@
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
 
-$Script:Prefix = if ($env:CLAUDE_AGENT_PREFIX) {
-    $env:CLAUDE_AGENT_PREFIX
+$Script:Prefix = if ($env:MOBAIDE_AGENT_PREFIX) {
+    $env:MOBAIDE_AGENT_PREFIX
 } else {
-    Join-Path $env:ProgramFiles "ClaudeAgent"
+    Join-Path $env:ProgramFiles "MobaideAgent"
 }
-$Script:ManifestUrl = if ($env:CLAUDE_AGENT_MANIFEST_URL) {
-    $env:CLAUDE_AGENT_MANIFEST_URL
+$Script:ManifestUrl = if ($env:MOBAIDE_AGENT_MANIFEST_URL) {
+    $env:MOBAIDE_AGENT_MANIFEST_URL
 } else {
-    "https://api.claudemobile.io/v1/agent/manifest.json"
+    "https://api.mobaide.com/v1/agent/manifest.json"
 }
-$Script:TrustKeyB64 = $env:CLAUDE_AGENT_TRUST_KEY_B64
-$Script:ServiceName = "ClaudeAgent"
+$Script:TrustKeyB64 = $env:MOBAIDE_AGENT_TRUST_KEY_B64
+$Script:ServiceName = "MobaideAgent"
 
 function Write-Info  { param($Msg) Write-Host "[INFO]  $Msg" }
 function Write-Warn  { param($Msg) Write-Warning $Msg }
@@ -59,7 +59,7 @@ function Get-Manifest {
 function Test-ManifestSignature {
     param($PythonExe, $ManifestPath)
     if (-not $Script:TrustKeyB64) {
-        Write-Warn "CLAUDE_AGENT_TRUST_KEY_B64 not set — skipping signature check (first-install bootstrap)."
+        Write-Warn "MOBAIDE_AGENT_TRUST_KEY_B64 not set — skipping signature check (first-install bootstrap)."
         return
     }
     Write-Info "Verifying manifest signature"
@@ -95,7 +95,7 @@ function Install-Release {
     if (Test-Path $releaseDir) { Remove-Item -Recurse -Force $releaseDir }
     New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 
-    $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("claude-agent-" + [guid]::NewGuid()))
+    $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("mobaide-agent-" + [guid]::NewGuid()))
     try {
         $stageScript = @'
 import hashlib, json, shutil, sys, tarfile, urllib.request
@@ -165,13 +165,13 @@ function Install-Service {
     param($Version)
     $launcherDir = Join-Path $Script:Prefix "bin"
     New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null
-    $launcherCmd = Join-Path $launcherDir "claude-agent-launcher.cmd"
+    $launcherCmd = Join-Path $launcherDir "mobaide-agent-launcher.cmd"
     $launcherBody = @"
 @echo off
 setlocal
-set CLAUDE_AGENT_PREFIX=$Script:Prefix
-for /f %%v in (%CLAUDE_AGENT_PREFIX%\current_version) do set CLAUDE_VERSION=%%v
-"%CLAUDE_AGENT_PREFIX%\releases\%CLAUDE_VERSION%\venv\Scripts\python.exe" -m claude_mobile.launcher
+set MOBAIDE_AGENT_PREFIX=$Script:Prefix
+for /f %%v in (%MOBAIDE_AGENT_PREFIX%\current_version) do set CLAUDE_VERSION=%%v
+"%MOBAIDE_AGENT_PREFIX%\releases\%CLAUDE_VERSION%\venv\Scripts\python.exe" -m mobaide.launcher
 "@
     Set-Content -Path $launcherCmd -Value $launcherBody
 
@@ -204,7 +204,7 @@ function Write-Completion {
 }
 
 function Main {
-    Write-Info "Installing claude_agent into $Script:Prefix"
+    Write-Info "Installing mobaide_agent into $Script:Prefix"
     New-Item -ItemType Directory -Path $Script:Prefix -Force | Out-Null
     Write-TrustKey
 
