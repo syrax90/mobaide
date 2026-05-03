@@ -330,7 +330,10 @@ irm https://get.mobaide.com/install.ps1 | iex
 ```
 
 Both scripts are mirrored from `deploy/install.sh` and `deploy/install.ps1`
-into `docs/get/` (the GitHub Pages source for `get.mobaide.com`). They:
+into `docs/get/` on `main`. From there an operator forwards them to the
+root of the `gh-pages` branch (the actual GitHub Pages source for
+`get.mobaide.com`) — see [release-publishing.md](release-publishing.md)
+for the runbook. They:
 
 1. Detect the OS and locate / create `<prefix>` (`/opt/mobaide`,
    `/usr/local/mobaide`, or `%ProgramFiles%\MobaideAgent`).
@@ -470,7 +473,10 @@ own integration tests.
 * [docs/deployment.md](deployment.md) — full deployment guide for both the
   central server and per-machine agents (legacy from-source layout, new
   versioned `releases/<v>/` layout, troubleshooting checklist).
-* [docs/get/README.md](get/README.md) — GitHub Pages source for
-  `get.mobaide.com`, including the trust-key inline-pinning command.
+* [docs/release-publishing.md](release-publishing.md) — install-script
+  publishing pipeline (`deploy/` → `docs/get/` → `gh-pages` →
+  `get.mobaide.com`) and the manual gh-pages sync runbook.
+* [docs/get/README.md](get/README.md) — short note next to the
+  install-script mirror, with the trust-key inline-pinning command.
 * `android/CHANGELOG.md`, `mobaide_agent/CHANGELOG.md`,
   `central_server/CHANGELOG.md` — per-tag release notes.

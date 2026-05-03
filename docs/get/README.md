@@ -1,22 +1,28 @@
-# GitHub Pages source for the Mobaide install endpoint (`get.mobaide.com`)
+# Install scripts mirrored for `get.mobaide.com`
 
-This directory is the GitHub Pages source for the install-script CDN. The
-release-agent workflow copies the canonical install scripts from
-`deploy/install.sh` and `deploy/install.ps1` into this directory at release
-time and Pages serves them as plain text.
+This directory holds the install scripts that end up published at
+`get.mobaide.com`. The canonical source lives at `deploy/install.sh` and
+`deploy/install.ps1`; the `release-agent.yml` workflow mirrors them here
+on every `agent-v*` tag, and `protocol-integrity.yml` enforces
+byte-identity between the two copies on every PR.
 
-Public URLs:
+Public URLs (after the gh-pages sync — see below):
 
 * `https://get.mobaide.com/install.sh`
 * `https://get.mobaide.com/install.ps1`
 
-## Setting up DNS / Pages
+## Pages source is the `gh-pages` branch
 
-1. Configure GitHub Pages on this repo with source = `gh-pages` branch, OR
-   set source = `main` and folder = `/docs/get`.
-2. Add a `CNAME` record at the apex: `get.mobaide.com → <user>.github.io`.
-3. Push the install scripts here at release time (the workflow does this
-   automatically once the agent-v* tag is created).
+GitHub Pages is configured to serve from the `gh-pages` branch (with the
+`CNAME` and `.nojekyll` files at its root), **not** from `main`/docs/get.
+That means changes committed here on `main` do not automatically reach
+`get.mobaide.com` — an operator must forward them onto the `gh-pages`
+branch root after merge.
+
+The runbook for that manual sync, plus a verify step and a description
+of what each file on `gh-pages` is for, lives in
+[`../release-publishing.md`](../release-publishing.md). Read that before
+landing changes to `install.sh` / `install.ps1`.
 
 ## Public-key trust
 
