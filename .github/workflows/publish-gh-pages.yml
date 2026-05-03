@@ -40,11 +40,15 @@ jobs:
             paths+=(manifest.json)
           fi
 
-          if git diff --quiet -- "${paths[@]}"; then
+          # Stage first, then use --cached so the diff check covers both
+          # modifications and brand-new untracked files (manifest.json is
+          # untracked on its first ever publish; plain `git diff` would
+          # silently miss it and the step would exit without publishing).
+          git add "${paths[@]}"
+          if git diff --cached --quiet -- "${paths[@]}"; then
             echo "gh-pages install scripts and manifest already match main — nothing to publish."
             exit 0
           fi
 
-          git add "${paths[@]}"
           git commit -m "publish: sync install scripts and manifest from main@${GITHUB_SHA::7}"
           git push origin gh-pages
