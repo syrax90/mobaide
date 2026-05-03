@@ -90,6 +90,25 @@ release still publishes a GitHub Release but skips signing / publishing the
 manifest. Deployed agents will not see the new version until the manifest is
 delivered.
 
+**Server-side counterparts.** Two of the GitHub secrets above must be
+mirrored as env vars on the production `central_server` host (typically
+`/opt/mobaide/.env`). The two halves are matched byte-for-byte at request
+time, so the names in CI and the names on the server intentionally
+differ — keep them in sync as a pair:
+
+| GitHub Actions secret | Server `.env` variable | Relationship |
+|--|--|--|
+| `CENTRAL_SERVER_RELEASE_TOKEN` | `RELEASE_AUTH_TOKEN` | Identical string. The workflow sends it in the `X-Release-Token` header; the server compares with `hmac.compare_digest`. |
+| `AGENT_MANIFEST_PRIVATE_KEY` | `MANIFEST_SIGNING_PUBLIC_KEY` | Public/private halves of the same Ed25519 key. CI signs; the server verifies. |
+
+If `RELEASE_AUTH_TOKEN` is unset on the server,
+`POST /api/internal/agent_manifest` returns **HTTP 503** ("Manifest
+publishing is disabled") and the release workflow's curl step fails
+after `--retry 5` exhaustion. If `MANIFEST_SIGNING_PUBLIC_KEY` is unset,
+the server stores manifests without verification — agents that have
+pinned a trust key will then reject the manifest at update time, so set
+both vars together.
+
 ### Server-side deploy gate
 
 `release-server.yml` builds and pushes the Docker image to GHCR, then a
