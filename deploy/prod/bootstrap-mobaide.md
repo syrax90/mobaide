@@ -91,6 +91,15 @@ SMTP_FROM_NAME=Mobaide
 
 Without SMTP configured, registrations will silently fail to deliver the OTP. Set `EMAIL_VERIFICATION_REQUIRED=false` only for non-production environments without a mail provider. See [`docs/email-verification-workflow.md`](../../docs/email-verification-workflow.md) for all knobs.
 
+If you publish agent releases via `.github/workflows/release-agent.yml`, also set:
+
+```
+RELEASE_AUTH_TOKEN=<same string as GitHub secret CENTRAL_SERVER_RELEASE_TOKEN>
+MANIFEST_SIGNING_PUBLIC_KEY=<base64 Ed25519 public half of GitHub secret AGENT_MANIFEST_PRIVATE_KEY>
+```
+
+Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the workflow's "Publish manifest to central_server" step fails after `curl --retry` exhaustion. The two values **must match across GitHub and the server** — the workflow sends `CENTRAL_SERVER_RELEASE_TOKEN` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte. See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the full release-secrets table.
+
 All other settings (DB path, log format, etc.) can be left at their defaults — `config.py` has sane values. **JWT TTL exception:** the default TTL for all token types is now `0` (never-expires — no `exp` claim is issued). This is intentional for pre-production use. If you want tokens to expire, set one or more of the following in `.env` to a positive integer (minutes):
 
 ```

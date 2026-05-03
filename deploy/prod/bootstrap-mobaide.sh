@@ -195,6 +195,15 @@ JWT_SECRET_KEY=${JWT_SECRET}
 # Required only if you use Google Sign-In in the Android app.
 # GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 
+# Required only if you publish agent releases via release-agent.yml.
+# Without these, POST /api/internal/agent_manifest returns HTTP 503 and
+# the release workflow fails. RELEASE_AUTH_TOKEN must hold the SAME
+# string as the GitHub Actions secret CENTRAL_SERVER_RELEASE_TOKEN.
+# MANIFEST_SIGNING_PUBLIC_KEY must be the public half of the GitHub
+# Actions secret AGENT_MANIFEST_PRIVATE_KEY (base64 Ed25519).
+# RELEASE_AUTH_TOKEN=
+# MANIFEST_SIGNING_PUBLIC_KEY=
+
 # HOST, PORT, DB_PATH are set by docker-compose.prod.yml - do not duplicate here.
 EOF
     chown "${DEPLOY_USER}:${DEPLOY_GROUP}" "$ENV_FILE"
