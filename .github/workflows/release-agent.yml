@@ -175,10 +175,14 @@ jobs:
 
           paths=(docs/get/install.sh docs/get/install.ps1)
           [ -f docs/get/manifest.json ] && paths+=(docs/get/manifest.json)
-          if git diff --quiet -- "${paths[@]}"; then
+          # Stage first, then use --cached so the diff check covers both
+          # modifications and brand-new untracked files (the manifest.json
+          # is untracked on its first ever sync; plain `git diff` would
+          # silently miss it and the step would exit without committing).
+          git add "${paths[@]}"
+          if git diff --cached --quiet -- "${paths[@]}"; then
             echo "Pages-served install scripts and manifest already match — nothing to sync."
             exit 0
           fi
-          git add "${paths[@]}"
           git commit -m "chore(release): sync install scripts and manifest for ${GITHUB_REF_NAME}"
           git push origin HEAD:main
