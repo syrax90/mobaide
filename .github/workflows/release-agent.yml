@@ -138,7 +138,7 @@ jobs:
           fi
           echo "Verified manifest version=${published}"
 
-      - name: Sync install scripts to docs/get/ for GitHub Pages
+      - name: Sync install scripts and manifest to docs/get/ for GitHub Pages
         env:
           GIT_AUTHOR_NAME: github-actions[bot]
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
@@ -148,24 +148,37 @@ jobs:
           # The job is checked out at the tag commit (detached HEAD). Don't
           # push that tree to main — an off-main tag would otherwise be
           # promoted onto main with the elevated PAT. Instead, snapshot the
-          # tag's deploy/install.* into a buffer, switch to a fresh main
-          # checkout, copy the buffered files there, and push from main.
+          # tag's deploy/install.* and the freshly-built manifest.json into
+          # a buffer, switch to a fresh main checkout, copy the buffered
+          # files there, and push from main. The manifest.json is what the
+          # public install one-liner fetches from
+          # https://get.mobaide.com/manifest.json (see docs/release-publishing.md).
           tag_install_sh=$(mktemp)
           tag_install_ps1=$(mktemp)
           cp deploy/install.sh "$tag_install_sh"
           cp deploy/install.ps1 "$tag_install_ps1"
+          tag_manifest=""
+          if [ -f manifest.json ]; then
+            tag_manifest=$(mktemp)
+            cp manifest.json "$tag_manifest"
+          fi
 
           git fetch origin main
           git checkout -B sync-install-scripts origin/main
           mkdir -p docs/get
           cp "$tag_install_sh" docs/get/install.sh
           cp "$tag_install_ps1" docs/get/install.ps1
-          rm -f "$tag_install_sh" "$tag_install_ps1"
+          if [ -n "$tag_manifest" ]; then
+            cp "$tag_manifest" docs/get/manifest.json
+          fi
+          rm -f "$tag_install_sh" "$tag_install_ps1" ${tag_manifest:+"$tag_manifest"}
 
-          if git diff --quiet -- docs/get/install.sh docs/get/install.ps1; then
-            echo "Pages-served install scripts already match deploy/ on main — nothing to sync."
+          paths=(docs/get/install.sh docs/get/install.ps1)
+          [ -f docs/get/manifest.json ] && paths+=(docs/get/manifest.json)
+          if git diff --quiet -- "${paths[@]}"; then
+            echo "Pages-served install scripts and manifest already match — nothing to sync."
             exit 0
           fi
-          git add docs/get/install.sh docs/get/install.ps1
-          git commit -m "chore(release): sync install scripts for ${GITHUB_REF_NAME}"
+          git add "${paths[@]}"
+          git commit -m "chore(release): sync install scripts and manifest for ${GITHUB_REF_NAME}"
           git push origin HEAD:main
