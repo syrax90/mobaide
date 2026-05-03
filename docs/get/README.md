@@ -15,14 +15,17 @@ Public URLs (after the gh-pages sync — see below):
 
 GitHub Pages is configured to serve from the `gh-pages` branch (with the
 `CNAME` and `.nojekyll` files at its root), **not** from `main`/docs/get.
-That means changes committed here on `main` do not automatically reach
-`get.mobaide.com` — an operator must forward them onto the `gh-pages`
-branch root after merge.
+Pushes to `main` that touch `install.sh` or `install.ps1` here are
+auto-published to the `gh-pages` root by
+[`.github/workflows/publish-gh-pages.yml`](../../.github/workflows/publish-gh-pages.yml),
+so `get.mobaide.com` picks them up within ~30 s of merge.
 
-The runbook for that manual sync, plus a verify step and a description
-of what each file on `gh-pages` is for, lives in
-[`../release-publishing.md`](../release-publishing.md). Read that before
-landing changes to `install.sh` / `install.ps1`.
+The release-time chain has one caveat (the `RELEASE_PLEASE_TOKEN` PAT
+requirement for `release-agent.yml`'s sync commit to fire downstream
+workflows) and a `workflow_dispatch` fallback. The full story, the
+manual fallback runbook, and the description of what each file on
+`gh-pages` is for live in
+[`../release-publishing.md`](../release-publishing.md).
 
 ## Public-key trust
 

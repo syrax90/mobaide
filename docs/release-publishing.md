@@ -7,8 +7,9 @@ curl -fsSL https://get.mobaide.com/install.sh | bash
 irm https://get.mobaide.com/install.ps1 | iex
 ```
 
-reach end users, and the manual step an operator must run after a change
-lands on `main` so that `get.mobaide.com` actually serves the new script.
+reach end users, the GitHub Actions workflow that auto-publishes them
+when `docs/get/install.{sh,ps1}` change on `main`, and the manual
+override an operator can fall back to if the automation does not fire.
 
 For the rest of the release machinery (component versioning, signed
 manifests, the staged-binary auto-updater on already-installed agents)
@@ -28,9 +29,9 @@ docs/get/install.{sh,ps1}   committed back to main by the workflow.
         │                   protocol-integrity.yml asserts byte-identity
         │                   with deploy/ on every PR.
         │
-        │ MANUAL step — operator copies onto gh-pages branch root.
-        │ (Direct edits to docs/get/* during ordinary PRs follow the
-        │  same manual sync.)
+        │ publish-gh-pages.yml on push: main with paths
+        │ docs/get/install.{sh,ps1}. workflow_dispatch is the
+        │ manual fallback when the chain breaks.
         ▼
 gh-pages branch root        also holds CNAME and .nojekyll. This is the
         │                   actual GitHub Pages source.
@@ -44,38 +45,43 @@ https://get.mobaide.com/    public CDN. The CNAME at the gh-pages root
 Three places hold copies of the install scripts: `deploy/`, `docs/get/`
 on `main`, and the root of the `gh-pages` branch. The first two are kept
 identical by `release-agent.yml` (auto-mirror) and policed by
-`protocol-integrity.yml` (CI diff guard). The third — `gh-pages` — has
-no automation: a human must forward the change after merge.
+`protocol-integrity.yml` (CI diff guard). The third — `gh-pages` — is
+auto-published from `docs/get/` by `publish-gh-pages.yml` on every push
+to `main` that touches `docs/get/install.{sh,ps1}`.
 
-## Why the manual step exists
+## Why the auto-sync may need a manual nudge
 
-`release-agent.yml` re-syncs `deploy/install.*` → `docs/get/install.*`
-on the `main` branch only. It has no leg that pushes to `gh-pages`. Some
-day a workflow extension (and a third leg in the diff guard) can close
-this loop — see "Future automation" below — but until then the public
-CDN goes stale every time `docs/get/install.*` moves.
+`publish-gh-pages.yml` listens for `push: main` events that touch
+`docs/get/install.{sh,ps1}`. Direct PR merges trigger it cleanly. The
+release-time path is more subtle: `release-agent.yml` commits the
+`docs/get/` resync to `main`, and that commit only triggers downstream
+workflows if the checkout token is a real PAT (`RELEASE_PLEASE_TOKEN`)
+rather than the default `GITHUB_TOKEN`. GitHub deliberately blocks
+`GITHUB_TOKEN`-authored commits from firing other workflows, so without
+the PAT the chain stops at `docs/get/` and `gh-pages` is not refreshed.
 
-## Who must run the sync
+When that happens, the operator running the release uses the
+`workflow_dispatch` button on `publish-gh-pages.yml` to force the
+publish, or runs the equivalent commands from the runbook below.
 
-Anyone landing a PR that changes `docs/get/install.sh` or
-`docs/get/install.ps1`. The two common triggers:
+## What to watch after a release
 
-1. **An `agent-v*` release** ran `release-agent.yml`, which committed an
-   updated `docs/get/install.*` directly to `main`. Whoever cuts the
-   release should also do the gh-pages sync as part of release closeout.
-2. **A direct PR** edited the install scripts (e.g. this very change —
-   the auto-elevation fix). Whoever merges the PR runs the sync.
+The Actions tab is the source of truth. After any merge that touches
+`docs/get/install.{sh,ps1}` — including the `chore(release): sync
+install scripts...` commit that `release-agent.yml` makes — confirm
+that "Publish install scripts to gh-pages" ran green on the resulting
+`main` SHA. There is no automated alarm: the CI diff guard only
+compares the two `main`-side copies, not `gh-pages`.
 
-If you forget the sync, `get.mobaide.com` keeps serving the old script
-indefinitely. There is no alarm — the CI diff guard only compares the
-two `main`-side copies.
+## Manual fallback runbook
 
-## Sync runbook
-
-The `gh-pages` branch has a flat layout (`install.sh` at the root,
-**not** under `docs/get/`). The cleanest sync uses `git show` to pull
-file content from `main` and write it straight to the gh-pages
-working tree, without touching the index of either branch.
+Use this when `publish-gh-pages.yml` did not fire (PAT unset, see
+above), when an emergency override is needed, or when reproducing the
+publish locally for debugging. The `gh-pages` branch has a flat layout
+(`install.sh` at the root, **not** under `docs/get/`). The cleanest
+sync uses `git show` to pull file content from `main` and write it
+straight to the gh-pages working tree, without touching the index of
+either branch.
 
 ```bash
 # 1. Make sure main is in sync locally.
@@ -154,30 +160,6 @@ infrastructure — they should not move:
 If `CNAME` or `.nojekyll` ever ends up touched in a sync commit,
 something went wrong with the runbook above — back the change out and
 restart from a fresh checkout.
-
-## Future automation
-
-The cleanest follow-up is to extend `release-agent.yml` with a third
-sync step that force-updates `gh-pages`:
-
-```yaml
-- name: Sync install scripts to gh-pages
-  run: |
-    git fetch origin gh-pages
-    git checkout -B gh-pages-tmp origin/gh-pages
-    cp docs/get/install.sh  install.sh
-    cp docs/get/install.ps1 install.ps1
-    if git diff --quiet -- install.sh install.ps1; then exit 0; fi
-    git add install.sh install.ps1
-    git commit -m "publish: sync install scripts for ${GITHUB_REF_NAME}"
-    git push origin HEAD:gh-pages
-```
-
-…paired with a third leg in the
-`protocol-integrity.yml` diff guard that asserts the `gh-pages` copy
-matches `docs/get/`. Both are out of scope for the change that
-introduces this doc; the manual runbook above is the supported path
-until that automation lands.
 
 ## See also
 

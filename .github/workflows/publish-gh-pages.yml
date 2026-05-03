@@ -1,0 +1,44 @@
+name: Publish install scripts to gh-pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/get/install.sh"
+      - "docs/get/install.ps1"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-gh-pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 1
+
+      - name: Sync install scripts from main into gh-pages root
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          git fetch origin main --depth=1
+          git show origin/main:docs/get/install.sh  > install.sh
+          git show origin/main:docs/get/install.ps1 > install.ps1
+
+          if git diff --quiet -- install.sh install.ps1; then
+            echo "gh-pages install scripts already match main — nothing to publish."
+            exit 0
+          fi
+
+          git add install.sh install.ps1
+          git commit -m "publish: sync install scripts from main@${GITHUB_SHA::7}"
+          git push origin gh-pages

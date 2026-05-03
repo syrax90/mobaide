@@ -83,7 +83,7 @@ Required CI secrets:
 | `AGENT_MANIFEST_PRIVATE_KEY` | `release-agent.yml` | Base64 Ed25519 private key. Signs the manifest body. |
 | `CENTRAL_SERVER_RELEASE_TOKEN` | `release-agent.yml` | Bearer token for `POST /api/internal/agent_manifest`. |
 | `CENTRAL_SERVER_URL` | `release-agent.yml` | Base URL of the production `central_server` that hosts the manifest. |
-| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent.yml` | PAT with `contents:write` + `workflow` scopes. Required only to chain release-please tag pushes into the downstream `release-*` workflows and for the agent release to push a Pages re-sync commit. |
+| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent.yml` | PAT with `contents:write` + `workflow` scopes. Required only to chain release-please tag pushes into the downstream `release-*` workflows and for the agent release's Pages re-sync commit on `main` to chain into `publish-gh-pages.yml`. Without it, `workflow_dispatch` on `publish-gh-pages.yml` is the documented fallback. |
 
 If `AGENT_MANIFEST_PRIVATE_KEY` or `CENTRAL_SERVER_*` is missing, the agent
 release still publishes a GitHub Release but skips signing / publishing the
