@@ -20,6 +20,7 @@ set -euo pipefail
 : "${MOBAIDE_AGENT_MANIFEST_URL:=https://api.mobaide.com/v1/agent/manifest.json}"
 : "${MOBAIDE_AGENT_TRUST_KEY_B64:=}"
 : "${MOBAIDE_AGENT_SERVICE_USER:=mobaide}"
+: "${MOBAIDE_AGENT_INSTALL_URL:=https://get.mobaide.com/install.sh}"
 
 info()  { printf '[INFO]  %s\n' "$*"; }
 warn()  { printf '[WARN]  %s\n' "$*" >&2; }
@@ -44,12 +45,25 @@ detect_platform() {
 
 require_root_when_writing_system_dir() {
     case "$MOBAIDE_AGENT_PREFIX" in
-        /opt/*|/usr/*|/etc/*)
-            if [ "$(id -u)" -ne 0 ]; then
-                fail "Installing to $MOBAIDE_AGENT_PREFIX requires root (sudo)."
-            fi
-            ;;
+        /opt/*|/usr/*|/etc/*) ;;
+        *) return 0 ;;
     esac
+    [ "$(id -u)" -eq 0 ] && return 0
+
+    # `sudo curl ... | bash` only elevates curl, not bash, so this branch is
+    # the common case rather than an edge case. Re-fetch the script under
+    # sudo so the canonical one-liner Just Works.
+    if command -v sudo >/dev/null 2>&1; then
+        info "Installing to $MOBAIDE_AGENT_PREFIX requires root — re-executing under sudo."
+        info "(With 'curl|bash', sudo applies only to curl; auto-elevating now.)"
+        exec sudo \
+            --preserve-env=MOBAIDE_AGENT_PREFIX,MOBAIDE_AGENT_MANIFEST_URL,MOBAIDE_AGENT_TRUST_KEY_B64,MOBAIDE_AGENT_SERVICE_USER,MOBAIDE_AGENT_INSTALL_URL \
+            bash -c 'curl -fsSL "$1" | bash' _ "$MOBAIDE_AGENT_INSTALL_URL"
+    fi
+
+    fail "Installing to $MOBAIDE_AGENT_PREFIX requires root, and sudo is not available.
+Re-run as root, or set MOBAIDE_AGENT_PREFIX to a user-writable directory:
+    MOBAIDE_AGENT_PREFIX=\$HOME/.mobaide curl -fsSL $MOBAIDE_AGENT_INSTALL_URL | bash"
 }
 
 check_command() {

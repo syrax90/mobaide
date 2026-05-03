@@ -1,22 +1,31 @@
-# GitHub Pages source for the Mobaide install endpoint (`get.mobaide.com`)
+# Install scripts mirrored for `get.mobaide.com`
 
-This directory is the GitHub Pages source for the install-script CDN. The
-release-agent workflow copies the canonical install scripts from
-`deploy/install.sh` and `deploy/install.ps1` into this directory at release
-time and Pages serves them as plain text.
+This directory holds the install scripts that end up published at
+`get.mobaide.com`. The canonical source lives at `deploy/install.sh` and
+`deploy/install.ps1`; the `release-agent.yml` workflow mirrors them here
+on every `agent-v*` tag, and `protocol-integrity.yml` enforces
+byte-identity between the two copies on every PR.
 
-Public URLs:
+Public URLs (after the gh-pages sync — see below):
 
 * `https://get.mobaide.com/install.sh`
 * `https://get.mobaide.com/install.ps1`
 
-## Setting up DNS / Pages
+## Pages source is the `gh-pages` branch
 
-1. Configure GitHub Pages on this repo with source = `gh-pages` branch, OR
-   set source = `main` and folder = `/docs/get`.
-2. Add a `CNAME` record at the apex: `get.mobaide.com → <user>.github.io`.
-3. Push the install scripts here at release time (the workflow does this
-   automatically once the agent-v* tag is created).
+GitHub Pages is configured to serve from the `gh-pages` branch (with the
+`CNAME` and `.nojekyll` files at its root), **not** from `main`/docs/get.
+Pushes to `main` that touch `install.sh` or `install.ps1` here are
+auto-published to the `gh-pages` root by
+[`.github/workflows/publish-gh-pages.yml`](../../.github/workflows/publish-gh-pages.yml),
+so `get.mobaide.com` picks them up within ~30 s of merge.
+
+The release-time chain has one caveat (the `RELEASE_PLEASE_TOKEN` PAT
+requirement for `release-agent.yml`'s sync commit to fire downstream
+workflows) and a `workflow_dispatch` fallback. The full story, the
+manual fallback runbook, and the description of what each file on
+`gh-pages` is for live in
+[`../release-publishing.md`](../release-publishing.md).
 
 ## Public-key trust
 

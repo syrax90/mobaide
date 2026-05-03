@@ -1,0 +1,172 @@
+# Install-Script Publishing Pipeline
+
+This doc covers how the public install one-liners
+
+```bash
+curl -fsSL https://get.mobaide.com/install.sh | bash
+irm https://get.mobaide.com/install.ps1 | iex
+```
+
+reach end users, the GitHub Actions workflow that auto-publishes them
+when `docs/get/install.{sh,ps1}` change on `main`, and the manual
+override an operator can fall back to if the automation does not fire.
+
+For the rest of the release machinery (component versioning, signed
+manifests, the staged-binary auto-updater on already-installed agents)
+see [`versioning-and-updates.md`](versioning-and-updates.md). This doc
+covers only the *bootstrap* path — how a brand-new host first downloads
+the agent.
+
+## Pipeline overview
+
+```
+deploy/install.{sh,ps1}     canonical source. PRs edit these.
+        │
+        │ release-agent.yml on agent-v* tag
+        │   (steps 141–172)
+        ▼
+docs/get/install.{sh,ps1}   committed back to main by the workflow.
+        │                   protocol-integrity.yml asserts byte-identity
+        │                   with deploy/ on every PR.
+        │
+        │ publish-gh-pages.yml on push: main with paths
+        │ docs/get/install.{sh,ps1}. workflow_dispatch is the
+        │ manual fallback when the chain breaks.
+        ▼
+gh-pages branch root        also holds CNAME and .nojekyll. This is the
+        │                   actual GitHub Pages source.
+        │
+        │ GitHub Pages serves files at the apex of the gh-pages branch
+        ▼
+https://get.mobaide.com/    public CDN. The CNAME at the gh-pages root
+                            provisions the custom domain.
+```
+
+Three places hold copies of the install scripts: `deploy/`, `docs/get/`
+on `main`, and the root of the `gh-pages` branch. The first two are kept
+identical by `release-agent.yml` (auto-mirror) and policed by
+`protocol-integrity.yml` (CI diff guard). The third — `gh-pages` — is
+auto-published from `docs/get/` by `publish-gh-pages.yml` on every push
+to `main` that touches `docs/get/install.{sh,ps1}`.
+
+## Why the auto-sync may need a manual nudge
+
+`publish-gh-pages.yml` listens for `push: main` events that touch
+`docs/get/install.{sh,ps1}`. Direct PR merges trigger it cleanly. The
+release-time path is more subtle: `release-agent.yml` commits the
+`docs/get/` resync to `main`, and that commit only triggers downstream
+workflows if the checkout token is a real PAT (`RELEASE_PLEASE_TOKEN`)
+rather than the default `GITHUB_TOKEN`. GitHub deliberately blocks
+`GITHUB_TOKEN`-authored commits from firing other workflows, so without
+the PAT the chain stops at `docs/get/` and `gh-pages` is not refreshed.
+
+When that happens, the operator running the release uses the
+`workflow_dispatch` button on `publish-gh-pages.yml` to force the
+publish, or runs the equivalent commands from the runbook below.
+
+## What to watch after a release
+
+The Actions tab is the source of truth. After any merge that touches
+`docs/get/install.{sh,ps1}` — including the `chore(release): sync
+install scripts...` commit that `release-agent.yml` makes — confirm
+that "Publish install scripts to gh-pages" ran green on the resulting
+`main` SHA. There is no automated alarm: the CI diff guard only
+compares the two `main`-side copies, not `gh-pages`.
+
+## Manual fallback runbook
+
+Use this when `publish-gh-pages.yml` did not fire (PAT unset, see
+above), when an emergency override is needed, or when reproducing the
+publish locally for debugging. The `gh-pages` branch has a flat layout
+(`install.sh` at the root, **not** under `docs/get/`). The cleanest
+sync uses `git show` to pull file content from `main` and write it
+straight to the gh-pages working tree, without touching the index of
+either branch.
+
+```bash
+# 1. Make sure main is in sync locally.
+git fetch origin
+
+# 2. Switch to gh-pages and fast-forward.
+git checkout gh-pages
+git pull --ff-only origin gh-pages
+
+# 3. Overwrite the served scripts with the latest main content.
+git show origin/main:docs/get/install.sh  > install.sh
+git show origin/main:docs/get/install.ps1 > install.ps1
+
+# 4. Sanity-check the diff (you should only see install.{sh,ps1} change;
+#    CNAME and .nojekyll must stay untouched).
+git status
+git diff -- install.sh install.ps1
+
+# 5. Commit and push.
+git add install.sh install.ps1
+git commit -m "publish: sync install scripts from main"
+git push origin gh-pages
+```
+
+Worktree variant (does not require switching the current branch):
+
+```bash
+git fetch origin
+git worktree add ../mobaide-gh-pages gh-pages
+git -C ../mobaide-gh-pages pull --ff-only origin gh-pages
+git show origin/main:docs/get/install.sh  > ../mobaide-gh-pages/install.sh
+git show origin/main:docs/get/install.ps1 > ../mobaide-gh-pages/install.ps1
+git -C ../mobaide-gh-pages add install.sh install.ps1
+git -C ../mobaide-gh-pages commit -m "publish: sync install scripts from main"
+git -C ../mobaide-gh-pages push origin gh-pages
+git worktree remove ../mobaide-gh-pages
+```
+
+## Verifying the publish
+
+GitHub Pages typically picks up a `gh-pages` push within ~30 seconds and
+serves with a short `max-age`, so the new script should be live almost
+immediately. Verify:
+
+```bash
+# Compare what's served against what's on the branch.
+curl -fsSL https://get.mobaide.com/install.sh | sha256sum
+git show origin/gh-pages:install.sh         | sha256sum
+# Both digests must match.
+```
+
+A spot-check on the change you just published:
+
+```bash
+# Example for the auto-elevation fix:
+curl -fsSL https://get.mobaide.com/install.sh \
+  | grep -A1 'Re-executing under sudo'
+```
+
+If the digests disagree for more than a couple of minutes, check the
+**Pages** section of the repo's Settings page for a deployment failure
+or a stale build.
+
+## What lives on `gh-pages`
+
+The branch root holds exactly four files. Treat the second pair as
+infrastructure — they should not move:
+
+| File | Purpose | Touched by sync? |
+|---|---|---|
+| `install.sh` | Linux/macOS bootstrap. Mirrors `docs/get/install.sh` from `main`. | Yes — every sync. |
+| `install.ps1` | Windows bootstrap. Mirrors `docs/get/install.ps1`. | Yes — every sync. |
+| `CNAME` | Single line `get.mobaide.com`. Provisions the custom domain. | No. |
+| `.nojekyll` | Empty file. Tells Pages **not** to run the Jekyll renderer, so the scripts are served as plain text rather than processed. | No. |
+
+If `CNAME` or `.nojekyll` ever ends up touched in a sync commit,
+something went wrong with the runbook above — back the change out and
+restart from a fresh checkout.
+
+## See also
+
+* [`versioning-and-updates.md`](versioning-and-updates.md) — the rest of
+  the release pipeline: tag conventions, signed manifests, on-host
+  staged-binary auto-updater. This doc covers only the bootstrap.
+* [`get/README.md`](get/README.md) — short note next to the scripts
+  themselves, with the trust-key inline-pinning command.
+* [`PROTOCOL.md`](../PROTOCOL.md) — wire-contract version history
+  (independent of the install pipeline).
