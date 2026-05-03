@@ -17,7 +17,7 @@ set -euo pipefail
 
 # Defaults (override via env var).
 : "${MOBAIDE_AGENT_PREFIX:=}"
-: "${MOBAIDE_AGENT_MANIFEST_URL:=https://api.mobaide.com/v1/agent/manifest.json}"
+: "${MOBAIDE_AGENT_MANIFEST_URL:=https://get.mobaide.com/manifest.json}"
 : "${MOBAIDE_AGENT_TRUST_KEY_B64:=}"
 : "${MOBAIDE_AGENT_SERVICE_USER:=mobaide}"
 : "${MOBAIDE_AGENT_INSTALL_URL:=https://get.mobaide.com/install.sh}"

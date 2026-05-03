@@ -6,6 +6,7 @@ on:
     paths:
       - "docs/get/install.sh"
       - "docs/get/install.ps1"
+      - "docs/get/manifest.json"
   workflow_dispatch:
 
 concurrency:
@@ -23,7 +24,7 @@ jobs:
           ref: gh-pages
           fetch-depth: 1
 
-      - name: Sync install scripts from main into gh-pages root
+      - name: Sync install scripts and manifest from main into gh-pages root
         env:
           GIT_AUTHOR_NAME: github-actions[bot]
           GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
@@ -33,12 +34,17 @@ jobs:
           git fetch origin main --depth=1
           git show origin/main:docs/get/install.sh  > install.sh
           git show origin/main:docs/get/install.ps1 > install.ps1
+          paths=(install.sh install.ps1)
+          if git cat-file -e origin/main:docs/get/manifest.json 2>/dev/null; then
+            git show origin/main:docs/get/manifest.json > manifest.json
+            paths+=(manifest.json)
+          fi
 
-          if git diff --quiet -- install.sh install.ps1; then
-            echo "gh-pages install scripts already match main — nothing to publish."
+          if git diff --quiet -- "${paths[@]}"; then
+            echo "gh-pages install scripts and manifest already match main — nothing to publish."
             exit 0
           fi
 
-          git add install.sh install.ps1
-          git commit -m "publish: sync install scripts from main@${GITHUB_SHA::7}"
+          git add "${paths[@]}"
+          git commit -m "publish: sync install scripts and manifest from main@${GITHUB_SHA::7}"
           git push origin gh-pages
