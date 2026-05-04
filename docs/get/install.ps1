@@ -97,8 +97,12 @@ function Install-Release {
 
     $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("mobaide-agent-" + [guid]::NewGuid()))
     try {
+        # The script prints exactly one line — the staged wheel's full path.
+        # pip 25.2+ enforces PEP 427 wheel-filename validation, so the wheel
+        # is staged under its canonical name-version-pyver-abi-platform
+        # filename derived from the manifest's `wheel_url`.
         $stageScript = @'
-import hashlib, json, shutil, sys, tarfile, urllib.request
+import hashlib, json, posixpath, shutil, sys, tarfile, urllib.parse, urllib.request
 from pathlib import Path
 
 manifest_path, tmpdir, release_dir = sys.argv[1:4]
@@ -120,8 +124,23 @@ def verify_sha256(path, expected):
     if digest.hexdigest().lower() != expected.lower():
         sys.exit(f"sha256 mismatch for {path}")
 
+def wheel_basename(url):
+    if url.startswith("file://"):
+        name = Path(url.removeprefix("file://")).name
+    else:
+        name = posixpath.basename(urllib.parse.urlparse(url).path)
+    if any(ch in name for ch in ("/", "\\", "\x00")):
+        sys.exit(
+            f"manifest wheel_url basename contains path-separator chars: {name!r} (from {url!r})"
+        )
+    if not name.endswith(".whl") or name.count("-") < 4:
+        sys.exit(
+            f"manifest wheel_url has non-PEP427 filename: {name!r} (from {url!r})"
+        )
+    return name
+
 tarball = Path(tmpdir) / "agent.tar.gz"
-wheel = Path(tmpdir) / "agent.whl"
+wheel = Path(tmpdir) / wheel_basename(body["wheel_url"])
 fetch(body["tarball_url"], tarball)
 verify_sha256(tarball, body["tarball_sha256"])
 fetch(body["wheel_url"], wheel)
@@ -131,10 +150,10 @@ with tarfile.open(tarball, mode="r:gz") as tar:
     tar.extractall(release_dir, filter="data")
 print(wheel)
 '@
-        & $PythonExe -c $stageScript $ManifestPath $tmp $releaseDir
+        $wheel = & $PythonExe -c $stageScript $ManifestPath $tmp $releaseDir
         if ($LASTEXITCODE -ne 0) { Write-Fail "Staging failed" }
+        $wheel = ($wheel | Out-String).Trim()
 
-        $wheel = Join-Path $tmp "agent.whl"
         $venv = Join-Path $releaseDir "venv"
         Write-Info "Creating venv in $venv"
         & $PythonExe -m venv $venv

@@ -61,7 +61,7 @@ def _build_tarball_and_wheel(target_dir: Path, version: str) -> tuple[Path, Path
     """
     target_dir.mkdir(parents=True, exist_ok=True)
     tarball_path = target_dir / f"agent-{version}.tar.gz"
-    wheel_path = target_dir / f"agent-{version}.whl"
+    wheel_path = target_dir / f"mobaide_agent-{version}-py3-none-any.whl"
 
     buf = BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:

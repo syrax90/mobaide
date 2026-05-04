@@ -43,12 +43,14 @@ import asyncio
 import hashlib
 import logging
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,6 +99,40 @@ class InstallLayout:
     @property
     def trust_public_key(self) -> Path:
         return self.trust_dir / "central_server.pub"
+
+
+def _wheel_basename_from_url(url: str) -> str:
+    """Return the canonical wheel filename from a manifest ``wheel_url``.
+
+    pip 25.2+ enforces PEP 427 wheel-filename validation
+    (``name-version-pyver-abi-platform.whl`` ⇒ ≥4 dashes in the stem). The
+    release workflow always emits a compliant URL, so deriving the basename
+    from the URL gives pip the filename it needs. A non-compliant URL is
+    rejected fail-closed before any download begins.
+
+    ``file://`` URLs are handled with ``pathlib.Path`` because ``urlparse``
+    routes Windows paths like ``file://C:\\…\\foo.whl`` entirely into
+    ``netloc`` (no forward slashes ⇒ empty ``path``); the Path-based split
+    matches what the sibling ``_download_to`` already does.
+    """
+    if url.startswith("file://"):
+        name = Path(url.removeprefix("file://")).name
+    else:
+        name = posixpath.basename(urllib.parse.urlparse(url).path)
+    # Reject path-separator characters surviving in the basename: a
+    # `posixpath`-derived basename leaves Windows backslashes literal, so a
+    # crafted `wheel_url` like `https://.../legit/..\..\evil-1-2-3-4.whl`
+    # would otherwise pass the PEP 427 shape check below and `Path(tmpdir) /
+    # name` would resolve outside ``tmpdir`` on Windows.
+    if any(ch in name for ch in ("/", "\\", "\x00")):
+        raise ValueError(
+            f"manifest wheel_url basename contains path-separator chars: {name!r} (from {url!r})"
+        )
+    if not name.endswith(".whl") or name.count("-") < 4:
+        raise ValueError(
+            f"manifest wheel_url has non-PEP427 filename: {name!r} (from {url!r})"
+        )
+    return name
 
 
 class StagedBinaryUpdater:
@@ -261,11 +297,9 @@ class StagedBinaryUpdater:
     def _stage_release(
         self, manifest_body: dict[str, Any], target_version: str
     ) -> Path:
-        release_dir = self._layout.releases_dir / target_version
-        if release_dir.exists():
-            shutil.rmtree(release_dir)
-        release_dir.mkdir(parents=True, exist_ok=False)
-
+        # Validate the manifest shape BEFORE any on-disk side effects so a
+        # rejected manifest leaves no empty ``releases/<v>/`` skeleton — the
+        # fail-closed contract documented at the top of this module.
         tarball_url = str(manifest_body.get("tarball_url", ""))
         tarball_sha = str(manifest_body.get("tarball_sha256", "")).lower()
         wheel_url = str(manifest_body.get("wheel_url", ""))
@@ -275,10 +309,16 @@ class StagedBinaryUpdater:
             raise ValueError("manifest missing tarball_url/tarball_sha256")
         if not wheel_url or not wheel_sha:
             raise ValueError("manifest missing wheel_url/wheel_sha256")
+        wheel_name = _wheel_basename_from_url(wheel_url)
+
+        release_dir = self._layout.releases_dir / target_version
+        if release_dir.exists():
+            shutil.rmtree(release_dir)
+        release_dir.mkdir(parents=True, exist_ok=False)
 
         with tempfile.TemporaryDirectory(prefix="mobaide-agent-") as tmpdir:
             tarball_path = Path(tmpdir) / "agent.tar.gz"
-            wheel_path = Path(tmpdir) / "agent.whl"
+            wheel_path = Path(tmpdir) / wheel_name
             self._download_to(tarball_url, tarball_path)
             self._verify_sha256(tarball_path, tarball_sha)
             self._download_to(wheel_url, wheel_path)

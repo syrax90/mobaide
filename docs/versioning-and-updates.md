@@ -407,10 +407,16 @@ for the runbook. They:
    `MOBAIDE_AGENT_MANIFEST_URL`).
 3. Verify the Ed25519 signature against `MOBAIDE_AGENT_TRUST_KEY_B64` and
    persist the key at `<prefix>/trust/central_server.pub`.
-4. Download tarball + wheel, verify sha256s, extract under
+4. **(Linux only, before venv creation)** Verify that `python3 -c 'import ensurepip'`
+   succeeds. If it does not (common on stock Debian/Ubuntu where the base
+   `python3` package omits `ensurepip`), auto-install `python${version}-venv`
+   via the detected package manager (`apt-get`, `dnf`/`yum`, `pacman`, `zypper`,
+   or `apk`). Non-root user-prefix installs print a distro-aware error instead
+   of attempting a privileged package install.
+5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
-5. Atomically pin `<prefix>/current_version`.
-6. Register the service:
+6. Atomically pin `<prefix>/current_version`.
+7. Register the service:
    * **Linux** — write `/etc/systemd/system/mobaide-agent.service`,
      `daemon-reload`, `enable`, `restart`. The unit's `ExecStart` is the
      launcher shim and `RestartForceExitStatus=75` is set.
