@@ -18,6 +18,7 @@ from mobaide.core.projects_store import (
     ProjectUpdatePatch,
     _seed_from_env,
     normalize_project_path,
+    safe_path_exists,
 )
 
 
@@ -393,6 +394,138 @@ class TestListPublic:
         assert isinstance(flags["verbose"], bool)
         assert isinstance(flags["retries"], int)
         assert isinstance(flags["ratio"], float)
+
+    def test_list_public_tolerates_unreadable_project_path(
+        self, tmp_path, monkeypatch,
+    ):
+        """Regression for the ``GET /api/projects`` 500 reported on a path
+        the agent process can't ``stat()`` (e.g. another user's home dir
+        with mode 0700).
+
+        ``_record_to_public`` previously called ``Path.exists()`` directly,
+        and a single ``PermissionError`` from one record's path probe
+        poisoned the whole list response. The fix routes the probes through
+        ``safe_path_exists``; this test pins that contract by injecting a
+        ``PermissionError`` for the unreadable record and asserting the
+        rest of the response stays intact.
+        """
+        readable_root = tmp_path / "readable"
+        readable_root.mkdir()
+        (readable_root / ".git").mkdir()
+        unreadable_root = tmp_path / "unreadable"
+
+        store = ProjectsStore(str(tmp_path / "projects.json"))
+        store.load()
+        store.create(ProjectRecord(name="Readable", path=str(readable_root)))
+        store.create(
+            ProjectRecord(name="Locked", path=str(unreadable_root)),
+        )
+
+        # Simulate an EACCES at the OS layer: any ``Path.exists()`` call on
+        # the unreadable root (or its ``.git`` child) raises ``PermissionError``.
+        # Other paths must still resolve normally so the readable record's
+        # ``is_git`` / ``path_exists`` flags remain truthful.
+        from pathlib import Path as _Path
+
+        real_exists = _Path.exists
+        unreadable_str = str(unreadable_root)
+
+        def faking_exists(self):  # type: ignore[no-redef]
+            if str(self).startswith(unreadable_str):
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_exists(self)
+
+        monkeypatch.setattr(_Path, "exists", faking_exists)
+
+        public = store.list_public()
+        by_name = {e["name"]: e for e in public}
+
+        assert set(by_name) == {"Readable", "Locked"}
+        # Locked project: probes returned False, no exception bubbled.
+        assert by_name["Locked"]["is_git"] is False
+        assert by_name["Locked"]["path_exists"] is False
+        # Readable project untouched.
+        assert by_name["Readable"]["is_git"] is True
+        assert by_name["Readable"]["path_exists"] is True
+
+
+class TestSafePathExists:
+    """Direct coverage for the ``safe_path_exists`` helper.
+
+    This is the load-bearing primitive behind every defensive ``.git`` /
+    project-root probe in the agent: ``projects_store._record_to_public``,
+    ``agent/git/router._resolve_git_project``, ``core/claude_launcher``'s
+    worktree fallback, and ``relay/client``'s git-relay path. The helper
+    must (a) report the truth on a normal path, and (b) silently return
+    ``False`` on any ``OSError`` subclass — matching the comment in
+    ``projects_store.py`` that calls out ``PermissionError``, broken
+    symlinks, and bouncing NFS mounts.
+    """
+
+    def test_returns_true_for_existing_path(self, tmp_path):
+        target = tmp_path / "real"
+        target.mkdir()
+        assert safe_path_exists(target) is True
+
+    def test_returns_false_for_missing_path(self, tmp_path):
+        # ``Path.exists`` already returns False for FileNotFoundError-class
+        # outcomes, so this is just the well-behaved baseline.
+        assert safe_path_exists(tmp_path / "does_not_exist") is False
+
+    def test_returns_false_when_underlying_exists_raises_permission_error(
+        self, tmp_path, monkeypatch,
+    ):
+        from pathlib import Path as _Path
+
+        target = tmp_path / "locked"
+
+        def boom(self):  # type: ignore[no-redef]
+            raise PermissionError(13, "Permission denied", str(self))
+
+        monkeypatch.setattr(_Path, "exists", boom)
+
+        # Must NOT propagate — caller is on a hot path that may not be
+        # entitled to stat() the target. EACCES degenerates to "no".
+        assert safe_path_exists(target) is False
+
+    def test_returns_false_for_other_oserror_subclasses(
+        self, tmp_path, monkeypatch,
+    ):
+        """Broken symlinks raise ``OSError`` (errno EIO/ELOOP) in some
+        kernels; an NFS hiccup surfaces as ``OSError`` too. The docstring
+        explicitly enumerates these as "treat as False" — pin that here so
+        a future tightening of the except clause to ``PermissionError``
+        only doesn't silently break the worktree path.
+        """
+        from pathlib import Path as _Path
+
+        target = tmp_path / "symlink"
+
+        def boom(self):  # type: ignore[no-redef]
+            raise OSError(40, "Symbolic link loop", str(self))
+
+        monkeypatch.setattr(_Path, "exists", boom)
+
+        assert safe_path_exists(target) is False
+
+    def test_does_not_swallow_non_oserror_exceptions(
+        self, tmp_path, monkeypatch,
+    ):
+        """A ``ValueError`` (or any non-OSError) must escape — those are
+        bugs, not environment-of-the-day reality, and silencing them
+        would hide real defects.
+        """
+        from pathlib import Path as _Path
+
+        target = tmp_path / "buggy"
+
+        def boom(self):  # type: ignore[no-redef]
+            raise ValueError("not an OSError, must propagate")
+
+        monkeypatch.setattr(_Path, "exists", boom)
+
+        with pytest.raises(ValueError, match="must propagate"):
+            safe_path_exists(target)
 
 
 class TestGet:

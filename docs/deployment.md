@@ -120,10 +120,13 @@ and registers the supervisor:
   configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so the
   launcher's 3-strike rollback heuristic has room to retry a stable sibling
   release before systemd stops the unit, and `RestartForceExitStatus=75` so
-  the updater's restart trigger is honoured.
+  the updater's restart trigger is honoured. The agent runs as the user
+  who invoked `sudo` (resolved from `$SUDO_USER`) so it can read/write
+  the developer's `/home/<user>/<repo>` source trees. Override with
+  `MOBAIDE_RUN_AS_USER=<user>` for CI / non-interactive provisioning.
 * **macOS** — installs `~/Library/LaunchAgents/com.mobaide.agent.plist`
   (launchd). `ThrottleInterval=10` gives the boot journal the same rollback
-  window on macOS.
+  window on macOS. Already runs as the invoking user; no extra config.
 
 After install, edit `<prefix>/agent.env` (created by the script) and add the relay credentials (`RELAY_CENTRAL_URL`, `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`), then restart the agent:
 
@@ -132,22 +135,59 @@ sudo systemctl restart mobaide-agent   # Linux
 launchctl kickstart -k gui/$(id -u)/com.mobaide.agent  # macOS
 ```
 
-**From-source / developer install:** use `deploy/setup.sh` (sets up a flat venv from the local repo checkout). Note that `setup.sh` installs the same service unit, which now expects the versioned `releases/` layout; use the end-user script above on production hosts.
+**From-source / developer install:** use `deploy/setup.sh` (sets up a flat venv from the local repo checkout). The script renders the systemd unit inline against the flat-venv layout (`/opt/mobaide/venv/...`), so this path does NOT require the versioned `releases/` layout that the end-user script uses.
 
 ```bash
 sudo bash deploy/setup.sh
+# or, to pin which user owns the agent on a multi-user host:
+MOBAIDE_RUN_AS_USER=alice sudo -E bash deploy/setup.sh
 ```
+
+### Threat model
+
+The agent now runs with the developer's full UID privileges and has read/write access to `$HOME`. A compromise of the relay channel — i.e. a stolen `RELAY_AGENT_TOKEN` or a compromised central server — gains the same access the developer has interactively:
+
+- their source trees, SSH keys, GPG keys, browser cookies, `~/.aws/credentials`, `~/.netrc`, `~/.gitconfig` (which may reference signing keys / tokens);
+- any process the user can spawn (the relay can request arbitrary `command` in `create_session`);
+- any host the user can reach over SSH.
+
+Treat `RELAY_AGENT_TOKEN` as equivalent to the developer's interactive shell credential. Rotate it immediately on any suspected central-server compromise; revoke it via the admin API before decommissioning a host. Rotate `JWT_SECRET_KEY` (in `<prefix>/agent.env`) on the same trigger — it signs the agent's local API tokens and is equivalent in trust to a stolen `RELAY_AGENT_TOKEN`. The systemd unit retains `NoNewPrivileges=yes`, `ProtectSystem=strict` with explicit `ReadWritePaths=$HOME /opt/mobaide`, and `PrivateTmp=yes` for residual hardening, but these protect against privilege escalation, not against a relay-token compromise.
+
+This is the same trust model adopted by comparable per-user developer tools (code-server, JupyterLab, VS Code Server). It is incompatible with multi-tenant hosting on a single agent install — pair one agent per developer.
+
+#### Project paths outside `$HOME`
+
+`ReadWritePaths` only grants writes to the agent user's `$HOME` and the install prefix. A project pointing at e.g. `/srv/code/myrepo` or `/data/repos/foo` will fail with `OSError: [Errno 30] Read-only file system` at worktree creation, because `ProtectSystem=strict` mounts the rest of the OS hierarchy read-only. To support such projects, drop in an override that extends the writable list — keeping the rest of the hardening intact:
+
+```bash
+sudo systemctl edit mobaide-agent.service
+# In the editor, paste (replace /srv/code with your real path):
+[Service]
+ReadWritePaths=/srv/code
+# Save and exit; systemd writes the override to
+# /etc/systemd/system/mobaide-agent.service.d/override.conf
+sudo systemctl restart mobaide-agent
+```
+
+Multiple paths can be listed whitespace-separated. Re-running the install scripts will not overwrite the `*.d/override.conf` files.
+
+### Migrating from the legacy `mobaide` system user
+
+Pre-`/home`-fix installs created a dedicated `mobaide` system account and ran the agent as that account with `ProtectHome=yes` — which silently broke any project pointing at `/home/<user>/...` (PermissionError on the `.git` probe). Re-running either install script on an existing host:
+
+* re-renders the systemd unit with `User=$SUDO_USER` (or `MOBAIDE_RUN_AS_USER`),
+* `chown -R`s `/opt/mobaide` to the new user,
+* `userdel`s the legacy `mobaide` account (best-effort; skipped if still in use).
+
+No data migration is needed — `projects.json`, releases, and `agent.env` survive the chown.
 
 ### Linux (systemd, manual)
 
-The service unit (`deploy/mobaide-agent.service`) now expects the versioned release layout:
-`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer file.
-The steps below reflect that layout.
+The service unit at `deploy/mobaide-agent.service` is a **template** with `__RUN_USER__`, `__RUN_GROUP__`, `__RUN_HOME__` placeholders that the install scripts substitute. If you wire it up by hand, fill those in yourself; `mobaide-agent.service` is otherwise configured for the versioned `releases/` layout (`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer).
 
 ```bash
-VERSION="0.1.0"   # replace with the actual agent version being installed
-
-sudo useradd --system --shell /usr/sbin/nologin mobaide
+VERSION="0.1.0"      # replace with the actual agent version being installed
+RUN_USER="$(id -un)" # the user whose code the agent will manage
 
 sudo mkdir -p /opt/mobaide/releases/${VERSION}
 sudo cp -r mobaide_agent/. /opt/mobaide/releases/${VERSION}/
@@ -160,11 +200,16 @@ echo "${VERSION}" | sudo tee /opt/mobaide/current_version
 sudo cp mobaide_agent/.env.example /opt/mobaide/agent.env
 sudoedit /opt/mobaide/agent.env   # set JWT_SECRET_KEY and RELAY_* vars
 
-sudo cp deploy/mobaide-agent.service /etc/systemd/system/
+sudo sed \
+    -e "s|__RUN_USER__|${RUN_USER}|g" \
+    -e "s|__RUN_GROUP__|$(id -gn ${RUN_USER})|g" \
+    -e "s|__RUN_HOME__|$(getent passwd ${RUN_USER} | cut -d: -f6)|g" \
+    deploy/mobaide-agent.service \
+    | sudo tee /etc/systemd/system/mobaide-agent.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable --now mobaide-agent
 
-sudo chown -R mobaide:mobaide /opt/mobaide
+sudo chown -R "${RUN_USER}:$(id -gn ${RUN_USER})" /opt/mobaide
 ```
 
 ### Service management

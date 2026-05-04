@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 from typing import TYPE_CHECKING
 
 from .projects_config import ProjectConfig
+from .projects_store import safe_path_exists
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
@@ -153,7 +154,7 @@ class ClaudeLauncher:
             return self._check_exists(project.path)
         # A stale client may still send worktree=true for a non-git project;
         # fall back to the project root.
-        if not (Path(project.path) / ".git").exists():
+        if not safe_path_exists(Path(project.path) / ".git"):
             logger.warning(
                 "worktree=true requested for non-git project %r; ignoring",
                 project.name,

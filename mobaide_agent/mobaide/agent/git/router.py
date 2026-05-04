@@ -17,6 +17,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from mobaide.core.projects_store import safe_path_exists
+
 from ..auth.dependencies import get_current_user
 from .models import (
     BusyByResponse,
@@ -86,7 +88,7 @@ def _resolve_project(request: Request, name: str) -> tuple[str, str]:
             detail=f"Project '{name}' not found",
         )
     project_root = project.path
-    if not (Path(project_root) / ".git").exists():
+    if not safe_path_exists(Path(project_root) / ".git"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Project '{name}' is not a git repository",
