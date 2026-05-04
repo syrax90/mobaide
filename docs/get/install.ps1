@@ -22,7 +22,7 @@ $Script:Prefix = if ($env:MOBAIDE_AGENT_PREFIX) {
 $Script:ManifestUrl = if ($env:MOBAIDE_AGENT_MANIFEST_URL) {
     $env:MOBAIDE_AGENT_MANIFEST_URL
 } else {
-    "https://api.mobaide.com/v1/agent/manifest.json"
+    "https://api.mobaide.com/api/v1/agent/manifest.json"
 }
 $Script:TrustKeyB64 = $env:MOBAIDE_AGENT_TRUST_KEY_B64
 $Script:ServiceName = "MobaideAgent"
