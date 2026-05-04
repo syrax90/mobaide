@@ -131,9 +131,17 @@ stage_release() {
     info "Staging release $target_version into $release_dir"
 
     mkdir -p "$release_dir"
-    local tmpdir
+    # Intentionally NOT `local`: the EXIT trap below fires when the
+    # script exits, including the path where the embedded Python heredoc
+    # exits non-zero under `set -e` and unwinds this function before
+    # its own cleanup runs. With `local`, the variable goes out of
+    # scope and `set -u` trips on the trap body. Substituting the path
+    # into a double-quoted trap body would also work but reintroduces a
+    # quote-escape sink if `$TMPDIR` ever contains a single quote (which
+    # `mktemp -d` does propagate). Keeping the value-resolution at
+    # trap-fire time with the variable script-scoped avoids both.
     tmpdir="$(mktemp -d)"
-    trap 'rm -rf "$tmpdir"' EXIT
+    trap 'rm -rf -- "$tmpdir"' EXIT
 
     python3 - "$manifest_path" "$tmpdir" "$release_dir" <<'PY'
 import hashlib, json, shutil, sys, tarfile, urllib.request

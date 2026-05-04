@@ -31,4 +31,7 @@ android/app/release/
 manifest_signing_key.pem
 deploy/get/install.sh.tmp
 central_server/data/agent_manifest.json
+# Same file shows up at the repo root when tests/manual server runs
+# resolve the default `data/agent_manifest.json` from the repo root CWD.
+/data/agent_manifest.json
 .github/release.keystore
