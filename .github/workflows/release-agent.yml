@@ -14,6 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # Public sibling repo that hosts agent release artifacts (the source
+      # repo is private, so anonymous installs cannot reach release URLs
+      # there). Configured as a repo Variable, not a secret. Bootstrap
+      # steps live in docs/versioning-and-updates.md.
+      RELEASES_REPO: ${{ vars.RELEASES_REPO }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,7 +84,13 @@ jobs:
           from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
           version = os.environ["VERSION"]
-          base = f"https://github.com/${{ github.repository }}/releases/download/agent-v{version}"
+          releases_repo = os.environ["RELEASES_REPO"]
+          if not releases_repo:
+              raise SystemExit(
+                  "RELEASES_REPO is not configured (repo Variable). "
+                  "See docs/versioning-and-updates.md → Releases repo bootstrap."
+              )
+          base = f"https://github.com/{releases_repo}/releases/download/agent-v{version}"
           body = {
               "version": version,
               "tarball_url": f"{base}/mobaide-agent-{version}.tar.gz",
@@ -98,13 +110,60 @@ jobs:
               json.dump(record, fh, indent=2, sort_keys=True)
           PY
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release in public releases repo
+        if: ${{ env.AGENT_MANIFEST_PRIVATE_KEY != '' }}
+        env:
+          # Hoisted into per-step env so the if-guard above can reference
+          # it via `env.X` (the only context name allowed by GitHub Actions
+          # for step-level `if:` expressions; `secrets.X` does not parse
+          # there). Matches the same pattern used by release-android.yml's
+          # PLAY_SERVICE_ACCOUNT_JSON guard.
+          AGENT_MANIFEST_PRIVATE_KEY: ${{ secrets.AGENT_MANIFEST_PRIVATE_KEY }}
         uses: softprops/action-gh-release@v2
         with:
+          repository: ${{ env.RELEASES_REPO }}
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          tag_name: ${{ github.ref_name }}
           files: |
             ${{ steps.checksum.outputs.tarball_path }}
             ${{ steps.checksum.outputs.wheel_path }}
             manifest.json
+
+      - name: Verify release artifact URLs are anonymously reachable
+        if: ${{ env.AGENT_MANIFEST_PRIVATE_KEY != '' }}
+        env:
+          AGENT_MANIFEST_PRIVATE_KEY: ${{ secrets.AGENT_MANIFEST_PRIVATE_KEY }}
+        run: |
+          # Anonymous reachability gate: every URL in the signed manifest
+          # must be fetchable without auth before we publish the manifest
+          # to central_server. If RELEASES_REPO is wrong/private, an
+          # asset name is misspelt, or upload didn't actually land, this
+          # step fails BEFORE central_server sees the manifest. Notes:
+          #   * `-r 0-0` issues a 1-byte ranged GET, not HEAD. GitHub's
+          #     CDN-signed redirect target on objects.githubusercontent.com
+          #     intermittently rejects HEAD with 403/405 even when GET
+          #     works. The install script uses urllib's GET, so a ranged
+          #     GET also exercises the path the install will take.
+          #     `-o /dev/null` discards the byte; expected status is
+          #     206 Partial Content, which `--fail` accepts.
+          #   * `--retry-all-errors` is required to retry on the 4xx
+          #     that softprops/action-gh-release@v2's eventual-
+          #     consistency lag produces (issues #194, #511): default
+          #     `--retry` covers timeouts/5xx/connection-refused but
+          #     NOT 4xx, so without `--retry-all-errors` the retry
+          #     budget would never absorb the propagation 404 it was
+          #     added for.
+          tarball_url=$(python -c "import json; print(json.load(open('manifest.json'))['body']['tarball_url'])")
+          wheel_url=$(python -c "import json; print(json.load(open('manifest.json'))['body']['wheel_url'])")
+          for url in "$tarball_url" "$wheel_url"; do
+            echo "GET (range 0-0) $url"
+            if ! curl -fsSL --max-time 30 \
+                  --retry 5 --retry-delay 10 --retry-all-errors \
+                  -r 0-0 -o /dev/null "$url"; then
+              echo "::error::$url is not anonymously reachable — refusing to publish manifest."
+              exit 1
+            fi
+          done
 
       - name: Publish manifest to central_server (with retry)
         if: ${{ env.CENTRAL_SERVER_RELEASE_TOKEN != '' && env.CENTRAL_SERVER_URL != '' }}

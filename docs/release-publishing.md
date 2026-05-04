@@ -23,7 +23,7 @@ the agent.
 deploy/install.{sh,ps1}     canonical source. PRs edit these.
         │
         │ release-agent.yml on agent-v* tag
-        │   (steps 141–172)
+        │   (steps 200–230)
         ▼
 docs/get/install.{sh,ps1}   committed back to main by the workflow.
         │                   protocol-integrity.yml asserts byte-identity

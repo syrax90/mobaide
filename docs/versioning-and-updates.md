@@ -23,7 +23,7 @@ dedicated workflow under `.github/workflows/`:
 | Tag prefix | Component | Workflow | What it produces |
 |------------|-----------|----------|------------------|
 | `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is computed from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
-| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. The workflow also re-syncs `docs/get/install.sh` and `docs/get/install.ps1` from `deploy/` so GitHub Pages stays current. |
+| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release **published into the public sibling repo `$RELEASES_REPO`** (the source repo is private, so anonymous installs cannot reach release URLs there), an anonymous reachability gate (1-byte ranged GET, with retries to absorb CDN-propagation lag) over every URL in the manifest, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. The workflow also re-syncs `docs/get/install.sh` and `docs/get/install.ps1` from `deploy/` so GitHub Pages stays current. |
 | `server-vX.Y.Z` | `central_server` | `release-server.yml` | Wheel + Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy-central.ps1` or `docker compose pull && up -d` against the prod compose file). |
 | `proto-vN` | Wire contract | `release-protocol.yml` | Re-runs the lockstep envelope-integrity check defensively, then publishes a GitHub Release named `proto-vN` with the matching PROTOCOL.md section as the body and a diff vs the previous proto tag appended. Must change **both** `mobaide_agent/.../envelope.py` AND `central_server/.../envelope.py` in lockstep — `protocol-integrity.yml` rejects drift on every PR. |
 
@@ -83,12 +83,36 @@ Required CI secrets:
 | `AGENT_MANIFEST_PRIVATE_KEY` | `release-agent.yml` | Base64 Ed25519 private key. Signs the manifest body. |
 | `CENTRAL_SERVER_RELEASE_TOKEN` | `release-agent.yml` | Bearer token for `POST /api/internal/agent_manifest`. |
 | `CENTRAL_SERVER_URL` | `release-agent.yml` | Base URL of the production `central_server` that hosts the manifest. |
+| `RELEASES_REPO_TOKEN` | `release-agent.yml` | Fine-grained PAT scoped to the **public releases repo** (e.g. `syrax90/mobaide-agent-releases`) with `Contents: Read and write`. Used by `softprops/action-gh-release@v2` to publish the release into that repo. |
 | `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent.yml` | PAT with `contents:write` + `workflow` scopes. Required only to chain release-please tag pushes into the downstream `release-*` workflows and for the agent release's Pages re-sync commit on `main` to chain into `publish-gh-pages.yml`. Without it, `workflow_dispatch` on `publish-gh-pages.yml` is the documented fallback. |
 
-If `AGENT_MANIFEST_PRIVATE_KEY` or `CENTRAL_SERVER_*` is missing, the agent
-release still publishes a GitHub Release but skips signing / publishing the
-manifest. Deployed agents will not see the new version until the manifest is
-delivered.
+Repo **variables** (not secrets — values appear in workflow logs and are not sensitive):
+
+| Variable | Used by | Purpose |
+|----------|---------|---------|
+| `RELEASES_REPO` | `release-agent.yml` | `<owner>/<repo>` of the public releases repo (e.g. `syrax90/mobaide-agent-releases`). The workflow embeds this in the manifest's `tarball_url`/`wheel_url` and pushes the `softprops/action-gh-release` step into this repo. |
+
+Failure modes by which prereq is missing:
+
+* `AGENT_MANIFEST_PRIVATE_KEY` missing → `Build signed manifest`,
+  `Create GitHub Release in public releases repo`, and the
+  reachability gate all skip via `if: ${{ env.AGENT_MANIFEST_PRIVATE_KEY != '' }}`,
+  with each step hoisting the secret into its own per-step `env:` so
+  the gate is evaluable (`secrets.*` is not in the allowed-contexts
+  list for step-level `if:`). No state changes anywhere.
+* `RELEASES_REPO_TOKEN` or the `RELEASES_REPO` variable missing →
+  `Create GitHub Release in public releases repo` fails loudly
+  before any URL-bearing manifest can be posted to `central_server`.
+* `CENTRAL_SERVER_*` missing → the upstream signing-dependent steps
+  run (so the public-repo release IS created), but `Publish manifest
+  to central_server` and `Verify manifest is published` skip via
+  their own `if:` guard on the central_server token+URL pair, and
+  the prior manifest on `central_server` keeps serving.
+
+The reachability gate (anonymous 1-byte ranged GET against every URL
+in the manifest, with `--retry 5 --retry-all-errors` to absorb
+GitHub-CDN propagation lag) is the additional safeguard that
+refuses to publish a manifest pointing at unreachable artifacts.
 
 **Server-side counterparts.** Two of the GitHub secrets above must be
 mirrored as env vars on the production `central_server` host (typically
@@ -169,9 +193,9 @@ be running. It is a small JSON document:
 {
   "body": {
     "version": "0.2.0",
-    "tarball_url": "https://github.com/.../mobaide-agent-0.2.0.tar.gz",
+    "tarball_url": "https://github.com/syrax90/mobaide-agent-releases/releases/download/agent-v0.2.0/mobaide-agent-0.2.0.tar.gz",
     "tarball_sha256": "a1b2...",
-    "wheel_url": "https://github.com/.../mobaide_agent-0.2.0-py3-none-any.whl",
+    "wheel_url": "https://github.com/syrax90/mobaide-agent-releases/releases/download/agent-v0.2.0/mobaide_agent-0.2.0-py3-none-any.whl",
     "wheel_sha256": "c3d4...",
     "released_at": "2026-04-26T10:30:00+00:00",
     "min_central_server_version": "0.1.0"
@@ -185,11 +209,21 @@ be running. It is a small JSON document:
   workflow signs with `AGENT_MANIFEST_PRIVATE_KEY`; the public half is
   configured on `central_server` as `MANIFEST_SIGNING_PUBLIC_KEY` and pinned
   on each agent host at `<prefix>/trust/central_server.pub`.
-* **Publishing** — `release-agent.yml` POSTs the record to
-  `POST /api/internal/agent_manifest` with header
-  `X-Release-Token: $CENTRAL_SERVER_RELEASE_TOKEN`. The route validates the
-  signature **before** persisting; an invalid signature returns 400 and the
-  manifest is not stored.
+* **Publishing** — `release-agent.yml` first creates a GitHub Release in
+  the public sibling repo (`$RELEASES_REPO`) with the tarball, wheel, and
+  `manifest.json` attached. It then runs an **anonymous reachability
+  gate** — `curl -fsSL --retry 5 -r 0-0` (a 1-byte ranged GET) against
+  every URL the signed manifest references — and refuses to proceed if
+  any URL is not anonymously reachable (privacy mismatch, asset-name
+  typo, missing upload). Ranged GET rather than HEAD avoids
+  GitHub-CDN-signed-redirect targets that intermittently reject HEAD
+  with 403/405 even when GET succeeds; retries absorb the CDN
+  propagation lag that `softprops/action-gh-release@v2` is known to
+  race with. Only after the gate passes does the workflow POST the
+  record to `POST /api/internal/agent_manifest` on `central_server`
+  with header `X-Release-Token: $CENTRAL_SERVER_RELEASE_TOKEN`. The
+  route validates the signature **before** persisting; an invalid
+  signature returns 400 and the manifest is not stored.
 * **Distribution** — agents read the manifest from
   `GET /api/v1/agent/manifest.json` and via the `auth_ok` reply on the agent
   tunnel. After a successful `POST /api/internal/agent_manifest`, the
@@ -199,6 +233,37 @@ be running. It is a small JSON document:
   heartbeat without a reconnect.
 * **Storage** — `ManifestStore` writes atomically via `os.replace`; reads are
   served from an in-memory last-good cache.
+
+### Releases repo bootstrap
+
+The source repo (`syrax90/claude_mobile`) is private; anonymous installs
+cannot reach a private repo's GitHub Release assets. Release artifacts
+therefore live in a dedicated **public** sibling repo. One-time bootstrap:
+
+1. **Create the public repo** (e.g. `syrax90/mobaide-agent-releases`).
+   Visibility = Public. A one-line README is enough; no source code lives
+   here, only release artifacts attached to GitHub Releases.
+2. **Mint a fine-grained PAT scoped to that repo only**, with
+   `Contents: Read and write`. Save it on `syrax90/claude_mobile` as a
+   secret named `RELEASES_REPO_TOKEN`.
+3. **Add a repo variable** on `syrax90/claude_mobile` named
+   `RELEASES_REPO` with value `<owner>/<public-releases-repo>`. This is
+   a Variable, not a secret — its value shows up in workflow logs and
+   is not sensitive.
+4. **Cut a release** as usual (push an `agent-v*` tag). The workflow
+   builds the wheel + tarball in the private repo's CI, signs the
+   manifest with URLs that point at the public repo, pushes the
+   GitHub Release into the public repo, runs the reachability gate
+   against the public URLs, then publishes the manifest to
+   `central_server`.
+
+If a previous release left a stale manifest record on `central_server`
+that points at unreachable URLs (e.g. the pre-bootstrap state), clear
+it out before re-running by deleting the file at the configured
+`MANIFEST_STORE_PATH` on the central_server host (default
+`data/agent_manifest.json`). The endpoint then reverts to "no manifest
+published yet" 404 — a clean state — until the next successful release
+pipeline run.
 
 ## Auto-update on the agent (staged-binary swap)
 

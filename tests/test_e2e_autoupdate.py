@@ -264,3 +264,29 @@ async def test_e2e_invalid_release_token_rejected(
         json=record,
     )
     assert response.status_code == 401
+
+
+async def test_reachability_gate_rejects_unreachable_url(server_client):
+    """Pin the server-side invariant the release-agent.yml gate depends on:
+    anonymous requests to unknown release-asset paths return non-2xx.
+
+    The workflow gate itself (`curl -fsSL ... -r 0-0 <URL>` against
+    GitHub Release URLs, with `--retry-all-errors` to absorb CDN
+    propagation lag) lives in CI and isn't unit-testable from here.
+    What we can pin in-process is the *floor* assumption: an
+    anonymous request against an unknown path returns 4xx, not 200.
+    A future change that added a catch-all returning 200 to unknown
+    routes would silently weaken any reachability check; this test
+    is that tripwire. HEAD is used here as a stand-in for the gate's
+    underlying anonymity contract — the in-process ASGI app doesn't
+    distinguish HEAD from ranged GET for unknown routes.
+    """
+    response = await server_client.request(
+        "HEAD",
+        "/api/v1/agent/releases/9.99.99/does-not-exist.tar.gz",
+    )
+    assert response.status_code in (404, 405), (
+        "expected anonymous HEAD on a non-existent route to fail with "
+        f"4xx; got {response.status_code} — reachability gate's "
+        "underlying assumption may not hold."
+    )
