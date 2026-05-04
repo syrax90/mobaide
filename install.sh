@@ -375,7 +375,7 @@ EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/agent.env
 EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=$MOBAIDE_AGENT_PREFIX
 Environment=HOME=$RUN_HOME
-ExecStart=$MOBAIDE_AGENT_PREFIX/releases/\$(cat $MOBAIDE_AGENT_PREFIX/current_version)/venv/bin/python -m mobaide.launcher
+ExecStart=/usr/bin/env bash -c '$MOBAIDE_AGENT_PREFIX/releases/\$(cat $MOBAIDE_AGENT_PREFIX/current_version)/venv/bin/python -m mobaide.launcher'
 Restart=on-failure
 RestartSec=5
 RestartForceExitStatus=75
