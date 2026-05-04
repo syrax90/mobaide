@@ -19,6 +19,27 @@ from .projects_config import ProjectConfig
 logger = logging.getLogger(__name__)
 
 
+def safe_path_exists(p: Path) -> bool:
+    """``p.exists()`` that swallows ``OSError`` instead of propagating it.
+
+    A user's project path may legitimately be unreadable by the agent
+    process — e.g. another user's home with mode-0700, an NFS mount that's
+    bouncing, or a broken symlink. ``Path.exists()`` raises ``PermissionError``
+    in those cases, which is fine for opportunistic probes (``is this a git
+    repo?``, ``does the path resolve?``) but ruinous when the probe is on
+    the hot path of ``GET /api/projects``: a single un-stat-able row poisons
+    the whole list with HTTP 500 and the mobile client surfaces nothing.
+    Treating ``OSError`` as "no" keeps the rest of the response intact;
+    operations that actually need the path (worktree creation, ``git``
+    invocations) will fail loudly with the real OS error at their own
+    call site.
+    """
+    try:
+        return p.exists()
+    except OSError:
+        return False
+
+
 def normalize_project_path(raw: str) -> str:
     """Return ``raw`` as a canonical POSIX path string.
 
@@ -349,8 +370,8 @@ def _record_to_public(r: ProjectRecord) -> dict[str, object]:
         "default_flags": dict(r.default_flags),
         "order": r.order,
         "has_linear_key": r.linear_api_key is not None,
-        "is_git": (p / ".git").exists(),
-        "path_exists": p.exists(),
+        "is_git": safe_path_exists(p / ".git"),
+        "path_exists": safe_path_exists(p),
     }
 
 

@@ -382,7 +382,13 @@ new version is available. Exit codes:
 
 ## Installing the agent (end users)
 
-Linux / macOS:
+Linux (requires sudo to write `/etc/systemd/system/` and resolve `$SUDO_USER`):
+
+```bash
+curl -fsSL https://get.mobaide.com/install.sh | sudo bash
+```
+
+macOS (runs as the invoking user; no sudo required):
 
 ```bash
 curl -fsSL https://get.mobaide.com/install.sh | bash
@@ -417,9 +423,12 @@ for the runbook. They:
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
 6. Atomically pin `<prefix>/current_version`.
 7. Register the service:
-   * **Linux** — write `/etc/systemd/system/mobaide-agent.service`,
-     `daemon-reload`, `enable`, `restart`. The unit's `ExecStart` is the
-     launcher shim and `RestartForceExitStatus=75` is set.
+   * **Linux** — resolve the runtime user from `$SUDO_USER` (or
+     `MOBAIDE_RUN_AS_USER`), substitute `__RUN_USER__`/`__RUN_GROUP__`/`__RUN_HOME__`
+     placeholders in the service template, write `/etc/systemd/system/mobaide-agent.service`,
+     `daemon-reload`, `enable`, `restart`. The unit runs as the invoking
+     user (not a `mobaide` system account), uses `ProtectSystem=strict` with
+     `ReadWritePaths=$HOME /opt/mobaide`, and sets `RestartForceExitStatus=75`.
    * **macOS** — write `~/Library/LaunchAgents/com.mobaide.agent.plist`,
      `launchctl load`.
    * **Windows** — register the `MobaideAgent` SCM service via `sc.exe create`,
@@ -437,7 +446,7 @@ Two strategies:
 1. **Pinned at install time (recommended):**
    ```bash
    MOBAIDE_AGENT_TRUST_KEY_B64=<base64> \
-     curl -fsSL https://get.mobaide.com/install.sh | bash
+     curl -fsSL https://get.mobaide.com/install.sh | sudo bash
    ```
    The script writes the key to `<prefix>/trust/central_server.pub` and uses
    it both for the install-time signature check and for every subsequent

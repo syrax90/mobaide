@@ -93,6 +93,15 @@ data class ProjectFormState(
     val submitAttempted: Boolean = false,
     val submitting: Boolean = false,
     val nameServerError: String? = null,
+    /**
+     * Server-side or transport error from the most recent save attempt
+     * (anything other than the 409-name-conflict that goes to
+     * [nameServerError]). Lives in StateFlow-backed form state — not on
+     * the lossy events SharedFlow — so a save failure is *guaranteed*
+     * visible while the sheet is open, regardless of collector timing.
+     * Cleared on the next field edit.
+     */
+    val submitError: String? = null,
 ) {
     enum class Field { NAME, PATH, CONDA, KEY, FLAG }
 

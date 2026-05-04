@@ -531,6 +531,203 @@ class ProjectsViewModelTest {
         assertNull(f.vm.uiState.value.form!!.nameServerError)
     }
 
+    @Test
+    fun save_createMode_genericException_setsSubmitErrorOnFormState() = runTest {
+        // Load-bearing contract for the "silent-save-failure" bug: a non-409
+        // failure must leave a *visible* message in the StateFlow-backed
+        // form state (`submitError`), not just on the lossy events
+        // SharedFlow. The existing `_emitsMessage_keepsSheetOpen` test
+        // covers the snackbar; this one pins the inline banner that the
+        // user actually sees regardless of collector timing.
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.projectsRepo.createProject(any()) } throws
+            RuntimeException("server exploded")
+
+        f.vm.openCreateSheet()
+        f.vm.onNameChange("alpha")
+        f.vm.onPathChange("/p/alpha")
+        f.vm.save()
+        advanceUntilIdle()
+
+        val form = f.vm.uiState.value.form
+        assertNotNull("Sheet stays open so the banner can render", form)
+        // Message format is "Save failed: <detail>". We pin the prefix
+        // explicitly and assert the underlying cause is present so a
+        // future i18n change still trips on a missing detail.
+        val err = form!!.submitError
+        assertNotNull("submitError must be populated on generic failure", err)
+        assertTrue(
+            "submitError must include the underlying cause; got $err",
+            err!!.contains("server exploded"),
+        )
+        assertTrue(
+            "submitError should be the 'Save failed' banner copy; got $err",
+            err.startsWith("Save failed"),
+        )
+        assertFalse("submitting must clear after the failure", form.submitting)
+    }
+
+    @Test
+    fun save_genericException_clearsPriorSubmitError_beforeRetryRunsAgain() =
+        runTest {
+            // Subtle but load-bearing: each `save()` invocation starts by
+            // clearing `submitError` on the snapshot it operates on (see
+            // `attempted = form.copy(... submitError = null)`). That way a
+            // second failed retry re-renders a fresh banner instead of a
+            // stale one. We verify by failing once, asserting the banner,
+            // then failing AGAIN with a different message and asserting
+            // the new message replaces (not appends).
+            val f = newFixture()
+            advanceUntilIdle()
+            coEvery { f.projectsRepo.createProject(any()) } throws
+                RuntimeException("first failure")
+
+            f.vm.openCreateSheet()
+            f.vm.onNameChange("alpha")
+            f.vm.onPathChange("/p/alpha")
+            f.vm.save()
+            advanceUntilIdle()
+            assertTrue(
+                f.vm.uiState.value.form!!.submitError!!.contains("first failure"),
+            )
+
+            coEvery { f.projectsRepo.createProject(any()) } throws
+                RuntimeException("second failure")
+            f.vm.save()
+            advanceUntilIdle()
+
+            val err = f.vm.uiState.value.form!!.submitError
+            assertNotNull(err)
+            assertTrue(
+                "Banner must reflect the latest failure; got $err",
+                err!!.contains("second failure"),
+            )
+            assertFalse(
+                "Stale message must not linger from the first try",
+                err.contains("first failure"),
+            )
+        }
+
+    @Test
+    fun onNameChange_clearsSubmitError() = runTest {
+        // Editing any field after a failure must wipe the inline banner —
+        // the user is mid-correction, the stale 5xx detail no longer
+        // applies. Pinned for `onNameChange` because the name is the
+        // first field a typical user touches after a save bounce.
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.projectsRepo.createProject(any()) } throws
+            RuntimeException("net down")
+
+        f.vm.openCreateSheet()
+        f.vm.onNameChange("alpha")
+        f.vm.onPathChange("/p/alpha")
+        f.vm.save()
+        advanceUntilIdle()
+        assertNotNull(
+            "pre-condition: submitError must be set after the failure",
+            f.vm.uiState.value.form!!.submitError,
+        )
+
+        // User edits the name → banner clears.
+        f.vm.onNameChange("alpha2")
+        assertNull(f.vm.uiState.value.form!!.submitError)
+    }
+
+    @Test
+    fun onPathChange_clearsSubmitError() = runTest {
+        // Same contract as `onNameChange_clearsSubmitError` but pinned on
+        // the `path` field — both call sites must reset the banner so the
+        // contract isn't accidentally narrowed to one mutator in a refactor.
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.projectsRepo.createProject(any()) } throws
+            RuntimeException("net down")
+
+        f.vm.openCreateSheet()
+        f.vm.onNameChange("alpha")
+        f.vm.onPathChange("/p/alpha")
+        f.vm.save()
+        advanceUntilIdle()
+        assertNotNull(f.vm.uiState.value.form!!.submitError)
+
+        f.vm.onPathChange("/p/alpha2")
+        assertNull(f.vm.uiState.value.form!!.submitError)
+    }
+
+    @Test
+    fun flagAndKeyMutators_clearSubmitError() = runTest {
+        // The "any field-edit clears the banner" contract has to cover ALL
+        // user-initiated form mutators, not just the four text setters —
+        // otherwise editing a flag value or hitting "Clear key" after a
+        // save bounce leaves a stale "Save failed" banner pinned above
+        // the action row. Pin all four mid-form mutators here so a future
+        // refactor can't narrow the contract back to text-only.
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.projectsRepo.createProject(any()) } throws
+            RuntimeException("net down")
+
+        // updateFlag clears submitError.
+        f.vm.openCreateSheet()
+        f.vm.onNameChange("alpha")
+        f.vm.onPathChange("/p/alpha")
+        // Add a flag and immediately give it a valid key+value so canSave
+        // stays true; otherwise the blank-key flag blocks save() before
+        // reaching the repo call that sets submitError.
+        f.vm.addFlag()
+        f.vm.updateFlag(0, FlagEntry("retries", FlagType.NUMBER, "5"))
+        f.vm.save()
+        advanceUntilIdle()
+        assertNotNull(f.vm.uiState.value.form!!.submitError)
+        // Now change the flag value to verify updateFlag clears submitError.
+        f.vm.updateFlag(0, FlagEntry("retries", FlagType.NUMBER, "10"))
+        assertNull(
+            "updateFlag must clear submitError",
+            f.vm.uiState.value.form!!.submitError,
+        )
+
+        // removeFlag clears submitError on a fresh failure.
+        f.vm.save()
+        advanceUntilIdle()
+        assertNotNull(f.vm.uiState.value.form!!.submitError)
+        f.vm.removeFlag(0)
+        assertNull(
+            "removeFlag must clear submitError",
+            f.vm.uiState.value.form!!.submitError,
+        )
+
+        // addFlag clears submitError on a fresh failure.
+        f.vm.save()
+        advanceUntilIdle()
+        assertNotNull(f.vm.uiState.value.form!!.submitError)
+        f.vm.addFlag()
+        assertNull(
+            "addFlag must clear submitError",
+            f.vm.uiState.value.form!!.submitError,
+        )
+
+        // requestClearLinearKey clears submitError on a fresh failure
+        // (edit-mode form, since clear-key is only meaningful there).
+        val edit = ProjectInfo(
+            name = "p1", path = "/p/p1", conda_env = null,
+            default_flags = emptyMap(), order = 0,
+            has_linear_key = true, is_git = false, path_exists = true,
+        )
+        f.vm.openEditSheet(edit)
+        coEvery { f.projectsRepo.updateProject(any(), any()) } throws
+            RuntimeException("net down")
+        f.vm.save()
+        advanceUntilIdle()
+        assertNotNull(f.vm.uiState.value.form!!.submitError)
+        f.vm.requestClearLinearKey()
+        assertNull(
+            "requestClearLinearKey must clear submitError",
+            f.vm.uiState.value.form!!.submitError,
+        )
+    }
+
     // --- form mutators / flags ---
 
     @Test

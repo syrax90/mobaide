@@ -23,6 +23,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from mobaide.core.models import SessionConfig, SessionEvent, SessionState
+from mobaide.core.projects_store import safe_path_exists
 
 from pydantic import ValidationError
 
@@ -1286,7 +1287,7 @@ class RelayClient:
                 "body": {"detail": f"Project '{name}' not found"},
             }
         project_root = project.path
-        if not (Path(project_root) / ".git").exists():
+        if not safe_path_exists(Path(project_root) / ".git"):
             return {
                 "status": 400,
                 "body": {"detail": f"Project '{name}' is not a git repository"},

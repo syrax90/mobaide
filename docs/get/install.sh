@@ -19,7 +19,11 @@ set -euo pipefail
 : "${MOBAIDE_AGENT_PREFIX:=}"
 : "${MOBAIDE_AGENT_MANIFEST_URL:=https://api.mobaide.com/api/v1/agent/manifest.json}"
 : "${MOBAIDE_AGENT_TRUST_KEY_B64:=}"
-: "${MOBAIDE_AGENT_SERVICE_USER:=mobaide}"
+# The agent runs as a real user (not a system account) so it can read/write
+# their own /home/<user>/<repo> source trees. With `sudo curl|bash` this
+# resolves from $SUDO_USER; override explicitly with MOBAIDE_RUN_AS_USER for
+# CI / multi-user hosts where SUDO_USER is unset or wrong.
+: "${MOBAIDE_RUN_AS_USER:=}"
 : "${MOBAIDE_AGENT_INSTALL_URL:=https://get.mobaide.com/install.sh}"
 
 info()  { printf '[INFO]  %s\n' "$*"; }
@@ -57,7 +61,7 @@ require_root_when_writing_system_dir() {
         info "Installing to $MOBAIDE_AGENT_PREFIX requires root — re-executing under sudo."
         info "(With 'curl|bash', sudo applies only to curl; auto-elevating now.)"
         exec sudo \
-            --preserve-env=MOBAIDE_AGENT_PREFIX,MOBAIDE_AGENT_MANIFEST_URL,MOBAIDE_AGENT_TRUST_KEY_B64,MOBAIDE_AGENT_SERVICE_USER,MOBAIDE_AGENT_INSTALL_URL \
+            --preserve-env=MOBAIDE_AGENT_PREFIX,MOBAIDE_AGENT_MANIFEST_URL,MOBAIDE_AGENT_TRUST_KEY_B64,MOBAIDE_RUN_AS_USER,MOBAIDE_AGENT_INSTALL_URL \
             bash -c 'curl -fsSL "$1" | bash' _ "$MOBAIDE_AGENT_INSTALL_URL"
     fi
 
@@ -288,28 +292,89 @@ write_trust_key() {
     fi
 }
 
-ensure_service_user() {
+resolve_run_as_user() {
+    # Linux only — macOS installs to ~/ and runs under launchd as the user.
+    # Sets script-scoped RUN_USER, RUN_GROUP, RUN_HOME consumed by
+    # install_systemd_unit. Not `local`: those are read from a different
+    # function frame.
     if [ "$PLATFORM" != "linux" ]; then return 0; fi
-    if id "$MOBAIDE_AGENT_SERVICE_USER" >/dev/null 2>&1; then return 0; fi
-    info "Creating system user $MOBAIDE_AGENT_SERVICE_USER"
-    useradd --system --shell /usr/sbin/nologin --home-dir "$MOBAIDE_AGENT_PREFIX" "$MOBAIDE_AGENT_SERVICE_USER"
+
+    if [ -n "$MOBAIDE_RUN_AS_USER" ]; then
+        RUN_USER="$MOBAIDE_RUN_AS_USER"
+    elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        RUN_USER="$SUDO_USER"
+    else
+        fail "Could not determine which user to run the agent as.
+The agent manages developer code under /home/<user> and must run as a real
+user — not 'root' and not a system account.
+
+Re-run with sudo (so SUDO_USER is set):
+    sudo curl -fsSL $MOBAIDE_AGENT_INSTALL_URL | bash
+
+Or pin the user explicitly (e.g. for CI / non-interactive provisioning):
+    MOBAIDE_RUN_AS_USER=alice curl -fsSL $MOBAIDE_AGENT_INSTALL_URL | sudo -E bash"
+    fi
+
+    if ! id "$RUN_USER" >/dev/null 2>&1; then
+        fail "MOBAIDE_RUN_AS_USER='$RUN_USER' does not exist on this host."
+    fi
+    if [ "$RUN_USER" = "root" ]; then
+        fail "Refusing to run the agent as 'root'. Set MOBAIDE_RUN_AS_USER to a regular user."
+    fi
+
+    RUN_GROUP="$(id -gn "$RUN_USER")"
+    RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+    if [ -z "$RUN_HOME" ]; then
+        fail "Could not resolve home directory for user '$RUN_USER'."
+    fi
+    if [ "$RUN_HOME" = "/" ]; then
+        # Renders as `ReadWritePaths=/ <prefix>`, which neutralises
+        # ProtectSystem=strict by re-granting writes to the entire root
+        # filesystem. Refuse rather than silently weakening the unit.
+        fail "Resolved HOME for '$RUN_USER' is '/'; refusing — agent would have writes over the entire root filesystem.
+Pick a regular user account: MOBAIDE_RUN_AS_USER=<user>."
+    fi
+
+    info "Agent will run as $RUN_USER ($RUN_GROUP), HOME=$RUN_HOME"
+
+    # Best-effort cleanup of the legacy 'mobaide' system user from older
+    # installs. Skip if it doesn't exist or is in use; never fail the install.
+    if id mobaide >/dev/null 2>&1 && [ "$RUN_USER" != "mobaide" ]; then
+        info "Removing legacy 'mobaide' system user from prior installs"
+        userdel mobaide >/dev/null 2>&1 || warn "Could not remove legacy 'mobaide' user (still in use?). Continuing."
+    fi
 }
 
 install_systemd_unit() {
     local unit="/etc/systemd/system/mobaide-agent.service"
-    info "Installing systemd unit at $unit"
+    info "Installing systemd unit at $unit (User=$RUN_USER)"
+    # ProtectHome is absent because the agent must read/write the user's
+    # source tree under $RUN_HOME. ProtectSystem=strict still mounts the
+    # rest of the OS hierarchy read-only; ReadWritePaths re-grants writes
+    # to exactly what the agent needs ($RUN_HOME for code, the install
+    # prefix for releases / agent.env / projects.json). PrivateTmp +
+    # NoNewPrivileges complete the residual hardening.
+    # StartLimitBurst/IntervalSec give the launcher's 3-strike rollback
+    # heuristic room to retry a stable sibling release before systemd
+    # gives up; RestartForceExitStatus=75 lets the updater request its
+    # own restart.
     cat > "$unit" <<EOF
 [Unit]
 Description=Mobaide Agent (FastAPI/uvicorn)
 After=network.target
 Wants=network-online.target
+StartLimitBurst=10
+StartLimitIntervalSec=600
 
 [Service]
 Type=simple
-User=$MOBAIDE_AGENT_SERVICE_USER
-Group=$MOBAIDE_AGENT_SERVICE_USER
+User=$RUN_USER
+Group=$RUN_GROUP
+WorkingDirectory=$MOBAIDE_AGENT_PREFIX
 EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/agent.env
+EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=$MOBAIDE_AGENT_PREFIX
+Environment=HOME=$RUN_HOME
 ExecStart=$MOBAIDE_AGENT_PREFIX/releases/\$(cat $MOBAIDE_AGENT_PREFIX/current_version)/venv/bin/python -m mobaide.launcher
 Restart=on-failure
 RestartSec=5
@@ -319,14 +384,13 @@ StandardError=journal
 
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=$MOBAIDE_AGENT_PREFIX
+ReadWritePaths=$RUN_HOME $MOBAIDE_AGENT_PREFIX
 PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    chown -R "$MOBAIDE_AGENT_SERVICE_USER:$MOBAIDE_AGENT_SERVICE_USER" "$MOBAIDE_AGENT_PREFIX"
+    chown -R "$RUN_USER:$RUN_GROUP" "$MOBAIDE_AGENT_PREFIX"
     systemctl daemon-reload
     systemctl enable mobaide-agent
     systemctl restart mobaide-agent
@@ -406,7 +470,7 @@ main() {
     rm -f "$manifest"
 
     if [ "$PLATFORM" = "linux" ]; then
-        ensure_service_user
+        resolve_run_as_user
         install_systemd_unit
     else
         install_launchd_plist

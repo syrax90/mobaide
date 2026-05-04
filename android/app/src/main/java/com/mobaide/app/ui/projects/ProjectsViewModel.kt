@@ -118,22 +118,31 @@ class ProjectsViewModel @Inject constructor(
     }
 
     fun onNameChange(value: String) = updateForm {
-        it.copy(name = value, nameServerError = null)
+        it.copy(name = value, nameServerError = null, submitError = null)
     }
 
-    fun onPathChange(value: String) = updateForm { it.copy(path = value) }
+    fun onPathChange(value: String) = updateForm {
+        it.copy(path = value, submitError = null)
+    }
 
-    fun onCondaChange(value: String) = updateForm { it.copy(condaEnv = value) }
+    fun onCondaChange(value: String) = updateForm {
+        it.copy(condaEnv = value, submitError = null)
+    }
 
     fun onLinearKeyChange(value: String) = updateForm {
         // Typing any non-empty value cancels a pending "clear" instruction.
-        it.copy(linearApiKey = value, clearLinearKey = false)
+        it.copy(linearApiKey = value, clearLinearKey = false, submitError = null)
     }
 
     fun toggleLinearKeyVisible() = updateForm { it.copy(linearKeyVisible = !it.linearKeyVisible) }
 
     fun requestClearLinearKey() = updateForm {
-        it.copy(linearApiKey = "", clearLinearKey = true, linearKeyVisible = false)
+        it.copy(
+            linearApiKey = "",
+            clearLinearKey = true,
+            linearKeyVisible = false,
+            submitError = null,
+        )
     }
 
     fun touch(field: ProjectFormState.Field) = updateForm {
@@ -145,6 +154,7 @@ class ProjectsViewModel @Inject constructor(
             flags = it.flags + FlagEntry(),
             flagsDirty = true,
             touched = it.touched + ProjectFormState.Field.FLAG,
+            submitError = null,
         )
     }
 
@@ -153,6 +163,7 @@ class ProjectsViewModel @Inject constructor(
         else it.copy(
             flags = it.flags.toMutableList().apply { removeAt(index) },
             flagsDirty = true,
+            submitError = null,
         )
     }
 
@@ -161,12 +172,13 @@ class ProjectsViewModel @Inject constructor(
         else it.copy(
             flags = it.flags.toMutableList().apply { this[index] = updated },
             flagsDirty = true,
+            submitError = null,
         )
     }
 
     fun save() {
         val form = _uiState.value.form ?: return
-        val attempted = form.copy(submitAttempted = true)
+        val attempted = form.copy(submitAttempted = true, submitError = null)
         if (!attempted.canSave) {
             updateForm { attempted }
             return
@@ -188,8 +200,14 @@ class ProjectsViewModel @Inject constructor(
                 // surface inline under the Name field.
                 updateForm { it.copy(submitting = false, nameServerError = e.detail) }
             } catch (e: Exception) {
-                updateForm { it.copy(submitting = false) }
-                _events.tryEmit(ProjectsUiEvent.Message("Save failed: ${e.message ?: "unknown error"}"))
+                // Anything else (5xx, transport, IO) → set submitError on the
+                // form (StateFlow, lossless) AND emit a snackbar event as a
+                // secondary cue. The form-state error is what reliably
+                // surfaces to the user; the snackbar can race the sheet's
+                // dismissal or the events SharedFlow's drop policy.
+                val message = "Save failed: ${e.message ?: "unknown error"}"
+                updateForm { it.copy(submitting = false, submitError = message) }
+                _events.tryEmit(ProjectsUiEvent.Message(message))
             }
         }
     }

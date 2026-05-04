@@ -6,7 +6,9 @@
 #
 # This script:
 #   1. Checks prerequisites (Python 3.12+, git, curl)
-#   2. Creates a system user and directory structure
+#   2. Resolves the user to run the agent as (SUDO_USER, or
+#      MOBAIDE_RUN_AS_USER override) — the agent must run as a real user
+#      so it can read/write the developer's /home/<user> source trees.
 #   3. Sets up a Python virtual environment and installs the agent
 #   4. Generates an agent .env with a random JWT secret
 #   5. Installs and starts the mobaide-agent systemd service
@@ -18,13 +20,14 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/mobaide"
 VENV_DIR="${INSTALL_DIR}/venv"
-SERVICE_USER="mobaide"
+: "${MOBAIDE_RUN_AS_USER:=}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # --- Helpers ---
 
 info()  { echo "[INFO]  $*"; }
+warn()  { echo "[WARN]  $*" >&2; }
 error() { echo "[ERROR] $*" >&2; }
 
 check_root() {
@@ -54,6 +57,50 @@ check_python_version() {
     info "Python $version detected."
 }
 
+resolve_run_as_user() {
+    if [[ -n "$MOBAIDE_RUN_AS_USER" ]]; then
+        RUN_USER="$MOBAIDE_RUN_AS_USER"
+    elif [[ -n "${SUDO_USER:-}" ]] && [[ "$SUDO_USER" != "root" ]]; then
+        RUN_USER="$SUDO_USER"
+    else
+        error "Could not determine which user to run the agent as."
+        error "The agent must run as a real user so it can manage code under /home/<user>."
+        error "Re-run with sudo (so SUDO_USER is set), or pin explicitly:"
+        error "    MOBAIDE_RUN_AS_USER=alice sudo -E bash deploy/setup.sh"
+        exit 1
+    fi
+
+    if ! id "$RUN_USER" >/dev/null 2>&1; then
+        error "User '$RUN_USER' does not exist on this host."
+        exit 1
+    fi
+    if [[ "$RUN_USER" == "root" ]]; then
+        error "Refusing to run the agent as 'root'. Set MOBAIDE_RUN_AS_USER to a regular user."
+        exit 1
+    fi
+
+    RUN_GROUP="$(id -gn "$RUN_USER")"
+    RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+    if [[ -z "$RUN_HOME" ]]; then
+        error "Could not resolve home directory for user '$RUN_USER'."
+        exit 1
+    fi
+    if [[ "$RUN_HOME" == "/" ]]; then
+        # Renders as `ReadWritePaths=/ <prefix>`, which neutralises
+        # ProtectSystem=strict. Refuse rather than silently weaken the unit.
+        error "Resolved HOME for '$RUN_USER' is '/'; refusing — agent would get writes over the entire root filesystem."
+        error "Pick a regular user account: MOBAIDE_RUN_AS_USER=<user>."
+        exit 1
+    fi
+    info "Agent will run as $RUN_USER ($RUN_GROUP), HOME=$RUN_HOME"
+
+    if id mobaide >/dev/null 2>&1 && [[ "$RUN_USER" != "mobaide" ]]; then
+        info "Removing legacy 'mobaide' system user from prior installs"
+        userdel mobaide >/dev/null 2>&1 || \
+            warn "Could not remove legacy 'mobaide' user (still in use?). Continuing."
+    fi
+}
+
 # --- Prerequisites ---
 
 check_root
@@ -62,15 +109,7 @@ check_command python3
 check_command git
 check_command curl
 check_python_version
-
-# --- System user ---
-
-if id "$SERVICE_USER" &>/dev/null; then
-    info "User '$SERVICE_USER' already exists."
-else
-    info "Creating system user '$SERVICE_USER'..."
-    useradd --system --shell /usr/sbin/nologin --home-dir "$INSTALL_DIR" "$SERVICE_USER"
-fi
+resolve_run_as_user
 
 # --- Directory structure ---
 
@@ -116,16 +155,54 @@ fi
 
 # --- Permissions ---
 
-chown -R "${SERVICE_USER}:${SERVICE_USER}" "$INSTALL_DIR"
+chown -R "${RUN_USER}:${RUN_GROUP}" "$INSTALL_DIR"
 
 # --- systemd service ---
 
+# The repo's deploy/mobaide-agent.service is a template with sentinels;
+# render it with the resolved values rather than copying it verbatim. The
+# from-source layout uses INSTALL_DIR/venv directly (no releases/<v>/ split),
+# so the ExecStart line is also overridden here. ProtectSystem=strict +
+# scoped ReadWritePaths matches the production install model (see
+# docs/get/install.sh:install_systemd_unit) so dev and prod converge on
+# the same hardening profile.
 info "Installing systemd service..."
-cp "${REPO_ROOT}/deploy/mobaide-agent.service" /etc/systemd/system/
+cat > /etc/systemd/system/mobaide-agent.service <<EOF
+[Unit]
+Description=Mobaide Agent (FastAPI/uvicorn)
+After=network.target
+Wants=network-online.target
+StartLimitBurst=10
+StartLimitIntervalSec=600
+
+[Service]
+Type=simple
+User=$RUN_USER
+Group=$RUN_GROUP
+WorkingDirectory=$INSTALL_DIR
+EnvironmentFile=-$INSTALL_DIR/agent.env
+EnvironmentFile=-$INSTALL_DIR/mobaide_agent/.env
+Environment=MOBAIDE_AGENT_PREFIX=$INSTALL_DIR
+Environment=HOME=$RUN_HOME
+ExecStart=$VENV_DIR/bin/python -m mobaide
+Restart=on-failure
+RestartSec=5
+RestartForceExitStatus=75
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=$RUN_HOME $INSTALL_DIR
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 systemctl daemon-reload
 systemctl enable mobaide-agent
-systemctl start mobaide-agent
+systemctl restart mobaide-agent
 
 # --- Done ---
 

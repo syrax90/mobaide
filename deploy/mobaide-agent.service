@@ -1,3 +1,22 @@
+# Mobaide Agent — systemd unit (TEMPLATE)
+#
+# This file is a reference template. The install scripts
+# (docs/get/install.sh, deploy/setup.sh) render the actual unit at
+# /etc/systemd/system/mobaide-agent.service with the resolved values.
+#
+# If you wire this up by hand, edit the four __PLACEHOLDER__ tokens below
+# with the user/group/home that owns your code, then:
+#   sudo install -m 0644 deploy/mobaide-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now mobaide-agent
+#
+# DO NOT add ProtectHome=yes — the agent's job is to read/write the user's
+# source trees under their $HOME, and that setting would block the core
+# use case. ProtectSystem=strict still locks the rest of the filesystem
+# read-only; ReadWritePaths below re-grants writes to exactly the two
+# paths the agent needs (the user's home for source trees, the install
+# prefix for releases / agent.env / projects.json). NoNewPrivileges and
+# PrivateTmp complete the residual hardening.
+
 [Unit]
 Description=Mobaide Agent (FastAPI/uvicorn)
 After=network.target
@@ -11,12 +30,13 @@ StartLimitIntervalSec=600
 
 [Service]
 Type=simple
-User=mobaide
-Group=mobaide
+User=__RUN_USER__
+Group=__RUN_GROUP__
 WorkingDirectory=/opt/mobaide
 EnvironmentFile=-/opt/mobaide/agent.env
 EnvironmentFile=-/opt/mobaide/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=/opt/mobaide
+Environment=HOME=__RUN_HOME__
 ExecStart=/usr/bin/env bash -c '/opt/mobaide/releases/$(cat /opt/mobaide/current_version)/venv/bin/python -m mobaide.launcher'
 Restart=on-failure
 RestartSec=5
@@ -24,11 +44,9 @@ RestartForceExitStatus=75
 StandardOutput=journal
 StandardError=journal
 
-# Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/opt/mobaide
+ReadWritePaths=__RUN_HOME__ /opt/mobaide
 PrivateTmp=yes
 
 [Install]
