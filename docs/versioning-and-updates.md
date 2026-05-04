@@ -300,7 +300,7 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 ### Forced update (operator escape hatch)
 
 ```bash
-MOBAIDE_AGENT_MANIFEST_URL=https://api.mobaide.com/v1/agent/manifest.json \
+MOBAIDE_AGENT_MANIFEST_URL=https://api.mobaide.com/api/v1/agent/manifest.json \
   /opt/mobaide/releases/$(cat /opt/mobaide/current_version)/venv/bin/python \
   -m mobaide update
 ```
@@ -338,7 +338,7 @@ for the runbook. They:
 1. Detect the OS and locate / create `<prefix>` (`/opt/mobaide`,
    `/usr/local/mobaide`, or `%ProgramFiles%\MobaideAgent`).
 2. Pull the manifest from
-   `https://api.mobaide.com/v1/agent/manifest.json` (override via
+   `https://api.mobaide.com/api/v1/agent/manifest.json` (override via
    `MOBAIDE_AGENT_MANIFEST_URL`).
 3. Verify the Ed25519 signature against `MOBAIDE_AGENT_TRUST_KEY_B64` and
    persist the key at `<prefix>/trust/central_server.pub`.
