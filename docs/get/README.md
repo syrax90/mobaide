@@ -11,6 +11,13 @@ Public URLs (after the gh-pages sync — see below):
 * `https://get.mobaide.com/install.sh`
 * `https://get.mobaide.com/install.ps1`
 
+On Debian/Ubuntu the script auto-installs `python3.X-venv` (the
+`ensurepip` carrier) when it is missing — which is the stock state of
+fresh Ubuntu, WSL, and most container base images. Other distros
+(Fedora, Arch, openSUSE, Alpine) get the equivalent package via their
+native package manager. Non-root user-prefix installs print an
+actionable error instead of attempting privileged package install.
+
 ## Pages source is the `gh-pages` branch
 
 GitHub Pages is configured to serve from the `gh-pages` branch (with the

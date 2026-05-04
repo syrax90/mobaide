@@ -74,14 +74,81 @@ check_python() {
     if ! command -v python3 >/dev/null 2>&1; then
         fail "python3 is required (>= 3.12)."
     fi
-    local version major minor
+    # Intentionally NOT `local`: $version is consumed downstream by
+    # ensure_ensurepip_available to pick the right `python3.X-venv` apt
+    # package on Debian/Ubuntu. Same script-scope idiom this file already
+    # uses for $tmpdir in stage_release().
     version="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+    local major minor
     major="${version%%.*}"
     minor="${version##*.}"
     if [ "$major" -lt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -lt 12 ]; }; then
         fail "Python 3.12+ is required (found $version)."
     fi
     info "Python $version detected."
+}
+
+ensure_ensurepip_available() {
+    if [ "$PLATFORM" != "linux" ]; then return 0; fi
+    if python3 -c 'import ensurepip' >/dev/null 2>&1; then return 0; fi
+
+    info "python3 'ensurepip' module missing — required by 'python3 -m venv'."
+    info "Common on Debian/Ubuntu when the python3-venv package is not installed."
+
+    if [ "$(id -u)" -ne 0 ]; then
+        fail "Cannot auto-install the venv prerequisite without root.
+You are installing into MOBAIDE_AGENT_PREFIX=$MOBAIDE_AGENT_PREFIX (user-writable),
+so the script did not auto-elevate. Install the package manually and re-run:
+    Debian/Ubuntu: sudo apt-get install -y python${version}-venv  (or python3-venv)
+    Fedora/RHEL:   sudo dnf install -y python3-virtualenv
+    Arch:          sudo pacman -S --noconfirm python
+    openSUSE:      sudo zypper install -y python3-virtualenv
+    Alpine:        sudo apk add py3-virtualenv"
+    fi
+
+    local installed=0
+    if command -v apt-get >/dev/null 2>&1; then
+        info "Installing python${version}-venv via apt-get (non-interactive)."
+        export DEBIAN_FRONTEND=noninteractive
+        if apt-get install -y --no-install-recommends "python${version}-venv" </dev/null >/dev/null 2>&1 \
+           || apt-get install -y --no-install-recommends python3-venv </dev/null >/dev/null 2>&1; then
+            installed=1
+        else
+            info "Initial install failed — refreshing apt cache and retrying."
+            if apt-get update -qq </dev/null >/dev/null 2>&1 \
+               && { apt-get install -y --no-install-recommends "python${version}-venv" </dev/null >/dev/null 2>&1 \
+                    || apt-get install -y --no-install-recommends python3-venv </dev/null >/dev/null 2>&1; }; then
+                installed=1
+            fi
+        fi
+    elif command -v dnf >/dev/null 2>&1; then
+        info "Installing python3-virtualenv via dnf."
+        dnf install -y python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+    elif command -v yum >/dev/null 2>&1; then
+        info "Installing python3-virtualenv via yum."
+        yum install -y python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+    elif command -v pacman >/dev/null 2>&1; then
+        info "Refreshing pacman db and ensuring python (includes venv)."
+        pacman -Sy --noconfirm --needed python </dev/null >/dev/null 2>&1 && installed=1
+    elif command -v zypper >/dev/null 2>&1; then
+        info "Installing python3-virtualenv via zypper."
+        zypper --non-interactive install python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+    elif command -v apk >/dev/null 2>&1; then
+        info "Installing py3-virtualenv via apk."
+        apk add --no-cache py3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+    else
+        fail "No supported package manager found (tried apt-get, dnf, yum, pacman, zypper, apk).
+Install the Python venv/ensurepip prerequisite for your distro and re-run."
+    fi
+
+    [ "$installed" -eq 1 ] || fail "Package manager invocation failed for the venv prerequisite.
+Try manually: install python${version}-venv (Debian/Ubuntu) or your distro's equivalent."
+
+    if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+        fail "Installed the venv package but 'import ensurepip' still fails.
+Open an issue with the output of: python3 -c 'import ensurepip'; uname -a; cat /etc/os-release"
+    fi
+    info "ensurepip available."
 }
 
 fetch_manifest() {
@@ -307,6 +374,7 @@ main() {
     check_command curl
     check_command tar
     check_python
+    ensure_ensurepip_available
 
     mkdir -p "$MOBAIDE_AGENT_PREFIX"
     write_trust_key
