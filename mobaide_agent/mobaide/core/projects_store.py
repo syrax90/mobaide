@@ -113,13 +113,22 @@ class ProjectsStore:
         self._projects: dict[str, ProjectRecord] = {}
         self._lock = threading.Lock()
 
-    def load(self) -> None:
-        """Populate the store from disk, seeding from ``PROJECTS`` if needed.
+    def load(self, seed_json: str | None = None) -> None:
+        """Populate the store from disk, seeding from JSON if needed.
 
-        On the first boot (``projects.json`` absent) the env var is parsed
-        with the same rules the legacy ``ProjectsConfig.from_dict`` used and
-        the result — including an empty list — is persisted. From that point
-        on, the env var is ignored and the file is the source of truth.
+        On the first boot (``projects.json`` absent) the ``seed_json`` arg
+        is parsed with the same rules the legacy ``ProjectsConfig.from_dict``
+        used and the result — including an empty list — is persisted. From
+        that point on, the seed is ignored and the file is the source of
+        truth.
+
+        ``seed_json`` defaults to the ``PROJECTS`` env var. Callers that
+        load the agent config via ``pydantic-settings`` should pass
+        ``config.projects`` explicitly: pydantic-settings reads `.env` into
+        the settings instance but does NOT mutate ``os.environ``, so reading
+        the env var here would silently miss values defined only in `.env`
+        on platforms where the supervisor doesn't pre-load it (e.g. the
+        Windows Service launcher.cmd).
         """
         with self._lock:
             if self._path.exists():
@@ -142,7 +151,7 @@ class ProjectsStore:
                 )
                 return
 
-            seeded = _seed_from_env()
+            seeded = _seed_from_env(seed_json)
             for rec in seeded:
                 self._projects[rec.name] = rec
             self._save_unlocked()
@@ -375,16 +384,22 @@ def _record_to_public(r: ProjectRecord) -> dict[str, object]:
     }
 
 
-def _seed_from_env() -> list[ProjectRecord]:
-    """Parse the ``PROJECTS`` env var into records.
+def _seed_from_env(raw: str | None = None) -> list[ProjectRecord]:
+    """Parse a ``PROJECTS``-style JSON string into records.
+
+    Defaults to ``os.getenv("PROJECTS")`` for backward compat with callers
+    that haven't migrated to passing the value through. After CLA-48 the
+    canonical caller is ``ProjectsStore.load(seed_json=config.projects)``
+    where ``config.projects`` is the pydantic-settings-resolved value.
 
     String values, non-dict values, and entries without a string ``path``
-    are silently dropped. Returns an empty list if ``PROJECTS`` is unset,
+    are silently dropped. Returns an empty list when the input is unset,
     empty, or parses to a non-dict. Raises ``RuntimeError`` on invalid JSON
     to surface misconfiguration early rather than silently seeding an empty
     store.
     """
-    raw = os.getenv("PROJECTS")
+    if raw is None:
+        raw = os.getenv("PROJECTS")
     if not raw:
         return []
     try:

@@ -1,49 +1,91 @@
-"""Relay configuration for connecting the agent to a Central Server."""
+"""Relay configuration for connecting the agent to a Central Server.
+
+Loaded via ``pydantic-settings``. Three runtime states:
+
+* **not configured** — ``RELAY_SERVER_URL`` empty. ``configured`` is False;
+  the agent boots without starting a relay client.
+* **pairing pending** — ``RELAY_SERVER_URL`` set, ``RELAY_AGENT_ID`` and
+  ``RELAY_AGENT_TOKEN`` both empty. ``pairing_pending`` is True; the agent
+  surfaces a status log line and exposes a health-endpoint flag, but does
+  NOT start a relay client. Mirrors Tailscale's idle-until-paired daemon.
+* **configured** — all three set. ``pairing_pending`` is False; the agent
+  starts a relay client normally.
+
+A genuine misconfig (id without token, or vice versa) still raises at
+construction time.
+"""
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import Field, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-@dataclass(frozen=True)
-class RelayConfig:
+class RelayConfig(BaseSettings):
     """Configuration for the outbound relay connection to a Central Server."""
 
-    server_url: str
-    agent_id: str
-    agent_token: str
-    heartbeat_interval: int = 15  # seconds
-    reconnect_base_delay: float = 1.0  # seconds
-    reconnect_max_delay: float = 60.0  # seconds
+    server_url: str = ""
+    agent_id: str = ""
+    agent_token: str = ""
+    heartbeat_interval: int = 15
+    # ``RELAY_RECONNECT_BASE`` / ``RELAY_RECONNECT_MAX`` env var names predate
+    # CLA-48 and are documented in `.env.example`; explicit aliases keep the
+    # contract stable while the field names follow the seconds-suffixed
+    # ``_delay`` Python convention. Without these, pydantic-settings derives
+    # ``RELAY_RECONNECT_BASE_DELAY`` from the field name + prefix and silently
+    # ignores the documented variable.
+    reconnect_base_delay: float = Field(
+        default=1.0, validation_alias="RELAY_RECONNECT_BASE",
+    )
+    reconnect_max_delay: float = Field(
+        default=60.0, validation_alias="RELAY_RECONNECT_MAX",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="RELAY_",
+        env_file=None,
+        env_file_encoding="utf-8",
+        extra="ignore",
+        frozen=True,
+    )
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.server_url)
+
+    @property
+    def pairing_pending(self) -> bool:
+        return self.configured and not (self.agent_id and self.agent_token)
+
+    @model_validator(mode="after")
+    def _check_partial(self) -> "RelayConfig":
+        if not self.configured:
+            return self
+        only_id = bool(self.agent_id) and not self.agent_token
+        only_token = bool(self.agent_token) and not self.agent_id
+        if only_id:
+            raise RuntimeError(
+                "RELAY_AGENT_TOKEN is required when RELAY_AGENT_ID is set",
+            )
+        if only_token:
+            raise RuntimeError(
+                "RELAY_AGENT_ID is required when RELAY_AGENT_TOKEN is set",
+            )
+        return self
 
     @classmethod
-    def from_env(cls) -> RelayConfig | None:
-        """Build from environment variables; return None if RELAY_SERVER_URL is unset.
+    def from_env(cls, env_file: Path | None = None) -> "RelayConfig | None":
+        """Build from environment variables and/or an ``env_file``.
 
-        RELAY_AGENT_ID and RELAY_AGENT_TOKEN are required whenever RELAY_SERVER_URL
-        is present — raises RuntimeError if either is missing.
+        Returns ``None`` when ``RELAY_SERVER_URL`` is not set, mirroring the
+        legacy contract that callers already understand. The ``configured``
+        / ``pairing_pending`` properties encode the remaining states.
         """
-        url = os.getenv("RELAY_SERVER_URL")
-        if not url:
+        kwargs: dict = {}
+        if env_file is not None:
+            kwargs["_env_file"] = str(env_file)
+        cfg = cls(**kwargs)
+        if not cfg.configured:
             return None
-        agent_id = os.getenv("RELAY_AGENT_ID")
-        agent_token = os.getenv("RELAY_AGENT_TOKEN")
-        if not agent_id or not agent_token:
-            raise RuntimeError(
-                "RELAY_AGENT_ID and RELAY_AGENT_TOKEN are required "
-                "when RELAY_SERVER_URL is set"
-            )
-        return cls(
-            server_url=url,
-            agent_id=agent_id,
-            agent_token=agent_token,
-            heartbeat_interval=int(
-                os.getenv("RELAY_HEARTBEAT_INTERVAL", "15"),
-            ),
-            reconnect_base_delay=float(
-                os.getenv("RELAY_RECONNECT_BASE", "1.0"),
-            ),
-            reconnect_max_delay=float(
-                os.getenv("RELAY_RECONNECT_MAX", "60.0"),
-            ),
-        )
+        return cfg

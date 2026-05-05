@@ -132,26 +132,9 @@ info "Installing agent package..."
 
 # --- Agent .env ---
 
-ENV_FILE="${INSTALL_DIR}/mobaide_agent/.env"
-if [[ -f "$ENV_FILE" ]]; then
-    info "Agent .env already exists, skipping generation."
-else
-    info "Generating agent .env..."
-    JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
-    cat > "$ENV_FILE" <<EOF
-JWT_SECRET_KEY=${JWT_SECRET}
-JWT_ALGORITHM=HS256
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES=0
-JWT_REFRESH_TOKEN_EXPIRE_MINUTES=0
-HOST=0.0.0.0
-PORT=8000
-MAX_SESSIONS=16
-LOG_LEVEL=INFO
-EOF
-    info "Generated JWT_SECRET_KEY automatically."
-    info "NOTE: add RELAY_CENTRAL_URL, RELAY_AGENT_ID, RELAY_AGENT_TOKEN to ${ENV_FILE}"
-    info "      after pairing this agent with central-server."
-fi
+# Idempotent: re-running setup.sh never clobbers a paired agent (no --force).
+info "Generating agent .env via init-env..."
+"${VENV_DIR}/bin/python" -m mobaide.agent.config init-env --prefix "${INSTALL_DIR}"
 
 # --- Permissions ---
 

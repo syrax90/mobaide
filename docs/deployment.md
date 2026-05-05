@@ -88,13 +88,19 @@ conda create -n mobaide python=3.12 -y
 conda activate mobaide
 pip install -e .\mobaide_agent
 
-# Copy .env template and fill in the relay credentials + JWT_SECRET_KEY
-Copy-Item .\mobaide_agent\.env.example .\mobaide_agent\.env
-notepad .\mobaide_agent\.env
+# Generate a prepared .env (random JWT_SECRET_KEY, RELAY_SERVER_URL prefilled).
+# Use a custom prefix for dev so it doesn't touch your install at C:\Program Files.
+python -m mobaide.agent.config init-env --prefix .\mobaide_dev_prefix
 
-# Run
-cd .\mobaide_agent
+# Run from the prefix (so the .env at <prefix>\mobaide_agent\.env is loaded).
+$env:MOBAIDE_AGENT_PREFIX = (Resolve-Path .\mobaide_dev_prefix).Path
 python -m mobaide
+```
+
+Pair after the mobile app issues a token:
+
+```powershell
+mobaide-agent pair --id <ID> --token <TOKEN> --prefix .\mobaide_dev_prefix
 ```
 
 For the full local stack (Caddy + central-server in Docker + agent native), use `start-all.ps1` from the repo root.
@@ -128,12 +134,21 @@ and registers the supervisor:
   (launchd). `ThrottleInterval=10` gives the boot journal the same rollback
   window on macOS. Already runs as the invoking user; no extra config.
 
-After install, edit `<prefix>/agent.env` (created by the script) and add the relay credentials (`RELAY_CENTRAL_URL`, `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`), then restart the agent:
+The install script auto-generates `<prefix>/mobaide_agent/.env` with a
+random `JWT_SECRET_KEY` and prefilled `RELAY_SERVER_URL=wss://mobaide.com`,
+so the agent boots in **pairing-pending** state immediately. To complete
+pairing, copy the agent id and token from the mobile app and run:
 
 ```bash
-sudo systemctl restart mobaide-agent   # Linux
-launchctl kickstart -k gui/$(id -u)/com.mobaide.agent  # macOS
+mobaide-agent pair --id <ID> --token <TOKEN>
 ```
+
+The CLI verb writes the credentials atomically and best-effort restarts
+the supervisor unit (systemd / launchd / Windows Service). Until paired,
+the agent surfaces a status log line and exposes `pairing_pending: true`
+on `/api/health`. Re-running the installer never clobbers paired
+credentials; pass `--force` to `python -m mobaide.agent.config init-env`
+to regenerate (which still preserves `RELAY_AGENT_ID`/`RELAY_AGENT_TOKEN`).
 
 **From-source / developer install:** use `deploy/setup.sh` (sets up a flat venv from the local repo checkout). The script renders the systemd unit inline against the flat-venv layout (`/opt/mobaide/venv/...`), so this path does NOT require the versioned `releases/` layout that the end-user script uses.
 
@@ -197,8 +212,7 @@ sudo /opt/mobaide/releases/${VERSION}/venv/bin/pip install /opt/mobaide/releases
 
 echo "${VERSION}" | sudo tee /opt/mobaide/current_version
 
-sudo cp mobaide_agent/.env.example /opt/mobaide/agent.env
-sudoedit /opt/mobaide/agent.env   # set JWT_SECRET_KEY and RELAY_* vars
+python -m mobaide.agent.config init-env   # generates <prefix>/mobaide_agent/.env with random JWT_SECRET_KEY and prefilled RELAY_SERVER_URL
 
 sudo sed \
     -e "s|__RUN_USER__|${RUN_USER}|g" \
@@ -225,8 +239,12 @@ sudo systemctl restart mobaide-agent
 1. Open the Mobaide app
 2. Go to **Settings → Add connection**
 3. Set the **Server URL** to your central-server base URL, e.g. `https://mobaide.com`
-4. Sign in (or sign up), then pair this agent under **Settings → Agents → Pair new** and copy the generated `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` into the agent's `.env`
-5. Restart the agent — it will show up as online in the app within a few seconds
+4. Sign in (or sign up), then pair this agent under **Settings → Agents → Pair new** and copy the generated `RELAY_AGENT_ID` and `RELAY_AGENT_TOKEN`, then run:
+   ```bash
+   mobaide-agent pair --id <ID> --token <TOKEN>
+   ```
+   The CLI verb writes the credentials atomically and restarts the supervisor.
+5. The agent will show up as online in the app within a few seconds
 
 ### Troubleshooting
 
@@ -247,7 +265,7 @@ Common causes:
 
 Check the agent's logs for `relay.connection_failed` entries. Common causes:
 
-- `RELAY_CENTRAL_URL` scheme wrong (`wss://` for HTTPS central-server, `ws://` for local plain HTTP)
+- `RELAY_SERVER_URL` scheme wrong (`wss://` for HTTPS central-server, `ws://` for local plain HTTP)
 - `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` don't match the bcrypt hash stored in central-server's DB for this agent — re-pair via the app or re-issue the token via the admin API
 - Central-server unreachable — verify with `curl https://mobaide.com/api/health`
 - For a local dev stack: the workstation's OS trust store must include Caddy's root CA (see `start-all.ps1`, which auto-installs it)

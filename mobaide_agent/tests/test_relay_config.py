@@ -50,17 +50,31 @@ class TestRelayConfigPartialConfig:
         with pytest.raises(RuntimeError, match="RELAY_AGENT_TOKEN"):
             RelayConfig.from_env()
 
-    def test_raises_when_both_id_and_token_missing(self, monkeypatch):
-        monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
-        with pytest.raises(RuntimeError):
-            RelayConfig.from_env()
-
     def test_raises_when_agent_id_is_empty(self, monkeypatch):
         monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
         monkeypatch.setenv("RELAY_AGENT_ID", "")
         monkeypatch.setenv("RELAY_AGENT_TOKEN", "tok")
         with pytest.raises(RuntimeError, match="RELAY_AGENT_ID"):
             RelayConfig.from_env()
+
+
+class TestRelayConfigPairingPending:
+    def test_url_only_returns_instance_with_pairing_pending(self, monkeypatch):
+        monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
+        cfg = RelayConfig.from_env()
+        assert cfg is not None
+        assert cfg.configured is True
+        assert cfg.pairing_pending is True
+        assert cfg.agent_id == ""
+        assert cfg.agent_token == ""
+
+    def test_full_config_is_not_pairing_pending(self, monkeypatch):
+        monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
+        monkeypatch.setenv("RELAY_AGENT_ID", "a")
+        monkeypatch.setenv("RELAY_AGENT_TOKEN", "t")
+        cfg = RelayConfig.from_env()
+        assert cfg is not None
+        assert cfg.pairing_pending is False
 
 
 class TestRelayConfigDefaults:
@@ -88,6 +102,7 @@ class TestRelayConfigOptionalOverrides:
         monkeypatch.setenv("RELAY_HEARTBEAT_INTERVAL", "30")
 
         cfg = RelayConfig.from_env()
+        assert cfg is not None
 
         assert cfg.heartbeat_interval == 30
         assert isinstance(cfg.heartbeat_interval, int)
@@ -99,6 +114,7 @@ class TestRelayConfigOptionalOverrides:
         monkeypatch.setenv("RELAY_RECONNECT_BASE", "2.5")
 
         cfg = RelayConfig.from_env()
+        assert cfg is not None
 
         assert cfg.reconnect_base_delay == 2.5
         assert isinstance(cfg.reconnect_base_delay, float)
@@ -110,6 +126,7 @@ class TestRelayConfigOptionalOverrides:
         monkeypatch.setenv("RELAY_RECONNECT_MAX", "120.0")
 
         cfg = RelayConfig.from_env()
+        assert cfg is not None
 
         assert cfg.reconnect_max_delay == 120.0
         assert isinstance(cfg.reconnect_max_delay, float)
@@ -122,6 +139,12 @@ class TestRelayConfigFrozen:
         monkeypatch.setenv("RELAY_AGENT_TOKEN", "t")
 
         cfg = RelayConfig.from_env()
+        assert cfg is not None
 
-        with pytest.raises(AttributeError):
+        # Pydantic v2 frozen models raise ValidationError on assignment;
+        # the legacy dataclass raised AttributeError. Accept either so the
+        # test pins the immutability invariant rather than the exception class.
+        from pydantic import ValidationError
+
+        with pytest.raises((AttributeError, ValidationError)):
             cfg.server_url = "wss://other.io"  # type: ignore[misc]

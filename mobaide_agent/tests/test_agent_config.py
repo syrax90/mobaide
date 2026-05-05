@@ -133,7 +133,10 @@ class TestAgentConfigIntegerParsing:
 
 
 class TestAgentConfigLogSampleWs:
-    @pytest.mark.parametrize("value", ["1", "true", "yes", "TRUE", "YES"])
+    @pytest.mark.parametrize(
+        "value",
+        ["1", "true", "yes", "TRUE", "YES", "on", "ON", "On"],
+    )
     def test_truthy_variants_parse_to_true(self, monkeypatch, value):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
         monkeypatch.setenv("LOG_SAMPLE_WS", value)
@@ -246,10 +249,77 @@ class TestAgentConfigRelayIntegration:
         assert cfg.relay_config.agent_id == "agent-1"
         assert cfg.relay_config.agent_token == "secret-tok"
 
-    def test_relay_config_raises_on_partial_env(self, monkeypatch):
+    def test_relay_config_pairing_pending_when_id_and_token_empty(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
         monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
-        # Missing RELAY_AGENT_ID and RELAY_AGENT_TOKEN
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.relay_config is not None
+        assert cfg.relay_config.pairing_pending is True
+
+    def test_relay_config_raises_on_partial_env(self, monkeypatch):
+        # Genuine misconfig (token without id, or vice versa) still raises.
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
+        monkeypatch.setenv("RELAY_AGENT_TOKEN", "tok-without-id")
 
         with pytest.raises(RuntimeError, match="RELAY_AGENT_ID"):
             AgentConfig.from_env()
+
+
+class TestAgentConfigProjectsField:
+    """The ``projects`` field carries the JSON seed forward from `.env` /
+    process env into the config instance, where ``app.create_app`` then
+    passes it explicitly to ``ProjectsStore.load(seed_json=...)``.
+
+    This decouples the projects store from ``os.environ`` — necessary
+    because pydantic-settings reads `.env` into the settings instance but
+    does NOT mutate ``os.environ``. On platforms whose supervisor doesn't
+    pre-load the env file (Windows Service launcher.cmd), the legacy
+    ``os.getenv("PROJECTS")`` path silently missed `.env`-defined values.
+    """
+
+    def test_unset_projects_field_is_none(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.projects is None
+
+    def test_projects_env_var_populates_field_as_string(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        seed = '{"X":{"path":"/tmp"}}'
+        monkeypatch.setenv("PROJECTS", seed)
+
+        cfg = AgentConfig.from_env()
+
+        # The field carries the raw JSON string forward — parsing happens
+        # downstream in ``ProjectsStore._seed_from_env``. Keeping the
+        # parse off the settings layer avoids early failure on a
+        # malformed PROJECTS that would block agent startup before the
+        # projects store has a chance to surface a useful error.
+        assert cfg.projects == seed
+        assert isinstance(cfg.projects, str)
+
+    def test_validation_alias_is_uppercase(self, monkeypatch):
+        # The field's Python name is ``projects`` but the env-var alias
+        # is ``PROJECTS``. case-insensitive case_sensitive=False on the
+        # model also accepts lowercase, but the canonical alias is upper.
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("PROJECTS", '{"A":{"path":"/x"}}')
+
+        cfg = AgentConfig.from_env()
+
+        assert cfg.projects == '{"A":{"path":"/x"}}'
+
+    def test_kwarg_construction_populates_via_python_name(self):
+        # populate_by_name=True allows ``projects=`` kwarg construction
+        # alongside the ``PROJECTS`` env-var alias. Without it, kwarg
+        # construction would silently drop the value.
+        cfg = AgentConfig(
+            jwt_secret_key="s",
+            projects='{"K":{"path":"/p"}}',
+        )
+
+        assert cfg.projects == '{"K":{"path":"/p"}}'

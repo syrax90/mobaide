@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mobaide.core.projects_config import ProjectConfig
 
@@ -15,14 +18,7 @@ _DEFAULT_AUTO_SCAN_PROMPT = (
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
-def _parse_bool(raw: str | None, *, default: bool) -> bool:
-    if raw is None:
-        return default
-    return raw.strip().lower() in _TRUTHY
-
-
-@dataclass(frozen=True)
-class AutoScanConfig:
+class AutoScanConfig(BaseSettings):
     """Configuration for the Linear auto-scan engine.
 
     Holds only the non-project settings (intervals, prompt, worktree base,
@@ -41,30 +37,48 @@ class AutoScanConfig:
     auto_scan_prompt: str | None = _DEFAULT_AUTO_SCAN_PROMPT
     auto_remove_worktrees: bool = True
     linear_done_state: str = "Done"
-    state_dir: str = "state"
+    state_dir: str = Field(default="state", validation_alias="AGENT_STATE_DIR")
+
+    model_config = SettingsConfigDict(
+        env_prefix="",
+        env_file=None,
+        env_file_encoding="utf-8",
+        extra="ignore",
+        frozen=True,
+        case_sensitive=False,
+        # Without this flag, pydantic-settings honors only ``validation_alias``
+        # values (e.g. ``AGENT_STATE_DIR`` for ``state_dir``) and silently
+        # ignores constructor kwargs that use the field's Python name.
+        # Production code (``AutoScanSessionManager``) and tests both
+        # construct ``AutoScanConfig`` by name, so ``populate_by_name`` must
+        # remain True.
+        populate_by_name=True,
+    )
+
+    @field_validator("auto_remove_worktrees", mode="before")
+    @classmethod
+    def _parse_bool(cls, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in _TRUTHY
+        return False
+
+    @field_validator("auto_scan_prompt", mode="before")
+    @classmethod
+    def _resolve_prompt(cls, value: Any) -> str | None:
+        if value is None:
+            return _DEFAULT_AUTO_SCAN_PROMPT
+        if isinstance(value, str):
+            if value == "":
+                return _DEFAULT_AUTO_SCAN_PROMPT
+            return value.replace("\\n", "\n")
+        return value
 
     @classmethod
-    def from_env(cls) -> AutoScanConfig:
-        """Build config from environment variables; always returns an instance."""
-        prompt_raw = os.getenv("AUTO_SCAN_PROMPT")
-        prompt = (
-            prompt_raw.replace("\\n", "\n")
-            if prompt_raw
-            else _DEFAULT_AUTO_SCAN_PROMPT
-        )
-
-        return cls(
-            worktree_base=os.getenv("WORKTREE_BASE", "claude_worktree"),
-            scan_interval_seconds=int(
-                os.getenv("SCAN_INTERVAL_SECONDS", "300"),
-            ),
-            branch_prefix=os.getenv("BRANCH_PREFIX", ""),
-            main_branch=os.getenv("MAIN_BRANCH", "main"),
-            linear_active_state=os.getenv("LINEAR_ACTIVE_STATE", "In Progress"),
-            auto_scan_prompt=prompt,
-            auto_remove_worktrees=_parse_bool(
-                os.getenv("AUTO_REMOVE_WORKTREES"), default=True,
-            ),
-            linear_done_state=os.getenv("LINEAR_DONE_STATE", "Done"),
-            state_dir=os.getenv("AGENT_STATE_DIR", "state"),
-        )
+    def from_env(cls, env_file: Path | None = None) -> "AutoScanConfig":
+        """Build config from environment variables and/or an ``env_file``."""
+        kwargs: dict = {}
+        if env_file is not None:
+            kwargs["_env_file"] = str(env_file)
+        return cls(**kwargs)
