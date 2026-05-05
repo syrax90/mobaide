@@ -375,6 +375,7 @@ EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/agent.env
 EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=$MOBAIDE_AGENT_PREFIX
 Environment=HOME=$RUN_HOME
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:%h/.npm-global/bin:%h/.local/bin
 ExecStart=/usr/bin/env bash -c '$MOBAIDE_AGENT_PREFIX/releases/\$(cat $MOBAIDE_AGENT_PREFIX/current_version)/venv/bin/python -m mobaide.launcher'
 Restart=on-failure
 RestartSec=5
@@ -413,6 +414,7 @@ install_launchd_plist() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>MOBAIDE_AGENT_PREFIX</key><string>$MOBAIDE_AGENT_PREFIX</string>
+    <key>PATH</key><string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/opt/homebrew/bin:\$HOME/.npm-global/bin:\$HOME/.local/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
