@@ -3,10 +3,10 @@ from __future__ import annotations
 import secrets
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from asgi_correlation_id import CorrelationIdMiddleware
 from asgi_correlation_id.context import correlation_id
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -83,36 +83,56 @@ def _build_updater(app: FastAPI):
     )
 
 
+def _resolve_env_file() -> Path | None:
+    """Return the canonical agent ``.env`` path if it exists.
+
+    Returning ``None`` for a missing file lets pydantic-settings fall back
+    to process-environment vars (which is what tests rely on). The explicit
+    absolute path is what fixes the Windows CWD-dependent silent miss the
+    legacy ``load_dotenv()`` had.
+
+    Tests construct ``AgentConfig`` directly via kwargs — this function is
+    only reached from the production ``create_app(config=None)`` path. A
+    developer running tests on a host with a real install at
+    ``/opt/mobaide`` would not hit this code path because every test passes
+    ``config=`` explicitly.
+    """
+    from mobaide.agent._env_writer import env_path_for_prefix
+
+    candidate = env_path_for_prefix(default_prefix())
+    return candidate if candidate.exists() else None
+
+
 def create_app(config: AgentConfig | None = None) -> FastAPI:
     """Build and return the FastAPI application."""
     if config is None:
-        load_dotenv()
-        config = AgentConfig.from_env()
+        config = AgentConfig.from_env(env_file=_resolve_env_file())
 
     configure_logging(config)
+
+    relay_cfg = config.relay_config
+    pairing_pending = relay_cfg is not None and relay_cfg.pairing_pending
+    if pairing_pending:
+        logger.warning(
+            "[mobaide-agent] Pairing required — open the mobile app, "
+            "then run: mobaide-agent pair --id <ID> --token <TOKEN>",
+        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
         await app.state.session_manager.start_liveness_monitor()
-        # Start relay client if configured (connects to Central Server).
-        if config.relay_config is not None:
+        if relay_cfg is not None and not pairing_pending:
             from mobaide.relay.client import RelayClient
 
             app.state.relay_client = RelayClient(
-                config=config.relay_config,
+                config=relay_cfg,
                 session_manager=app.state.session_manager,
                 event_bus=app.state.event_bus,
                 broadcaster=app.state.broadcaster,
                 app_state=app.state,
             )
             await app.state.relay_client.start()
-            # Wire the staged-binary auto-updater into the relay's manifest
-            # callback so manifests delivered via auth_ok or
-            # ``agent_manifest_update`` control frames drive the updater
-            # state machine in production. The updater is None when the
-            # trust key is absent (development checkout, no install layout) —
-            # in that case auto-update stays disabled, fail-closed.
             app.state.updater = _build_updater(app)
             if app.state.updater is not None:
                 app.state.relay_client.set_manifest_update_callback(
@@ -210,13 +230,14 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     )
 
     app.state.config = config
+    app.state.pairing_pending = pairing_pending
 
     # Mutable, file-backed projects store (seeds from PROJECTS env var on
     # first boot, then file wins forever). Every downstream consumer
     # (SessionManager, auto-scan, relay proxy, WS snapshot) reads through
     # this single reference.
     projects_store = ProjectsStore(config.projects_store_path)
-    projects_store.load()
+    projects_store.load(seed_json=config.projects)
     app.state.projects_store = projects_store
 
     # Worktree manager is always wired so Standard-mode sessions can create
@@ -299,6 +320,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "status": "ok",
             "sessions": len(sm.list_sessions()),
             "max_sessions": sm.max_sessions,
+            "pairing_pending": getattr(app.state, "pairing_pending", False),
         }
         if autoscan_mgr is not None:
             result["auto_scans_active"] = len(autoscan_mgr.list())

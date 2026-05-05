@@ -124,10 +124,9 @@ class TestRunNow:
     @pytest.mark.asyncio
     async def test_request_immediate_scan_wakes_loop(self, tmp_path):
         """A long sleep should be cut short when request_immediate_scan() is called."""
-        from dataclasses import replace
         inst = _make_instance(tmp_path)
         # Build a fresh config with a long interval (AutoScanConfig is frozen).
-        inst._config = replace(inst._config, scan_interval_seconds=30)
+        inst._config = inst._config.model_copy(update={"scan_interval_seconds": 30})
 
         scan_calls = 0
 
@@ -1046,8 +1045,7 @@ class TestProcessedCountDTO:
 
         config = _make_config(tmp_path)
         # Point config at the pre-populated state dir.
-        from dataclasses import replace
-        config = replace(config, state_dir=str(state_dir))
+        config = config.model_copy(update={"state_dir": str(state_dir)})
 
         inst = _make_instance(tmp_path, config=config)
         assert inst.to_dto()["processed_count"] == 1

@@ -292,6 +292,18 @@ write_trust_key() {
     fi
 }
 
+write_agent_env() {
+    # Generate <prefix>/mobaide_agent/.env on first install (idempotent).
+    # No --force on installer-driven invocations: a paired agent's
+    # RELAY_AGENT_ID/TOKEN are never clobbered by re-running the installer.
+    local version
+    version="$(cat "${MOBAIDE_AGENT_PREFIX}/current_version")"
+    local release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${version}"
+    info "Writing prepared agent .env via init-env"
+    "$release_dir/venv/bin/python" -m mobaide.agent.config init-env \
+        --prefix "$MOBAIDE_AGENT_PREFIX"
+}
+
 resolve_run_as_user() {
     # Linux only — macOS installs to ~/ and runs under launchd as the user.
     # Sets script-scoped RUN_USER, RUN_GROUP, RUN_HOME consumed by
@@ -470,6 +482,8 @@ main() {
     verify_manifest_signature "$manifest"
     stage_release "$manifest"
     rm -f "$manifest"
+
+    write_agent_env
 
     if [ "$PLATFORM" = "linux" ]; then
         resolve_run_as_user

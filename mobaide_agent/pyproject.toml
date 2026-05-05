@@ -14,7 +14,7 @@ dependencies = [
     "PyJWT",
     "gql",
     "httpx",
-    "python-dotenv",
+    "pydantic-settings>=2.5",
     "bcrypt",
     "structlog>=24.1",
     "asgi-correlation-id>=4.3",
@@ -41,3 +41,6 @@ testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["mobaide"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"mobaide/agent/env.template" = "mobaide/agent/env.template"

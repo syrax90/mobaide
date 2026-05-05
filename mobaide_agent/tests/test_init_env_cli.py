@@ -1,0 +1,198 @@
+"""Tests for the ``init-env`` and ``print-template`` CLI verbs.
+
+The CLI lives at the bottom of ``mobaide.agent.config`` and is invoked
+by install scripts via ``python -m mobaide.agent.config``. We drive the
+``main(argv)`` entry point directly so each test runs in-process; the
+verb itself returns an exit code rather than calling ``sys.exit`` mid-flow.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+from mobaide.agent._env_writer import env_path_for_prefix, parse_env_file
+from mobaide.agent.config import main as config_main
+
+
+_DEFAULT_RELAY_URL = "wss://mobaide.com"
+_URLSAFE_30_PLUS = re.compile(r"^[A-Za-z0-9_\-]{30,}$")
+
+
+def _run(argv: list[str]) -> int:
+    return config_main(argv)
+
+
+class TestInitEnvFreshWrite:
+    def test_writes_env_under_prefix(self, tmp_path):
+        rc = _run(["init-env", "--prefix", str(tmp_path)])
+
+        assert rc == 0
+        target = env_path_for_prefix(tmp_path)
+        assert target.exists()
+        assert target.is_file()
+
+    def test_jwt_secret_key_is_urlsafe_30_plus_chars(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        secret = values["JWT_SECRET_KEY"]
+
+        # secrets.token_urlsafe(32) yields ~43 chars; 30 is a safe lower bound.
+        assert _URLSAFE_30_PLUS.match(secret), (
+            f"JWT_SECRET_KEY did not look URL-safe / 30+ chars: {secret!r}"
+        )
+
+    def test_relay_server_url_default_is_set(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        # The template ships RELAY_SERVER_URL=wss://mobaide.com uncommented;
+        # init-env preserves it. Either way the user gets the default.
+        assert values["RELAY_SERVER_URL"] == _DEFAULT_RELAY_URL
+
+    def test_creates_parent_directory(self, tmp_path):
+        prefix = tmp_path / "fresh_install_prefix"
+        # Prefix directory does not exist yet — atomic_write must create it.
+        assert not prefix.exists()
+
+        rc = _run(["init-env", "--prefix", str(prefix)])
+
+        assert rc == 0
+        assert env_path_for_prefix(prefix).exists()
+
+
+class TestInitEnvIdempotent:
+    def test_second_run_without_force_is_noop(self, tmp_path, capsys):
+        _run(["init-env", "--prefix", str(tmp_path)])
+        target = env_path_for_prefix(tmp_path)
+        first_content = target.read_bytes()
+        first_mtime = target.stat().st_mtime_ns
+        capsys.readouterr()  # discard first-run output
+
+        rc = _run(["init-env", "--prefix", str(tmp_path)])
+
+        assert rc == 0
+        assert target.read_bytes() == first_content
+        assert target.stat().st_mtime_ns == first_mtime
+        captured = capsys.readouterr()
+        # The "skip" message names the existing path so users know what to do.
+        assert "already exists" in captured.out or "skipping" in captured.out
+
+    def test_second_run_does_not_rotate_jwt_secret(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+        first = parse_env_file(env_path_for_prefix(tmp_path))["JWT_SECRET_KEY"]
+
+        _run(["init-env", "--prefix", str(tmp_path)])
+        second = parse_env_file(env_path_for_prefix(tmp_path))["JWT_SECRET_KEY"]
+
+        assert first == second
+
+
+class TestInitEnvForce:
+    def test_force_preserves_existing_jwt_secret(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+        original_secret = parse_env_file(
+            env_path_for_prefix(tmp_path)
+        )["JWT_SECRET_KEY"]
+
+        rc = _run(["init-env", "--prefix", str(tmp_path), "--force"])
+
+        assert rc == 0
+        new_secret = parse_env_file(
+            env_path_for_prefix(tmp_path)
+        )["JWT_SECRET_KEY"]
+        # Plan: by default --force keeps the JWT secret (rotating would
+        # invalidate every live mobile JWT).
+        assert new_secret == original_secret
+
+    def test_force_preserves_relay_agent_id_and_token(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+        target = env_path_for_prefix(tmp_path)
+
+        # Simulate a paired agent: hand-edit RELAY_AGENT_ID/TOKEN.
+        text = target.read_text(encoding="utf-8")
+        text = text.replace("RELAY_AGENT_ID=\n", "RELAY_AGENT_ID=paired-id\n")
+        text = text.replace(
+            "RELAY_AGENT_TOKEN=\n", "RELAY_AGENT_TOKEN=paired-tok\n"
+        )
+        target.write_text(text, encoding="utf-8")
+
+        rc = _run(["init-env", "--prefix", str(tmp_path), "--force"])
+
+        assert rc == 0
+        values = parse_env_file(target)
+        assert values["RELAY_AGENT_ID"] == "paired-id"
+        assert values["RELAY_AGENT_TOKEN"] == "paired-tok"
+
+    def test_force_preserves_user_set_relay_server_url(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+        target = env_path_for_prefix(tmp_path)
+
+        text = target.read_text(encoding="utf-8")
+        text = text.replace(
+            f"RELAY_SERVER_URL={_DEFAULT_RELAY_URL}",
+            "RELAY_SERVER_URL=wss://self-hosted.example",
+        )
+        target.write_text(text, encoding="utf-8")
+
+        _run(["init-env", "--prefix", str(tmp_path), "--force"])
+
+        values = parse_env_file(target)
+        assert values["RELAY_SERVER_URL"] == "wss://self-hosted.example"
+
+
+class TestPrintTemplate:
+    def test_prints_template_to_stdout(self, capsys):
+        rc = _run(["print-template"])
+
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "JWT_SECRET_KEY=" in captured.out
+        # The wheel-packaged template ships with an uncommented relay URL.
+        assert f"RELAY_SERVER_URL={_DEFAULT_RELAY_URL}" in captured.out
+
+    def test_print_template_writes_no_files(self, tmp_path, monkeypatch):
+        # Even if a default prefix were resolved, print-template must
+        # never touch the filesystem.
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path))
+
+        _run(["print-template"])
+
+        # No mobaide_agent dir created under the temp prefix.
+        assert not (tmp_path / "mobaide_agent").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission semantics only")
+class TestInitEnvPermsPosix:
+    def test_written_env_is_0o600(self, tmp_path):
+        import stat
+
+        _run(["init-env", "--prefix", str(tmp_path)])
+
+        target = env_path_for_prefix(tmp_path)
+        mode = stat.S_IMODE(target.stat().st_mode)
+        assert mode == 0o600
+
+
+class TestInitEnvOutputContents:
+    """Validate the ``.env`` rendered to disk has the structure callers expect."""
+
+    def test_rendered_file_contains_template_comments(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+
+        text = env_path_for_prefix(tmp_path).read_text(encoding="utf-8")
+
+        # Header comment from the template should be preserved verbatim.
+        assert "# Auto-generated by `python -m mobaide.agent.config init-env`." in text
+
+    def test_rendered_file_has_relay_pairing_placeholders_empty(self, tmp_path):
+        _run(["init-env", "--prefix", str(tmp_path)])
+
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+
+        # Fresh install: pairing has not happened yet.
+        assert values.get("RELAY_AGENT_ID", "") == ""
+        assert values.get("RELAY_AGENT_TOKEN", "") == ""

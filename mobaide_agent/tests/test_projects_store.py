@@ -141,6 +141,115 @@ class TestLoadMissing:
             store.load()
 
 
+class TestLoadSeedJsonExplicit:
+    """``ProjectsStore.load(seed_json=...)`` accepts an explicit JSON
+    string in addition to (or instead of) ``os.environ['PROJECTS']``.
+
+    This decouples the store from ``os.environ`` so the canonical caller
+    (``mobaide.agent.app.create_app``) can pass ``config.projects`` —
+    the pydantic-settings-resolved value — directly. Without this path
+    `.env`-defined PROJECTS values are silently missed on Windows where
+    the supervisor does not pre-load the env file.
+    """
+
+    def test_seeds_from_explicit_arg_when_environ_unset(self, tmp_path):
+        # PROJECTS env var is unset (autouse fixture _clean_env). The
+        # explicit seed_json arg must populate the store anyway.
+        path = tmp_path / "projects.json"
+        seed = json.dumps(
+            {
+                "Alpha": {"path": "C:/work/a", "linear_api_key": "lin_abc"},
+                "Beta": {"path": "C:/work/b"},
+            },
+        )
+
+        store = ProjectsStore(str(path))
+        store.load(seed_json=seed)
+
+        on_disk = json.loads(path.read_text())
+        names = {entry["name"] for entry in on_disk}
+        assert names == {"Alpha", "Beta"}
+        # Secrets are persisted (file content), not exposed publicly.
+        by_name = {entry["name"]: entry for entry in on_disk}
+        assert by_name["Alpha"]["linear_api_key"] == "lin_abc"
+
+    def test_explicit_seed_overrides_environ_projects(
+        self, tmp_path, monkeypatch,
+    ):
+        # When both seed_json and PROJECTS env are set, the explicit arg
+        # wins — ``_seed_from_env`` only consults ``os.getenv`` when the
+        # passed arg is None.
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps({"FromEnv": {"path": "C:/from-env"}}),
+        )
+        path = tmp_path / "projects.json"
+        explicit = json.dumps({"FromArg": {"path": "C:/from-arg"}})
+
+        store = ProjectsStore(str(path))
+        store.load(seed_json=explicit)
+
+        public = store.list_public()
+        names = [p["name"] for p in public]
+        assert names == ["FromArg"]
+        assert "FromEnv" not in names
+
+    def test_explicit_none_falls_back_to_environ(self, tmp_path, monkeypatch):
+        # Back-compat path for callers that haven't migrated yet:
+        # passing ``seed_json=None`` (or omitting it) still consults the
+        # PROJECTS env var.
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps({"FromEnv": {"path": "C:/from-env"}}),
+        )
+        path = tmp_path / "projects.json"
+
+        store = ProjectsStore(str(path))
+        store.load(seed_json=None)
+
+        names = {p["name"] for p in store.list_public()}
+        assert names == {"FromEnv"}
+
+    def test_empty_explicit_seed_creates_empty_store(self, tmp_path):
+        # A non-None but empty seed_json (e.g. ``""`` or whitespace)
+        # produces an empty store and persists an empty file.
+        path = tmp_path / "projects.json"
+
+        store = ProjectsStore(str(path))
+        store.load(seed_json="")
+
+        assert path.exists()
+        assert json.loads(path.read_text()) == []
+        assert store.list_public() == []
+
+    def test_invalid_explicit_seed_raises(self, tmp_path):
+        # Malformed JSON in the explicit seed surfaces a RuntimeError —
+        # the store does not silently swallow misconfiguration.
+        path = tmp_path / "projects.json"
+
+        store = ProjectsStore(str(path))
+        with pytest.raises(RuntimeError, match="invalid JSON"):
+            store.load(seed_json="{not valid json")
+
+    def test_explicit_seed_ignored_when_file_exists(self, tmp_path):
+        # Once the projects.json file exists, the seed is ignored — the
+        # file is the source of truth from second boot onward.
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [{"name": "OnDisk", "path": "C:/disk", "order": 0}],
+            ),
+        )
+        seed = json.dumps({"FromArg": {"path": "C:/arg"}})
+
+        store = ProjectsStore(str(path))
+        store.load(seed_json=seed)
+
+        names = [p["name"] for p in store.list_public()]
+        assert names == ["OnDisk"]
+        assert "FromArg" not in names
+
+
 # ---------------------------------------------------------------------------
 # CRUD
 # ---------------------------------------------------------------------------
