@@ -180,6 +180,18 @@ function Write-TrustKey {
     Set-Content -Path (Join-Path $trustDir "central_server.pub") -Value $Script:TrustKeyB64 -NoNewline
 }
 
+function Write-AgentEnv {
+    param($Version)
+    # Idempotent: re-running the installer never clobbers a paired agent's
+    # credentials (no --force is passed). Auto-generates JWT_SECRET_KEY and
+    # prefills RELAY_SERVER_URL on first install.
+    $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $Version
+    $releasePython = Join-Path $releaseDir "venv\Scripts\python.exe"
+    Write-Info "Writing prepared agent .env via init-env"
+    & $releasePython -m mobaide.agent.config init-env --prefix $Script:Prefix
+    if ($LASTEXITCODE -ne 0) { Write-Fail "init-env failed (exit $LASTEXITCODE)" }
+}
+
 function Install-Service {
     param($Version)
     $launcherDir = Join-Path $Script:Prefix "bin"
@@ -236,6 +248,8 @@ function Main {
     } finally {
         Remove-Item $manifest -ErrorAction SilentlyContinue
     }
+
+    Write-AgentEnv -Version $version
 
     Install-Service -Version $version
     Write-Completion -Version $version
