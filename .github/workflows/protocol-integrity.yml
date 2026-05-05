@@ -50,14 +50,3 @@ jobs:
             echo "::error::envelope.py files must be modified together — mobaide_agent and central_server copies are intentionally duplicated and any wire-shape change must touch both. agent_changed=${agent_changed} central_changed=${central_changed}."
             exit 1
           fi
-
-      - name: Diff guard — install scripts must stay in sync between deploy/ and docs/get/
-        if: ${{ github.event_name == 'pull_request' }}
-        run: |
-          for name in install.sh install.ps1; do
-            if ! cmp -s "deploy/${name}" "docs/get/${name}"; then
-              echo "::error::deploy/${name} and docs/get/${name} drifted. The Pages-served copy must be byte-identical to the canonical source."
-              diff "deploy/${name}" "docs/get/${name}" || true
-              exit 1
-            fi
-          done

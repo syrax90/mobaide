@@ -1,7 +1,7 @@
 # Mobaide Agent — systemd unit (TEMPLATE)
 #
 # This file is a reference template. The install scripts
-# (docs/get/install.sh, deploy/setup.sh) render the actual unit at
+# (deploy/install.sh, deploy/setup.sh) render the actual unit at
 # /etc/systemd/system/mobaide-agent.service with the resolved values.
 #
 # If you wire this up by hand, edit the four __PLACEHOLDER__ tokens below

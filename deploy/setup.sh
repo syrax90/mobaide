@@ -164,7 +164,7 @@ chown -R "${RUN_USER}:${RUN_GROUP}" "$INSTALL_DIR"
 # from-source layout uses INSTALL_DIR/venv directly (no releases/<v>/ split),
 # so the ExecStart line is also overridden here. ProtectSystem=strict +
 # scoped ReadWritePaths matches the production install model (see
-# docs/get/install.sh:install_systemd_unit) so dev and prod converge on
+# deploy/install.sh:install_systemd_unit) so dev and prod converge on
 # the same hardening profile.
 info "Installing systemd service..."
 cat > /etc/systemd/system/mobaide-agent.service <<EOF
