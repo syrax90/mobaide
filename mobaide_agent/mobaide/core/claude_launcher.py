@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
 import platform
+import shutil
+import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +20,110 @@ from .projects_store import safe_path_exists
 
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
+
+
+class ClaudeBinaryNotFoundError(RuntimeError):
+    """Raised when the Claude Code CLI cannot be located on the host."""
+
+    _INSTALL_HINT = (
+        "Claude CLI not found. Install it with:\n"
+        "    npm install -g @anthropic-ai/claude-code\n"
+        "or set MOBAIDE_CLAUDE_BIN to its absolute path in the agent's env file."
+    )
+
+    def __init__(self, searched_paths: list[str]) -> None:
+        self.searched_paths = list(searched_paths)
+        searched = ", ".join(self.searched_paths) if self.searched_paths else "(none)"
+        super().__init__(f"{self._INSTALL_HINT}\nSearched: {searched}")
+
+
+_CLAUDE_BIN_ENV_VAR = "MOBAIDE_CLAUDE_BIN"
+_resolved_claude_bin: str | None = None
+
+
+def _is_executable_file(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def _nvm_version_key(path: str) -> tuple[int, ...]:
+    """Parse the ``vX.Y.Z`` segment of an nvm path into a comparable tuple.
+
+    nvm directories are named like ``v18.20.4``; lexicographic sort would
+    rank ``v9.x`` after ``v10.x`` because ``'1' < '9'``. Falling back to
+    ``(0,)`` for unparseable names keeps such entries below any real
+    semver-named one without crashing.
+    """
+    try:
+        version_dir = Path(path).parent.parent.name
+        parts = version_dir.lstrip("v").split(".")
+        return tuple(int(p) for p in parts)
+    except (ValueError, IndexError):
+        return (0,)
+
+
+def _posix_fallback_candidates() -> list[str]:
+    home = Path.home()
+    candidates = [
+        str(home / ".npm-global" / "bin" / "claude"),
+        str(home / ".local" / "bin" / "claude"),
+        "/usr/local/bin/claude",
+        "/opt/homebrew/bin/claude",
+    ]
+    nvm_matches = glob.glob(
+        str(home / ".nvm" / "versions" / "node" / "*" / "bin" / "claude")
+    )
+    if nvm_matches:
+        candidates.append(max(nvm_matches, key=_nvm_version_key))
+    return candidates
+
+
+def _resolve_claude_binary() -> str:
+    """Locate the Claude Code CLI executable.
+
+    Resolution order:
+      1. ``MOBAIDE_CLAUDE_BIN`` env var (operator override).
+      2. ``shutil.which`` against the current PATH.
+      3. (POSIX) common npm/nvm/homebrew install locations.
+
+    Result is cached for the process lifetime in ``_resolved_claude_bin``.
+    Raises :class:`ClaudeBinaryNotFoundError` with an actionable message
+    listing every path that was probed.
+    """
+    global _resolved_claude_bin
+    if _resolved_claude_bin is not None:
+        return _resolved_claude_bin
+
+    searched: list[str] = []
+
+    override = os.environ.get(_CLAUDE_BIN_ENV_VAR)
+    if override:
+        override_path = os.path.abspath(override)
+        searched.append(f"{_CLAUDE_BIN_ENV_VAR}={override_path}")
+        if _is_executable_file(override_path):
+            _resolved_claude_bin = override_path
+            return _resolved_claude_bin
+
+    if sys.platform == "win32":
+        for name in ("claude", "claude.cmd", "claude.exe"):
+            hit = shutil.which(name)
+            searched.append(f"PATH:{name}")
+            if hit:
+                _resolved_claude_bin = os.path.abspath(hit)
+                return _resolved_claude_bin
+    else:
+        hit = shutil.which("claude")
+        searched.append("PATH:claude")
+        if hit:
+            _resolved_claude_bin = os.path.abspath(hit)
+            return _resolved_claude_bin
+
+        for candidate in _posix_fallback_candidates():
+            searched.append(candidate)
+            if _is_executable_file(candidate):
+                _resolved_claude_bin = candidate
+                return _resolved_claude_bin
+
+    raise ClaudeBinaryNotFoundError(searched)
 
 
 @dataclass(frozen=True)
@@ -89,15 +196,19 @@ class ClaudeLauncher:
         project: ProjectConfig,
         options: ClaudeOptions,
     ) -> LaunchSpec:
-        cwd = await self._resolve_cwd(project, options)
+        # Resolve the binary FIRST so a ``ClaudeBinaryNotFoundError`` aborts
+        # before ``_resolve_cwd`` runs ``git worktree add`` — otherwise a
+        # missing CLI would leak an orphan worktree directory on every
+        # scan cycle.
         argv = self._build_argv(options)
+        cwd = await self._resolve_cwd(project, options)
         env = self._build_env(project, options)
         created = self._write_project_files(project, cwd)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
 
     @staticmethod
     def _build_argv(options: ClaudeOptions) -> list[str]:
-        argv: list[str] = ["claude", "--debug"]
+        argv: list[str] = [_resolve_claude_binary(), "--debug"]
         if options.plan_mode and options.skip_permissions:
             argv += ["--permission-mode", "plan",
                      "--allow-dangerously-skip-permissions"]
@@ -127,6 +238,17 @@ class ClaudeLauncher:
             if conda_bin:
                 sep = os.pathsep
                 env["PATH"] = f"{conda_bin}{sep}{env.get('PATH', '')}"
+
+        try:
+            claude_dir = os.path.dirname(_resolve_claude_binary())
+        except ClaudeBinaryNotFoundError:
+            claude_dir = ""
+        if claude_dir:
+            sep = os.pathsep
+            existing = env.get("PATH", "")
+            parts = existing.split(sep) if existing else []
+            if claude_dir not in parts:
+                env["PATH"] = f"{claude_dir}{sep}{existing}" if existing else claude_dir
         return env
 
     @staticmethod

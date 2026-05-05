@@ -78,7 +78,7 @@ The Android app never talks to the agent directly; it always goes through `centr
 
 - Python 3.12+
 - `git`, `curl`
-- Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code). **v2.1.108 or newer is recommended** — the agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)); older CLIs will simply ignore the variable.
+- Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code). **v2.1.108 or newer is recommended** — the agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)); older CLIs will simply ignore the variable. When running as a systemd or launchd service the CLI must be on the service's `PATH` — the unit files ship with `%h/.npm-global/bin` and `%h/.local/bin` already appended. To use a non-standard install location set `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` in `<prefix>/agent.env`.
 - A paired agent: `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` issued by `central-server`. Pair from the Android app: **Settings → Agents → Pair new**, or via the admin REST API.
 
 ### Windows (conda — recommended for development)
@@ -241,6 +241,7 @@ Common causes:
 - Missing `JWT_SECRET_KEY` in `.env`
 - Port 8000 already in use (change `PORT`, or stop the other process)
 - Python version < 3.12
+- Claude CLI not on the service's `PATH` — the agent returns HTTP 503 with `claude_cli_missing: true` and a `searched_paths` list. Fix: add `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` to `<prefix>/agent.env`, or ensure the CLI is under `~/.npm-global/bin` or `~/.local/bin` (already in the unit's `PATH`).
 
 #### Agent not showing as online in the Android app
 

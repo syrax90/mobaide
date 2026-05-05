@@ -19,6 +19,30 @@ IS_WINDOWS = sys.platform == "win32"
 skip_if_not_windows = pytest.mark.skipif(not IS_WINDOWS, reason="Windows only")
 skip_if_not_linux = pytest.mark.skipif(IS_WINDOWS, reason="Linux/macOS only")
 
+
+@pytest.fixture(autouse=True)
+def _pin_claude_binary(monkeypatch):
+    """Pin the resolver to the literal string ``"claude"`` for every test.
+
+    Existing assertions in ``test_claude_launcher.py`` (and any future test
+    that does not opt out) compare ``spec.argv[0] == "claude"``. The
+    production resolver returns an absolute path; without this pin those
+    tests would break on the developer's host depending on where ``claude``
+    happens to be installed.
+
+    Tests that need to exercise the real resolver (``test_claude_resolver.py``)
+    capture the original function reference at module-import time, before
+    this fixture has a chance to swap it.
+    """
+    from mobaide.core import claude_launcher
+
+    monkeypatch.setattr(
+        claude_launcher, "_resolve_claude_binary", lambda: "claude"
+    )
+    claude_launcher._resolved_claude_bin = None
+    yield
+    claude_launcher._resolved_claude_bin = None
+
 TEST_JWT_SECRET = "test-secret-key-for-jwt-signing-do-not-use-in-prod"
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpass123"

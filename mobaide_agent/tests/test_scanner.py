@@ -308,6 +308,160 @@ class TestProcessIssueEmitsPerStepEvents:
         sess_mgr.create_session.assert_not_awaited()
 
 
+class TestClaudeBinaryNotFoundHandling:
+    """Coverage for the ``ClaudeBinaryNotFoundError`` path added to keep
+    journalctl from being flooded when the Claude CLI is missing.
+
+    Two layers cooperate:
+    1. ``_process_issue`` emits a ``session_spawn/failed`` issue event with
+       a stable ``error="Claude CLI not found"`` string and re-raises so
+       the outer cycle can short-circuit.
+    2. ``_scan_once`` catches the re-raised error, emits a single
+       operator-facing ``log`` event, and breaks out of the per-issue
+       loop — the next issue in the same scan cycle is NEVER processed,
+       which is the actual bug fix (without this break, every issue in
+       the cycle would re-spawn the same FileNotFoundError chain and
+       spam the journal).
+    """
+
+    @pytest.mark.asyncio
+    async def test_process_issue_emits_session_spawn_failed_and_reraises(
+        self, tmp_path,
+    ):
+        from mobaide.core import ClaudeBinaryNotFoundError
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+
+        launcher = AsyncMock()
+        launcher.build.side_effect = ClaudeBinaryNotFoundError(
+            searched_paths=["PATH:claude", "/home/test/.npm-global/bin/claude"],
+        )
+
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            session_manager=sess_mgr,
+            launcher=launcher,
+        )
+
+        with pytest.raises(ClaudeBinaryNotFoundError):
+            await inst._process_issue(_make_issue(identifier="CLA-MISS"))
+
+        steps = [
+            (e.payload["step"], e.payload["status"], e.payload.get("error"))
+            for e in inst._recent_events
+            if e.type == "issue"
+        ]
+        assert ("session_spawn", "failed", "Claude CLI not found") in steps
+        # State-machine completeness: ``worktree_create`` must reach a
+        # terminal status (``failed``) so consumers building off the event
+        # stream don't see a dangling ``started``. ``ok`` would be a lie
+        # since launcher.build short-circuited on argv resolution before
+        # any worktree was created.
+        assert ("worktree_create", "failed", "Claude CLI not found") in steps
+        assert ("worktree_create", "ok") not in [(s, st) for s, st, _ in steps]
+        sess_mgr.create_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_scan_once_breaks_loop_on_first_claude_cli_missing(
+        self, tmp_path,
+    ):
+        """The bug fix: after the first ``ClaudeBinaryNotFoundError`` in a
+        scan cycle, the remaining issues in that cycle must be skipped.
+        Without the break, the launcher would be invoked for every queued
+        issue and each invocation would spam the same error into journalctl.
+        """
+        from mobaide.core import ClaudeBinaryNotFoundError
+
+        first = _make_issue(issue_id="uuid-1", identifier="CLA-FIRST")
+        second = _make_issue(issue_id="uuid-2", identifier="CLA-SECOND")
+
+        client = AsyncMock()
+        client.get_auto_scan_issues.return_value = [first, second]
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+
+        launcher = AsyncMock()
+        launcher.build.side_effect = ClaudeBinaryNotFoundError(
+            searched_paths=["PATH:claude"],
+        )
+
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            session_manager=sess_mgr,
+            launcher=launcher,
+        )
+
+        await inst._scan_once()
+
+        # The launcher was invoked exactly once — for the first issue. The
+        # second issue must NOT have triggered another build attempt.
+        assert launcher.build.await_count == 1
+
+        # Issue events were only emitted for the first issue's identifier.
+        issue_identifiers = {
+            e.payload.get("identifier")
+            for e in inst._recent_events
+            if e.type == "issue"
+        }
+        assert "CLA-FIRST" in issue_identifiers
+        assert "CLA-SECOND" not in issue_identifiers
+
+    @pytest.mark.asyncio
+    async def test_scan_once_emits_actionable_log_when_claude_cli_missing(
+        self, tmp_path,
+    ):
+        """The operator-facing ``log`` event must mention both the
+        ``MOBAIDE_CLAUDE_BIN`` override and ``claude-code`` install hint so
+        a sysadmin reading the live event stream knows what to do —
+        otherwise the only signal is a generic 'aborted' phase event.
+        """
+        from mobaide.core import ClaudeBinaryNotFoundError
+
+        issue = _make_issue(identifier="CLA-LOG")
+
+        client = AsyncMock()
+        client.get_auto_scan_issues.return_value = [issue]
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+
+        launcher = AsyncMock()
+        launcher.build.side_effect = ClaudeBinaryNotFoundError(
+            searched_paths=["PATH:claude"],
+        )
+
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            session_manager=sess_mgr,
+            launcher=launcher,
+        )
+
+        await inst._scan_once()
+
+        log_events = [
+            e for e in inst._recent_events
+            if e.type == "log" and e.payload.get("level") == "error"
+        ]
+        cli_log_lines = [
+            e.payload.get("line", "") for e in log_events
+            if "Claude CLI not found" in e.payload.get("line", "")
+        ]
+        assert cli_log_lines, "expected an error-level log event mentioning Claude CLI"
+        line = cli_log_lines[0]
+        assert "MOBAIDE_CLAUDE_BIN" in line
+        assert "claude-code" in line
+
+
 class TestProcessIssueForwardsClientOptions:
     """The scanner's spawn path merges a ``ClaudeOptions`` from the client's
     stored preferences with per-issue fields (identifier/title). The

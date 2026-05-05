@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from mobaide.core import (
+    ClaudeBinaryNotFoundError,
     MaxSessionsError,
     SessionConfig,
     SessionManager,
@@ -72,6 +73,11 @@ async def create_session(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
+        )
+    except ClaudeBinaryNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Claude CLI not found: {exc}",
         )
     except FileNotFoundError as exc:
         # Use ``exc.filename`` (plain str) rather than ``str(exc)`` which

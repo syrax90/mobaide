@@ -184,6 +184,7 @@ EnvironmentFile=-$INSTALL_DIR/agent.env
 EnvironmentFile=-$INSTALL_DIR/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=$INSTALL_DIR
 Environment=HOME=$RUN_HOME
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:%h/.npm-global/bin:%h/.local/bin
 ExecStart=$VENV_DIR/bin/python -m mobaide
 Restart=on-failure
 RestartSec=5
