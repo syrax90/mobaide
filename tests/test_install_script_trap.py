@@ -133,26 +133,26 @@ def test_buggy_trap_does_emit_unbound_variable() -> None:
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEPLOY_INSTALL_SH = _REPO_ROOT / "deploy" / "install.sh"
-_DOCS_INSTALL_SH = _REPO_ROOT / "docs" / "get" / "install.sh"
 
 
-def test_install_scripts_pass_bash_syntax_check() -> None:
-    """Both install.sh copies must parse cleanly under ``bash -n``.
+def test_install_script_passes_bash_syntax_check() -> None:
+    """``deploy/install.sh`` must parse cleanly under ``bash -n``.
 
-    Cheap insurance against accidental syntax breakage from edits to
-    either copy. Protocol integrity (byte-identity) is enforced by
-    ``.github/workflows/protocol-integrity.yml`` separately; this test
-    catches the parse-error class of bug locally before push.
+    Cheap insurance against accidental syntax breakage. Catches the
+    parse-error class of bug locally before push.
     """
     assert _BASH is not None
-    for path in (_DEPLOY_INSTALL_SH, _DOCS_INSTALL_SH):
-        assert path.is_file(), f"missing install script: {path}"
-        proc = subprocess.run(
-            [_BASH, "-n", str(path)], capture_output=True, text=True
-        )
-        assert proc.returncode == 0, (
-            f"bash -n failed for {path}: {proc.stderr!r}"
-        )
+    assert _DEPLOY_INSTALL_SH.is_file(), (
+        f"missing install script: {_DEPLOY_INSTALL_SH}"
+    )
+    proc = subprocess.run(
+        [_BASH, "-n", str(_DEPLOY_INSTALL_SH)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (
+        f"bash -n failed for {_DEPLOY_INSTALL_SH}: {proc.stderr!r}"
+    )
 
 
 @pytest.mark.skipif(
@@ -249,43 +249,34 @@ ensure_ensurepip_available
     )
 
 
-@pytest.mark.parametrize(
-    "script_path,label",
-    [
-        (_DEPLOY_INSTALL_SH, "deploy/install.sh (canonical)"),
-        (_DOCS_INSTALL_SH, "docs/get/install.sh (mirror)"),
-    ],
-)
-def test_ensure_ensurepip_function_is_defined_in_both_copies(
-    script_path: Path, label: str
-) -> None:
-    """Both install.sh copies must define ``ensure_ensurepip_available``.
+def test_ensure_ensurepip_function_is_defined_in_install_script() -> None:
+    """``deploy/install.sh`` must define ``ensure_ensurepip_available``.
 
-    Protocol-integrity CI (``cmp -s`` between the two) catches drift,
-    but only after the function exists in *some* copy. This test pins
-    the contract one level deeper: the function must be present in
-    *each* file individually, so a future refactor that accidentally
-    drops it from one mirror is caught locally before push.
+    Pins the contract that the function exists in the canonical install
+    script, so a future refactor that accidentally drops it is caught
+    locally before push.
     """
     assert _BASH is not None
-    assert script_path.is_file(), f"missing install script: {script_path}"
+    assert _DEPLOY_INSTALL_SH.is_file(), (
+        f"missing install script: {_DEPLOY_INSTALL_SH}"
+    )
     proc = subprocess.run(
         [
             _BASH,
             "-c",
-            f"grep -c '^ensure_ensurepip_available()' '{script_path.as_posix()}'",
+            f"grep -c '^ensure_ensurepip_available()' '{_DEPLOY_INSTALL_SH.as_posix()}'",
         ],
         capture_output=True,
         text=True,
     )
     assert proc.returncode == 0, (
-        f"grep failed for {label}: stdout={proc.stdout!r} "
+        f"grep failed for {_DEPLOY_INSTALL_SH}: stdout={proc.stdout!r} "
         f"stderr={proc.stderr!r}"
     )
     count = int(proc.stdout.strip() or "0")
     assert count == 1, (
         f"expected exactly one ensure_ensurepip_available() definition "
-        f"in {label}, found {count}"
+        f"in {_DEPLOY_INSTALL_SH}, found {count}"
     )
 
 

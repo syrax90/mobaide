@@ -23,7 +23,7 @@ dedicated workflow under `.github/workflows/`:
 | Tag prefix | Component | Workflow | What it produces |
 |------------|-----------|----------|------------------|
 | `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is computed from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
-| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release **published into the public sibling repo `$RELEASES_REPO`** (the source repo is private, so anonymous installs cannot reach release URLs there), an anonymous reachability gate (1-byte ranged GET, with retries to absorb CDN-propagation lag) over every URL in the manifest, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. The workflow also re-syncs `docs/get/install.sh` and `docs/get/install.ps1` from `deploy/` so GitHub Pages stays current. |
+| `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release **published into the public sibling repo `$RELEASES_REPO`** (the source repo is private, so anonymous installs cannot reach release URLs there), an anonymous reachability gate (1-byte ranged GET, with retries to absorb CDN-propagation lag) over every URL in the manifest, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. |
 | `server-vX.Y.Z` | `central_server` | `release-server.yml` | Wheel + Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy-central.ps1` or `docker compose pull && up -d` against the prod compose file). |
 | `proto-vN` | Wire contract | `release-protocol.yml` | Re-runs the lockstep envelope-integrity check defensively, then publishes a GitHub Release named `proto-vN` with the matching PROTOCOL.md section as the body and a diff vs the previous proto tag appended. Must change **both** `mobaide_agent/.../envelope.py` AND `central_server/.../envelope.py` in lockstep — `protocol-integrity.yml` rejects drift on every PR. |
 
@@ -84,7 +84,7 @@ Required CI secrets:
 | `CENTRAL_SERVER_RELEASE_TOKEN` | `release-agent.yml` | Bearer token for `POST /api/internal/agent_manifest`. |
 | `CENTRAL_SERVER_URL` | `release-agent.yml` | Base URL of the production `central_server` that hosts the manifest. |
 | `RELEASES_REPO_TOKEN` | `release-agent.yml` | Fine-grained PAT scoped to the **public releases repo** (e.g. `syrax90/mobaide-agent-releases`) with `Contents: Read and write`. Used by `softprops/action-gh-release@v2` to publish the release into that repo. |
-| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent.yml` | PAT with `contents:write` + `workflow` scopes. Required only to chain release-please tag pushes into the downstream `release-*` workflows and for the agent release's Pages re-sync commit on `main` to chain into `publish-gh-pages.yml`. Without it, `workflow_dispatch` on `publish-gh-pages.yml` is the documented fallback. |
+| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml` | PAT with `contents:write` + `workflow` scopes. Required only to chain release-please tag pushes into the downstream `release-*` workflows; without it, the operator pushes the tag manually after merging the release-PR. |
 
 Repo **variables** (not secrets — values appear in workflow logs and are not sensitive):
 
@@ -400,11 +400,10 @@ Windows (elevated PowerShell):
 irm https://get.mobaide.com/install.ps1 | iex
 ```
 
-Both scripts are mirrored from `deploy/install.sh` and `deploy/install.ps1`
-into `docs/get/` on `main`. From there an operator forwards them to the
-root of the `gh-pages` branch (the actual GitHub Pages source for
-`get.mobaide.com`) — see [release-publishing.md](release-publishing.md)
-for the runbook. They:
+Both scripts are auto-published from `deploy/` to the root of the
+`gh-pages` branch (the actual GitHub Pages source for
+`get.mobaide.com`) by `publish-gh-pages.yml` — see
+[release-publishing.md](release-publishing.md) for the runbook. They:
 
 1. Detect the OS and locate / create `<prefix>` (`/opt/mobaide`,
    `/usr/local/mobaide`, or `%ProgramFiles%\MobaideAgent`).
@@ -508,11 +507,7 @@ The Android client has three distinct update paths that work together:
 3. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
    files, it must modify the other. Comparison uses
    `${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}`
-   so the check is base-branch-agnostic. The same diff guard also asserts
-   that `deploy/install.{sh,ps1}` and `docs/get/install.{sh,ps1}` are
-   byte-identical — Pages serves the latter, and any drift between the
-   canonical source and the published mirror is flagged before the next
-   release re-syncs them.
+   so the check is base-branch-agnostic.
 
 This is the safety net that lets the two component packages duplicate
 `envelope.py` (a deliberate constraint — the two packages are independent
@@ -554,9 +549,7 @@ own integration tests.
   central server and per-machine agents (legacy from-source layout, new
   versioned `releases/<v>/` layout, troubleshooting checklist).
 * [docs/release-publishing.md](release-publishing.md) — install-script
-  publishing pipeline (`deploy/` → `docs/get/` → `gh-pages` →
-  `get.mobaide.com`) and the manual gh-pages sync runbook.
-* [docs/get/README.md](get/README.md) — short note next to the
-  install-script mirror, with the trust-key inline-pinning command.
+  publishing pipeline (`deploy/` → `gh-pages` → `get.mobaide.com`) and
+  the manual gh-pages sync runbook.
 * `android/CHANGELOG.md`, `mobaide_agent/CHANGELOG.md`,
   `central_server/CHANGELOG.md` — per-tag release notes.

@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "docs/get/install.sh"
-      - "docs/get/install.ps1"
+      - "deploy/install.sh"
+      - "deploy/install.ps1"
   workflow_dispatch:
 
 concurrency:
@@ -31,8 +31,8 @@ jobs:
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
           git fetch origin main --depth=1
-          git show origin/main:docs/get/install.sh  > install.sh
-          git show origin/main:docs/get/install.ps1 > install.ps1
+          git show origin/main:deploy/install.sh  > install.sh
+          git show origin/main:deploy/install.ps1 > install.ps1
 
           if git diff --quiet -- install.sh install.ps1; then
             echo "gh-pages install scripts already match main — nothing to publish."
