@@ -1,4 +1,9 @@
-from .claude_launcher import ClaudeLauncher, ClaudeOptions, LaunchSpec
+from .claude_launcher import (
+    ClaudeBinaryNotFoundError,
+    ClaudeLauncher,
+    ClaudeOptions,
+    LaunchSpec,
+)
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
 from .projects_config import ProjectConfig
 from .projects_store import (
@@ -21,6 +26,7 @@ __all__ = [
     "TerminalSession",
     "SessionManager",
     "MaxSessionsError",
+    "ClaudeBinaryNotFoundError",
     "ClaudeLauncher",
     "ClaudeOptions",
     "LaunchSpec",

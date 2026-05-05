@@ -12,6 +12,15 @@
   <dict>
     <key>MOBAIDE_AGENT_PREFIX</key>
     <string>/usr/local/mobaide</string>
+    <!--
+      launchd uses a minimal default PATH that omits npm/homebrew/user-local
+      bins where the Claude Code CLI typically lives. Extend it so the
+      runtime resolver and any subprocess the CLI shells out to can find
+      both Apple Silicon homebrew (/opt/homebrew/bin) and Intel
+      (/usr/local/bin) installs as well as user-installed npm.
+    -->
+    <key>PATH</key>
+    <string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.local/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

@@ -22,6 +22,7 @@ import orjson
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
 from mobaide.core.models import SessionConfig, SessionEvent, SessionState
 from mobaide.core.projects_store import safe_path_exists
 
@@ -722,6 +723,18 @@ class RelayClient:
                 "session_id": session.session_id,
                 "pid": session.pid,
             }
+        except ClaudeBinaryNotFoundError as exc:
+            logger.warning(
+                "relay.create_session_claude_cli_missing session_id=%s",
+                session_id,
+            )
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": f"Claude CLI not found: {exc}",
+                "claude_cli_missing": True,
+                "searched_paths": list(exc.searched_paths),
+            }
         except FileNotFoundError as exc:
             # Mirror the HTTP router: interpolate ``exc.filename`` as a plain
             # string rather than ``str(exc)``, which would embed
@@ -818,6 +831,21 @@ class RelayClient:
                 "request_id": request_id,
                 "status": result.get("status", 200),
                 "body": result.get("body"),
+            }
+        except ClaudeBinaryNotFoundError as exc:
+            logger.warning(
+                "relay.proxy_request_claude_cli_missing path=%s",
+                path,
+            )
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 503,
+                "body": {
+                    "detail": f"Claude CLI not found: {exc}",
+                    "claude_cli_missing": True,
+                    "searched_paths": list(exc.searched_paths),
+                },
             }
         except FileNotFoundError as exc:
             # Same rationale as ``_handle_create_session``: mobile clients

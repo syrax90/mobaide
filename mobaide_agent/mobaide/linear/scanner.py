@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover
     def bind_request_context(**kwargs): pass
 
 from mobaide.core import (
+    ClaudeBinaryNotFoundError,
     ClaudeLauncher,
     ClaudeOptions,
     ProjectConfig,
@@ -268,7 +269,26 @@ class AutoScanInstance:
         if issues:
             logger.info("Found %d matching issue(s) to process", len(issues))
             for issue in issues:
-                await self._process_issue(issue)
+                try:
+                    await self._process_issue(issue)
+                except ClaudeBinaryNotFoundError:
+                    logger.error(
+                        "autoscan.aborting_cycle reason=claude_cli_missing project=%s",
+                        self._project_name,
+                    )
+                    self._emit(
+                        "log",
+                        {
+                            "line": (
+                                "Aborting scan cycle: Claude CLI not found "
+                                "on PATH (set MOBAIDE_CLAUDE_BIN or install "
+                                "claude-code)."
+                            ),
+                            "level": "error",
+                            "ansi": False,
+                        },
+                    )
+                    break
                 processed_count += 1
         else:
             logger.info("No matching AutoPipeline issues found")
@@ -350,6 +370,30 @@ class AutoScanInstance:
             )
             self._last_activity_at = time.time()
             return
+        except ClaudeBinaryNotFoundError:
+            # ``launcher.build`` resolves the binary BEFORE creating the
+            # worktree, so no orphan directory is on disk by the time we
+            # land here. Emit a terminal ``worktree_create:failed`` so the
+            # event stream's state machine has no dangling ``started``,
+            # then ``session_spawn:failed`` for consumers that key off
+            # that step, and re-raise so the outer ``_scan_once`` aborts.
+            self._emit_issue(
+                issue,
+                "worktree_create",
+                "failed",
+                error="Claude CLI not found",
+            )
+            self._emit_issue(
+                issue,
+                "session_spawn",
+                "failed",
+                error="Claude CLI not found",
+            )
+            logger.error(
+                "autoscan.claude_cli_missing project=%s", self._project_name,
+            )
+            self._last_activity_at = time.time()
+            raise
         except Exception as exc:
             self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
             logger.error(

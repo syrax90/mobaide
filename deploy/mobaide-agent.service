@@ -37,6 +37,11 @@ EnvironmentFile=-/opt/mobaide/agent.env
 EnvironmentFile=-/opt/mobaide/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=/opt/mobaide
 Environment=HOME=__RUN_HOME__
+# systemd's default PATH (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin)
+# does not include npm-global or user-local bins where the Claude Code CLI
+# typically lives. %h is systemd's specifier for the User='s $HOME and is
+# expanded at unit-load time.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:%h/.npm-global/bin:%h/.local/bin
 ExecStart=/usr/bin/env bash -c '/opt/mobaide/releases/$(cat /opt/mobaide/current_version)/venv/bin/python -m mobaide.launcher'
 Restart=on-failure
 RestartSec=5

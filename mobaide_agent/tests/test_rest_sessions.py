@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+from mobaide.core import ClaudeBinaryNotFoundError
+
 
 class TestCreateSession:
     async def test_create_returns_201(self, client, auth_headers):
@@ -243,6 +245,36 @@ class TestCreateSessionProjectPathErrors:
         # reading the raw response bytes, so one literal backslash in the
         # detail string must appear as ``\\`` in the wire source).
         assert "D:\\\\raw\\\\backslash\\\\dir" in resp.text
+
+    async def test_claude_cli_missing_returns_503_with_clean_detail(
+        self, app, client, auth_headers,
+    ):
+        """When the Claude CLI is not installed (or not on PATH), the router
+        must distinguish that from a missing project path: it returns 503
+        Service Unavailable with a detail starting ``Claude CLI not found:``
+        — never the misleading 400 ``Project path not found: claude``."""
+        async def _raise_cli_missing(*args, **kwargs):
+            raise ClaudeBinaryNotFoundError(
+                searched_paths=[
+                    "PATH:claude",
+                    "/home/test/.npm-global/bin/claude",
+                ]
+            )
+
+        app.state.session_manager.create_session = _raise_cli_missing
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={},
+        )
+
+        assert resp.status_code == 503
+        detail = resp.json()["detail"]
+        assert detail.startswith("Claude CLI not found:")
+        assert "npm install -g @anthropic-ai/claude-code" in detail
+        assert "MOBAIDE_CLAUDE_BIN" in detail
+        assert "\\\\\\\\" not in resp.text
 
 
 class TestListSessions:

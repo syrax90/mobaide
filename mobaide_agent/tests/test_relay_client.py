@@ -33,6 +33,7 @@ from mobaide.relay.envelope import (
     decode,
     encode,
 )
+from mobaide.core import ClaudeBinaryNotFoundError
 from mobaide.core.models import SessionState
 
 
@@ -769,6 +770,35 @@ class TestHandleCreateSessionPathErrors:
         assert resp["type"] == "session_create_failed"
         assert resp["error"] == "I/O error"  # no trailing ": "
 
+    async def test_claude_cli_missing_emits_claude_cli_missing_discriminator(
+        self, client, mock_session_manager
+    ):
+        """``ClaudeBinaryNotFoundError`` from the spawn path must be mapped
+        to ``session_create_failed`` with ``claude_cli_missing: true`` so
+        the mobile client can render an "install Claude CLI" affordance
+        instead of the generic "project path not found" toast."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=ClaudeBinaryNotFoundError(
+                searched_paths=["PATH:claude", "/home/test/.npm-global/bin/claude"]
+            ),
+        )
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "no-cli-sess"}
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "no-cli-sess"
+        assert resp["claude_cli_missing"] is True
+        assert resp["error"].startswith("Claude CLI not found:")
+        assert "npm install -g @anthropic-ai/claude-code" in resp["error"]
+        assert "MOBAIDE_CLAUDE_BIN" in resp["error"]
+        assert resp["searched_paths"] == [
+            "PATH:claude",
+            "/home/test/.npm-global/bin/claude",
+        ]
+
 
 # -- _handle_proxy_request: OSError/FileNotFoundError branches -----------------
 
@@ -854,6 +884,41 @@ class TestHandleProxyRequestPathErrors:
         wire_json = payload.decode("utf-8")
         assert r"Permission denied: D:\\locked" in wire_json
         assert r"D:\\\\locked" not in wire_json
+
+    async def test_proxy_claude_cli_missing_returns_503_with_discriminator(
+        self, client, mock_session_manager
+    ):
+        """``POST /api/sessions`` proxied through the relay must map
+        ``ClaudeBinaryNotFoundError`` to status=503 (not 400 / not 500) and
+        include ``claude_cli_missing: true`` in the body so the mobile
+        client can render a specialized error UI."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=ClaudeBinaryNotFoundError(
+                searched_paths=["PATH:claude", "/usr/local/bin/claude"]
+            ),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-cli-missing",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-cli-missing"
+        assert resp["status"] == 503
+        assert resp["body"]["claude_cli_missing"] is True
+        assert resp["body"]["detail"].startswith("Claude CLI not found:")
+        assert "npm install -g @anthropic-ai/claude-code" in resp["body"]["detail"]
+        assert resp["body"]["searched_paths"] == [
+            "PATH:claude",
+            "/usr/local/bin/claude",
+        ]
 
     async def test_proxy_generic_exception_still_returns_500(
         self, client, mock_session_manager
