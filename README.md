@@ -17,6 +17,7 @@ Mobaide bridges this gap with a client-agent architecture:
 ## Key Features
 
 - **Remote Terminal** — Full bidirectional terminal I/O with Claude Code sessions from your phone
+- **Terminal Display Modes** — Settings toggle between `Full` (auto-fits viewport, recomputes columns on rotation) and `Static` (user-chosen column count 60–240, default 120; surface wider than viewport, pan horizontally)
 - **Multi-Session** — Run and switch between up to 16 concurrent Claude sessions
 - **Auto Scan Mode** — Polls Linear for issues labeled "AutoPipeline", auto-creates git worktrees, and launches Claude sessions to work on them
 - **Reconnection** — Scrollback buffer (10K lines) per session ensures seamless reconnect after network drops

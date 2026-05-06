@@ -5,6 +5,10 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
+import com.mobaide.app.data.local.TerminalDisplayConfig
+import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.network.TerminalFrame
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
@@ -22,9 +26,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okio.ByteString
@@ -39,7 +46,18 @@ class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
     private val templatesRepository: TemplatesRepository,
+    preferencesStore: PreferencesStore,
 ) : ViewModel() {
+
+    val displayConfig: StateFlow<TerminalDisplayConfig> = combine(
+        preferencesStore.terminalDisplayMode,
+        preferencesStore.terminalStaticColumns,
+    ) { mode, cols -> TerminalDisplayConfig(mode, cols) }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            TerminalDisplayConfig(TerminalDisplayMode.Full, TERMINAL_STATIC_COLUMNS_DEFAULT),
+        )
 
     private val sessionId: String = savedStateHandle["sessionId"]
         ?: throw IllegalArgumentException("sessionId required")
@@ -338,7 +356,9 @@ class TerminalViewModel @Inject constructor(
         if (rows == lastResizeRows && cols == lastResizeCols) return
         lastResizeRows = rows
         lastResizeCols = cols
-        session.updateSize(cols, rows, 12, 24)
+        // TerminalView.updateSize() already calls session.updateSize(...) with real
+        // renderer metrics synchronously before this callback fires; calling it again here
+        // with stub (12, 24) metrics would clobber the correct values.
         resizeJob?.cancel()
         resizeJob = viewModelScope.launch {
             delay(100)

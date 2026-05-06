@@ -70,6 +70,7 @@ fun TerminalScreen(
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
     val requestInputFocus by viewModel.requestInputFocus.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
+    val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showTemplatesPicker by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
@@ -132,6 +133,7 @@ fun TerminalScreen(
                     TerminalSurfaceView(
                         session = viewModel.session,
                         sessionCallback = viewModel.sessionCallback,
+                        displayConfig = displayConfig,
                         onResize = { rows, cols ->
                             if (isConnected) viewModel.resize(rows, cols)
                         },
