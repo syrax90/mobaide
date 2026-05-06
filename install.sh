@@ -19,6 +19,9 @@ set -euo pipefail
 : "${MOBAIDE_AGENT_PREFIX:=}"
 : "${MOBAIDE_AGENT_MANIFEST_URL:=https://api.mobaide.com/api/v1/agent/manifest.json}"
 : "${MOBAIDE_AGENT_TRUST_KEY_B64:=}"
+# Self-host / loopback escape hatch for the trust-key fetch. Defaults to "0"
+# (HTTPS-only); set to "1" only on a trusted local network.
+: "${MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH:=0}"
 # The agent runs as a real user (not a system account) so it can read/write
 # their own /home/<user>/<repo> source trees. With `sudo curl|bash` this
 # resolves from $SUDO_USER; override explicitly with MOBAIDE_RUN_AS_USER for
@@ -61,7 +64,7 @@ require_root_when_writing_system_dir() {
         info "Installing to $MOBAIDE_AGENT_PREFIX requires root — re-executing under sudo."
         info "(With 'curl|bash', sudo applies only to curl; auto-elevating now.)"
         exec sudo \
-            --preserve-env=MOBAIDE_AGENT_PREFIX,MOBAIDE_AGENT_MANIFEST_URL,MOBAIDE_AGENT_TRUST_KEY_B64,MOBAIDE_RUN_AS_USER,MOBAIDE_AGENT_INSTALL_URL \
+            --preserve-env=MOBAIDE_AGENT_PREFIX,MOBAIDE_AGENT_MANIFEST_URL,MOBAIDE_AGENT_TRUST_KEY_B64,MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH,MOBAIDE_RUN_AS_USER,MOBAIDE_AGENT_INSTALL_URL \
             bash -c 'curl -fsSL "$1" | bash' _ "$MOBAIDE_AGENT_INSTALL_URL"
     fi
 
@@ -163,12 +166,115 @@ fetch_manifest() {
     fi
 }
 
+# Round-trip validate that ``$MOBAIDE_AGENT_TRUST_KEY_B64`` decodes to a
+# 32-byte Ed25519 public key. Used by both the env-var-pinned path and the
+# central-server-fetched path so a malformed key surfaces immediately at
+# install time as "your key is malformed" rather than later as a confusing
+# "manifest signature does not verify".
+_validate_trust_key_or_fail() {
+    python3 - "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
+import base64, sys
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+key_b64 = sys.argv[1]
+try:
+    Ed25519PublicKey.from_public_bytes(base64.b64decode(key_b64, validate=True))
+except Exception as exc:
+    sys.exit(f"trust key is not a valid base64 Ed25519 public key: {exc}")
+PY
+}
+
+# Trust-key bootstrap: ensure ``$MOBAIDE_AGENT_TRUST_KEY_B64`` is set before
+# fetching the manifest. If the operator pinned a value, validate and use
+# it. Otherwise fetch the manifest-signing public key from the
+# central_server endpoint (host derived from
+# ``$MOBAIDE_AGENT_MANIFEST_URL``). Fail-closed if neither path yields a
+# valid key — never silently ship an install whose auto-updater can't
+# verify rollouts.
+#
+# Two security guards on the fetch path:
+# * User-info in ``$MOBAIDE_AGENT_MANIFEST_URL`` (e.g.
+#   ``https://api.mobaide.com@evil.example/...``) is rejected — would
+#   otherwise DNS-resolve to ``evil.example`` and pin an attacker key.
+# * ``http://`` schemes refused unless
+#   ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`` is set — a passive
+#   on-path attacker could substitute the public key over cleartext.
+bootstrap_trust_key() {
+    if [ -n "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
+        info "Using operator-pinned trust key (MOBAIDE_AGENT_TRUST_KEY_B64)."
+        _validate_trust_key_or_fail
+        return 0
+    fi
+
+    # Parse $MOBAIDE_AGENT_MANIFEST_URL into a clean scheme://host[:port]
+    # base. The Python heredoc rejects user-info up front (urlparse's
+    # ``netloc`` would otherwise smuggle ``user@host`` into the trust-key
+    # URL and DNS-resolve to the wrong host) and rebuilds the origin from
+    # ``hostname`` + optional ``port`` so the netloc surface is fully
+    # under our control.
+    local origin
+    origin="$(printf '%s\n' "$MOBAIDE_AGENT_MANIFEST_URL" | python3 -c '
+import os, sys, urllib.parse as p
+
+raw = sys.stdin.read().strip()
+u = p.urlparse(raw)
+if not u.scheme or not u.hostname:
+    sys.exit(f"MOBAIDE_AGENT_MANIFEST_URL is not a valid URL: {raw!r}")
+if u.username is not None or u.password is not None:
+    sys.exit(
+        f"MOBAIDE_AGENT_MANIFEST_URL must not contain user-info "
+        f"(user@/user:pass@): {raw!r}"
+    )
+scheme = u.scheme.lower()
+if scheme not in ("http", "https"):
+    sys.exit(
+        f"MOBAIDE_AGENT_MANIFEST_URL has unsupported scheme {scheme!r}: {raw!r}"
+    )
+if scheme == "http" and os.environ.get(
+    "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
+) != "1":
+    sys.exit(
+        f"Trust-key fetch over cleartext http:// is refused by default "
+        f"(MOBAIDE_AGENT_MANIFEST_URL={raw!r}). Set "
+        f"MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1 to override "
+        f"(only safe on a trusted local network, e.g. self-host loopback)."
+    )
+host = u.hostname
+if ":" in host and not host.startswith("["):
+    host = f"[{host}]"
+if u.port is not None:
+    host = f"{host}:{u.port}"
+print(f"{scheme}://{host}")
+')"
+    if [ -z "$origin" ]; then
+        fail "Could not derive a trust-key endpoint from MOBAIDE_AGENT_MANIFEST_URL=$MOBAIDE_AGENT_MANIFEST_URL"
+    fi
+
+    local trust_url="${origin}/api/v1/agent/trust_key"
+    info "Fetching trust key from $trust_url"
+    local body
+    if ! body="$(curl -fsSL --max-time 30 "$trust_url")"; then
+        fail "Could not bootstrap trust key from $trust_url.
+Set MOBAIDE_AGENT_TRUST_KEY_B64=<base64-ed25519> explicitly,
+or ensure central_server has MANIFEST_SIGNING_PUBLIC_KEY configured.
+See docs/versioning-and-updates.md → Trust-key bootstrap."
+    fi
+    MOBAIDE_AGENT_TRUST_KEY_B64="$(printf '%s' "$body" | python3 -c 'import json, sys; print(json.load(sys.stdin)["public_key_b64"].strip())')"
+    if [ -z "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
+        fail "Trust-key endpoint returned an empty public_key_b64."
+    fi
+    # Round-trip validate fail-closed BEFORE any files land on disk so a
+    # misconfigured central_server can't smuggle in a malformed key.
+    _validate_trust_key_or_fail
+    info "Trust key bootstrapped from central_server."
+}
+
 verify_manifest_signature() {
     local manifest_path="$1"
     if [ -z "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
-        warn "MOBAIDE_AGENT_TRUST_KEY_B64 not set — skipping manifest signature check."
-        warn "First-install bootstrap; pin the public key in production install."
-        return 0
+        # ``bootstrap_trust_key`` should have populated this — defensive check
+        # only fires if a future refactor reorders the call sites.
+        fail "Internal error: trust key not bootstrapped before signature verification."
     fi
     info "Verifying manifest signature"
     python3 - "$manifest_path" "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
@@ -286,10 +392,15 @@ PY
 }
 
 write_trust_key() {
-    if [ -n "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
-        mkdir -p "${MOBAIDE_AGENT_PREFIX}/trust"
-        printf '%s\n' "$MOBAIDE_AGENT_TRUST_KEY_B64" > "${MOBAIDE_AGENT_PREFIX}/trust/central_server.pub"
+    # Always called after ``bootstrap_trust_key`` has populated
+    # ``$MOBAIDE_AGENT_TRUST_KEY_B64``, so the file is always written.
+    # The agent's auto-updater requires this file at runtime
+    # (mobaide.agent.install_paths.read_trust_public_key).
+    if [ -z "$MOBAIDE_AGENT_TRUST_KEY_B64" ]; then
+        fail "Internal error: write_trust_key called without a bootstrapped key."
     fi
+    mkdir -p "${MOBAIDE_AGENT_PREFIX}/trust"
+    printf '%s\n' "$MOBAIDE_AGENT_TRUST_KEY_B64" > "${MOBAIDE_AGENT_PREFIX}/trust/central_server.pub"
 }
 
 write_agent_env() {
@@ -474,6 +585,11 @@ main() {
     ensure_ensurepip_available
 
     mkdir -p "$MOBAIDE_AGENT_PREFIX"
+    # Order: bootstrap key (env var or central_server fetch) → pin to disk
+    # so the agent picks it up at runtime → fetch manifest → verify it
+    # against the same key → stage. ``bootstrap_trust_key`` fails the
+    # install with an actionable message if neither path yields a key.
+    bootstrap_trust_key
     write_trust_key
 
     local manifest

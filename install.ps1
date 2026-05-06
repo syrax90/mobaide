@@ -25,6 +25,10 @@ $Script:ManifestUrl = if ($env:MOBAIDE_AGENT_MANIFEST_URL) {
     "https://api.mobaide.com/api/v1/agent/manifest.json"
 }
 $Script:TrustKeyB64 = $env:MOBAIDE_AGENT_TRUST_KEY_B64
+# Self-host / loopback escape hatch for the trust-key fetch. Defaults to
+# off (HTTPS-only); set MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1
+# only on a trusted local network.
+$Script:AllowInsecureTrustKeyFetch = ($env:MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH -eq "1")
 $Script:ServiceName = "MobaideAgent"
 
 function Write-Info  { param($Msg) Write-Host "[INFO]  $Msg" }
@@ -56,11 +60,99 @@ function Get-Manifest {
     Invoke-WebRequest -Uri $Script:ManifestUrl -OutFile $ManifestPath -UseBasicParsing
 }
 
+# Round-trip validate that $Script:TrustKeyB64 decodes to a 32-byte Ed25519
+# public key. Used by both the env-var-pinned path and the
+# central-server-fetched path so a malformed key surfaces immediately at
+# install time as "your key is malformed" rather than later as a confusing
+# "manifest signature does not verify".
+function Confirm-TrustKey {
+    param($PythonExe)
+    $validateScript = @'
+import base64, sys
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+key_b64 = sys.argv[1]
+try:
+    Ed25519PublicKey.from_public_bytes(base64.b64decode(key_b64, validate=True))
+except Exception as exc:
+    sys.exit(f"trust key is not a valid base64 Ed25519 public key: {exc}")
+'@
+    & $PythonExe -c $validateScript $Script:TrustKeyB64
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Trust key validation failed."
+    }
+}
+
+# Trust-key bootstrap: ensure $Script:TrustKeyB64 is set before fetching the
+# manifest. If the operator pinned via MOBAIDE_AGENT_TRUST_KEY_B64, validate
+# and use it. Otherwise fetch the manifest-signing public key from the
+# central_server endpoint (host derived from $Script:ManifestUrl).
+# Fail-closed if neither path yields a key — never silently ship an install
+# whose auto-updater can't verify rollouts.
+#
+# Two security guards on the fetch path:
+# * User-info in $Script:ManifestUrl is rejected (.NET's [System.Uri] strips
+#   it from .Authority, so we'd silently retarget — explicitly check
+#   .UserInfo before building the origin).
+# * http:// schemes refused unless
+#   MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1 is set.
+function Initialize-TrustKey {
+    param($PythonExe)
+    if ($Script:TrustKeyB64) {
+        Write-Info "Using operator-pinned trust key (MOBAIDE_AGENT_TRUST_KEY_B64)."
+        Confirm-TrustKey -PythonExe $PythonExe
+        return
+    }
+    $manifestUri = [System.Uri]$Script:ManifestUrl
+    if ($manifestUri.UserInfo) {
+        Write-Fail "MOBAIDE_AGENT_MANIFEST_URL must not contain user-info (user@/user:pass@): $Script:ManifestUrl"
+    }
+    $scheme = $manifestUri.Scheme.ToLowerInvariant()
+    if ($scheme -ne "http" -and $scheme -ne "https") {
+        Write-Fail "MOBAIDE_AGENT_MANIFEST_URL has unsupported scheme '$scheme': $Script:ManifestUrl"
+    }
+    if ($scheme -eq "http" -and -not $Script:AllowInsecureTrustKeyFetch) {
+        Write-Fail @"
+Trust-key fetch over cleartext http:// is refused by default
+(MOBAIDE_AGENT_MANIFEST_URL=$Script:ManifestUrl). Set
+MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1 to override (only safe on
+a trusted local network, e.g. self-host loopback).
+"@
+    }
+    $origin = "$($manifestUri.Scheme)://$($manifestUri.Authority)"
+    $trustUrl = "$origin/api/v1/agent/trust_key"
+    Write-Info "Fetching trust key from $trustUrl"
+    try {
+        $response = Invoke-WebRequest -Uri $trustUrl -UseBasicParsing -TimeoutSec 30
+    } catch {
+        Write-Fail @"
+Could not bootstrap trust key from ${trustUrl}: $($_.Exception.Message)
+Set MOBAIDE_AGENT_TRUST_KEY_B64=<base64-ed25519> explicitly,
+or ensure central_server has MANIFEST_SIGNING_PUBLIC_KEY configured.
+See docs/versioning-and-updates.md -> Trust-key bootstrap.
+"@
+    }
+    try {
+        $payload = $response.Content | ConvertFrom-Json
+    } catch {
+        Write-Fail "Trust-key endpoint returned non-JSON: $($_.Exception.Message)"
+    }
+    $key = ($payload.public_key_b64 | Out-String).Trim()
+    if (-not $key) {
+        Write-Fail "Trust-key endpoint returned an empty public_key_b64."
+    }
+    $Script:TrustKeyB64 = $key
+    # Round-trip validate fail-closed BEFORE any files land on disk so a
+    # misconfigured central_server can't smuggle in a malformed key.
+    Confirm-TrustKey -PythonExe $PythonExe
+    Write-Info "Trust key bootstrapped from central_server."
+}
+
 function Test-ManifestSignature {
     param($PythonExe, $ManifestPath)
     if (-not $Script:TrustKeyB64) {
-        Write-Warn "MOBAIDE_AGENT_TRUST_KEY_B64 not set — skipping signature check (first-install bootstrap)."
-        return
+        # Initialize-TrustKey should have populated this; defensive only.
+        Write-Fail "Internal error: trust key not bootstrapped before signature verification."
     }
     Write-Info "Verifying manifest signature"
     $verifyScript = @'
@@ -174,7 +266,12 @@ print(wheel)
 }
 
 function Write-TrustKey {
-    if (-not $Script:TrustKeyB64) { return }
+    # Always called after Initialize-TrustKey, so $Script:TrustKeyB64 is
+    # always set. The agent's auto-updater requires this file at runtime
+    # (mobaide.agent.install_paths.read_trust_public_key).
+    if (-not $Script:TrustKeyB64) {
+        Write-Fail "Internal error: Write-TrustKey called without a bootstrapped key."
+    }
     $trustDir = Join-Path $Script:Prefix "trust"
     New-Item -ItemType Directory -Path $trustDir -Force | Out-Null
     Set-Content -Path (Join-Path $trustDir "central_server.pub") -Value $Script:TrustKeyB64 -NoNewline
@@ -237,9 +334,15 @@ function Write-Completion {
 function Main {
     Write-Info "Installing mobaide_agent into $Script:Prefix"
     New-Item -ItemType Directory -Path $Script:Prefix -Force | Out-Null
-    Write-TrustKey
 
     $python = Test-Python
+    # Order: bootstrap key (env var or central_server fetch) -> pin to disk
+    # so the agent picks it up at runtime -> fetch manifest -> verify it
+    # against the same key -> stage. Initialize-TrustKey fails the install
+    # with an actionable message if neither path yields a key.
+    Initialize-TrustKey -PythonExe $python
+    Write-TrustKey
+
     $manifest = New-TemporaryFile
     try {
         Get-Manifest -PythonExe $python -ManifestPath $manifest
