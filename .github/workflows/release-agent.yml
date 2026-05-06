@@ -49,7 +49,14 @@ jobs:
 
       - name: Build wheel + sdist
         working-directory: mobaide_agent
-        run: uv build --wheel --sdist
+        # `rm -rf dist/` is defense-in-depth: `uv build` appends to dist/
+        # rather than wiping it, so any stale wheel that slipped past
+        # .gitignore would ship instead of the freshly-built one (the
+        # checksum step's filename pin would catch it, but we want the
+        # build to be deterministic regardless).
+        run: |
+          rm -rf dist/
+          uv build --wheel --sdist
 
       - name: Create source tarball
         working-directory: mobaide_agent
@@ -58,9 +65,29 @@ jobs:
       - name: Compute checksums
         id: checksum
         working-directory: mobaide_agent
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          tarball="mobaide-agent-${{ steps.version.outputs.version }}.tar.gz"
-          wheel=$(ls dist/*.whl | head -n 1)
+          # Pick the wheel by exact tag-derived filename rather than
+          # `ls dist/*.whl | head -n 1` (which sorts lexicographically and
+          # would happily pick mobaide_agent-0.1.0-... over -0.1.1-...).
+          # If pyproject.toml's version disagrees with the tag, this fails
+          # loudly here instead of silently uploading the wrong wheel.
+          wheel="dist/mobaide_agent-${VERSION}-py3-none-any.whl"
+          tarball="mobaide-agent-${VERSION}.tar.gz"
+
+          if [[ ! -f "$wheel" ]]; then
+            echo "::error::Expected wheel '$wheel' was not built. pyproject.toml version probably does not match tag '${VERSION}'."
+            ls -la dist/
+            exit 1
+          fi
+          extra=$(ls dist/*.whl 2>/dev/null | grep -v -F "$wheel" || true)
+          if [[ -n "$extra" ]]; then
+            echo "::error::Unexpected extra wheel(s) in dist/:"
+            echo "$extra"
+            exit 1
+          fi
+
           tarball_sha=$(sha256sum "$tarball" | awk '{print $1}')
           wheel_sha=$(sha256sum "$wheel" | awk '{print $1}')
           echo "tarball_path=mobaide_agent/${tarball}" >> "$GITHUB_OUTPUT"

@@ -25,6 +25,11 @@ config/.active
 *.apk
 *.jks
 *.keystore
+# Python build outputs — release workflows ship whatever is in dist/,
+# so a committed stale wheel will replace the freshly-built one.
+**/dist/
+**/build/
+**/*.egg-info/
 android/release.keystore
 android/signing.properties
 android/app/release/
