@@ -29,15 +29,22 @@ dedicated workflow under `.github/workflows/`:
 
 ### Cutting a release
 
-There are two equivalent paths:
+> **Do not hand-edit `[project] version` in `pyproject.toml` or push
+> release tags directly.** release-please owns version bumps and tag
+> creation; bypassing it desyncs `.release-please-manifest.json` from
+> the actual versions in `pyproject.toml`, which makes the next
+> release-please run propose a duplicate bump and is how the
+> `agent-v0.1.1` release shipped a stale `0.1.0` wheel. Follow the
+> flow below.
 
-**Automated (preferred): release-please.** Land work on `main` using
+**release-please is the only supported path.** Land work on `main` using
 [Conventional Commits](https://www.conventionalcommits.org/) prefixed by
 component path (`feat(mobaide_agent): …`, `fix(central_server): …`,
 `feat(android): …`). The `release-please.yml` workflow opens or updates a
 release-PR per component that:
 
-* bumps `[project] version` in the component's `pyproject.toml` (or
+* bumps `[project] version` in the component's `pyproject.toml` AND the
+  matching entry in `.release-please-manifest.json` in lockstep (or
   `versionName`/`versionCode` for android — the simple release type tracks
   the version in `.release-please-manifest.json` for the Android entry, so
   `app/build.gradle.kts` must be bumped manually before tagging),
@@ -47,32 +54,37 @@ release-PR per component that:
   `server-vX.Y.Z` / `android-vX.Y.Z` tag, which fires the matching
   release-* workflow.
 
-  **Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN`
-  cannot trigger downstream workflows from a tag it pushes. The
-  release-please workflow's `token` input falls back to `GITHUB_TOKEN` if
-  `RELEASE_PLEASE_TOKEN` is unset, but in that mode the operator must
-  push the tag manually after merging the release-PR (e.g.
-  `git fetch && git tag agent-v0.2.0 && git push origin agent-v0.2.0`).
+If you actually need to release without an upstream change (e.g.
+re-publishing a burnt tag after fixing a CI bug, or shipping a
+hotfix against a build that release-please can't represent), edit
+the open release-please PR before merging it — adjust the version
+or commit list in the PR — rather than tagging by hand. The PR
+keeps `pyproject.toml` and `.release-please-manifest.json` in lockstep
+no matter what version you choose.
 
-  **Recommended PAT shape.** Use a **fine-grained PAT** scoped to **this
-  repository only** with these permissions:
+**Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN`
+cannot trigger downstream workflows from a tag it pushes. The
+release-please workflow's `token` input falls back to `GITHUB_TOKEN` if
+`RELEASE_PLEASE_TOKEN` is unset; in that mode the auto-tag is created but
+**no `release-*` workflow fires**, leaving the wheel/aab unbuilt. This is
+a hard GitHub Actions limit, not a release-please bug. Set
+`RELEASE_PLEASE_TOKEN` to make tag-trigger chaining work.
 
-  | Permission | Access |
-  |-----------|--------|
-  | Contents | Read and write |
-  | Pull requests | Read and write |
-  | Workflows | Read and write |
+**Recommended PAT shape.** Use a **fine-grained PAT** scoped to **this
+repository only** with these permissions:
 
-  Do **not** use a classic PAT — those grant write access to every repo
-  the user owns and are unnecessarily broad. The fine-grained PAT also
-  needs `Workflows: write` so that release-please's tag-push triggers the
-  downstream `release-agent.yml` / `release-server.yml` /
-  `release-android.yml` workflows; without it, the tag is created but no
-  workflow fires.
+| Permission | Access |
+|-----------|--------|
+| Contents | Read and write |
+| Pull requests | Read and write |
+| Workflows | Read and write |
 
-**Manual.** Bump the version field for the component, update the matching
-`CHANGELOG.md` by hand, push the tag (`git tag agent-v0.2.0 && git push --tags`).
-The relevant workflow takes it from there.
+Do **not** use a classic PAT — those grant write access to every repo
+the user owns and are unnecessarily broad. The fine-grained PAT also
+needs `Workflows: write` so that release-please's tag-push triggers the
+downstream `release-agent.yml` / `release-server.yml` /
+`release-android.yml` workflows; without it, the tag is created but no
+workflow fires.
 
 Required CI secrets:
 
