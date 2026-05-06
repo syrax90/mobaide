@@ -45,6 +45,12 @@ class ManifestResponse(BaseModel):
     signature_b64: str
 
 
+class TrustKeyResponse(BaseModel):
+    public_key_b64: str = Field(
+        ..., description="Base64-encoded Ed25519 manifest-signing public key."
+    )
+
+
 @router.get("/api/v1/agent/manifest.json", response_model=ManifestResponse, tags=["manifest"])
 async def get_manifest(request: Request) -> ManifestResponse:
     store = request.app.state.manifest_store
@@ -52,6 +58,37 @@ async def get_manifest(request: Request) -> ManifestResponse:
     if record is None:
         raise HTTPException(status_code=404, detail="No manifest published yet")
     return ManifestResponse(body=record.body, signature_b64=record.signature_b64)
+
+
+@router.get(
+    "/api/v1/agent/trust_key",
+    response_model=TrustKeyResponse,
+    tags=["manifest"],
+)
+async def get_trust_key(request: Request) -> TrustKeyResponse:
+    """Return the manifest-signing public key for agent-side bootstrap.
+
+    The agent's auto-updater needs this key (pinned at
+    ``<prefix>/trust/central_server.pub``) to verify Ed25519 signatures on
+    every release manifest. The install scripts and the
+    ``mobaide-agent fetch-trust-key`` CLI fetch this endpoint when the
+    operator hasn't pre-set ``MOBAIDE_AGENT_TRUST_KEY_B64``. Returns 503
+    when ``MANIFEST_SIGNING_PUBLIC_KEY`` is unset on this server — agents
+    cannot bootstrap auto-update against a server that has no signing key
+    configured. Anonymous: matches the public ``manifest.json`` contract,
+    so unpaired install hosts can fetch it before having any credentials.
+    """
+    config = request.app.state.config
+    public_key_b64 = config.manifest_signing_public_key_b64
+    if not public_key_b64:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Trust key is not configured — "
+                "set MANIFEST_SIGNING_PUBLIC_KEY"
+            ),
+        )
+    return TrustKeyResponse(public_key_b64=public_key_b64)
 
 
 @router.post("/api/internal/agent_manifest", response_model=ManifestResponse, tags=["manifest"])

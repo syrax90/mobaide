@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+- ``GET /api/v1/agent/trust_key`` — public, anonymous endpoint that
+  exposes ``MANIFEST_SIGNING_PUBLIC_KEY`` so the agent install scripts
+  and ``mobaide-agent fetch-trust-key`` can bootstrap
+  ``<prefix>/trust/central_server.pub`` without operator-side env-var
+  plumbing on each install host. Returns 503 when the env var is
+  unset (matches the existing manifest-publish 503 pattern).
 - Prompt-templates CRUD: ``GET/POST /api/templates``,
   ``GET/PUT/DELETE /api/templates/{id}``, and
   ``POST /api/templates/{id}/touch`` (updates ``last_used_at`` and bumps the

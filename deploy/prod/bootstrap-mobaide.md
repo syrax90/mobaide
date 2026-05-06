@@ -98,7 +98,11 @@ RELEASE_AUTH_TOKEN=<same string as GitHub secret CENTRAL_SERVER_RELEASE_TOKEN>
 MANIFEST_SIGNING_PUBLIC_KEY=<base64 Ed25519 public half of GitHub secret AGENT_MANIFEST_PRIVATE_KEY>
 ```
 
-Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the workflow's "Publish manifest to central_server" step fails after `curl --retry` exhaustion. The two values **must match across GitHub and the server** — the workflow sends `CENTRAL_SERVER_RELEASE_TOKEN` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte. See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the full release-secrets table.
+Without `RELEASE_AUTH_TOKEN`, the publish endpoint returns HTTP 503 and the workflow's "Publish manifest to central_server" step fails after `curl --retry` exhaustion. The two values **must match across GitHub and the server** — the workflow sends `CENTRAL_SERVER_RELEASE_TOKEN` in the `X-Release-Token` header, and the server compares it against `RELEASE_AUTH_TOKEN` byte-for-byte.
+
+`MANIFEST_SIGNING_PUBLIC_KEY` is now also required for **agent-side trust-key bootstrap**. Agent install scripts (`deploy/install.sh`, `deploy/install.ps1`) auto-fetch this key from `GET /api/v1/agent/trust_key` to pin `<prefix>/trust/central_server.pub` without needing operators to set `MOBAIDE_AGENT_TRUST_KEY_B64` on every install host. Without `MANIFEST_SIGNING_PUBLIC_KEY` set on this server, that endpoint returns HTTP 503 and agent installs against this server fail-closed (which is desirable — silently shipping agents whose auto-updater can't verify rollouts is the precise bug this gate prevents).
+
+See [`docs/versioning-and-updates.md`](../../docs/versioning-and-updates.md) for the full release-secrets table and the trust-key bootstrap flow.
 
 All other settings (DB path, log format, etc.) can be left at their defaults — `config.py` has sane values. **JWT TTL exception:** the default TTL for all token types is now `0` (never-expires — no `exp` claim is issued). This is intentional for pre-production use. If you want tokens to expire, set one or more of the following in `.env` to a positive integer (minutes):
 
