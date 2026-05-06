@@ -25,6 +25,7 @@ import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
 import android.view.accessibility.AccessibilityManager;
 import android.view.autofill.AutofillManager;
@@ -57,6 +58,13 @@ public final class TerminalView extends View {
     public TerminalRenderer mRenderer;
 
     public TerminalViewClient mClient;
+
+    /**
+     * CLA-49: when {@code > 0}, {@link #updateSize()} uses this value as the column count
+     * instead of the viewport-derived {@code viewWidth / mFontWidth}. {@code 0} means the
+     * default auto-fit behavior. See docs/terminal-view-fork-changes.md.
+     */
+    private int mForcedColumns = 0;
 
     private TextSelectionCursorController mTextSelectionCursorController;
 
@@ -664,13 +672,55 @@ public final class TerminalView extends View {
      */
     public void setTextSize(int textSize) {
         mRenderer = new TerminalRenderer(textSize, mRenderer == null ? Typeface.MONOSPACE : mRenderer.mTypeface);
+        // CLA-49: in Static-column mode, pinch-zoom keeps mForcedColumns fixed and rescales
+        // the surface width so the new font size matches the existing column count.
+        applyForcedColumnsLayoutWidth();
         updateSize();
     }
 
     public void setTypeface(Typeface newTypeface) {
         mRenderer = new TerminalRenderer(mRenderer.mTextSize, newTypeface);
+        applyForcedColumnsLayoutWidth();
         updateSize();
         invalidate();
+    }
+
+    /**
+     * CLA-49: override the auto-fit column calculation in {@link #updateSize()}.
+     * Pass {@code columns > 0} for Static-column display mode (e.g. 120 cols regardless
+     * of orientation), or {@code 0} to restore the default {@code viewWidth / mFontWidth}
+     * behavior.
+     */
+    public void setForcedColumns(int columns) {
+        if (mForcedColumns != columns) {
+            mForcedColumns = columns;
+            applyForcedColumnsLayoutWidth();
+            updateSize();
+        }
+    }
+
+    /** CLA-49 */
+    public int getForcedColumns() { return mForcedColumns; }
+
+    /** CLA-49: glyph width in pixels from the active renderer. {@code 0} until the renderer is created. */
+    public float getRendererFontWidth() {
+        return mRenderer == null ? 0f : mRenderer.mFontWidth;
+    }
+
+    /** CLA-49: line spacing in pixels from the active renderer. {@code 0} until the renderer is created. */
+    public int getRendererFontLineSpacing() {
+        return mRenderer == null ? 0 : mRenderer.mFontLineSpacing;
+    }
+
+    private void applyForcedColumnsLayoutWidth() {
+        if (mForcedColumns <= 0 || mRenderer == null || mRenderer.mFontWidth <= 0f) return;
+        ViewGroup.LayoutParams lp = getLayoutParams();
+        if (lp == null) return;
+        int desired = (int) Math.ceil(mForcedColumns * mRenderer.mFontWidth);
+        if (lp.width != desired) {
+            lp.width = desired;
+            setLayoutParams(lp);
+        }
     }
 
     @Override
@@ -1137,9 +1187,14 @@ public final class TerminalView extends View {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         if (viewWidth == 0 || viewHeight == 0 || mTermSession == null) return;
+        // CLA-49: renderer can be momentarily null (or have zero metrics) during the
+        // AndroidView recreate window — guard before dividing. See Termux #4346 / #3541.
+        if (mRenderer == null || mRenderer.mFontWidth <= 0f || mRenderer.mFontLineSpacing <= 0) return;
 
-        // Set to 80 and 24 if you want to enable vttest.
-        int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
+        // CLA-49: in Static-column mode mForcedColumns overrides the viewport-derived count.
+        int newColumns = (mForcedColumns > 0)
+            ? Math.max(4, mForcedColumns)
+            : Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
         int newRows = Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
 
         if (mEmulator == null || (newColumns != mEmulator.mColumns || newRows != mEmulator.mRows)) {

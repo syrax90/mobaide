@@ -1,13 +1,19 @@
 package com.mobaide.app.ui.settings
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -16,14 +22,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MAX
+import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MIN
+import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_STEP
+import com.mobaide.app.data.local.TerminalDisplayMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,6 +104,19 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            HorizontalDivider()
+
+            TerminalDisplaySection(
+                mode = uiState.terminalDisplayMode,
+                staticColumns = uiState.terminalStaticColumns,
+                onModeChange = viewModel::setTerminalDisplayMode,
+                onColumnsChange = viewModel::setTerminalStaticColumns,
+            )
+
+            HorizontalDivider()
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             Button(
                 onClick = {
                     viewModel.logout()
@@ -114,6 +140,119 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(16.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun TerminalDisplaySection(
+    mode: TerminalDisplayMode,
+    staticColumns: Int,
+    onModeChange: (TerminalDisplayMode) -> Unit,
+    onColumnsChange: (Int) -> Unit,
+) {
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = "Terminal display",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Full Screen reflows columns to the viewport. Static keeps a fixed column count and pans horizontally.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Column(modifier = Modifier.selectableGroup()) {
+            DisplayModeRow(
+                label = "Full Screen",
+                selected = mode == TerminalDisplayMode.Full,
+                onSelect = { onModeChange(TerminalDisplayMode.Full) },
+            )
+            DisplayModeRow(
+                label = "Static (fixed columns)",
+                selected = mode == TerminalDisplayMode.Static,
+                onSelect = { onModeChange(TerminalDisplayMode.Static) },
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        ColumnsStepper(
+            value = staticColumns,
+            enabled = mode == TerminalDisplayMode.Static,
+            onValueChange = onColumnsChange,
+        )
+    }
+}
+
+@Composable
+private fun DisplayModeRow(
+    label: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = selected,
+                onClick = onSelect,
+                role = Role.RadioButton,
+            )
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(text = label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun ColumnsStepper(
+    value: Int,
+    enabled: Boolean,
+    onValueChange: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Columns",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        IconButton(
+            enabled = enabled && value > TERMINAL_STATIC_COLUMNS_MIN,
+            onClick = { onValueChange(value - TERMINAL_STATIC_COLUMNS_STEP) },
+        ) {
+            Icon(Icons.Default.Remove, contentDescription = "Decrease columns")
+        }
+        Text(
+            text = value.toString(),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier
+                .width(48.dp)
+                .padding(horizontal = 4.dp),
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        IconButton(
+            enabled = enabled && value < TERMINAL_STATIC_COLUMNS_MAX,
+            onClick = { onValueChange(value + TERMINAL_STATIC_COLUMNS_STEP) },
+        ) {
+            Icon(Icons.Default.Add, contentDescription = "Increase columns")
         }
     }
 }

@@ -2,6 +2,7 @@ package com.mobaide.app.data.local
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -10,20 +11,30 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "mobaide_prefs")
 
-/**
- * Persist the two fields the Android client needs across launches: the most recently used
- * project name (for pre-selecting the picker) and the most recently created session id
- * (for auto-resume on app restart).
- */
 class PreferencesStore(private val context: Context) {
 
     private val keyLastProject = stringPreferencesKey("last_used_project_name")
     private val keyLastSession = stringPreferencesKey("last_used_session_id")
+    private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
+    private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
 
     val lastUsedProjectName: Flow<String?> =
         context.dataStore.data.map { it[keyLastProject] }
     val lastUsedSessionId: Flow<String?> =
         context.dataStore.data.map { it[keyLastSession] }
+
+    val terminalDisplayMode: Flow<TerminalDisplayMode> =
+        context.dataStore.data.map { prefs ->
+            prefs[keyTerminalDisplayMode]?.let { stored ->
+                runCatching { TerminalDisplayMode.valueOf(stored) }.getOrNull()
+            } ?: TerminalDisplayMode.Full
+        }
+
+    val terminalStaticColumns: Flow<Int> =
+        context.dataStore.data.map { prefs ->
+            (prefs[keyTerminalStaticColumns] ?: TERMINAL_STATIC_COLUMNS_DEFAULT)
+                .coerceIn(TERMINAL_STATIC_COLUMNS_MIN, TERMINAL_STATIC_COLUMNS_MAX)
+        }
 
     suspend fun getLastUsedProjectName(): String? =
         context.dataStore.data.map { it[keyLastProject] }.first()
@@ -40,6 +51,19 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedSessionId(id: String?) {
         context.dataStore.edit { prefs ->
             if (id == null) prefs.remove(keyLastSession) else prefs[keyLastSession] = id
+        }
+    }
+
+    suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {
+        context.dataStore.edit { prefs ->
+            prefs[keyTerminalDisplayMode] = mode.name
+        }
+    }
+
+    suspend fun setTerminalStaticColumns(columns: Int) {
+        val clamped = columns.coerceIn(TERMINAL_STATIC_COLUMNS_MIN, TERMINAL_STATIC_COLUMNS_MAX)
+        context.dataStore.edit { prefs ->
+            prefs[keyTerminalStaticColumns] = clamped
         }
     }
 }

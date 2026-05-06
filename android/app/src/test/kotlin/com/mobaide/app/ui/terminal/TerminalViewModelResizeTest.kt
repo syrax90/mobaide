@@ -1,6 +1,9 @@
 package com.mobaide.app.ui.terminal
 
 import androidx.lifecycle.SavedStateHandle
+import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
+import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
@@ -11,6 +14,7 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -48,12 +52,17 @@ class TerminalViewModelResizeTest {
         every { createSessionIoConnection("test-session") } returns connection
     }
     private val templatesRepository = mockk<com.mobaide.app.data.repository.TemplatesRepository>(relaxed = true)
+    private val preferencesStore = mockk<PreferencesStore> {
+        every { terminalDisplayMode } returns flowOf(TerminalDisplayMode.Full)
+        every { terminalStaticColumns } returns flowOf(TERMINAL_STATIC_COLUMNS_DEFAULT)
+    }
 
     private fun createViewModel(): TerminalViewModel =
         TerminalViewModel(
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = sessionRepository,
             templatesRepository = templatesRepository,
+            preferencesStore = preferencesStore,
         )
 
     // ── Deduplication ─────────────────────────────────────────────────────────

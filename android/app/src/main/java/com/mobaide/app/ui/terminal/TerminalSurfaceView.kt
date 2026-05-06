@@ -2,12 +2,19 @@ package com.mobaide.app.ui.terminal
 
 import android.graphics.Typeface
 import android.view.ViewGroup
+import android.view.ViewTreeObserver
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import com.mobaide.app.data.local.TerminalDisplayConfig
+import com.mobaide.app.data.local.TerminalDisplayMode
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
@@ -18,11 +25,17 @@ import com.termux.view.TerminalViewClient
  * is owned by the host [TerminalViewModel] so it survives recomposition; this composable is a
  * thin glue layer that creates the View, attaches the session, and forwards layout-driven
  * resize callbacks back to the caller.
+ *
+ * In [TerminalDisplayMode.Static] mode an outer scrollable [Box] hosts the [TerminalView] at a
+ * fixed pixel width of `staticColumns * mFontWidth`; the user pans horizontally to see columns
+ * beyond the viewport. The [TerminalView] fork's `setForcedColumns` keeps `updateSize()` from
+ * recomputing column count from viewport width.
  */
 @Composable
 fun TerminalSurfaceView(
     session: TerminalSession,
     sessionCallback: TerminalSessionCallback,
+    displayConfig: TerminalDisplayConfig,
     onResize: (rows: Int, cols: Int) -> Unit,
     onRowTapped: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
     onRowCopyToInput: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
@@ -39,36 +52,78 @@ fun TerminalSurfaceView(
         onDispose { sessionCallback.onInvalidate = null }
     }
 
-    AndroidView(
-        modifier = modifier.fillMaxSize(),
-        factory = { ctx ->
-            TerminalView(ctx, null).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                )
-                setTextSize(36)
-                setTypeface(Typeface.MONOSPACE)
-                setTerminalViewClient(client)
-                attachSession(session)
-                sessionCallback.onInvalidate = { onScreenUpdated() }
-                viewTreeObserver.addOnGlobalLayoutListener {
-                    val emu = session.emulator
-                    if (emu != null) onResize(emu.mRows, emu.mColumns)
+    val layoutListener = remember(session) {
+        ViewTreeObserver.OnGlobalLayoutListener {
+            val emu = session.emulator
+            if (emu != null) onResize(emu.mRows, emu.mColumns)
+        }
+    }
+
+    val isStatic = displayConfig.mode == TerminalDisplayMode.Static
+    val staticCols = displayConfig.staticColumns
+    val scrollState = rememberScrollState()
+
+    val outerModifier = if (isStatic) {
+        modifier.fillMaxSize().horizontalScroll(scrollState)
+    } else {
+        modifier.fillMaxSize()
+    }
+
+    Box(modifier = outerModifier) {
+        AndroidView(
+            modifier = if (isStatic) Modifier.fillMaxHeight() else Modifier.fillMaxSize(),
+            factory = { ctx ->
+                TerminalView(ctx, null).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    setTextSize(36)
+                    setTypeface(Typeface.MONOSPACE)
+                    setTerminalViewClient(client)
+                    attachSession(session)
+                    sessionCallback.onInvalidate = { onScreenUpdated() }
+                    applyDisplayConfig(isStatic, staticCols)
+                    viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
                 }
-            }
-        },
-        update = { view ->
-            if (view.mTermSession !== session) {
-                view.attachSession(session)
-                sessionCallback.onInvalidate = { view.onScreenUpdated() }
-            }
-            if (followMode && view.topRow != 0) {
-                view.topRow = 0
-                view.invalidate()
-            }
-        },
-    )
+            },
+            update = { view ->
+                if (view.mTermSession !== session) {
+                    view.attachSession(session)
+                    sessionCallback.onInvalidate = { view.onScreenUpdated() }
+                }
+                view.applyDisplayConfig(isStatic, staticCols)
+                if (followMode && view.topRow != 0) {
+                    view.topRow = 0
+                    view.invalidate()
+                }
+            },
+            onRelease = { view ->
+                view.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
+            },
+        )
+    }
+}
+
+/** Push the requested display mode into the [TerminalView] without churning when nothing changed. */
+private fun TerminalView.applyDisplayConfig(isStatic: Boolean, staticCols: Int) {
+    val targetForcedCols = if (isStatic) staticCols else 0
+    if (forcedColumns != targetForcedCols) {
+        setForcedColumns(targetForcedCols)
+    }
+    val targetWidth: Int = when {
+        !isStatic -> ViewGroup.LayoutParams.MATCH_PARENT
+        rendererFontWidth > 0f ->
+            kotlin.math.ceil(staticCols * rendererFontWidth).toInt().coerceAtLeast(1)
+        // Renderer not ready (zero font width). setForcedColumns will retry on the next
+        // layout pass once the renderer is constructed; leave layout width untouched.
+        else -> return
+    }
+    val lp = layoutParams ?: return
+    if (lp.width != targetWidth) {
+        lp.width = targetWidth
+        layoutParams = lp
+    }
 }
 
 /**
