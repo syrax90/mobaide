@@ -41,6 +41,30 @@ def test_build_updater_returns_none_without_trust_key(tmp_path, monkeypatch):
     assert _build_updater(_fake_app()) is None
 
 
+def test_build_updater_logs_disabled_reason(tmp_path, monkeypatch, capsys):
+    """When the trust key is missing, the disabled reason MUST be logged.
+
+    Regression guard: this is the ``HTTP 503: Auto-updater is not configured``
+    failure mode the user hit. The log line is what an operator would grep
+    for to diagnose the silent disable. If a future refactor swallows it,
+    this test fails — and so does the real-world recovery flow.
+
+    NOTE: the production logger is a structlog BoundLogger which renders
+    directly to stdout (bypassing stdlib logging), so we capture via
+    ``capsys`` rather than ``caplog``.
+    """
+    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path / "absent"))
+    monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    assert _build_updater(_fake_app()) is None
+    out = capsys.readouterr().out
+    assert "updater.disabled" in out, (
+        "expected 'updater.disabled' in structlog stdout output; got: " + repr(out)
+    )
+    assert "no_trust_key" in out, (
+        "expected 'no_trust_key' in structlog stdout output; got: " + repr(out)
+    )
+
+
 def test_build_updater_returns_instance_with_trust_key(tmp_path, monkeypatch):
     prefix = tmp_path / "mobaide"
     prefix.mkdir()

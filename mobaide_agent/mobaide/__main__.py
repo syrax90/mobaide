@@ -2,13 +2,19 @@
 
 Subcommands:
 
-* ``run``        — start the FastAPI app (default; what ``python -m mobaide``
-                   has always done).
-* ``update``     — force an immediate manifest check and apply if a new
-                   version is rolled out.
-* ``pair``       — write ``RELAY_AGENT_ID`` / ``RELAY_AGENT_TOKEN`` into the
-                   agent's ``.env`` after pairing in the mobile app.
-* ``--version``  — print ``__version__`` and exit.
+* ``run``              — start the FastAPI app (default; what ``python -m
+                         mobaide`` has always done).
+* ``update``           — force an immediate manifest check and apply if a new
+                         version is rolled out.
+* ``pair``             — write ``RELAY_AGENT_ID`` / ``RELAY_AGENT_TOKEN`` into
+                         the agent's ``.env`` after pairing in the mobile app.
+* ``fetch-trust-key``  — fetch the manifest-signing public key from
+                         ``central_server`` and pin it at
+                         ``<prefix>/trust/central_server.pub`` so the
+                         auto-updater is configured. Bootstrap path for
+                         existing installs that were set up before
+                         install.sh learned to fetch the key automatically.
+* ``--version``        — print ``__version__`` and exit.
 """
 from __future__ import annotations
 
@@ -45,6 +51,36 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", help="Start the agent (default).")
     sub.add_parser("update", help="Check for an update and apply if available.")
+
+    fetch_key = sub.add_parser(
+        "fetch-trust-key",
+        help=(
+            "Fetch the manifest-signing public key from central_server "
+            "and pin it locally so the auto-updater can verify rollouts."
+        ),
+    )
+    fetch_key.add_argument(
+        "--from-url",
+        help=(
+            "Override URL to fetch the trust key from. Default: derive "
+            "https://<host>/api/v1/agent/trust_key from RELAY_SERVER_URL "
+            "in <prefix>/mobaide_agent/.env."
+        ),
+    )
+    fetch_key.add_argument(
+        "--prefix",
+        help="Override install prefix (default: install_paths.default_prefix()).",
+    )
+    fetch_key.add_argument(
+        "--no-restart",
+        action="store_true",
+        help=(
+            "Skip the best-effort service restart. The trust key is "
+            "written, but the running agent will NOT pick it up — and "
+            "the auto-updater will stay disabled — until the next "
+            "supervisor restart."
+        ),
+    )
 
     pair = sub.add_parser(
         "pair",
@@ -90,6 +126,8 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(_run_update())
     elif command == "pair":
         sys.exit(_run_pair(args))
+    elif command == "fetch-trust-key":
+        sys.exit(_run_fetch_trust_key(args))
     else:
         parser.print_help()
         sys.exit(2)
@@ -125,7 +163,10 @@ def _run_update() -> int:
     public_key_b64 = read_trust_public_key(layout)
     if public_key_b64 is None:
         sys.stderr.write(
-            f"mobaide-agent update: missing public key at {layout.trust_public_key}\n"
+            f"mobaide-agent update: missing public key at {layout.trust_public_key}.\n"
+            f"Run 'mobaide-agent fetch-trust-key' on this host to bootstrap it "
+            f"from central_server, or set MOBAIDE_AGENT_TRUST_KEY_B64=<base64-ed25519> "
+            f"for an airgap install.\n"
         )
         return 3
 
@@ -178,6 +219,202 @@ def _outcome_exit_code(outcome: str) -> int:
     if outcome == "deferred":
         return 4
     return 1
+
+
+_TRUST_KEY_ENDPOINT_PATH = "/api/v1/agent/trust_key"
+_ALLOW_INSECURE_TRUST_KEY_FETCH_ENV = "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
+
+
+def _trust_key_url_from_relay_server_url(relay_server_url: str) -> str:
+    """Translate a ``RELAY_SERVER_URL`` into the trust-key fetch URL.
+
+    ``wss://host[/path]`` becomes ``https://host`` + the trust-key endpoint;
+    ``ws://host[/path]`` becomes ``http://...``. Any path component on the
+    relay URL is intentionally dropped — the relay tunnel and the HTTP
+    REST API live at the root of the same origin (see central_server's
+    routing in ``central_server/app.py``), so the path on the relay URL
+    is a relay-tunnel path, not an API base.
+
+    Two security guards on top of basic URL parsing:
+
+    * **User-info rejected** — ``urlparse('wss://api.mobaide.com@evil.example')``
+      yields a ``netloc`` of ``api.mobaide.com@evil.example``, which DNS-resolves
+      to ``evil.example``. A ``RELAY_SERVER_URL`` with user-info would silently
+      retarget the trust-key fetch to an attacker-controlled host. Reject up
+      front rather than relying on the post-fetch Ed25519 round-trip to
+      catch the substituted key.
+    * **Cleartext refused by default** — ``ws://`` / ``http://`` would let a
+      passive on-path attacker substitute the public key without breaking
+      TLS. Refused unless ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1``
+      is set (self-host loopback / local testing escape hatch).
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(relay_server_url)
+    if not parsed.scheme or not parsed.hostname:
+        raise ValueError(
+            f"RELAY_SERVER_URL is not a valid URL: {relay_server_url!r}"
+        )
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            f"RELAY_SERVER_URL must not contain user-info (user@/user:pass@): "
+            f"{relay_server_url!r}"
+        )
+    scheme_map = {"wss": "https", "ws": "http", "https": "https", "http": "http"}
+    scheme = scheme_map.get(parsed.scheme.lower())
+    if scheme is None:
+        raise ValueError(
+            f"RELAY_SERVER_URL has unsupported scheme {parsed.scheme!r}: "
+            f"{relay_server_url!r}"
+        )
+    if scheme == "http" and os.environ.get(
+        _ALLOW_INSECURE_TRUST_KEY_FETCH_ENV
+    ) != "1":
+        raise ValueError(
+            f"Trust-key fetch over cleartext {parsed.scheme!r} is refused by "
+            f"default (RELAY_SERVER_URL={relay_server_url!r}). Set "
+            f"{_ALLOW_INSECURE_TRUST_KEY_FETCH_ENV}=1 to override (only safe "
+            f"on a trusted local network, e.g. self-host loopback)."
+        )
+    # Rebuild from hostname + optional :port — never from raw netloc — so
+    # user-info or other smuggled netloc components can't survive into the
+    # outbound URL even if a future refactor drops the explicit guard above.
+    if ":" in parsed.hostname and not parsed.hostname.startswith("["):
+        host = f"[{parsed.hostname}]"  # IPv6 literal
+    else:
+        host = parsed.hostname
+    if parsed.port is not None:
+        host = f"{host}:{parsed.port}"
+    return f"{scheme}://{host}{_TRUST_KEY_ENDPOINT_PATH}"
+
+
+def _run_fetch_trust_key(args: argparse.Namespace) -> int:
+    """Fetch the manifest-signing public key and pin it locally.
+
+    Returns:
+        0   key written successfully (and supervisor restarted, unless
+            ``--no-restart``).
+        2   ``RELAY_SERVER_URL`` could not be resolved (no env file or no
+            value), and ``--from-url`` was not supplied.
+        3   the trust-key endpoint could not be reached or returned a
+            non-JSON / malformed response.
+        4   the fetched value did not validate as a base64-Ed25519 public
+            key.
+    """
+    import base64
+    import json
+    import urllib.error
+    import urllib.request
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+        Ed25519PublicKey,
+    )
+
+    from mobaide.agent._env_writer import (
+        atomic_write,
+        env_path_for_prefix,
+        parse_env_file,
+    )
+    from mobaide.agent.install_paths import default_prefix
+    from mobaide.agent.updater import InstallLayout
+
+    prefix = Path(args.prefix) if args.prefix else default_prefix()
+    layout = InstallLayout(prefix=prefix)
+
+    url = getattr(args, "from_url", None)
+    if not url:
+        env_file = env_path_for_prefix(prefix)
+        if not env_file.exists():
+            sys.stderr.write(
+                f"mobaide-agent fetch-trust-key: {env_file} does not exist.\n"
+                f"Pass --from-url <central_server_base>{_TRUST_KEY_ENDPOINT_PATH} "
+                f"or run init-env first.\n"
+            )
+            return 2
+        relay_server_url = parse_env_file(env_file).get("RELAY_SERVER_URL", "").strip()
+        if not relay_server_url:
+            sys.stderr.write(
+                f"mobaide-agent fetch-trust-key: RELAY_SERVER_URL is empty in "
+                f"{env_file}.\n"
+                f"Pair the agent first, or pass --from-url explicitly.\n"
+            )
+            return 2
+        try:
+            url = _trust_key_url_from_relay_server_url(relay_server_url)
+        except ValueError as exc:
+            sys.stderr.write(f"mobaide-agent fetch-trust-key: {exc}\n")
+            return 2
+
+    sys.stdout.write(f"[mobaide-agent] Fetching trust key from {url}\n")
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            raw = resp.read().decode("utf-8")
+    except (urllib.error.URLError, OSError) as exc:
+        sys.stderr.write(
+            f"mobaide-agent fetch-trust-key: cannot reach {url}: {exc}\n"
+        )
+        return 3
+    try:
+        record = json.loads(raw)
+        public_key_b64 = record["public_key_b64"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        sys.stderr.write(
+            f"mobaide-agent fetch-trust-key: malformed response from {url}: "
+            f"{exc}\n"
+        )
+        return 3
+    if not isinstance(public_key_b64, str) or not public_key_b64.strip():
+        sys.stderr.write(
+            f"mobaide-agent fetch-trust-key: response from {url} carried an "
+            f"empty public_key_b64.\n"
+        )
+        return 3
+
+    public_key_b64 = public_key_b64.strip()
+    try:
+        key_bytes = base64.b64decode(public_key_b64, validate=True)
+        Ed25519PublicKey.from_public_bytes(key_bytes)
+    except (ValueError, TypeError) as exc:
+        sys.stderr.write(
+            f"mobaide-agent fetch-trust-key: fetched value is not a valid "
+            f"base64 Ed25519 public key: {exc}\n"
+        )
+        return 4
+
+    # Trust file is a public key — keep default 0o644 perms so a service
+    # running as a non-root user (the typical systemd setup, where the
+    # install was done with sudo) can still read the file written by
+    # root. ``atomic_write`` uses ``mkstemp`` which creates the file
+    # 0o600 by default; explicitly chmod back to umask-respecting
+    # behaviour after the rename. POSIX-only — Windows ACLs are
+    # inherited from the parent ``trust/`` dir, which is fine here.
+    target = layout.trust_public_key
+    atomic_write(target, public_key_b64 + "\n")
+    if sys.platform != "win32":
+        try:
+            os.chmod(target, 0o644)
+        except OSError:
+            pass
+    sys.stdout.write(
+        f"[mobaide-agent] Wrote trust key to {target}.\n"
+    )
+
+    if args.no_restart:
+        sys.stdout.write(
+            "[mobaide-agent] Skipping restart (--no-restart). The auto-updater "
+            "stays disabled until the agent restarts; restart manually:\n"
+        )
+        if sys.platform.startswith("linux"):
+            sys.stdout.write("    sudo systemctl restart mobaide-agent\n")
+        elif sys.platform == "darwin":
+            sys.stdout.write(
+                "    launchctl kickstart -k gui/$(id -u)/com.mobaide.agent\n",
+            )
+        elif sys.platform == "win32":
+            sys.stdout.write("    Restart-Service MobaideAgent\n")
+        return 0
+
+    return _try_restart_service()
 
 
 _DEFAULT_RELAY_URL = "wss://mobaide.com"

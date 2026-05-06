@@ -3,7 +3,19 @@
 ## [Unreleased]
 
 ### Added
-- Install scripts (`deploy/install.sh`, `deploy/install.ps1`, `deploy/setup.sh`)
+- `mobaide-agent fetch-trust-key [--from-url URL] [--no-restart] [--prefix PATH]`
+  CLI verb. Repair path for installs that were set up before the install
+  scripts learned to fetch the manifest-signing public key automatically.
+  Default URL is derived from `RELAY_SERVER_URL` in the agent `.env`
+  (`wss://host[/path]` → `https://host/api/v1/agent/trust_key`). User-info
+  in the URL is rejected (would otherwise silently DNS-resolve to an
+  attacker host); cleartext `ws://`/`http://` schemes are refused by
+  default (set `MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1` for
+  self-host loopback). The fetched value is validated as a 32-byte
+  base64 Ed25519 key before being written to
+  `<prefix>/trust/central_server.pub`. Best-effort restarts the
+  supervisor so the running agent picks up the new updater wiring.
+- Install scripts (`deploy/install.sh`, `deploy/install.ps1`)
   now write a prepared `<prefix>/mobaide_agent/.env` after staging the
   release. `JWT_SECRET_KEY` is auto-generated and `RELAY_SERVER_URL` is
   prefilled with `wss://mobaide.com`; pair the agent via `mobaide-agent
@@ -57,6 +69,17 @@
   verification.
 
 ### Changed
+- **BREAKING:** install scripts (`deploy/install.sh`, `deploy/install.ps1`)
+  no longer silently skip manifest signature verification when
+  `MOBAIDE_AGENT_TRUST_KEY_B64` is unset. They now derive
+  `https://<host>/api/v1/agent/trust_key` from
+  `MOBAIDE_AGENT_MANIFEST_URL` and bootstrap the public key from there
+  automatically. If neither the env var nor the fetch yields a key, the
+  install fails-closed with an actionable message. The previous
+  silent-skip branch shipped agents whose auto-updater could never
+  apply rollouts (manifests received but never verified) — closing
+  that gap. Operators who rely on env-var pinning don't need to change
+  anything; the env var still takes priority over the fetch.
 - Configuration loading migrated from `python-dotenv` + `os.getenv` to
   `pydantic-settings`. `AgentConfig`, `RelayConfig`, and `AutoScanConfig`
   are now `BaseSettings` subclasses; the agent loads its `.env` from an

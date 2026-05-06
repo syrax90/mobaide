@@ -423,8 +423,14 @@ Both scripts are auto-published from `deploy/` to the root of the
 2. Pull the manifest from
    `https://api.mobaide.com/api/v1/agent/manifest.json` (override via
    `MOBAIDE_AGENT_MANIFEST_URL`).
-3. Verify the Ed25519 signature against `MOBAIDE_AGENT_TRUST_KEY_B64` and
-   persist the key at `<prefix>/trust/central_server.pub`.
+3. Bootstrap the manifest-signing public key and persist it at
+   `<prefix>/trust/central_server.pub`. Two paths, in priority order:
+   `MOBAIDE_AGENT_TRUST_KEY_B64` env var if set; otherwise the host derived
+   from `MOBAIDE_AGENT_MANIFEST_URL` is hit at
+   `/api/v1/agent/trust_key` to fetch the key. Verify the manifest signature
+   against the pinned key. The install fails-closed if neither path yields
+   a key — never silently ships an install whose auto-updater can't
+   verify rollouts.
 4. **(Linux only, before venv creation)** Verify that `python3 -c 'import ensurepip'`
    succeeds. If it does not (common on stock Debian/Ubuntu where the base
    `python3` package omits `ensurepip`), auto-install `python${version}-venv`
@@ -454,22 +460,58 @@ one-liner is also the operator-driven upgrade path.
 ### Trust-key bootstrap
 
 The first install needs the public key that signs every subsequent manifest.
-Two strategies:
+Three resolution paths, in priority order:
 
-1. **Pinned at install time (recommended):**
+1. **Auto-fetch from `central_server` (default):** the install scripts derive
+   `https://<host>/api/v1/agent/trust_key` from the manifest URL host (default
+   `https://api.mobaide.com`) and pin the returned key to
+   `<prefix>/trust/central_server.pub`. No operator-side env vars required —
+   the canonical `curl|bash` line just works. The endpoint requires
+   `MANIFEST_SIGNING_PUBLIC_KEY` to be set on the central_server (already
+   required for manifest publishing).
+2. **Operator-pinned via env var (airgap / explicit):**
    ```bash
    MOBAIDE_AGENT_TRUST_KEY_B64=<base64> \
      curl -fsSL https://get.mobaide.com/install.sh | sudo bash
    ```
-   The script writes the key to `<prefix>/trust/central_server.pub` and uses
-   it both for the install-time signature check and for every subsequent
-   auto-update cycle.
-2. **Bootstrap install** (no `MOBAIDE_AGENT_TRUST_KEY_B64`): the install script
-   warns and skips signature verification on the very first download. This is
-   acceptable only if you trust the install channel itself (e.g. a private
-   ZTNA URL) and you immediately publish a key into `<prefix>/trust/` before
-   the next update cycle. **Production installs should always pin the key
-   inline**.
+   Skips the central_server fetch. Use this when the install host has no
+   network path to your central_server, or when you want maximum trust
+   isolation between the install channel and the trust root.
+3. **Repair existing install:** if you have an agent that was set up before
+   path #1 existed (or pre-`MOBAIDE_AGENT_TRUST_KEY_B64`), run
+   `mobaide-agent fetch-trust-key` on the agent host. The CLI derives
+   `https://<host>/api/v1/agent/trust_key` from `RELAY_SERVER_URL` in the
+   agent's `.env`, validates the result as base64-Ed25519, writes
+   `<prefix>/trust/central_server.pub`, and best-effort restarts the
+   supervisor so the running agent picks up the new updater. Use
+   `--from-url <full-url>` to override the env-derivation, and
+   `--no-restart` to skip the supervisor restart when you'd rather schedule
+   it yourself.
+
+**Fail-closed semantics:** if neither the env var nor the central_server
+fetch yields a key, the install script aborts with an actionable error.
+There is no longer a "skip signature verification" branch — silently
+shipping an unsigned install is a security regression we'd rather flag at
+install time than discover when the auto-updater never works.
+
+**Hardening on the fetch path:**
+
+* User-info in the manifest URL (`wss://api.mobaide.com@evil.example/...`)
+  is rejected up front. `urlparse`'s `netloc` would otherwise smuggle the
+  attacker host into the trust-key URL and DNS-resolve to the wrong
+  place. Both the install scripts and `mobaide-agent fetch-trust-key`
+  enforce this.
+* Cleartext `ws://` / `http://` is refused by default. A passive on-path
+  attacker on the install host's LAN could otherwise substitute the
+  public key. Set `MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1` to
+  override (only safe on a trusted local network — e.g. a self-host
+  central_server reachable only over loopback / a VPN). The default
+  `https://` and `wss://` paths are unaffected.
+* The fetched value is round-trip validated as a 32-byte Ed25519 public
+  key before any file lands on disk, with the same validator applied to
+  env-var-pinned values so a malformed key surfaces immediately as
+  "your key is malformed" rather than later as a confusing "manifest
+  signature does not verify".
 
 ## Android update flows
 
