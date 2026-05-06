@@ -84,23 +84,30 @@ def _build_updater(app: FastAPI):
 
 
 def _resolve_env_file() -> Path | None:
-    """Return the canonical agent ``.env`` path if it exists.
+    """Return the canonical agent ``.env`` path if one exists.
 
-    Returning ``None`` for a missing file lets pydantic-settings fall back
-    to process-environment vars (which is what tests rely on). The explicit
-    absolute path is what fixes the Windows CWD-dependent silent miss the
-    legacy ``load_dotenv()`` had.
+    Resolution order:
 
-    Tests construct ``AgentConfig`` directly via kwargs — this function is
-    only reached from the production ``create_app(config=None)`` path. A
-    developer running tests on a host with a real install at
-    ``/opt/mobaide`` would not hit this code path because every test passes
-    ``config=`` explicitly.
+    1. ``<install_prefix>/mobaide_agent/.env`` — production layout written
+       by the install scripts (see ``env_path_for_prefix``).
+    2. ``<package_root>/../.env`` — developer-checkout fallback so
+       ``python -m mobaide`` works from a source tree without requiring
+       ``MOBAIDE_AGENT_PREFIX`` to be set. Only triggers in editable / dev
+       installs where ``__file__`` resolves into the repo source tree; for
+       wheel installs ``parents[2]`` is ``site-packages`` and the fallback
+       silently misses.
+
+    Returning ``None`` when both candidates miss lets pydantic-settings
+    fall back to process-environment vars (which is what tests rely on).
     """
     from mobaide.agent._env_writer import env_path_for_prefix
 
     candidate = env_path_for_prefix(default_prefix())
-    return candidate if candidate.exists() else None
+    if candidate.exists():
+        return candidate
+
+    dev_candidate = Path(__file__).resolve().parents[2] / ".env"
+    return dev_candidate if dev_candidate.exists() else None
 
 
 def create_app(config: AgentConfig | None = None) -> FastAPI:
