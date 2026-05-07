@@ -9,6 +9,7 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.security.TrustKeyPinning
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
 import io.mockk.coEvery
@@ -68,6 +69,7 @@ class AgentListViewModelTest {
         val sessionManager: SessionManager,
         val agentEventBus: AgentEventBus,
         val userIdentityStore: UserIdentityStore,
+        val trustKeyPinning: TrustKeyPinning,
         val agentsFlow: MutableStateFlow<List<AgentSummaryResponse>>,
     )
 
@@ -81,6 +83,7 @@ class AgentListViewModelTest {
         val sessionManager = mockk<SessionManager>(relaxed = true)
         val agentEventBus = mockk<AgentEventBus>(relaxed = true)
         val userIdentityStore = mockk<UserIdentityStore>(relaxed = true)
+        val trustKeyPinning = mockk<TrustKeyPinning>(relaxed = true)
 
         val agentsFlow = MutableStateFlow(initialAgents)
         every { agentRepository.observeAgents() } returns agentsFlow
@@ -94,7 +97,8 @@ class AgentListViewModelTest {
 
         return Fixture(
             agentRepository, connectionStore, tokenStore,
-            sessionManager, agentEventBus, userIdentityStore, agentsFlow,
+            sessionManager, agentEventBus, userIdentityStore,
+            trustKeyPinning, agentsFlow,
         )
     }
 
@@ -102,6 +106,7 @@ class AgentListViewModelTest {
         AgentListViewModel(
             agentRepository, connectionStore, tokenStore,
             sessionManager, agentEventBus, userIdentityStore,
+            trustKeyPinning,
         )
 
     // ---- init() side-effects ---------------------------------------------------

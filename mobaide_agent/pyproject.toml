@@ -21,6 +21,7 @@ dependencies = [
     "orjson",
     "websockets>=13.0",
     "cryptography>=43.0",
+    "segno>=1.6",
 ]
 
 [project.scripts]

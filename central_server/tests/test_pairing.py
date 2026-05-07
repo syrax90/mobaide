@@ -45,7 +45,9 @@ class TestPairingEndpoints:
 
     async def test_refresh_token(self, client, app, registered_agent):
         agent_id, _ = registered_agent
-        # Create mobile tokens directly (QR pairing is removed)
+        # Create mobile tokens directly. The QR pairing flow has its own
+        # coverage in ``test_pairing_qr.py``; this suite covers the
+        # ``/api/mobile/refresh`` and admin pairing-revoke paths.
         owner = await app.state.db.get_user_by_email("viewer@test.local")
         access, refresh = await app.state.auth_service.create_mobile_tokens(
             owner["id"], agent_id, owner["id"]

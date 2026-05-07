@@ -3,6 +3,22 @@
 ## [Unreleased]
 
 ### Added
+- **QR pairing endpoints (CLA-50):**
+  * ``POST /api/pairing/initiate`` — anonymous; agent posts to receive a
+    signed nonce + QR payload (``MOBA1|<nonce>|<ws_url>|<fp>``). Returns
+    503 when ``MANIFEST_SIGNING_PRIVATE_KEY`` is unset.
+  * ``POST /api/pairing/claim`` — authenticated (mobile user); claims a
+    scanned nonce, creates the agent row, and pushes signed credentials
+    (``agent_id``/``agent_token``) directly to the waiting agent over
+    ``WS /ws/pairing/{nonce}``.
+  * ``WS /ws/pairing/{nonce}`` — anonymous, single-flight WebSocket the
+    agent holds open while the QR is displayed; closed (with the push
+    payload) the instant mobile claims the nonce, or with code 4410
+    (gone) if the nonce expires before a claim.
+- Schema migration 0005 (``pairing_qr``): adds ``pairing_sessions`` table
+  (``nonce``, ``agent_id``, ``owner_user_id``, ``expires_at``,
+  ``claimed_at``) used by the QR flow. Pure additive; runs automatically
+  on startup.
 - ``GET /api/v1/agent/trust_key`` — public, anonymous endpoint that
   exposes ``MANIFEST_SIGNING_PUBLIC_KEY`` so the agent install scripts
   and ``mobaide-agent fetch-trust-key`` can bootstrap
@@ -51,3 +67,14 @@ New environment variables:
   validate manifests posted by the release pipeline.
 * ``MANIFEST_STORE_PATH`` — file system path for the persisted manifest
   (default ``data/agent_manifest.json``).
+* ``MANIFEST_SIGNING_PRIVATE_KEY`` — base64-encoded Ed25519 private key
+  paired with ``MANIFEST_SIGNING_PUBLIC_KEY``. Required for the QR pairing
+  flow: the server signs the push payload delivered to the agent over
+  ``WS /ws/pairing/{nonce}``. ``POST /api/pairing/initiate`` returns 503
+  when unset.
+* ``PUBLIC_BASE_URL`` — public HTTPS base URL of this server (e.g.
+  ``https://mobaide.com``). Embedded in the QR payload so the agent can
+  open the right WebSocket. Falls back to the ``Host`` header of the
+  initiate request when unset.
+* ``PAIRING_QR_TOKEN_TTL_SECONDS`` — lifetime of a pairing nonce in
+  seconds (default ``120``).

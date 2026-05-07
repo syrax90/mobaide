@@ -44,12 +44,15 @@ CREATE TABLE IF NOT EXISTS pairings (
 );
 
 CREATE TABLE IF NOT EXISTS pairing_tokens (
-    token_hash  TEXT PRIMARY KEY,
-    agent_id    TEXT NOT NULL REFERENCES agents(agent_id),
-    created_at  TEXT NOT NULL,
-    expires_at  TEXT NOT NULL,
-    consumed_at TEXT,
-    consumed_by TEXT
+    token_hash         TEXT PRIMARY KEY,
+    agent_id           TEXT REFERENCES agents(agent_id),
+    created_at         TEXT NOT NULL,
+    expires_at         TEXT NOT NULL,
+    consumed_at        TEXT,
+    consumed_by        TEXT,
+    claimed_token_raw  TEXT,
+    claimed_agent_id   TEXT REFERENCES agents(agent_id),
+    agent_metadata     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
@@ -91,6 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_pairings_agent
     ON pairings(agent_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_pairing_tokens_agent
     ON pairing_tokens(agent_id) WHERE consumed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_pairing_tokens_claimed_agent
+    ON pairing_tokens(claimed_agent_id) WHERE claimed_agent_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_email_verification_user
@@ -207,6 +212,64 @@ class Database:
             # safe and idempotent on populated dev databases.
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 6")
+
+        if version < 7:
+            # Relax pairing_tokens.agent_id NOT NULL so
+            # rows can exist before the agent row does (agent is created at
+            # claim time). Add claimed_token_raw / claimed_agent_id /
+            # agent_metadata columns to drive the agent-initiated flow.
+            #
+            # SQLite cannot ALTER the NOT NULL constraint in place. Build a
+            # new table with the relaxed schema, copy data, drop the old.
+            # Idempotent: only runs the rebuild when the legacy NOT NULL
+            # constraint is still present.
+            pti_cursor = await self._conn.execute(
+                "PRAGMA table_info(pairing_tokens)"
+            )
+            pti_rows = await pti_cursor.fetchall()
+            pt_cols = {r[1]: r for r in pti_rows}
+            agent_id_notnull = (
+                "agent_id" in pt_cols and pt_cols["agent_id"][3] == 1
+            )
+            if agent_id_notnull:
+                await self._conn.execute(
+                    "CREATE TABLE pairing_tokens_new ("
+                    "token_hash TEXT PRIMARY KEY, "
+                    "agent_id TEXT REFERENCES agents(agent_id), "
+                    "created_at TEXT NOT NULL, "
+                    "expires_at TEXT NOT NULL, "
+                    "consumed_at TEXT, "
+                    "consumed_by TEXT, "
+                    "claimed_token_raw TEXT, "
+                    "claimed_agent_id TEXT REFERENCES agents(agent_id), "
+                    "agent_metadata TEXT)"
+                )
+                await self._conn.execute(
+                    "INSERT INTO pairing_tokens_new "
+                    "(token_hash, agent_id, created_at, expires_at, "
+                    "consumed_at, consumed_by) "
+                    "SELECT token_hash, agent_id, created_at, expires_at, "
+                    "consumed_at, consumed_by FROM pairing_tokens"
+                )
+                await self._conn.execute("DROP TABLE pairing_tokens")
+                await self._conn.execute(
+                    "ALTER TABLE pairing_tokens_new RENAME TO pairing_tokens"
+                )
+            else:
+                # Fresh DBs already have the relaxed schema from _SCHEMA.
+                # Add the three new columns if any are still missing.
+                for col_name, col_ddl in (
+                    ("claimed_token_raw", "TEXT"),
+                    ("claimed_agent_id", "TEXT REFERENCES agents(agent_id)"),
+                    ("agent_metadata", "TEXT"),
+                ):
+                    if col_name not in pt_cols:
+                        await self._conn.execute(
+                            "ALTER TABLE pairing_tokens "
+                            f"ADD COLUMN {col_name} {col_ddl}"
+                        )
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 7")
 
         await self._conn.commit()
 
@@ -550,9 +613,18 @@ class Database:
         return await self.get_template(template_id)
 
     async def create_pairing_token(
-        self, agent_id: str, ttl_seconds: int
+        self,
+        agent_id: str | None = None,
+        ttl_seconds: int = 300,
+        agent_metadata: str | None = None,
     ) -> tuple[str, str]:
-        """Create a pairing token. Returns (raw_token, expires_at ISO)."""
+        """Create a pairing token. Returns (raw_token, expires_at ISO).
+
+        ``agent_id`` is None for the QR pairing flow: the agent row
+        is created at claim time. ``agent_metadata`` is a JSON string blob
+        carrying initiate-time hints (hostname, os, current_agent_id) used
+        by the claim handler to distinguish first-pair from re-pair.
+        """
         raw_token = secrets.token_urlsafe(24)  # 192 bits
         token_hash = _hash_token(raw_token)
         now = datetime.now(timezone.utc)
@@ -560,9 +632,16 @@ class Database:
             now.timestamp() + ttl_seconds, tz=timezone.utc
         )
         await self.conn.execute(
-            "INSERT INTO pairing_tokens (token_hash, agent_id, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?)",
-            (token_hash, agent_id, now.isoformat(), expires_at.isoformat()),
+            "INSERT INTO pairing_tokens "
+            "(token_hash, agent_id, created_at, expires_at, agent_metadata) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                token_hash,
+                agent_id,
+                now.isoformat(),
+                expires_at.isoformat(),
+                agent_metadata,
+            ),
         )
         await self.conn.commit()
         return raw_token, expires_at.isoformat()
@@ -592,6 +671,130 @@ class Database:
         row = await cursor2.fetchone()
         return row["agent_id"] if row else None
 
+    async def lookup_pairing_token_metadata(
+        self, raw_token: str
+    ) -> dict | None:
+        """Read pre-claim state for a QR pairing nonce.
+
+        Returns a dict with ``token_hash, expires_at, agent_metadata,
+        consumed_at`` or None if the row does not exist. Used by the claim
+        handler before CAS to inspect ``agent_metadata`` (which encodes
+        re-pair vs. first-pair intent), and by the WS handler to validate
+        nonce existence + TTL before accepting the connection.
+        """
+        token_hash = _hash_token(raw_token)
+        cursor = await self.conn.execute(
+            "SELECT token_hash, expires_at, agent_metadata, consumed_at "
+            "FROM pairing_tokens WHERE token_hash = ?",
+            (token_hash,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def claim_pairing_nonce(
+        self,
+        raw_token: str,
+        mobile_device_id: str,
+        claimed_agent_id: str,
+        claimed_token_raw: str,
+    ) -> bool:
+        """Atomic CAS that consumes the nonce AND records the claim outcome.
+
+        Combines ``consume_pairing_token``'s consume-only-if-unconsumed CAS
+        with the persistence of ``claimed_agent_id`` / ``claimed_token_raw``
+        so the row carries the credentials the WS push will deliver. The
+        single UPDATE-with-WHERE is the concurrency boundary; two parallel
+        claims race here and exactly one wins.
+
+        Returns True on success, False if the row was already consumed,
+        expired, or never existed.
+        """
+        token_hash = _hash_token(raw_token)
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE pairing_tokens "
+            "SET consumed_at = ?, "
+            "    consumed_by = ?, "
+            "    claimed_agent_id = ?, "
+            "    claimed_token_raw = ? "
+            "WHERE token_hash = ? "
+            "  AND consumed_at IS NULL "
+            "  AND expires_at > ?",
+            (
+                now,
+                mobile_device_id,
+                claimed_agent_id,
+                claimed_token_raw,
+                token_hash,
+                now,
+            ),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def read_and_clear_claimed_credentials(
+        self, raw_token: str
+    ) -> dict | None:
+        """Single-flight read of credentials to deliver, then clear.
+
+        Atomically reads ``(claimed_agent_id, claimed_token_raw)`` for a
+        consumed row AND clears ``claimed_token_raw`` to NULL so a second
+        reader (e.g., a reconnecting WS) cannot re-deliver. Returns None if
+        the row is not consumed, has no claimed token, or doesn't exist.
+
+        Note: ``claimed_agent_id`` remains populated for forensics; only
+        the raw token is cleared at rest.
+        """
+        token_hash = _hash_token(raw_token)
+        cursor = await self.conn.execute(
+            "SELECT claimed_agent_id, claimed_token_raw "
+            "FROM pairing_tokens "
+            "WHERE token_hash = ? "
+            "  AND consumed_at IS NOT NULL "
+            "  AND claimed_token_raw IS NOT NULL",
+            (token_hash,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        agent_id = row["claimed_agent_id"]
+        raw = row["claimed_token_raw"]
+        clear_cursor = await self.conn.execute(
+            "UPDATE pairing_tokens SET claimed_token_raw = NULL "
+            "WHERE token_hash = ? AND claimed_token_raw IS NOT NULL",
+            (token_hash,),
+        )
+        await self.conn.commit()
+        if clear_cursor.rowcount != 1:
+            return None
+        return {"claimed_agent_id": agent_id, "claimed_token_raw": raw}
+
+    async def transfer_agent_owner(
+        self, agent_id: str, new_owner_user_id: str
+    ) -> bool:
+        """Transfer agent ownership; cascade-invalidate prior owner's links.
+
+        Used by the QR re-pair flow when a different user account scans the
+        agent's QR. Mirrors ``delete_agent``'s cascade: deletes
+        ``mobile_refresh_tokens`` and ``pairings`` rows that belong to the
+        prior owner-device pairings, then updates ``agents.owner_user_id``.
+        Returns True if the agent row was updated, False if not found.
+        """
+        await self.conn.execute(
+            "DELETE FROM mobile_refresh_tokens WHERE agent_id = ?",
+            (agent_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM pairings WHERE agent_id = ?",
+            (agent_id,),
+        )
+        cursor = await self.conn.execute(
+            "UPDATE agents SET owner_user_id = ? WHERE agent_id = ?",
+            (new_owner_user_id, agent_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
     async def get_pending_pairing_tokens(self, agent_id: str) -> list[dict]:
         now = _now_iso()
         cursor = await self.conn.execute(
@@ -608,8 +811,17 @@ class Database:
     # that stale code hashes don't pile up as a brute-force surface on a DB leak.
     _VERIFICATION_TOKEN_RETENTION_SECONDS = 24 * 3600
 
+    # A successful WS delivery clears `claimed_token_raw` synchronously,
+    # but the queue path can fail
+    # (no waiter, dropped connection) leaving the raw token persisted.
+    # The 60s retention is generous enough that a transient WS reconnect
+    # within the QR's TTL recovers the credentials, but bounded so a raw
+    # token is never durably at rest.
+    _PAIRING_CLAIMED_TOKEN_RETENTION_SECONDS = 60
+
     async def cleanup_expired_tokens(self) -> int:
-        """Delete expired pairing AND email-verification tokens.
+        """Delete expired pairing AND email-verification tokens; clear stale
+        claimed pairing-token rows.
 
         Verification tokens are cleaned in two sweeps:
           - expired but never consumed rows are dropped immediately;
@@ -617,12 +829,25 @@ class Database:
             window so old code hashes don't linger as brute-force fodder
             on a DB dump.
 
-        Returns the total number of deleted rows across all sweeps.
+        For QR pairing, a third sweep nulls
+        ``pairing_tokens.claimed_token_raw`` for consumed rows older than
+        the claimed-token retention window. The row itself is kept (audit
+        trail), but the literal agent token is wiped so a subsequent DB
+        leak does not yield a usable RELAY_AGENT_TOKEN.
+
+        Returns the total number of deleted rows across all sweeps. The
+        third sweep contributes its rowcount when it null-updates a row.
         """
         now = _now_iso()
         retention_cutoff = (
             datetime.now(timezone.utc)
             - timedelta(seconds=self._VERIFICATION_TOKEN_RETENTION_SECONDS)
+        ).isoformat()
+        pairing_token_cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(
+                seconds=self._PAIRING_CLAIMED_TOKEN_RETENTION_SECONDS
+            )
         ).isoformat()
         pairing_cursor = await self.conn.execute(
             "DELETE FROM pairing_tokens WHERE expires_at <= ? AND consumed_at IS NULL",
@@ -638,11 +863,19 @@ class Database:
             "WHERE consumed_at IS NOT NULL AND consumed_at <= ?",
             (retention_cutoff,),
         )
+        claimed_clear_cursor = await self.conn.execute(
+            "UPDATE pairing_tokens SET claimed_token_raw = NULL "
+            "WHERE consumed_at IS NOT NULL "
+            "  AND claimed_token_raw IS NOT NULL "
+            "  AND consumed_at <= ?",
+            (pairing_token_cutoff,),
+        )
         await self.conn.commit()
         return (
             pairing_cursor.rowcount
             + expired_cursor.rowcount
             + consumed_cursor.rowcount
+            + claimed_clear_cursor.rowcount
         )
 
     async def create_verification_token(

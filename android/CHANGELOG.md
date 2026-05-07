@@ -41,6 +41,18 @@
 - Double-tap on any ``❯ ``-prefixed terminal row (or its wrapped continuation
   rows) copies the command text into the bottom InputBar and focuses it,
   without submitting. Single-tap (submit-on-tap) behaviour is unchanged.
+- **QR pairing flow (CLA-50).** ``AgentListScreen`` gains a QR-scanner
+  icon button (``Icons.Default.QrCodeScanner``) that launches
+  ``QrPairingScanner`` (ML Kit Code Scanner). After the user scans a
+  ``MOBA1|…`` payload rendered by the agent terminal, the app presents a
+  confirmation dialog; on confirm, ``AgentListViewModel.confirmQrClaim``
+  calls ``POST /api/pairing/claim`` and the server pushes credentials
+  directly to the agent — no token ever appears in the mobile UI.
+  TOFS trust-key pinning: the QR payload carries the server's Ed25519
+  fingerprint; the app pins it on first scan and rejects any future
+  claim whose fingerprint does not match, closing the substitution
+  attack surface. Adds the ``CAMERA`` permission and ML Kit / CameraX
+  dependencies for the scanner.
 
 ### Removed
 - QR-based device-pairing flow (``QrScannerScreen``, ``ManualPairingScreen``,

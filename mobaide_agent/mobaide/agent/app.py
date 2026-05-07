@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -121,14 +122,16 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     pairing_pending = relay_cfg is not None and relay_cfg.pairing_pending
     if pairing_pending:
         logger.warning(
-            "[mobaide-agent] Pairing required — open the mobile app, "
-            "then run: mobaide-agent pair --id <ID> --token <TOKEN>",
+            "[mobaide-agent] Pairing required — the mobile app will pair "
+            "this agent automatically once the QR is scanned. "
+            "Run `mobaide-agent show-qr` to re-render.",
         )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
         await app.state.session_manager.start_liveness_monitor()
+        app.state.pairing_task = None
         if relay_cfg is not None and not pairing_pending:
             from mobaide.relay.client import RelayClient
 
@@ -145,11 +148,44 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 app.state.relay_client.set_manifest_update_callback(
                     app.state.updater.consider_manifest
                 )
+        elif relay_cfg is not None and pairing_pending:
+            app.state.relay_client = None
+            app.state.updater = None
+            from mobaide.agent.pairing_monitor import (
+                default_layout,
+                run_pairing_monitor,
+            )
+
+            def _on_paired() -> None:
+                from mobaide.__main__ import _try_restart_service
+
+                logger.info("agent.pairing_complete restart_supervisor=true")
+                _try_restart_service()
+
+            layout = default_layout()
+            app.state.pairing_task = asyncio.create_task(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url=relay_cfg.server_url,
+                    current_agent_id=relay_cfg.agent_id or None,
+                    on_paired=_on_paired,
+                ),
+                name="pairing-monitor",
+            )
         else:
             app.state.relay_client = None
             app.state.updater = None
         yield
         logger.info("agent.shutting_down")
+        pairing_task = getattr(app.state, "pairing_task", None)
+        if pairing_task is not None and not pairing_task.done():
+            pairing_task.cancel()
+            try:
+                await pairing_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("agent.pairing_task_failed: %s", exc)
         # Relay client must stop first so it unsubscribes from fanouts/buses before they are torn down.
         relay_client = getattr(app.state, "relay_client", None)
         if relay_client is not None:

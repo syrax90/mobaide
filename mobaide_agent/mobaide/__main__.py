@@ -6,8 +6,17 @@ Subcommands:
                          mobaide`` has always done).
 * ``update``           — force an immediate manifest check and apply if a new
                          version is rolled out.
-* ``pair``             — write ``RELAY_AGENT_ID`` / ``RELAY_AGENT_TOKEN`` into
-                         the agent's ``.env`` after pairing in the mobile app.
+* ``pair-qr``          — initiate a QR pairing nonce, render the QR to the
+                         terminal, and (with ``--wait``) block until the
+                         mobile app claims it. Replaces the legacy
+                         ``pair --id ... --token ...`` flow.
+* ``show-qr``          — re-render the most-recent pending QR (or initiate
+                         a fresh one if expired). Helpful for SSH-attached
+                         operators who lost the install-time render.
+* ``re-pair``          — tear down the running agent, blank credentials in
+                         ``.env``, and start a fresh ``pair-qr`` cycle.
+                         Used when re-pairing to a different mobile account
+                         or rotating an agent's relay credentials.
 * ``fetch-trust-key``  — fetch the manifest-signing public key from
                          ``central_server`` and pin it at
                          ``<prefix>/trust/central_server.pub`` so the
@@ -21,10 +30,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import re
+import platform
+import socket
 import subprocess
 import sys
 import time
+import urllib.error as urllib_error
 from pathlib import Path
 
 import uvicorn
@@ -32,10 +43,6 @@ import uvicorn
 from mobaide import __version__
 
 
-# Restrictive enough to refuse newline injection (CR/LF/NUL) and shell
-# metacharacters, lenient enough to allow base64-url, hex, UUIDs, and
-# colon-prefixed tokens that some auth schemes generate.
-_AGENT_CRED_RE = re.compile(r"^[A-Za-z0-9_\-\.:+/=]{1,1024}$")
 _AGENT_RESTART_TIMEOUT_S = 15
 _AGENT_STOP_TIMEOUT_S = 30
 _WINDOWS_STOP_POLL_INTERVAL_S = 0.5
@@ -82,35 +89,70 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    pair = sub.add_parser(
-        "pair",
-        help="Write relay credentials to <prefix>/mobaide_agent/.env.",
+    pair_qr = sub.add_parser(
+        "pair-qr",
+        help=(
+            "Initiate a QR pairing nonce and render it to the terminal. "
+            "With --wait, block until the mobile app claims it."
+        ),
     )
-    pair.add_argument("--id", required=True, help="Agent id from mobile app.")
-    # Three mutually-exclusive token sources. The CLI argv form (``--token``)
-    # leaks via /proc/<pid>/cmdline and shell history; ``--token-file`` and
-    # ``--token-stdin`` are the recommended forms for shared hosts.
-    token_src = pair.add_mutually_exclusive_group(required=True)
-    token_src.add_argument(
-        "--token", help="Agent token (NOTE: visible in process argv).",
-    )
-    token_src.add_argument(
-        "--token-file",
-        help="Path to a file containing the token (one line; whitespace stripped).",
-    )
-    token_src.add_argument(
-        "--token-stdin",
+    pq_mode = pair_qr.add_mutually_exclusive_group()
+    pq_mode.add_argument(
+        "--print",
         action="store_true",
-        help="Read the token from stdin (one line; whitespace stripped).",
+        help=(
+            "Render the QR and exit immediately. Used by install scripts "
+            "to keep service start non-blocking."
+        ),
     )
-    pair.add_argument(
+    pq_mode.add_argument(
+        "--wait",
+        action="store_true",
+        help=(
+            "Render the QR and block on the pairing WebSocket until the "
+            "mobile claim arrives or the nonce expires."
+        ),
+    )
+    pair_qr.add_argument(
         "--prefix",
         help="Override install prefix (default: install_paths.default_prefix()).",
     )
-    pair.add_argument(
+    pair_qr.add_argument(
         "--no-restart",
         action="store_true",
-        help="Skip the best-effort service restart.",
+        help="Skip the best-effort service restart after a successful claim.",
+    )
+
+    show_qr = sub.add_parser(
+        "show-qr",
+        help=(
+            "Re-render the most-recent pending QR; initiate a fresh nonce "
+            "if the cached one has expired."
+        ),
+    )
+    show_qr.add_argument(
+        "--prefix",
+        help="Override install prefix (default: install_paths.default_prefix()).",
+    )
+
+    re_pair = sub.add_parser(
+        "re-pair",
+        help=(
+            "Tear down the running agent, blank its relay credentials, "
+            "and start a fresh QR pairing cycle."
+        ),
+    )
+    re_pair.add_argument(
+        "--prefix",
+        help="Override install prefix (default: install_paths.default_prefix()).",
+    )
+    re_pair.add_argument(
+        "--no-restart",
+        action="store_true",
+        help=(
+            "Blank credentials in .env without stopping or restarting the "
+            "service. The next agent boot picks up pairing-pending state."
+        ),
     )
     return parser
 
@@ -124,8 +166,12 @@ def main(argv: list[str] | None = None) -> None:
         _run_agent()
     elif command == "update":
         sys.exit(_run_update())
-    elif command == "pair":
-        sys.exit(_run_pair(args))
+    elif command == "pair-qr":
+        sys.exit(_run_pair_qr(args))
+    elif command == "show-qr":
+        sys.exit(_run_show_qr(args))
+    elif command == "re-pair":
+        sys.exit(_run_re_pair(args))
     elif command == "fetch-trust-key":
         sys.exit(_run_fetch_trust_key(args))
     else:
@@ -417,112 +463,246 @@ def _run_fetch_trust_key(args: argparse.Namespace) -> int:
     return _try_restart_service()
 
 
-_DEFAULT_RELAY_URL = "wss://mobaide.com"
-
-
-def _resolve_token(args: argparse.Namespace) -> str | None:
-    """Return the token from --token, --token-file, or stdin.
-
-    Strips trailing whitespace (the common case for
-    ``echo "$TOKEN" > token.txt``). Returns ``None`` if the file cannot be
-    read or stdin is empty. Uses ``getattr`` so that hand-built test
-    namespaces only need to set the source they're using.
-    """
-    token = getattr(args, "token", None)
-    if token is not None:
-        return token
-    token_file = getattr(args, "token_file", None)
-    if token_file is not None:
-        try:
-            return Path(token_file).read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            sys.stderr.write(
-                f"mobaide-agent pair: cannot read --token-file: {exc}\n"
-            )
-            return None
-    if getattr(args, "token_stdin", False):
-        data = sys.stdin.read().strip()
-        return data or None
-    return None
-
-
-def _run_pair(args: argparse.Namespace) -> int:
-    """Write ``RELAY_AGENT_ID`` / ``RELAY_AGENT_TOKEN`` atomically.
+def _run_pair_qr(args: argparse.Namespace) -> int:
+    """Initiate a QR pairing nonce, render it, optionally wait for the claim.
 
     Returns:
-        0   credentials written; restart succeeded or was skipped.
-        2   ``.env`` does not exist — user must run the installer or
-            ``python -m mobaide.agent.config init-env`` first.
-        3   ``--token-file`` could not be read or token was empty.
-        4   ``--id`` or token failed validation (control chars or unsupported
-            characters that would corrupt the .env on write).
+        0   pairing rendered (``--print``) or claim received (``--wait``).
+        2   ``.env`` missing or RELAY_SERVER_URL unset — operator must run
+            ``init-env`` first and configure the relay URL.
+        3   network error talking to the central server.
+        4   trust key not pinned (run ``mobaide-agent fetch-trust-key``).
+        5   trust-key fingerprint mismatch with the relay's current key.
+        6   pairing WebSocket failed (signature, transport, TTL).
+    """
+    from mobaide.agent._env_writer import (
+        env_path_for_prefix,
+        parse_env_file,
+    )
+    from mobaide.agent.install_paths import (
+        default_prefix,
+        read_trust_public_key,
+    )
+    from mobaide.agent.pairing_monitor import (
+        PairingMonitorError,
+        initiate_pairing,
+        write_credentials_to_env,
+    )
+    from mobaide.agent.pairing_qr import (
+        compute_trust_key_fp,
+        load_pending_pairing,
+        parse_qr_payload,
+        render_qr_to_terminal,
+        save_pending_pairing,
+        clear_pending_pairing,
+    )
+    from mobaide.agent.pairing_ws import PairingWsClient, PairingWsError
+    from mobaide.agent.updater import InstallLayout
+
+    prefix = Path(args.prefix) if args.prefix else default_prefix()
+    layout = InstallLayout(prefix=prefix)
+
+    env_file = env_path_for_prefix(prefix)
+    if not env_file.exists():
+        sys.stderr.write(
+            f"mobaide-agent pair-qr: {env_file} does not exist.\n"
+            f"Run: mobaide-agent init-env\n"
+        )
+        return 2
+    env_kv = parse_env_file(env_file)
+    relay_server_url = env_kv.get("RELAY_SERVER_URL", "").strip()
+    if not relay_server_url:
+        sys.stderr.write(
+            f"mobaide-agent pair-qr: RELAY_SERVER_URL is empty in {env_file}.\n"
+            f"Set it before pairing.\n"
+        )
+        return 2
+    current_agent_id = env_kv.get("RELAY_AGENT_ID", "").strip() or None
+
+    pinned_pub_key = read_trust_public_key(layout)
+    if not pinned_pub_key:
+        sys.stderr.write(
+            f"mobaide-agent pair-qr: trust key not pinned at "
+            f"{layout.trust_public_key}.\n"
+            f"Run: mobaide-agent fetch-trust-key\n"
+        )
+        return 4
+    pinned_fp = compute_trust_key_fp(pinned_pub_key)
+
+    pending = load_pending_pairing(layout)
+    if pending is None or pending.trust_key_fp != pinned_fp:
+        try:
+            pending = initiate_pairing(
+                relay_server_url,
+                pinned_fp,
+                hostname=socket.gethostname(),
+                os_name=platform.system(),
+                current_agent_id=current_agent_id,
+            )
+        except PairingMonitorError as exc:
+            sys.stderr.write(f"mobaide-agent pair-qr: {exc}\n")
+            return 5
+        except (urllib_error.URLError, OSError) as exc:
+            sys.stderr.write(
+                f"mobaide-agent pair-qr: cannot reach central server: {exc}\n"
+            )
+            return 3
+        save_pending_pairing(layout, pending)
+
+    sys.stdout.write(
+        "[mobaide-agent] Pairing QR — scan from the Mobaide mobile app:\n"
+    )
+    render_qr_to_terminal(pending.qr_payload)
+    sys.stdout.write(
+        f"[mobaide-agent] Pairing nonce expires at {pending.expires_at}\n"
+    )
+
+    if not args.wait:
+        return 0
+
+    parsed = parse_qr_payload(pending.qr_payload)
+    if parsed is None:
+        sys.stderr.write(
+            "mobaide-agent pair-qr: cached pending payload is malformed\n"
+        )
+        clear_pending_pairing(layout)
+        return 5
+    timeout_s = max(1.0, parsed.exp_unix - time.time())
+
+    sys.stdout.write(
+        "[mobaide-agent] Waiting for the mobile app to claim the QR...\n"
+    )
+    try:
+        claim = asyncio.run(
+            PairingWsClient().wait_for_claim(
+                ws_url=pending.ws_url,
+                timeout_s=timeout_s,
+                trust_pub_key_b64=pinned_pub_key,
+                expected_relay_url=pending.relay_url,
+            )
+        )
+    except PairingWsError as exc:
+        sys.stderr.write(f"mobaide-agent pair-qr: {exc}\n")
+        clear_pending_pairing(layout)
+        return 6
+
+    asyncio.run(write_credentials_to_env(env_file, claim))
+    clear_pending_pairing(layout)
+    sys.stdout.write(
+        f"[mobaide-agent] Paired as agent_id={claim.agent_id} "
+        f"({claim.agent_friendly_name}).\n"
+    )
+    if args.no_restart:
+        return 0
+    return _try_restart_service()
+
+
+def _run_show_qr(args: argparse.Namespace) -> int:
+    """Re-render the most-recent pending QR or initiate a fresh nonce.
+
+    If the agent already has both ``RELAY_AGENT_ID`` and
+    ``RELAY_AGENT_TOKEN`` set, prints ``already paired`` and exits.
+    """
+    from mobaide.agent._env_writer import env_path_for_prefix, parse_env_file
+    from mobaide.agent.install_paths import default_prefix
+    from mobaide.agent.pairing_qr import (
+        load_pending_pairing,
+        render_qr_to_terminal,
+    )
+    from mobaide.agent.updater import InstallLayout
+
+    prefix = Path(args.prefix) if args.prefix else default_prefix()
+    layout = InstallLayout(prefix=prefix)
+    env_file = env_path_for_prefix(prefix)
+    if env_file.exists():
+        env_kv = parse_env_file(env_file)
+        if env_kv.get("RELAY_AGENT_ID", "").strip() and env_kv.get(
+            "RELAY_AGENT_TOKEN", ""
+        ).strip():
+            sys.stdout.write(
+                "[mobaide-agent] Already paired. Run 'mobaide-agent re-pair' "
+                "to re-pair to a different account.\n"
+            )
+            return 0
+
+    pending = load_pending_pairing(layout)
+    if pending is not None:
+        sys.stdout.write(
+            "[mobaide-agent] Pending pairing QR — scan from the Mobaide "
+            "mobile app:\n"
+        )
+        render_qr_to_terminal(pending.qr_payload)
+        sys.stdout.write(
+            f"[mobaide-agent] Pairing nonce expires at "
+            f"{pending.expires_at}\n"
+        )
+        return 0
+
+    fake_args = argparse.Namespace(
+        prefix=str(prefix), print=True, wait=False, no_restart=True
+    )
+    return _run_pair_qr(fake_args)
+
+
+def _run_re_pair(args: argparse.Namespace) -> int:
+    """Blank credentials in .env and trigger a fresh QR pairing cycle.
+
+    Authorization model: shell access on the agent host is sufficient.
+    On platforms with a registered service supervisor we restart so the
+    boot autorun picks up ``pairing_pending`` immediately; otherwise we
+    print a manual restart hint.
+
+    Returns:
+        0   .env rewritten; restart attempted (or skipped per --no-restart).
+        2   .env missing.
     """
     from mobaide.agent._env_writer import (
         atomic_write,
         env_path_for_prefix,
-        parse_env_file,
         render_template,
         restrict_perms,
     )
     from mobaide.agent.install_paths import default_prefix
-
-    token = _resolve_token(args)
-    if token is None or token == "":
-        sys.stderr.write(
-            "mobaide-agent pair: token was empty (or --token-file unreadable).\n"
-        )
-        return 3
-
-    if not _AGENT_CRED_RE.match(args.id):
-        sys.stderr.write(
-            "mobaide-agent pair: --id contains characters that are not allowed "
-            "(control chars or shell metacharacters); refusing to write a "
-            "potentially corrupt .env.\n"
-        )
-        return 4
-    if not _AGENT_CRED_RE.match(token):
-        sys.stderr.write(
-            "mobaide-agent pair: token contains characters that are not allowed "
-            "(control chars or shell metacharacters); refusing to write a "
-            "potentially corrupt .env.\n"
-        )
-        return 4
+    from mobaide.agent.pairing_qr import clear_pending_pairing
+    from mobaide.agent.updater import InstallLayout
 
     prefix = Path(args.prefix) if args.prefix else default_prefix()
-    target = env_path_for_prefix(prefix)
-    if not target.exists():
+    layout = InstallLayout(prefix=prefix)
+    env_file = env_path_for_prefix(prefix)
+    if not env_file.exists():
         sys.stderr.write(
-            f"mobaide-agent pair: {target} does not exist.\n"
-            f"Run the installer, or:\n"
-            f"    python -m mobaide.agent.config init-env --prefix {prefix}\n"
+            f"mobaide-agent re-pair: {env_file} does not exist.\n"
+            f"Run: mobaide-agent init-env\n"
         )
         return 2
 
-    existing_text = target.read_text(encoding="utf-8")
-    existing = parse_env_file(existing_text)
-
-    overrides: dict[str, str] = {
-        "RELAY_AGENT_ID": args.id,
-        "RELAY_AGENT_TOKEN": token,
-    }
-    if not existing.get("RELAY_SERVER_URL"):
-        overrides["RELAY_SERVER_URL"] = _DEFAULT_RELAY_URL
-
-    rendered = render_template(existing_text, overrides=overrides)
-    atomic_write(target, rendered)
-    restrict_perms(target)
+    template_text = env_file.read_text(encoding="utf-8")
+    rendered = render_template(
+        template_text,
+        overrides={"RELAY_AGENT_TOKEN": ""},
+    )
+    atomic_write(env_file, rendered)
+    restrict_perms(env_file)
+    clear_pending_pairing(layout)
     sys.stdout.write(
-        f"[mobaide-agent] Wrote relay credentials to {target}.\n"
+        "[mobaide-agent] Blanked RELAY_AGENT_TOKEN in "
+        f"{env_file}; RELAY_AGENT_ID is preserved so the next pairing "
+        "claim can rotate or transfer the existing agent.\n"
     )
 
     if args.no_restart:
         sys.stdout.write(
-            "[mobaide-agent] Skipping restart (--no-restart). "
-            "Restart the service manually to pick up the new credentials.\n"
+            "[mobaide-agent] Skipping restart (--no-restart). The next "
+            "agent boot enters pairing-pending; run "
+            "'mobaide-agent show-qr' to render a fresh QR.\n"
         )
         return 0
-
-    return _try_restart_service()
+    rc = _try_restart_service()
+    sys.stdout.write(
+        "[mobaide-agent] After the service restarts, run "
+        "'mobaide-agent show-qr' to render the new QR for the mobile app.\n"
+    )
+    return rc
 
 
 def _try_restart_service() -> int:

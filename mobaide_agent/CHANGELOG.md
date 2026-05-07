@@ -3,6 +3,25 @@
 ## [Unreleased]
 
 ### Added
+- **QR pairing flow (CLA-50).** Replaces the legacy
+  `mobaide-agent pair --id ... --token ...` invocation with a scan-to-pair
+  experience: the agent renders a QR code in its terminal, the operator
+  scans it from the Mobaide mobile app, and the agent receives its
+  credentials over a server-mediated WebSocket. New CLI verbs:
+  - `mobaide-agent pair-qr [--print | --wait] [--prefix] [--no-restart]` —
+    initiates a pairing nonce, renders the QR; with `--wait`, blocks on
+    `WS /ws/pairing/{nonce}` until the mobile claim arrives, then
+    atomically writes credentials and restarts the supervisor.
+  - `mobaide-agent show-qr [--prefix]` — re-renders the most-recent
+    pending QR; falls back to a fresh initiate if expired.
+  - `mobaide-agent re-pair [--prefix] [--no-restart]` — blanks
+    `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` in `.env` and restarts so the
+    boot autorun renders a fresh QR.
+  Boot-time autorun: when an agent in `pairing_pending` state starts, the
+  app's lifespan schedules a pairing monitor that initiates + renders +
+  awaits the claim, then atomic-writes `.env` and restarts the
+  supervisor. Replaces the previous "log a warning and idle" behaviour.
+- New dependency: `segno >= 1.6` for terminal QR rendering.
 - `mobaide-agent fetch-trust-key [--from-url URL] [--no-restart] [--prefix PATH]`
   CLI verb. Repair path for installs that were set up before the install
   scripts learned to fetch the manifest-signing public key automatically.
@@ -17,24 +36,24 @@
   supervisor so the running agent picks up the new updater wiring.
 - Install scripts (`deploy/install.sh`, `deploy/install.ps1`)
   now write a prepared `<prefix>/mobaide_agent/.env` after staging the
-  release. `JWT_SECRET_KEY` is auto-generated and `RELAY_SERVER_URL` is
-  prefilled with `wss://mobaide.com`; pair the agent via `mobaide-agent
-  pair --id <ID> --token <TOKEN>` after install.
+  release and render the pairing QR before service start so SSH-attached
+  operators can scan it immediately. `JWT_SECRET_KEY` is auto-generated
+  and `RELAY_SERVER_URL` is prefilled with `wss://mobaide.com`.
 - `python -m mobaide.agent.config init-env [--prefix] [--force]` and
   `print-template` CLI verbs. Idempotent: re-runs without `--force` are
   no-ops; with `--force`, regenerates the file while preserving
   `RELAY_AGENT_ID`, `RELAY_AGENT_TOKEN`, and the existing
   `JWT_SECRET_KEY` (rotating the secret would invalidate live mobile
   JWTs).
-- `mobaide-agent pair --id <id> --token <token> [--prefix] [--no-restart]`
-  CLI verb. Atomically writes relay credentials into the agent `.env` and
-  best-effort restarts the supervisor unit on systemd / launchd / Windows
-  Service.
 - Pairing-pending boot mode: when `RELAY_SERVER_URL` is set without a
-  matching id/token pair, the agent boots without crashing, surfaces a
-  WARNING-level log line (`[mobaide-agent] Pairing required — ...`), and
-  exposes `pairing_pending: true` on `/api/health`. Mirrors Tailscale's
-  idle-until-paired daemon model.
+  matching id/token pair, the agent boots without crashing, schedules
+  the QR pairing monitor, and exposes `pairing_pending: true` on
+  `/api/health`. Mirrors Tailscale's idle-until-paired daemon model.
+
+### Removed
+- `mobaide-agent pair --id ... --token ...` verb. Replaced by the QR
+  pairing flow described above. The mobile app no longer surfaces
+  raw `agent_id` / `agent_token` for manual entry.
 - `mobaide/agent/env.template` packaged inside the wheel as canonical
   source of truth for the agent `.env` shape. Repo-root
   `mobaide_agent/.env.example` is now a generated mirror; regenerate

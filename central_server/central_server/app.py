@@ -30,6 +30,7 @@ from .logging_setup import (
 )
 from .manifest.store import ManifestStore
 from .pairing.service import PairingService
+from .pairing.ws_handlers import PairingWsRegistry
 from .relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -86,6 +87,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         )
         await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db)
+        app.state.pairing_ws_registry = PairingWsRegistry()
         app.state.agent_service = AgentService(db, app.state.routing)
         app.state.template_service = TemplateService(db, app.state.routing)
 

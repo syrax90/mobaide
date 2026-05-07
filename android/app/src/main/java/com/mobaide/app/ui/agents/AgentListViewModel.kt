@@ -9,7 +9,9 @@ import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.security.TrustKeyPinning
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +23,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/** Sub-state for the QR pairing flow. Token is never stored here. */
+sealed interface QrPairingState {
+    data object Idle : QrPairingState
+    data class Confirming(val payload: ParsedQrPairingPayload) : QrPairingState
+    data class Claiming(val payload: ParsedQrPairingPayload) : QrPairingState
+    data class Success(val agentId: String, val friendlyName: String) : QrPairingState
+    data class Error(val message: String) : QrPairingState
+}
+
 data class AgentListUiState(
     val agents: List<AgentSummaryResponse> = emptyList(),
     val isLoading: Boolean = false,
@@ -30,6 +41,7 @@ data class AgentListUiState(
     val deleteConfirmAgent: AgentSummaryResponse? = null,
     val isConnecting: Boolean = false,
     val connectedAgentId: String? = null,
+    val qrPairing: QrPairingState = QrPairingState.Idle,
 )
 
 @HiltViewModel
@@ -40,6 +52,7 @@ class AgentListViewModel @Inject constructor(
     private val sessionManager: SessionManager,
     private val agentEventBus: AgentEventBus,
     private val userIdentityStore: UserIdentityStore,
+    private val trustKeyPinning: TrustKeyPinning,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
@@ -49,6 +62,9 @@ class AgentListViewModel @Inject constructor(
 
     private val _navigateToSessions = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val navigateToSessions: SharedFlow<Unit> = _navigateToSessions.asSharedFlow()
+
+    private val _scanRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val scanRequests: SharedFlow<Unit> = _scanRequests.asSharedFlow()
 
     init {
         viewModelScope.launch {
@@ -171,6 +187,120 @@ class AgentListViewModel @Inject constructor(
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(error = e.message ?: "Failed to delete agent")
+                }
+            }
+        }
+    }
+
+    fun onScanQrClicked() {
+        _uiState.update { it.copy(qrPairing = QrPairingState.Idle) }
+        _scanRequests.tryEmit(Unit)
+    }
+
+    fun dismissQrPairing() {
+        _uiState.update { it.copy(qrPairing = QrPairingState.Idle) }
+    }
+
+    /**
+     * Handle a scanned QR (or scan failure). Validates expiry, performs the
+     * TOFS trust-key check, then transitions to [QrPairingState.Confirming]
+     * so the user can confirm before the network call. Confirmation drives
+     * [confirmQrClaim].
+     */
+    fun onScanResult(result: Result<ParsedQrPairingPayload>) {
+        result.fold(
+            onSuccess = { payload ->
+                viewModelScope.launch {
+                    val nowSec = System.currentTimeMillis() / 1000L
+                    if (payload.expUnix <= nowSec) {
+                        _uiState.update {
+                            it.copy(
+                                qrPairing = QrPairingState.Error(
+                                    "QR expired. Render a fresh one on the agent."
+                                ),
+                            )
+                        }
+                        return@launch
+                    }
+                    when (val verdict = trustKeyPinning.verifyOrPin(
+                        payload.relayUrl, payload.trustKeyFp,
+                    )) {
+                        is TrustKeyPinning.VerifyResult.Mismatch -> {
+                            _uiState.update {
+                                it.copy(
+                                    qrPairing = QrPairingState.Error(
+                                        "Trust key changed for ${payload.relayUrl} " +
+                                        "— possible MITM. Refusing to claim. " +
+                                        "If you intentionally rotated the relay key, " +
+                                        "clear app data to re-pin."
+                                    ),
+                                )
+                            }
+                        }
+                        TrustKeyPinning.VerifyResult.Match,
+                        TrustKeyPinning.VerifyResult.Pinned -> {
+                            _uiState.update {
+                                it.copy(
+                                    qrPairing = QrPairingState.Confirming(payload),
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            onFailure = { exc ->
+                if (exc is CancellationException) {
+                    _uiState.update { it.copy(qrPairing = QrPairingState.Idle) }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            qrPairing = QrPairingState.Error(
+                                exc.message ?: "Could not scan QR"
+                            ),
+                        )
+                    }
+                }
+            },
+        )
+    }
+
+    fun confirmQrClaim() {
+        val state = _uiState.value.qrPairing
+        if (state !is QrPairingState.Confirming) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(qrPairing = QrPairingState.Claiming(state.payload)) }
+            try {
+                val mobileDeviceId = userIdentityStore.getUserId()
+                    ?: state.payload.nonce  // Fallback: never empty.
+                val response = agentRepository.claimAgentByPairing(
+                    nonce = state.payload.nonce,
+                    trustKeyFp = state.payload.trustKeyFp,
+                    mobileDeviceId = mobileDeviceId,
+                    hostnameHint = null,
+                    friendlyName = null,
+                )
+                _uiState.update {
+                    it.copy(
+                        qrPairing = QrPairingState.Success(
+                            agentId = response.agent_id,
+                            friendlyName = response.agent_friendly_name,
+                        ),
+                    )
+                }
+            } catch (e: ApiException) {
+                val msg = if (e.code == 410) {
+                    "Pairing code consumed or expired. Render a fresh QR on the agent."
+                } else {
+                    e.message ?: "Pairing failed (HTTP ${e.code})"
+                }
+                _uiState.update { it.copy(qrPairing = QrPairingState.Error(msg)) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        qrPairing = QrPairingState.Error(
+                            e.message ?: "Pairing failed"
+                        ),
+                    )
                 }
             }
         }

@@ -289,6 +289,25 @@ function Write-AgentEnv {
     if ($LASTEXITCODE -ne 0) { Write-Fail "init-env failed (exit $LASTEXITCODE)" }
 }
 
+function Write-PairingQr {
+    param($Version)
+    # Best-effort: render a pairing QR for the operator to scan from the
+    # Mobaide mobile app before the service starts. Non-fatal — the
+    # boot-time autorun retries on its own.
+    if ($env:MOBAIDE_AGENT_SKIP_INSTALL_QR) { return }
+    $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $Version
+    $releaseScripts = Join-Path $releaseDir "venv\Scripts"
+    $mobaideAgent = Join-Path $releaseScripts "mobaide-agent.exe"
+    if (-not (Test-Path $mobaideAgent)) {
+        $mobaideAgent = Join-Path $releaseScripts "mobaide-agent"
+    }
+    Write-Info "Rendering pairing QR (scan from the Mobaide mobile app)"
+    & $mobaideAgent pair-qr --print --prefix $Script:Prefix
+    if ($LASTEXITCODE -ne 0) {
+        Write-Info "QR render failed; the agent will re-render at boot."
+    }
+}
+
 function Install-Service {
     param($Version)
     $launcherDir = Join-Path $Script:Prefix "bin"
@@ -353,6 +372,7 @@ function Main {
     }
 
     Write-AgentEnv -Version $version
+    Write-PairingQr -Version $version
 
     Install-Service -Version $version
     Write-Completion -Version $version
