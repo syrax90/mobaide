@@ -183,8 +183,9 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
 
     sys.stdout.write(
         f"[mobaide-agent] Wrote prepared config to {target}.\n"
-        f"Next: open the mobile app, pair this agent, then run:\n"
-        f"    mobaide-agent pair --id <ID> --token <TOKEN>\n"
+        f"Next: render the pairing QR and scan it from the Mobaide mobile app:\n"
+        f"    mobaide-agent pair-qr --print     # render once and exit\n"
+        f"    mobaide-agent pair-qr --wait      # render and block until claimed\n"
         f"or edit the file directly:\n"
         f"    {target}\n"
     )

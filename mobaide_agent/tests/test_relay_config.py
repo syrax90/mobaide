@@ -44,11 +44,21 @@ class TestRelayConfigPartialConfig:
         with pytest.raises(RuntimeError, match="RELAY_AGENT_ID"):
             RelayConfig.from_env()
 
-    def test_raises_when_agent_token_missing(self, monkeypatch):
+    def test_id_set_token_blank_is_re_pair_pending(self, monkeypatch):
+        # The agent_id-set + token-blank state is the documented re-pair-
+        # pending sub-state. ``mobaide-agent re-pair`` writes exactly this
+        # shape so the boot autorun can carry the prior ``current_agent_id``
+        # into the next claim. The previous strict validator that raised
+        # RuntimeError here is intentionally relaxed.
         monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")
         monkeypatch.setenv("RELAY_AGENT_ID", "agent-1")
-        with pytest.raises(RuntimeError, match="RELAY_AGENT_TOKEN"):
-            RelayConfig.from_env()
+        monkeypatch.setenv("RELAY_AGENT_TOKEN", "")
+        cfg = RelayConfig.from_env()
+        assert cfg is not None
+        assert cfg.agent_id == "agent-1"
+        assert cfg.agent_token == ""
+        assert cfg.pairing_pending is True
+        assert cfg.re_pair_pending is True
 
     def test_raises_when_agent_id_is_empty(self, monkeypatch):
         monkeypatch.setenv("RELAY_SERVER_URL", "wss://relay.example.com")

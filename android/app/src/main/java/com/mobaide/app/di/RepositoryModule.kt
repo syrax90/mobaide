@@ -22,6 +22,7 @@ import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.data.repository.VersionGateRepository
+import com.mobaide.app.data.security.TrustKeyPinning
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -115,6 +116,12 @@ object RepositoryModule {
     @Singleton
     fun providePreferencesStore(@ApplicationContext context: Context): PreferencesStore {
         return PreferencesStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideTrustKeyPinning(@ApplicationContext context: Context): TrustKeyPinning {
+        return TrustKeyPinning(context)
     }
 
     @Provides

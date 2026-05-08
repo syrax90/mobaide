@@ -97,10 +97,10 @@ $env:MOBAIDE_AGENT_PREFIX = (Resolve-Path .\mobaide_dev_prefix).Path
 python -m mobaide
 ```
 
-Pair after the mobile app issues a token:
+Render the pairing QR for the mobile app to scan (CLA-50):
 
 ```powershell
-mobaide-agent pair --id <ID> --token <TOKEN> --prefix .\mobaide_dev_prefix
+mobaide-agent pair-qr --wait --prefix .\mobaide_dev_prefix
 ```
 
 For the full local stack (Caddy + central-server in Docker + agent native), use `start-all.ps1` from the repo root.
@@ -136,19 +136,17 @@ and registers the supervisor:
 
 The install script auto-generates `<prefix>/mobaide_agent/.env` with a
 random `JWT_SECRET_KEY` and prefilled `RELAY_SERVER_URL=wss://mobaide.com`,
-so the agent boots in **pairing-pending** state immediately. To complete
-pairing, copy the agent id and token from the mobile app and run:
+so the agent boots in **pairing-pending** state immediately. The install
+script renders a pairing QR before service start; if the operator misses
+it, the boot autorun re-renders, and `mobaide-agent show-qr` prints the
+most-recent pending QR on demand. Scan from the Mobaide mobile app to
+complete pairing — see [docs/qr-pairing.md](qr-pairing.md) for the full
+flow.
 
-```bash
-mobaide-agent pair --id <ID> --token <TOKEN>
-```
-
-The CLI verb writes the credentials atomically and best-effort restarts
-the supervisor unit (systemd / launchd / Windows Service). Until paired,
-the agent surfaces a status log line and exposes `pairing_pending: true`
-on `/api/health`. Re-running the installer never clobbers paired
-credentials; pass `--force` to `python -m mobaide.agent.config init-env`
-to regenerate (which still preserves `RELAY_AGENT_ID`/`RELAY_AGENT_TOKEN`).
+Until paired, the agent exposes `pairing_pending: true` on `/api/health`.
+Re-running the installer never clobbers paired credentials; pass
+`--force` to `python -m mobaide.agent.config init-env` to regenerate
+(which still preserves `RELAY_AGENT_ID`/`RELAY_AGENT_TOKEN`).
 
 **From-source / developer install:** use `deploy/setup.sh` (sets up a flat venv from the local repo checkout). The script renders the systemd unit inline against the flat-venv layout (`/opt/mobaide/venv/...`), so this path does NOT require the versioned `releases/` layout that the end-user script uses.
 
@@ -239,12 +237,13 @@ sudo systemctl restart mobaide-agent
 1. Open the Mobaide app
 2. Go to **Settings → Add connection**
 3. Set the **Server URL** to your central-server base URL, e.g. `https://mobaide.com`
-4. Sign in (or sign up), then pair this agent under **Settings → Agents → Pair new** and copy the generated `RELAY_AGENT_ID` and `RELAY_AGENT_TOKEN`, then run:
-   ```bash
-   mobaide-agent pair --id <ID> --token <TOKEN>
-   ```
-   The CLI verb writes the credentials atomically and restarts the supervisor.
-5. The agent will show up as online in the app within a few seconds
+4. Sign in (or sign up), then go to **Agents → Scan QR**
+5. Scan the QR code rendered on the agent host (printed by the install
+   script before service start, or via `mobaide-agent show-qr`). The
+   server pushes the credentials directly to the agent over a
+   pairing WebSocket; no token ever appears in the mobile UI. See
+   [docs/qr-pairing.md](qr-pairing.md) for the protocol details.
+6. The agent will show up as online in the app within a few seconds
 
 ### Troubleshooting
 

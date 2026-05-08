@@ -46,6 +46,10 @@ class CentralServerConfig:
     log_level: str = "INFO"
     log_format: str = "json"  # "json" | "console"
     pairing_token_ttl_seconds: int = 300  # 5 minutes
+    # NIST SP 800-63B sweet-spot for short-lived on-screen secrets: 60s is
+    # too tight for scan latency over an SSH session; 300s is too generous
+    # for an authenticator-bound code rendered to a terminal.
+    pairing_qr_token_ttl_seconds: int = 120
     ws_ping_interval: int = 20  # seconds, within 15-30s spec
     agent_disconnect_timeout: int = 30
 
@@ -69,7 +73,20 @@ class CentralServerConfig:
     # Release / manifest publishing
     release_auth_token: str | None = None
     manifest_signing_public_key_b64: str | None = None
+    # Optional Ed25519 private key paired with ``manifest_signing_public_key_b64``.
+    # Required for the QR pairing flow: the central server signs the
+    # WS-push payload that delivers ``agent_id``/``agent_token`` to the agent,
+    # and the agent verifies with its pinned public key. When this is unset,
+    # ``POST /api/pairing/initiate`` returns 503 — the trust-key endpoint at
+    # ``/api/v1/agent/trust_key`` follows the same fail-closed pattern.
+    # Manifest publishing itself remains driven by the external release
+    # pipeline and does NOT consume this private key.
+    manifest_signing_private_key_b64: str | None = None
     manifest_store_path: str = "data/agent_manifest.json"
+    # Public base URL the agent and mobile use to talk to this server.
+    # When set, ``POST /api/pairing/initiate`` embeds it in the QR payload.
+    # When unset, falls back to the Host header from the initiate request.
+    public_base_url: str | None = None
 
     @classmethod
     def from_env(cls) -> CentralServerConfig:
@@ -99,6 +116,9 @@ class CentralServerConfig:
             log_format=os.getenv("LOG_FORMAT", "json"),
             pairing_token_ttl_seconds=int(
                 os.getenv("PAIRING_TOKEN_TTL_SECONDS", "300"),
+            ),
+            pairing_qr_token_ttl_seconds=int(
+                os.getenv("PAIRING_QR_TOKEN_TTL_SECONDS", "120"),
             ),
             ws_ping_interval=int(os.getenv("WS_PING_INTERVAL", "20")),
             agent_disconnect_timeout=int(
@@ -134,7 +154,11 @@ class CentralServerConfig:
             manifest_signing_public_key_b64=(
                 os.getenv("MANIFEST_SIGNING_PUBLIC_KEY") or None
             ),
+            manifest_signing_private_key_b64=(
+                os.getenv("MANIFEST_SIGNING_PRIVATE_KEY") or None
+            ),
             manifest_store_path=os.getenv(
                 "MANIFEST_STORE_PATH", "data/agent_manifest.json",
             ),
+            public_base_url=os.getenv("PUBLIC_BASE_URL") or None,
         )

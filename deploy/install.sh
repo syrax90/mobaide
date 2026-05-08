@@ -415,6 +415,22 @@ write_agent_env() {
         --prefix "$MOBAIDE_AGENT_PREFIX"
 }
 
+print_pairing_qr() {
+    # Best-effort: render a pairing QR for SSH-attached operators before
+    # the service starts. Non-fatal — if the agent cannot reach the
+    # central server (e.g., during CI installs without network access),
+    # the boot-time autorun retries automatically once the service is up.
+    local version release_dir
+    version="$(cat "${MOBAIDE_AGENT_PREFIX}/current_version")"
+    release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${version}"
+    if [ -z "${MOBAIDE_AGENT_SKIP_INSTALL_QR:-}" ]; then
+        info "Rendering pairing QR (scan from the Mobaide mobile app)"
+        "$release_dir/venv/bin/mobaide-agent" pair-qr --print \
+            --prefix "$MOBAIDE_AGENT_PREFIX" \
+            || info "QR render failed; the agent will re-render at boot."
+    fi
+}
+
 resolve_run_as_user() {
     # Linux only — macOS installs to ~/ and runs under launchd as the user.
     # Sets script-scoped RUN_USER, RUN_GROUP, RUN_HOME consumed by
@@ -600,6 +616,7 @@ main() {
     rm -f "$manifest"
 
     write_agent_env
+    print_pairing_qr
 
     if [ "$PLATFORM" = "linux" ]; then
         resolve_run_as_user

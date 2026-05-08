@@ -184,6 +184,11 @@ dependencies {
     // Google Play in-app updates (flexible + immediate flows)
     implementation(libs.play.app.update.ktx)
 
+    // Google Code Scanner. GMS-rendered scanner UI; no CAMERA
+    // permission required — the GMS module hosts the camera in a
+    // separate process and only returns the scanned barcode value.
+    implementation(libs.play.services.code.scanner)
+
     // Unit testing
     testImplementation(libs.junit)
     testImplementation(libs.mockk)

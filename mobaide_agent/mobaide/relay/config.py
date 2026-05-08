@@ -1,17 +1,24 @@
 """Relay configuration for connecting the agent to a Central Server.
 
-Loaded via ``pydantic-settings``. Three runtime states:
+Loaded via ``pydantic-settings``. Four runtime states:
 
 * **not configured** — ``RELAY_SERVER_URL`` empty. ``configured`` is False;
   the agent boots without starting a relay client.
-* **pairing pending** — ``RELAY_SERVER_URL`` set, ``RELAY_AGENT_ID`` and
-  ``RELAY_AGENT_TOKEN`` both empty. ``pairing_pending`` is True; the agent
-  surfaces a status log line and exposes a health-endpoint flag, but does
-  NOT start a relay client. Mirrors Tailscale's idle-until-paired daemon.
+* **pairing pending (fresh install)** — ``RELAY_SERVER_URL`` set,
+  ``RELAY_AGENT_ID`` AND ``RELAY_AGENT_TOKEN`` both empty.
+  ``pairing_pending`` is True, ``re_pair_pending`` is False; the agent
+  boots in QR pairing mode. Mirrors Tailscale's idle-until-paired
+  daemon.
+* **re-pair pending** — ``RELAY_SERVER_URL`` set, ``RELAY_AGENT_ID`` set,
+  ``RELAY_AGENT_TOKEN`` empty. Both ``pairing_pending`` and
+  ``re_pair_pending`` are True; the boot autorun carries the prior
+  ``agent_id`` into the next claim so the server takes the
+  ``transfer_agent_owner`` / ``reregister_agent`` branch instead of
+  registering a fresh agent. Written by ``mobaide-agent re-pair``.
 * **configured** — all three set. ``pairing_pending`` is False; the agent
   starts a relay client normally.
 
-A genuine misconfig (id without token, or vice versa) still raises at
+The id-empty + token-set state is still a misconfig and raises at
 construction time.
 """
 from __future__ import annotations
@@ -58,16 +65,32 @@ class RelayConfig(BaseSettings):
     def pairing_pending(self) -> bool:
         return self.configured and not (self.agent_id and self.agent_token)
 
+    @property
+    def re_pair_pending(self) -> bool:
+        """Sub-state of `pairing_pending`: agent_id retained, token blanked.
+
+        Set by ``mobaide-agent re-pair``: only the
+        token is cleared so the boot autorun can carry ``current_agent_id``
+        into the next initiate request and trigger the server's
+        ``transfer_agent_owner`` / ``reregister_agent`` branch instead of
+        registering a fresh agent. The fresh-install pairing-pending case
+        has both fields blank and ``re_pair_pending`` is False.
+        """
+        return (
+            self.configured
+            and bool(self.agent_id)
+            and not self.agent_token
+        )
+
     @model_validator(mode="after")
     def _check_partial(self) -> "RelayConfig":
         if not self.configured:
             return self
-        only_id = bool(self.agent_id) and not self.agent_token
+        # The id-set / token-blank state is intentional during re-pair:
+        # blanking the token alone signals the boot autorun that the
+        # existing agent should rotate-or-transfer. The reverse — token
+        # set without id — is still nonsensical and refused.
         only_token = bool(self.agent_token) and not self.agent_id
-        if only_id:
-            raise RuntimeError(
-                "RELAY_AGENT_TOKEN is required when RELAY_AGENT_ID is set",
-            )
         if only_token:
             raise RuntimeError(
                 "RELAY_AGENT_ID is required when RELAY_AGENT_TOKEN is set",

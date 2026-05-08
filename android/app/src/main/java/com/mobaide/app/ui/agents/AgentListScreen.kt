@@ -19,8 +19,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -31,7 +33,9 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -62,6 +66,17 @@ fun AgentListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val qrScanLauncher = rememberQrPairingScanner()
+
+    LaunchedEffect(qrScanLauncher) {
+        qrScanLauncher.warmUp()
+    }
+
+    LaunchedEffect(qrScanLauncher) {
+        viewModel.scanRequests.collect {
+            qrScanLauncher.launch { result -> viewModel.onScanResult(result) }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.navigateToSessions.collect {
@@ -81,6 +96,12 @@ fun AgentListScreen(
             TopAppBar(
                 title = { Text("My Agents") },
                 actions = {
+                    IconButton(onClick = viewModel::onScanQrClicked) {
+                        Icon(
+                            Icons.Default.QrCodeScanner,
+                            contentDescription = "Scan QR to pair agent",
+                        )
+                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -169,6 +190,74 @@ fun AgentListScreen(
             agentName = agent.name,
             onConfirm = { viewModel.confirmDelete(agent.agent_id) },
             onDismiss = viewModel::dismissDeleteConfirm,
+        )
+    }
+
+    QrPairingDialogs(
+        state = uiState.qrPairing,
+        onConfirm = viewModel::confirmQrClaim,
+        onDismiss = viewModel::dismissQrPairing,
+    )
+}
+
+@Composable
+private fun QrPairingDialogs(
+    state: QrPairingState,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        QrPairingState.Idle -> Unit
+        is QrPairingState.Confirming -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Pair this agent?") },
+            text = {
+                Text(
+                    "Relay: ${state.payload.relayUrl}\n" +
+                    "Pairing code: ${state.payload.nonce.take(8)}…\n" +
+                    "Expires at unix ${state.payload.expUnix}.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onConfirm) { Text("Pair") }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            },
+        )
+        is QrPairingState.Claiming -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Pairing…") },
+            text = {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            },
+            confirmButton = {},
+        )
+        is QrPairingState.Success -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Paired") },
+            text = {
+                Text(
+                    "Agent ${state.friendlyName} (${state.agentId}) " +
+                    "has been paired to your account.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = onDismiss) { Text("OK") }
+            },
+        )
+        is QrPairingState.Error -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Pairing failed") },
+            text = { Text(state.message) },
+            confirmButton = {
+                OutlinedButton(onClick = onDismiss) { Text("Close") }
+            },
         )
     }
 }

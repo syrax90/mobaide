@@ -6,6 +6,8 @@ import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
 import com.mobaide.app.data.network.dto.GoogleAuthRequest
 import com.mobaide.app.data.network.dto.MobileTokenResponse
+import com.mobaide.app.data.network.dto.PairingClaimRequest
+import com.mobaide.app.data.network.dto.PairingClaimResponse
 import com.mobaide.app.data.network.dto.ReRegisterAgentResponse
 import com.mobaide.app.data.network.dto.ResendVerificationRequest
 import com.mobaide.app.data.network.dto.ResendVerificationResponse
@@ -144,6 +146,27 @@ class CentralApi(
         val request = Request.Builder()
             .url("${baseUrl()}/api/agents/$agentId/token")
             .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    /**
+     * Claim a scanned QR pairing nonce. The server creates or transfers the
+     * `agents` row, mints a fresh token, pushes the credentials to the agent
+     * over its pairing WebSocket, and returns only the public-facing agent
+     * id + friendly name. The token never reaches the mobile UI.
+     *
+     * Throws [ApiException] with HTTP 410 if the nonce is consumed/expired.
+     */
+    suspend fun claimAgentByPairing(
+        userToken: String,
+        body: PairingClaimRequest,
+    ): PairingClaimResponse {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/pairing/claim")
+            .post(payload)
             .header("Authorization", "Bearer $userToken")
             .build()
         return execute(request)

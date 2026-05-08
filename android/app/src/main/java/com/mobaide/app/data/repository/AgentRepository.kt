@@ -5,6 +5,8 @@ import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.MobileTokenResponse
+import com.mobaide.app.data.network.dto.PairingClaimRequest
+import com.mobaide.app.data.network.dto.PairingClaimResponse
 import com.mobaide.app.data.network.dto.ReRegisterAgentResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -68,6 +70,34 @@ class AgentRepository(
     suspend fun getMobileTokensForAgent(agentId: String): MobileTokenResponse {
         val token = requireUserToken()
         return centralApi.getMobileTokens(token, agentId)
+    }
+
+    /**
+     * Claim a scanned QR pairing payload. The server creates or
+     * transfers the agent row and pushes the credentials directly to the
+     * agent over its pairing WebSocket. Refreshes the agent list on
+     * success; the new agent appears within one round-trip.
+     */
+    suspend fun claimAgentByPairing(
+        nonce: String,
+        trustKeyFp: String,
+        mobileDeviceId: String,
+        hostnameHint: String?,
+        friendlyName: String?,
+    ): PairingClaimResponse {
+        val token = requireUserToken()
+        val response = centralApi.claimAgentByPairing(
+            token,
+            PairingClaimRequest(
+                nonce = nonce,
+                trust_key_fp = trustKeyFp,
+                mobile_device_id = mobileDeviceId,
+                hostname_hint = hostnameHint,
+                friendly_name = friendlyName,
+            ),
+        )
+        refreshAgents()
+        return response
     }
 
     private fun requireUserToken(): String =
