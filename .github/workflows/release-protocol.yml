@@ -24,17 +24,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install runtime deps for envelope import
+      - name: Install both packages with dev extras
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e mobaide_agent
-          python -m pip install -e central_server
-          python -m pip install pytest
+          python -m pip install -e 'mobaide_agent[dev]'
+          python -m pip install -e 'central_server[dev]'
 
-      - name: Validate envelope.py constants are mirrored
-        run: python tests/test_protocol_integrity.py
-
-      - name: Pytest protocol golden file
+      - name: Run protocol integrity tests
         run: python -m pytest tests/test_protocol_integrity.py -v
 
       - name: Resolve tag and previous proto tag
