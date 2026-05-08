@@ -1,0 +1,49 @@
+name: PR title lint
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+  statuses: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Allowed conventional-commit types. Only feat/fix on a
+          # release-bearing scope produces a tag; the rest are no-ops for
+          # release-please but accepted so non-release PRs can still merge.
+          types: |
+            feat
+            fix
+            chore
+            docs
+            refactor
+            test
+            ci
+            build
+            perf
+            style
+            revert
+          # Allowed scopes. The release-bearing ones (agent, server, android)
+          # match the tag prefixes used by release-please-config.json's
+          # `component` field. The rest are catch-alls for non-release work.
+          # If a scope is present and not on this list, the check fails -
+          # this is what catches typos like `feat(mobaide_agent): ...` or
+          # `feat(central_server): ...` that silently miss release-please.
+          scopes: |
+            agent
+            server
+            android
+            protocol
+            infra
+            docs
+          # Scope is optional. `chore: tidy ci` passes; `feat(agent): ...`
+          # passes and triggers a release after squash-merge.
+          requireScope: false
