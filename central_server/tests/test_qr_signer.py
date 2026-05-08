@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 
 import pytest
 from cryptography.exceptions import InvalidSignature
@@ -20,7 +19,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 from central_server.pairing.qr_signer import (
     canonical_payload_bytes,
     compute_trust_key_fp,
-    derive_ws_url,
     sign_pairing_payload,
 )
 
@@ -120,41 +118,3 @@ class TestSignPairingPayload:
         s2 = sign_pairing_payload(priv_b64, payload)
 
         assert s1 == s2
-
-
-class TestDeriveWsUrl:
-    @pytest.mark.parametrize(
-        "base_url,expected",
-        [
-            ("https://relay.example.com",
-             "wss://relay.example.com/ws/pairing/N1"),
-            ("https://relay.example.com:9000",
-             "wss://relay.example.com:9000/ws/pairing/N1"),
-            ("http://localhost:8080",
-             "ws://localhost:8080/ws/pairing/N1"),
-            ("wss://relay.example.com",
-             "wss://relay.example.com/ws/pairing/N1"),
-            ("ws://localhost",
-             "ws://localhost/ws/pairing/N1"),
-        ],
-    )
-    def test_scheme_and_port_translation(self, base_url, expected):
-        assert derive_ws_url(base_url, "N1") == expected
-
-    def test_path_query_fragment_dropped(self):
-        # The WS endpoint is pinned at /ws/pairing/{nonce}; any path on
-        # the input base URL is intentionally discarded.
-        out = derive_ws_url(
-            "https://relay.example.com/some/path?q=1#frag",
-            "abc",
-        )
-
-        assert out == "wss://relay.example.com/ws/pairing/abc"
-
-    def test_unsupported_scheme_raises(self):
-        with pytest.raises(ValueError, match="Unsupported scheme"):
-            derive_ws_url("ftp://relay.example.com", "n")
-
-    def test_missing_host_raises(self):
-        with pytest.raises(ValueError, match="missing host"):
-            derive_ws_url("https://", "n")

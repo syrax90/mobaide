@@ -37,7 +37,6 @@ from .models import (
 )
 from .qr_signer import (
     compute_trust_key_fp,
-    derive_ws_url,
     sign_pairing_payload,
 )
 
@@ -150,7 +149,6 @@ async def initiate_pairing(
 
     relay_url = _resolve_public_base_url(request)
     trust_key_fp = compute_trust_key_fp(pub_key_b64)
-    ws_url = derive_ws_url(relay_url, raw_nonce)
     exp_unix = int(datetime.fromisoformat(expires_at).timestamp())
     qr_payload = (
         f"MOBA1|{relay_url}|{raw_nonce}|{trust_key_fp}|{exp_unix}"
@@ -169,7 +167,6 @@ async def initiate_pairing(
         expires_at=expires_at,
         trust_key_fp=trust_key_fp,
         relay_url=relay_url,
-        ws_url=ws_url,
         qr_payload=qr_payload,
     )
 

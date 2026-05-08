@@ -47,6 +47,15 @@
 
 ## [Unreleased]
 
+### Breaking
+- **`POST /api/pairing/initiate` no longer returns a `ws_url` field.** The
+  pairing WS URL is now derived agent-side from `RELAY_SERVER_URL` + the
+  response `nonce` (single source of truth). Removes a class of
+  deployment-skew bugs where a stale server image returned an `https://`
+  scheme that the Python `websockets` client hard-rejected with
+  `"isn't a valid URI: scheme isn't ws or wss"`. The
+  `derive_ws_url` helper in `central_server.pairing.qr_signer` is removed.
+
 ### Added
 - **QR pairing endpoints (CLA-50):**
   * ``POST /api/pairing/initiate`` — anonymous; agent posts to receive a
