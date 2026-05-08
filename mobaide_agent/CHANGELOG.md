@@ -1,5 +1,28 @@
 # mobaide_agent Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Offline-after-pairing: pairing WebSocket failed with `"isn't a valid
+  URI: scheme isn't ws or wss"`.** The agent now derives the pairing WS
+  URL locally from `RELAY_SERVER_URL` + the response `nonce` rather than
+  trusting the server's `ws_url` field. Eliminates a deployment-skew
+  failure mode where a stale `central_server` returned `https://...` and
+  the Python `websockets` client hard-rejected the scheme. New helper:
+  `mobaide.agent.pairing_monitor._pairing_ws_url`. Cleartext (`ws://` /
+  `http://`) is refused unless `MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`,
+  mirroring the trust-key fetch's loopback escape hatch.
+- **Offline-after-pairing: agent stayed in `pairing_pending` even after
+  successful pairing.** The post-pairing `_on_paired` callback used
+  `sudo -n systemctl restart mobaide-agent`, which silently no-op'd when
+  the install user lacked NOPASSWD (the typical case after
+  `curl|sudo bash`); the running process kept its frozen
+  empty-credentials config in memory and never started the relay client.
+  Replaced with `sys.exit(EXIT_RESTART_REQUESTED)` (exit code 75),
+  recognized by the systemd unit's `RestartForceExitStatus=75`, macOS
+  launchd's `KeepAlive`, and Windows SC's failure-restart actions —
+  same pattern the auto-updater already uses.
+
 ## [0.1.3](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.2...agent-v0.1.3) (2026-05-08)
 
 

@@ -1,14 +1,20 @@
-"""Cryptographic + URL helpers for QR pairing.
+"""Cryptographic helpers for QR pairing.
 
 These are deliberately small pure functions with no FastAPI / DB
 dependencies so they can be unit-tested without an app fixture.
+
+The pairing WS URL is *not* computed here. It is derived on the agent
+from ``RELAY_SERVER_URL`` + the response ``nonce`` (see
+``mobaide_agent/mobaide/agent/pairing_monitor._pairing_ws_url``). Keeping
+the URL agent-side eliminates a class of deployment-skew bugs where a
+stale server image returned ``https://...`` and the websockets client
+hard-rejected the scheme.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import json
-from urllib.parse import urlsplit, urlunsplit
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -45,25 +51,3 @@ def sign_pairing_payload(private_key_b64: str, payload: dict) -> str:
     private_key = Ed25519PrivateKey.from_private_bytes(private_bytes)
     sig = private_key.sign(canonical_payload_bytes(payload))
     return base64.b64encode(sig).decode("ascii")
-
-
-def derive_ws_url(public_base_url: str, nonce: str) -> str:
-    """Convert ``https://host[:port]`` → ``wss://host[:port]/ws/pairing/{nonce}``.
-
-    Preserves explicit port. Replaces ``http``/``https`` with ``ws``/``wss``.
-    Discards any path/query/fragment on the input — the WS endpoint is
-    pinned at ``/ws/pairing/{nonce}`` regardless of base URL path.
-    """
-    parts = urlsplit(public_base_url)
-    scheme = parts.scheme.lower()
-    if scheme in ("http", "ws"):
-        ws_scheme = "ws"
-    elif scheme in ("https", "wss", ""):
-        ws_scheme = "wss"
-    else:
-        raise ValueError(f"Unsupported scheme for ws derivation: {scheme!r}")
-    netloc = parts.netloc or parts.path
-    if not netloc:
-        raise ValueError("Cannot derive WS URL: missing host")
-    path = f"/ws/pairing/{nonce}"
-    return urlunsplit((ws_scheme, netloc, path, "", ""))

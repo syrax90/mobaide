@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import platform
 import socket
 import sys
@@ -23,6 +24,7 @@ import time
 import urllib.error
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit, urlunsplit
 
 import mobaide._http as _http
 
@@ -51,6 +53,7 @@ logger = logging.getLogger(__name__)
 _INITIATE_PATH = "/api/pairing/initiate"
 _BACKOFF_FLOOR_S = 2.0
 _BACKOFF_CEIL_S = 60.0
+_ALLOW_INSECURE_FETCH_ENV = "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
 
 
 def _initiate_url(relay_server_url: str) -> str:
@@ -59,6 +62,71 @@ def _initiate_url(relay_server_url: str) -> str:
 
     base = _trust_key_url_from_relay_server_url(relay_server_url)
     return base.removesuffix("/api/v1/agent/trust_key") + _INITIATE_PATH
+
+
+def _pairing_ws_url(relay_server_url: str, nonce: str) -> str:
+    """Derive the pairing WS URL from ``RELAY_SERVER_URL`` + ``nonce``.
+
+    Single source of truth: the agent computes the URL it dials rather
+    than trusting a server-supplied ``ws_url`` field. Eliminates a class
+    of deployment-skew bugs where a stale central_server returns
+    ``https://...`` for ``ws_url``; the Python ``websockets`` library
+    hard-rejects anything but ``ws``/``wss``.
+
+    Scheme map:
+    * ``wss://host``  → ``wss://host/ws/pairing/{nonce}``
+    * ``ws://host``   → ``ws://host/ws/pairing/{nonce}``
+    * ``https://host`` → ``wss://host/ws/pairing/{nonce}``
+    * ``http://host``  → ``ws://host/ws/pairing/{nonce}``
+
+    Cleartext (``ws://`` / ``http://``) is refused unless
+    ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`` is set, mirroring
+    the trust-key fetch's same loopback-only escape hatch (see
+    ``_trust_key_url_from_relay_server_url`` in ``mobaide.__main__``).
+
+    Any path/query/fragment on the relay URL is intentionally discarded
+    — the WS endpoint is pinned at ``/ws/pairing/{nonce}`` regardless of
+    the relay-tunnel path.
+    """
+    parts = urlsplit(relay_server_url)
+    if not parts.scheme or not parts.hostname:
+        raise ValueError(
+            f"RELAY_SERVER_URL is not a valid URL: {relay_server_url!r}"
+        )
+    if parts.username is not None or parts.password is not None:
+        raise ValueError(
+            f"RELAY_SERVER_URL must not contain user-info "
+            f"(user@/user:pass@): {relay_server_url!r}"
+        )
+    scheme = parts.scheme.lower()
+    if scheme in ("https", "wss"):
+        ws_scheme = "wss"
+    elif scheme in ("http", "ws"):
+        ws_scheme = "ws"
+    else:
+        raise ValueError(
+            f"RELAY_SERVER_URL has unsupported scheme {scheme!r}: "
+            f"{relay_server_url!r}"
+        )
+    if ws_scheme == "ws" and os.environ.get(_ALLOW_INSECURE_FETCH_ENV) != "1":
+        raise ValueError(
+            f"Pairing over cleartext {scheme!r} is refused by default "
+            f"(RELAY_SERVER_URL={relay_server_url!r}). Set "
+            f"{_ALLOW_INSECURE_FETCH_ENV}=1 to override (only safe on a "
+            f"trusted local network)."
+        )
+    if ":" in parts.hostname and not parts.hostname.startswith("["):
+        host = f"[{parts.hostname}]"
+    else:
+        host = parts.hostname
+    netloc = f"{host}:{parts.port}" if parts.port is not None else host
+    path = f"/ws/pairing/{nonce}"
+    derived = urlunsplit((ws_scheme, netloc, path, "", ""))
+    if not derived.startswith(("ws://", "wss://")):
+        raise ValueError(
+            f"derived pairing WS URL has unexpected scheme: {derived!r}"
+        )
+    return derived
 
 
 def initiate_pairing(
@@ -101,8 +169,10 @@ def initiate_pairing(
     expires_at = record["expires_at"]
     server_fp = record["trust_key_fp"]
     relay_url = record["relay_url"]
-    ws_url = record["ws_url"]
     qr_payload = record["qr_payload"]
+    # WS URL is derived locally from RELAY_SERVER_URL — see
+    # ``_pairing_ws_url`` for the deployment-skew rationale.
+    ws_url = _pairing_ws_url(relay_server_url, nonce)
 
     if server_fp != pinned_trust_key_fp:
         raise PairingMonitorError(

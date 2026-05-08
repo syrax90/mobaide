@@ -81,7 +81,11 @@ class TestInitiate:
         assert "nonce" in body
         assert "expires_at" in body
         assert "qr_payload" in body
-        assert "ws_url" in body
+        # The pairing WS URL is no longer returned by the server — the
+        # agent derives it from RELAY_SERVER_URL + nonce. Pin the absence
+        # so a regression that re-introduces a server-side ws_url field
+        # gets caught here.
+        assert "ws_url" not in body
         # trust_key_fp matches the configured public key fingerprint.
         assert body["trust_key_fp"] == compute_trust_key_fp(
             qr_app.state._test_pub_b64

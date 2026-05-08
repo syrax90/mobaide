@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -157,10 +158,31 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             )
 
             def _on_paired() -> None:
-                from mobaide.__main__ import _try_restart_service
+                # Exit with EXIT_RESTART_REQUESTED so the supervisor brings
+                # us back up; the next boot reads the just-written .env and
+                # starts the relay client. The previous path called
+                # ``sudo -n systemctl restart`` which silently no-op'd when
+                # the install user lacked NOPASSWD — leaving the running
+                # process with the stale empty-credentials config in memory
+                # and the agent permanently "offline".
+                #
+                # Recognised by:
+                #   * Linux systemd: RestartForceExitStatus=75
+                #   * macOS launchd:  KeepAlive=true
+                #   * Windows SC:     sc.exe failure ... actions= restart/...
+                #
+                # The 0.5s defer mirrors the updater's pattern in
+                # ``relay/client.py`` — gives the structured log line a
+                # chance to flush before the process tears down.
+                from mobaide.agent.updater import EXIT_RESTART_REQUESTED
 
-                logger.info("agent.pairing_complete restart_supervisor=true")
-                _try_restart_service()
+                logger.info(
+                    "agent.pairing_complete exit_code=%d",
+                    EXIT_RESTART_REQUESTED,
+                )
+                asyncio.get_running_loop().call_later(
+                    0.5, sys.exit, EXIT_RESTART_REQUESTED
+                )
 
             layout = default_layout()
             app.state.pairing_task = asyncio.create_task(

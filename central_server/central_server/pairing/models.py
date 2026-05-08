@@ -30,17 +30,18 @@ class PairingInitiateResponse(BaseModel):
     """Server's reply to ``POST /api/pairing/initiate``.
 
     ``qr_payload`` is the canonical ``MOBA1|...`` text the agent renders.
-    ``ws_url`` is the WebSocket endpoint the agent connects to to await
-    the claim push. ``trust_key_fp`` is the SHA-256 fingerprint of the
-    server's manifest signing public key — the agent cross-checks this
-    against its own pinned key before trusting the flow.
+    ``trust_key_fp`` is the SHA-256 fingerprint of the server's manifest
+    signing public key — the agent cross-checks this against its own
+    pinned key before trusting the flow. The pairing WS URL is *not*
+    returned: the agent derives it locally from ``RELAY_SERVER_URL`` +
+    ``nonce`` so a deployment-skewed server cannot hand back a buggy
+    scheme (``https://...``) that the websockets client would reject.
     """
 
     nonce: str
     expires_at: str
     trust_key_fp: str
     relay_url: str
-    ws_url: str
     qr_payload: str
 
 

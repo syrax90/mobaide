@@ -22,6 +22,7 @@ import pytest
 
 from mobaide.agent.pairing_monitor import (
     PairingMonitorError,
+    _pairing_ws_url,
     initiate_pairing,
     write_credentials_to_env,
 )
@@ -29,12 +30,14 @@ from mobaide.agent.pairing_ws import PairingClaim
 
 
 def _initiate_response(**overrides) -> dict:
+    # Note: no ``ws_url`` field. The agent derives the pairing WS URL
+    # locally from RELAY_SERVER_URL + nonce; the server does not return
+    # it. See ``_pairing_ws_url`` in ``mobaide.agent.pairing_monitor``.
     base = {
         "nonce": "n1",
         "expires_at": "2099-01-01T00:00:00+00:00",
         "trust_key_fp": "ff" * 32,
         "relay_url": "https://relay.test",
-        "ws_url": "wss://relay.test/ws/pairing/n1",
         "qr_payload": f"MOBA1|https://relay.test|n1|{'ff' * 32}|2999999999",
     }
     base.update(overrides)
@@ -78,6 +81,29 @@ class TestInitiatePairing:
         assert pending.relay_url == "https://relay.test"
         assert pending.trust_key_fp == "ff" * 32
         assert pending.qr_payload.startswith("MOBA1|")
+        # WS URL is derived from RELAY_SERVER_URL (the wss:// arg above) +
+        # the response nonce — never read from the server response. Pin
+        # the exact value so a regression that re-introduces a
+        # server-supplied ws_url field gets caught here.
+        assert pending.ws_url == "wss://relay.test/ws/pairing/n1"
+
+    def test_ws_url_ignores_buggy_server_supplied_https(self):
+        # Regression guard for the offline-after-pairing bug: a deployed
+        # central_server that erroneously hands back ``https://`` as
+        # ``ws_url`` would break the websockets client. The agent now
+        # derives the URL locally from RELAY_SERVER_URL + nonce, so a
+        # buggy server-side field is simply ignored.
+        buggy = _initiate_response(
+            ws_url="https://relay.test/ws/pairing/n1",  # Pretend stale server.
+        )
+        with _patch_urlopen(_FakeResp(200, buggy)):
+            pending = initiate_pairing(
+                "wss://relay.test",
+                pinned_trust_key_fp="ff" * 32,
+            )
+
+        assert pending.ws_url == "wss://relay.test/ws/pairing/n1"
+        assert pending.ws_url.startswith("wss://")
 
     def test_fp_mismatch_raises_pairing_monitor_error(self):
         # Server announces a different fingerprint than the agent has
@@ -170,6 +196,73 @@ class TestInitiatePairing:
         assert (
             captured["request"].get_header("Content-type")
             == "application/json"
+        )
+
+
+class TestPairingWsUrlHelper:
+    @pytest.mark.parametrize(
+        "relay_url,expected",
+        [
+            ("wss://relay.example.com",
+             "wss://relay.example.com/ws/pairing/N1"),
+            ("wss://relay.example.com:9000",
+             "wss://relay.example.com:9000/ws/pairing/N1"),
+            ("https://relay.example.com",
+             "wss://relay.example.com/ws/pairing/N1"),
+            ("https://relay.example.com:9000",
+             "wss://relay.example.com:9000/ws/pairing/N1"),
+        ],
+    )
+    def test_secure_scheme_translation(self, relay_url, expected):
+        assert _pairing_ws_url(relay_url, "N1") == expected
+
+    def test_path_query_fragment_dropped(self):
+        # WS endpoint is pinned at /ws/pairing/{nonce}; any path on the
+        # input relay URL is intentionally discarded — the relay tunnel
+        # path and the WS endpoint live at the same origin root.
+        out = _pairing_ws_url(
+            "https://relay.example.com/some/path?q=1#frag", "abc",
+        )
+
+        assert out == "wss://relay.example.com/ws/pairing/abc"
+
+    def test_unsupported_scheme_raises(self):
+        with pytest.raises(ValueError, match="unsupported scheme"):
+            _pairing_ws_url("ftp://relay.example.com", "n")
+
+    def test_missing_host_raises(self):
+        with pytest.raises(ValueError, match="not a valid URL"):
+            _pairing_ws_url("https://", "n")
+
+    def test_user_info_rejected(self):
+        # urlparse('wss://api@evil.example') resolves to evil.example;
+        # refuse upfront to mirror _trust_key_url_from_relay_server_url.
+        with pytest.raises(ValueError, match="user-info"):
+            _pairing_ws_url(
+                "wss://attacker@relay.example.com", "n",
+            )
+
+    def test_cleartext_refused_by_default(self, monkeypatch):
+        monkeypatch.delenv(
+            "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH",
+            raising=False,
+        )
+        with pytest.raises(ValueError, match="cleartext"):
+            _pairing_ws_url("ws://relay.example.com", "n")
+        with pytest.raises(ValueError, match="cleartext"):
+            _pairing_ws_url("http://localhost:8080", "n")
+
+    def test_cleartext_allowed_with_insecure_env_var(self, monkeypatch):
+        monkeypatch.setenv(
+            "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH", "1",
+        )
+        assert (
+            _pairing_ws_url("ws://localhost", "N1")
+            == "ws://localhost/ws/pairing/N1"
+        )
+        assert (
+            _pairing_ws_url("http://localhost:8080", "N1")
+            == "ws://localhost:8080/ws/pairing/N1"
         )
 
 

@@ -28,10 +28,12 @@ agent (mobaide-agent)        central_server                 mobile (Mobaide app)
         │                          │ INSERT pairing_tokens           │
         │                          │  (agent_id NULL,                │
         │                          │   agent_metadata=...)           │
-        │ ◄── 200 {nonce, expires_at, ws_url, trust_key_fp,          │
+        │ ◄── 200 {nonce, expires_at, trust_key_fp, relay_url,       │
         │           qr_payload}                                      │
         │                          │                                 │
         │ render QR(MOBA1|...)     │                                 │
+        │ derive ws_url locally    │                                 │
+        │   from RELAY_SERVER_URL  │                                 │
         │                          │                                 │
         │ open WS /ws/pairing/{nonce}                                │
         │ ─────────────────────────►                                 │
@@ -76,6 +78,24 @@ MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}
 
 The token is never carried in the QR. The server mints it server-side
 and pushes it to the agent over the pairing WebSocket.
+
+### Pairing WS URL is agent-derived
+
+The `/api/pairing/initiate` response intentionally omits a `ws_url`
+field. The agent computes the URL it dials from its own
+`RELAY_SERVER_URL` plus the response `nonce` (see
+`mobaide_agent/mobaide/agent/pairing_monitor._pairing_ws_url`):
+
+* `wss://host[:port]` → `wss://host[:port]/ws/pairing/{nonce}`
+* `https://host` → `wss://host/ws/pairing/{nonce}` (scheme upgraded)
+* `ws://` / `http://` are refused unless
+  `MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1` (loopback escape
+  hatch, mirroring the trust-key fetch).
+
+This makes the agent the single source of truth for the URL it dials
+and removes a class of bugs where a deployment-skewed central_server
+returned an `https://` ws_url that the Python `websockets` client
+hard-rejected (`scheme isn't ws or wss`).
 
 ## Trust-On-First-Scan (TOFS) on the mobile
 
@@ -193,6 +213,7 @@ holding the agent's WS, and the push is silently dropped. Mitigations:
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
+| QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.4 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD | Upgrade to v0.1.4+. On older installs, manually run `sudo systemctl restart mobaide-agent` (Linux) or `launchctl unload … && launchctl load …` (macOS) once after the initial pairing scan. |
 
 ## Security tests
 
