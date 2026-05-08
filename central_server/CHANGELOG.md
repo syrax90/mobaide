@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.2](https://github.com/syrax90/claude_mobile/compare/server-v0.1.1...server-v0.1.2) (2026-05-08)
+
+
+### Bug Fixes
+
+* **pairing:** resolve offline-after-pairing via agent-derived WS URL and sys.exit restart ([cae3ae2](https://github.com/syrax90/claude_mobile/commit/cae3ae2ad559cb8cbe09b7f2da0305f6fd28e2ff))
+* **pairing:** resolve offline-after-pairing via agent-derived WS URL and sys.exit restart ([3b88eb2](https://github.com/syrax90/claude_mobile/commit/3b88eb2464ace3a780c1f195d9b19601ba8fcf6a))
+
 ## [0.1.1](https://github.com/syrax90/claude_mobile/compare/server-v0.1.0...server-v0.1.1) (2026-05-08)
 
 
