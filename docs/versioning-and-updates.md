@@ -553,14 +553,14 @@ The Android client has three distinct update paths that work together:
 
 `protocol-integrity.yml` runs on every push and PR to `main`:
 
-1. Imports `mobaide_agent/.../envelope.py` and
-   `central_server/.../envelope.py` and asserts that `PROTOCOL_VERSION`,
-   `SUPPORTED_PROTOCOL_VERSIONS`, and `MIN_CLIENT_PROTOCOL_VERSION` match
-   between the two — refuses any commit that drifts them.
-2. Runs `tests/test_protocol_integrity.py`, which compares the live wire
-   shape against `tests/protocol_golden.json`. Any change to the handshake
-   shape **must** update the golden file in the same commit.
-3. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
+1. Runs `tests/test_protocol_integrity.py` under pytest, which (a) imports
+   both `envelope.py` copies and asserts that `PROTOCOL_VERSION`,
+   `MIN_CLIENT_PROTOCOL_VERSION`, `SUPPORTED_PROTOCOL_VERSIONS`,
+   `PROTOCOL_INCOMPATIBLE_CLOSE_CODE`, and the channel-type constants match
+   between the two, and (b) compares the live wire shape against
+   `tests/protocol_golden.json`. Any handshake-shape change **must** update
+   the golden file in the same commit.
+2. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
    files, it must modify the other. Comparison uses
    `${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}`
    so the check is base-branch-agnostic.
