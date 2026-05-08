@@ -59,14 +59,61 @@ What happens after merge:
    `server-vX.Y.Z` / `android-vX.Y.Z` tag, which fires the matching
    `release-*.yml` workflow.
 
-> **Do not hand-edit `[project] version` in `pyproject.toml` or push
-> release tags directly.** release-please owns version bumps and tag
-> creation; bypassing it desyncs `.release-please-manifest.json` from
-> the actual versions in `pyproject.toml` (this is how the `agent-v0.1.1`
-> release shipped a stale `0.1.0` wheel). If you need to release
-> without an upstream change — re-publishing a burnt tag, or shipping
-> a hotfix release-please can't represent — edit the open release-PR
-> before merging it instead of tagging by hand.
+### Manual release path (operator escape hatch)
+
+Use this when the conventional-commits flow is the wrong tool:
+release-please opened no release-PR (no actionable conventional
+commit reached `main` — typical when squash was bypassed and the
+merge commit on `main` is just `Merge pull request #N…`); you want
+to ship a hotfix release-please can't represent; or you've already
+hand-bumped the version files and want to ship those exact bytes.
+
+Currently wired for `mobaide_agent` only via
+`.github/workflows/release-agent-manual.yml`. The same shape clones
+to `central_server` / `android` when needed.
+
+1. **On a branch**, edit the version files in lockstep:
+   - `mobaide_agent/pyproject.toml` — bump `[project] version`.
+   - `.release-please-manifest.json` — bump the `mobaide_agent`
+     entry to the same version.
+   - `mobaide_agent/CHANGELOG.md` — replace `## [Unreleased]` with
+     `## [X.Y.Z] - YYYY-MM-DD` and fill in the entries.
+2. **Open and merge a PR** to `main`. Commit grammar does not matter
+   on this path — the workflow trigger replaces release-please here,
+   so a plain `Merge pull request #N…` commit is fine.
+3. **Run the manual workflow:** Actions → **Release agent (manual)**
+   → Run workflow → enter the version (e.g. `0.1.2`). The workflow
+   validates that `pyproject.toml`, the manifest, and the tag state
+   all agree, then creates and pushes `agent-vX.Y.Z`. The downstream
+   `release-agent.yml` fires on the tag push and ships the wheel
+   exactly as it would on the release-please path.
+
+The validation step hard-fails if `pyproject.toml` and the manifest
+don't already agree at the requested version, or if the tag already
+exists, so the half-and-half failure modes (manifest at one version,
+tag at another) are not reachable from this path.
+
+**Local fallback.** If you'd rather not grant the workflow PAT scope
+or CI is down, the same effect is `git tag agent-vX.Y.Z origin/main &&
+git push origin agent-vX.Y.Z` from a developer machine. A
+locally-pushed tag does fire `release-agent.yml`; the
+`GITHUB_TOKEN`-can't-trigger-downstream caveat below only applies
+to tags GHA itself pushes.
+
+> **Pick one path and stay on it.** Either let release-please own the
+> bump (the conventional-commits flow above), **or** use the manual
+> release path end-to-end (hand-edit the version files, then trigger
+> the manual workflow / push the tag yourself). The half-and-half
+> mode — hand-edit `pyproject.toml` and the manifest, then expect
+> release-please to tag for you — is the failure mode that shipped
+> `agent-v0.1.1` with a stale `0.1.0` wheel and silently dropped the
+> `agent-v0.1.2` tag entirely (release-please saw no conventional
+> commits to act on, so it didn't tag; nothing else watches the
+> manifest). Mixing paths desyncs `.release-please-manifest.json`
+> from either the tags or the `pyproject.toml` versions. If you need
+> to ship without an upstream change, the manual release path is the
+> supported way; editing the open release-PR before merging is the
+> other supported way.
 
 Android note: the `android` component is `release-type: simple`, so
 release-please bumps the version in `.release-please-manifest.json`
@@ -107,7 +154,7 @@ Required CI secrets:
 | `CENTRAL_SERVER_RELEASE_TOKEN` | `release-agent.yml` | Bearer token for `POST /api/internal/agent_manifest`. |
 | `CENTRAL_SERVER_URL` | `release-agent.yml` | Base URL of the production `central_server` that hosts the manifest. |
 | `RELEASES_REPO_TOKEN` | `release-agent.yml` | Fine-grained PAT scoped to the **public releases repo** (e.g. `syrax90/mobaide-agent-releases`) with `Contents: Read and write`. Used by `softprops/action-gh-release@v2` to publish the release into that repo. |
-| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml` | PAT with `contents:write` + `workflow` scopes. Required only to chain release-please tag pushes into the downstream `release-*` workflows; without it, the operator pushes the tag manually after merging the release-PR. |
+| `RELEASE_PLEASE_TOKEN` _(optional)_ | `release-please.yml`, `release-agent-manual.yml` | PAT with `contents:write` + `workflow` scopes. Required to chain CI-side tag pushes into the downstream `release-*` workflows (GitHub Actions does not fire downstream workflows from tags pushed by `GITHUB_TOKEN`). Without it, those workflows still push the tag, but the operator must re-push it from a developer machine to fire the downstream build. |
 
 Repo **variables** (not secrets — values appear in workflow logs and are not sensitive):
 

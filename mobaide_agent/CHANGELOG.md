@@ -1,6 +1,6 @@
 # mobaide_agent Changelog
 
-## [Unreleased]
+## [0.1.2] - 2026-05-08
 
 ### Added
 
