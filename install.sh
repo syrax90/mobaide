@@ -334,11 +334,16 @@ manifest_path, tmpdir, release_dir = sys.argv[1:4]
 record = json.loads(Path(manifest_path).read_text())
 body = record["body"]
 
+# Identify ourselves so a Cloudflare-fronted wheel host doesn't classify the
+# request as the default ``Python-urllib/X.Y`` UA (Bot Fight Mode 1010).
+USER_AGENT = f"mobaide-agent-installer/{body.get('version', 'unknown')}"
+
 def fetch(url, dest):
     if url.startswith("file://") or url.startswith("/"):
         shutil.copyfile(url.removeprefix("file://"), dest)
         return
-    with urllib.request.urlopen(url, timeout=120) as resp, open(dest, "wb") as fh:
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as fh:
         shutil.copyfileobj(resp, fh)
 
 def verify_sha256(path, expected):
