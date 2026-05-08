@@ -21,9 +21,10 @@ import socket
 import sys
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Callable
+
+import mobaide._http as _http
 
 from ._env_writer import (
     atomic_write,
@@ -84,13 +85,13 @@ def initiate_pairing(
     if current_agent_id:
         body["current_agent_id"] = current_agent_id
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
+    with _http.urlopen(
         url,
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+        timeout=30,
+    ) as resp:
         if resp.status != 200:
             raise PairingMonitorError(
                 f"initiate returned HTTP {resp.status}"

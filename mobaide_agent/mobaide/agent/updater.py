@@ -51,11 +51,11 @@ import tarfile
 import tempfile
 import time
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import mobaide._http as _http
 from mobaide.manifest_signing import (
     ManifestSignatureError,
     verify_signature,
@@ -341,7 +341,7 @@ class StagedBinaryUpdater:
             src = Path(url.removeprefix("file://"))
             shutil.copyfile(src, dest)
             return
-        with urllib.request.urlopen(url, timeout=120) as resp, dest.open("wb") as fh:
+        with _http.urlopen(url, timeout=120) as resp, dest.open("wb") as fh:
             shutil.copyfileobj(resp, fh)
 
     @staticmethod
@@ -365,7 +365,7 @@ class StagedBinaryUpdater:
 
 
 def _http_download(url: str) -> str:
-    with urllib.request.urlopen(url, timeout=30) as resp:
+    with _http.urlopen(url, timeout=30) as resp:
         return resp.read().decode("utf-8")
 
 

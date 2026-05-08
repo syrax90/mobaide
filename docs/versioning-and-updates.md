@@ -339,7 +339,11 @@ pipeline run.
 
 The agent updates itself in place using a **staged-binary** pattern: every
 release lives in its own directory and a single pointer file selects the
-"current" one. There is no in-process patching.
+"current" one. There is no in-process patching. All outbound HTTP calls (manifest
+polling, tarball/wheel downloads, trust-key fetch) are made through a centralised
+wrapper (`mobaide._http`) that injects `User-Agent: mobaide-agent/<version>` so
+Cloudflare-fronted relay and artifact hosts do not classify them as generic
+`Python-urllib` bot traffic (Cloudflare error 1010).
 
 ### Install layout
 
