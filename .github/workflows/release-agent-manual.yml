@@ -1,0 +1,114 @@
+name: Release agent (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Agent version to release (e.g. 0.1.2). Must already match mobaide_agent/pyproject.toml and .release-please-manifest.json."
+        required: true
+        type: string
+
+concurrency:
+  group: release-agent-manual-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  tag-and-trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          # Tags pushed by GITHUB_TOKEN do NOT fire downstream workflows
+          # (GitHub Actions hard limit; same caveat as release-please.yml).
+          # RELEASE_PLEASE_TOKEN is a PAT with `workflow` scope, so the tag
+          # push it makes here triggers release-agent.yml exactly like a
+          # tag from a merged release-PR would. The fallback to
+          # GITHUB_TOKEN keeps the workflow runnable in degraded mode --
+          # the tag still gets pushed, but the operator has to re-push it
+          # from a developer machine to fire release-agent.yml.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate version, manifest, pyproject, and tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import tomllib
+
+          version = os.environ["VERSION"]
+          if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+              sys.exit(f"version must be X.Y.Z, got {version!r}")
+
+          with open("mobaide_agent/pyproject.toml", "rb") as fh:
+              py = tomllib.load(fh)
+          py_ver = py["project"]["version"]
+          if py_ver != version:
+              sys.exit(
+                  f"mobaide_agent/pyproject.toml version is {py_ver!r}, "
+                  f"expected {version!r}. Bump it on a branch and merge "
+                  f"to main before re-running."
+              )
+
+          with open(".release-please-manifest.json") as fh:
+              manifest = json.load(fh)
+          manifest_ver = manifest["mobaide_agent"]
+          if manifest_ver != version:
+              sys.exit(
+                  f".release-please-manifest.json mobaide_agent is "
+                  f"{manifest_ver!r}, expected {version!r}. Bump it on a "
+                  f"branch and merge to main before re-running."
+              )
+
+          tag = f"agent-v{version}"
+          rc = subprocess.call(
+              ["git", "rev-parse", "--verify", tag],
+              stdout=subprocess.DEVNULL,
+              stderr=subprocess.DEVNULL,
+          )
+          if rc == 0:
+              sys.exit(
+                  f"tag {tag} already exists. Pick a different version, "
+                  f"or delete the existing tag if you intend to re-cut."
+              )
+
+          with open("mobaide_agent/CHANGELOG.md") as fh:
+              changelog = fh.read()
+          if f"## [{version}]" not in changelog:
+              print(
+                  f"::warning::mobaide_agent/CHANGELOG.md has no "
+                  f"'## [{version}]' heading. The tag will still be cut "
+                  f"and the wheel will still ship; the changelog just "
+                  f"won't reflect this release until you fix the header."
+              )
+          PY
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          tag="agent-v${VERSION}"
+          sha=$(git rev-parse HEAD)
+          git tag -a "$tag" -m "Release ${tag}"
+          git push origin "$tag"
+          echo "::notice::Pushed ${tag} at ${sha} -- release-agent.yml will fire next."
