@@ -29,38 +29,49 @@ dedicated workflow under `.github/workflows/`:
 
 ### Cutting a release
 
+The rule is one line: **the PR title is the release trigger.**
+
+| You want to release… | PR title prefix |
+|----------------------|-----------------|
+| `mobaide_agent` | `feat(agent): …` (minor) or `fix(agent): …` (patch) |
+| `central_server` | `feat(server): …` or `fix(server): …` |
+| Android app | `feat(android): …` or `fix(android): …` |
+| Anything else (CI, docs, refactor) | `chore: …`, `docs: …`, `refactor: …` — no release fires |
+
+The repo is configured to **squash-merge with the PR title as the commit
+message**, so the PR title literally becomes the commit on `main` that
+release-please reads. There is no longer any "but the title was right
+and nothing happened" failure mode tied to merge-commit style.
+
+`pr-title-lint.yml` runs on every pull request and fails the check if
+the title doesn't match the grammar above (or uses a stale scope like
+`mobaide_agent` / `central_server` instead of the short `agent` /
+`server`). A typo can no longer silently skip a release.
+
+What happens after merge:
+
+1. release-please sees the new conventional commit on `main`.
+2. It opens (or updates) a release-PR for that component — bumps
+   `[project] version` in `pyproject.toml` and the matching entry in
+   `.release-please-manifest.json` in lockstep, and prepends the new
+   `## [vX.Y.Z]` section to the component's `CHANGELOG.md`.
+3. Merging that release-PR pushes the corresponding `agent-vX.Y.Z` /
+   `server-vX.Y.Z` / `android-vX.Y.Z` tag, which fires the matching
+   `release-*.yml` workflow.
+
 > **Do not hand-edit `[project] version` in `pyproject.toml` or push
 > release tags directly.** release-please owns version bumps and tag
 > creation; bypassing it desyncs `.release-please-manifest.json` from
-> the actual versions in `pyproject.toml`, which makes the next
-> release-please run propose a duplicate bump and is how the
-> `agent-v0.1.1` release shipped a stale `0.1.0` wheel. Follow the
-> flow below.
+> the actual versions in `pyproject.toml` (this is how the `agent-v0.1.1`
+> release shipped a stale `0.1.0` wheel). If you need to release
+> without an upstream change — re-publishing a burnt tag, or shipping
+> a hotfix release-please can't represent — edit the open release-PR
+> before merging it instead of tagging by hand.
 
-**release-please is the only supported path.** Land work on `main` using
-[Conventional Commits](https://www.conventionalcommits.org/) prefixed by
-component path (`feat(mobaide_agent): …`, `fix(central_server): …`,
-`feat(android): …`). The `release-please.yml` workflow opens or updates a
-release-PR per component that:
-
-* bumps `[project] version` in the component's `pyproject.toml` AND the
-  matching entry in `.release-please-manifest.json` in lockstep (or
-  `versionName`/`versionCode` for android — the simple release type tracks
-  the version in `.release-please-manifest.json` for the Android entry, so
-  `app/build.gradle.kts` must be bumped manually before tagging),
-* prepends the new `## [vX.Y.Z]` section to that component's `CHANGELOG.md`
-  derived from the commits since the last release tag,
-* on PR merge, pushes the corresponding `agent-vX.Y.Z` /
-  `server-vX.Y.Z` / `android-vX.Y.Z` tag, which fires the matching
-  release-* workflow.
-
-If you actually need to release without an upstream change (e.g.
-re-publishing a burnt tag after fixing a CI bug, or shipping a
-hotfix against a build that release-please can't represent), edit
-the open release-please PR before merging it — adjust the version
-or commit list in the PR — rather than tagging by hand. The PR
-keeps `pyproject.toml` and `.release-please-manifest.json` in lockstep
-no matter what version you choose.
+Android note: the `android` component is `release-type: simple`, so
+release-please bumps the version in `.release-please-manifest.json`
+only. `versionName` / `versionCode` in `app/build.gradle.kts` must be
+bumped manually before tagging.
 
 **Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN`
 cannot trigger downstream workflows from a tag it pushes. The

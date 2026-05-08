@@ -101,18 +101,25 @@ Each component (Android, `mobaide_agent`, `central_server`) ships on its own
 semver cadence; a single integer `protocol_version` is the only compatibility
 signal between them.
 
+**To cut a release, the PR title is the trigger.** Use `feat(agent): …` /
+`fix(agent): …` for `mobaide_agent`, `feat(server): …` / `fix(server): …`
+for `central_server`, and `feat(android): …` / `fix(android): …` for the
+Android app. The repo is configured to squash-merge with the PR title as
+the commit message, so the PR title becomes the commit release-please
+reads on `main`. `pr-title-lint.yml` blocks merge if the title doesn't
+match. Anything else (`chore:`, `docs:`, `refactor:`) merges normally and
+produces no release.
+
+After merge, release-please opens a release-PR per affected component;
+merging that release-PR pushes the matching tag below and fires the
+corresponding workflow:
+
 | Tag prefix | Triggers workflow | What it produces |
 |------------|--------------------|------------------|
 | `android-vX.Y.Z` | `release-android.yml` | Signed `.aab` uploaded to Play Console internal track. `inAppUpdatePriority` set from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
 | `agent-vX.Y.Z` | `release-agent.yml` | `uv build` wheel + sdist, Ed25519-signed manifest, GitHub Release, manifest POSTed to `central_server`. |
 | `server-vX.Y.Z` | `release-server.yml` | Wheel + Docker image to GHCR, manual-approval-gated deploy step (`environment: production`). |
 | `proto-vN` | `release-protocol.yml` | Re-runs the lockstep envelope-integrity check, then publishes a GitHub Release with the PROTOCOL.md section + diff against the previous proto tag. |
-
-Conventional-commit-driven CHANGELOG management is handled by
-[release-please](.github/workflows/release-please.yml) in monorepo mode —
-a push to `main` opens (or updates) per-component release-PRs that, when
-merged, push the corresponding `agent-v*` / `server-v*` / `android-v*`
-tag and fire the matching release workflow.
 
 See [docs/versioning-and-updates.md](docs/versioning-and-updates.md) for the
 staged-binary auto-updater, signed-manifest format, install one-liners,
