@@ -1,5 +1,50 @@
 # central_server Changelog
 
+## [0.1.1](https://github.com/syrax90/claude_mobile/compare/server-v0.1.0...server-v0.1.1) (2026-05-08)
+
+
+### Features
+
+* add non-expiring token support by omitting exp claim when TTL is 0 ([ada6181](https://github.com/syrax90/claude_mobile/commit/ada6181c3f3e8faea842312320e0834fa2ed953d))
+* add non-expiring token support by omitting exp claim when TTL is 0 ([649fc89](https://github.com/syrax90/claude_mobile/commit/649fc8903a88bc0069483604936906cb35cd5b07))
+* add real-time agent online/offline status via user-scoped WebSocket channel ([3fcd576](https://github.com/syrax90/claude_mobile/commit/3fcd57643b7082d243583161b11157e9bf3c7524))
+* add real-time agent online/offline status via user-scoped WebSocket channel ([27b3431](https://github.com/syrax90/claude_mobile/commit/27b34319d403bce8cccee5059f092e5d11035bc4))
+* **cla-30:** central server WebSocket relay with agent registration and web dashboard ([6d2762b](https://github.com/syrax90/claude_mobile/commit/6d2762b1d548ac918adac458abff387c43dcd4e4))
+* **cla-32:** Android QR pairing and dual-mode connection relay ([066cd00](https://github.com/syrax90/claude_mobile/commit/066cd00b6cae954529e98fc562c1b6ff3b660e78))
+* **cla-32:** Android QR pairing and dual-mode connection relay ([a93d4d7](https://github.com/syrax90/claude_mobile/commit/a93d4d7d2456030e811a735730f9f6e420615b75))
+* **cla-33:** implement user authentication system with registration, login, and Google OAuth ([d5cbed1](https://github.com/syrax90/claude_mobile/commit/d5cbed193a7f4770cebc876f16d2a2a3ab2ec1d0))
+* **cla-33:** implement user authentication system with registration, login, and Google OAuth ([1865ba5](https://github.com/syrax90/claude_mobile/commit/1865ba5d5c375f17a8d0addc5060fbf537635634))
+* **cla-34:** implement user-owned agent management with credential isolation ([77135f5](https://github.com/syrax90/claude_mobile/commit/77135f59c652f95a1dcc6c8691db6cc3a4b47a25))
+* **cla-34:** implement user-owned agent management with credential isolation ([e26746e](https://github.com/syrax90/claude_mobile/commit/e26746e60cd4ec751fe89ab0d379204020c9d70a))
+* **CLA-38:** implement email verification for email/password registr… ([cb4e71b](https://github.com/syrax90/claude_mobile/commit/cb4e71bb0f4eddfdbb6ebc253fe7d148e26f9839))
+* **CLA-38:** implement email verification for email/password registration via server OTP ([fa8c2d1](https://github.com/syrax90/claude_mobile/commit/fa8c2d100d02fd174fe5e790e7ce8905c225b538))
+* **cla-42:** wire-contract versioning, auto-update, Play publishing, and CI/CD ([204350d](https://github.com/syrax90/claude_mobile/commit/204350dfb2a017a8fbe6b3169a5f225e5f408c76))
+* **cla-44:** wire StagedBinaryUpdater, force-update endpoint, launcher rollback, and Android update UX ([4d27647](https://github.com/syrax90/claude_mobile/commit/4d27647f9d93c36ad77c0110094434c450bdc3bf))
+* **cla-44:** wire StagedBinaryUpdater, force-update endpoint, launcher rollback, and Android update UX ([e5d4da1](https://github.com/syrax90/claude_mobile/commit/e5d4da1851e9e45f26472515dc166541f505a9ba))
+* **CLA-50:** agent-initiated QR pairing across server, agent, and Android ([8d1f9b9](https://github.com/syrax90/claude_mobile/commit/8d1f9b956791d2944c4732af165327e7cd2f78ca))
+* enforce admin-users-never-own-agents invariant and fix viewer security gaps ([6280127](https://github.com/syrax90/claude_mobile/commit/62801275d22805a871fa8e349206d27b9372cd71))
+* enforce admin-users-never-own-agents invariant and fix viewer security gaps ([4367e5d](https://github.com/syrax90/claude_mobile/commit/4367e5dc2d1705bf9b5eae2887060b49023c945c))
+* **mobaide_agent:** agent-initiated QR pairing across server, agent, and Android ([5fa3179](https://github.com/syrax90/claude_mobile/commit/5fa3179286bfc51948c1727cbc3412f4ef042a89))
+
+
+### Bug Fixes
+
+* **cla-30:** resolve validation warnings — secure cookie, unused var, re-registration race ([37a7045](https://github.com/syrax90/claude_mobile/commit/37a704520cec95026f9e397cc841e5e65725df44))
+* fail-closed trust key pinning and fetch-trust-key CLI verb ([2dd5613](https://github.com/syrax90/claude_mobile/commit/2dd561377071f0c6c66f55eb473db58cb716e677))
+* fail-closed trust key pinning and fetch-trust-key CLI verb ([4a8f281](https://github.com/syrax90/claude_mobile/commit/4a8f281b397807112dde6ab19b43fa6686d299ed))
+* issue dashboard login cookie as session cookie when TTL=0 ([fc619a5](https://github.com/syrax90/claude_mobile/commit/fc619a5fea74c4c2d85ed1d15def6e332e340e26))
+* issue dashboard login cookie as session cookie when TTL=0 ([203bcd7](https://github.com/syrax90/claude_mobile/commit/203bcd7f70738456d584ddabadd83ce96a29f7e5))
+* recover from server-side JWT invalidation on mobile client ([32b4773](https://github.com/syrax90/claude_mobile/commit/32b4773425ea8ad230094c85f3683f52e71f4918))
+* recover from server-side JWT invalidation on mobile client ([389c950](https://github.com/syrax90/claude_mobile/commit/389c95033d59378ff99cec36193a47803480fd3a))
+* **relay:** fix session-not-showing and blank-terminal-on-reopen bugs ([e8894ab](https://github.com/syrax90/claude_mobile/commit/e8894ab364cdcb87fe74411bce0e9e4b91c30862))
+* **relay:** unstick keyboard on session reopen via explicit mobile_session_attach ([b3c829e](https://github.com/syrax90/claude_mobile/commit/b3c829ee3deb538a7e476e9d101aeee406685b03))
+* **relay:** unstick keyboard on session reopen via explicit mobile_session_attach ([45e5731](https://github.com/syrax90/claude_mobile/commit/45e5731766124129afc004075c8c1af140d4eb1f))
+
+
+### Documentation
+
+* new docs/email-verification-workflow.md; updated deploy/prod/bootstrap-mobaide.md with SMTP guidance. ([fa8c2d1](https://github.com/syrax90/claude_mobile/commit/fa8c2d100d02fd174fe5e790e7ce8905c225b538))
+
 ## [Unreleased]
 
 ### Added
