@@ -147,6 +147,31 @@ class TestInitiatePairing:
 
         assert captured["data"] == {}
 
+    def test_outbound_request_carries_mobaide_user_agent(self):
+        # Regression guard for the Cloudflare 1010 UA block: ``initiate_pairing`` must route through
+        # ``mobaide._http.urlopen`` so Cloudflare's default Bot Fight Mode
+        # doesn't 403 the request based on the ``Python-urllib/X.Y`` UA.
+        captured: dict = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["request"] = req
+            return _FakeResp(200, _initiate_response())
+
+        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            initiate_pairing(
+                "wss://relay.test",
+                pinned_trust_key_fp="ff" * 32,
+            )
+
+        ua = captured["request"].get_header("User-agent")
+        assert ua is not None and ua.startswith("mobaide-agent/")
+        # Caller-supplied Content-Type must not have been clobbered by the
+        # wrapper's header merge.
+        assert (
+            captured["request"].get_header("Content-type")
+            == "application/json"
+        )
+
 
 class TestWriteCredentialsToEnv:
     @pytest.fixture

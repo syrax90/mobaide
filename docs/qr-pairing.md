@@ -186,6 +186,7 @@ holding the agent's WS, and the push is silently dropped. Mitigations:
 
 | Symptom | Likely cause | Action |
 |---|---|---|
+| `pair-qr` or `fetch-trust-key` returns HTTP 403 (Cloudflare error 1010) | Cloudflare Bot Fight Mode blocked the default `Python-urllib` User-Agent | Agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>`, which passes default Bot Fight Mode. If using Super Bot Fight Mode with JA3/JA4 "Block", add a Cloudflare WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`. Older agents must be upgraded. |
 | `pair-qr` returns 503 | Server lacks `MANIFEST_SIGNING_PRIVATE_KEY` | Set the env var on the relay; restart |
 | `pair-qr` returns 4 ("trust key not pinned") | Agent never ran `fetch-trust-key` | Run `mobaide-agent fetch-trust-key` |
 | `pair-qr` returns 5 ("fingerprint mismatch") | Server's trust key was rotated since the agent pinned it | Re-fetch the trust key (re-run `fetch-trust-key`); confirm rotation was intentional |

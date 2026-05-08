@@ -200,7 +200,16 @@ class TestFetchHappyPath:
 
         assert rc == 0
         urlopen.assert_called_once()
-        called_url = urlopen.call_args[0][0]
+        # The fetch now routes through ``mobaide._http.urlopen``, which
+        # always wraps a URL string in a ``urllib.request.Request`` so it
+        # can attach the agent's User-Agent. Extract ``.full_url`` to
+        # preserve the original URL-equality assertion.
+        called_arg = urlopen.call_args[0][0]
+        called_url = (
+            called_arg.full_url
+            if hasattr(called_arg, "full_url")
+            else called_arg
+        )
         assert called_url == "https://override.example/api/v1/agent/trust_key"
 
 
@@ -295,6 +304,30 @@ class TestFetchValidation:
             _run_fetch_trust_key(_ns(prefix=str(tmp_path)))
 
         assert not trust_file.exists()
+
+
+class TestFetchUserAgent:
+    def test_outbound_request_carries_mobaide_user_agent(self, tmp_path):
+        # Regression guard for the Cloudflare 1010 UA block: ``_run_fetch_trust_key`` must route
+        # through ``mobaide._http.urlopen`` so Cloudflare's default Bot
+        # Fight Mode doesn't 403 the trust-key fetch based on the
+        # ``Python-urllib/X.Y`` UA. The wheel/manifest fetch in install.sh
+        # uses curl already; this is the very first ``urllib`` call any
+        # operator makes after install.
+        _seed_env(tmp_path, "wss://example.com")
+        key_b64 = _valid_key_b64()
+        captured: dict = {}
+
+        def _fake_urlopen(req, timeout=None):
+            captured["request"] = req
+            return _FakeResponse(json.dumps({"public_key_b64": key_b64}))
+
+        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            rc = _run_fetch_trust_key(_ns(prefix=str(tmp_path)))
+
+        assert rc == 0
+        ua = captured["request"].get_header("User-agent")
+        assert ua is not None and ua.startswith("mobaide-agent/")
 
 
 class TestNoRestartFlag:

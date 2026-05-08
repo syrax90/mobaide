@@ -96,7 +96,7 @@ class TestRunPairQrEarlyExits:
 
         # initiate_pairing's underlying urlopen raises URLError → exit 3.
         with patch(
-            "mobaide.agent.pairing_monitor.urllib.request.urlopen",
+            "urllib.request.urlopen",
             side_effect=urllib.error.URLError("DNS down"),
         ):
             rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))

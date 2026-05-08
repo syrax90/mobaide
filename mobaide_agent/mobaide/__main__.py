@@ -231,12 +231,12 @@ def _run_update() -> int:
 
 async def _drive_update(layout, public_key_b64, manifest_url, *, force) -> int:
     import json
-    import urllib.request
 
+    import mobaide._http as _http
     from mobaide.agent.updater import StagedBinaryUpdater
 
     def _fetch() -> str:
-        with urllib.request.urlopen(manifest_url, timeout=30) as resp:
+        with _http.urlopen(manifest_url, timeout=30) as resp:
             return resp.read().decode("utf-8")
 
     raw = await asyncio.to_thread(_fetch)
@@ -350,12 +350,12 @@ def _run_fetch_trust_key(args: argparse.Namespace) -> int:
     import base64
     import json
     import urllib.error
-    import urllib.request
 
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
         Ed25519PublicKey,
     )
 
+    import mobaide._http as _http
     from mobaide.agent._env_writer import (
         atomic_write,
         env_path_for_prefix,
@@ -393,7 +393,7 @@ def _run_fetch_trust_key(args: argparse.Namespace) -> int:
 
     sys.stdout.write(f"[mobaide-agent] Fetching trust key from {url}\n")
     try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
+        with _http.urlopen(url, timeout=30) as resp:
             raw = resp.read().decode("utf-8")
     except (urllib.error.URLError, OSError) as exc:
         sys.stderr.write(

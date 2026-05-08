@@ -12,7 +12,7 @@ import sys
 import tarfile
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from mobaide.agent.updater import (
     InstallLayout,
     StagedBinaryUpdater,
+    _http_download,
     _wheel_basename_from_url,
 )
 from mobaide.manifest_signing import canonical_json
@@ -271,3 +272,65 @@ def test_wheel_basename_from_url_error_includes_diagnostic_url() -> None:
 def test_wheel_basename_from_url_rejects_path_separators(url: str) -> None:
     with pytest.raises(ValueError, match="path-separator chars"):
         _wheel_basename_from_url(url)
+
+
+class _FakeBytesResp:
+    def __init__(self, body: bytes = b"manifest-body"):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, n: int = -1) -> bytes:
+        if n == -1 or n >= len(self._body):
+            out, self._body = self._body, b""
+            return out
+        out, self._body = self._body[:n], self._body[n:]
+        return out
+
+
+def test_http_download_routes_through_user_agent_wrapper(tmp_path) -> None:
+    # Regression guard for the Cloudflare 1010 UA block on the manifest-fetch path. ``_http_download``
+    # is the default ``downloader`` injected into ``StagedBinaryUpdater``; if
+    # this ever reverts to bare ``urllib.request.urlopen``, every running
+    # agent's auto-update polling against a Cloudflare-fronted manifest URL
+    # would silently start 403'ing.
+    captured: dict = {}
+
+    def _fake_urlopen(req, timeout=None):
+        captured["request"] = req
+        return _FakeBytesResp(b'{"version":"x"}')
+
+    with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        body = _http_download("https://manifest.example/manifest.json")
+
+    assert body == '{"version":"x"}'
+    ua = captured["request"].get_header("User-agent")
+    assert ua is not None and ua.startswith("mobaide-agent/")
+
+
+def test_download_to_routes_through_user_agent_wrapper(tmp_path) -> None:
+    # Regression guard for the Cloudflare 1010 UA block on the wheel/tarball download path. The
+    # ``file://`` short-circuit in ``_download_to`` means existing tests
+    # never touch ``urllib`` — pin the http(s) branch explicitly so a
+    # future revert can't slip past unnoticed.
+    captured: dict = {}
+    payload = b"PK\x03\x04 fake wheel bytes"
+
+    def _fake_urlopen(req, timeout=None):
+        captured["request"] = req
+        return _FakeBytesResp(payload)
+
+    dest = tmp_path / "agent.whl"
+    with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+        StagedBinaryUpdater._download_to(
+            "https://cdn.example.com/releases/mobaide_agent-0.2.0-py3-none-any.whl",
+            dest,
+        )
+
+    assert dest.read_bytes() == payload
+    ua = captured["request"].get_header("User-agent")
+    assert ua is not None and ua.startswith("mobaide-agent/")
