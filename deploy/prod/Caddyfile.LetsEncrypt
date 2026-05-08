@@ -3,7 +3,7 @@
 #           ports 80 + 443 open in the server firewall.
 # Caddy auto-provisions and renews a Let's Encrypt cert via ACME HTTP-01.
 
-mobaide.com {
+mobaide.com, api.mobaide.com {
     encode zstd gzip
     reverse_proxy central-server:9000
 }

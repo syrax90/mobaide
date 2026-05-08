@@ -8,7 +8,7 @@
 #             /opt/mobaide/tls/origin-key.pem
 #           (both chmod 600, owner matches the user running docker compose).
 
-mobaide.com {
+mobaide.com, api.mobaide.com {
     tls /etc/caddy/tls/origin-cert.pem /etc/caddy/tls/origin-key.pem
     encode zstd gzip
     reverse_proxy central-server:9000
