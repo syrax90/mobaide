@@ -169,6 +169,46 @@ class TestDeleteAgent:
         assert await db.list_pairings_for_agent(agent_id) == []
         assert await db.get_pending_pairing_tokens(agent_id) == []
 
+    async def test_delete_qr_paired_agent_returns_204(
+        self, client, app, api_auth_headers
+    ):
+        """End-to-end regression: an agent paired through the QR flow has a
+        ``pairing_tokens`` row linked only via ``claimed_agent_id`` (the
+        original ``agent_id`` was NULL pre-claim and stays NULL after claim).
+        Before the fix, ``DELETE /api/agents/{id}`` raised aiosqlite
+        ``IntegrityError`` out of FastAPI's default handler and surfaced as
+        HTTP 500 in the mobile UI.
+        """
+        create_resp = await client.post(
+            "/api/agents",
+            json={"name": "qr-paired"},
+            headers=api_auth_headers,
+        )
+        agent_id = create_resp.json()["agent_id"]
+
+        db = app.state.db
+        raw_nonce, _ = await db.create_pairing_token(
+            agent_id=None, ttl_seconds=300
+        )
+        claimed = await db.claim_pairing_nonce(
+            raw_token=raw_nonce,
+            mobile_device_id="device-qr",
+            claimed_agent_id=agent_id,
+            claimed_token_raw="agent-token-stub",
+        )
+        assert claimed is True
+
+        resp = await client.delete(
+            f"/api/agents/{agent_id}", headers=api_auth_headers
+        )
+        assert resp.status_code == 204
+        assert await db.get_agent(agent_id) is None
+        cur = await db.conn.execute(
+            "SELECT 1 FROM pairing_tokens WHERE claimed_agent_id = ?",
+            (agent_id,),
+        )
+        assert await cur.fetchone() is None
+
 
 class TestGetMobileTokens:
     async def test_get_mobile_tokens(self, client, api_auth_headers):

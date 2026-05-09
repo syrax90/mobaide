@@ -177,3 +177,26 @@ class TestDeleteAgent:
         # Should not raise despite the mobile close error
         await service.delete_agent(agent_id, owner)
         assert await db.get_agent(agent_id) is None
+
+    async def test_delete_agent_with_qr_claimed_token(self, service, db):
+        """Service-layer regression for the QR-pairing post-claim shape:
+        a ``pairing_tokens`` row whose only FK to the agent is
+        ``claimed_agent_id`` must not raise an FK violation out of
+        ``service.delete_agent`` (which would surface as HTTP 500).
+        """
+        owner = await _create_owner(db)
+        agent_id, _ = await service.create_agent("qr-agent", owner)
+
+        raw_nonce, _ = await db.create_pairing_token(
+            agent_id=None, ttl_seconds=300
+        )
+        claimed = await db.claim_pairing_nonce(
+            raw_token=raw_nonce,
+            mobile_device_id="device-qr",
+            claimed_agent_id=agent_id,
+            claimed_token_raw="agent-token-stub",
+        )
+        assert claimed is True
+
+        await service.delete_agent(agent_id, owner)
+        assert await db.get_agent(agent_id) is None
