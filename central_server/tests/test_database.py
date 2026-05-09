@@ -112,6 +112,37 @@ class TestAgentCRUD:
     async def test_delete_nonexistent_returns_false(self, db: Database):
         assert await db.delete_agent("nonexistent") is False
 
+    async def test_delete_agent_with_qr_claimed_token(self, db: Database):
+        """Regression: pairing_tokens.claimed_agent_id is a second FK to
+        agents that ``delete_agent`` must also clear, otherwise SQLite
+        raises a FOREIGN KEY constraint failure on the agents DELETE.
+
+        Reproduces the QR-pairing post-claim shape where ``agent_id`` is
+        NULL (created pre-claim) and ``claimed_agent_id`` carries the FK
+        to the live agent — surviving cleanup for forensics.
+        """
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+
+        raw_nonce, _ = await db.create_pairing_token(
+            agent_id=None, ttl_seconds=300
+        )
+        claimed = await db.claim_pairing_nonce(
+            raw_token=raw_nonce,
+            mobile_device_id="device-1",
+            claimed_agent_id=agent_id,
+            claimed_token_raw="agent-token-stub",
+        )
+        assert claimed is True
+
+        assert await db.delete_agent(agent_id) is True
+        assert await db.get_agent(agent_id) is None
+        cur = await db.conn.execute(
+            "SELECT 1 FROM pairing_tokens WHERE claimed_agent_id = ?",
+            (agent_id,),
+        )
+        assert await cur.fetchone() is None
+
 
 class TestPairingTokens:
     async def test_create_and_consume(self, db: Database):

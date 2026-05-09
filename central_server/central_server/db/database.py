@@ -407,12 +407,21 @@ class Database:
         return raw_token
 
     async def delete_agent(self, agent_id: str) -> bool:
-        """Delete an agent and cascade to pairings, tokens, refresh tokens."""
+        """Delete an agent and cascade to pairings, tokens, refresh tokens.
+
+        ``pairing_tokens`` is referenced from ``agents`` via two FK columns
+        (``agent_id`` for the legacy flow and ``claimed_agent_id`` for the
+        QR-pairing post-claim row that survives cleanup for forensics).
+        Both must be cleared before the ``agents`` DELETE, otherwise SQLite
+        raises an FK constraint violation under ``PRAGMA foreign_keys=ON``.
+        """
         await self.conn.execute(
             "DELETE FROM mobile_refresh_tokens WHERE agent_id = ?", (agent_id,)
         )
         await self.conn.execute(
-            "DELETE FROM pairing_tokens WHERE agent_id = ?", (agent_id,)
+            "DELETE FROM pairing_tokens "
+            "WHERE agent_id = ? OR claimed_agent_id = ?",
+            (agent_id, agent_id),
         )
         await self.conn.execute(
             "DELETE FROM pairings WHERE agent_id = ?", (agent_id,)
