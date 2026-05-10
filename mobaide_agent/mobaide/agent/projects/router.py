@@ -7,8 +7,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from mobaide.linear.client import LinearApiClient
+from mobaide.linear.rate_limiter import LinearRateLimiter
+
 from ..auth.dependencies import get_current_user
+from ..logging import get_logger
 from .models import (
+    LinearLabelModel,
+    LinearStateModel,
     ProjectReadModel,
     ProjectUpdateModel,
     ProjectWriteModel,
@@ -24,6 +30,8 @@ from .service import (
     reorder_projects,
     update_project,
 )
+
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/api/projects",
@@ -160,4 +168,94 @@ async def delete_project_endpoint(
     except ProjectInUseError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc),
+        )
+
+
+def _resolve_api_key_or_404(request: Request, name: str) -> str:
+    store = _store(request)
+    project = store.get(name)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{name}' not found",
+        )
+    api_key = project.linear_api_key
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Project '{name}' has no linear_api_key configured; "
+                "set one before fetching Linear metadata."
+            ),
+        )
+    return api_key
+
+
+def _shared_rate_limiter(request: Request) -> LinearRateLimiter | None:
+    return getattr(request.app.state, "linear_rate_limiter", None)
+
+
+@router.get(
+    "/{name}/linear/labels",
+    response_model=list[LinearLabelModel],
+)
+async def list_linear_labels(
+    name: str,
+    request: Request,
+) -> list[dict[str, str]]:
+    """Return labels visible to the project's Linear API key, deduped by name.
+
+    Used by the Android project form to populate the multi-select chip
+    group for trigger labels and the dropdown for the removal label.
+
+    * 404 if the project is unknown.
+    * 400 if the project has no Linear API key.
+    * 502 if the upstream Linear API call fails.
+    """
+    api_key = _resolve_api_key_or_404(request, name)
+    client = LinearApiClient(
+        api_key=api_key, rate_limiter=_shared_rate_limiter(request),
+    )
+    try:
+        return await client.get_labels()
+    except Exception as exc:
+        logger.warning(
+            "linear.discovery.labels_failed project=%s error=%s", name, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch labels from Linear",
+        )
+
+
+@router.get(
+    "/{name}/linear/states",
+    response_model=list[LinearStateModel],
+)
+async def list_linear_states(
+    name: str,
+    request: Request,
+) -> list[dict[str, str]]:
+    """Return workflow states visible to the project's Linear API key.
+
+    Used by the Android project form to populate the multi-select chip
+    group for trigger states and the dropdowns for active / done states.
+
+    * 404 if the project is unknown.
+    * 400 if the project has no Linear API key.
+    * 502 if the upstream Linear API call fails.
+    """
+    api_key = _resolve_api_key_or_404(request, name)
+    client = LinearApiClient(
+        api_key=api_key, rate_limiter=_shared_rate_limiter(request),
+    )
+    try:
+        return await client.get_workflow_states()
+    except Exception as exc:
+        logger.warning(
+            "linear.discovery.states_failed project=%s error=%s", name, exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to fetch workflow states from Linear",
         )

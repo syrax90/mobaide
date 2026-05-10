@@ -154,6 +154,12 @@ fun ProjectsScreen(
             onAddFlag = viewModel::addFlag,
             onUpdateFlag = viewModel::updateFlag,
             onRemoveFlag = viewModel::removeFlag,
+            onToggleTriggerLabel = viewModel::toggleTriggerLabel,
+            onToggleTriggerState = viewModel::toggleTriggerState,
+            onActiveStateChange = viewModel::onActiveStateChange,
+            onDoneStateChange = viewModel::onDoneStateChange,
+            onRemovalLabelChange = viewModel::onRemovalLabelChange,
+            onRefreshFilterMetadata = viewModel::refreshFilterMetadata,
             onSave = viewModel::save,
             onOpenGit = { name ->
                 viewModel.closeSheet()

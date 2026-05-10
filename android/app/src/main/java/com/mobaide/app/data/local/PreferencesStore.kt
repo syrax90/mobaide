@@ -5,9 +5,13 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.mobaide.app.data.network.dto.LinearLabelDto
+import com.mobaide.app.data.network.dto.LinearStateDto
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore(name = "mobaide_prefs")
 
@@ -17,6 +21,18 @@ class PreferencesStore(private val context: Context) {
     private val keyLastSession = stringPreferencesKey("last_used_session_id")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
+
+    // Lenient (ignore unknown keys) so adding fields server-side later doesn't
+    // crash a stale cached blob.
+    private val cacheJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val labelListSerializer = ListSerializer(LinearLabelDto.serializer())
+    private val stateListSerializer = ListSerializer(LinearStateDto.serializer())
+
+    private fun keyLinearLabels(projectName: String) =
+        stringPreferencesKey("linear_labels::$projectName")
+
+    private fun keyLinearStates(projectName: String) =
+        stringPreferencesKey("linear_states::$projectName")
 
     val lastUsedProjectName: Flow<String?> =
         context.dataStore.data.map { it[keyLastProject] }
@@ -64,6 +80,36 @@ class PreferencesStore(private val context: Context) {
         val clamped = columns.coerceIn(TERMINAL_STATIC_COLUMNS_MIN, TERMINAL_STATIC_COLUMNS_MAX)
         context.dataStore.edit { prefs ->
             prefs[keyTerminalStaticColumns] = clamped
+        }
+    }
+
+    suspend fun getCachedLinearLabels(projectName: String): List<LinearLabelDto> {
+        val raw = context.dataStore.data.map { it[keyLinearLabels(projectName)] }.first()
+            ?: return emptyList()
+        return runCatching {
+            cacheJson.decodeFromString(labelListSerializer, raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun getCachedLinearStates(projectName: String): List<LinearStateDto> {
+        val raw = context.dataStore.data.map { it[keyLinearStates(projectName)] }.first()
+            ?: return emptyList()
+        return runCatching {
+            cacheJson.decodeFromString(stateListSerializer, raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun setCachedLinearLabels(projectName: String, labels: List<LinearLabelDto>) {
+        val payload = cacheJson.encodeToString(labelListSerializer, labels)
+        context.dataStore.edit { prefs ->
+            prefs[keyLinearLabels(projectName)] = payload
+        }
+    }
+
+    suspend fun setCachedLinearStates(projectName: String, states: List<LinearStateDto>) {
+        val payload = cacheJson.encodeToString(stateListSerializer, states)
+        context.dataStore.edit { prefs ->
+            prefs[keyLinearStates(projectName)] = payload
         }
     }
 }

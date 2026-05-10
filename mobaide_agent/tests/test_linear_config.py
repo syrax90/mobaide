@@ -3,6 +3,10 @@
 Post-CLA-39: AutoScanConfig no longer owns a projects dict and
 ``from_env()`` always returns an instance. The set of scannable projects is
 resolved live from ``mobaide.core.projects_store.ProjectsStore``.
+
+Post-CLA-52: ``LINEAR_ACTIVE_STATE`` / ``LINEAR_DONE_STATE`` are no longer
+on ``AutoScanConfig``. Per-project workflow-state names live on
+``ProjectRecord.auto_scan_filter``.
 """
 from __future__ import annotations
 
@@ -19,9 +23,7 @@ _ENV_VARS = (
     "WORKTREE_BASE",
     "BRANCH_PREFIX",
     "MAIN_BRANCH",
-    "LINEAR_ACTIVE_STATE",
     "AUTO_REMOVE_WORKTREES",
-    "LINEAR_DONE_STATE",
     "AGENT_STATE_DIR",
 )
 
@@ -43,9 +45,7 @@ class TestAlwaysReturnsInstance:
         assert cfg.scan_interval_seconds == 300
         assert cfg.branch_prefix == ""
         assert cfg.main_branch == "main"
-        assert cfg.linear_active_state == "In Progress"
         assert cfg.auto_remove_worktrees is True
-        assert cfg.linear_done_state == "Done"
         assert cfg.state_dir == "state"
         assert cfg.auto_scan_prompt == _DEFAULT_AUTO_SCAN_PROMPT
 
@@ -89,8 +89,6 @@ class TestEnvOverrides:
         monkeypatch.setenv("WORKTREE_BASE", "wt")
         monkeypatch.setenv("BRANCH_PREFIX", "feat/")
         monkeypatch.setenv("MAIN_BRANCH", "develop")
-        monkeypatch.setenv("LINEAR_ACTIVE_STATE", "Doing")
-        monkeypatch.setenv("LINEAR_DONE_STATE", "Completed")
         monkeypatch.setenv("AGENT_STATE_DIR", "/tmp/my-state")
 
         cfg = AutoScanConfig.from_env()
@@ -98,9 +96,32 @@ class TestEnvOverrides:
         assert cfg.worktree_base == "wt"
         assert cfg.branch_prefix == "feat/"
         assert cfg.main_branch == "develop"
-        assert cfg.linear_active_state == "Doing"
-        assert cfg.linear_done_state == "Completed"
         assert cfg.state_dir == "/tmp/my-state"
+
+
+class TestDeprecatedFieldsRemoved:
+    """``LINEAR_ACTIVE_STATE`` / ``LINEAR_DONE_STATE`` have been removed.
+
+    The pydantic-settings model is configured with ``extra="ignore"``, so a
+    leftover env var from a previous deployment does not crash boot. These
+    tests pin both halves of that contract: the field is gone, AND a
+    leftover env var is silently ignored.
+    """
+
+    def test_linear_active_state_field_does_not_exist(self):
+        cfg = AutoScanConfig.from_env()
+        assert not hasattr(cfg, "linear_active_state")
+
+    def test_linear_done_state_field_does_not_exist(self):
+        cfg = AutoScanConfig.from_env()
+        assert not hasattr(cfg, "linear_done_state")
+
+    def test_leftover_env_vars_are_ignored(self, monkeypatch):
+        monkeypatch.setenv("LINEAR_ACTIVE_STATE", "Doing")
+        monkeypatch.setenv("LINEAR_DONE_STATE", "Completed")
+        # Build should not raise; the values are silently ignored.
+        cfg = AutoScanConfig.from_env()
+        assert cfg is not None
 
 
 class TestWorktreeCleanup:

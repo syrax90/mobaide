@@ -11,4 +11,5 @@ data class ProjectWrite(
     val linear_api_key: String? = null,
     val conda_env: String? = null,
     val default_flags: Map<String, JsonElement> = emptyMap(),
+    val auto_scan_filter: AutoScanFilterDto? = null,
 )

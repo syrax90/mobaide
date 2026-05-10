@@ -5,7 +5,11 @@ import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.ProjectUpdate
 import com.mobaide.app.data.network.dto.ProjectWrite
+import com.mobaide.app.data.network.dto.LinearLabelDto
+import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.LinearMetadataRepository
+import com.mobaide.app.data.repository.MetadataResult
 import com.mobaide.app.data.repository.ProjectConflictException
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.testing.MainDispatcherRule
@@ -62,6 +66,7 @@ class ProjectsViewModelTest {
         val vm: ProjectsViewModel,
         val projectsRepo: ProjectsRepository,
         val autoScanRepo: AutoScanRepository,
+        val metadataRepo: LinearMetadataRepository,
         val projectsFlow: MutableStateFlow<List<ProjectInfo>>,
         val scansFlow: MutableStateFlow<List<AutoScanInstanceDto>>,
     )
@@ -75,13 +80,20 @@ class ProjectsViewModelTest {
     ): Fixture {
         val projectsRepo = mockk<ProjectsRepository>(relaxed = true)
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
+        val metadataRepo = mockk<LinearMetadataRepository>(relaxed = true)
         val projectsFlow = MutableStateFlow(initialProjects)
         val scansFlow = MutableStateFlow(initialScans)
         every { projectsRepo.observeProjects() } returns projectsFlow
         coEvery { projectsRepo.listProjects() } returns initialProjects
         every { autoScanRepo.observeScans() } returns scansFlow
-        val vm = ProjectsViewModel(projectsRepo, autoScanRepo)
-        return Fixture(vm, projectsRepo, autoScanRepo, projectsFlow, scansFlow)
+        // Default: metadata repo returns empty cache + empty fresh — keeps
+        // tests that don't care about filter UI uncluttered.
+        coEvery { metadataRepo.getLabels(any(), any()) } returns
+            MetadataResult.Cached<LinearLabelDto>(emptyList())
+        coEvery { metadataRepo.getStates(any(), any()) } returns
+            MetadataResult.Cached<LinearStateDto>(emptyList())
+        val vm = ProjectsViewModel(projectsRepo, autoScanRepo, metadataRepo)
+        return Fixture(vm, projectsRepo, autoScanRepo, metadataRepo, projectsFlow, scansFlow)
     }
 
     // --- projects list / sort ---
@@ -908,6 +920,181 @@ class ProjectsViewModelTest {
     }
 
     // --- busy-set propagation ---
+
+    @Test
+    fun openEditSheet_withLinearKey_loadsMetadataIntoForm() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.metadataRepo.getLabels("alpha", false) } returns
+            MetadataResult.Fresh(
+                listOf(LinearLabelDto("AutoPipeline", "#ff0000"), LinearLabelDto("AI-ready", "#00ff00")),
+            )
+        coEvery { f.metadataRepo.getStates("alpha", false) } returns
+            MetadataResult.Fresh(
+                listOf(LinearStateDto("Proposals", "backlog"), LinearStateDto("In Progress", "started")),
+            )
+
+        f.vm.openEditSheet(project("alpha", has_linear_key = true))
+        advanceUntilIdle()
+
+        val form = f.vm.uiState.value.form
+        assertNotNull(form)
+        assertEquals(2, form!!.availableLabels.size)
+        assertEquals(2, form.availableStates.size)
+        assertNull(form.filterMetadataError)
+        assertFalse(form.filterMetadataLoading)
+    }
+
+    @Test
+    fun openEditSheet_withoutLinearKey_doesNotCallMetadataRepo() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        f.vm.openEditSheet(project("beta", has_linear_key = false))
+        advanceUntilIdle()
+        coVerify(exactly = 0) { f.metadataRepo.getLabels(any(), any()) }
+        coVerify(exactly = 0) { f.metadataRepo.getStates(any(), any()) }
+    }
+
+    @Test
+    fun loadFilterMetadata_errorPath_keepsCachedAndSurfacesMessage() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.metadataRepo.getLabels("alpha", false) } returns
+            MetadataResult.Error("net down", cached = listOf(LinearLabelDto("AutoPipeline")))
+        coEvery { f.metadataRepo.getStates("alpha", false) } returns
+            MetadataResult.Cached(emptyList())
+
+        f.vm.openEditSheet(project("alpha", has_linear_key = true))
+        advanceUntilIdle()
+        val form = f.vm.uiState.value.form!!
+        assertEquals(1, form.availableLabels.size)
+        assertEquals("net down", form.filterMetadataError)
+    }
+
+    @Test
+    fun toggleTriggerLabel_marksFilterDirty_andTouchesFilterField() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        f.vm.openCreateSheet()
+        f.vm.toggleTriggerLabel("AI-ready")
+
+        val form = f.vm.uiState.value.form!!
+        assertTrue("FILTER touched after toggle", ProjectFormState.Field.FILTER in form.touched)
+        assertTrue(form.filterDirty)
+        assertTrue("AI-ready added to selected", "AI-ready" in form.triggerLabels)
+        // Toggling again removes.
+        f.vm.toggleTriggerLabel("AI-ready")
+        assertFalse("AI-ready" in f.vm.uiState.value.form!!.triggerLabels)
+    }
+
+    @Test
+    fun save_create_sendsAutoScanFilterOnTheWire() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        val bodySlot = slot<ProjectWrite>()
+        coEvery { f.projectsRepo.createProject(capture(bodySlot)) } returns project("alpha")
+
+        f.vm.openCreateSheet()
+        f.vm.onNameChange("alpha")
+        f.vm.onPathChange("/p/alpha")
+        f.vm.toggleTriggerLabel("AI-ready")  // adds in addition to default AutoPipeline
+        f.vm.toggleTriggerState("Backlog")   // adds in addition to default Proposals
+        f.vm.onActiveStateChange("Doing")
+        f.vm.save()
+        advanceUntilIdle()
+
+        val filter = bodySlot.captured.auto_scan_filter
+        assertNotNull("auto_scan_filter must be populated on create", filter)
+        assertTrue("AutoPipeline" in filter!!.label_names)
+        assertTrue("AI-ready" in filter.label_names)
+        assertTrue("Proposals" in filter.state_names)
+        assertTrue("Backlog" in filter.state_names)
+        assertEquals("Doing", filter.active_state)
+    }
+
+    @Test
+    fun save_edit_filterUnchanged_omitsFromUpdateBody() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        val target = project("alpha", has_linear_key = true)
+        val bodySlot = slot<ProjectUpdate>()
+        coEvery { f.projectsRepo.updateProject(any(), capture(bodySlot)) } returns target
+
+        f.vm.openEditSheet(target)
+        f.vm.save()
+        advanceUntilIdle()
+
+        // No filter mutation → null on the wire (server treats absent = keep).
+        assertNull(
+            "Unchanged filter must be null in PUT body",
+            bodySlot.captured.auto_scan_filter,
+        )
+    }
+
+    @Test
+    fun save_edit_filterChanged_emitsAppliesOnNextScanMessage() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        val target = project("alpha", has_linear_key = true)
+        coEvery { f.projectsRepo.updateProject(any(), any()) } returns target
+
+        f.vm.openEditSheet(target)
+        f.vm.toggleTriggerLabel("AI-ready")
+
+        val messages = mutableListOf<String>()
+        f.vm.events.test {
+            f.vm.save()
+            advanceUntilIdle()
+            // At least one message will fire (the "applies on next cycle" one).
+            // The CloseSheet event fires too. Drain a few.
+            for (i in 0 until 3) {
+                val ev = awaitItem() as? ProjectsUiEvent.Message ?: continue
+                messages += ev.text
+                if (messages.any { "applies on" in it }) break
+            }
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(
+            "Filter-dirty save must emit the 'applies on next scan cycle' snackbar; got $messages",
+            messages.any { "applies on" in it },
+        )
+    }
+
+    @Test
+    fun refreshFilterMetadata_inCreateMode_emitsHelpfulMessage_noNetworkCall() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        f.vm.openCreateSheet()
+
+        f.vm.events.test {
+            f.vm.refreshFilterMetadata()
+            advanceUntilIdle()
+            val ev = awaitItem()
+            assertTrue(ev is ProjectsUiEvent.Message)
+            assertTrue((ev as ProjectsUiEvent.Message).text.contains("Save the project first"))
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 0) { f.metadataRepo.getLabels(any(), any()) }
+    }
+
+    @Test
+    fun refreshFilterMetadata_inEditMode_forcesNetworkRefresh() = runTest {
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.metadataRepo.getLabels("alpha", any()) } returns
+            MetadataResult.Cached(emptyList())
+        coEvery { f.metadataRepo.getStates("alpha", any()) } returns
+            MetadataResult.Cached(emptyList())
+
+        f.vm.openEditSheet(project("alpha", has_linear_key = true))
+        advanceUntilIdle()
+        f.vm.refreshFilterMetadata()
+        advanceUntilIdle()
+
+        // The second call (refreshFilterMetadata) must pass forceRefresh=true.
+        coVerify(atLeast = 1) { f.metadataRepo.getLabels("alpha", true) }
+        coVerify(atLeast = 1) { f.metadataRepo.getStates("alpha", true) }
+    }
 
     @Test
     fun busyProjectNames_reflectsAutoScanFlow() = runTest {

@@ -14,9 +14,14 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 
-from .projects_config import ProjectConfig
+from .projects_config import AutoScanFilter, ProjectConfig
 
 logger = logging.getLogger(__name__)
+
+# Single source of truth for the historical-equivalent filter values used as
+# fallbacks when a stored record is missing or malforms a field. ``AutoScanFilter``
+# is a frozen dataclass so this shared instance is safe to read concurrently.
+_FILTER_DEFAULTS = AutoScanFilter()
 
 
 def safe_path_exists(p: Path) -> bool:
@@ -74,6 +79,7 @@ class ProjectRecord:
     conda_env: str | None = None
     default_flags: dict[str, object] = field(default_factory=dict)
     order: int = 0
+    auto_scan_filter: AutoScanFilter = field(default_factory=AutoScanFilter)
 
 
 @dataclass
@@ -87,6 +93,7 @@ class ProjectUpdatePatch:
     * ``linear_api_key`` / ``conda_env``: ``None`` keeps, ``""`` clears
       (stored as ``None``), any other string replaces.
     * ``default_flags``: ``None`` keeps, a dict replaces.
+    * ``auto_scan_filter``: ``None`` keeps, a filter replaces wholesale.
     """
 
     name: str | None = None
@@ -94,6 +101,7 @@ class ProjectUpdatePatch:
     linear_api_key: str | None = None
     conda_env: str | None = None
     default_flags: dict[str, object] | None = None
+    auto_scan_filter: AutoScanFilter | None = None
 
 
 class ProjectsStore:
@@ -267,6 +275,9 @@ class ProjectsStore:
             if patch.default_flags is not None:
                 record.default_flags = dict(patch.default_flags)
 
+            if patch.auto_scan_filter is not None:
+                record.auto_scan_filter = patch.auto_scan_filter
+
             if new_name != record.name:
                 self._projects.pop(record.name)
                 record.name = new_name
@@ -317,6 +328,64 @@ class ProjectsStore:
             self._save_unlocked()
 
 
+def _filter_from_dict(data: object) -> AutoScanFilter:
+    """Parse a stored ``auto_scan_filter`` blob.
+
+    Tolerates legacy records (missing field) by returning the historical
+    default. Unknown / malformed values are silently coerced to defaults so
+    a single corrupted entry does not block boot.
+    """
+    if not isinstance(data, dict):
+        return AutoScanFilter()
+    state_names = data.get("state_names")
+    label_names = data.get("label_names")
+    # Element-level filtering mirrors ``AutoScanFilterModel._reject_empty_elements`` and
+    # ``_reject_blank_string`` in ``agent/projects/models.py`` so a hand-edited
+    # ``projects.json`` cannot land an empty/whitespace-only string in the
+    # store and crash the next ``GET /api/projects`` (which validates each
+    # row through ``ProjectReadModel``). Lenient on type, strict on content.
+    return AutoScanFilter(
+        state_names=(
+            [s for s in state_names if isinstance(s, str) and s.strip()]
+            if isinstance(state_names, list)
+            else list(_FILTER_DEFAULTS.state_names)
+        ),
+        label_names=(
+            [s for s in label_names if isinstance(s, str) and s.strip()]
+            if isinstance(label_names, list)
+            else list(_FILTER_DEFAULTS.label_names)
+        ),
+        active_state=(
+            data["active_state"]
+            if isinstance(data.get("active_state"), str)
+            and data["active_state"].strip()
+            else _FILTER_DEFAULTS.active_state
+        ),
+        done_state=(
+            data["done_state"]
+            if isinstance(data.get("done_state"), str)
+            and data["done_state"].strip()
+            else _FILTER_DEFAULTS.done_state
+        ),
+        removal_label=(
+            data["removal_label"]
+            if isinstance(data.get("removal_label"), str)
+            and data["removal_label"].strip()
+            else _FILTER_DEFAULTS.removal_label
+        ),
+    )
+
+
+def _filter_to_dict(f: AutoScanFilter) -> dict[str, object]:
+    return {
+        "state_names": list(f.state_names),
+        "label_names": list(f.label_names),
+        "active_state": f.active_state,
+        "done_state": f.done_state,
+        "removal_label": f.removal_label,
+    }
+
+
 def _record_from_dict(data: object) -> ProjectRecord | None:
     """Parse one stored record. Returns ``None`` if invalid."""
     if not isinstance(data, dict):
@@ -342,6 +411,7 @@ def _record_from_dict(data: object) -> ProjectRecord | None:
         conda_env=conda_env if isinstance(conda_env, str) else None,
         default_flags=default_flags if isinstance(default_flags, dict) else {},
         order=order if isinstance(order, int) else 0,
+        auto_scan_filter=_filter_from_dict(data.get("auto_scan_filter")),
     )
 
 
@@ -357,6 +427,7 @@ def _record_to_dict(r: ProjectRecord) -> dict[str, object]:
         d["conda_env"] = r.conda_env
     if r.default_flags:
         d["default_flags"] = dict(r.default_flags)
+    d["auto_scan_filter"] = _filter_to_dict(r.auto_scan_filter)
     return d
 
 
@@ -367,6 +438,7 @@ def _record_to_config(r: ProjectRecord) -> ProjectConfig:
         linear_api_key=r.linear_api_key,
         conda_env=r.conda_env,
         default_flags=dict(r.default_flags),
+        auto_scan_filter=r.auto_scan_filter,
     )
 
 
@@ -381,6 +453,7 @@ def _record_to_public(r: ProjectRecord) -> dict[str, object]:
         "has_linear_key": r.linear_api_key is not None,
         "is_git": safe_path_exists(p / ".git"),
         "path_exists": safe_path_exists(p),
+        "auto_scan_filter": _filter_to_dict(r.auto_scan_filter),
     }
 
 
@@ -435,6 +508,7 @@ def _seed_from_env(raw: str | None = None) -> list[ProjectRecord]:
                 default_flags=(
                     default_flags if isinstance(default_flags, dict) else {}
                 ),
+                auto_scan_filter=_filter_from_dict(value.get("auto_scan_filter")),
             ),
         )
     for i, r in enumerate(records):

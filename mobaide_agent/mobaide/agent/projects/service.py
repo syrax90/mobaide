@@ -82,7 +82,10 @@ def _patch_from_update_model(model: ProjectUpdateModel) -> ProjectUpdatePatch:
     """Build a store patch from the Pydantic update DTO.
 
     ``None`` in the DTO means "keep existing"; empty-string secret means
-    "clear the key" — both must round-trip faithfully to the store.
+    "clear the key" — both must round-trip faithfully to the store. The
+    ``auto_scan_filter`` field is wholesale (replace or keep — there's no
+    meaningful "clear" operation, since the filter must always be present
+    to keep the scanner running).
     """
     if model.linear_api_key is None:
         lak: str | None = None
@@ -93,12 +96,18 @@ def _patch_from_update_model(model: ProjectUpdateModel) -> ProjectUpdatePatch:
     normalized_path = (
         normalize_project_path(model.path) if model.path is not None else None
     )
+    auto_scan_filter = (
+        model.auto_scan_filter.to_dataclass()
+        if model.auto_scan_filter is not None
+        else None
+    )
     return ProjectUpdatePatch(
         name=model.name,
         path=normalized_path,
         linear_api_key=lak,
         conda_env=model.conda_env,
         default_flags=cast("dict[str, object] | None", model.default_flags),
+        auto_scan_filter=auto_scan_filter,
     )
 
 
@@ -108,13 +117,16 @@ def _record_from_write_model(model: ProjectWriteModel) -> ProjectRecord:
         if model.linear_api_key is not None
         else None
     )
-    return ProjectRecord(
+    record = ProjectRecord(
         name=model.name,
         path=normalize_project_path(model.path),
         linear_api_key=lak or None,
         conda_env=model.conda_env or None,
         default_flags=cast("dict[str, object]", dict(model.default_flags)),
     )
+    if model.auto_scan_filter is not None:
+        record.auto_scan_filter = model.auto_scan_filter.to_dataclass()
+    return record
 
 
 def _public_view(store: ProjectsStore, name: str) -> dict[str, object]:

@@ -523,6 +523,280 @@ class TestPathNormalizationAcrossRest:
         assert after.path == original_path
 
 
+class TestAutoScanFilterOnTheWire:
+    """The per-project filter must round-trip through GET / POST / PUT and
+    appear on the public read model so the Android form can populate."""
+
+    async def test_get_includes_default_filter(
+        self, client_with_projects, auth_headers_p,
+    ):
+        resp = await client_with_projects.get(
+            "/api/projects", headers=auth_headers_p,
+        )
+        assert resp.status_code == 200
+        rows = {p["name"]: p for p in resp.json()}
+        # `alpha` was seeded directly via the store; it gets the default
+        # filter on construction.
+        assert "auto_scan_filter" in rows["alpha"]
+        f = rows["alpha"]["auto_scan_filter"]
+        assert f["state_names"] == ["Proposals"]
+        assert f["label_names"] == ["AutoPipeline"]
+        assert f["active_state"] == "In Progress"
+        assert f["done_state"] == "Done"
+        assert f["removal_label"] == "AutoPipeline"
+
+    async def test_post_with_explicit_filter_round_trips(
+        self, client_with_projects, auth_headers_p,
+    ):
+        resp = await client_with_projects.post(
+            "/api/projects",
+            headers=auth_headers_p,
+            json={
+                "name": "delta",
+                "path": "C:/delta",
+                "auto_scan_filter": {
+                    "state_names": ["Proposals", "Backlog"],
+                    "label_names": ["AutoPipeline", "AI-ready"],
+                    "active_state": "Doing",
+                    "done_state": "Released",
+                    "removal_label": "AI-ready",
+                },
+            },
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["auto_scan_filter"]["state_names"] == ["Proposals", "Backlog"]
+        assert body["auto_scan_filter"]["active_state"] == "Doing"
+        assert body["auto_scan_filter"]["removal_label"] == "AI-ready"
+
+    async def test_put_filter_replaces_wholesale(
+        self, client_with_projects, auth_headers_p,
+    ):
+        resp = await client_with_projects.put(
+            "/api/projects/alpha",
+            headers=auth_headers_p,
+            json={
+                "auto_scan_filter": {
+                    "state_names": ["Backlog"],
+                    "label_names": ["AI-ready"],
+                    "active_state": "Doing",
+                    "done_state": "Released",
+                    "removal_label": "AI-ready",
+                },
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["auto_scan_filter"]["state_names"] == ["Backlog"]
+        assert body["auto_scan_filter"]["label_names"] == ["AI-ready"]
+
+    async def test_put_without_filter_keeps_existing(
+        self, client_with_projects, auth_headers_p, app_with_projects,
+    ):
+        # Seed a non-default filter directly on the store, then PUT without
+        # the auto_scan_filter key — the existing filter must survive.
+        from mobaide.core.projects_config import AutoScanFilter
+        store = app_with_projects.state.projects_store
+        store._projects["alpha"].auto_scan_filter = AutoScanFilter(
+            state_names=["Backlog"],
+            label_names=["AI-ready"],
+            active_state="Doing",
+            done_state="Released",
+            removal_label="AI-ready",
+        )
+
+        resp = await client_with_projects.put(
+            "/api/projects/alpha",
+            headers=auth_headers_p,
+            json={"conda_env": "ml"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["auto_scan_filter"]["state_names"] == ["Backlog"]
+        assert body["auto_scan_filter"]["active_state"] == "Doing"
+
+    async def test_post_with_empty_state_names_returns_422(
+        self, client_with_projects, auth_headers_p,
+    ):
+        # ``state_names`` and ``label_names`` have ``min_length=1`` on the
+        # wire model — empty lists would silently match every issue, which
+        # is almost certainly not what the user wants.
+        resp = await client_with_projects.post(
+            "/api/projects",
+            headers=auth_headers_p,
+            json={
+                "name": "delta",
+                "path": "C:/delta",
+                "auto_scan_filter": {
+                    "state_names": [],
+                    "label_names": ["AutoPipeline"],
+                    "active_state": "In Progress",
+                    "done_state": "Done",
+                    "removal_label": "AutoPipeline",
+                },
+            },
+        )
+        assert resp.status_code == 422
+
+    async def test_post_with_empty_label_names_returns_422(
+        self, client_with_projects, auth_headers_p,
+    ):
+        # Symmetric to ``state_names`` — an empty ``label_names`` list would
+        # silently match every issue. The wire model rejects it with 422.
+        resp = await client_with_projects.post(
+            "/api/projects",
+            headers=auth_headers_p,
+            json={
+                "name": "delta",
+                "path": "C:/delta",
+                "auto_scan_filter": {
+                    "state_names": ["Proposals"],
+                    "label_names": [],
+                    "active_state": "In Progress",
+                    "done_state": "Done",
+                    "removal_label": "AutoPipeline",
+                },
+            },
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.parametrize(
+        "field",
+        ["active_state", "done_state", "removal_label"],
+    )
+    async def test_post_with_empty_string_field_returns_422(
+        self, client_with_projects, auth_headers_p, field,
+    ):
+        # Each of the three single-value string fields is declared
+        # ``min_length=1`` on the Pydantic wire model. An empty string for
+        # any one of them is a misconfiguration (would never match anything
+        # in Linear), and must surface at the API boundary as 422 — not
+        # silently round-trip into the store as a broken filter.
+        body = {
+            "name": "delta",
+            "path": "C:/delta",
+            "auto_scan_filter": {
+                "state_names": ["Proposals"],
+                "label_names": ["AutoPipeline"],
+                "active_state": "In Progress",
+                "done_state": "Done",
+                "removal_label": "AutoPipeline",
+            },
+        }
+        body["auto_scan_filter"][field] = ""
+
+        resp = await client_with_projects.post(
+            "/api/projects", headers=auth_headers_p, json=body,
+        )
+        assert resp.status_code == 422
+
+
+class TestLinearDiscoveryEndpoints:
+    """``GET /api/projects/{name}/linear/labels`` and ``/states`` instantiate
+    a one-shot ``LinearApiClient`` with the project's stored API key. We
+    monkey-patch the client class so no real network call is made."""
+
+    async def test_labels_404_when_project_unknown(
+        self, client_with_projects, auth_headers_p,
+    ):
+        resp = await client_with_projects.get(
+            "/api/projects/missing/linear/labels", headers=auth_headers_p,
+        )
+        assert resp.status_code == 404
+
+    async def test_labels_400_when_no_linear_api_key(
+        self, client_with_projects, auth_headers_p,
+    ):
+        # `beta` is seeded without a linear_api_key.
+        resp = await client_with_projects.get(
+            "/api/projects/beta/linear/labels", headers=auth_headers_p,
+        )
+        assert resp.status_code == 400
+
+    async def test_labels_returns_client_response(
+        self, client_with_projects, auth_headers_p, monkeypatch,
+    ):
+        captured = {}
+
+        class _Stub:
+            def __init__(self, api_key, rate_limiter=None):
+                captured["api_key"] = api_key
+
+            async def get_labels(self):
+                return [
+                    {"name": "AutoPipeline", "color": "#ff0000"},
+                    {"name": "AI-ready", "color": "#00ff00"},
+                ]
+
+        monkeypatch.setattr(
+            "mobaide.agent.projects.router.LinearApiClient", _Stub,
+        )
+        resp = await client_with_projects.get(
+            "/api/projects/alpha/linear/labels", headers=auth_headers_p,
+        )
+        assert resp.status_code == 200
+        # The stub was instantiated with the seeded project's API key.
+        assert captured["api_key"] == "lin_secret"
+        assert resp.json() == [
+            {"name": "AutoPipeline", "color": "#ff0000"},
+            {"name": "AI-ready", "color": "#00ff00"},
+        ]
+
+    async def test_states_502_on_upstream_failure(
+        self, client_with_projects, auth_headers_p, monkeypatch,
+    ):
+        class _Boom:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def get_workflow_states(self):
+                raise RuntimeError("linear is down")
+
+        monkeypatch.setattr(
+            "mobaide.agent.projects.router.LinearApiClient", _Boom,
+        )
+        resp = await client_with_projects.get(
+            "/api/projects/alpha/linear/states", headers=auth_headers_p,
+        )
+        assert resp.status_code == 502
+        # The internal exception detail is not echoed to the client.
+        assert "linear is down" not in resp.text
+
+    async def test_states_returns_client_response(
+        self, client_with_projects, auth_headers_p, monkeypatch,
+    ):
+        class _Stub:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def get_workflow_states(self):
+                return [
+                    {"name": "Proposals", "type": "backlog"},
+                    {"name": "In Progress", "type": "started"},
+                    {"name": "Done", "type": "completed"},
+                ]
+
+        monkeypatch.setattr(
+            "mobaide.agent.projects.router.LinearApiClient", _Stub,
+        )
+        resp = await client_with_projects.get(
+            "/api/projects/alpha/linear/states", headers=auth_headers_p,
+        )
+        assert resp.status_code == 200
+        names = [s["name"] for s in resp.json()]
+        assert names == ["Proposals", "In Progress", "Done"]
+
+    async def test_endpoints_require_auth(self, client_with_projects):
+        resp = await client_with_projects.get(
+            "/api/projects/alpha/linear/labels",
+        )
+        assert resp.status_code in (401, 403)
+        resp = await client_with_projects.get(
+            "/api/projects/alpha/linear/states",
+        )
+        assert resp.status_code in (401, 403)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

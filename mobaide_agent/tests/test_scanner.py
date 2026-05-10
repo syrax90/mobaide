@@ -13,8 +13,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from mobaide.core import SessionManager
-from mobaide.core.projects_config import ProjectConfig
+from typing import cast
+
+from mobaide.core import ProjectsStore, SessionManager
+from mobaide.core.projects_config import AutoScanFilter, ProjectConfig
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.models import (
     IssueLabel,
@@ -31,15 +33,15 @@ def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanCon
         scan_interval_seconds=1,
         branch_prefix="feature/claude",
         main_branch="main",
-        linear_active_state="In Progress",
         auto_scan_prompt=None,
         auto_remove_worktrees=auto_remove_worktrees,
-        linear_done_state="Done",
         state_dir=str(tmp_path / "state"),
     )
 
 
-def _make_project_config(tmp_path) -> ProjectConfig:
+def _make_project_config(
+    tmp_path, *, auto_scan_filter: AutoScanFilter | None = None,
+) -> ProjectConfig:
     # POSIX form matches the canonical path that flows through the real
     # ``ProjectsStore`` after project-path reconciliation — keeps the
     # synthetic fixture in sync with production, so string-equality
@@ -50,7 +52,25 @@ def _make_project_config(tmp_path) -> ProjectConfig:
         name="test-project",
         path=Path(tmp_path / "repo").as_posix(),
         linear_api_key="lin_api_test",
+        auto_scan_filter=auto_scan_filter or AutoScanFilter(),
     )
+
+
+class _FakeProjectsStore:
+    """In-memory stand-in that exposes only ``get`` to the scanner.
+
+    The scanner uses ``projects_store.get(name)`` once per cycle to refresh
+    its filter snapshot. Tests mutate ``self.config`` to simulate a UI-level
+    filter edit without rebuilding the whole instance.
+    """
+
+    def __init__(self, config: ProjectConfig | None) -> None:
+        self.config = config
+
+    def get(self, name: str) -> ProjectConfig | None:
+        if self.config is None or self.config.name != name:
+            return None
+        return self.config
 
 
 def _make_issue(
@@ -72,16 +92,23 @@ def _make_issue(
     )
 
 
-def _make_instance(tmp_path, *, client=None, worktree_mgr=None, session_manager=None,
-                   launcher=None, config=None, project_config=None) -> AutoScanInstance:
+def _make_instance(
+    tmp_path, *,
+    client=None, worktree_mgr=None, session_manager=None,
+    launcher=None, config=None, project_config=None,
+    projects_store=None,
+) -> AutoScanInstance:
+    project_config = project_config or _make_project_config(tmp_path)
+    store = projects_store or _FakeProjectsStore(project_config)
     return AutoScanInstance(
         project_name="test-project",
-        project_config=project_config or _make_project_config(tmp_path),
+        project_config=project_config,
         config=config or _make_config(tmp_path),
         session_manager=session_manager or AsyncMock(spec=SessionManager),
         launcher=launcher or AsyncMock(),
         client=client or AsyncMock(),
         worktree_mgr=worktree_mgr or AsyncMock(),
+        projects_store=cast("ProjectsStore", store),
     )
 
 
@@ -1082,14 +1109,16 @@ class TestClientOptionsTypeGuard:
         ``client_options`` is typed ``Any`` at the call boundary so the
         tests can pass the very inputs the guard is supposed to reject
         (dict, str) without fighting the static type checker."""
+        project_config = _make_project_config(tmp_path)
         return AutoScanInstance(
             project_name="test-project",
-            project_config=_make_project_config(tmp_path),
+            project_config=project_config,
             config=_make_config(tmp_path),
             session_manager=AsyncMock(spec=SessionManager),
             launcher=AsyncMock(),
             client=AsyncMock(),
             worktree_mgr=AsyncMock(),
+            projects_store=cast("ProjectsStore", _FakeProjectsStore(project_config)),
             client_options=client_options,
         )
 
@@ -1189,3 +1218,157 @@ class TestPollLoopContextIsolation:
             assert "path" not in observed_ctx
         finally:
             clear_request_context()
+
+
+class TestPerProjectFilter:
+    """The scanner reads filter values from the project's
+    ``auto_scan_filter``, not from hardcoded literals or global env."""
+
+    @pytest.mark.asyncio
+    async def test_scan_once_passes_filter_to_client(self, tmp_path):
+        client = AsyncMock()
+        client.get_auto_scan_issues.return_value = []
+        custom = AutoScanFilter(
+            state_names=["Backlog", "Proposals"],
+            label_names=["AI-ready"],
+            active_state="Doing",
+            done_state="Released",
+            removal_label="AI-ready",
+        )
+        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            project_config=project_config,
+        )
+
+        await inst._scan_once()
+
+        # The client received the project's filter — not a default-built one.
+        assert client.get_auto_scan_issues.await_count == 1
+        passed = client.get_auto_scan_issues.await_args.args[0]
+        assert isinstance(passed, AutoScanFilter)
+        assert passed == custom
+
+    @pytest.mark.asyncio
+    async def test_process_issue_uses_active_state_from_filter(self, tmp_path):
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        custom = AutoScanFilter(active_state="Doing")
+        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            project_config=project_config,
+            launcher=_launcher_with_worktree(str(tmp_path / "wt")),
+        )
+        # Inject the team-state set the scanner will look up.
+        issue = LinearIssue(
+            id="uuid-1",
+            identifier="CLA-9",
+            title="Test",
+            description=None,
+            state=IssueState(id="s-prop", name="Proposals"),
+            labels=[IssueLabel(id="lab-auto", name="AutoPipeline")],
+            team_states=[
+                IssueState(id="s-prop", name="Proposals"),
+                IssueState(id="s-doing", name="Doing"),
+                IssueState(id="s-done", name="Done"),
+            ],
+        )
+
+        await inst._process_issue(issue)
+
+        # update_issue_state was called with the "Doing" state's id, not
+        # the historical "In Progress".
+        assert client.update_issue_state.await_count == 1
+        called_state = client.update_issue_state.await_args.args[1]
+        assert called_state == "s-doing"
+
+    @pytest.mark.asyncio
+    async def test_process_issue_uses_removal_label_from_filter(self, tmp_path):
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        custom = AutoScanFilter(removal_label="AI-ready")
+        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            project_config=project_config,
+            launcher=_launcher_with_worktree(str(tmp_path / "wt")),
+        )
+        # Issue carries both labels — scanner must strip ONLY the
+        # configured ``removal_label``.
+        issue = LinearIssue(
+            id="uuid-1",
+            identifier="CLA-9",
+            title="Test",
+            description=None,
+            state=IssueState(id="s-prop", name="Proposals"),
+            labels=[
+                IssueLabel(id="lab-auto", name="AutoPipeline"),
+                IssueLabel(id="lab-ai", name="AI-ready"),
+            ],
+            team_states=[
+                IssueState(id="s-prop", name="Proposals"),
+                IssueState(id="s-doing", name="In Progress"),
+            ],
+        )
+
+        await inst._process_issue(issue)
+
+        assert client.remove_issue_label.await_count == 1
+        called_label = client.remove_issue_label.await_args.args[1]
+        assert called_label == "lab-ai"
+
+    @pytest.mark.asyncio
+    async def test_filter_refreshes_from_store_between_cycles(self, tmp_path):
+        """Editing the project's filter via the store takes effect on the
+        next ``_scan_once`` call without a restart — the snapshot at
+        construction time is intentionally NOT load-bearing for filters."""
+        client = AsyncMock()
+        client.get_auto_scan_issues.return_value = []
+
+        starting = AutoScanFilter(state_names=["Proposals"])
+        project_config = _make_project_config(tmp_path, auto_scan_filter=starting)
+        store = _FakeProjectsStore(project_config)
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            project_config=project_config,
+            projects_store=store,
+        )
+
+        await inst._scan_once()
+        first_filter = client.get_auto_scan_issues.await_args.args[0]
+        assert first_filter.state_names == ["Proposals"]
+
+        # Simulate a UI edit: replace the project_config in the store.
+        new_filter = AutoScanFilter(state_names=["Backlog"])
+        store.config = ProjectConfig(
+            name=project_config.name,
+            path=project_config.path,
+            linear_api_key=project_config.linear_api_key,
+            auto_scan_filter=new_filter,
+        )
+
+        await inst._scan_once()
+        second_filter = client.get_auto_scan_issues.await_args.args[0]
+        assert second_filter.state_names == ["Backlog"]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_uses_done_state_from_filter(self, tmp_path):
+        # Simplest path: with no tracked workitems, the cleanup helper
+        # exits early but still reads ``self._filter.done_state``. We pin
+        # that the access is via the filter (not a removed config field)
+        # by ensuring the call doesn't raise AttributeError.
+        custom = AutoScanFilter(done_state="Released")
+        project_config = _make_project_config(tmp_path, auto_scan_filter=custom)
+        inst = _make_instance(tmp_path, project_config=project_config)
+
+        await inst._cleanup_completed_worktrees()
+        assert inst._filter.done_state == "Released"

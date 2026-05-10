@@ -54,6 +54,8 @@ from mobaide.agent.git.service import (
     delete_git_items,
     list_git_items,
 )
+from mobaide.linear.client import LinearApiClient
+from mobaide.linear.rate_limiter import LinearRateLimiter
 
 from mobaide.agent.autoscan.models import StartScanRequest
 from mobaide.agent.autoscan.stream import run_autoscan_stream
@@ -1072,6 +1074,10 @@ class RelayClient:
         if git_resp is not None:
             return git_resp
 
+        linear_resp = await self._dispatch_linear_discovery(method, path)
+        if linear_resp is not None:
+            return linear_resp
+
         if method == "GET" and path == "/api/autoscan/list":
             mgr = getattr(self._app_state, "autoscan_manager", None)
             if mgr is None:
@@ -1363,6 +1369,74 @@ class RelayClient:
             return {"status": 200, "body": resp.model_dump()}
 
         return None
+
+    async def _dispatch_linear_discovery(
+        self,
+        method: str,
+        path: str,
+    ) -> dict | None:
+        """Handle ``GET /api/projects/{name}/linear/(labels|states)`` over relay.
+
+        Mirrors the FastAPI endpoints in ``agent/projects/router.py`` so mobile
+        clients connecting through the central server reach the same surface.
+        Returns 404 if the project is unknown, 400 if the project has no
+        ``linear_api_key``, 502 on upstream Linear failure, otherwise the
+        deduped-by-name list returned by the agent's :class:`LinearApiClient`.
+        """
+        m = re.match(r"^/api/projects/([^/]+)/linear/(labels|states)$", path)
+        if not m or method != "GET":
+            return None
+
+        name = m.group(1)
+        kind = m.group(2)
+
+        store = getattr(self._app_state, "projects_store", None)
+        if store is None:
+            return {
+                "status": 500,
+                "body": {"detail": "projects store not configured"},
+            }
+        project = store.get(name)
+        if project is None:
+            return {
+                "status": 404,
+                "body": {"detail": f"Project '{name}' not found"},
+            }
+        api_key = project.linear_api_key
+        if not api_key:
+            return {
+                "status": 400,
+                "body": {
+                    "detail": (
+                        f"Project '{name}' has no linear_api_key configured; "
+                        "set one before fetching Linear metadata."
+                    ),
+                },
+            }
+        rate_limiter: LinearRateLimiter | None = getattr(
+            self._app_state, "linear_rate_limiter", None,
+        )
+        client = LinearApiClient(api_key=api_key, rate_limiter=rate_limiter)
+        try:
+            if kind == "labels":
+                items = await client.get_labels()
+            else:
+                items = await client.get_workflow_states()
+        except Exception as exc:
+            logger.warning(
+                "linear.discovery.%s_failed project=%s error=%s",
+                kind, name, exc,
+            )
+            return {
+                "status": 502,
+                "body": {
+                    "detail": (
+                        f"Failed to fetch {'labels' if kind == 'labels' else 'workflow states'} "
+                        "from Linear"
+                    ),
+                },
+            }
+        return {"status": 200, "body": items}
 
     async def _handle_session_input(
         self,

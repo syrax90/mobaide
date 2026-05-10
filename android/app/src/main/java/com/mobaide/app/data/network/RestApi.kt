@@ -3,6 +3,8 @@ package com.mobaide.app.data.network
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.LinearLabelDto
+import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ForceUpdateResponse
 import com.mobaide.app.data.network.dto.GitDeleteRequest
@@ -162,6 +164,22 @@ class RestApi(
         val request = Request.Builder()
             .url("${baseUrl()}/api/projects/order")
             .patch(payload)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun getLinearLabels(projectName: String): List<LinearLabelDto> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/linear/labels")
+            .get()
+            .build()
+        return execute(request)
+    }
+
+    suspend fun getLinearStates(projectName: String): List<LinearStateDto> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/projects/${encodePathSegment(projectName)}/linear/states")
+            .get()
             .build()
         return execute(request)
     }

@@ -1,5 +1,8 @@
 package com.mobaide.app.ui.projects
 
+import com.mobaide.app.data.network.dto.AutoScanFilterDto
+import com.mobaide.app.data.network.dto.LinearLabelDto
+import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.ProjectUpdate
 import com.mobaide.app.data.network.dto.ProjectWrite
@@ -89,6 +92,26 @@ data class ProjectFormState(
     val flags: List<FlagEntry> = emptyList(),
     val flagsDirty: Boolean = false,
 
+    // Auto Scan filter selections — multi-select sets for trigger labels &
+    // states, single-string for active/done/removal. Dirty flag mirrors the
+    // `flagsDirty` pattern: only send the field on the wire if the user
+    // actually edited the form.
+    val triggerLabels: Set<String> = setOf("AutoPipeline"),
+    val triggerStates: Set<String> = setOf("Proposals"),
+    val activeState: String = "In Progress",
+    val doneState: String = "Done",
+    val removalLabel: String = "AutoPipeline",
+    val filterDirty: Boolean = false,
+
+    // Discovery results from the Linear discovery endpoints. Populated
+    // asynchronously after the sheet opens — until then, the chip groups
+    // render only the currently-selected entries (so the form is editable
+    // even before the network fetch returns).
+    val availableLabels: List<LinearLabelDto> = emptyList(),
+    val availableStates: List<LinearStateDto> = emptyList(),
+    val filterMetadataLoading: Boolean = false,
+    val filterMetadataError: String? = null,
+
     val touched: Set<Field> = emptySet(),
     val submitAttempted: Boolean = false,
     val submitting: Boolean = false,
@@ -103,9 +126,16 @@ data class ProjectFormState(
      */
     val submitError: String? = null,
 ) {
-    enum class Field { NAME, PATH, CONDA, KEY, FLAG }
+    enum class Field { NAME, PATH, CONDA, KEY, FLAG, FILTER }
 
     val isEdit: Boolean get() = editing != null
+
+    /** Whether the Auto Scan filter section should render at all. The filter
+     *  is only meaningful for projects with a Linear API key; otherwise the
+     *  scanner cannot start regardless of the filter values. */
+    val showAutoScanFilterSection: Boolean
+        get() = linearApiKey.isNotBlank() ||
+            clearLinearKey.not() && (editing?.has_linear_key == true)
 
     private fun fieldVisible(field: Field): Boolean =
         submitAttempted || field in touched
@@ -156,6 +186,40 @@ data class ProjectFormState(
             return errors
         }
 
+    /** "Select at least one trigger label" — null until the user has touched
+     *  the section or attempted submit, mirroring the name/path pattern. */
+    val triggerLabelsError: String? get() =
+        if (fieldVisible(Field.FILTER) && triggerLabels.isEmpty())
+            "Select at least one trigger label"
+        else null
+
+    val triggerStatesError: String? get() =
+        if (fieldVisible(Field.FILTER) && triggerStates.isEmpty())
+            "Select at least one trigger state"
+        else null
+
+    val activeStateError: String? get() =
+        if (fieldVisible(Field.FILTER) && activeState.isBlank())
+            "Active state is required"
+        else null
+
+    val doneStateError: String? get() =
+        if (fieldVisible(Field.FILTER) && doneState.isBlank())
+            "Done state is required"
+        else null
+
+    val removalLabelError: String? get() =
+        if (fieldVisible(Field.FILTER) && removalLabel.isBlank())
+            "Removal label is required"
+        else null
+
+    private val filterValid: Boolean
+        get() = triggerLabels.isNotEmpty() &&
+            triggerStates.isNotEmpty() &&
+            activeState.isNotBlank() &&
+            doneState.isNotBlank() &&
+            removalLabel.isNotBlank()
+
     val canSave: Boolean
         get() = !submitting
             && name.isNotBlank()
@@ -164,6 +228,15 @@ data class ProjectFormState(
             && flags.all { it.keyValid && it.valueValid }
             && flags.distinctBy { it.key }.size == flags.size
             && nameServerError == null
+            && filterValid
+
+    private fun currentFilterDto(): AutoScanFilterDto = AutoScanFilterDto(
+        state_names = triggerStates.toList(),
+        label_names = triggerLabels.toList(),
+        active_state = activeState.trim(),
+        done_state = doneState.trim(),
+        removal_label = removalLabel.trim(),
+    )
 
     fun toCreateBody(): ProjectWrite = ProjectWrite(
         name = name.trim(),
@@ -171,6 +244,7 @@ data class ProjectFormState(
         linear_api_key = linearApiKey.ifBlank { null },
         conda_env = condaEnv.ifBlank { null },
         default_flags = flags.associate { it.key to it.toJsonElement() },
+        auto_scan_filter = currentFilterDto(),
     )
 
     /**
@@ -210,12 +284,19 @@ data class ProjectFormState(
         val flagsOut: Map<String, JsonElement>? =
             if (flagsDirty) flags.associate { it.key to it.toJsonElement() } else null
 
+        // auto_scan_filter: send only if the user touched the section.
+        // Otherwise null = keep existing on the server side. There is no
+        // "clear" semantics — the filter is always present.
+        val filterOut: AutoScanFilterDto? =
+            if (filterDirty) currentFilterDto() else null
+
         return ProjectUpdate(
             name = nameOut,
             path = pathOut,
             linear_api_key = keyOut,
             conda_env = condaOut,
             default_flags = flagsOut,
+            auto_scan_filter = filterOut,
         )
     }
 
@@ -237,6 +318,12 @@ data class ProjectFormState(
             clearLinearKey = false,
             flags = project.default_flags.map { (k, v) -> FlagEntry.fromJsonElement(k, v) },
             flagsDirty = false,
+            triggerLabels = project.auto_scan_filter.label_names.toSet(),
+            triggerStates = project.auto_scan_filter.state_names.toSet(),
+            activeState = project.auto_scan_filter.active_state,
+            doneState = project.auto_scan_filter.done_state,
+            removalLabel = project.auto_scan_filter.removal_label,
+            filterDirty = false,
         )
     }
 }

@@ -4,10 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.LinearMetadataRepository
+import com.mobaide.app.data.repository.MetadataResult
 import com.mobaide.app.data.repository.ProjectConflictException
 import com.mobaide.app.data.repository.ProjectsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -39,6 +43,7 @@ import javax.inject.Inject
 class ProjectsViewModel @Inject constructor(
     private val projectsRepository: ProjectsRepository,
     private val autoScanRepository: AutoScanRepository,
+    private val linearMetadataRepository: LinearMetadataRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProjectsUiState())
@@ -105,6 +110,11 @@ class ProjectsViewModel @Inject constructor(
 
     fun openEditSheet(project: ProjectInfo) {
         _uiState.update { it.copy(form = ProjectFormState.forEdit(project)) }
+        if (project.has_linear_key) {
+            // Project has an API key — fetch fresh labels/states. SWR: cached
+            // values render immediately if present, fresh ones overwrite.
+            loadFilterMetadata(project.name, forceRefresh = false)
+        }
     }
 
     fun closeSheet() {
@@ -176,6 +186,110 @@ class ProjectsViewModel @Inject constructor(
         )
     }
 
+    fun toggleTriggerLabel(name: String) = updateForm {
+        val next = if (name in it.triggerLabels) it.triggerLabels - name else it.triggerLabels + name
+        it.copy(
+            triggerLabels = next,
+            filterDirty = true,
+            touched = it.touched + ProjectFormState.Field.FILTER,
+            submitError = null,
+        )
+    }
+
+    fun toggleTriggerState(name: String) = updateForm {
+        val next = if (name in it.triggerStates) it.triggerStates - name else it.triggerStates + name
+        it.copy(
+            triggerStates = next,
+            filterDirty = true,
+            touched = it.touched + ProjectFormState.Field.FILTER,
+            submitError = null,
+        )
+    }
+
+    fun onActiveStateChange(value: String) = updateForm {
+        it.copy(
+            activeState = value,
+            filterDirty = true,
+            touched = it.touched + ProjectFormState.Field.FILTER,
+            submitError = null,
+        )
+    }
+
+    fun onDoneStateChange(value: String) = updateForm {
+        it.copy(
+            doneState = value,
+            filterDirty = true,
+            touched = it.touched + ProjectFormState.Field.FILTER,
+            submitError = null,
+        )
+    }
+
+    fun onRemovalLabelChange(value: String) = updateForm {
+        it.copy(
+            removalLabel = value,
+            filterDirty = true,
+            touched = it.touched + ProjectFormState.Field.FILTER,
+            submitError = null,
+        )
+    }
+
+    /**
+     * Triggered by the section's refresh icon. Force-fetches over the
+     * network and updates form state.
+     */
+    fun refreshFilterMetadata() {
+        val form = _uiState.value.form ?: return
+        val target = form.editing?.name
+            ?: run {
+                // Create mode: cannot fetch — emit a brief snackbar so the
+                // user understands they need to save first.
+                _events.tryEmit(
+                    ProjectsUiEvent.Message(
+                        "Save the project first to fetch labels/states from Linear.",
+                    ),
+                )
+                return
+            }
+        loadFilterMetadata(target, forceRefresh = true)
+    }
+
+    private fun loadFilterMetadata(projectName: String, forceRefresh: Boolean) {
+        viewModelScope.launch {
+            updateForm { it.copy(filterMetadataLoading = true, filterMetadataError = null) }
+
+            // Run the two network calls in parallel — they're independent,
+            // so total latency is max(labels, states) rather than the sum.
+            val (labelsResult, statesResult) = coroutineScope {
+                val labels = async { linearMetadataRepository.getLabels(projectName, forceRefresh) }
+                val states = async { linearMetadataRepository.getStates(projectName, forceRefresh) }
+                labels.await() to states.await()
+            }
+
+            updateForm { state ->
+                val labels = when (labelsResult) {
+                    is MetadataResult.Cached -> labelsResult.items
+                    is MetadataResult.Fresh -> labelsResult.items
+                    is MetadataResult.Error -> labelsResult.cached
+                }
+                val states = when (statesResult) {
+                    is MetadataResult.Cached -> statesResult.items
+                    is MetadataResult.Fresh -> statesResult.items
+                    is MetadataResult.Error -> statesResult.cached
+                }
+                val errMsg = listOfNotNull(
+                    (labelsResult as? MetadataResult.Error)?.message,
+                    (statesResult as? MetadataResult.Error)?.message,
+                ).firstOrNull()
+                state.copy(
+                    availableLabels = labels,
+                    availableStates = states,
+                    filterMetadataLoading = false,
+                    filterMetadataError = errMsg,
+                )
+            }
+        }
+    }
+
     fun save() {
         val form = _uiState.value.form ?: return
         val attempted = form.copy(submitAttempted = true, submitError = null)
@@ -192,19 +306,18 @@ class ProjectsViewModel @Inject constructor(
                 } else {
                     projectsRepository.createProject(attempted.toCreateBody())
                 }
-                // Success → close sheet; list refresh arrives via `projects.changed` event.
                 _uiState.update { it.copy(form = null) }
                 _events.tryEmit(ProjectsUiEvent.CloseSheet)
+                if (form.filterDirty) {
+                    _events.tryEmit(
+                        ProjectsUiEvent.Message(
+                            "Filters updated — applies on the next scan cycle.",
+                        ),
+                    )
+                }
             } catch (e: ProjectConflictException) {
-                // 409 on save: server reports rename collision or "auto-scan active" —
-                // surface inline under the Name field.
                 updateForm { it.copy(submitting = false, nameServerError = e.detail) }
             } catch (e: Exception) {
-                // Anything else (5xx, transport, IO) → set submitError on the
-                // form (StateFlow, lossless) AND emit a snackbar event as a
-                // secondary cue. The form-state error is what reliably
-                // surfaces to the user; the snackbar can race the sheet's
-                // dismissal or the events SharedFlow's drop policy.
                 val message = "Save failed: ${e.message ?: "unknown error"}"
                 updateForm { it.copy(submitting = false, submitError = message) }
                 _events.tryEmit(ProjectsUiEvent.Message(message))
@@ -267,6 +380,7 @@ class ProjectsViewModel @Inject constructor(
             linear_api_key = null,
             conda_env = conda_env,
             default_flags = default_flags,
+            auto_scan_filter = auto_scan_filter,
         )
 
     fun reorder(newNameOrder: List<String>) {

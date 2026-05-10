@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover
     def bind_request_context(**kwargs): pass
 
 from mobaide.core import (
+    AutoScanFilter,
     ClaudeBinaryNotFoundError,
     ClaudeLauncher,
     ClaudeOptions,
@@ -63,11 +64,14 @@ class AutoScanCapacityReached(Exception):
 class AutoScanInstance:
     """One Auto Scan polling loop bound to a single project.
 
-    The instance captures a :class:`ProjectConfig` snapshot at construction
-    time — mid-scan mutations of the project (path change, key rotation,
-    flags edit) do NOT affect the running loop. To pick up changes, the
-    operator must ``stop`` and ``start`` the scan. This gives predictable
-    behaviour and keeps the cycle loop from racing the projects store.
+    Snapshot semantics:
+
+    * ``path``, ``linear_api_key``, ``conda_env``, ``default_flags`` are
+      captured at construction time — mid-scan mutations do NOT affect the
+      running loop. Stop+start the scan to pick those up.
+    * ``auto_scan_filter`` is re-read from the injected ``ProjectsStore`` at
+      the top of each cycle, so filter edits apply on the next iteration
+      (within at most ``scan_interval_seconds``) without needing a restart.
     """
 
     def __init__(
@@ -80,6 +84,7 @@ class AutoScanInstance:
         launcher: ClaudeLauncher,
         client: LinearApiClient,
         worktree_mgr: WorktreeManager,
+        projects_store: ProjectsStore,
         event_bus=None,
         client_options: ClaudeOptions | None = None,
     ) -> None:
@@ -97,8 +102,15 @@ class AutoScanInstance:
         self._launcher = launcher
         self._client = client
         self._worktree_mgr = worktree_mgr
+        self._projects_store = projects_store
         self._event_bus = event_bus
         self._client_options = client_options
+        # Filter snapshot for the in-progress cycle. Refreshed at the top of
+        # each ``_scan_once`` call from ``self._projects_store``; pre-seeded
+        # from the construction-time project snapshot so the first cycle
+        # has a valid filter even if the store ever reports the project as
+        # missing (defensive — should not happen under normal operation).
+        self._filter: AutoScanFilter = project_config.auto_scan_filter
 
         # Per-project persistent record of issues whose worktrees have been
         # created by auto-scan. The scanner consults this file AFTER the
@@ -107,8 +119,9 @@ class AutoScanInstance:
         #
         # It is intentionally NOT used as a dedup gate for the processing
         # loop — the source of truth for "needs processing" is the Linear
-        # query filter (state=Proposals + label=AutoPipeline). The processing
-        # step itself transitions state and removes the label, which
+        # query filter (state.name in filter.state_names AND
+        # labels.name in filter.label_names). The processing step itself
+        # transitions state and removes the configured removal_label, which
         # naturally prevents the issue from reappearing unless the user
         # explicitly resets it in Linear.
         self._workitems_store = ActiveWorkItemsStore(
@@ -217,8 +230,8 @@ class AutoScanInstance:
         having to wait for the next poll cycle to emit a phase event.
 
         Re-processing of previously-seen issues is now driven purely by
-        the Linear query filters (state=Proposals + label=AutoPipeline) —
-        there is no in-memory dedup set to clear.
+        the configured Linear query filters (per-project trigger states
+        and labels) — there is no in-memory dedup set to clear.
         """
         self._run_now_event.set()
         self._next_scan_at = datetime.now(timezone.utc)
@@ -255,15 +268,35 @@ class AutoScanInstance:
         except asyncio.CancelledError:
             return
 
+    def _refresh_filter(self) -> AutoScanFilter:
+        """Re-read the project's filter from the store, fall back to last-known.
+
+        Decoupling the filter from the construction-time snapshot is
+        intentional: edits in the project form propagate via
+        ``ProjectsStore`` and take effect on the next cycle without a
+        manual stop+start. If the project has been deleted concurrently,
+        we keep using the last-known filter to avoid spuriously dropping
+        in-flight issues — the next cycle will fail at the issue query
+        anyway and the manager will surface a sensible error.
+        """
+        current = self._projects_store.get(self._project_name)
+        if current is not None:
+            self._filter = current.auto_scan_filter
+        return self._filter
+
     async def _scan_once(self) -> None:
         self._last_scan_time = time.time()
         self._last_activity_at = self._last_scan_time
+        filter_cfg = self._refresh_filter()
         logger.info(
-            "Scanning for AutoPipeline issues (project=%s)...", self._project_name
+            "autoscan.scan_started project=%s state_names=%s label_names=%s",
+            self._project_name,
+            list(filter_cfg.state_names),
+            list(filter_cfg.label_names),
         )
         self._emit_phase("scan_started")
 
-        issues = await self._client.get_auto_scan_issues()
+        issues = await self._client.get_auto_scan_issues(filter_cfg)
 
         processed_count = 0
         if issues:
@@ -291,7 +324,12 @@ class AutoScanInstance:
                     break
                 processed_count += 1
         else:
-            logger.info("No matching AutoPipeline issues found")
+            logger.info(
+                "autoscan.no_matches project=%s state_names=%s label_names=%s",
+                self._project_name,
+                list(filter_cfg.state_names),
+                list(filter_cfg.label_names),
+            )
 
         # Run every cycle — items added in prior cycles may have reached Done.
         if self._config.auto_remove_worktrees:
@@ -306,9 +344,10 @@ class AutoScanInstance:
     async def _process_issue(self, issue: LinearIssue) -> None:
         bind_request_context(issue_identifier=issue.identifier)
         project = self._project_config
+        filter_cfg = self._filter
         logger.info("Processing: %s - %s", issue.identifier, issue.title)
 
-        target_state_name = self._config.linear_active_state
+        target_state_name = filter_cfg.active_state
         target_state = next(
             (s for s in issue.team_states if s.name == target_state_name), None
         )
@@ -330,13 +369,17 @@ class AutoScanInstance:
             except Exception as exc:
                 self._emit_issue(issue, "state_update", "failed", error=str(exc))
 
+        removal_name = filter_cfg.removal_label
         auto_label = next(
-            (l for l in issue.labels if l.name == "AutoPipeline"), None
+            (l for l in issue.labels if l.name == removal_name), None
         )
         self._emit_issue(issue, "label_removal", "started")
         if auto_label is None:
             self._emit_issue(
-                issue, "label_removal", "ok", error="AutoPipeline label absent"
+                issue,
+                "label_removal",
+                "ok",
+                error=f"label '{removal_name}' not present on issue",
             )
         else:
             try:
@@ -456,14 +499,14 @@ class AutoScanInstance:
         Mirrors the PowerShell ``Remove-CompletedWorktrees`` function: for
         each item in ``active_workitems.json`` belonging to the current
         project, query Linear for the issue's current workflow state;
-        if it matches ``config.linear_done_state``, remove the git
-        worktree and drop the entry from the store. Items for other
-        projects are preserved (the same file is shared per-project in
-        practice, but the guard is kept for safety).
+        if it matches the project's configured ``done_state``, remove
+        the git worktree and drop the entry from the store. Items for
+        other projects are preserved (the same file is shared per-project
+        in practice, but the guard is kept for safety).
         """
         project = self._project_config
         project_root = project.path
-        done_state_name = self._config.linear_done_state
+        done_state_name = self._filter.done_state
 
         items = await self._workitems_store.read()
         tracked = [i for i in items if i.project_root == project_root]
@@ -736,6 +779,7 @@ class AutoScanSessionManager:
                 launcher=self._launcher,
                 client=client,
                 worktree_mgr=worktree_mgr,
+                projects_store=self._projects_store,
                 event_bus=self._event_bus,
                 client_options=client_options,
             )

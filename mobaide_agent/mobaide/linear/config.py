@@ -33,10 +33,8 @@ class AutoScanConfig(BaseSettings):
     scan_interval_seconds: int = 300
     branch_prefix: str = ""
     main_branch: str = "main"
-    linear_active_state: str = "In Progress"
     auto_scan_prompt: str | None = _DEFAULT_AUTO_SCAN_PROMPT
     auto_remove_worktrees: bool = True
-    linear_done_state: str = "Done"
     state_dir: str = Field(default="state", validation_alias="AGENT_STATE_DIR")
 
     model_config = SettingsConfigDict(
