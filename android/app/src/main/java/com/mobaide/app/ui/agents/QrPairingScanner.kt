@@ -99,6 +99,11 @@ fun rememberQrPairingScanner(): QrScanLauncher {
             ModuleInstall.getClient(context)
                 .installModules(request)
         }
+        // Trigger module install during first composition (earlier than a
+        // LaunchedEffect, which runs after the first frame). Idempotent —
+        // a second warmUp() call from a later LaunchedEffect is a no-op
+        // when the module is already installing/installed.
         QrScanLauncher(scanner = scanner, moduleInstaller = moduleInstaller)
+            .also { it.warmUp() }
     }
 }
