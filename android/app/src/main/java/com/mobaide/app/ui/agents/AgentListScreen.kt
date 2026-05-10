@@ -1,6 +1,7 @@
 package com.mobaide.app.ui.agents
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
@@ -23,15 +25,18 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -50,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -96,12 +102,7 @@ fun AgentListScreen(
             TopAppBar(
                 title = { Text("My Agents") },
                 actions = {
-                    IconButton(onClick = viewModel::onScanQrClicked) {
-                        Icon(
-                            Icons.Default.QrCodeScanner,
-                            contentDescription = "Scan QR to pair agent",
-                        )
-                    }
+                    AgentListOverflowMenu(onAddManually = viewModel::showAddDialog)
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -109,55 +110,47 @@ fun AgentListScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = viewModel::showAddDialog) {
-                Icon(Icons.Default.Add, contentDescription = "Add Agent")
-            }
+            ScanQrFab(onClick = viewModel::onScanQrClicked)
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        PullToRefreshBox(
-            isRefreshing = uiState.isLoading,
-            onRefresh = viewModel::refresh,
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (uiState.agents.isEmpty() && !uiState.isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "No agents yet",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = "Tap + to create your first agent",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                        horizontal = 16.dp,
-                        vertical = 8.dp,
-                    ),
-                ) {
-                    items(uiState.agents, key = { it.agent_id }) { agent ->
-                        AgentCard(
-                            agent = agent,
-                            isConnected = agent.agent_id == uiState.connectedAgentId,
-                            isConnecting = uiState.isConnecting,
-                            onClick = { viewModel.connectToAgent(agent) },
-                            onReRegister = { viewModel.showReRegisterDialog(agent) },
-                            onDelete = { viewModel.showDeleteConfirm(agent) },
-                        )
+            if (uiState.isScannerLaunching) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            PullToRefreshBox(
+                isRefreshing = uiState.isLoading,
+                onRefresh = viewModel::refresh,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                if (uiState.agents.isEmpty() && !uiState.isLoading) {
+                    EmptyAgentsState(
+                        onScanClick = viewModel::onScanQrClicked,
+                        onAddManuallyClick = viewModel::showAddDialog,
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 16.dp,
+                            vertical = 8.dp,
+                        ),
+                    ) {
+                        items(uiState.agents, key = { it.agent_id }) { agent ->
+                            AgentCard(
+                                agent = agent,
+                                isConnected = agent.agent_id == uiState.connectedAgentId,
+                                isConnecting = uiState.isConnecting,
+                                onClick = { viewModel.connectToAgent(agent) },
+                                onReRegister = { viewModel.showReRegisterDialog(agent) },
+                                onDelete = { viewModel.showDeleteConfirm(agent) },
+                            )
+                        }
                     }
                 }
             }
@@ -198,6 +191,103 @@ fun AgentListScreen(
         onConfirm = viewModel::confirmQrClaim,
         onDismiss = viewModel::dismissQrPairing,
     )
+}
+
+/** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
+@Composable
+internal fun ScanQrFab(onClick: () -> Unit) {
+    ExtendedFloatingActionButton(
+        onClick = onClick,
+        icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) },
+        text = { Text("Scan to add") },
+    )
+}
+
+/** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
+@Composable
+internal fun AgentListOverflowMenu(onAddManually: () -> Unit) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { menuExpanded = true }) {
+            Icon(Icons.Default.MoreVert, contentDescription = "More options")
+        }
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Add manually...") },
+                onClick = {
+                    menuExpanded = false
+                    onAddManually()
+                },
+                leadingIcon = {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                },
+            )
+        }
+    }
+}
+
+/** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
+@Composable
+internal fun EmptyAgentsState(
+    onScanClick: () -> Unit,
+    onAddManuallyClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(32.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .background(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = CircleShape,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.QrCodeScanner,
+                    contentDescription = null,
+                    modifier = Modifier.size(56.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            Text(
+                text = "No agents yet",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "Scan the QR code shown by `mobaide-agent show-qr` on your host to add an agent.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Button(
+                onClick = onScanClick,
+                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+            ) {
+                Icon(
+                    Icons.Default.QrCodeScanner,
+                    contentDescription = null,
+                    modifier = Modifier.size(ButtonDefaults.IconSize),
+                )
+                Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                Text("Scan QR code")
+            }
+            TextButton(onClick = onAddManuallyClick) {
+                Text("Add manually instead")
+            }
+        }
+    }
 }
 
 @Composable

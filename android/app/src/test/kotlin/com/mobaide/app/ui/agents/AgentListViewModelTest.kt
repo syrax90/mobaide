@@ -264,6 +264,108 @@ class AgentListViewModelTest {
         assertEquals("409 conflict", vm.uiState.value.error)
     }
 
+    @Test
+    fun onScanQrClicked_setsIsScannerLaunchingTrue() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.onScanQrClicked()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.isScannerLaunching)
+    }
+
+    @Test
+    fun onScanResult_clearsIsScannerLaunching_onSuccess() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.onScanQrClicked()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.isScannerLaunching)
+
+        // Trigger a benign expired-payload result; the VM clears the flag on entry
+        // before the expiry check, so the path used here doesn't matter.
+        val expired = ParsedQrPairingPayload(
+            version = "MOBA1",
+            relayUrl = "https://relay.test",
+            nonce = "nonce-x",
+            trustKeyFp = "f".repeat(64),
+            expUnix = 0L,
+        )
+        vm.onScanResult(Result.success(expired))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.isScannerLaunching)
+    }
+
+    @Test
+    fun onScanResult_clearsIsScannerLaunching_onFailure() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.onScanQrClicked()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.isScannerLaunching)
+
+        vm.onScanResult(Result.failure(RuntimeException("scanner crashed")))
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.isScannerLaunching)
+    }
+
+    @Test
+    fun onScanQrClicked_whileAlreadyLaunching_isDebounced() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        // Drain initial scan request emissions
+        vm.scanRequests.test {
+            vm.onScanQrClicked()
+            assertEquals(Unit, awaitItem())
+
+            // Second click while still launching -- must not emit again
+            vm.onScanQrClicked()
+            expectNoEvents()
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun onScanQrClicked_afterPreviousScanCompletes_emitsAgain() = runTest {
+        // Re-arm semantics: once a scan resolves (success or failure), the
+        // debounce guard releases and a subsequent click must produce a
+        // fresh _scanRequests emission. Protects against a regression
+        // where the flag is left set or the predicate references a stale
+        // field.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.scanRequests.test {
+            vm.onScanQrClicked()
+            assertEquals(Unit, awaitItem())
+
+            // First scan resolves (failure path keeps the qrPairing flow
+            // out of trustKeyPinning, so no extra mocking is needed).
+            vm.onScanResult(Result.failure(RuntimeException("user cancelled")))
+            advanceUntilIdle()
+            assertFalse(vm.uiState.value.isScannerLaunching)
+
+            // Second click after resolution must re-emit
+            vm.onScanQrClicked()
+            assertEquals(Unit, awaitItem())
+            assertTrue(vm.uiState.value.isScannerLaunching)
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
     // ---- Re-register dialog state ----------------------------------------------
 
     @Test

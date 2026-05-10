@@ -42,6 +42,13 @@ data class AgentListUiState(
     val isConnecting: Boolean = false,
     val connectedAgentId: String? = null,
     val qrPairing: QrPairingState = QrPairingState.Idle,
+    /**
+     * True between [AgentListViewModel.onScanQrClicked] and the first
+     * [AgentListViewModel.onScanResult] callback. Drives a thin
+     * progress indicator on the screen so the cold-start delay of the
+     * GMS code-scanner module install does not look like a frozen tap.
+     */
+    val isScannerLaunching: Boolean = false,
 )
 
 @HiltViewModel
@@ -193,7 +200,10 @@ class AgentListViewModel @Inject constructor(
     }
 
     fun onScanQrClicked() {
-        _uiState.update { it.copy(qrPairing = QrPairingState.Idle) }
+        if (_uiState.value.isScannerLaunching) return
+        _uiState.update {
+            it.copy(qrPairing = QrPairingState.Idle, isScannerLaunching = true)
+        }
         _scanRequests.tryEmit(Unit)
     }
 
@@ -208,6 +218,7 @@ class AgentListViewModel @Inject constructor(
      * [confirmQrClaim].
      */
     fun onScanResult(result: Result<ParsedQrPairingPayload>) {
+        _uiState.update { it.copy(isScannerLaunching = false) }
         result.fold(
             onSuccess = { payload ->
                 viewModelScope.launch {
