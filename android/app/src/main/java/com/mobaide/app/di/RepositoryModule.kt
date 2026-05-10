@@ -18,6 +18,7 @@ import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.GitRepository
+import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
@@ -104,6 +105,15 @@ object RepositoryModule {
     @Singleton
     fun provideProjectsRepository(restApi: RestApi, eventBus: AgentEventBus): ProjectsRepository {
         return ProjectsRepository(restApi, eventBus)
+    }
+
+    @Provides
+    @Singleton
+    fun provideLinearMetadataRepository(
+        restApi: RestApi,
+        preferencesStore: PreferencesStore,
+    ): LinearMetadataRepository {
+        return LinearMetadataRepository(restApi, preferencesStore)
     }
 
     @Provides

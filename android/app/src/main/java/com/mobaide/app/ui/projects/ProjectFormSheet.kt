@@ -1,7 +1,10 @@
 package com.mobaide.app.ui.projects
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,12 +16,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -29,6 +40,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -52,6 +65,12 @@ fun ProjectFormSheet(
     onAddFlag: () -> Unit,
     onUpdateFlag: (Int, FlagEntry) -> Unit,
     onRemoveFlag: (Int) -> Unit,
+    onToggleTriggerLabel: (String) -> Unit,
+    onToggleTriggerState: (String) -> Unit,
+    onActiveStateChange: (String) -> Unit,
+    onDoneStateChange: (String) -> Unit,
+    onRemovalLabelChange: (String) -> Unit,
+    onRefreshFilterMetadata: () -> Unit,
     onSave: () -> Unit,
     onOpenGit: (String) -> Unit = {},
 ) {
@@ -136,6 +155,19 @@ fun ProjectFormSheet(
                 onRemove = onRemoveFlag,
                 onAdd = onAddFlag,
             )
+
+            if (state.showAutoScanFilterSection) {
+                HorizontalDivider()
+                AutoScanFilterSection(
+                    state = state,
+                    onToggleTriggerLabel = onToggleTriggerLabel,
+                    onToggleTriggerState = onToggleTriggerState,
+                    onActiveStateChange = onActiveStateChange,
+                    onDoneStateChange = onDoneStateChange,
+                    onRemovalLabelChange = onRemovalLabelChange,
+                    onRefresh = onRefreshFilterMetadata,
+                )
+            }
 
             Spacer(Modifier.height(8.dp))
 
@@ -223,6 +255,267 @@ private fun LinearKeyField(
             }
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun AutoScanFilterSection(
+    state: ProjectFormState,
+    onToggleTriggerLabel: (String) -> Unit,
+    onToggleTriggerState: (String) -> Unit,
+    onActiveStateChange: (String) -> Unit,
+    onDoneStateChange: (String) -> Unit,
+    onRemovalLabelChange: (String) -> Unit,
+    onRefresh: () -> Unit,
+) {
+    // Union of "what we know exists in Linear" with "what the form already
+    // has selected". The latter guarantees that even before the discovery
+    // call lands (or if it failed), the user sees their currently-saved
+    // selections rendered as chips, so the form is functional offline.
+    val labelNames = remember(state.availableLabels, state.triggerLabels, state.removalLabel) {
+        val seen = LinkedHashSet<String>()
+        state.availableLabels.forEach { seen.add(it.name) }
+        seen.addAll(state.triggerLabels)
+        if (state.removalLabel.isNotBlank()) seen.add(state.removalLabel)
+        seen.toList()
+    }
+    val stateNames = remember(state.availableStates, state.triggerStates, state.activeState, state.doneState) {
+        val seen = LinkedHashSet<String>()
+        state.availableStates.forEach { seen.add(it.name) }
+        seen.addAll(state.triggerStates)
+        if (state.activeState.isNotBlank()) seen.add(state.activeState)
+        if (state.doneState.isNotBlank()) seen.add(state.doneState)
+        seen.toList()
+    }
+    val stateByName = remember(state.availableStates) {
+        state.availableStates.associateBy { it.name }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Auto Scan filters",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(
+                onClick = onRefresh,
+                enabled = !state.filterMetadataLoading,
+            ) {
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = "Refresh from Linear",
+                )
+            }
+        }
+
+        if (state.filterMetadataLoading) {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+
+        state.filterMetadataError?.let { err ->
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = err,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onRefresh) { Text("Retry") }
+                }
+            }
+        }
+
+        ChipGroupSection(
+            title = "Trigger labels",
+            description = "Issues with any of these labels will be picked up.",
+            error = state.triggerLabelsError,
+            names = labelNames,
+            selected = state.triggerLabels,
+            empty = if (labelNames.isEmpty())
+                "No labels found — verify your Linear API key and refresh."
+            else null,
+            onToggle = onToggleTriggerLabel,
+            chipLeading = null,
+        )
+
+        ChipGroupSection(
+            title = "Trigger states",
+            description = "Issues in any of these workflow states will be picked up.",
+            error = state.triggerStatesError,
+            names = stateNames,
+            selected = state.triggerStates,
+            empty = if (stateNames.isEmpty())
+                "No workflow states found — verify your Linear API key and refresh."
+            else null,
+            onToggle = onToggleTriggerState,
+            chipLeading = { name ->
+                val type = stateByName[name]?.type.orEmpty()
+                if (type.isNotBlank()) {
+                    Text(
+                        text = stateTypeGlyph(type),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            },
+        )
+
+        SingleSelectDropdown(
+            label = "Active state (set on claim)",
+            value = state.activeState,
+            options = stateNames,
+            error = state.activeStateError,
+            onChange = onActiveStateChange,
+        )
+
+        SingleSelectDropdown(
+            label = "Done state (cleanup trigger)",
+            value = state.doneState,
+            options = stateNames,
+            error = state.doneStateError,
+            onChange = onDoneStateChange,
+        )
+
+        SingleSelectDropdown(
+            label = "Removal label (stripped on claim)",
+            value = state.removalLabel,
+            options = labelNames,
+            error = state.removalLabelError,
+            onChange = onRemovalLabelChange,
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun ChipGroupSection(
+    title: String,
+    description: String,
+    error: String?,
+    names: List<String>,
+    selected: Set<String>,
+    empty: String?,
+    onToggle: (String) -> Unit,
+    chipLeading: (@Composable (String) -> Unit)?,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = title, style = MaterialTheme.typography.labelLarge)
+        Text(
+            text = description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (empty != null) {
+            Text(
+                text = empty,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                names.forEach { name ->
+                    FilterChip(
+                        selected = name in selected,
+                        onClick = { onToggle(name) },
+                        label = { Text(name) },
+                        leadingIcon = chipLeading?.let { lead -> { lead(name) } },
+                        elevation = FilterChipDefaults.filterChipElevation(),
+                    )
+                }
+            }
+        }
+        if (error != null) {
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SingleSelectDropdown(
+    label: String,
+    value: String,
+    options: List<String>,
+    error: String?,
+    onChange: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { if (options.isNotEmpty()) expanded = !expanded },
+        ) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = { /* read-only — selection-only field */ },
+                readOnly = true,
+                label = { Text(label) },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                isError = error != null,
+                supportingText = { error?.let { Text(it) } },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(),
+            )
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                if (options.isEmpty()) {
+                    DropdownMenuItem(
+                        text = { Text("No options — refresh from Linear") },
+                        onClick = { expanded = false },
+                        enabled = false,
+                    )
+                } else {
+                    options.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option) },
+                            onClick = {
+                                onChange(option)
+                                expanded = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Map a Linear state ``type`` to a single-character glyph. The glyphs mirror
+ *  the icons Linear's web app uses, but as Unicode characters so the chip
+ *  can render the leading slot without pulling in an icon pack. */
+private fun stateTypeGlyph(type: String): String = when (type) {
+    "backlog" -> "◴"
+    "unstarted" -> "○"
+    "started" -> "◐"
+    "completed" -> "●"
+    "canceled" -> "⊘"
+    "triage" -> "△"
+    else -> "·"
 }
 
 /** Fire [onBlur] the first time the modified node loses focus after having been focused. */

@@ -1,5 +1,6 @@
 package com.mobaide.app.ui.projects
 
+import com.mobaide.app.data.network.dto.AutoScanFilterDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -326,5 +327,136 @@ class ProjectFormStateTest {
         val s = ProjectFormState.forEdit(current)
         assertEquals("", s.linearApiKey)
         assertFalse(s.clearLinearKey)
+    }
+
+    @Test
+    fun forCreate_seedsHistoricalDefaults() {
+        val s = ProjectFormState.forCreate()
+        assertEquals(setOf("AutoPipeline"), s.triggerLabels)
+        assertEquals(setOf("Proposals"), s.triggerStates)
+        assertEquals("In Progress", s.activeState)
+        assertEquals("Done", s.doneState)
+        assertEquals("AutoPipeline", s.removalLabel)
+        assertFalse(s.filterDirty)
+    }
+
+    @Test
+    fun forEdit_loadsFilterFromProject() {
+        val current = ProjectInfo(
+            name = "alpha",
+            path = "/p/alpha",
+            auto_scan_filter = AutoScanFilterDto(
+                state_names = listOf("Backlog", "Triage"),
+                label_names = listOf("AI-ready"),
+                active_state = "Doing",
+                done_state = "Released",
+                removal_label = "AI-ready",
+            ),
+        )
+        val s = ProjectFormState.forEdit(current)
+        assertEquals(setOf("Backlog", "Triage"), s.triggerStates)
+        assertEquals(setOf("AI-ready"), s.triggerLabels)
+        assertEquals("Doing", s.activeState)
+        assertEquals("Released", s.doneState)
+        assertEquals("AI-ready", s.removalLabel)
+        assertFalse(s.filterDirty)
+    }
+
+    @Test
+    fun triggerLabelsError_visibleAfterTouch_whenEmpty() {
+        val s = ProjectFormState.forCreate().copy(
+            triggerLabels = emptySet(),
+            touched = setOf(ProjectFormState.Field.FILTER),
+        )
+        assertEquals("Select at least one trigger label", s.triggerLabelsError)
+    }
+
+    @Test
+    fun triggerStatesError_visibleAfterSubmitAttempted_whenEmpty() {
+        val s = ProjectFormState.forCreate().copy(
+            triggerStates = emptySet(),
+            submitAttempted = true,
+        )
+        assertEquals("Select at least one trigger state", s.triggerStatesError)
+    }
+
+    @Test
+    fun canSave_falseWhenFilterIncomplete() {
+        val s = ProjectFormState.forCreate().copy(
+            name = "alpha",
+            path = "/p/alpha",
+            triggerLabels = emptySet(),
+        )
+        assertFalse(s.canSave)
+    }
+
+    @Test
+    fun toCreateBody_emitsCurrentFilter() {
+        val s = ProjectFormState.forCreate().copy(
+            name = "alpha",
+            path = "/p/alpha",
+            triggerLabels = setOf("AutoPipeline", "AI-ready"),
+            triggerStates = setOf("Proposals", "Backlog"),
+            activeState = "Doing",
+            doneState = "Released",
+            removalLabel = "AI-ready",
+        )
+        val body = s.toCreateBody()
+        assertNotNull(body.auto_scan_filter)
+        val f = body.auto_scan_filter!!
+        assertTrue("AutoPipeline" in f.label_names)
+        assertTrue("AI-ready" in f.label_names)
+        assertEquals("Doing", f.active_state)
+        assertEquals("Released", f.done_state)
+        assertEquals("AI-ready", f.removal_label)
+    }
+
+    @Test
+    fun toUpdateBody_filterDirty_sendsFilter() {
+        val current = ProjectInfo(name = "alpha", path = "/p/alpha")
+        val s = ProjectFormState.forEdit(current).copy(
+            triggerLabels = setOf("AutoPipeline", "AI-ready"),
+            filterDirty = true,
+        )
+        val body = s.toUpdateBody()
+        assertNotNull(body.auto_scan_filter)
+        assertTrue("AI-ready" in body.auto_scan_filter!!.label_names)
+    }
+
+    @Test
+    fun toUpdateBody_filterClean_omitsFilter() {
+        val current = ProjectInfo(
+            name = "alpha",
+            path = "/p/alpha",
+            auto_scan_filter = AutoScanFilterDto(
+                state_names = listOf("Proposals"),
+                label_names = listOf("AutoPipeline"),
+            ),
+        )
+        val s = ProjectFormState.forEdit(current)
+        // No mutation → filterDirty stays false → null on the wire.
+        assertFalse(s.filterDirty)
+        assertNull(s.toUpdateBody().auto_scan_filter)
+    }
+
+    @Test
+    fun showAutoScanFilterSection_trueInCreateModeWithKey() {
+        val s = ProjectFormState.forCreate().copy(linearApiKey = "lin_test")
+        assertTrue(s.showAutoScanFilterSection)
+    }
+
+    @Test
+    fun showAutoScanFilterSection_falseInCreateModeWithoutKey() {
+        val s = ProjectFormState.forCreate()
+        assertFalse(s.showAutoScanFilterSection)
+    }
+
+    @Test
+    fun showAutoScanFilterSection_trueInEditModeWithExistingKey() {
+        val current = ProjectInfo(name = "alpha", path = "/p/alpha", has_linear_key = true)
+        val s = ProjectFormState.forEdit(current)
+        // linearApiKey stays "" in edit mode (server doesn't echo it back),
+        // but the section still renders because the project HAS a key.
+        assertTrue(s.showAutoScanFilterSection)
     }
 }

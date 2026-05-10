@@ -23,4 +23,8 @@ data class ProjectUpdate(
     val linear_api_key: String? = null,
     val conda_env: String? = null,
     val default_flags: Map<String, JsonElement>? = null,
+    // null = keep existing filter; a value replaces wholesale. There is no
+    // "clear" semantics for the filter — it must always be present so the
+    // scanner has something to query Linear with.
+    val auto_scan_filter: AutoScanFilterDto? = null,
 )

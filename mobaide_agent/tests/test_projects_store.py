@@ -11,7 +11,7 @@ from typing import cast
 
 import pytest
 
-from mobaide.core.projects_config import ProjectConfig
+from mobaide.core.projects_config import AutoScanFilter, ProjectConfig
 from mobaide.core.projects_store import (
     ProjectRecord,
     ProjectsStore,
@@ -894,3 +894,403 @@ class TestLegacyBackslashRowsNormalizedOnLoad:
 
         names = [p["name"] for p in store.list_public()]
         assert names == ["OK"]
+
+
+def _filter(**overrides) -> AutoScanFilter:
+    base = {
+        "state_names": ["Proposals"],
+        "label_names": ["AutoPipeline"],
+        "active_state": "In Progress",
+        "done_state": "Done",
+        "removal_label": "AutoPipeline",
+    }
+    base.update(overrides)
+    return AutoScanFilter(**base)
+
+
+class TestAutoScanFilterDefaultsForLegacyRecords:
+    """Legacy records lack the ``auto_scan_filter`` field; loading must
+    coerce them to the historical-equivalent default so users do not see
+    behavior change after upgrading the agent."""
+
+    def test_legacy_record_gets_default_filter(self, tmp_path):
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "linear_api_key": "lin",
+                        "order": 0,
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter == AutoScanFilter()
+
+    def test_partial_filter_field_falls_back_per_field(self, tmp_path):
+        # A record that has *some* filter fields but is missing others should
+        # populate the absent fields with the per-field default rather than
+        # crashing or wholesale-defaulting.
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_filter": {
+                            "state_names": ["Backlog"],
+                            "active_state": "Doing",
+                        },
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter.state_names == ["Backlog"]
+        assert snap.auto_scan_filter.label_names == ["AutoPipeline"]
+        assert snap.auto_scan_filter.active_state == "Doing"
+        assert snap.auto_scan_filter.done_state == "Done"
+        assert snap.auto_scan_filter.removal_label == "AutoPipeline"
+
+    def test_malformed_filter_is_silently_replaced_with_default(self, tmp_path):
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        # Wrong type — should not crash, just default.
+                        "auto_scan_filter": "not-a-dict",
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter == AutoScanFilter()
+
+
+class TestAutoScanFilterRoundTrip:
+    """A non-default filter persisted via the store must round-trip through
+    JSON without losing fields or changing field order."""
+
+    def test_round_trip_preserves_all_fields(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+
+        filt = _filter(
+            state_names=["Proposals", "Backlog"],
+            label_names=["AutoPipeline", "AI-ready"],
+            active_state="Doing",
+            done_state="Released",
+            removal_label="AI-ready",
+        )
+        store.create(
+            ProjectRecord(name="alpha", path="C:/alpha", auto_scan_filter=filt),
+        )
+
+        # Reload from disk and verify the snapshot matches.
+        store2 = ProjectsStore(str(path))
+        store2.load()
+        snap = store2.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter == filt
+
+    def test_filter_appears_in_list_public(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        filt = _filter(state_names=["Proposals", "Triage"])
+        store.create(
+            ProjectRecord(name="alpha", path="C:/alpha", auto_scan_filter=filt),
+        )
+
+        rows = store.list_public()
+        assert len(rows) == 1
+        on_wire = cast("dict", rows[0]).get("auto_scan_filter")
+        assert on_wire is not None
+        assert isinstance(on_wire, dict)
+        assert on_wire["state_names"] == ["Proposals", "Triage"]
+        assert on_wire["active_state"] == "In Progress"
+
+
+class TestUpdateAppliesFilterPatch:
+    def test_update_replaces_filter_when_provided(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        store.create(
+            ProjectRecord(
+                name="alpha", path="C:/alpha",
+                auto_scan_filter=_filter(),
+            ),
+        )
+
+        new_filter = _filter(
+            state_names=["Backlog"],
+            label_names=["AI-ready"],
+            active_state="Doing",
+            done_state="Released",
+            removal_label="AI-ready",
+        )
+        snap = store.update(
+            "alpha",
+            ProjectUpdatePatch(auto_scan_filter=new_filter),
+        )
+        assert snap.auto_scan_filter == new_filter
+
+    def test_update_keeps_existing_filter_when_patch_is_none(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        starting = _filter(state_names=["Proposals", "Backlog"])
+        store.create(
+            ProjectRecord(
+                name="alpha", path="C:/alpha", auto_scan_filter=starting,
+            ),
+        )
+
+        # A patch with auto_scan_filter=None must not overwrite.
+        snap = store.update(
+            "alpha",
+            ProjectUpdatePatch(conda_env="ml"),
+        )
+        assert snap.auto_scan_filter == starting
+
+
+class TestFilterFromDictMalformedListElements:
+    """``_filter_from_dict`` is the load-time tolerance layer for the
+    persisted filter blob. It is exercised indirectly via ``store.load()``,
+    but the per-element type-filtering branches are easier to pin with a
+    direct fixture: a list-typed ``state_names`` / ``label_names`` whose
+    individual entries are not strings (e.g. an int slipped in from a
+    hand-edited file) must drop the bogus elements rather than crashing or
+    leaking through to the GraphQL filter."""
+
+    def test_non_string_state_names_elements_are_filtered_out(self, tmp_path):
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_filter": {
+                            "state_names": ["Proposals", 42, None, "Backlog"],
+                            "label_names": ["AutoPipeline"],
+                            "active_state": "In Progress",
+                            "done_state": "Done",
+                            "removal_label": "AutoPipeline",
+                        },
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter.state_names == ["Proposals", "Backlog"]
+
+    def test_non_string_label_names_elements_are_filtered_out(self, tmp_path):
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_filter": {
+                            "state_names": ["Proposals"],
+                            "label_names": ["AutoPipeline", 7, "AI-ready"],
+                            "active_state": "In Progress",
+                            "done_state": "Done",
+                            "removal_label": "AutoPipeline",
+                        },
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter.label_names == ["AutoPipeline", "AI-ready"]
+
+    def test_empty_string_active_state_falls_back_to_default(self, tmp_path):
+        # Empty-string single-value fields are coerced to the historical
+        # default; an empty ``active_state`` would otherwise produce a
+        # filter that never matches any workflow state at scan time.
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_filter": {
+                            "state_names": ["Proposals"],
+                            "label_names": ["AutoPipeline"],
+                            "active_state": "",
+                            "done_state": "",
+                            "removal_label": "",
+                        },
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter.active_state == "In Progress"
+        assert snap.auto_scan_filter.done_state == "Done"
+        assert snap.auto_scan_filter.removal_label == "AutoPipeline"
+
+    def test_empty_string_elements_in_list_are_dropped(self, tmp_path):
+        # Mirrors the AutoScanFilterModel field validator. The store loader
+        # must drop empty / whitespace-only elements so a hand-edited
+        # projects.json cannot land a record that the wire model
+        # (ProjectReadModel) would reject on the next GET /api/projects.
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_filter": {
+                            "state_names": ["Proposals", "", "Backlog"],
+                            "label_names": ["AutoPipeline", "   ", "AI-ready"],
+                            "active_state": "In Progress",
+                            "done_state": "Done",
+                            "removal_label": "AutoPipeline",
+                        },
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter.state_names == ["Proposals", "Backlog"]
+        assert snap.auto_scan_filter.label_names == ["AutoPipeline", "AI-ready"]
+
+    def test_whitespace_only_singleton_falls_back_to_default(self, tmp_path):
+        # ``"   "`` passes the truthiness check on a string but would fail
+        # the wire model's _reject_blank_string validator. Loader must
+        # treat it identically to empty string.
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_filter": {
+                            "state_names": ["Proposals"],
+                            "label_names": ["AutoPipeline"],
+                            "active_state": "   ",
+                            "done_state": "\t\n",
+                            "removal_label": "    ",
+                        },
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_filter.active_state == "In Progress"
+        assert snap.auto_scan_filter.done_state == "Done"
+        assert snap.auto_scan_filter.removal_label == "AutoPipeline"
+
+
+class TestSeedFromEnvParsesAutoScanFilter:
+    """The ``PROJECTS`` env var path must also pick up a per-project
+    ``auto_scan_filter`` block. Without this, users on first boot would
+    silently get the historical defaults regardless of what they put in
+    the env — a silent regression for env-driven deployments."""
+
+    def test_seed_carries_filter_from_env(self, monkeypatch):
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps(
+                {
+                    "P": {
+                        "path": "C:/p",
+                        "auto_scan_filter": {
+                            "state_names": ["Backlog"],
+                            "label_names": ["AI-ready"],
+                            "active_state": "Doing",
+                            "done_state": "Released",
+                            "removal_label": "AI-ready",
+                        },
+                    },
+                },
+            ),
+        )
+
+        records = _seed_from_env()
+
+        assert len(records) == 1
+        assert records[0].auto_scan_filter == AutoScanFilter(
+            state_names=["Backlog"],
+            label_names=["AI-ready"],
+            active_state="Doing",
+            done_state="Released",
+            removal_label="AI-ready",
+        )
+
+    def test_seed_uses_default_filter_when_field_absent(self, monkeypatch):
+        # An env-defined project with no ``auto_scan_filter`` block must
+        # land on the per-field defaults, identical to the legacy-record
+        # path on disk.
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps({"P": {"path": "C:/p"}}),
+        )
+
+        records = _seed_from_env()
+
+        assert len(records) == 1
+        assert records[0].auto_scan_filter == AutoScanFilter()

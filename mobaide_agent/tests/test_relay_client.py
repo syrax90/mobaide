@@ -1853,3 +1853,158 @@ class TestProxyGitItems:
         mock_app_state.projects_store.get.assert_called_once_with(
             "Mobaide Project",
         )
+
+
+class TestProxyLinearDiscoveryRelayParity:
+    """Regression guards for the new Linear discovery endpoints
+    (``GET /api/projects/{name}/linear/labels`` and ``/states``): they must
+    reach the relay's ``_dispatch_proxy`` allowlist. Mobile clients connect
+    through the central server in production, and a missing relay route
+    would surface as ``404 "Unknown proxy route"`` on every edit-sheet
+    open — the identical regression class a prior git-router gap exposed.
+
+    These tests pin the relay-path contract: project-resolution semantics
+    (404 / 400), upstream Linear failure mapping (502), and a happy-path
+    that confirms the discovery client was actually called with the project's
+    stored API key.
+    """
+
+    def _make_project(self, name="proj", api_key: str | None = "lin_secret"):
+        project = MagicMock()
+        project.name = name
+        project.linear_api_key = api_key
+        return project
+
+    async def test_labels_unknown_project_returns_404(
+        self, client, mock_app_state,
+    ):
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=None)
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "GET", "/api/projects/missing/linear/labels", None, None, ws,
+        )
+
+        assert result["status"] == 404
+        assert "not found" in result["body"]["detail"]
+
+    async def test_states_unknown_project_returns_404(
+        self, client, mock_app_state,
+    ):
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=None)
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "GET", "/api/projects/missing/linear/states", None, None, ws,
+        )
+
+        assert result["status"] == 404
+
+    async def test_labels_no_api_key_returns_400(
+        self, client, mock_app_state,
+    ):
+        project = self._make_project(api_key=None)
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "GET", "/api/projects/proj/linear/labels", None, None, ws,
+        )
+
+        assert result["status"] == 400
+        assert "linear_api_key" in result["body"]["detail"]
+
+    async def test_labels_happy_path_uses_stored_api_key(
+        self, client, mock_app_state,
+    ):
+        project = self._make_project(api_key="lin_test_key")
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+
+        captured = {}
+
+        class _Stub:
+            def __init__(self, api_key, rate_limiter=None):
+                captured["api_key"] = api_key
+
+            async def get_labels(self):
+                return [{"name": "AutoPipeline", "color": "#ff0000"}]
+
+        ws = AsyncMock()
+        with patch("mobaide.relay.client.LinearApiClient", _Stub):
+            result = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/linear/labels", None, None, ws,
+            )
+
+        assert result["status"] == 200
+        assert captured["api_key"] == "lin_test_key"
+        assert result["body"] == [{"name": "AutoPipeline", "color": "#ff0000"}]
+
+    async def test_states_happy_path_returns_workflow_states(
+        self, client, mock_app_state,
+    ):
+        project = self._make_project()
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+
+        class _Stub:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def get_workflow_states(self):
+                return [
+                    {"name": "Proposals", "type": "backlog"},
+                    {"name": "Done", "type": "completed"},
+                ]
+
+        ws = AsyncMock()
+        with patch("mobaide.relay.client.LinearApiClient", _Stub):
+            result = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/linear/states", None, None, ws,
+            )
+
+        assert result["status"] == 200
+        names = [s["name"] for s in result["body"]]
+        assert names == ["Proposals", "Done"]
+
+    async def test_labels_upstream_failure_returns_502(
+        self, client, mock_app_state,
+    ):
+        project = self._make_project()
+        mock_app_state.projects_store = MagicMock()
+        mock_app_state.projects_store.get = MagicMock(return_value=project)
+
+        class _Boom:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def get_labels(self):
+                raise RuntimeError("linear is down")
+
+        ws = AsyncMock()
+        with patch("mobaide.relay.client.LinearApiClient", _Boom):
+            result = await client._dispatch_proxy(
+                "GET", "/api/projects/proj/linear/labels", None, None, ws,
+            )
+
+        assert result["status"] == 502
+        # The internal exception detail is not echoed to the client.
+        body_detail = result["body"]["detail"]
+        assert "linear is down" not in body_detail
+        assert "Failed to fetch" in body_detail
+
+    async def test_post_to_discovery_endpoint_falls_through(
+        self, client, mock_app_state,
+    ):
+        # Method-mismatch: POST should NOT match the GET-only dispatcher,
+        # falling through to the catch-all 404 "Unknown proxy route".
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/projects/proj/linear/labels", None, None, ws,
+        )
+
+        assert result["status"] == 404
+        assert "Unknown proxy route" in result["body"]["detail"]

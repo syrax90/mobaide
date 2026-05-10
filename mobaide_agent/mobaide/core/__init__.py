@@ -5,7 +5,7 @@ from .claude_launcher import (
     LaunchSpec,
 )
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
-from .projects_config import ProjectConfig
+from .projects_config import AutoScanFilter, ProjectConfig
 from .projects_store import (
     ProjectRecord,
     ProjectsStore,
@@ -30,6 +30,7 @@ __all__ = [
     "ClaudeLauncher",
     "ClaudeOptions",
     "LaunchSpec",
+    "AutoScanFilter",
     "ProjectConfig",
     "ProjectRecord",
     "ProjectsStore",

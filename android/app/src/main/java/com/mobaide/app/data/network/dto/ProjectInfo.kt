@@ -16,4 +16,5 @@ data class ProjectInfo(
     val conda_env: String? = null,
     val order: Int = 0,
     val path_exists: Boolean = true,
+    val auto_scan_filter: AutoScanFilterDto = AutoScanFilterDto(),
 )
