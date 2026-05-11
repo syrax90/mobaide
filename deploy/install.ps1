@@ -1,7 +1,11 @@
 # Mobaide agent install script (Windows).
 #
-# Usage (PowerShell as Administrator):
+# Usage:
 #     irm https://get.mobaide.com/install.ps1 | iex
+#
+# Self-elevates via UAC if run unelevated (the SCM service registration and
+# %ProgramFiles%\MobaideAgent writes both require admin). Auto-installs
+# Python 3.12 via winget if no qualifying interpreter is on PATH.
 #
 # Idempotent: re-running upgrades the agent in place. Each release is staged
 # into a sibling releases\<version>\ directory and the current_version
@@ -11,7 +15,6 @@
 # Wrapped in a single Main function called once at the bottom so a partial
 # download (irm | iex) cannot execute half a script.
 
-#Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
 
 $Script:Prefix = if ($env:MOBAIDE_AGENT_PREFIX) {
@@ -30,12 +33,62 @@ $Script:TrustKeyB64 = $env:MOBAIDE_AGENT_TRUST_KEY_B64
 # only on a trusted local network.
 $Script:AllowInsecureTrustKeyFetch = ($env:MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH -eq "1")
 $Script:ServiceName = "MobaideAgent"
+# Used by Assert-AdminOrElevate to re-fetch this script under UAC. Override
+# for self-hosted distributions of install.ps1.
+$Script:InstallUrl = if ($env:MOBAIDE_AGENT_INSTALL_URL) {
+    $env:MOBAIDE_AGENT_INSTALL_URL
+} else {
+    "https://get.mobaide.com/install.ps1"
+}
+# Opt out of the auto-Python-install path for CI / locked-down hosts; the
+# installer then falls back to the legacy "fail if no Python 3.12+" behaviour.
+$Script:SkipPythonInstall = [bool]$env:MOBAIDE_AGENT_SKIP_PYTHON_INSTALL
 
 function Write-Info  { param($Msg) Write-Host "[INFO]  $Msg" }
 function Write-Warn  { param($Msg) Write-Warning $Msg }
 function Write-Fail  { param($Msg) Write-Error $Msg; exit 1 }
 
-function Test-Python {
+function Test-IsAdmin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($id)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# `irm | iex` runs the script inline in the caller's PowerShell, so we cannot
+# use `#Requires -RunAsAdministrator` (which errors confusingly before our own
+# messages run) and cannot just re-exec ourselves from disk (the script does
+# not live on disk). Instead: detect non-admin and re-launch via UAC with
+# `Start-Process -Verb RunAs`, passing a command that re-fetches and pipes the
+# same install URL, with the relevant MOBAIDE_* env vars reinstated.
+function Assert-AdminOrElevate {
+    if (Test-IsAdmin) { return }
+    Write-Info "Not running elevated; relaunching under UAC to register the Windows service."
+    $passthrough = @(
+        'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
+        'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
+        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_SKIP_INSTALL_QR',
+        'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL'
+    )
+    $envStmts = foreach ($name in $passthrough) {
+        $val = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($val) {
+            $escaped = $val -replace "'", "''"
+            "`$env:$name = '$escaped'"
+        }
+    }
+    $prefix = if ($envStmts) { ($envStmts -join '; ') + '; ' } else { '' }
+    $urlEscaped = $Script:InstallUrl -replace "'", "''"
+    $cmd = "$prefix" + "irm '$urlEscaped' | iex"
+    $psArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-Command', $cmd)
+    try {
+        Start-Process -FilePath 'powershell.exe' -ArgumentList $psArgs -Verb RunAs -Wait
+    } catch {
+        Write-Fail "Installation cancelled at UAC prompt. Re-run when ready: irm $Script:InstallUrl | iex"
+    }
+    exit 0
+}
+
+function Find-Python {
     $candidates = @("py", "python", "python3")
     foreach ($cmd in $candidates) {
         $exe = Get-Command $cmd -ErrorAction SilentlyContinue
@@ -51,7 +104,48 @@ function Test-Python {
             }
         } catch {}
     }
-    Write-Fail "Python 3.12+ is required."
+    return $null
+}
+
+# winget install Python.Python.3.12 at machine scope so the SCM service
+# (running as LocalSystem by default) can later see the interpreter. Refreshes
+# the current session's PATH from the Machine + User scopes since winget edits
+# the persistent PATH but not the in-flight process environment.
+function Install-Python {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Fail @"
+Python 3.12+ is required but not installed, and winget is not available on PATH
+to auto-install it. Install Python 3.12 manually from
+https://www.python.org/downloads/release/python-3120/ (choose
+'Add python.exe to PATH' and 'Install for all users'), then re-run:
+    irm $Script:InstallUrl | iex
+Or set MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1 to require a pre-installed
+interpreter (CI / locked-down hosts).
+"@
+    }
+    Write-Info "Installing Python 3.12 via winget (machine scope, silent)..."
+    & winget install --id Python.Python.3.12 --silent `
+        --accept-package-agreements --accept-source-agreements `
+        --scope machine --disable-interactivity
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "winget install Python.Python.3.12 failed (exit $LASTEXITCODE). Install manually from https://www.python.org/downloads/ and re-run."
+    }
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+                [Environment]::GetEnvironmentVariable('Path', 'User')
+}
+
+function Resolve-Python {
+    $py = Find-Python
+    if ($py) { return $py }
+    if ($Script:SkipPythonInstall) {
+        Write-Fail "Python 3.12+ is required (MOBAIDE_AGENT_SKIP_PYTHON_INSTALL is set, so the installer will not auto-install it)."
+    }
+    Install-Python
+    $py = Find-Python
+    if (-not $py) {
+        Write-Fail "Python 3.12+ still not found after winget install. Try re-running, or install manually from https://www.python.org/downloads/."
+    }
+    return $py
 }
 
 function Get-Manifest {
@@ -351,10 +445,11 @@ function Write-Completion {
 }
 
 function Main {
+    Assert-AdminOrElevate
     Write-Info "Installing mobaide_agent into $Script:Prefix"
     New-Item -ItemType Directory -Path $Script:Prefix -Force | Out-Null
 
-    $python = Test-Python
+    $python = Resolve-Python
     # Order: bootstrap key (env var or central_server fetch) -> pin to disk
     # so the agent picks it up at runtime -> fetch manifest -> verify it
     # against the same key -> stage. Initialize-TrustKey fails the install

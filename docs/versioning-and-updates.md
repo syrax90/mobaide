@@ -469,7 +469,7 @@ macOS (runs as the invoking user; no sudo required):
 curl -fsSL https://get.mobaide.com/install.sh | bash
 ```
 
-Windows (elevated PowerShell):
+Windows (self-elevates via UAC if launched from a normal PowerShell — no need to "Run as Administrator" first):
 
 ```powershell
 irm https://get.mobaide.com/install.ps1 | iex
@@ -499,6 +499,17 @@ Both scripts are auto-published from `deploy/` to the root of the
    via the detected package manager (`apt-get`, `dnf`/`yum`, `pacman`, `zypper`,
    or `apk`). Non-root user-prefix installs print a distro-aware error instead
    of attempting a privileged package install.
+4a. **(Windows only, before venv creation)** Auto-elevate via UAC if the
+    current PowerShell is not elevated — required for the SCM service
+    registration and `%ProgramFiles%\MobaideAgent` writes. If no Python 3.12+
+    is found on PATH, install `Python.Python.3.12` via `winget` at machine
+    scope (silent, with `--accept-package-agreements --accept-source-agreements
+    --disable-interactivity`) and refresh the current session's PATH from
+    the Machine + User scopes. Set `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to
+    opt out and require a pre-installed interpreter (CI / locked-down hosts);
+    in that case the installer fails with the same actionable error as before.
+    Override the re-fetch URL used by the elevation re-launch via
+    `MOBAIDE_AGENT_INSTALL_URL` (parallel to the Linux side).
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
 6. Atomically pin `<prefix>/current_version`.
