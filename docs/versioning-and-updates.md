@@ -493,21 +493,6 @@ Both scripts are auto-published from `deploy/` to the root of the
    against the pinned key. The install fails-closed if neither path yields
    a key — never silently ships an install whose auto-updater can't
    verify rollouts.
-3a. **(All platforms, before the step-3 trust-key + manifest signature checks)**
-    Ensure `cryptography>=43.0` is importable on the resolved interpreter —
-    both the trust-key validation and the manifest Ed25519 signature verify
-    in step 3 use `cryptography`, but the wheel's transitive `cryptography`
-    dep is not yet present on hosts without a system-wide install (fresh
-    macOS, Alpine, the python.org installer fallback on Windows, minimal
-    Fedora). Fast path: bare `python3` already has it (typical on
-    Debian/Ubuntu via `cloud-init`/`snapd`) — used directly. Slow path:
-    build an ephemeral verifier venv in `$TMPDIR`/`%TEMP%` and
-    `pip install --index-url https://pypi.org/simple 'cryptography>=43.0'`
-    into it; the venv is torn down at end of install (success or failure).
-    The index-url is pinned to canonical PyPI so a hostile `PIP_INDEX_URL`
-    in the host environment cannot redirect the bootstrap install to an
-    attacker-controlled mirror. The release venv created in step 5
-    reinstalls `cryptography` cleanly via the wheel's transitive deps.
 4. **(Linux only, before venv creation)** Verify that `python3 -c 'import ensurepip'`
    succeeds. If it does not (common on stock Debian/Ubuntu where the base
    `python3` package omits `ensurepip`), auto-install `python${version}-venv`
