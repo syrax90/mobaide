@@ -1785,3 +1785,411 @@ def test_install_release_staging_argv_contract_matches_call_site() -> None:
         f"(fewer args -> IndexError; more args -> silently dropped) "
         f"corrupts the staging step at runtime. Body:\n{body!r}"
     )
+
+
+_PIPELINE_SUPPRESSION_RE = re.compile(
+    r"\|\s*Out-(?:Host|Null)\b|^\s*\$null\s*=", re.MULTILINE
+)
+"""Match any canonical PowerShell idiom for "consume this pipeline without
+appending to the surrounding function's success stream":
+
+  * ``| Out-Host`` — writes to the console host, emits nothing onwards
+    (the operator-facing choice; preserves pip / winget progress).
+  * ``| Out-Null`` — discards entirely (the silent choice; appropriate
+    for probe-style calls).
+  * ``$null = ...`` — assigns to the bit bucket (the inline-statement
+    choice; appropriate when no actual pipeline follows).
+
+Pinned as a single alternation so the regression tests stay agnostic to
+which suppression primitive a future refactor prefers — the contract
+they enforce is "the function's return value is not corrupted by native
+command output", not the specific operator picked.
+"""
+
+
+def _native_invocations_in(body: str) -> list[str]:
+    """Return each line of ``body`` that contains a ``&`` native-command
+    invocation (the PowerShell call operator), filtered to the lines a
+    function-body pipeline-pollution scan cares about.
+
+    The rule of thumb: any line whose first non-whitespace token is ``&``
+    is a top-level call whose output (if any) lands on the surrounding
+    function's success stream. Continuation lines from a backtick-wrapped
+    multi-line ``&`` call are reattached to the originating line so a
+    ``| Out-Host`` on the final segment satisfies the suppression check
+    for the whole call (the alternative would force every line of a
+    multi-line call to carry the suppression, which is syntactically
+    impossible).
+
+    Lines where the ``&`` result is captured into a variable
+    (``$var = & cmd ...``) are excluded — capturing redirects the
+    pipeline into the variable, not the function's success stream, so
+    pollution does not occur regardless of trailing suppression.
+    """
+    lines = body.splitlines()
+    # Stitch backtick line-continuations: PowerShell's `\`` at EOL means
+    # "this line continues on the next". Glue the chain together so the
+    # final segment's `| Out-Host` is visible on the originating line.
+    stitched: list[str] = []
+    buf = ""
+    for line in lines:
+        if buf:
+            buf += " " + line.strip()
+        else:
+            buf = line
+        if buf.rstrip().endswith("`"):
+            buf = buf.rstrip()[:-1]
+            continue
+        stitched.append(buf)
+        buf = ""
+    if buf:
+        stitched.append(buf)
+    invocations: list[str] = []
+    for line in stitched:
+        stripped = line.lstrip()
+        if stripped.startswith("&"):
+            invocations.append(line)
+    return invocations
+
+
+def test_install_release_self_upgrades_pip_via_python_module() -> None:
+    """``Install-Release`` must upgrade pip via ``python.exe -m pip``,
+    NOT via the ``pip.exe`` console_scripts shim.
+
+    pip on Windows refuses to self-overwrite when invoked through its
+    ``pip.exe`` shim: the shim is the running process and Windows locks
+    it. Pre-fix, the script called ``& $venvPip install --upgrade pip``
+    and got back
+
+        ERROR: To modify pip, please run the following command:
+        ...\\Scripts\\python.exe -m pip install --no-cache-dir --upgrade pip
+
+    on every install — a scary, user-visible failure even though the
+    install proceeded (its non-zero ``$LASTEXITCODE`` was overwritten by
+    the next pip call). The canonical workaround
+    (`pypa/pip#6784 <https://github.com/pypa/pip/issues/6784>`_) is to
+    upgrade through the interpreter so pip is loaded as a module and the
+    shim isn't held open during replacement.
+
+    The contract pinned here:
+
+    1. The interpreter form must appear: ``-m pip install`` plus
+       ``--upgrade pip`` somewhere in the function body.
+    2. The pre-fix shim form must NOT appear: a ``$venvPip install ...
+       --upgrade pip`` line is the exact regression to catch (the same
+       ``$venvPip`` is still used for the wheel install on the next
+       line, which is fine — only the ``--upgrade pip`` call has the
+       self-overwrite problem).
+    """
+    body = _function_body_text("Install-Release")
+    assert "-m pip install" in body, (
+        "Install-Release must upgrade pip via the interpreter "
+        "(`python.exe -m pip install --upgrade pip`), not the "
+        "`pip.exe` console_scripts shim. pip on Windows refuses to "
+        "self-overwrite via the shim (the running process is locked); "
+        "pypa/pip#6784. Body:\n" + repr(body)
+    )
+    assert re.search(r"-m\s+pip\s+install[^|]*--upgrade\s+pip", body), (
+        "Install-Release must specifically use `-m pip install ... "
+        "--upgrade pip` for the self-upgrade. Body:\n" + repr(body)
+    )
+    assert not re.search(
+        r"\$venvPip\s+install[^|]*--upgrade\s+pip", body
+    ), (
+        "Install-Release must NOT call the `pip.exe` shim "
+        "(`& $venvPip install --upgrade pip`) — that's the pre-fix "
+        "form that trips pip's self-overwrite guard on Windows and "
+        "prints `ERROR: To modify pip, please run the following "
+        "command: ...\\python.exe -m pip install --upgrade pip`. "
+        "Upgrade through `$venvPython -m pip` instead. "
+        "Body:\n" + repr(body)
+    )
+
+
+def test_install_release_isolates_native_command_output_from_return_value() -> None:
+    """Every native ``&`` invocation inside ``Install-Release`` must be
+    isolated from the function's success pipeline.
+
+    ``Install-Release`` ends with ``return $version`` — a single string.
+    PowerShell appends every uncaptured native-command stdout line to
+    the surrounding function's output, so a bare ``& $venvPip install
+    --upgrade pip`` glues all of pip's ``[notice] ...`` / ``ERROR: ...``
+    lines onto the returned value. ``Main`` then receives an
+    ``[object[]]`` instead of a string and forwards it to
+    ``Write-AgentEnv -Version $version``, where ``Join-Path -ChildPath
+    $Version`` crashes with
+
+        Cannot convert 'System.Object[]' to the type 'System.String'
+        required by parameter 'ChildPath'
+
+    — surfaced under ``iex`` because the canonical install one-liner
+    pipes the script through ``Invoke-Expression``. The fix is to
+    terminate every ``&`` line with ``| Out-Host`` (or ``Out-Null``, or
+    capture to ``$null``) so the function's return value is the only
+    object on its pipeline.
+
+    The check enumerates every line whose first non-whitespace token is
+    ``&`` and asserts a canonical suppression primitive
+    (``Out-Host`` / ``Out-Null`` / ``$null = ...``) appears on the same
+    line. Captured invocations (``$var = & cmd ...``) are excluded —
+    capturing into a variable already redirects the pipeline away from
+    the function's success stream.
+    """
+    body = _function_body_text("Install-Release")
+    invocations = _native_invocations_in(body)
+    assert invocations, (
+        "Install-Release must contain `&`-invoked native commands "
+        "(`python -m venv`, `pip install`); none found, which means "
+        "either the function body was emptied or the line-scan is "
+        "broken. Body:\n" + repr(body)
+    )
+    unsuppressed = [
+        line for line in invocations
+        if not _PIPELINE_SUPPRESSION_RE.search(line)
+    ]
+    assert not unsuppressed, (
+        "Install-Release has native `&` invocations whose stdout "
+        "lands on the function's success pipeline, corrupting "
+        "`return $version` into an `[object[]]` that crashes "
+        "downstream `Join-Path -ChildPath`. Pipe each to `| Out-Host` "
+        "(operator-facing) or `| Out-Null` (silent), or capture with "
+        "`$null = ...`. Offending lines:\n"
+        + "\n".join(f"  {ln!r}" for ln in unsuppressed)
+    )
+
+
+def test_install_python_via_winget_isolates_winget_output() -> None:
+    """``Install-PythonViaWinget`` must isolate ``winget``'s output from
+    its ``return $true`` / ``return $false`` value.
+
+    The function returns a ``[bool]``. PowerShell evaluates ``if ($x)``
+    truthy whenever ``$x`` is a non-empty array — regardless of contents
+    — so a polluted return ``@(winget-stdout-line-1, ..., $false)`` is
+    truthy and the caller (``Install-Python``'s fallback orchestration)
+    short-circuits on a failed winget install. The user is then told
+    "Python installed" while no Python actually landed.
+
+    Same suppression contract as
+    ``test_install_release_isolates_native_command_output_from_return_value``:
+    every ``&``-prefixed line must carry one of the canonical
+    primitives. Captured invocations are excluded for the same reason.
+    """
+    body = _function_body_text("Install-PythonViaWinget")
+    invocations = _native_invocations_in(body)
+    assert invocations, (
+        "Install-PythonViaWinget must invoke winget; no native `&` "
+        "lines found, which would mean the function was emptied. "
+        "Body:\n" + repr(body)
+    )
+    unsuppressed = [
+        line for line in invocations
+        if not _PIPELINE_SUPPRESSION_RE.search(line)
+    ]
+    assert not unsuppressed, (
+        "Install-PythonViaWinget has a `& winget ...` line whose "
+        "stdout pollutes the `[bool]` return value. PowerShell's "
+        "truthy check on `[object[]]` is non-empty-array-truthy, so "
+        "`if (Install-PythonViaWinget) { ... }` would return early "
+        "even on a failed install. Pipe the winget call to `Out-Host` "
+        "(progress visible) or `Out-Null` (silent). Offending "
+        "lines:\n" + "\n".join(f"  {ln!r}" for ln in unsuppressed)
+    )
+
+
+def test_new_bootstrap_venv_isolates_native_command_output() -> None:
+    """``New-BootstrapVenv`` must isolate every native ``&`` invocation
+    from its hashtable return value.
+
+    The function returns ``@{ Python = $venvPython; Root = $root }`` —
+    a single hashtable. Bare ``& $PythonExe -m venv $root`` and
+    ``& $venvPip install ...`` calls would prepend their stdout onto
+    the function's pipeline, so ``$verifier =
+    Resolve-VerifierPython ...`` would land an array on ``$verifier``,
+    and every downstream ``$verifier.Python`` / ``$verifier.Root``
+    property access would either return ``$null`` (method-on-array)
+    or throw.
+
+    The `Install-Release` failure mode reproduces here: the trust-key
+    bootstrap and manifest-signature verification both invoke
+    ``$verifier.Python``; a corrupted ``$verifier`` makes the bootstrap
+    crash before the manifest is even fetched.
+    """
+    body = _function_body_text("New-BootstrapVenv")
+    invocations = _native_invocations_in(body)
+    assert invocations, (
+        "New-BootstrapVenv must invoke `python -m venv` and `pip "
+        "install`; no native `&` lines found. Body:\n" + repr(body)
+    )
+    unsuppressed = [
+        line for line in invocations
+        if not _PIPELINE_SUPPRESSION_RE.search(line)
+    ]
+    assert not unsuppressed, (
+        "New-BootstrapVenv has native `&` invocations whose stdout "
+        "would corrupt the `@{Python=...; Root=...}` return into an "
+        "`[object[]]`. Downstream `$verifier.Python` property access "
+        "then returns `$null` and the manifest verify crashes "
+        "opaquely. Offending lines:\n"
+        + "\n".join(f"  {ln!r}" for ln in unsuppressed)
+    )
+
+
+def test_test_cryptography_importable_isolates_python_probe_output() -> None:
+    """``Test-CryptographyImportable`` must isolate its
+    ``& $PythonExe -c 'import cryptography'`` probe from the ``[bool]``
+    return value.
+
+    The function's return is ``$LASTEXITCODE -eq 0`` — a single boolean
+    that ``Resolve-VerifierPython`` uses to short-circuit between the
+    fast path (bare interpreter, cryptography already importable) and
+    the slow path (build a bootstrap venv). A polluted return makes the
+    fast-path branch truthy on every host whose Python emits any line
+    to stdout during ``-c "import cryptography"`` — silently disabling
+    the bootstrap venv slow path that this code exists to provide.
+
+    ``2>$null`` already swallows stderr (so an ``ImportError`` traceback
+    doesn't reach the pipeline), but stdout is not guarded. A
+    ``sitecustomize.py``, ``usercustomize.py``, ``PYTHONSTARTUP`` hook,
+    or future ``-X`` flag can print at import time. The canonical fix
+    is to add ``| Out-Null`` (or capture with ``$null =``) on the same
+    line as the ``&`` call.
+
+    Scoped tighter than the other functions in this group: the probe
+    here is single-line and the function is small, so we pin the
+    suppression directly on the ``& $PythonExe -c`` line rather than
+    enumerating all ``&`` lines.
+    """
+    body = _function_body_text("Test-CryptographyImportable")
+    probe_lines = [
+        line for line in body.splitlines()
+        if re.search(r"&\s+\$PythonExe\s+-c\b", line)
+    ]
+    assert probe_lines, (
+        "Test-CryptographyImportable must invoke `& $PythonExe -c "
+        "'import cryptography'`; not found. Body:\n" + repr(body)
+    )
+    unsuppressed = [
+        line for line in probe_lines
+        if not _PIPELINE_SUPPRESSION_RE.search(line)
+    ]
+    assert not unsuppressed, (
+        "Test-CryptographyImportable's `& $PythonExe -c` probe must "
+        "be piped to `Out-Null` (or captured with `$null = ...`) on "
+        "the same line. The function returns a `[bool]`; any stdout "
+        "chatter from the probe (sitecustomize.py, PYTHONSTARTUP, "
+        "future Python build) would convert the return to a non-"
+        "empty `[object[]]` that's truthy regardless of contents, "
+        "silently disabling the bootstrap-venv slow path. Offending "
+        "lines:\n" + "\n".join(f"  {ln!r}" for ln in unsuppressed)
+    )
+
+
+def test_install_release_pip_self_upgrade_failure_warns_but_does_not_abort() -> None:
+    """The pip self-upgrade in ``Install-Release`` must surface failure
+    via ``Write-Warn`` and let the wheel install proceed — NOT abort the
+    install with ``Write-Fail``, NOT silently swallow the failure.
+
+    Pre-fix, the failing ``& $venvPip install --upgrade pip`` (the call
+    that tripped pip's Windows self-overwrite guard, pypa/pip#6784) left
+    a non-zero ``$LASTEXITCODE`` that was immediately overwritten by the
+    next ``& $venvPip install --no-cache-dir $wheel``. The user saw the
+    scary ``ERROR: To modify pip ...`` line, the install nonetheless
+    succeeded with the bundled pip, and there was no observable
+    failure path for any *real* pip upgrade failure (network drop,
+    locked .exe under AV, missing PyPI route) — every such failure was
+    masked by the wheel install's exit code.
+
+    Post-fix, the upgrade goes through ``$venvPython -m pip`` so the
+    common-case Windows pip-self-overwrite no longer fires, AND a
+    dedicated ``if ($LASTEXITCODE -ne 0) { Write-Warn ... }`` makes any
+    *real* failure visible. ``Write-Warn`` (not ``Write-Fail``) because
+    Install-Release deliberately tolerates a failed pip upgrade and
+    proceeds with the bundled pip — the wheel install on the next
+    line is the hard gate, not the pip upgrade.
+
+    Two regressions this pin closes:
+
+    1. **Silent masking returns.** A refactor that drops the
+       ``$LASTEXITCODE`` check after the ``-m pip install ... --upgrade
+       pip`` line would re-introduce the pre-fix bug: any real pip
+       upgrade failure would be invisibly swallowed by the next
+       ``$LASTEXITCODE`` overwrite. The fix narrative explicitly calls
+       this out as a behaviour change worth preserving.
+    2. **Graceful degradation lost.** A refactor that escalates the
+       check to ``Write-Fail`` (which calls ``exit 1`` — see
+       ``Write-Fail`` definition above) would hard-abort every install
+       on a transient pip upgrade failure (AV race, PyPI hiccup), even
+       though the install would otherwise succeed with the bundled
+       pip 25.0.1. ``Write-Warn`` is the canonical choice.
+
+    Scoped to the slice strictly *between* the pip self-upgrade line
+    and the wheel-install line so the assertion can't be satisfied by
+    the wheel install's own ``Write-Fail`` (which is correct — wheel
+    install IS the hard gate).
+    """
+    body = _function_body_text("Install-Release")
+    upgrade_match = re.search(
+        r"-m\s+pip\s+install[^\r\n]*--upgrade\s+pip[^\r\n]*", body
+    )
+    assert upgrade_match, (
+        "Install-Release must contain a `-m pip install ... --upgrade "
+        "pip` line; not found. This is the precondition for the "
+        "post-fix-only behavioural pin below — if the line is missing, "
+        "test_install_release_self_upgrades_pip_via_python_module "
+        "should already have flagged it. Body:\n" + repr(body)
+    )
+    wheel_match = re.search(r"\$venvPip\s+install[^\r\n]*\$wheel", body)
+    assert wheel_match, (
+        "Install-Release must contain a `& $venvPip install ... $wheel` "
+        "line that performs the actual wheel install (the hard gate "
+        "whose `$LASTEXITCODE` check is `Write-Fail`); not found. "
+        "Body:\n" + repr(body)
+    )
+    assert upgrade_match.end() < wheel_match.start(), (
+        "The pip self-upgrade line must appear textually before the "
+        "wheel install line. The post-fix flow is: upgrade pip "
+        "(soft-fail) -> install wheel (hard-fail). Reordering breaks "
+        "both the contract pinned here AND the documented intent. "
+        f"upgrade.end={upgrade_match.end()} "
+        f"wheel.start={wheel_match.start()} Body:\n" + repr(body)
+    )
+    between = body[upgrade_match.end():wheel_match.start()]
+    # The non-zero-exit-code check must exist between the two lines so
+    # the upgrade's `$LASTEXITCODE` is consumed before the wheel install
+    # overwrites it. Without this check, a real upgrade failure (network
+    # drop, AV lock, missing PyPI route) is silently masked — exactly
+    # the pre-fix bug.
+    assert re.search(r"\$LASTEXITCODE\s*-ne\s*0", between), (
+        "Install-Release must check `$LASTEXITCODE -ne 0` between the "
+        "`-m pip install ... --upgrade pip` line and the `& $venvPip "
+        "install ... $wheel` line. Without it, any real pip upgrade "
+        "failure (network drop, AV-locked .exe, no PyPI reachability) "
+        "is silently overwritten by the wheel install's exit code -- "
+        "the exact pre-fix masking behaviour that the fix narrative "
+        "called out as worth surfacing. Slice between the two lines:\n"
+        + repr(between)
+    )
+    # `Write-Warn` (not `Write-Fail`) because Install-Release deliberately
+    # tolerates a failed pip upgrade and proceeds with the bundled pip
+    # (25.0.1 in the current venv). `Write-Fail` would hard-abort every
+    # install on a transient AV race or PyPI hiccup -- a strictly worse
+    # outcome than the pre-fix silent masking.
+    assert re.search(r"\bWrite-Warn\b", between), (
+        "Install-Release's pip-self-upgrade-failure branch must call "
+        "`Write-Warn`, not `Write-Fail` (which exits 1 -- see the "
+        "`Write-Fail` helper definition). The fix narrative is explicit: "
+        "pip upgrade is best-effort, the wheel install on the next line "
+        "is the hard gate. Hard-aborting on a transient pip upgrade "
+        "failure (AV race, locked .exe, network blip) would be a "
+        "regression worse than the pre-fix silent masking. Slice "
+        "between the upgrade and wheel-install lines:\n" + repr(between)
+    )
+    assert not re.search(r"\bWrite-Fail\b", between), (
+        "Install-Release's pip-self-upgrade-failure branch must NOT "
+        "call `Write-Fail` (which calls `exit 1`). The wheel install on "
+        "the next line is the canonical hard gate; the pip upgrade is "
+        "explicitly best-effort because the bundled pip is sufficient "
+        "to install the wheel. A `Write-Fail` here would hard-abort "
+        "the install on every transient AV race or PyPI hiccup. Slice "
+        "between the upgrade and wheel-install lines:\n" + repr(between)
+    )

@@ -228,9 +228,14 @@ function Update-CurrentSessionPath {
 # python.org installer).
 function Install-PythonViaWinget {
     Write-Info "Installing Python 3.12 via winget (machine scope, silent)..."
+    # `| Out-Host` so winget's progress chatter prints to the operator but
+    # doesn't pile onto the function's success pipeline. A `[bool]` return
+    # mixed with an `[object[]]` of stdout lines would make
+    # `if (Install-PythonViaWinget) { ... }` truthy even on failure (any
+    # non-empty array is truthy in PowerShell, regardless of contents).
     & winget install --id Python.Python.3.12 --silent `
         --accept-package-agreements --accept-source-agreements `
-        --scope machine --disable-interactivity
+        --scope machine --disable-interactivity | Out-Host
     if ($LASTEXITCODE -ne 0) {
         Write-Warn "winget install Python.Python.3.12 failed (exit $LASTEXITCODE)."
         return $false
@@ -355,7 +360,13 @@ function Resolve-Python {
 function Test-CryptographyImportable {
     param([Parameter(Mandatory=$true)] $PythonExe)
     try {
-        & $PythonExe -c "import cryptography" 2>$null
+        # `2>$null` silences stderr; `| Out-Null` silences stdout. The
+        # function returns a `[bool]`; if anything (sitecustomize.py,
+        # warning bridge, future Python build) printed to stdout, the
+        # return would become an `[object[]]` and every
+        # `if (Test-CryptographyImportable ...) { ... }` call site would
+        # be truthy on failure (any non-empty array is truthy).
+        & $PythonExe -c "import cryptography" 2>$null | Out-Null
         return ($LASTEXITCODE -eq 0)
     } catch {
         return $false
@@ -375,7 +386,10 @@ function New-BootstrapVenv {
     New-Item -ItemType Directory -Path $root -Force | Out-Null
     try {
         Write-Info "Bootstrapping verification venv (cryptography>=43.0)..."
-        & $PythonExe -m venv $root
+        # `| Out-Host` for the same reason as Install-Release: this
+        # function returns a hashtable, and native stdout on the pipeline
+        # would corrupt `$verifier.Python` / `$verifier.Root` downstream.
+        & $PythonExe -m venv $root | Out-Host
         if ($LASTEXITCODE -ne 0) {
             Write-Fail @"
 Could not create a verification venv with $PythonExe (python -m venv exited
@@ -412,7 +426,7 @@ on PATH.
         # the rest of the install. Operators behind an air-gapped /
         # self-hosted PyPI mirror can pre-install `cryptography>=43.0` on
         # the system Python (fast path), bypassing this slow path entirely.
-        & $venvPip install --isolated --no-cache-dir --disable-pip-version-check --quiet --index-url https://pypi.org/simple "cryptography>=43.0"
+        & $venvPip install --isolated --no-cache-dir --disable-pip-version-check --quiet --index-url https://pypi.org/simple "cryptography>=43.0" | Out-Host
         if ($LASTEXITCODE -ne 0) {
             Write-Fail @"
 Could not install the `cryptography` package required to verify the manifest
@@ -636,10 +650,25 @@ print(wheel_path)
 
         $venv = Join-Path $releaseDir "venv"
         Write-Info "Creating venv in $venv"
-        & $PythonExe -m venv $venv
+        # Every `&`-invoked native command emits its stdout onto the
+        # surrounding function's success pipeline. Without `| Out-Host`,
+        # pip's `[notice]` lines and `python -m venv`'s chatter get glued
+        # onto Install-Release's final `return $version`, and `Main`
+        # receives an `object[]` instead of a string. Downstream
+        # `Join-Path -ChildPath $Version` then crashes with
+        # `Cannot convert 'System.Object[]' to ... 'ChildPath'`.
+        & $PythonExe -m venv $venv | Out-Host
+        $venvPython = Join-Path $venv "Scripts\python.exe"
         $venvPip = Join-Path $venv "Scripts\pip.exe"
-        & $venvPip install --no-cache-dir --upgrade pip
-        & $venvPip install --no-cache-dir $wheel
+        # pip on Windows refuses to self-overwrite through the `pip.exe`
+        # console_scripts shim — that shim is the running process and is
+        # locked. Upgrade through the interpreter so the shim isn't held
+        # open during replacement (pypa/pip#6784).
+        & $venvPython -m pip install --no-cache-dir --upgrade pip | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "pip self-upgrade failed (exit $LASTEXITCODE); continuing with bundled pip."
+        }
+        & $venvPip install --no-cache-dir $wheel | Out-Host
         if ($LASTEXITCODE -ne 0) { Write-Fail "Wheel install failed" }
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
