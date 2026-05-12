@@ -93,6 +93,10 @@ function Find-Python {
     foreach ($cmd in $candidates) {
         $exe = Get-Command $cmd -ErrorAction SilentlyContinue
         if (-not $exe) { continue }
+        # Skip the App Execution Alias stub under WindowsApps — it's a
+        # reparse-point trampoline that opens the Microsoft Store and
+        # never actually runs Python in an unattended `irm | iex` flow.
+        if ($exe.Source -like "*\WindowsApps\*") { continue }
         try {
             $version = & $cmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
             if ($LASTEXITCODE -ne 0) { continue }
@@ -107,31 +111,120 @@ function Find-Python {
     return $null
 }
 
-# winget install Python.Python.3.12 at machine scope so the SCM service
-# (running as LocalSystem by default) can later see the interpreter. Refreshes
-# the current session's PATH from the Machine + User scopes since winget edits
-# the persistent PATH but not the in-flight process environment.
+# Both auto-install paths (winget and python.org) edit the persistent PATH
+# but not the in-flight process environment. Recompose the in-session PATH
+# from the Machine + User registry scopes so Find-Python can resolve the
+# freshly-installed interpreter without a shell restart.
+function Update-CurrentSessionPath {
+    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+                [Environment]::GetEnvironmentVariable('Path', 'User')
+}
+
+# Fast path: winget install Python.Python.3.12 at machine scope so the SCM
+# service (running as LocalSystem by default) can later see the interpreter.
+# Returns $true on success, $false on any failure (caller falls back to the
+# python.org installer).
+function Install-PythonViaWinget {
+    Write-Info "Installing Python 3.12 via winget (machine scope, silent)..."
+    & winget install --id Python.Python.3.12 --silent `
+        --accept-package-agreements --accept-source-agreements `
+        --scope machine --disable-interactivity
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "winget install Python.Python.3.12 failed (exit $LASTEXITCODE)."
+        return $false
+    }
+    Update-CurrentSessionPath
+    return $true
+}
+
+# Fallback path: download the official python.org installer and run it
+# silently with per-machine scope. Used when winget is absent (Windows 10
+# LTSC, Server <2025, Sandbox, fresh user profiles, GPO-locked Store) or
+# when the winget invocation itself fails.
+#
+# Returns $true on success, $false otherwise. The pinned 3.12.x patch
+# version is bumpable in source — python.org serves no stable "latest"
+# alias, so every release has its own versioned URL.
+function Install-PythonFromPythonOrg {
+    $version = "3.12.10"
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
+    $url = "https://www.python.org/ftp/python/$version/python-$version-$arch.exe"
+    $tmp = Join-Path $env:TEMP ("python-installer-" + [guid]::NewGuid() + ".exe")
+    Write-Info "Downloading Python $version ($arch) from python.org..."
+    $oldProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -TimeoutSec 300
+        } catch {
+            Write-Warn "Failed to download Python installer from ${url}: $($_.Exception.Message)"
+            return $false
+        }
+        # Defense-in-depth on top of TLS: verify the downloaded .exe is
+        # Authenticode-signed by the Python Software Foundation before
+        # running it as admin. Closes the rogue-CA / python.org-compromise
+        # gap relative to the manifest/wheel path (which already verifies
+        # Ed25519 + SHA-256). Authenticode roots in Microsoft's program,
+        # independent of the host's TLS trust store.
+        Write-Info "Verifying Authenticode signature on the downloaded installer..."
+        $sig = Get-AuthenticodeSignature -FilePath $tmp
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notlike '*Python Software Foundation*') {
+            Write-Warn "python.org installer failed Authenticode verification (status=$($sig.Status), subject=$($sig.SignerCertificate.Subject))."
+            return $false
+        }
+        Write-Info "Running Python $version installer (silent, machine scope)..."
+        # Machine-scope (InstallAllUsers=1) matches the prior winget
+        # --scope machine choice so the SCM service running as LocalSystem
+        # sees the interpreter. SimpleInstall=1 suppresses the optional-
+        # features page; Include_test=0 trims the install footprint.
+        try {
+            $proc = Start-Process -FilePath $tmp -Wait -PassThru -ArgumentList `
+                '/quiet', 'InstallAllUsers=1', 'PrependPath=1', `
+                'Include_test=0', 'Include_launcher=1', 'SimpleInstall=1'
+        } catch {
+            Write-Warn "Python installer process failed to start: $($_.Exception.Message)"
+            return $false
+        }
+        # 0 = success; 3010 = success but reboot pending (the rest of the
+        # install still works); any other code is a real failure.
+        if ($proc.ExitCode -eq 3010) {
+            Write-Warn "Python installer reported reboot pending (exit 3010); continuing."
+        } elseif ($proc.ExitCode -ne 0) {
+            Write-Warn "Python installer exited with code $($proc.ExitCode)."
+            return $false
+        }
+        Update-CurrentSessionPath
+        return $true
+    } finally {
+        $ProgressPreference = $oldProgress
+        Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+    }
+}
+
+# Two-stage fallback chain:
+#   1. winget (fast path, present on modern Windows 11 / 10).
+#   2. official python.org installer (works on every Windows SKU,
+#      including LTSC / Server / Sandbox / GPO-locked hosts where winget
+#      is absent).
+# Hard-fails only when both stages fail.
 function Install-Python {
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Write-Fail @"
-Python 3.12+ is required but not installed, and winget is not available on PATH
-to auto-install it. Install Python 3.12 manually from
+    $wingetAvailable = [bool](Get-Command winget -ErrorAction SilentlyContinue)
+    if ($wingetAvailable) {
+        if (Install-PythonViaWinget) { return }
+        Write-Warn "Falling back to python.org installer."
+    } else {
+        Write-Info "winget is not available on PATH; using python.org installer."
+    }
+    if (Install-PythonFromPythonOrg) { return }
+    Write-Fail @"
+Python 3.12+ is required but could not be auto-installed (both the winget
+path and the python.org fallback failed). Install Python 3.12 manually from
 https://www.python.org/downloads/release/python-3120/ (choose
 'Add python.exe to PATH' and 'Install for all users'), then re-run:
     irm $Script:InstallUrl | iex
 Or set MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1 to require a pre-installed
 interpreter (CI / locked-down hosts).
 "@
-    }
-    Write-Info "Installing Python 3.12 via winget (machine scope, silent)..."
-    & winget install --id Python.Python.3.12 --silent `
-        --accept-package-agreements --accept-source-agreements `
-        --scope machine --disable-interactivity
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "winget install Python.Python.3.12 failed (exit $LASTEXITCODE). Install manually from https://www.python.org/downloads/ and re-run."
-    }
-    $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
-                [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
 function Resolve-Python {
@@ -143,7 +236,7 @@ function Resolve-Python {
     Install-Python
     $py = Find-Python
     if (-not $py) {
-        Write-Fail "Python 3.12+ still not found after winget install. Try re-running, or install manually from https://www.python.org/downloads/."
+        Write-Fail "Python 3.12+ still not found after auto-install. Try re-running, or install manually from https://www.python.org/downloads/."
     }
     return $py
 }

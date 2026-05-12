@@ -502,14 +502,40 @@ Both scripts are auto-published from `deploy/` to the root of the
 4a. **(Windows only, before venv creation)** Auto-elevate via UAC if the
     current PowerShell is not elevated — required for the SCM service
     registration and `%ProgramFiles%\MobaideAgent` writes. If no Python 3.12+
-    is found on PATH, install `Python.Python.3.12` via `winget` at machine
-    scope (silent, with `--accept-package-agreements --accept-source-agreements
-    --disable-interactivity`) and refresh the current session's PATH from
-    the Machine + User scopes. Set `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to
-    opt out and require a pre-installed interpreter (CI / locked-down hosts);
-    in that case the installer fails with the same actionable error as before.
-    Override the re-fetch URL used by the elevation re-launch via
-    `MOBAIDE_AGENT_INSTALL_URL` (parallel to the Linux side).
+    is found on PATH, walk a two-stage auto-install fallback chain:
+    1. **Fast path — `winget`.** If `Get-Command winget` resolves, install
+       `Python.Python.3.12` at machine scope (silent, with
+       `--accept-package-agreements --accept-source-agreements
+       --disable-interactivity`).
+    2. **Robust fallback — python.org installer.** If `winget` is absent
+       (Windows 10 LTSC, Server <2025, Sandbox, fresh user profiles,
+       GPO/Store-blocked corporate hosts) or the winget install fails,
+       download the pinned 3.12.x `python-<ver>-<arch>.exe` from
+       `https://www.python.org/ftp/python/<ver>/` (arch picked from
+       `$env:PROCESSOR_ARCHITECTURE`: `amd64` or `arm64`). Before
+       execution the installer verifies the Authenticode signature via
+       `Get-AuthenticodeSignature`: the status must be `Valid` and the
+       signer subject must match `*Python Software Foundation*` — any
+       mismatch aborts the fallback and the overall install fails. This
+       check is independent of the host's TLS trust store (roots in
+       Microsoft's Authenticode program). Once verified, the installer
+       runs silently (`/quiet InstallAllUsers=1 PrependPath=1
+       Include_test=0 Include_launcher=1 SimpleInstall=1`). Machine
+       scope matches the prior winget choice so the SCM service
+       (LocalSystem) sees the interpreter. Exit code 3010 (reboot
+       pending) is treated as success with a warning; any other non-zero
+       is a real failure.
+
+    Either path then refreshes the current session's PATH from the Machine
+    + User scopes. `Find-Python` filters out the
+    `%LOCALAPPDATA%\Microsoft\WindowsApps\` App Execution Alias stub so the
+    Store reparse-point trampoline never wins detection. The installer
+    hard-fails with an actionable manual-download message only when both
+    stages fail. Set `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to opt out of
+    the entire auto-install path and require a pre-installed interpreter
+    (CI / locked-down hosts). Override the re-fetch URL used by the
+    elevation re-launch via `MOBAIDE_AGENT_INSTALL_URL` (parallel to the
+    Linux side).
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
 6. Atomically pin `<prefix>/current_version`.
