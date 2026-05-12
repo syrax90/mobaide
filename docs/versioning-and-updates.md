@@ -502,13 +502,16 @@ Both scripts are auto-published from `deploy/` to the root of the
 4a. **(Windows only, before venv creation)** Auto-elevate via UAC if the
     current PowerShell is not elevated — required for the SCM service
     registration and `%ProgramFiles%\MobaideAgent` writes. If no Python 3.12+
-    is found on PATH, install `Python.Python.3.12` via `winget` at machine
-    scope (silent, with `--accept-package-agreements --accept-source-agreements
-    --disable-interactivity`) and refresh the current session's PATH from
-    the Machine + User scopes. Set `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to
-    opt out and require a pre-installed interpreter (CI / locked-down hosts);
-    in that case the installer fails with the same actionable error as before.
-    Override the re-fetch URL used by the elevation re-launch via
+    is found on PATH, auto-install at machine scope and refresh the current
+    session's PATH from the Machine + User scopes. Two paths, in priority
+    order: `winget install Python.Python.3.12`; if `winget` is unavailable
+    or fails, fall back to the official python.org installer (downloaded
+    for the host architecture, Authenticode-verified against the Python
+    Software Foundation signer before execution). Fails with a
+    manual-download message only when both paths fail. Set
+    `MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1` to opt out and require a
+    pre-installed interpreter (CI / locked-down hosts). Override the
+    re-fetch URL used by the elevation re-launch via
     `MOBAIDE_AGENT_INSTALL_URL` (parallel to the Linux side).
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
