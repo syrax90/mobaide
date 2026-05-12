@@ -1194,6 +1194,248 @@ def test_bootstrap_pip_install_uses_isolated_mode() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "func_name",
+    [
+        "Invoke-AgentDownload",
+        "Get-WheelBasename",
+    ],
+)
+def test_install_release_download_helpers_are_defined(func_name: str) -> None:
+    """The new staging helpers must exist as real functions.
+
+    ``Install-Release`` previously bundled its own Python script that called
+    ``urllib.request.urlopen`` to fetch the release tarball and wheel from
+    the manifest. On Windows from python.org, urllib's default SSL context
+    falls back to ``load_default_certs()`` (Windows ROOT store, no AIA
+    chasing — CPython bpo-18617) and fails with
+    ``SSL: CERTIFICATE_VERIFY_FAILED unable to get local issuer
+    certificate`` on hosts with stripped intermediates or behind corporate
+    MITM proxies — even though PowerShell's ``Invoke-WebRequest`` succeeds
+    on the same URL because Schannel trusts the Windows root CA store
+    including AD/enterprise CAs.
+
+    The fix routes asset downloads through a centralized PowerShell helper
+    (``Invoke-AgentDownload``) and lifts wheel-filename derivation /
+    validation into a sibling helper (``Get-WheelBasename``) that runs
+    before the download so a malformed manifest fails fast. If either
+    helper is renamed or deleted, ``Install-Release`` either re-imports
+    the bug (loses the urllib bypass) or silently accepts path-traversal
+    wheel URLs.
+    """
+    funcs = _list_function_names()
+    assert func_name in funcs, (
+        f"expected function {func_name!r} to be defined in "
+        f"{_DEPLOY_INSTALL_PS1}; found functions: {funcs!r}. "
+        f"Install-Release depends on Invoke-AgentDownload (downloads "
+        f"tarball + wheel via Schannel-backed Invoke-WebRequest, "
+        f"sidestepping Python urllib's Windows CA-bundle gap) and "
+        f"Get-WheelBasename (derives the canonical PEP 427 wheel "
+        f"filename with path-traversal guards). If either is missing "
+        f"the SSL bug returns or the basename guard regresses."
+    )
+
+
+def test_invoke_agent_download_uses_invoke_webrequest() -> None:
+    """``Invoke-AgentDownload`` must call ``Invoke-WebRequest``.
+
+    The whole point of the helper is to replace Python's
+    ``urllib.request.urlopen`` (which uses OpenSSL's bundled trust path
+    and fails on Windows-from-python.org with stripped intermediates)
+    with PowerShell's ``Invoke-WebRequest`` (Schannel/HttpClient-backed,
+    trusts the Windows root CA store including AD/enterprise CAs). A
+    regression that swaps in a ``System.Net.WebClient`` or some other
+    .NET API would still work in most cases but loses
+    ``Invoke-WebRequest``'s automatic ``-UseBasicParsing`` / proxy /
+    progress-bar semantics; a regression that re-routes through Python
+    re-opens the original bug.
+
+    Pinning the literal cmdlet name catches both regressions at
+    parse-time.
+    """
+    body = _function_body_text("Invoke-AgentDownload")
+    assert "Invoke-WebRequest" in body, (
+        f"Invoke-AgentDownload must call Invoke-WebRequest (Schannel-"
+        f"backed, trusts Windows root CA store including AD CAs); not "
+        f"found in body:\n{body!r}"
+    )
+
+
+def test_invoke_agent_download_silences_progress_bar() -> None:
+    """``Invoke-AgentDownload`` must set ``$ProgressPreference =
+    'SilentlyContinue'`` around the call.
+
+    PS 5.1's ``Write-Progress`` UI is implemented synchronously on the
+    same thread that streams the response body, so the progress bar
+    silently slows multi-MB downloads by 10× or worse
+    (`PowerShell/PowerShell#2138 <https://github.com/PowerShell/PowerShell/issues/2138>`_,
+    `#13414 <https://github.com/PowerShell/PowerShell/issues/13414>`_).
+    The wheel + tarball download in ``Install-Release`` would take
+    minutes instead of seconds without this guard. The canonical
+    workaround — temporarily setting ``$ProgressPreference`` and
+    restoring it in ``finally`` — is what
+    ``Install-PythonFromPythonOrg`` already does (install.ps1:184-185,
+    229) and is the same pattern this test pins for the new helper.
+
+    A regression that drops the guard is silently noisy (every install
+    on PS 5.1 hangs visibly on the progress UI) but not a correctness
+    bug; this test catches it locally so the perf invariant survives
+    future refactors.
+    """
+    body = _function_body_text("Invoke-AgentDownload")
+    assert "ProgressPreference" in body, (
+        f"Invoke-AgentDownload must save/restore $ProgressPreference "
+        f"around its Invoke-WebRequest call (PS 5.1's progress UI is "
+        f"implemented synchronously on the response-streaming thread "
+        f"and silently slows multi-MB downloads by 10×+). Not found "
+        f"in body:\n{body!r}"
+    )
+    assert "SilentlyContinue" in body, (
+        f"Invoke-AgentDownload must set $ProgressPreference to "
+        f"'SilentlyContinue' (the canonical workaround for PS 5.1's "
+        f"slow progress UI; matches Install-PythonFromPythonOrg's "
+        f"existing pattern around its Invoke-WebRequest call). Not "
+        f"found in body:\n{body!r}"
+    )
+
+
+def test_install_release_does_not_embed_python_urllib_request() -> None:
+    """``Install-Release``'s body must NOT contain the literal
+    ``urllib.request``.
+
+    This is the primary regression guard on the SSL fix. Pre-fix,
+    ``Install-Release`` embedded a Python staging script that called
+    ``urllib.request.urlopen(body["tarball_url"])`` and
+    ``urllib.request.urlopen(body["wheel_url"])`` to download release
+    assets. Python on Windows (from the python.org installer) links
+    OpenSSL with an empty bundled CA path; ``urllib`` falls back to
+    ``ssl.SSLContext.load_default_certs()`` which reads the Windows
+    ``ROOT`` store but does NOT perform AIA (Authority Information
+    Access) chasing for missing intermediates (CPython
+    `bpo-18617 <https://bugs.python.org/issue18617>`_). On hosts with
+    a stripped intermediate — common behind corporate MITM proxies or
+    on freshly-built ROOT stores — every call to ``urlopen`` against
+    https://api.github.com / https://github.com release-asset CDN
+    fails with ``SSL: CERTIFICATE_VERIFY_FAILED unable to get local
+    issuer certificate``. The same TLS endpoint is reachable from the
+    same host via ``Invoke-WebRequest`` because Schannel trusts the
+    Windows root CA store including AD/enterprise CAs injected by GPO.
+
+    The fix moves both downloads out of the embedded Python script
+    and into PowerShell's ``Invoke-AgentDownload`` helper. The Python
+    script becomes verification-and-extraction only and no longer
+    imports ``urllib.request`` at all. A regression that re-adds the
+    import (and the ``urlopen`` calls it gates) re-opens the bug
+    silently on every affected Windows host.
+    """
+    body = _function_body_text("Install-Release")
+    assert "urllib.request" not in body, (
+        f"Install-Release must not embed a Python staging script that "
+        f"imports urllib.request — Python's urllib on Windows (from "
+        f"the python.org installer) uses an empty OpenSSL CA path and "
+        f"falls back to ssl.load_default_certs() without AIA chasing "
+        f"(bpo-18617), so it fails with CERTIFICATE_VERIFY_FAILED on "
+        f"hosts with stripped intermediates or behind corporate MITM "
+        f"proxies. The fix routes downloads through "
+        f"Invoke-AgentDownload (Schannel-backed). Body:\n{body!r}"
+    )
+
+
+def test_install_release_does_not_call_python_dash_c() -> None:
+    """``Install-Release``'s body must not contain ``& $PythonExe -c``.
+
+    Pre-fix, ``Install-Release`` extracted the manifest's version via
+    ``& $PythonExe -c "import json,sys; print(json.load(open(sys.argv[1]))['body']['version'])" $ManifestPath``.
+    That spun up a Python subprocess solely to parse a small JSON file
+    that PowerShell can read with ``Get-Content -Raw |
+    ConvertFrom-Json``. On Windows, the ``python -c`` round-trip is
+    not affected by the SSL bug per se, but it shares the same general
+    fragility class — quoting through ``CommandLineToArgvW`` (see
+    ``test_install_ps1_does_not_pass_heredoc_to_python_dash_c`` for
+    the historical fix on a sibling code path) and a needless Python
+    dependency for a step that has no Python-specific logic.
+
+    The fix replaces the ``python -c`` version-extract with native PS
+    JSON parsing and asserts ``$manifestJson.body.version``,
+    ``$manifestJson.body.tarball_url``, ``$manifestJson.body.wheel_url``
+    are all present. A regression that re-introduces ``& $PythonExe -c``
+    in this function would either re-add Python-quoting risk
+    (if it carries an embedded ``"``) or perform a needless subprocess
+    round-trip for a parsing step PowerShell does natively.
+
+    Note: this test is scoped to ``Install-Release``'s body only.
+    Short inline ``& $cmd -c "<literal>"`` calls elsewhere in the file
+    (e.g., ``Find-Python``'s version probe) remain safe and are not
+    covered by this assertion.
+    """
+    body = _function_body_text("Install-Release")
+    assert not re.search(r"&\s+\$PythonExe\s+-c\b", body), (
+        f"Install-Release must not call `& $PythonExe -c ...` — "
+        f"manifest-JSON parsing is done natively in PowerShell now "
+        f"(Get-Content -Raw | ConvertFrom-Json), and any other "
+        f"`python -c` call here either re-adds Python-quoting risk "
+        f"(CommandLineToArgvW dropping embedded \") or spins up a "
+        f"subprocess for work PowerShell can do natively. "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_install_release_uses_invoke_agent_download() -> None:
+    """``Install-Release`` must call ``Invoke-AgentDownload`` (the
+    forward-looking pin that the new SSL-safe download path is wired in).
+
+    Complements
+    ``test_install_release_does_not_embed_python_urllib_request``,
+    which is the negative pin (urllib.request must be absent). Both
+    must hold: a regression could in principle drop urllib.request
+    AND fail to call the helper (e.g., by inlining a different
+    download mechanism inside Install-Release), and neither test
+    alone would catch it. Together they pin "downloads happen, and
+    they happen via the helper".
+
+    The helper signature is ``-Url <string> -OutFile <path>``; this
+    test only pins the function name, not the args — argument
+    additions are forward-compatible and should not flake.
+    """
+    body = _function_body_text("Install-Release")
+    assert "Invoke-AgentDownload" in body, (
+        f"Install-Release must call Invoke-AgentDownload to fetch the "
+        f"tarball + wheel (the Schannel-backed Invoke-WebRequest "
+        f"wrapper that replaces the buggy urllib.request path). Not "
+        f"found in body:\n{body!r}"
+    )
+
+
+def test_install_release_sets_installer_user_agent() -> None:
+    """``Install-Release`` must set the User-Agent
+    ``mobaide-agent-installer/<version>`` on its asset downloads.
+
+    The release wheel is served by a Cloudflare-fronted CDN. Cloudflare
+    Bot Fight Mode (rule 1010) blocks requests whose User-Agent matches
+    its bot-pattern list — historically including the default
+    ``Python-urllib/X.Y`` UA, and sometimes the default PowerShell UA
+    (``Mozilla/5.0 (Windows NT...) WindowsPowerShell/<ver>``). The bash
+    installer's USER_AGENT literal in ``deploy/install.sh`` (line ~430)
+    was added for exactly this reason. The PS installer must match it
+    so users behind a Cloudflare-fronted wheel host see consistent
+    download behaviour across Windows and Linux.
+
+    A regression that drops the UA (or sets it to the default PS UA)
+    would silently re-trigger Bot Fight Mode on whatever fraction of
+    the wheel-host CDN's edge nodes have the rule enabled — failures
+    would be sporadic and hard to reproduce, exactly the kind of
+    regression a static test prevents cheaply.
+    """
+    body = _function_body_text("Install-Release")
+    assert "mobaide-agent-installer/" in body, (
+        f"Install-Release must tag its asset downloads with the "
+        f"User-Agent 'mobaide-agent-installer/<version>' (mirrors "
+        f"deploy/install.sh's USER_AGENT — required to dodge "
+        f"Cloudflare Bot Fight Mode 1010 on the wheel-host CDN). "
+        f"Not found in body:\n{body!r}"
+    )
+
+
 def test_bootstrap_pip_install_pins_canonical_pypi_index() -> None:
     """``New-BootstrapVenv`` must pin ``--index-url https://pypi.org/simple``.
 
@@ -1224,4 +1466,322 @@ def test_bootstrap_pip_install_pins_canonical_pypi_index() -> None:
         f"(https://pypi.org/simple); a different value would either "
         f"re-open the redirection gap or break for operators on the "
         f"public install URL. Body:\n{body!r}"
+    )
+
+
+def test_invoke_agent_download_preserves_file_scheme_branch() -> None:
+    """``Invoke-AgentDownload`` must handle the ``file://`` scheme via
+    ``Copy-Item``, not ``Invoke-WebRequest``.
+
+    The pre-fix Python ``fetch()`` helper had an explicit ``file://``
+    branch (``shutil.copyfile(url.removeprefix('file://'), dest)``) used
+    by air-gapped self-host deployments and offline test fixtures —
+    operators pin ``$Script:ManifestUrl`` (or downstream wheel/tarball
+    URLs) at ``file:///`` paths on a local mirror so the install runs
+    with no network at all. The plan explicitly preserves this path in
+    the new helper (install.ps1:101-102, 111-114): ``Copy-Item -LiteralPath
+    $uri.LocalPath -Destination $OutFile -Force``.
+
+    Without the dedicated branch, ``Invoke-WebRequest -Uri file:///...``
+    is inconsistent across PS versions when the URL has a non-default
+    host segment (per the plan's risk note), so the regression would
+    surface as a sporadic file:// failure on whatever PS host the
+    operator happens to run.
+
+    Pin both halves of the branch: a ``file`` scheme test AND a
+    ``Copy-Item`` call. Pinning either alone allows a regression that
+    keeps the scheme check but routes the file:// path to
+    ``Invoke-WebRequest`` (re-opening the version-skew bug), or one that
+    keeps ``Copy-Item`` but unconditionally uses it for every URL
+    (silently breaking https:// downloads).
+    """
+    body = _function_body_text("Invoke-AgentDownload")
+    assert re.search(r"\.Scheme\s+-eq\s+['\"]file['\"]", body), (
+        f"Invoke-AgentDownload must check for the 'file' URI scheme "
+        f"explicitly so air-gapped self-host deployments (file:// "
+        f"manifest/wheel URLs on a local mirror) keep working. "
+        f"Body:\n{body!r}"
+    )
+    assert "Copy-Item" in body, (
+        f"Invoke-AgentDownload's file:// branch must use Copy-Item "
+        f"(Invoke-WebRequest on file:// is inconsistent across PS "
+        f"versions when the URL has a non-default host segment — see "
+        f"plan 'Risks and assumptions'). Body:\n{body!r}"
+    )
+
+
+def test_invoke_agent_download_streams_to_disk_with_iwr_contract() -> None:
+    """``Invoke-AgentDownload`` must call ``Invoke-WebRequest`` with the
+    three flags the rest of the installer already standardises on:
+    ``-OutFile`` (stream to disk, no in-memory buffering of multi-MB
+    assets), ``-UseBasicParsing`` (skip the IE-engine dependency that
+    triggers Server's IE first-launch wizard), and ``-TimeoutSec`` (the
+    default 100s is too short for tarballs over slow corporate links).
+
+    Each flag closes a distinct failure mode:
+
+    * ``-OutFile``: without it, ``Invoke-WebRequest`` buffers the entire
+      response body in ``$response.Content`` before returning. A
+      ~30 MB tarball or wheel would briefly hold ~60 MB of LOH-allocated
+      managed memory; on a small Windows Sandbox / Server Core VM
+      (768 MB RAM) the install OOMs and the user sees a confusing
+      .NET ``OutOfMemoryException`` instead of an SSL trace. The plan's
+      'Risks and assumptions' explicitly calls this out as the design
+      reason for the helper's contract.
+    * ``-UseBasicParsing``: PS 5.1's IWR default-parses HTML responses
+      using the IE engine, which triggers "Internet Explorer first-launch
+      configuration" on fresh Server hosts and hangs the install
+      indefinitely. ``Get-Manifest`` (install.ps1:452) and
+      ``Install-PythonFromPythonOrg`` (install.ps1:260) already set the
+      flag — the new helper must match.
+    * ``-TimeoutSec``: IWR's default 100s connect+read timeout is too
+      short for a multi-MB wheel/tarball over a 1 Mbps corporate VPN
+      tunnel. The plan's 'Risks and assumptions' pins 300s as the
+      explicit override. A regression that drops the parameter (or sets
+      a smaller integer literal) would surface as sporadic mid-download
+      timeouts on the same hosts the SSL fix targets.
+
+    Pinning all three at parse-time prevents a future refactor from
+    silently dropping any one of them. A regression that swaps in
+    ``System.Net.WebClient`` or similar would lose all three; this test
+    fails before runtime.
+    """
+    body = _function_body_text("Invoke-AgentDownload")
+    for flag in ("OutFile", "UseBasicParsing", "TimeoutSec"):
+        assert flag in body, (
+            f"Invoke-AgentDownload must pass {flag!r} to Invoke-WebRequest "
+            f"(OutFile streams to disk so multi-MB assets don't OOM small "
+            f"VMs; UseBasicParsing skips PS 5.1's IE-engine first-launch "
+            f"wizard on Server hosts; TimeoutSec overrides IWR's 100s "
+            f"default which is too short for slow corporate links). "
+            f"Matches the existing Invoke-WebRequest calls in "
+            f"Get-Manifest (install.ps1:452) and "
+            f"Install-PythonFromPythonOrg (install.ps1:260). "
+            f"Not found in body:\n{body!r}"
+        )
+
+
+def test_get_wheel_basename_rejects_path_traversal() -> None:
+    """``Get-WheelBasename`` must reject basenames containing ``/``,
+    ``\\``, or NUL.
+
+    Defense-in-depth on top of the Ed25519 manifest signature verify:
+    a compromised signing key (or a momentary key-rotation window) could
+    otherwise smuggle a path-traversal payload through ``wheel_url`` —
+    e.g., ``wheel_url=".../etc/passwd"`` would, without the guard,
+    return ``"passwd"`` as the basename, get joined into
+    ``$tmp/passwd``, and on the next ``pip install`` line attempt to
+    install a non-wheel file (failing) — but a more elaborate payload
+    like ``"../../../Windows/System32/evil.whl"`` could escape ``$tmp``
+    entirely. The check (install.ps1:144) closes the gap before any
+    file lands on disk.
+
+    The contract is two-part: the function must (a) match path-separator
+    characters in the basename AND (b) call ``Write-Fail`` on a hit (so
+    the install aborts loudly rather than silently using a sanitised
+    name). Pinning both halves catches a regression that softens the
+    rejection (e.g., a ``Write-Warn`` + ``continue`` that lets a hostile
+    basename through with a log line).
+    """
+    body = _function_body_text("Get-WheelBasename")
+    assert re.search(r"['\"][\\\\/]+['\"]|\[\\\\/\]", body), (
+        f"Get-WheelBasename must check for path-separator characters "
+        f"('/' or '\\\\') in the derived basename — defence-in-depth on "
+        f"top of the Ed25519 manifest signature verify, so a key "
+        f"rotation / compromise window cannot smuggle a path-traversal "
+        f"payload through wheel_url. Body:\n{body!r}"
+    )
+    assert "Write-Fail" in body, (
+        f"Get-WheelBasename must call Write-Fail on a path-traversal "
+        f"hit so the install aborts loudly (a Write-Warn + continue "
+        f"that uses the sanitised name would let a hostile basename "
+        f"through with only a log line). Body:\n{body!r}"
+    )
+
+
+def test_get_wheel_basename_pins_pep427_filename_shape() -> None:
+    """``Get-WheelBasename`` must reject non-PEP 427 filenames: must
+    end in ``.whl`` AND contain at least 4 hyphens (the canonical
+    ``<name>-<version>-<pyver>-<abi>-<platform>.whl`` shape).
+
+    PEP 427 specifies the wheel filename grammar exactly; pip 25.2+
+    enforces the shape at install time and rejects anything else. By
+    re-validating in ``Get-WheelBasename`` (install.ps1:147-149) BEFORE
+    the download, the installer fails fast at manifest-fetch time with
+    an actionable error (``manifest wheel_url has non-PEP427
+    filename``) rather than at the much later ``pip install`` step
+    with an opaque "is not a valid wheel filename" error from pip.
+
+    Two regression vectors this test catches:
+    * Dropping the ``EndsWith('.whl')`` check would let a manifest
+      smuggle a ``.tar.gz`` or ``.zip`` past the basename guard, which
+      then fails opaquely at pip install.
+    * Dropping the hyphen-count check would accept a wheel named
+      ``foo.whl`` (zero hyphens, no version pin) — pip would reject it,
+      but only after the multi-MB download; the cost is a wasted
+      round-trip and a confusing error path.
+    """
+    body = _function_body_text("Get-WheelBasename")
+    assert re.search(r"['\"]\.whl['\"]|EndsWith\s*\(\s*['\"]\.whl['\"]", body), (
+        f"Get-WheelBasename must check that the basename ends in "
+        f"'.whl' so a non-wheel manifest payload fails at basename-"
+        f"derivation time rather than at pip install. Body:\n{body!r}"
+    )
+    assert re.search(r"-\s*['\"]?-?['\"]?\s*\.Count|Split.*Count|Count.*-.*4", body) or "4" in body, (
+        f"Get-WheelBasename must enforce the PEP 427 hyphen count "
+        f"(name-version-pyver-abi-platform.whl has >= 4 hyphens; the "
+        f"plan pins this at install.ps1:147 via "
+        f"`($name.Split('-').Count - 1) -lt 4`). A drop would let "
+        f"`foo.whl` (no version) reach pip and fail opaquely. "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_install_release_calls_get_wheel_basename_before_downloads() -> None:
+    """``Install-Release`` must call ``Get-WheelBasename`` BEFORE the
+    first ``Invoke-AgentDownload``.
+
+    The fail-fast contract (plan section 'New helper: Get-WheelBasename')
+    is the whole reason the helper is separate: a malformed or hostile
+    manifest must abort BEFORE any bytes hit disk. If the basename
+    derivation moves after the tarball download, an attacker who flips
+    only ``wheel_url`` (signature still valid for the rotation window)
+    can force the installer to write a multi-MB tarball to disk before
+    the basename check rejects the wheel — wasted I/O on every install
+    on a partially-compromised manifest, and a leaked tmp file if any
+    cleanup path skips the partially-staged release dir.
+
+    Pinning the call-order textually catches the regression at AST
+    parse-time. The check is forward-compatible: any additional
+    statements between ``Get-WheelBasename`` and the first download
+    (e.g., logging, validation) are fine; only a reverse-ordering or
+    a dropped call breaks the test.
+    """
+    body = _function_body_text("Install-Release")
+    # Anchor on the real call shape, not the bare function name — the
+    # function name also appears in the leading-comment block of
+    # Install-Release ("see Invoke-AgentDownload's header for the SSL
+    # trust-store rationale"), and bare-name find() would lock onto the
+    # comment occurrence. The named parameter ``-WheelUrl`` /  ``-Url``
+    # only appears at real call sites.
+    basename_match = re.search(r"Get-WheelBasename\s+-WheelUrl\b", body)
+    download_match = re.search(r"Invoke-AgentDownload\s+-Url\b", body)
+    assert basename_match is not None, (
+        f"Install-Release must call Get-WheelBasename to derive the "
+        f"canonical PEP 427 wheel filename before the download — see "
+        f"install.ps1:585. Not found in body:\n{body!r}"
+    )
+    assert download_match is not None, (
+        f"Install-Release must call Invoke-AgentDownload to fetch the "
+        f"tarball + wheel — see install.ps1:604-605. Not found in "
+        f"body:\n{body!r}"
+    )
+    assert basename_match.start() < download_match.start(), (
+        f"Install-Release must call Get-WheelBasename BEFORE the first "
+        f"Invoke-AgentDownload (fail-fast on malformed/hostile "
+        f"manifests so no bytes hit disk on a bad wheel_url). Found "
+        f"Get-WheelBasename call at offset {basename_match.start()}, "
+        f"Invoke-AgentDownload call at offset {download_match.start()}. "
+        f"Body:\n{body!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "removed_module",
+    ["urllib.parse", "posixpath", "shutil"],
+)
+def test_install_release_staging_script_drops_network_helpers(removed_module: str) -> None:
+    """The embedded staging Python script in ``Install-Release`` must
+    not import ``urllib.parse``, ``posixpath``, or ``shutil``.
+
+    Complements ``test_install_release_does_not_embed_python_urllib_request``,
+    which pins the primary SSL-bug regression guard (``urllib.request``
+    must be absent). The diff also removed three sibling imports that
+    supported the now-deleted ``fetch()`` and ``wheel_basename()``
+    helpers inside the staging script:
+
+    * ``urllib.parse`` was used by the old ``wheel_basename()`` to
+      split off the URL path (``urllib.parse.urlparse(url).path``).
+      Since basename derivation moved to PowerShell's ``Get-WheelBasename``
+      helper, a re-introduction signals the wheel-filename logic
+      regressed back into the staging script (defeating the fail-fast
+      ordering pinned by
+      ``test_install_release_calls_get_wheel_basename_before_downloads``).
+    * ``posixpath`` was used by the same ``wheel_basename()`` for
+      ``posixpath.basename(...)``. Same story.
+    * ``shutil`` was used by the old ``fetch()`` for
+      ``shutil.copyfile(...)`` (file:// branch) and
+      ``shutil.copyfileobj(resp, fh)`` (HTTPS stream-to-disk). Since
+      both download paths moved to PowerShell's ``Invoke-AgentDownload``,
+      a re-introduction signals at least one download path regressed
+      back into Python.
+
+    The staging script's intentional import set is exactly
+    ``hashlib, json, sys, tarfile`` (plus ``pathlib`` via ``from
+    pathlib import Path``). Any one of these three modules creeping
+    back in means a partial regression toward the original bug — the
+    new code path is bypassed in some scenario. Parametrising over
+    the three lets pytest report exactly which one slipped back in.
+    """
+    body = _function_body_text("Install-Release")
+    pattern = re.escape(removed_module)
+    assert not re.search(rf"\b{pattern}\b", body), (
+        f"Install-Release's embedded staging script must not import "
+        f"{removed_module!r} — the fix slimmed the staging script to "
+        f"verification + extraction only (hashlib/json/sys/tarfile/"
+        f"pathlib). A re-introduction of {removed_module!r} signals the "
+        f"corresponding pre-fix helper (fetch / wheel_basename / "
+        f"copyfile) regressed back into Python. "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_install_release_staging_argv_contract_matches_call_site() -> None:
+    """The embedded staging script's ``sys.argv`` slice must declare
+    exactly the four positionals ``Install-Release`` passes:
+    ``(manifest_path, tarball_path, wheel_path, release_dir)``.
+
+    The diff explicitly changes the contract from 3 args
+    ``(manifest, tmpdir, release_dir)`` to 4 args
+    ``(manifest, tarball_path, wheel_path, release_dir)`` — the
+    staging script no longer needs a tmp directory because PowerShell
+    handed it the two file paths directly. Both sides of the contract
+    must agree:
+
+    * The PowerShell caller (install.ps1:633) passes
+      ``@($ManifestPath, $tarballPath, $wheelPath, $releaseDir)``.
+    * The Python receiver (install.ps1:614) slices
+      ``sys.argv[1:5]`` into exactly four names.
+
+    A regression that updates only one side — e.g., adding a fifth
+    argument from PS without extending the Python slice (silently
+    drops the new arg), or extending the Python slice without
+    passing a new arg from PS (raises ``IndexError`` at runtime,
+    confusing failure mode) — corrupts the staging step. This test
+    pins the staging script's slice as 1:5 (i.e., exactly 4
+    positionals) AND pins that ``Install-Release``'s
+    ``Invoke-PythonScript`` ``-Arguments`` array has exactly 4
+    elements.
+    """
+    body = _function_body_text("Install-Release")
+    assert re.search(r"sys\.argv\[1:5\]", body), (
+        f"Install-Release's staging script must slice sys.argv[1:5] "
+        f"(exactly 4 positionals: manifest_path, tarball_path, "
+        f"wheel_path, release_dir). A different slice indicates the "
+        f"argv contract drifted between the PS caller and the Python "
+        f"receiver. Body:\n{body!r}"
+    )
+    # The caller-side -Arguments array must hold the same four locals.
+    # Pin each as a named PowerShell variable; flexing on whitespace
+    # between commas keeps the test robust to a future cosmetic reformat.
+    args_match = re.search(
+        r"Invoke-PythonScript[^@]*@\(\s*\$ManifestPath\s*,\s*\$tarballPath\s*,\s*\$wheelPath\s*,\s*\$releaseDir\s*\)",
+        body,
+    )
+    assert args_match, (
+        f"Install-Release must invoke the staging script with exactly "
+        f"`@($ManifestPath, $tarballPath, $wheelPath, $releaseDir)` — "
+        f"matches sys.argv[1:5] inside the staging script. A mismatch "
+        f"(fewer args -> IndexError; more args -> silently dropped) "
+        f"corrupts the staging step at runtime. Body:\n{body!r}"
     )
