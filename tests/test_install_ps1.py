@@ -296,6 +296,7 @@ def test_requires_runasadministrator_directive_is_removed() -> None:
         "Update-CurrentSessionPath",
         "Resolve-Python",
         "Invoke-PythonScript",
+        "Install-Service",
     ],
 )
 def test_required_function_is_defined(func_name: str) -> None:
@@ -2192,4 +2193,128 @@ def test_install_release_pip_self_upgrade_failure_warns_but_does_not_abort() -> 
         "to install the wheel. A `Write-Fail` here would hard-abort "
         "the install on every transient AV race or PyPI hiccup. Slice "
         "between the upgrade and wheel-install lines:\n" + repr(between)
+    )
+
+
+def test_install_service_uses_new_service_cmdlet() -> None:
+    """``Install-Service`` must use ``New-Service``, not ``sc.exe create``.
+
+    Regression guard on the Windows-service-registration fix. The
+    binPath value (``cmd.exe /c "C:\\Program Files\\...\\launcher.cmd"``)
+    contains both spaces and embedded double quotes; PowerShell's
+    ``NativeCommandProcessor`` re-serialises such an argument with
+    CRT-style ``\\"`` escaping that ``sc.exe``'s own parser does not
+    recognise, so the registered ``ImagePath`` is corrupted (or the
+    call is rejected outright). The pre-fix bug surfaced much later as
+    ``Start-Service : Cannot find any service with service name
+    'MobaideAgent'``.
+
+    ``New-Service`` calls ``CreateServiceW`` via P/Invoke and never
+    round-trips the binary path through a command line, so it is
+    immune to this class of quoting bug. If a future PR reintroduces
+    ``sc.exe create``, this test surfaces it locally.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"\bNew-Service\b", body), (
+        "Install-Service must register the service via the `New-Service` "
+        "cmdlet (CreateServiceW via P/Invoke). The historical "
+        "`sc.exe create` invocation is incompatible with PowerShell's "
+        "native-arg-passing: the binPath value contains both spaces "
+        "and embedded double quotes, and the resulting CRT-style `\\\"` "
+        "escaping is not understood by sc.exe's own parser. Found "
+        "body:\n" + repr(body)
+    )
+    assert not re.search(r"\bsc\.exe\s+create\b", body), (
+        "Install-Service must NOT call `sc.exe create` (the pre-fix "
+        "invocation that PowerShell's native-arg-passing silently "
+        "corrupts when binPath contains both spaces and embedded "
+        "double quotes). Use `New-Service` instead. Found body:\n"
+        + repr(body)
+    )
+
+
+def test_install_service_verifies_service_exists_before_starting() -> None:
+    """``Install-Service`` must re-check SCM after ``New-Service``.
+
+    The pre-fix silent-failure anti-pattern (``| Out-Null`` + no
+    ``$LASTEXITCODE`` check on ``sc.exe create``) hid the original bug
+    until ``Start-Service`` emitted its own opaque "Cannot find any
+    service" error. Defence-in-depth: after ``New-Service`` succeeds,
+    confirm the service actually appeared in SCM before invoking
+    ``Start-Service``. Surfaces a real error (with a real message)
+    immediately at install time rather than several lines later.
+    """
+    body = _function_body_text("Install-Service")
+    new_svc = re.search(r"\bNew-Service\b", body)
+    assert new_svc is not None, (
+        "Pre-condition for this test: Install-Service must use "
+        "`New-Service` (covered by "
+        "test_install_service_uses_new_service_cmdlet)."
+    )
+    tail = body[new_svc.end():]
+    assert re.search(r"\bGet-Service\b", tail), (
+        "After the `New-Service` call, Install-Service must re-check "
+        "the service's existence via `Get-Service` and fail loudly if "
+        "it is missing. This is the silent-failure-mode safeguard the "
+        "fix narrative calls out: without an explicit verification "
+        "step, the next regression in service registration will "
+        "surface as another opaque `Start-Service : Cannot find any "
+        "service` error far away from the actual cause. Body slice "
+        "after `New-Service`:\n" + repr(tail)
+    )
+
+
+def test_install_service_launcher_cmd_handles_paths_with_spaces() -> None:
+    """The launcher .cmd template in ``Install-Service`` must be
+    space-safe.
+
+    The default install prefix is ``C:\\Program Files\\MobaideAgent``,
+    which contains a space. cmd's ``for /f`` splits an unquoted
+    parenthesised file-set on whitespace; without ``usebackq``, a
+    double-quoted file-set is treated as a literal string rather than a
+    filename. The pre-fix template
+
+        for /f %%v in (%MOBAIDE_AGENT_PREFIX%\\current_version) ...
+
+    therefore tried to open ``C:\\Program`` and
+    ``Files\\MobaideAgent\\current_version`` as two separate files,
+    left ``CLAUDE_VERSION`` empty, and resolved the next line to a
+    non-existent python.exe. The fix requires both ``usebackq`` and a
+    double-quoted ``"%MOBAIDE_AGENT_PREFIX%\\current_version"``.
+
+    Also guards the ``if not defined CLAUDE_VERSION`` exit branch — a
+    missing/empty ``current_version`` must surface as a real error in
+    the Windows Event Log, not as an empty-version-segment
+    NoSuchFile crash.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"\busebackq\b", body), (
+        "Install-Service's launcher.cmd here-string must use the "
+        "`for /f \"usebackq tokens=*\"` form so a double-quoted "
+        "file-set is treated as a filename. Without `usebackq`, "
+        "the default install prefix `C:\\Program Files\\MobaideAgent` "
+        "breaks the for-loop's file-set parsing and CLAUDE_VERSION "
+        "is left empty. Body:\n" + repr(body)
+    )
+    assert re.search(
+        r'"%MOBAIDE_AGENT_PREFIX%\\current_version"', body
+    ), (
+        "Install-Service's launcher.cmd here-string must quote the "
+        "`%MOBAIDE_AGENT_PREFIX%\\current_version` path inside the "
+        "`for /f` file-set (e.g. "
+        "`for /f \"usebackq tokens=*\" %%v in "
+        "(\"%MOBAIDE_AGENT_PREFIX%\\current_version\") do ...`). "
+        "Otherwise the default prefix's embedded space splits the "
+        "file-set into two non-existent paths. Body:\n" + repr(body)
+    )
+    assert re.search(r"if\s+not\s+defined\s+CLAUDE_VERSION", body), (
+        "Install-Service's launcher.cmd here-string must contain an "
+        "`if not defined CLAUDE_VERSION` guard that exits non-zero "
+        "with a real error message. A missing or empty "
+        "current_version file must surface in the Windows Event Log "
+        "as a clear failure -- the pre-fix template would silently "
+        "resolve `%MOBAIDE_AGENT_PREFIX%\\releases\\%CLAUDE_VERSION%\\"
+        "venv\\Scripts\\python.exe` to a path with an empty version "
+        "segment and produce a confusing NoSuchFile crash instead. "
+        "Body:\n" + repr(body)
     )

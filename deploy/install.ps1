@@ -730,11 +730,28 @@ function Install-Service {
     $launcherDir = Join-Path $Script:Prefix "bin"
     New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null
     $launcherCmd = Join-Path $launcherDir "mobaide-agent-launcher.cmd"
+    # Default $Script:Prefix is "C:\Program Files\MobaideAgent" — a path
+    # containing a space — so the .cmd has to be space-safe:
+    #   * `set "VAR=value"` quotes the assignment so a future env-overridden
+    #     prefix containing &/</>/| does not break the line either.
+    #   * `for /f "usebackq tokens=*"` makes a double-quoted file-set
+    #     refer to a filename (with spaces). Without usebackq, cmd's
+    #     for /f splits the unquoted file-set on whitespace and tries to
+    #     open "C:\Program" and "Files\MobaideAgent\current_version" as
+    #     two separate files, leaving CLAUDE_VERSION empty.
+    #   * The `if not defined` guard exits 1 with a real error message so
+    #     a missing/empty current_version surfaces in the Windows Event
+    #     Log instead of resolving to ...\releases\\venv\... (an empty
+    #     version segment) and crashing further down the chain.
     $launcherBody = @"
 @echo off
 setlocal
-set MOBAIDE_AGENT_PREFIX=$Script:Prefix
-for /f %%v in (%MOBAIDE_AGENT_PREFIX%\current_version) do set CLAUDE_VERSION=%%v
+set "MOBAIDE_AGENT_PREFIX=$Script:Prefix"
+for /f "usebackq tokens=*" %%v in ("%MOBAIDE_AGENT_PREFIX%\current_version") do set "CLAUDE_VERSION=%%v"
+if not defined CLAUDE_VERSION (
+    echo Failed to read %MOBAIDE_AGENT_PREFIX%\current_version 1>&2
+    exit /b 1
+)
 "%MOBAIDE_AGENT_PREFIX%\releases\%CLAUDE_VERSION%\venv\Scripts\python.exe" -m mobaide.launcher
 "@
     Set-Content -Path $launcherCmd -Value $launcherBody
@@ -747,12 +764,44 @@ for /f %%v in (%MOBAIDE_AGENT_PREFIX%\current_version) do set CLAUDE_VERSION=%%v
     }
 
     Write-Info "Registering $Script:ServiceName service"
-    & sc.exe create $Script:ServiceName binPath= "cmd.exe /c `"$launcherCmd`"" start= auto DisplayName= "Mobaide Agent" | Out-Null
+    # Use New-Service (CreateServiceW via P/Invoke) rather than `sc.exe
+    # create` because the binPath contains both spaces and embedded
+    # double quotes (`cmd.exe /c "C:\Program Files\..."`). PowerShell's
+    # NativeCommandProcessor re-serialises such an argument with
+    # CRT-style `\"` escaping, which sc.exe's own command-line parser
+    # does not recognise. The old code silently registered a corrupted
+    # ImagePath (or, more often, sc.exe rejected the call with a
+    # non-zero exit that `| Out-Null` swallowed), and the failure
+    # surfaced much later as "Cannot find any service with service name
+    # 'MobaideAgent'" at Start-Service.
+    $binaryPath = 'cmd.exe /c "' + $launcherCmd + '"'
+    try {
+        New-Service -Name $Script:ServiceName `
+            -BinaryPathName $binaryPath `
+            -DisplayName "Mobaide Agent" `
+            -StartupType Automatic | Out-Null
+    } catch {
+        Write-Fail "Failed to register $Script:ServiceName service: $($_.Exception.Message)"
+    }
+    # Defence-in-depth on the silent-failure anti-pattern that hid the
+    # original bug: re-check SCM after New-Service and fail with a
+    # message that names the real problem, instead of letting the next
+    # cmdlet emit its own confusing "Cannot find any service" error.
+    if (-not (Get-Service -Name $Script:ServiceName -ErrorAction SilentlyContinue)) {
+        Write-Fail "Service $Script:ServiceName did not appear in SCM after New-Service. Re-run as Administrator and check the Windows Event Log."
+    }
+
     # Three SCM-driven restarts at 5s spacing — the launcher rolls back
     # on its third boot attempt within the same window. reset=600 keeps
     # the failure counter alive long enough for the rolled-back release
     # to prove stable before SCM forgets the prior crash burst.
+    # Best-effort: a recovery-policy misconfig is a warning, not fatal —
+    # the launcher's own crash-loop rollback (mobaide.launcher) still
+    # works without SCM-side restarts.
     & sc.exe failure $Script:ServiceName reset= 600 actions= restart/5000/restart/5000/restart/5000 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Could not configure failure recovery for $Script:ServiceName (sc.exe failure exit $LASTEXITCODE); continuing."
+    }
     Start-Service -Name $Script:ServiceName
 }
 
