@@ -48,6 +48,36 @@ function Write-Info  { param($Msg) Write-Host "[INFO]  $Msg" }
 function Write-Warn  { param($Msg) Write-Warning $Msg }
 function Write-Fail  { param($Msg) Write-Error $Msg; exit 1 }
 
+# Pass a multi-line Python script to python.exe via a temp file rather than
+# `-c <heredoc>`. Windows PowerShell 5.1 silently drops embedded " characters
+# when wrapping a long script for a native .exe — CommandLineToArgvW then
+# toggles in and out of quoted-region state at each stripped quote and joins
+# the surrounding tokens, so a line like
+#     sys.exit(f"...{x}")
+# arrives at Python as
+#     sys.exit(f...{x})
+# and parses as a SyntaxError. Writing the script to disk eliminates the
+# argv-quoting step entirely; the bash installer takes the equivalent path
+# via heredocs to stdin. UTF-8 without BOM matches Python 3's PEP 3120
+# default source encoding (Set-Content -Encoding UTF8 differs between PS 5.1
+# and 7 — the .NET API is consistent across both).
+function Invoke-PythonScript {
+    param(
+        [Parameter(Mandatory=$true)] $PythonExe,
+        [Parameter(Mandatory=$true)] [string] $Script,
+        [string[]] $Arguments = @()
+    )
+    $tmpScript = Join-Path $env:TEMP ("mobaide-py-" + [guid]::NewGuid() + ".py")
+    [System.IO.File]::WriteAllText(
+        $tmpScript, $Script, [System.Text.UTF8Encoding]::new($false)
+    )
+    try {
+        & $PythonExe $tmpScript @Arguments
+    } finally {
+        Remove-Item -Force $tmpScript -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($id)
@@ -264,7 +294,7 @@ try:
 except Exception as exc:
     sys.exit(f"trust key is not a valid base64 Ed25519 public key: {exc}")
 '@
-    & $PythonExe -c $validateScript $Script:TrustKeyB64
+    Invoke-PythonScript -PythonExe $PythonExe -Script $validateScript -Arguments @($Script:TrustKeyB64)
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "Trust key validation failed."
     }
@@ -359,7 +389,7 @@ try:
 except InvalidSignature:
     sys.exit("manifest signature does not verify")
 '@
-    & $PythonExe -c $verifyScript $ManifestPath $Script:TrustKeyB64
+    Invoke-PythonScript -PythonExe $PythonExe -Script $verifyScript -Arguments @($ManifestPath, $Script:TrustKeyB64)
     if ($LASTEXITCODE -ne 0) { Write-Fail "Manifest signature verification failed" }
 }
 
@@ -429,7 +459,7 @@ with tarfile.open(tarball, mode="r:gz") as tar:
     tar.extractall(release_dir, filter="data")
 print(wheel)
 '@
-        $wheel = & $PythonExe -c $stageScript $ManifestPath $tmp $releaseDir
+        $wheel = Invoke-PythonScript -PythonExe $PythonExe -Script $stageScript -Arguments @($ManifestPath, "$tmp", $releaseDir)
         if ($LASTEXITCODE -ne 0) { Write-Fail "Staging failed" }
         $wheel = ($wheel | Out-String).Trim()
 

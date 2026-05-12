@@ -106,12 +106,26 @@ def _run_ps(script: str) -> subprocess.CompletedProcess[str]:
     ``-NoProfile`` and ``-NonInteractive`` guard against host
     customisations (user ``$PROFILE``, prompts) that would otherwise
     pollute stdout and make assertions flaky on developer machines.
+
+    ``encoding='utf-8', errors='replace'`` overrides ``text=True``'s default
+    of ``locale.getpreferredencoding()`` (cp1252 on English Windows).
+    PowerShell 5.1's ``Parser.ParseFile`` reads ``install.ps1`` (no BOM)
+    using the system ANSI codepage rather than UTF-8, so a UTF-8 em-dash
+    ``\\xe2\\x80\\x94`` in a comment is decoded as ``\\u00e2\\u20ac\\u201d``,
+    and the host's UTF-8 ``[Console]::OutputEncoding`` then writes those
+    chars back out as ``\\xc3\\xa2\\xe2\\x82\\xac\\xe2\\x80\\x9d``. Byte
+    ``0x9d`` is undefined in cp1252, so the default ``text=True`` decode
+    raises ``UnicodeDecodeError`` in subprocess's reader thread and the
+    test sees ``proc.stdout=None``. ``errors='replace'`` substitutes ``?``
+    for any byte that survives mis-decoding — all assertions in this file
+    match ASCII tokens, so mojibake in non-ASCII regions is harmless.
     """
     assert _PS is not None
     return subprocess.run(
         [_PS, "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -281,6 +295,7 @@ def test_requires_runasadministrator_directive_is_removed() -> None:
         "Install-PythonFromPythonOrg",
         "Update-CurrentSessionPath",
         "Resolve-Python",
+        "Invoke-PythonScript",
     ],
 )
 def test_required_function_is_defined(func_name: str) -> None:
@@ -677,6 +692,55 @@ def test_find_python_skips_windowsapps_stub() -> None:
         f"Alias stub (the reparse-point trampoline that opens the "
         f"Microsoft Store and never runs Python in `irm | iex`); not "
         f"found in body:\n{body!r}"
+    )
+
+
+def test_install_ps1_does_not_pass_heredoc_to_python_dash_c() -> None:
+    """install.ps1 must not invoke ``& $PythonExe -c $<variable>``.
+
+    Reason: Windows PowerShell 5.1's native-argument quoting silently
+    drops embedded ``"`` characters when wrapping a long argument for a
+    native ``.exe``. ``CommandLineToArgvW`` then toggles in/out of
+    quoted-region state at every stripped quote and joins the surrounding
+    tokens, so a here-string line like::
+
+        sys.exit(f"trust key is not a valid base64 ...: {exc}")
+
+    arrives at python.exe as::
+
+        sys.exit(ftrust key is not a valid base64 ...: {exc})
+
+    and Python reports ``SyntaxError: '(' was never closed`` (its
+    canonical error when a parse fails inside an open paren). PowerShell
+    7.3+ defaults to a fixed argv-passing mode (PSNativeCommand-
+    ArgumentPassing = 'Standard'), but the canonical install one-liner
+    ``irm https://get.mobaide.com/install.ps1 | iex`` runs under whatever
+    PowerShell the user has, and 5.1 is the default on every fresh
+    Windows install — we cannot require 7.3+.
+
+    The ``Invoke-PythonScript`` helper writes the script to a temp file
+    and runs ``python <file>``, sidestepping argv-quoting entirely. Short
+    inline ``& $cmd -c "<literal-no-quotes>"`` calls remain safe and are
+    explicitly allowed (``Find-Python``'s version probe at line ~101,
+    the manifest version extract at line ~368 — both single-line ASCII
+    expressions whose Python uses only ``'`` for string literals).
+
+    Regex pin: any occurrence of ``& $PythonExe -c $<word>`` is a
+    regression. ``& $PythonExe -c "..."`` (string literal) and
+    ``& $PythonExe $tmpScript ...`` (script-as-file, the fixed form
+    inside the helper) are both untouched by this pattern.
+    """
+    text = _read_install_ps1_text()
+    matches = re.findall(r"&\s+\$PythonExe\s+-c\s+\$\w+", text)
+    assert not matches, (
+        "install.ps1 passes a script via `& $PythonExe -c $<variable>`. "
+        "Windows PowerShell 5.1 strips embedded `\"` characters from "
+        "native-command argv, mangling any here-string Python script "
+        "with f-strings, dict-key access, or double-quoted literals. "
+        "Use Invoke-PythonScript (writes the script to a temp `.py` and "
+        "runs `python <file>`) instead — it sidesteps argv-quoting "
+        f"entirely and is host-version-agnostic. Offending matches: "
+        f"{matches!r}"
     )
 
 
