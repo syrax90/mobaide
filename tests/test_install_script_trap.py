@@ -22,9 +22,11 @@ the canonical environment.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
+from functools import cache
 from pathlib import Path
 
 import pytest
@@ -543,4 +545,532 @@ ensure_ensurepip_available
     assert "uname -a" in proc.stderr or "/etc/os-release" in proc.stderr, (
         f"diagnostic must point at the env-fingerprint commands the "
         f"user should attach to an issue report; stderr={proc.stderr!r}"
+    )
+
+
+@cache
+def _read_install_sh_text() -> str:
+    """File text of ``deploy/install.sh`` (UTF-8, decoded once).
+
+    Cached so the seven structural tests that call ``_sh_function_body``
+    each don't re-read the file from disk. Mirrors the
+    ``@cache`` decoration on ``_read_install_ps1_text`` in the PowerShell
+    test module — pure file I/O so the cache is mainly a symmetry concern,
+    not a perf one, but cheap symmetry is good symmetry.
+    """
+    assert _DEPLOY_INSTALL_SH.is_file(), (
+        f"missing install script: {_DEPLOY_INSTALL_SH}"
+    )
+    return _DEPLOY_INSTALL_SH.read_text(encoding="utf-8")
+
+
+@cache
+def _sh_function_body(name: str) -> str:
+    """Extract the body of a top-level function in ``deploy/install.sh``.
+
+    Pure-Python brace counter (not ``sed``) — robust to nested ``{...}``
+    inside heredocs and string literals which the line-anchored ``sed``
+    pattern used elsewhere in this file would mis-handle. The contract:
+    a function definition starts with ``<name>() {`` on its own line and
+    ends at the matching closing brace at column 0.
+    """
+    text = _read_install_sh_text()
+    needle = f"\n{name}() {{\n"
+    start = text.find(needle)
+    assert start != -1, (
+        f"function {name!r} not found in {_DEPLOY_INSTALL_SH}"
+    )
+    body_start = start + len(needle)
+    depth = 1
+    i = body_start
+    while i < len(text) and depth > 0:
+        c = text[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[body_start:i]
+        i += 1
+    raise AssertionError(f"unbalanced braces in {name}() body")
+
+
+@pytest.mark.parametrize(
+    "func_name",
+    ["resolve_verifier_python", "cleanup_on_exit"],
+)
+def test_cryptography_bootstrap_function_is_defined_in_install_sh(
+    func_name: str,
+) -> None:
+    """The two new bash functions that bootstrap ``cryptography`` for
+    the pre-wheel-install verification steps must exist as top-level
+    definitions in ``deploy/install.sh``.
+
+    * ``resolve_verifier_python`` — sets ``VERIFIER_PYTHON`` to a Python
+      that can ``import cryptography``. Fast path: ``python3`` already
+      has it. Slow path: build an ephemeral venv in ``$(mktemp -d)``.
+    * ``cleanup_on_exit`` — single installer-wide EXIT trap that
+      cleans up ``$tmpdir`` (stage_release scratch) and ``$BOOTSTRAP_DIR``
+      (bootstrap venv).
+
+    If either is renamed or deleted, ``main()``'s `trap cleanup_on_exit
+    EXIT` / `resolve_verifier_python` calls reference an undefined name
+    and the install errors out under ``set -u``.
+    """
+    assert _BASH is not None
+    proc = subprocess.run(
+        [
+            _BASH,
+            "-c",
+            f"grep -c '^{func_name}()' '{_DEPLOY_INSTALL_SH.as_posix()}'",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (
+        f"grep failed for {_DEPLOY_INSTALL_SH}: stdout={proc.stdout!r} "
+        f"stderr={proc.stderr!r}"
+    )
+    count = int(proc.stdout.strip() or "0")
+    assert count == 1, (
+        f"expected exactly one {func_name}() definition in "
+        f"{_DEPLOY_INSTALL_SH}, found {count}. The bootstrap-venv chain "
+        f"in main() depends on both resolve_verifier_python and "
+        f"cleanup_on_exit existing at top-level — a rename or deletion "
+        f"breaks the fix for the cryptography-not-importable bug."
+    )
+
+
+def test_main_installs_centralized_exit_trap() -> None:
+    """``main()`` must install ``trap cleanup_on_exit EXIT`` as its first
+    real statement.
+
+    This is the single installer-wide EXIT trap. Without it, the
+    bootstrap venv created by ``resolve_verifier_python`` is leaked on
+    every failed install — and on a successful install the
+    ``$BOOTSTRAP_DIR`` directory stays in ``$TMPDIR`` until the OS rotates
+    it. Placing the trap before ``detect_platform`` ensures the cleanup
+    fires even for the earliest failure paths.
+    """
+    body = _sh_function_body("main")
+    assert "trap cleanup_on_exit EXIT" in body, (
+        f"main() must install the centralized EXIT trap "
+        f"(trap cleanup_on_exit EXIT) so $tmpdir and $BOOTSTRAP_DIR are "
+        f"cleaned regardless of which step fails. Not found in "
+        f"body:\n{body!r}"
+    )
+
+
+def test_stage_release_no_longer_installs_local_trap() -> None:
+    """``stage_release()`` must NOT install its own EXIT trap.
+
+    The centralized ``cleanup_on_exit`` trap in ``main()`` covers
+    ``$tmpdir``. A local ``trap '...' EXIT`` inside ``stage_release``
+    would OVERRIDE the centralized one (bash has a single EXIT slot per
+    shell), silently dropping the ``$BOOTSTRAP_DIR`` cleanup. A regression
+    that re-introduces the local trap also re-introduces the original
+    bootstrap-venv leak.
+
+    Similarly, ``trap - EXIT`` (which the old code used to clear its
+    local trap) would clear the centralized one too — equally a
+    regression.
+    """
+    body = _sh_function_body("stage_release")
+    assert "trap 'rm -rf -- \"$tmpdir\"' EXIT" not in body, (
+        f"stage_release must NOT install a local 'trap rm-rf tmpdir EXIT' "
+        f"— it would override the centralized cleanup_on_exit trap from "
+        f"main() and silently drop the $BOOTSTRAP_DIR cleanup. The "
+        f"centralized trap already handles $tmpdir via the "
+        f"${{tmpdir:-}} guard. Body:\n{body!r}"
+    )
+    assert "trap - EXIT" not in body, (
+        f"stage_release must NOT clear the EXIT trap (trap - EXIT) — "
+        f"that would also clear the centralized cleanup_on_exit and "
+        f"leak the bootstrap venv. Body:\n{body!r}"
+    )
+
+
+def test_cleanup_on_exit_handles_both_temp_dirs() -> None:
+    """``cleanup_on_exit`` must remove both ``$tmpdir`` and
+    ``$BOOTSTRAP_DIR`` and guard each with the ``${var:-}`` empty default.
+
+    The empty-default guard is essential: ``set -u`` would otherwise trip
+    if the trap fires before either variable was set (e.g., a failure in
+    ``detect_platform`` before ``resolve_verifier_python`` and
+    ``stage_release`` have run). A regression that drops the guards
+    converts a clean fail-fast exit into ``unbound variable`` noise; a
+    regression that drops one of the two dirs leaks that dir on failure.
+    """
+    body = _sh_function_body("cleanup_on_exit")
+    assert re.search(r"\$\{tmpdir:-\}", body), (
+        f"cleanup_on_exit must reference ${{tmpdir:-}} (empty-default "
+        f"guard so set -u does not trip on a fail-fast path before "
+        f"stage_release set tmpdir). Body:\n{body!r}"
+    )
+    assert re.search(r"\$\{BOOTSTRAP_DIR:-\}", body), (
+        f"cleanup_on_exit must reference ${{BOOTSTRAP_DIR:-}} (empty-"
+        f"default guard for the bootstrap venv root). Body:\n{body!r}"
+    )
+    assert "rm -rf" in body, (
+        f"cleanup_on_exit must actually rm -rf the temp dirs; "
+        f"body:\n{body!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "func_name",
+    ["_validate_trust_key_or_fail", "verify_manifest_signature"],
+)
+def test_cryptography_heredoc_uses_verifier_python(func_name: str) -> None:
+    """The two heredocs that ``import cryptography`` must invoke
+    ``"$VERIFIER_PYTHON"``, not ``python3``.
+
+    ``_validate_trust_key_or_fail`` and ``verify_manifest_signature``
+    both run BEFORE the wheel install. On a host whose ``python3`` lacks
+    cryptography (macOS, Alpine, fresh Fedora, python.org installer,
+    minimal containers), invoking ``python3 -`` fails with
+    ``ModuleNotFoundError`` and the install aborts. The fix routes
+    these two — and ONLY these two — heredocs through
+    ``$VERIFIER_PYTHON``, which ``resolve_verifier_python`` populates
+    with a cryptography-capable interpreter (the bootstrap venv's
+    python on hosts that need it).
+
+    Other heredocs in this script (URL parser, version extract, staging
+    script) use only stdlib and must keep using ``python3``.
+    """
+    body = _sh_function_body(func_name)
+    assert '"$VERIFIER_PYTHON" -' in body, (
+        f"{func_name} must invoke \"$VERIFIER_PYTHON\" - (the "
+        f"cryptography-capable interpreter from resolve_verifier_python) "
+        f"for its heredoc. A regression to `python3 -` re-opens the "
+        f"ModuleNotFoundError bug on every host without a pre-existing "
+        f"system cryptography. Body:\n{body!r}"
+    )
+    assert "python3 -" not in body, (
+        f"{func_name} must NOT invoke `python3 -` — that interpreter "
+        f"may not have cryptography. Use \"$VERIFIER_PYTHON\" -. "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_resolve_verifier_python_pins_cryptography_43_plus() -> None:
+    """``resolve_verifier_python`` must pin ``cryptography>=43.0`` in
+    the bootstrap pip install.
+
+    Matches the floor declared in ``mobaide_agent/pyproject.toml`` line
+    23 so the verifier and the release wheel see the same API surface.
+    A regression to an unpinned or older floor risks subtle divergence
+    if the verify heredoc ever starts using a cryptography 43+ feature.
+    """
+    body = _sh_function_body("resolve_verifier_python")
+    assert "cryptography>=43.0" in body, (
+        f"resolve_verifier_python must pin 'cryptography>=43.0' "
+        f"(matches mobaide_agent/pyproject.toml line 23). "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_resolve_verifier_python_uses_isolated_mode() -> None:
+    """``resolve_verifier_python``'s pip install must pass ``--isolated``.
+
+    ``--index-url`` alone is necessary but not sufficient: pip honours
+    ``PIP_EXTRA_INDEX_URL`` and ``PIP_FIND_LINKS`` (and the equivalent
+    ``[global] extra-index-url`` / ``find-links`` in ``pip.conf``) as
+    ADDITIVE sources with no priority — an attacker who controls the
+    install user's environment can publish ``cryptography==999.0.0`` on
+    their mirror and pip will prefer it by version (classic
+    dependency-confusion vector, CVE-2018-20225-class).
+
+    Pip's ``--isolated`` flag is the canonical fix: it instructs pip to
+    ignore environment variables AND user/system config files, leaving
+    only the explicit CLI args in play. Combined with the
+    ``--index-url https://pypi.org/simple`` pin, this hardens the
+    bootstrap install against the full pip-config-driven hijack vector.
+
+    A regression that drops ``--isolated`` while keeping ``--index-url``
+    silently re-opens the PIP_EXTRA_INDEX_URL gap.
+    """
+    body = _sh_function_body("resolve_verifier_python")
+    assert "--isolated" in body, (
+        f"resolve_verifier_python's pip install must pass --isolated so "
+        f"pip ignores PIP_EXTRA_INDEX_URL, PIP_FIND_LINKS, "
+        f"PIP_TRUSTED_HOST, and ~/.pip/pip.conf / /etc/pip.conf "
+        f"(--index-url alone is necessary but not sufficient — those "
+        f"vars/files are additive, not overridden). Body:\n{body!r}"
+    )
+
+
+def test_resolve_verifier_python_pins_canonical_pypi_index() -> None:
+    """``resolve_verifier_python`` must pin
+    ``--index-url https://pypi.org/simple`` in the bootstrap pip install.
+
+    Pip otherwise honours the host's ``PIP_INDEX_URL`` env var, the
+    user's ``~/.pip/pip.conf``, or system-wide ``/etc/pip.conf``. On a
+    host with a hostile or misconfigured pip index, the bootstrap
+    install would resolve ``cryptography`` from an attacker-controlled
+    mirror — a compromised wheel could then forge a passing manifest
+    signature verify, defeating the very check this venv exists for.
+
+    The release wheel install goes through the manifest's ``wheel_url``
+    rather than PyPI (see ``stage_release``), so pinning canonical PyPI
+    here keeps the bootstrap's trust posture aligned with the rest of
+    the install. Operators behind a self-hosted PyPI mirror can
+    pre-install ``cryptography>=43.0`` on the system Python to hit the
+    fast path, bypassing this pin entirely.
+    """
+    body = _sh_function_body("resolve_verifier_python")
+    assert "--index-url" in body, (
+        f"resolve_verifier_python's pip install must pin --index-url "
+        f"(a hostile PIP_INDEX_URL would otherwise redirect cryptography "
+        f"to an attacker-controlled mirror, defeating the manifest "
+        f"signature verify). Body:\n{body!r}"
+    )
+    assert "https://pypi.org/simple" in body, (
+        f"resolve_verifier_python's --index-url must point at canonical "
+        f"PyPI (https://pypi.org/simple); a different value would either "
+        f"re-open the redirection gap or break for operators on the "
+        f"public install URL. Body:\n{body!r}"
+    )
+
+
+def test_resolve_verifier_python_uses_script_scope_bootstrap_dir() -> None:
+    """``resolve_verifier_python`` must set ``BOOTSTRAP_DIR=`` without
+    the ``local`` keyword.
+
+    Same script-scope idiom as ``check_python``'s ``version=`` (line 88)
+    and ``stage_release``'s ``tmpdir=`` (line ~320): the centralized
+    ``cleanup_on_exit`` trap resolves ``$BOOTSTRAP_DIR`` via deferred
+    expansion when the script exits. If ``resolve_verifier_python``
+    declares ``local BOOTSTRAP_DIR``, the variable goes out of scope when
+    the function returns and the trap fires against an unset name — under
+    ``set -u`` that's an ``unbound variable`` error masking the real
+    install failure.
+    """
+    body = _sh_function_body("resolve_verifier_python")
+    assert "BOOTSTRAP_DIR=" in body, (
+        f"resolve_verifier_python must assign BOOTSTRAP_DIR (the "
+        f"bootstrap venv root). Body:\n{body!r}"
+    )
+    assert not re.search(r"\blocal\s+BOOTSTRAP_DIR\b", body), (
+        f"resolve_verifier_python must NOT declare BOOTSTRAP_DIR as "
+        f"local — the centralized cleanup_on_exit trap resolves it via "
+        f"deferred expansion from script scope. A `local` declaration "
+        f"would put the variable out of scope before the trap fires and "
+        f"trip `set -u` with 'BOOTSTRAP_DIR: unbound variable'. "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_resolve_verifier_python_short_circuits_when_importable() -> None:
+    """``resolve_verifier_python`` must check ``import cryptography``
+    BEFORE running ``python3 -m venv``.
+
+    Fast-path optimisation: most Debian/Ubuntu hosts already have
+    ``cryptography`` (system tools like cloud-init pull it in), so the
+    bootstrap-venv install is wasted work for them. A regression that
+    inverts the order (or drops the check) forces every install through
+    the slow path — pointless network round-trip on hosts that didn't
+    need it.
+    """
+    body = _sh_function_body("resolve_verifier_python")
+    check_at = body.find("import cryptography")
+    venv_at = body.find("python3 -m venv")
+    assert check_at != -1, (
+        f"resolve_verifier_python must probe 'import cryptography' to "
+        f"short-circuit the fast path. Body:\n{body!r}"
+    )
+    assert venv_at != -1, (
+        f"resolve_verifier_python must build a bootstrap venv on the "
+        f"slow path. Body:\n{body!r}"
+    )
+    assert check_at < venv_at, (
+        f"resolve_verifier_python must probe import cryptography BEFORE "
+        f"the python3 -m venv call (fast path first). Found 'import "
+        f"cryptography' at offset {check_at}, 'python3 -m venv' at "
+        f"offset {venv_at}. Body:\n{body!r}"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="stub-script PATH shadowing relies on POSIX chmod; "
+    "Git Bash on Windows does not honor Python-set executable bits",
+)
+def test_resolve_verifier_python_fast_path_runtime_behavior(
+    tmp_path: Path,
+) -> None:
+    """End-to-end behavioural smoke: when ``python3`` can already import
+    ``cryptography``, the function must set ``VERIFIER_PYTHON=python3``,
+    ``BOOTSTRAP_DIR=""``, and NEVER invoke ``mktemp -d``.
+
+    Pure AST/grep tests (above) pin the textual ordering of the
+    short-circuit but cannot prove the function actually *takes* the
+    short-circuit at runtime — a subtle regression could leave the
+    literals ``BOOTSTRAP_DIR=""`` / ``VERIFIER_PYTHON="python3"``
+    somewhere in the body yet structurally drop the ``return 0`` that
+    skips the slow path, sending every install through ``mktemp -d`` and
+    ``pip install``. The textual checks all pass; the runtime contract
+    silently regresses.
+
+    Strategy: stub ``python3`` so ``python3 -c 'import cryptography'``
+    succeeds (exit 0), stub ``mktemp`` as a tripwire (writes a marker
+    file when invoked, then exits non-zero so a regression that DOES
+    reach mktemp halts cleanly). After invoking ``resolve_verifier_python``
+    via the same source-and-call harness used by the ensurepip tests,
+    assert the two output variables and the absence of the tripwire
+    marker — three independent witnesses that the fast path fired.
+
+    The complementary slow-path test
+    (``test_resolve_verifier_python_slow_path_invokes_mktemp``) proves
+    this test's mktemp-tripwire is load-bearing: the same stub fires
+    when the fast path is correctly skipped.
+    """
+    assert _BASH is not None
+
+    py_stub = tmp_path / "python3"
+    py_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+    py_stub.chmod(0o755)
+
+    mktemp_marker = tmp_path / "mktemp_was_called"
+    mktemp_stub = tmp_path / "mktemp"
+    # Tripwire stub: record the call and exit non-zero so the function
+    # would `fail` cleanly if the fast path is missed (rather than
+    # falling through to a real venv/pip attempt). The marker file is
+    # the witness; the non-zero exit is the safety net.
+    mktemp_stub.write_text(
+        f"#!/usr/bin/env bash\necho \"$*\" > '{mktemp_marker}'\nexit 1\n"
+    )
+    mktemp_stub.chmod(0o755)
+
+    harness = f"""
+set -euo pipefail
+PATH='{tmp_path}':"$PATH"
+PLATFORM=linux
+MOBAIDE_AGENT_PREFIX=/opt/mobaide
+version=3.12
+info()  {{ printf '[INFO]  %s\\n' "$*"; }}
+warn()  {{ printf '[WARN]  %s\\n' "$*" >&2; }}
+error() {{ printf '[ERROR] %s\\n' "$*" >&2; }}
+fail()  {{ error "$*"; exit 1; }}
+
+source <(sed -n '/^resolve_verifier_python()/,/^}}$/p' '{_DEPLOY_INSTALL_SH.as_posix()}')
+
+resolve_verifier_python
+
+# Emit both contract variables on dedicated lines so the test can match
+# them exactly. ``BOOTSTRAP_DIR`` must be the literal empty string on
+# the fast path — print it inside angle brackets so an empty value is
+# distinguishable from a missing line.
+printf 'VERIFIER_PYTHON=<%s>\\n' "$VERIFIER_PYTHON"
+printf 'BOOTSTRAP_DIR=<%s>\\n' "$BOOTSTRAP_DIR"
+"""
+    proc = subprocess.run(
+        [_BASH, "-c", harness], capture_output=True, text=True
+    )
+    assert proc.returncode == 0, (
+        f"fast path should return 0 without invoking mktemp; "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert not mktemp_marker.exists(), (
+        f"regression: resolve_verifier_python invoked mktemp on the "
+        f"fast path. The function should short-circuit after the "
+        f"successful `python3 -c 'import cryptography'` probe and "
+        f"return BEFORE the BOOTSTRAP_DIR=\"$(mktemp -d)\" line. "
+        f"Marker content: {mktemp_marker.read_text()!r}"
+    )
+    assert "VERIFIER_PYTHON=<python3>" in proc.stdout, (
+        f"fast path must set VERIFIER_PYTHON to the literal 'python3' "
+        f"(NOT a path under BOOTSTRAP_DIR — that's the slow-path value). "
+        f"A regression here surfaces as the right exit code with the "
+        f"wrong interpreter wired to the trust-key + manifest heredocs. "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert "BOOTSTRAP_DIR=<>" in proc.stdout, (
+        f"fast path must set BOOTSTRAP_DIR to the empty string. "
+        f"cleanup_on_exit guards on ${{BOOTSTRAP_DIR:-}} so a non-empty "
+        f"value would trigger a stray `rm -rf` on whatever path is "
+        f"there — a fast-path regression that left BOOTSTRAP_DIR as "
+        f"the previous value of $TMPDIR or a stale mktemp output would "
+        f"delete the wrong directory on exit. "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="stub-script PATH shadowing relies on POSIX chmod; "
+    "Git Bash on Windows does not honor Python-set executable bits",
+)
+def test_resolve_verifier_python_slow_path_invokes_mktemp(
+    tmp_path: Path,
+) -> None:
+    """Negative control for the fast-path test: when ``python3`` CANNOT
+    import ``cryptography``, the function MUST invoke ``mktemp -d``.
+
+    Without this complement,
+    ``test_resolve_verifier_python_fast_path_runtime_behavior``'s
+    mktemp-tripwire assertion is only meaningful if we know the tripwire
+    fires under some condition — otherwise a regression that always
+    skips mktemp (e.g., a bare ``VERIFIER_PYTHON=python3`` with no slow
+    path at all) would pass the fast-path test trivially.
+
+    Strategy: stub ``python3`` to fail every invocation (exit 1) so the
+    `import cryptography` probe fails and the function enters the slow
+    path. Stub ``mktemp`` as a tripwire that records the call and exits
+    non-zero, so the function ``fail``s before reaching ``python3 -m
+    venv`` or ``pip install``. Assert the marker file exists with the
+    expected ``-d`` argument — proof the slow path is reached.
+    """
+    assert _BASH is not None
+
+    py_stub = tmp_path / "python3"
+    py_stub.write_text("#!/usr/bin/env bash\nexit 1\n")
+    py_stub.chmod(0o755)
+
+    mktemp_marker = tmp_path / "mktemp_was_called"
+    mktemp_stub = tmp_path / "mktemp"
+    mktemp_stub.write_text(
+        f"#!/usr/bin/env bash\necho \"$*\" > '{mktemp_marker}'\nexit 1\n"
+    )
+    mktemp_stub.chmod(0o755)
+
+    harness = f"""
+set -euo pipefail
+PATH='{tmp_path}':"$PATH"
+PLATFORM=linux
+MOBAIDE_AGENT_PREFIX=/opt/mobaide
+version=3.12
+info()  {{ printf '[INFO]  %s\\n' "$*"; }}
+warn()  {{ printf '[WARN]  %s\\n' "$*" >&2; }}
+error() {{ printf '[ERROR] %s\\n' "$*" >&2; }}
+fail()  {{ error "$*"; exit 1; }}
+
+source <(sed -n '/^resolve_verifier_python()/,/^}}$/p' '{_DEPLOY_INSTALL_SH.as_posix()}')
+
+resolve_verifier_python
+"""
+    proc = subprocess.run(
+        [_BASH, "-c", harness], capture_output=True, text=True
+    )
+    # The function should exit non-zero — the mktemp tripwire halts the
+    # slow path before pip/venv get involved. The exact exit code is
+    # not pinned; what matters is the marker.
+    assert proc.returncode != 0, (
+        f"slow path with failing mktemp should exit non-zero; "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert mktemp_marker.exists(), (
+        f"negative-control failure: resolve_verifier_python did NOT "
+        f"invoke mktemp on the slow path. Either the function silently "
+        f"skipped both paths (the fast-path tripwire test is no longer "
+        f"load-bearing), or the import-cryptography probe is not being "
+        f"interpreted as failure when the python3 stub exits 1. "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert "-d" in mktemp_marker.read_text(), (
+        f"resolve_verifier_python's mktemp invocation must pass `-d` "
+        f"(directory mode); without it mktemp creates a regular file, "
+        f"and the subsequent `python3 -m venv \"$BOOTSTRAP_DIR\"` would "
+        f"fail with a different error. Marker contents: "
+        f"{mktemp_marker.read_text()!r}"
     )

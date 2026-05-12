@@ -942,3 +942,286 @@ def test_resolve_python_post_install_message_drops_winget_phrasing() -> None:
         f"'auto-install' (the path-agnostic phrasing introduced by "
         f"the two-stage fallback rewrite). Not found in body:\n{body!r}"
     )
+
+
+@pytest.mark.parametrize(
+    "func_name",
+    [
+        "Test-CryptographyImportable",
+        "New-BootstrapVenv",
+        "Resolve-VerifierPython",
+    ],
+)
+def test_cryptography_bootstrap_function_is_defined(func_name: str) -> None:
+    """The three new functions that bootstrap ``cryptography`` for the
+    pre-wheel-install verification steps must be defined.
+
+    Trust-key validation (``Confirm-TrustKey``) and manifest-signature
+    verification (``Test-ManifestSignature``) both ``import cryptography``,
+    but they run BEFORE ``Install-Release`` ever ``pip install``s the wheel
+    that carries cryptography transitively. On a freshly-installed
+    python.org or winget Python the import fails with
+    ``ModuleNotFoundError: No module named 'cryptography'`` and the install
+    aborts at the trust-key step.
+
+    The fix introduces ``Resolve-VerifierPython`` — fast path returns the
+    bare interpreter when ``cryptography`` is already importable
+    (``Test-CryptographyImportable``); slow path delegates to
+    ``New-BootstrapVenv`` which builds an ephemeral venv in ``$env:TEMP``
+    and ``pip install``s ``cryptography>=43.0`` into it. If any of the
+    three is renamed or deleted, the bootstrap chain breaks and the install
+    regresses to the original ModuleNotFoundError.
+    """
+    funcs = _list_function_names()
+    assert func_name in funcs, (
+        f"expected function {func_name!r} to be defined in "
+        f"{_DEPLOY_INSTALL_PS1}; found functions: {funcs!r}. "
+        f"Main() now depends on the Test-CryptographyImportable / "
+        f"New-BootstrapVenv / Resolve-VerifierPython chain to supply a "
+        f"Python that can import cryptography for trust-key + manifest "
+        f"verification — both run BEFORE Install-Release stages the wheel."
+    )
+
+
+def test_main_resolves_verifier_python_before_trust_key() -> None:
+    """``Main`` must call ``Resolve-VerifierPython`` before
+    ``Initialize-TrustKey``.
+
+    The ordering is load-bearing: ``Initialize-TrustKey`` invokes
+    ``Confirm-TrustKey`` which imports ``cryptography``. If the verifier
+    Python is resolved AFTER the trust-key step, the import fails on every
+    host without a pre-existing cryptography install (the bug this fix
+    targets). A regression that reorders the calls would silently re-open
+    the original failure mode.
+    """
+    body = _function_body_text("Main")
+    resolve_at = body.find("Resolve-VerifierPython")
+    init_at = body.find("Initialize-TrustKey")
+    assert resolve_at != -1, (
+        f"Main must call Resolve-VerifierPython to obtain a Python that "
+        f"can import cryptography for the trust-key + manifest checks; "
+        f"not found in body:\n{body!r}"
+    )
+    assert init_at != -1, (
+        f"Main must still call Initialize-TrustKey (the trust-key "
+        f"bootstrap that gates the manifest signature verify); not "
+        f"found in body:\n{body!r}"
+    )
+    assert resolve_at < init_at, (
+        f"Main must call Resolve-VerifierPython BEFORE "
+        f"Initialize-TrustKey (the latter imports cryptography via "
+        f"Confirm-TrustKey; without the verifier the import fails on a "
+        f"bare python.org install). Found Resolve-VerifierPython at "
+        f"offset {resolve_at}, Initialize-TrustKey at offset {init_at}. "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_main_passes_verifier_python_to_trust_validation() -> None:
+    """``Main`` must pass ``$verifier.Python`` (not the bare ``$python``)
+    to ``Initialize-TrustKey`` and ``Test-ManifestSignature``.
+
+    These are the two call sites that drive embedded Python scripts which
+    ``import cryptography``. Wiring them to the bare ``$python`` re-opens
+    the bug: a fresh python.org install has no cryptography. Wiring them
+    to ``$verifier.Python`` either uses the bare interpreter (fast path)
+    or the bootstrap venv (slow path), both of which can do the import.
+    """
+    body = _function_body_text("Main")
+    assert re.search(
+        r"Initialize-TrustKey\s+-PythonExe\s+\$verifier\.Python", body
+    ), (
+        f"Main must call Initialize-TrustKey with -PythonExe "
+        f"$verifier.Python (the cryptography-capable interpreter from "
+        f"Resolve-VerifierPython); not found in body:\n{body!r}"
+    )
+    assert re.search(
+        r"Test-ManifestSignature\s+-PythonExe\s+\$verifier\.Python", body
+    ), (
+        f"Main must call Test-ManifestSignature with -PythonExe "
+        f"$verifier.Python (the same cryptography-capable interpreter); "
+        f"not found in body:\n{body!r}"
+    )
+
+
+def test_main_install_release_still_uses_bare_python() -> None:
+    """Negative-control: ``Install-Release`` must still receive the bare
+    ``$python`` (not ``$verifier.Python``).
+
+    ``Install-Release`` calls ``& $PythonExe -m venv`` to create the
+    release venv at ``$releaseDir\\venv``. Running ``python -m venv`` from
+    inside the bootstrap venv would create a nested venv pointing at the
+    bootstrap's interpreter — which the outer ``finally`` then deletes,
+    leaving the release venv pointing at a non-existent Python. A
+    regression here would surface as a silent post-install service-start
+    failure (the launcher invokes a now-broken venv python).
+    """
+    body = _function_body_text("Main")
+    assert re.search(
+        r"Install-Release\s+-PythonExe\s+\$python\b", body
+    ), (
+        f"Main must call Install-Release with -PythonExe $python (the "
+        f"bare interpreter from Resolve-Python). Using $verifier.Python "
+        f"would create a nested release venv whose interpreter is "
+        f"deleted by the outer cleanup. Not found in body:\n{body!r}"
+    )
+
+
+def test_bootstrap_venv_pins_cryptography_43_plus() -> None:
+    """``New-BootstrapVenv`` must pin ``cryptography>=43.0``.
+
+    Matches the floor declared in ``mobaide_agent/pyproject.toml`` line 23.
+    Pinning a floor here (rather than an unbounded ``cryptography``) means
+    the bootstrap venv loads at least the same API surface the wheel
+    consumes — important if the verify scripts ever start using a
+    cryptography 43+ feature. A drift to a stricter or older pin would
+    silently diverge from the wheel's contract.
+    """
+    body = _function_body_text("New-BootstrapVenv")
+    assert "cryptography>=43.0" in body, (
+        f"New-BootstrapVenv must pin 'cryptography>=43.0' (matches "
+        f"mobaide_agent/pyproject.toml line 23). Found body:\n{body!r}"
+    )
+
+
+def test_bootstrap_venv_cleanup_in_finally() -> None:
+    """``Main`` must clean up ``$verifier.Root`` in a ``finally`` block.
+
+    Cleanup in the happy path (after a successful Install-Release) would
+    leak the bootstrap venv on every failed install — a multi-MB blob in
+    ``$env:TEMP`` per failure. The ``finally`` placement ensures the
+    cleanup fires regardless of whether trust-key validation, manifest
+    fetch, signature verification, or wheel staging is the failure point.
+    """
+    body = _function_body_text("Main")
+    assert re.search(r"\bfinally\b", body), (
+        f"Main must wrap the verifier-venv cleanup in a `finally` block "
+        f"(otherwise a failed install leaks the bootstrap venv on every "
+        f"attempt). Body:\n{body!r}"
+    )
+    assert re.search(
+        r"Remove-Item[^}]*\$verifier\.Root", body
+    ), (
+        f"Main's cleanup must Remove-Item $verifier.Root specifically — "
+        f"a regression that drops the property access would either leak "
+        f"the venv entirely or fail to even compile. Body:\n{body!r}"
+    )
+
+
+def test_resolve_verifier_python_short_circuits_when_importable() -> None:
+    """``Resolve-VerifierPython`` must check ``Test-CryptographyImportable``
+    BEFORE delegating to ``New-BootstrapVenv``.
+
+    The fast-path optimisation matters: most pre-existing dev installs
+    already have cryptography (it's a common transitive dep), so the
+    bootstrap-venv cost (a pip install of ~5MB of wheels) should be
+    skipped for them. A regression that inverts the order (or drops the
+    check) would force every install — including all CI hosts with a
+    pre-baked cryptography — through the slow path.
+    """
+    body = _function_body_text("Resolve-VerifierPython")
+    check_at = body.find("Test-CryptographyImportable")
+    boot_at = body.find("New-BootstrapVenv")
+    assert check_at != -1, (
+        f"Resolve-VerifierPython must call Test-CryptographyImportable "
+        f"to short-circuit the fast path; not found in body:\n{body!r}"
+    )
+    assert boot_at != -1, (
+        f"Resolve-VerifierPython must delegate to New-BootstrapVenv "
+        f"when the importable check fails; not found in body:\n{body!r}"
+    )
+    assert check_at < boot_at, (
+        f"Resolve-VerifierPython must run Test-CryptographyImportable "
+        f"BEFORE New-BootstrapVenv (fast-path first). Found "
+        f"Test-CryptographyImportable at offset {check_at}, "
+        f"New-BootstrapVenv at offset {boot_at}. Body:\n{body!r}"
+    )
+
+
+def test_bootstrap_pip_install_flags() -> None:
+    """``New-BootstrapVenv`` must pass ``--no-cache-dir`` and
+    ``--disable-pip-version-check`` to the bootstrap pip install.
+
+    * ``--no-cache-dir``: the venv is ephemeral (deleted in Main's
+      finally). Caching the cryptography wheel in the user's pip cache
+      would be a side effect of a transient install — and it duplicates
+      what Install-Release already does on line 470-471 for the release
+      venv. Matches the existing flag-style precedent.
+    * ``--disable-pip-version-check``: suppresses the "new pip available"
+      notice that pip emits on stderr — irrelevant noise for a throwaway
+      venv that runs exactly one pip command and is then deleted.
+
+    A regression that drops either flag is silently noisy / wasteful but
+    not security-critical; this test catches it locally before push.
+    """
+    body = _function_body_text("New-BootstrapVenv")
+    for flag in ("--no-cache-dir", "--disable-pip-version-check"):
+        assert flag in body, (
+            f"New-BootstrapVenv's pip install must pass {flag!r} (an "
+            f"ephemeral venv should not pollute the user cache, and a "
+            f"throwaway venv should not emit pip-upgrade nag). Not "
+            f"found in body:\n{body!r}"
+        )
+
+
+def test_bootstrap_pip_install_uses_isolated_mode() -> None:
+    """``New-BootstrapVenv``'s pip install must pass ``--isolated``.
+
+    ``--index-url`` alone does NOT close the pip-config attack surface.
+    Pip honours ``PIP_EXTRA_INDEX_URL`` and ``PIP_FIND_LINKS`` as ADDITIVE
+    sources with no priority — an attacker who controls the install user's
+    environment can publish ``cryptography==999.0.0`` on their mirror and
+    pip will prefer it by version (classic dependency-confusion,
+    CVE-2018-20225-class). ``pip.conf`` / ``pip.ini`` `[global]
+    extra-index-url` entries have the same problem.
+
+    Pip's ``--isolated`` flag is the canonical fix: it instructs pip to
+    ignore environment variables AND user/system config files, leaving
+    only the explicit CLI args in play. Combined with the
+    ``--index-url https://pypi.org/simple`` pin, this hardens the
+    bootstrap install against the full pip-config-driven hijack vector.
+
+    A regression that drops ``--isolated`` while keeping ``--index-url``
+    silently re-opens the PIP_EXTRA_INDEX_URL gap. This test pins both.
+    """
+    body = _function_body_text("New-BootstrapVenv")
+    assert "--isolated" in body, (
+        f"New-BootstrapVenv's pip install must pass --isolated so pip "
+        f"ignores PIP_EXTRA_INDEX_URL, PIP_FIND_LINKS, PIP_TRUSTED_HOST, "
+        f"and pip.conf/pip.ini (--index-url alone is necessary but not "
+        f"sufficient — those vars/files are additive, not overridden). "
+        f"Body:\n{body!r}"
+    )
+
+
+def test_bootstrap_pip_install_pins_canonical_pypi_index() -> None:
+    """``New-BootstrapVenv`` must pin ``--index-url https://pypi.org/simple``.
+
+    Pip otherwise honours the host's ``PIP_INDEX_URL`` env var or
+    ``pip.ini``/``pip.conf`` files. On a host with a hostile or
+    misconfigured pip index, the bootstrap install would resolve
+    ``cryptography`` from an attacker-controlled mirror — and the
+    compromised wheel could forge a passing manifest signature verify
+    (the very check this venv exists for). Pinning canonical PyPI
+    closes this attack vector at the cost of breaking operators behind
+    self-hosted PyPI mirrors (who can use the fast path by pre-installing
+    cryptography on the system Python, or pin
+    ``MOBAIDE_AGENT_TRUST_KEY_B64`` and bypass the bootstrap entirely).
+
+    The agent's release wheel goes through the manifest's ``wheel_url``
+    rather than PyPI, so this pin keeps the bootstrap aligned with the
+    same trust posture as the rest of the install.
+    """
+    body = _function_body_text("New-BootstrapVenv")
+    assert "--index-url" in body, (
+        f"New-BootstrapVenv's pip install must pin --index-url (a "
+        f"hostile PIP_INDEX_URL would otherwise redirect cryptography "
+        f"to an attacker-controlled mirror, defeating the manifest "
+        f"signature verify). Body:\n{body!r}"
+    )
+    assert "https://pypi.org/simple" in body, (
+        f"New-BootstrapVenv's --index-url must point at canonical PyPI "
+        f"(https://pypi.org/simple); a different value would either "
+        f"re-open the redirection gap or break for operators on the "
+        f"public install URL. Body:\n{body!r}"
+    )
