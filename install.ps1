@@ -78,6 +78,78 @@ function Invoke-PythonScript {
     }
 }
 
+# Centralized HTTPS asset download. Every download in the install pipeline
+# goes through PowerShell's `Invoke-WebRequest` rather than Python's
+# `urllib.request.urlopen`:
+#
+#   * The python.org Windows installer links OpenSSL with an empty bundled
+#     CA path AND ships no "Install Certificates.command" equivalent. On
+#     those interpreters `urllib.request.urlopen` falls back to
+#     `ssl.SSLContext.load_default_certs()`, which reads the Windows ROOT
+#     store but does NOT perform AIA (Authority Information Access) chasing
+#     for missing intermediates (CPython bpo-18617). On hosts with a
+#     stripped intermediate (common behind corporate MITM proxies,
+#     freshly-built ROOT stores) this surfaces as
+#     `SSL: CERTIFICATE_VERIFY_FAILED unable to get local issuer certificate`
+#     even when the same TLS endpoint succeeds via Invoke-WebRequest.
+#   * Invoke-WebRequest is backed by .NET HttpClient / Schannel, which
+#     trusts the Windows root CA store including AD / enterprise CAs
+#     injected by GPO — works on corporate hosts where urllib fails.
+#
+# PS 5.1's progress bar is notoriously slow for streaming downloads
+# (PowerShell/PowerShell#2138), so we silence $ProgressPreference around
+# the call. The `file://` branch preserves the air-gapped self-host path
+# the old Python `fetch()` supported (test fixtures and offline mirrors).
+function Invoke-AgentDownload {
+    param(
+        [Parameter(Mandatory=$true)] [string] $Url,
+        [Parameter(Mandatory=$true)] [string] $OutFile,
+        [string] $UserAgent,
+        [int]    $TimeoutSec = 300
+    )
+    $uri = [System.Uri]$Url
+    if ($uri.Scheme -eq 'file') {
+        Copy-Item -LiteralPath $uri.LocalPath -Destination $OutFile -Force
+        return
+    }
+    $oldProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        $iwrArgs = @{
+            Uri             = $Url
+            OutFile         = $OutFile
+            UseBasicParsing = $true
+            TimeoutSec      = $TimeoutSec
+        }
+        if ($UserAgent) { $iwrArgs['UserAgent'] = $UserAgent }
+        Invoke-WebRequest @iwrArgs
+    } finally {
+        $ProgressPreference = $oldProgress
+    }
+}
+
+# Derive the canonical PEP 427 wheel filename from a `wheel_url`. Runs
+# BEFORE the download so a malformed or hostile manifest fails fast
+# (and the wheel lands at its canonical name directly — pip 25.2+
+# enforces PEP 427 wheel-filename validation at install time, so a wheel
+# staged under any other filename would be rejected one step later).
+# The basename validation is defense-in-depth on top of the Ed25519
+# manifest signature verify: a compromised signing key could otherwise
+# smuggle a path-traversal payload through `wheel_url`.
+function Get-WheelBasename {
+    param([Parameter(Mandatory=$true)] [string] $WheelUrl)
+    $uri = [System.Uri]$WheelUrl
+    $sourcePath = if ($uri.IsFile) { $uri.LocalPath } else { $uri.AbsolutePath }
+    $name = [System.IO.Path]::GetFileName($sourcePath)
+    if ($name -match '[\\/]' -or $name.Contains([char]0)) {
+        Write-Fail "manifest wheel_url basename contains path-separator chars: $name (from $WheelUrl)"
+    }
+    if (-not $name.EndsWith('.whl') -or ($name.Split('-').Count - 1) -lt 4) {
+        Write-Fail "manifest wheel_url has non-PEP427 filename: $name (from $WheelUrl)"
+    }
+    return $name
+}
+
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($id)
@@ -498,9 +570,20 @@ except InvalidSignature:
 
 function Install-Release {
     param($PythonExe, $ManifestPath)
-    $version = & $PythonExe -c "import json,sys; print(json.load(open(sys.argv[1]))['body']['version'])" $ManifestPath
+    # Parse the manifest in PowerShell so the staging step does not depend
+    # on Python's network stack at all — see Invoke-AgentDownload's header
+    # for the SSL trust-store rationale. Three values come out: the version
+    # (semver, used to name $releaseDir and tag the User-Agent), and the
+    # two asset URLs that PowerShell will download.
+    $manifestJson = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json
+    $version = "$($manifestJson.body.version)".Trim()
     if (-not $version) { Write-Fail "Manifest is missing 'version'" }
-    $version = $version.Trim()
+    $tarballUrl = "$($manifestJson.body.tarball_url)".Trim()
+    $wheelUrl   = "$($manifestJson.body.wheel_url)".Trim()
+    if (-not $tarballUrl) { Write-Fail "Manifest is missing 'tarball_url'" }
+    if (-not $wheelUrl)   { Write-Fail "Manifest is missing 'wheel_url'" }
+    $wheelBasename = Get-WheelBasename -WheelUrl $wheelUrl
+
     $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $version
 
     Write-Info "Staging release $version into $releaseDir"
@@ -509,24 +592,28 @@ function Install-Release {
 
     $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("mobaide-agent-" + [guid]::NewGuid()))
     try {
+        $tarballPath = Join-Path $tmp.FullName "agent.tar.gz"
+        # Stage the wheel under its canonical PEP 427 filename directly so
+        # pip 25.2+'s wheel-filename validator accepts it at install time.
+        $wheelPath = Join-Path $tmp.FullName $wheelBasename
+        # Identify as the installer so a Cloudflare-fronted wheel host does
+        # not classify the request as the default PowerShell UA (Bot Fight
+        # Mode 1010). Mirrors deploy/install.sh's USER_AGENT header on its
+        # own urllib requests.
+        $userAgent = "mobaide-agent-installer/$version"
+        Invoke-AgentDownload -Url $tarballUrl -OutFile $tarballPath -UserAgent $userAgent
+        Invoke-AgentDownload -Url $wheelUrl   -OutFile $wheelPath   -UserAgent $userAgent
+
         # The script prints exactly one line — the staged wheel's full path.
-        # pip 25.2+ enforces PEP 427 wheel-filename validation, so the wheel
-        # is staged under its canonical name-version-pyver-abi-platform
-        # filename derived from the manifest's `wheel_url`.
+        # All network I/O happened in PowerShell above; this script only
+        # verifies sha256 against the manifest and extracts the tarball.
         $stageScript = @'
-import hashlib, json, posixpath, shutil, sys, tarfile, urllib.parse, urllib.request
+import hashlib, json, sys, tarfile
 from pathlib import Path
 
-manifest_path, tmpdir, release_dir = sys.argv[1:4]
+manifest_path, tarball_path, wheel_path, release_dir = sys.argv[1:5]
 record = json.loads(Path(manifest_path).read_text())
 body = record["body"]
-
-def fetch(url, dest):
-    if url.startswith("file://") or url.startswith("/"):
-        shutil.copyfile(url.removeprefix("file://"), dest)
-        return
-    with urllib.request.urlopen(url, timeout=120) as resp, open(dest, "wb") as fh:
-        shutil.copyfileobj(resp, fh)
 
 def verify_sha256(path, expected):
     digest = hashlib.sha256()
@@ -536,33 +623,14 @@ def verify_sha256(path, expected):
     if digest.hexdigest().lower() != expected.lower():
         sys.exit(f"sha256 mismatch for {path}")
 
-def wheel_basename(url):
-    if url.startswith("file://"):
-        name = Path(url.removeprefix("file://")).name
-    else:
-        name = posixpath.basename(urllib.parse.urlparse(url).path)
-    if any(ch in name for ch in ("/", "\\", "\x00")):
-        sys.exit(
-            f"manifest wheel_url basename contains path-separator chars: {name!r} (from {url!r})"
-        )
-    if not name.endswith(".whl") or name.count("-") < 4:
-        sys.exit(
-            f"manifest wheel_url has non-PEP427 filename: {name!r} (from {url!r})"
-        )
-    return name
+verify_sha256(tarball_path, body["tarball_sha256"])
+verify_sha256(wheel_path, body["wheel_sha256"])
 
-tarball = Path(tmpdir) / "agent.tar.gz"
-wheel = Path(tmpdir) / wheel_basename(body["wheel_url"])
-fetch(body["tarball_url"], tarball)
-verify_sha256(tarball, body["tarball_sha256"])
-fetch(body["wheel_url"], wheel)
-verify_sha256(wheel, body["wheel_sha256"])
-
-with tarfile.open(tarball, mode="r:gz") as tar:
+with tarfile.open(tarball_path, mode="r:gz") as tar:
     tar.extractall(release_dir, filter="data")
-print(wheel)
+print(wheel_path)
 '@
-        $wheel = Invoke-PythonScript -PythonExe $PythonExe -Script $stageScript -Arguments @($ManifestPath, "$tmp", $releaseDir)
+        $wheel = Invoke-PythonScript -PythonExe $PythonExe -Script $stageScript -Arguments @($ManifestPath, $tarballPath, $wheelPath, $releaseDir)
         if ($LASTEXITCODE -ne 0) { Write-Fail "Staging failed" }
         $wheel = ($wheel | Out-String).Trim()
 
