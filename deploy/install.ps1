@@ -271,6 +271,109 @@ function Resolve-Python {
     return $py
 }
 
+# Trust-key validation and manifest-signature verification (Confirm-TrustKey,
+# Test-ManifestSignature below) import `cryptography` — a PyPI dep that is NOT
+# in stdlib and is NOT present on a freshly-installed python.org / winget
+# interpreter. The wheel installed later in Install-Release pulls cryptography
+# transitively, but those verification steps happen BEFORE the wheel is
+# fetched, so we'd otherwise hard-fail with ModuleNotFoundError on every host
+# without a pre-existing cryptography install. Fast inline `-c` probe — no
+# embedded quotes / f-strings, so it doesn't trip the
+# test_install_ps1_does_not_pass_heredoc_to_python_dash_c regex pin.
+function Test-CryptographyImportable {
+    param([Parameter(Mandatory=$true)] $PythonExe)
+    try {
+        & $PythonExe -c "import cryptography" 2>$null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        return $false
+    }
+}
+
+# Ephemeral verification venv (Poetry installer pattern). `cryptography`
+# ships prebuilt wheels for win_amd64 / win_arm64 on PyPI, so this is a
+# fast pip install + a one-shot trust-key / manifest verification, then
+# the caller's finally tears the directory down. Deliberately NOT
+# `pip install --upgrade pip` first: the wheel-installing Install-Release
+# venv does that (line ~470), but this venv runs exactly one `pip install`
+# and is then deleted — the upgrade is a wasted network round-trip here.
+function New-BootstrapVenv {
+    param([Parameter(Mandatory=$true)] $PythonExe)
+    $root = Join-Path $env:TEMP ("mobaide-verifier-" + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    try {
+        Write-Info "Bootstrapping verification venv (cryptography>=43.0)..."
+        & $PythonExe -m venv $root
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail @"
+Could not create a verification venv with $PythonExe (python -m venv exited
+$LASTEXITCODE). The base interpreter is missing or broken `ensurepip`/`venv`.
+Reinstall Python 3.12 from https://www.python.org/downloads/release/python-3120/
+or set MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1 and provide a healthier interpreter
+on PATH.
+"@
+        }
+        $venvPython = Join-Path $root "Scripts\python.exe"
+        $venvPip = Join-Path $root "Scripts\pip.exe"
+        # Lock down pip's runtime configuration so a hostile-configured host
+        # cannot redirect `cryptography` to an attacker-controlled mirror.
+        # A compromised cryptography wheel could forge a passing manifest
+        # signature verify — the very check this venv exists for — so the
+        # bootstrap install must be its own root of trust on top of TLS.
+        #
+        # Two layers, both required:
+        #   * `--index-url https://pypi.org/simple` — declares the canonical
+        #     primary index explicitly.
+        #   * `--isolated` — tells pip to ignore environment variables
+        #     (PIP_EXTRA_INDEX_URL, PIP_FIND_LINKS, PIP_TRUSTED_HOST,
+        #     PIP_INDEX_URL, ...) AND user/system config files
+        #     (~/.pip/pip.conf, %APPDATA%\pip\pip.ini, /etc/pip.conf).
+        #     Without --isolated, --index-url alone leaves PIP_EXTRA_INDEX_URL
+        #     and PIP_FIND_LINKS in play — pip treats those as ADDITIVE
+        #     sources with no priority, so an attacker publishes
+        #     `cryptography==999.0.0` on their mirror and pip prefers it
+        #     by version (classic dependency-confusion vector,
+        #     CVE-2018-20225-class).
+        #
+        # The agent's release wheel goes through the manifest's wheel_url
+        # rather than PyPI, so this lockdown matches the trust posture of
+        # the rest of the install. Operators behind an air-gapped /
+        # self-hosted PyPI mirror can pre-install `cryptography>=43.0` on
+        # the system Python (fast path), bypassing this slow path entirely.
+        & $venvPip install --isolated --no-cache-dir --disable-pip-version-check --quiet --index-url https://pypi.org/simple "cryptography>=43.0"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail @"
+Could not install the `cryptography` package required to verify the manifest
+signature. Most likely causes:
+  * No network access to PyPI (pypi.org).
+  * A corporate proxy blocking pypi.org — set HTTPS_PROXY / HTTP_PROXY.
+  * No prebuilt wheel for this Python/arch (check
+    https://pypi.org/project/cryptography for the matching wheel).
+Workaround: pre-install on the system Python (`pip install 'cryptography>=43.0'`)
+and re-run.
+"@
+        }
+        return @{ Python = $venvPython; Root = $root }
+    } catch {
+        Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+        throw
+    }
+}
+
+# Return a Python that can import `cryptography`. Fast path: the bare
+# interpreter already has it (most pre-existing dev installs, system-managed
+# Python on hosts where another package pulled cryptography). Slow path: build
+# an ephemeral bootstrap venv. The hashtable-with-null-Root shape lets the
+# Main finally block clean up both paths uniformly.
+function Resolve-VerifierPython {
+    param([Parameter(Mandatory=$true)] $PythonExe)
+    if (Test-CryptographyImportable -PythonExe $PythonExe) {
+        Write-Info "cryptography already importable on $PythonExe; skipping bootstrap venv."
+        return @{ Python = $PythonExe; Root = $null }
+    }
+    return New-BootstrapVenv -PythonExe $PythonExe
+}
+
 function Get-Manifest {
     param($PythonExe, $ManifestPath)
     Write-Info "Fetching manifest from $Script:ManifestUrl"
@@ -573,20 +676,35 @@ function Main {
     New-Item -ItemType Directory -Path $Script:Prefix -Force | Out-Null
 
     $python = Resolve-Python
-    # Order: bootstrap key (env var or central_server fetch) -> pin to disk
-    # so the agent picks it up at runtime -> fetch manifest -> verify it
-    # against the same key -> stage. Initialize-TrustKey fails the install
-    # with an actionable message if neither path yields a key.
-    Initialize-TrustKey -PythonExe $python
-    Write-TrustKey
-
-    $manifest = New-TemporaryFile
+    # Verifier Python carries `cryptography` for trust-key + manifest signature
+    # checks. Fast path returns $python unchanged ($verifier.Root = $null); slow
+    # path returns an ephemeral bootstrap venv that the outer finally tears
+    # down. $python (bare interpreter) still drives Install-Release's release
+    # venv creation — `python -m venv` from inside another venv would create a
+    # nested venv pointing at the bootstrap's interpreter, which would
+    # disappear when the bootstrap is cleaned up.
+    $verifier = Resolve-VerifierPython -PythonExe $python
+    $version = $null
     try {
-        Get-Manifest -PythonExe $python -ManifestPath $manifest
-        Test-ManifestSignature -PythonExe $python -ManifestPath $manifest
-        $version = Install-Release -PythonExe $python -ManifestPath $manifest
+        # Order: bootstrap key (env var or central_server fetch) -> pin to disk
+        # so the agent picks it up at runtime -> fetch manifest -> verify it
+        # against the same key -> stage. Initialize-TrustKey fails the install
+        # with an actionable message if neither path yields a key.
+        Initialize-TrustKey -PythonExe $verifier.Python
+        Write-TrustKey
+
+        $manifest = New-TemporaryFile
+        try {
+            Get-Manifest -PythonExe $python -ManifestPath $manifest
+            Test-ManifestSignature -PythonExe $verifier.Python -ManifestPath $manifest
+            $version = Install-Release -PythonExe $python -ManifestPath $manifest
+        } finally {
+            Remove-Item $manifest -ErrorAction SilentlyContinue
+        }
     } finally {
-        Remove-Item $manifest -ErrorAction SilentlyContinue
+        if ($verifier.Root) {
+            Remove-Item -Recurse -Force $verifier.Root -ErrorAction SilentlyContinue
+        }
     }
 
     Write-AgentEnv -Version $version

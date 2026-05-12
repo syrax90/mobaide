@@ -158,6 +158,99 @@ Open an issue with the output of: python3 -c 'import ensurepip'; uname -a; cat /
     info "ensurepip available."
 }
 
+# Trust-key validation (``_validate_trust_key_or_fail``) and manifest-signature
+# verification (``verify_manifest_signature``) import ``cryptography`` — a
+# PyPI dep that is NOT in stdlib. On Debian/Ubuntu the system tools that
+# depend on it (cloud-init, snapd) drag it in, but on macOS, Alpine, fresh
+# Fedora minimal, and the python.org installer it is absent. Those checks
+# run BEFORE the wheel is fetched (which carries cryptography transitively),
+# so the install would hard-fail with ``ModuleNotFoundError`` on every host
+# without a pre-existing cryptography install.
+#
+# Sets two script-scoped variables (intentionally NOT ``local`` — the
+# centralized ``cleanup_on_exit`` trap installed by ``main()`` resolves
+# ``$BOOTSTRAP_DIR`` from this scope, and ``local`` would hide it):
+#   * ``VERIFIER_PYTHON`` — interpreter that can ``import cryptography``.
+#     Either ``python3`` (fast path: host already has it) or the bootstrap
+#     venv's python (slow path: ephemeral install).
+#   * ``BOOTSTRAP_DIR`` — bootstrap venv root if created, empty string
+#     otherwise. The cleanup trap deletes it on EXIT (success or failure).
+resolve_verifier_python() {
+    if python3 -c 'import cryptography' >/dev/null 2>&1; then
+        info "cryptography already importable on python3; skipping bootstrap venv."
+        VERIFIER_PYTHON="python3"
+        BOOTSTRAP_DIR=""
+        return 0
+    fi
+    BOOTSTRAP_DIR="$(mktemp -d)"
+    info "Bootstrapping verification venv (cryptography>=43.0)..."
+    if ! python3 -m venv "$BOOTSTRAP_DIR"; then
+        fail "Could not create a verification venv (python3 -m venv failed).
+The base interpreter is missing or has a broken venv/ensurepip. Ensure
+python${version}-venv (or the equivalent for your distro) is installed and
+re-run."
+    fi
+    # ``--no-cache-dir`` matches stage_release's pip flags (line ~389) — this
+    # is an ephemeral venv, the cache would be deleted with it.
+    # ``--disable-pip-version-check`` + ``--quiet`` suppress noise on a
+    # throwaway one-shot install. Errors still surface (pip writes them to
+    # stderr and exits non-zero).
+    #
+    # Lock down pip's runtime configuration so a hostile-configured host
+    # cannot redirect ``cryptography`` to an attacker-controlled mirror.
+    # A compromised cryptography wheel could forge a passing manifest
+    # signature verify — the very check this venv exists for — so the
+    # bootstrap install must be its own root of trust on top of TLS.
+    #
+    # Two layers, both required:
+    #   * ``--index-url https://pypi.org/simple`` — declares the canonical
+    #     primary index explicitly.
+    #   * ``--isolated`` — tells pip to ignore environment variables
+    #     (``PIP_EXTRA_INDEX_URL``, ``PIP_FIND_LINKS``, ``PIP_TRUSTED_HOST``,
+    #     ``PIP_INDEX_URL``, ...) AND user/system config files
+    #     (``~/.pip/pip.conf``, ``/etc/pip.conf``). Without ``--isolated``,
+    #     ``--index-url`` alone leaves ``PIP_EXTRA_INDEX_URL`` and
+    #     ``PIP_FIND_LINKS`` in play — pip treats those as ADDITIVE sources
+    #     with no priority, so an attacker publishes
+    #     ``cryptography==999.0.0`` on their mirror and pip prefers it by
+    #     version (classic dependency-confusion vector,
+    #     CVE-2018-20225-class).
+    #
+    # The agent's release wheel goes through the manifest's ``wheel_url``
+    # rather than PyPI, so this lockdown matches the trust posture of the
+    # rest of the install. Operators behind an air-gapped/self-hosted PyPI
+    # mirror can pre-install ``cryptography>=43.0`` on the system Python
+    # (fast path), bypassing this slow-path entirely.
+    if ! "$BOOTSTRAP_DIR/bin/pip" install --isolated --no-cache-dir --disable-pip-version-check --quiet --index-url https://pypi.org/simple "cryptography>=43.0"; then
+        fail "Could not install the cryptography package required to verify
+the manifest signature. Most likely causes:
+  * No network access to PyPI (pypi.org).
+  * A corporate proxy blocking pypi.org — set HTTPS_PROXY / HTTP_PROXY.
+  * No prebuilt wheel for this Python/arch (check
+    https://pypi.org/project/cryptography for the matching wheel).
+Workaround: pre-install on the system Python (pip install 'cryptography>=43.0')
+and re-run."
+    fi
+    VERIFIER_PYTHON="$BOOTSTRAP_DIR/bin/python"
+}
+
+# Centralized EXIT trap installed by main() — single source of truth for the
+# transient temp dirs this installer creates:
+#   * $tmpdir          — stage_release's tarball/wheel scratch (mktemp -d
+#                        at line ~320). NOT local in stage_release so this
+#                        trap can see it from a deferred-expansion context.
+#   * $BOOTSTRAP_DIR   — resolve_verifier_python's bootstrap venv root.
+# ``${var:-}`` defaults are essential: ``set -u`` would otherwise trip when
+# the trap fires before either variable is set (fail-fast paths in
+# detect_platform / check_python). Future contributors adding a third
+# temp dir must extend this function, not install a second trap that
+# would override this one.
+cleanup_on_exit() {
+    [ -n "${tmpdir:-}" ] && rm -rf -- "$tmpdir"
+    [ -n "${BOOTSTRAP_DIR:-}" ] && rm -rf -- "$BOOTSTRAP_DIR"
+    return 0
+}
+
 fetch_manifest() {
     local manifest_path="$1"
     info "Fetching manifest from $MOBAIDE_AGENT_MANIFEST_URL"
@@ -172,7 +265,7 @@ fetch_manifest() {
 # install time as "your key is malformed" rather than later as a confusing
 # "manifest signature does not verify".
 _validate_trust_key_or_fail() {
-    python3 - "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
+    "$VERIFIER_PYTHON" - "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
 import base64, sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -277,7 +370,7 @@ verify_manifest_signature() {
         fail "Internal error: trust key not bootstrapped before signature verification."
     fi
     info "Verifying manifest signature"
-    python3 - "$manifest_path" "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
+    "$VERIFIER_PYTHON" - "$manifest_path" "$MOBAIDE_AGENT_TRUST_KEY_B64" <<'PY'
 import base64, json, sys
 from pathlib import Path
 from cryptography.exceptions import InvalidSignature
@@ -308,17 +401,15 @@ stage_release() {
     info "Staging release $target_version into $release_dir"
 
     mkdir -p "$release_dir"
-    # Intentionally NOT `local`: the EXIT trap below fires when the
-    # script exits, including the path where the embedded Python heredoc
-    # exits non-zero under `set -e` and unwinds this function before
-    # its own cleanup runs. With `local`, the variable goes out of
-    # scope and `set -u` trips on the trap body. Substituting the path
-    # into a double-quoted trap body would also work but reintroduces a
-    # quote-escape sink if `$TMPDIR` ever contains a single quote (which
-    # `mktemp -d` does propagate). Keeping the value-resolution at
-    # trap-fire time with the variable script-scoped avoids both.
+    # Intentionally NOT `local`: the centralized `cleanup_on_exit` trap
+    # installed at the top of `main()` resolves `$tmpdir` from this scope
+    # via deferred expansion (`[ -n "${tmpdir:-}" ] && rm -rf -- "$tmpdir"`).
+    # With `local`, the variable would go out of scope before the trap
+    # fires and `set -u` would trip on the guard. Keeping `tmpdir`
+    # script-scoped also lets a half-finished stage_release (any path
+    # that exits non-zero under `set -e` between mktemp and the explicit
+    # cleanup below) still surrender the directory on EXIT.
     tmpdir="$(mktemp -d)"
-    trap 'rm -rf -- "$tmpdir"' EXIT
 
     # Capture the heredoc's stdout: the Python script prints exactly one line
     # — the staged wheel's full path. pip 25.2+ enforces PEP 427 wheel-filename
@@ -389,7 +480,6 @@ PY
     "$release_dir/venv/bin/pip" install --no-cache-dir "$wheel_path"
 
     rm -rf "$tmpdir"
-    trap - EXIT
 
     printf '%s\n' "$target_version" > "${MOBAIDE_AGENT_PREFIX}/current_version.tmp"
     mv "${MOBAIDE_AGENT_PREFIX}/current_version.tmp" "${MOBAIDE_AGENT_PREFIX}/current_version"
@@ -597,6 +687,12 @@ print_completion() {
 }
 
 main() {
+    # Single installer-wide EXIT trap. Cleans up ``$tmpdir``
+    # (stage_release's scratch) and ``$BOOTSTRAP_DIR``
+    # (resolve_verifier_python's bootstrap venv). stage_release no longer
+    # installs its own trap — overriding this one would silently drop the
+    # bootstrap-venv cleanup.
+    trap cleanup_on_exit EXIT
     detect_platform
     require_root_when_writing_system_dir
     info "Installing mobaide_agent into $MOBAIDE_AGENT_PREFIX"
@@ -604,6 +700,7 @@ main() {
     check_command tar
     check_python
     ensure_ensurepip_available
+    resolve_verifier_python
 
     mkdir -p "$MOBAIDE_AGENT_PREFIX"
     # Order: bootstrap key (env var or central_server fetch) → pin to disk
