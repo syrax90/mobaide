@@ -54,9 +54,9 @@ agent (mobaide-agent)        central_server                 mobile (Mobaide app)
         │ verify Ed25519 signature                                   │
         │ atomic .env write        │                                 │
         │ close WS                 │ clear claimed_token_raw         │
-        │ supervisor restart                                         │
+        │ _start_relay_in_process  │                                 │
         │ (relay client comes up   │                                 │
-        │  on next boot)           │                                 │
+        │  in ~1-2 s, same proc)   │                                 │
 ```
 
 ## QR payload schema
@@ -223,7 +223,7 @@ holding the agent's WS, and the push is silently dropped. Mitigations:
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
-| QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.4 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD | Upgrade to v0.1.4+. On older installs, manually run `sudo systemctl restart mobaide-agent` (Linux) or `launchctl unload … && launchctl load …` (macOS) once after the initial pairing scan. |
+| QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. | Upgrade to v0.1.7+. The agent now transitions in-process after a successful QR scan — no restart required. On older installs that cannot be upgraded, manually run `sudo systemctl restart mobaide-agent` (Linux) or `launchctl unload … && launchctl load …` (macOS) once after the initial pairing scan. |
 
 ## Security tests
 

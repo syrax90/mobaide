@@ -19,6 +19,7 @@ from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.rate_limiter import LinearRateLimiter
 from mobaide.linear.scanner import AutoScanSessionManager
 from mobaide.linear.worktree import WorktreeManager
+from mobaide.relay.config import RelayConfig
 from mobaide.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
@@ -85,6 +86,44 @@ def _build_updater(app: FastAPI):
     )
 
 
+async def _start_relay_in_process(
+    app: FastAPI, relay_cfg: RelayConfig,
+) -> None:
+    """Construct, start, and wire up the relay client + updater on ``app.state``.
+
+    Single seam shared by the lifespan's cold-boot branch (agent boots
+    with credentials already in ``.env``) and the in-process pairing
+    transition in ``_on_paired`` (agent boots in pairing-pending state,
+    receives the QR claim, then comes online without a process restart).
+    Keeping both paths through one helper means the freshly-paired agent
+    reaches the same operational state as one that booted fully
+    configured — no "lifespan started the relay this way, post-pair
+    started it that way" drift.
+
+    Assignment order matters: ``relay_client.start()`` runs first, then
+    the updater is built and wired, and only after that do the
+    ``app.state.*`` writes happen. A failure mid-startup leaves
+    ``app.state.relay_client`` ``None`` and ``pairing_pending`` unchanged
+    so a caller falling back to ``sys.exit(75)`` sees consistent state.
+    """
+    from mobaide.relay.client import RelayClient
+
+    relay_client = RelayClient(
+        config=relay_cfg,
+        session_manager=app.state.session_manager,
+        event_bus=app.state.event_bus,
+        broadcaster=app.state.broadcaster,
+        app_state=app.state,
+    )
+    await relay_client.start()
+    updater = _build_updater(app)
+    if updater is not None:
+        relay_client.set_manifest_update_callback(updater.consider_manifest)
+    app.state.relay_client = relay_client
+    app.state.updater = updater
+    app.state.pairing_pending = False
+
+
 def _resolve_env_file() -> Path | None:
     """Return the canonical agent ``.env`` path if one exists.
 
@@ -134,21 +173,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         await app.state.session_manager.start_liveness_monitor()
         app.state.pairing_task = None
         if relay_cfg is not None and not pairing_pending:
-            from mobaide.relay.client import RelayClient
-
-            app.state.relay_client = RelayClient(
-                config=relay_cfg,
-                session_manager=app.state.session_manager,
-                event_bus=app.state.event_bus,
-                broadcaster=app.state.broadcaster,
-                app_state=app.state,
-            )
-            await app.state.relay_client.start()
-            app.state.updater = _build_updater(app)
-            if app.state.updater is not None:
-                app.state.relay_client.set_manifest_update_callback(
-                    app.state.updater.consider_manifest
-                )
+            await _start_relay_in_process(app, relay_cfg)
         elif relay_cfg is not None and pairing_pending:
             app.state.relay_client = None
             app.state.updater = None
@@ -156,39 +181,80 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 default_layout,
                 run_pairing_monitor,
             )
+            from mobaide.agent.pairing_ws import PairingClaim
 
-            def _on_paired() -> None:
-                # Exit with EXIT_RESTART_REQUESTED so the supervisor brings
-                # us back up; the next boot reads the just-written .env and
-                # starts the relay client. The previous path called
-                # ``sudo -n systemctl restart`` which silently no-op'd when
-                # the install user lacked NOPASSWD — leaving the running
-                # process with the stale empty-credentials config in memory
-                # and the agent permanently "offline".
-                #
-                # Recognised by:
-                #   * Linux systemd: RestartForceExitStatus=75
-                #   * macOS launchd:  KeepAlive=true
-                #   * Windows:        ``deploy/windows_service.py``'s
-                #     ``SvcDoRun`` re-spawn loop on
-                #     ``_EXIT_RESTART_REQUESTED``. SCM's own
-                #     ``sc.exe failure ... actions=restart/...`` policy
-                #     does NOT cover this path — those actions fire only
-                #     on abnormal service exit, and a graceful
-                #     ``SvcDoRun`` return is reported as a clean stop.
-                #
-                # The 0.5s defer mirrors the updater's pattern in
-                # ``relay/client.py`` — gives the structured log line a
-                # chance to flush before the process tears down.
-                from mobaide.agent.updater import EXIT_RESTART_REQUESTED
+            # Bind a non-Optional alias so the closure below doesn't need
+            # ``assert relay_cfg is not None`` on every attribute access —
+            # the ``elif`` already proved it. Without this, Pyright loses
+            # the narrowing across the nested function boundary.
+            boot_relay_cfg: RelayConfig = relay_cfg
 
-                logger.info(
-                    "agent.pairing_complete exit_code=%d",
-                    EXIT_RESTART_REQUESTED,
-                )
-                asyncio.get_running_loop().call_later(
-                    0.5, sys.exit, EXIT_RESTART_REQUESTED
-                )
+            async def _on_paired(claim: PairingClaim) -> None:
+                # In-process state transition after a successful QR pair.
+                # The .env write has already happened in
+                # ``run_pairing_monitor`` before this callback runs
+                # (persisted across restarts as a fallback). This
+                # callback ALSO constructs and starts the relay client
+                # in the running process so the agent reaches
+                # operational state in ~1-2 seconds without any process
+                # exit. ``app.state.pairing_pending`` flips to False
+                # atomically with the relay-client assignment inside
+                # ``_start_relay_in_process``, so ``/api/health`` and the
+                # mobile app see the agent as paired immediately.
+                #
+                # Previously this scheduled ``sys.exit(75)`` and relied
+                # on the supervisor (systemd / launchd / Windows service
+                # host) to restart the agent so the next boot would read
+                # the just-written .env and bring up the relay client.
+                # That dependency chain — propagate exit 75 from a
+                # call_later callback up through asyncio → uvicorn →
+                # mobaide.run → mobaide.launcher subprocess wait →
+                # supervisor — was fragile in practice: any link breaking
+                # left the running process with stale empty credentials
+                # in memory, no observable error, and no recovery short
+                # of a manual restart. The auto-updater still uses
+                # ``sys.exit(75)`` because a binary swap genuinely needs
+                # a fresh process; pairing does not.
+                try:
+                    new_relay_cfg = RelayConfig(
+                        # server_url is preserved from .env, mirroring
+                        # write_credentials_to_env's "only backfill if
+                        # blank" rule. If the operator customised
+                        # RELAY_SERVER_URL, in-process startup must hit
+                        # the same URL the next cold boot will use —
+                        # otherwise the running process and a fresh
+                        # process disagree on which relay to dial.
+                        # claim.relay_url is informational here.
+                        server_url=boot_relay_cfg.server_url,
+                        agent_id=claim.agent_id,
+                        agent_token=claim.agent_token,
+                        heartbeat_interval=boot_relay_cfg.heartbeat_interval,
+                        reconnect_base_delay=boot_relay_cfg.reconnect_base_delay,
+                        reconnect_max_delay=boot_relay_cfg.reconnect_max_delay,
+                    )
+                    await _start_relay_in_process(app, new_relay_cfg)
+                    logger.info(
+                        "agent.relay_started_in_process agent_id=%s relay=%s",
+                        claim.agent_id, boot_relay_cfg.server_url,
+                    )
+                except Exception as exc:
+                    # In-process startup failed (rare). The .env is
+                    # already correct, so the supervisor's next restart
+                    # will see the new credentials and start the relay
+                    # client normally. Fall back to ``sys.exit(75)`` so
+                    # the operator does not have to wait for a manual
+                    # restart. This is the legacy code path, now used
+                    # only as a backup.
+                    from mobaide.agent.updater import EXIT_RESTART_REQUESTED
+
+                    logger.error(
+                        "agent.in_process_relay_start_failed: %s; "
+                        "requesting supervisor restart via exit code %d",
+                        exc, EXIT_RESTART_REQUESTED,
+                    )
+                    asyncio.get_running_loop().call_later(
+                        0.5, sys.exit, EXIT_RESTART_REQUESTED,
+                    )
 
             layout = default_layout()
             app.state.pairing_task = asyncio.create_task(

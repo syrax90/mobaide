@@ -23,7 +23,7 @@ import sys
 import time
 import urllib.error
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 import mobaide._http as _http
@@ -264,13 +264,24 @@ async def run_pairing_monitor(
     layout: InstallLayout,
     relay_server_url: str,
     current_agent_id: str | None = None,
-    on_paired: Callable[[], None] | None = None,
+    on_paired: Callable[[PairingClaim], Awaitable[None]] | None = None,
 ) -> None:
     """Drive the pairing flow until paired or cancelled.
 
-    On success: writes credentials to .env, optionally calls ``on_paired``
-    (which the lifespan uses to ``_try_restart_service`` so the next boot
-    picks up ``configured`` state), then exits.
+    On success: writes credentials to .env, optionally awaits
+    ``on_paired(claim)`` so the caller can transition the running
+    process into the operational state (start the relay client
+    in-process — see ``app.py``'s ``_on_paired`` for the production
+    callback), then exits.
+
+    The ``on_paired`` callback receives the validated ``PairingClaim``
+    so the caller has direct access to the just-received credentials
+    without re-reading ``.env``. Earlier designs used a no-arg
+    callback that triggered a process restart so the next cold boot
+    would pick up the persisted credentials; that worked but depended
+    on a fragile chain of exit-code propagation through
+    asyncio/uvicorn/launcher/supervisor that the in-process design
+    avoids entirely.
     """
     env_path = env_path_for_prefix(layout.prefix)
     pinned_pub_key = read_trust_public_key(layout)
@@ -327,22 +338,34 @@ async def run_pairing_monitor(
             await asyncio.sleep(_BACKOFF_FLOOR_S)
             continue
 
+        logger.info(
+            "pairing_monitor.writing_credentials env_path=%s agent_id=%s",
+            env_path, claim.agent_id,
+        )
         try:
             await write_credentials_to_env(env_path, claim)
-        except OSError as exc:
+        except Exception as exc:
             # Defence-in-depth: an unhandled exception here would silently
             # kill the pairing-monitor task (the task is created via
             # ``asyncio.create_task`` in ``app.py`` and never awaited, so
-            # exceptions don't propagate). The most likely cause on
-            # Windows was ``SYSTEM:R`` on ``.env`` blocking ``os.replace``
-            # — that's fixed at the ACL layer in ``_restrict_perms_windows``,
-            # but a future ACL drift, disk-full, or read-only-fs condition
-            # would re-introduce the silent failure mode. Log loudly and
-            # retry the cycle so the operator can see the problem and the
-            # next QR scan has a fresh chance.
+            # exceptions don't propagate). The original Windows surface
+            # was ``PermissionError`` (subclass of ``OSError``) from
+            # ``os.replace`` under a ``SYSTEM:R`` ACL — fixed at the ACL
+            # layer in ``_restrict_perms_windows`` — but
+            # ``write_credentials_to_env`` can also raise
+            # ``UnicodeDecodeError`` on a corrupt-encoding ``.env`` or
+            # ``ValueError`` from ``render_template``'s control-character
+            # injection guard, neither of which are ``OSError`` subclasses.
+            # Catch every non-Cancellation exception so the task survives
+            # any failure mode and the operator sees the cause in
+            # ``agent.err.log`` rather than a silent task death. The
+            # ``asyncio.CancelledError`` raised by lifespan-shutdown
+            # ``pairing_task.cancel()`` is a ``BaseException`` subclass
+            # and is not caught here, so cancellation still propagates.
             logger.error(
-                "pairing_monitor.write_failed path=%s: %s; will retry",
+                "pairing_monitor.write_failed path=%s exc_type=%s: %s; will retry",
                 env_path,
+                type(exc).__name__,
                 exc,
             )
             clear_pending_pairing(layout)
@@ -356,7 +379,7 @@ async def run_pairing_monitor(
         )
         if on_paired is not None:
             try:
-                on_paired()
+                await on_paired(claim)
             except Exception as exc:
                 logger.warning(
                     "pairing_monitor.on_paired_callback_failed: %s", exc

@@ -8,6 +8,12 @@ When the agent boots with ``RELAY_SERVER_URL`` set but no
 * NOT instantiate a ``RelayClient`` (the relay-client startup happens
   inside the lifespan; we verify by avoiding the lifespan in TestClient
   and checking the attribute directly).
+
+This module also covers the in-process pairing transition:
+``_start_relay_in_process`` is the seam shared between cold-boot and
+post-pair startup, so a test that exercises the helper directly pins
+the contract that ``app.state.pairing_pending`` flips to False
+atomically with the ``relay_client`` assignment.
 """
 from __future__ import annotations
 
@@ -16,7 +22,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from mobaide.agent.app import create_app
+import mobaide.agent.app as _agent_app
+from mobaide.agent.app import _start_relay_in_process, create_app
 from mobaide.agent.config import AgentConfig
 from mobaide.relay.config import RelayConfig
 
@@ -232,3 +239,192 @@ class TestProjectsStoreSeededFromConfig:
         assert "FromConfig" in names
         # The env-var value is ignored — seed_json takes precedence.
         assert "FromEnvLeak" not in names
+
+
+class TestStartRelayInProcess:
+    """Pin the contract that ``_start_relay_in_process`` makes the running
+    agent operational in-place after a QR pair, without any process exit.
+
+    Before this design, ``_on_paired`` only scheduled ``sys.exit(75)``
+    and the relay client started only on the next process boot. That
+    relied on every link in asyncio → uvicorn → mobaide.run →
+    mobaide.launcher subprocess wait → supervisor restart to correctly
+    propagate exit code 75 — a chain that broke in practice on Windows
+    despite the ACL + SvcDoRun fixes in 7b9c581. The in-process
+    transition eliminates the dependency: the running process becomes
+    the operational process, and ``.env`` is still written as a
+    persistence fallback for the next cold boot. Tests in this class
+    pin the new behaviour.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_jwt_pre_check(self, monkeypatch):
+        monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+
+    async def test_starts_relay_client_and_clears_pairing_pending(
+        self, tmp_path, monkeypatch,
+    ):
+        # Build an agent in pairing-pending state, then invoke
+        # ``_start_relay_in_process`` with the post-pair RelayConfig
+        # and verify ``app.state`` reflects the operational state.
+        captured_starts: list[RelayConfig] = []
+
+        class _FakeRelayClient:
+            def __init__(self, *, config: RelayConfig, **_kwargs):
+                self._config = config
+                self._started = False
+                self._manifest_cb = None
+
+            async def start(self) -> None:
+                captured_starts.append(self._config)
+                self._started = True
+
+            async def stop(self) -> None:
+                self._started = False
+
+            def set_manifest_update_callback(self, cb):
+                self._manifest_cb = cb
+
+        # Patch RelayClient inside the helper's late import so the test
+        # never actually opens a network socket. Use the
+        # ``mobaide.relay.client`` attribute path because the helper
+        # imports it lazily inside the function body.
+        from mobaide.relay import client as _relay_client_mod
+        monkeypatch.setattr(_relay_client_mod, "RelayClient", _FakeRelayClient)
+
+        # Also patch ``_build_updater`` to return None so we don't pull in
+        # the trust-key / install-layout machinery for this unit test.
+        monkeypatch.setattr(
+            _agent_app, "_build_updater", lambda _app: None,
+        )
+
+        app = create_app(config=_make_pairing_pending_config(tmp_path))
+        # ``app.state.session_manager`` etc. are already constructed by
+        # ``create_app`` (outside the lifespan); the in-process helper
+        # only needs those references plus the new RelayConfig.
+
+        new_relay_cfg = RelayConfig(
+            server_url="wss://relay.example.com",
+            agent_id="paired-id",
+            agent_token="paired-token",
+        )
+
+        # Sanity: starting state.
+        assert app.state.pairing_pending is True
+        assert getattr(app.state, "relay_client", None) is None
+
+        await _start_relay_in_process(app, new_relay_cfg)
+
+        # After the helper, the agent is operational in-process.
+        assert app.state.pairing_pending is False, (
+            "pairing_pending must flip to False so /api/health and the "
+            "mobile app see the agent as paired immediately — without "
+            "this, the in-process transition's whole point is defeated"
+        )
+        assert app.state.relay_client is not None
+        # The relay client was constructed with the new config and
+        # ``start()`` was awaited.
+        assert len(captured_starts) == 1
+        assert captured_starts[0].agent_id == "paired-id"
+        assert captured_starts[0].agent_token == "paired-token"
+
+    async def test_health_endpoint_reflects_in_process_transition(
+        self, tmp_path, monkeypatch,
+    ):
+        # /api/health is the operator's primary visibility surface;
+        # after in-process startup it MUST report
+        # ``pairing_pending: false``. If it still reports True, the
+        # mobile app keeps polling for pairing completion and the
+        # supposed "no restart needed" UX silently regresses to the
+        # old restart-based flow.
+        class _FakeRelayClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def start(self) -> None:
+                pass
+
+            async def stop(self) -> None:
+                pass
+
+            def set_manifest_update_callback(self, _cb):
+                pass
+
+        from mobaide.relay import client as _relay_client_mod
+        monkeypatch.setattr(_relay_client_mod, "RelayClient", _FakeRelayClient)
+        monkeypatch.setattr(
+            _agent_app, "_build_updater", lambda _app: None,
+        )
+
+        app = create_app(config=_make_pairing_pending_config(tmp_path))
+        client = TestClient(app)
+
+        resp = client.get("/api/health")
+        assert resp.json()["pairing_pending"] is True
+
+        await _start_relay_in_process(
+            app,
+            RelayConfig(
+                server_url="wss://relay.example.com",
+                agent_id="id1",
+                agent_token="tok1",
+            ),
+        )
+
+        resp = client.get("/api/health")
+        assert resp.json()["pairing_pending"] is False, (
+            "after in-process pairing transition, /api/health must "
+            "report pairing_pending=false — this is the contract the "
+            "mobile app polls"
+        )
+
+    async def test_failure_leaves_state_consistent_for_fallback(
+        self, tmp_path, monkeypatch,
+    ):
+        # The helper assigns ``app.state.*`` AFTER ``start()`` completes.
+        # If ``start()`` raises (e.g. central_server unreachable), the
+        # agent must NOT end up with ``pairing_pending=False`` and a
+        # broken relay client — that would leave the running process
+        # in a half-paired state that ``_on_paired``'s fallback
+        # (``sys.exit(75)``) cannot recover from cleanly because the
+        # ``.env`` is correct but app.state lies about it.
+        class _ExplodingRelayClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def start(self) -> None:
+                raise RuntimeError("simulated relay connect failure")
+
+            async def stop(self) -> None:
+                pass
+
+            def set_manifest_update_callback(self, _cb):
+                pass
+
+        from mobaide.relay import client as _relay_client_mod
+        monkeypatch.setattr(_relay_client_mod, "RelayClient", _ExplodingRelayClient)
+        monkeypatch.setattr(
+            _agent_app, "_build_updater", lambda _app: None,
+        )
+
+        app = create_app(config=_make_pairing_pending_config(tmp_path))
+        assert app.state.pairing_pending is True
+
+        with pytest.raises(RuntimeError, match="simulated relay connect failure"):
+            await _start_relay_in_process(
+                app,
+                RelayConfig(
+                    server_url="wss://relay.example.com",
+                    agent_id="id",
+                    agent_token="tok",
+                ),
+            )
+
+        # The helper raised BEFORE the state assignments, so the agent
+        # is still in pairing-pending state — consistent for the
+        # ``_on_paired`` fallback to ``sys.exit(75)`` to take over.
+        assert app.state.pairing_pending is True, (
+            "start() failure must NOT flip pairing_pending — assignment "
+            "order pins this"
+        )
+        assert getattr(app.state, "relay_client", None) is None

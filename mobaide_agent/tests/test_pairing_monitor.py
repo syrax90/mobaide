@@ -412,6 +412,7 @@ class TestRunPairingMonitorWriteFailureHandling:
         recorder: dict = {
             "clear_calls": 0,
             "on_paired_calls": 0,
+            "on_paired_claim": None,
             "write_calls": 0,
             "save_calls": 0,
         }
@@ -457,8 +458,9 @@ class TestRunPairingMonitorWriteFailureHandling:
                 raise effect
             # None => success path
 
-        def _on_paired() -> None:
+        async def _on_paired(received_claim) -> None:
             recorder["on_paired_calls"] += 1
+            recorder["on_paired_claim"] = received_claim
 
         recorder["on_paired"] = _on_paired
 
@@ -658,29 +660,35 @@ class TestRunPairingMonitorWriteFailureHandling:
             f"got {recorder['on_paired_calls']} invocations"
         )
 
-    async def test_non_oserror_during_write_still_propagates(
+    async def test_non_oserror_during_write_is_caught_and_retried(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
-        # The handler is narrow on purpose: ``except OSError`` covers
-        # the filesystem failures the defence is designed for
-        # (PermissionError, FileNotFoundError, IsADirectoryError, ...)
-        # and explicitly does NOT swallow programmer errors like
-        # AssertionError, TypeError, ValueError. Swallowing those
-        # would hide real bugs (e.g. a renamed field on
-        # ``PairingClaim``) behind a generic "will retry" log line
-        # that keeps the agent stuck without surfacing the actual
-        # cause.
+        # The handler is intentionally broad: ``except Exception`` catches
+        # every non-Cancellation failure so the pairing-monitor task
+        # never dies silently. ``OSError`` covers the filesystem failure
+        # modes the defence was originally designed for, but
+        # ``write_credentials_to_env`` can also raise
+        # ``UnicodeDecodeError`` on a corrupt-encoding ``.env`` or
+        # ``ValueError`` from ``render_template``'s control-character
+        # injection guard — neither of which is an ``OSError`` subclass.
+        # Narrowing the handler to ``OSError`` previously let those
+        # propagate and silently killed the asyncio task (because the
+        # task is ``asyncio.create_task``'d but never awaited), which
+        # was exactly the silent-failure mode the wrapper exists to
+        # eliminate.
         recorder = self._install_loop_stubs(
             monkeypatch,
             write_side_effects=[
-                ValueError("simulated programmer error"),
+                ValueError("simulated control-character guard fired"),
+                None,
             ],
         )
         layout = self._make_layout(tmp_path)
 
-        with pytest.raises(ValueError, match="simulated programmer error"):
+        with caplog.at_level(logging.ERROR, logger=_pm.__name__):
             await asyncio.wait_for(
                 run_pairing_monitor(
                     layout=layout,
@@ -690,7 +698,213 @@ class TestRunPairingMonitorWriteFailureHandling:
                 timeout=5.0,
             )
 
-        # Single write attempt: the ValueError escaped immediately,
-        # the loop did not retry.
-        assert recorder["write_calls"] == 1
-        assert recorder["on_paired_calls"] == 0
+        # Two attempts: the first raised ValueError, the loop caught
+        # it via the broadened handler, retried, and the second
+        # succeeded. If the handler were still narrow on OSError, the
+        # ValueError would have escaped immediately, the pairing-monitor
+        # task would have died, and the second write attempt would
+        # never have happened.
+        assert recorder["write_calls"] == 2, (
+            f"expected exactly two write attempts (raise + succeed); "
+            f"got {recorder['write_calls']} — a narrowed handler would "
+            f"have produced exactly 1"
+        )
+        assert recorder["on_paired_calls"] == 1, (
+            "second write succeeded, so on_paired must have fired once"
+        )
+
+        # The structured log line names the actual exception type
+        # (``ValueError`` here), so an operator grepping
+        # ``agent.err.log`` can tell ``ValueError`` from
+        # ``PermissionError`` from ``UnicodeDecodeError`` and route to
+        # the right cause without re-running the install.
+        error_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno >= logging.ERROR
+        ]
+        assert any(
+            "pairing_monitor.write_failed" in msg
+            and "ValueError" in msg
+            for msg in error_messages
+        ), (
+            f"expected 'pairing_monitor.write_failed ... ValueError' "
+            f"in ERROR logs; got: {error_messages!r}"
+        )
+
+    async def test_on_paired_callback_receives_claim_and_is_awaited(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The post-7b9c581 refactor changed ``on_paired`` from a sync
+        # no-arg callback (used to schedule ``sys.exit(75)``) into an
+        # async callable that receives the validated ``PairingClaim``.
+        # ``app.py``'s production callback uses the claim to build a
+        # ``RelayConfig`` and start the relay client in-process without
+        # any process restart. If the contract regresses — e.g. a future
+        # refactor reverts to a no-arg sync signature — the in-process
+        # pairing transition silently breaks and the agent falls back to
+        # restart-based pairing (which is what the broader fix was
+        # designed to eliminate).
+        recorder = self._install_loop_stubs(
+            monkeypatch,
+            write_side_effects=[None],
+        )
+        layout = self._make_layout(tmp_path)
+
+        await asyncio.wait_for(
+            run_pairing_monitor(
+                layout=layout,
+                relay_server_url="wss://relay.test",
+                on_paired=recorder["on_paired"],
+            ),
+            timeout=5.0,
+        )
+
+        # Callback fired exactly once on the successful write cycle.
+        assert recorder["on_paired_calls"] == 1
+        # Callback received the claim — pins the new contract.
+        # Without this the test would pass even if the production code
+        # passed an entirely wrong object (or None).
+        received = recorder["on_paired_claim"]
+        assert received is not None, (
+            "on_paired must receive the PairingClaim as its sole "
+            "positional argument; got None"
+        )
+        assert received.agent_id == "new-agent-id"
+        assert received.agent_token == "new-agent-token"
+        assert received.relay_url == "https://relay.test"
+
+    async def test_on_paired_async_callback_exception_does_not_crash_loop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # The callback runs INSIDE the pairing-monitor task. If the
+        # production callback raises (e.g. relay-client construction
+        # fails because central_server is unreachable), the task itself
+        # must not die — the ``except Exception`` around the await is
+        # what makes the in-process transition's "fall back to
+        # sys.exit(75)" branch in ``app.py``'s ``_on_paired`` reachable.
+        # If a future refactor drops the wrapper, the task would die
+        # silently between writes and the user-visible symptom would be
+        # "QR scan succeeds but agent never comes online" — silently.
+        captured: list[BaseException] = []
+
+        async def _exploding_on_paired(_claim) -> None:
+            exc = RuntimeError("simulated callback failure")
+            captured.append(exc)
+            raise exc
+
+        # We install the stubs only to satisfy run_pairing_monitor's
+        # collaborators — the on_paired callback is supplied explicitly
+        # below, so the recorder's _on_paired entry is irrelevant here.
+        self._install_loop_stubs(
+            monkeypatch,
+            write_side_effects=[None],
+        )
+        layout = self._make_layout(tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger=_pm.__name__):
+            # The function MUST return cleanly — the failure is logged
+            # and swallowed. ``asyncio.wait_for`` raises on timeout, so
+            # a hanging task would fail the test loudly.
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                    on_paired=_exploding_on_paired,
+                ),
+                timeout=5.0,
+            )
+
+        assert len(captured) == 1, (
+            "exploding on_paired must have been called exactly once"
+        )
+        # The exception is logged at WARNING via
+        # ``pairing_monitor.on_paired_callback_failed`` — pins the
+        # operator-visibility contract.
+        warning_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+        ]
+        assert any(
+            "pairing_monitor.on_paired_callback_failed" in msg
+            for msg in warning_messages
+        ), (
+            f"expected 'pairing_monitor.on_paired_callback_failed' "
+            f"WARNING log; got: {warning_messages!r}"
+        )
+
+    async def test_writing_credentials_log_is_emitted_before_write(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # The plan calls this out explicitly as the missing observability
+        # bit that would have surfaced any prior path-mismatch bug: log
+        # the resolved ``.env`` path on every write attempt so the
+        # operator can verify they are checking the same path the agent
+        # writes to. Without it, "the .env doesn't have my credentials"
+        # has no way to disambiguate "agent wrote to a different path"
+        # from "agent never wrote at all" — exactly the symptom that
+        # triggered this refactor on Windows. Pin the structured event
+        # name AND that the env_path appears in the message so the
+        # observability contract survives a future log-format refactor.
+        recorder = self._install_loop_stubs(
+            monkeypatch,
+            write_side_effects=[None],
+        )
+        layout = self._make_layout(tmp_path)
+
+        with caplog.at_level(logging.INFO, logger=_pm.__name__):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                    on_paired=recorder["on_paired"],
+                ),
+                timeout=5.0,
+            )
+
+        info_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.INFO
+        ]
+        # The structured event name is grepped for in ops dashboards;
+        # a rename needs an explicit test update.
+        writing_lines = [
+            msg for msg in info_messages
+            if "pairing_monitor.writing_credentials" in msg
+        ]
+        assert len(writing_lines) == 1, (
+            f"expected exactly one 'pairing_monitor.writing_credentials' "
+            f"INFO log on a successful write; got {len(writing_lines)}: "
+            f"{info_messages!r}"
+        )
+        msg = writing_lines[0]
+        # The agent_id from the claim must be in the log so the
+        # operator can correlate against the .env value they observe.
+        assert "new-agent-id" in msg, (
+            f"expected claim agent_id in writing_credentials log; "
+            f"got: {msg!r}"
+        )
+        # The env_path must be in the log. We don't pin the exact
+        # path (it depends on the layout prefix) but it MUST contain
+        # the layout's tmp_path and the .env basename so a path-
+        # mismatch bug would be immediately obvious to the operator.
+        assert "env_path=" in msg, (
+            f"expected 'env_path=' field in writing_credentials log "
+            f"so operators can verify the write target; got: {msg!r}"
+        )
+        # The prefix path appears in the resolved env_path — this is
+        # the smoking-gun visibility the plan calls out.
+        assert str(layout.prefix) in msg or ".env" in msg, (
+            f"expected layout prefix or .env in writing_credentials "
+            f"log; got: {msg!r}"
+        )
