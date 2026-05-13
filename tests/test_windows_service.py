@@ -1,4 +1,4 @@
-"""Tests for ``mobaide.windows_service``.
+"""Tests for ``deploy/windows_service.py``.
 
 The module hosts the Windows service that replaces the pre-fix
 ``cmd.exe /c launcher.cmd`` design (real root cause of the
@@ -6,6 +6,11 @@ The module hosts the Windows service that replaces the pre-fix
 failure). It imports ``pywin32`` unconditionally, so this file
 auto-skips on hosts where the import is not satisfiable (any
 non-Windows CI, or a Windows CI without pywin32 in the env).
+
+Lives under ``deploy/`` rather than inside the mobaide package because
+it is deploy infrastructure, not agent runtime — nothing in mobaide.*
+imports it. install.ps1 fetches it from get.mobaide.com (gh-pages)
+alongside install.ps1 itself, so the two cannot desync.
 """
 from __future__ import annotations
 
@@ -23,10 +28,10 @@ pytest.importorskip(
 
 sys.path.insert(
     0,
-    str(Path(__file__).resolve().parent.parent / "mobaide_agent"),
+    str(Path(__file__).resolve().parent.parent / "deploy"),
 )
 
-from mobaide import windows_service  # noqa: E402
+import windows_service  # noqa: E402
 
 
 def test_default_prefix_honours_env_override(monkeypatch: pytest.MonkeyPatch) -> None:

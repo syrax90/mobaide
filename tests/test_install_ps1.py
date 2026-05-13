@@ -375,18 +375,19 @@ def test_old_test_python_function_is_removed() -> None:
     [
         "MOBAIDE_AGENT_INSTALL_URL",
         "MOBAIDE_AGENT_SKIP_PYTHON_INSTALL",
+        "MOBAIDE_AGENT_WINDOWS_SERVICE_URL",
     ],
 )
 def test_new_env_var_contract_is_wired(env_var: str) -> None:
-    """The two new env-var hooks must appear in ``install.ps1``.
+    """Each env-var hook must appear in ``install.ps1``.
 
     These are the env-var contract documented in
-    ``docs/versioning-and-updates.md`` (and exposed for self-hosted
-    distributions / CI hosts respectively). A plain substring check is
-    enough — both are referenced both as ``$env:NAME`` reads and as
-    literals in the elevation passthrough array, so multiple
-    occurrences are expected. If the file does not mention the name
-    at all, the contract is silently broken.
+    ``docs/versioning-and-updates.md`` and ``docs/deployment.md``
+    (exposed for self-hosted distributions / CI hosts). A plain
+    substring check is enough — each is referenced both as
+    ``$env:NAME`` reads and as a literal in the elevation passthrough
+    array, so multiple occurrences are expected. If the file does not
+    mention the name at all, the contract is silently broken.
     """
     text = _read_install_ps1_text()
     assert env_var in text, (
@@ -421,6 +422,31 @@ def test_skip_python_install_is_preserved_across_uac_elevation() -> None:
         f"MOBAIDE_AGENT_SKIP_PYTHON_INSTALL must appear in the "
         f"$passthrough array inside Assert-AdminOrElevate so the "
         f"opt-out survives the UAC re-launch. Function body:\n{body!r}"
+    )
+
+
+def test_windows_service_url_is_preserved_across_uac_elevation() -> None:
+    """``MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` must be in the elevation
+    passthrough array literal inside ``Assert-AdminOrElevate``.
+
+    Same class of regression as
+    ``test_skip_python_install_is_preserved_across_uac_elevation`` —
+    if the new self-hosted-mirror override is not in the passthrough
+    array, a user invoking the one-liner non-admin with
+    ``$env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` set will see the UAC
+    child silently fall back to the canonical ``get.mobaide.com`` URL.
+    The user thinks they are fully self-hosted; in reality the service
+    module fetch silently goes to the canonical endpoint, defeating
+    the whole point of the override.
+    """
+    body = _function_body_text("Assert-AdminOrElevate")
+    assert re.search(
+        r"['\"]MOBAIDE_AGENT_WINDOWS_SERVICE_URL['\"]", body
+    ), (
+        f"MOBAIDE_AGENT_WINDOWS_SERVICE_URL must appear in the "
+        f"$passthrough array inside Assert-AdminOrElevate so the "
+        f"self-hosted-mirror override survives the UAC re-launch. "
+        f"Function body:\n{body!r}"
     )
 
 
@@ -2317,31 +2343,102 @@ def test_install_service_installs_pywin32_in_svc_venv() -> None:
     )
 
 
-def test_install_service_copies_service_module_to_svc_dir() -> None:
+def test_install_service_downloads_service_module_to_svc_dir() -> None:
     """``Install-Service`` must place ``mobaide_service.py`` under
-    ``<prefix>/svc/``.
+    ``<prefix>/svc/`` by downloading it from a configurable URL.
 
     The pywin32 service registration points at this file (as
     ``-u <path>``). It must exist on disk BEFORE the registration step
     runs, and it must live in a version-independent location so the
     registered binary path stays valid across upgrades and rollbacks.
 
-    The source is ``mobaide/windows_service.py`` inside the just-installed
-    release venv's site-packages (it ships in the agent wheel); the
-    target is ``<prefix>/svc/mobaide_service.py``. Either a ``Copy-Item``
-    or a ``Set-Content`` of the file contents satisfies the on-disk
-    contract.
+    The source is ``$Script:WindowsServiceUrl`` (defaults to
+    ``https://get.mobaide.com/windows_service.py``); the target is
+    ``<prefix>/svc/mobaide_service.py``. The pre-fix design copied the
+    file from the installed wheel at
+    ``releases/<v>/venv/Lib/site-packages/mobaide/windows_service.py`` —
+    that coupled the installer to the wheel's contents and broke when an
+    install.ps1 change shipped (via gh-pages) faster than a new wheel tag.
+    Pinned negatively below.
     """
-    body = _function_body_text("Install-Service")
-    assert re.search(r"mobaide_service\.py", body), (
+    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
+    assert re.search(r"mobaide_service\.py", body_code), (
         "Install-Service must reference `mobaide_service.py` (the "
         "on-disk filename of the service module under <prefix>/svc/). "
-        "Not found in body:\n" + repr(body)
+        "Not found in body:\n" + repr(body_code)
     )
-    assert re.search(r"\bCopy-Item\b|\bSet-Content\b", body), (
-        "Install-Service must materialise the service module on disk "
-        "via `Copy-Item` (from the release venv's site-packages) or "
-        "`Set-Content` (inline). Neither found in body:\n" + repr(body)
+    assert re.search(
+        r"Invoke-AgentDownload[^|\r\n]*\$Script:WindowsServiceUrl",
+        body_code,
+    ), (
+        "Install-Service must materialise the service module on disk by "
+        "calling `Invoke-AgentDownload -Url $Script:WindowsServiceUrl` "
+        "(the same download helper Install-Release uses for the tarball "
+        "and wheel; centralised SSL/UA handling). Comment-stripped body:\n"
+        + repr(body_code)
+    )
+
+
+def test_install_service_does_not_copy_from_release_wheel() -> None:
+    """``Install-Service`` must NOT copy the service module from the
+    installed release wheel.
+
+    Regression pin for the
+    "Service module source not found at ...\\releases\\<v>\\venv\\..."
+    failure. The pre-fix design copied
+    ``releases/<v>/venv/Lib/site-packages/mobaide/windows_service.py``
+    into ``<prefix>/svc/mobaide_service.py``, coupling install.ps1 to
+    whatever the just-installed wheel happened to contain. install.ps1
+    ships via gh-pages on every push to main, but the wheel ships only
+    on a tag push, so any installer change that referenced a new wheel
+    path failed against any older signed release.
+
+    The fix decouples them by fetching the module from gh-pages
+    alongside install.ps1 itself.
+    """
+    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
+    assert not re.search(
+        r"site-packages\\mobaide\\windows_service\.py",
+        body_code,
+    ), (
+        "Install-Service must NOT reference the wheel-installed "
+        "`site-packages\\mobaide\\windows_service.py` path (pre-fix "
+        "design coupled the installer to wheel contents). "
+        "Comment-stripped body:\n" + repr(body_code)
+    )
+    assert not re.search(r"\bCopy-Item\b", body_code), (
+        "Install-Service must NOT use `Copy-Item` for the service "
+        "module (the pre-fix design copied it out of the release "
+        "venv; the fix downloads it from gh-pages so installer and "
+        "service module are co-versioned). Comment-stripped body:\n"
+        + repr(body_code)
+    )
+
+
+def test_install_ps1_defines_windows_service_url_with_env_override() -> None:
+    """install.ps1 must expose ``$Script:WindowsServiceUrl`` with a
+    ``MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` env override.
+
+    Mirrors ``$Script:InstallUrl`` / ``MOBAIDE_AGENT_INSTALL_URL`` — same
+    distribution channel (gh-pages), same override mechanism for
+    self-hosted mirrors and CI fixtures. A self-hosted distribution that
+    mirrors install.ps1 must mirror windows_service.py too, or set this
+    env var to point at the canonical URL.
+    """
+    text = _DEPLOY_INSTALL_PS1.read_text(encoding="utf-8")
+    assert re.search(
+        r"\$Script:WindowsServiceUrl\s*=\s*if\s*\(\s*\$env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL\s*\)",
+        text,
+    ), (
+        "install.ps1 must declare `$Script:WindowsServiceUrl` with a "
+        "MOBAIDE_AGENT_WINDOWS_SERVICE_URL env override, parallel to "
+        "$Script:InstallUrl / MOBAIDE_AGENT_INSTALL_URL. Not found."
+    )
+    assert "https://get.mobaide.com/windows_service.py" in text, (
+        "install.ps1 must default $Script:WindowsServiceUrl to "
+        "https://get.mobaide.com/windows_service.py (the gh-pages-"
+        "published canonical URL, co-versioned with install.ps1). "
+        "Not found."
     )
 
 

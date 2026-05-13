@@ -526,8 +526,13 @@ Both scripts are auto-published from `deploy/` to the root of the
      `ReadWritePaths=$HOME /opt/mobaide`, and sets `RestartForceExitStatus=75`.
    * **macOS** — write `~/Library/LaunchAgents/com.mobaide.agent.plist`,
      `launchctl load`.
-   * **Windows** — register the `MobaideAgent` SCM service via `sc.exe create`,
-     with restart-on-failure tuned to recover from updater exit code 75.
+   * **Windows** — download `windows_service.py` from
+     `https://get.mobaide.com/windows_service.py` (override via
+     `MOBAIDE_AGENT_WINDOWS_SERVICE_URL`) into `<prefix>\svc\`, create a
+     dedicated `svc\venv\` with only `pywin32`, and register the
+     `MobaideAgent` SCM service via `New-Service` with the pywin32 host as
+     the binary path, with restart-on-failure tuned to recover from updater
+     exit code 75.
 
 Re-running an install script is idempotent: a higher-versioned manifest stages
 into a sibling `releases/<version>/` and re-pins the pointer, so the same
