@@ -8,8 +8,9 @@ irm https://get.mobaide.com/install.ps1 | iex
 ```
 
 reach end users, the GitHub Actions workflow that auto-publishes them
-when `deploy/install.{sh,ps1}` change on `main`, and the manual
-override an operator can fall back to if the automation does not fire.
+when `deploy/install.{sh,ps1}` or `deploy/windows_service.py` change
+on `main`, and the manual override an operator can fall back to if the
+automation does not fire.
 
 For the rest of the release machinery (component versioning, signed
 manifests, the staged-binary auto-updater on already-installed agents)
@@ -21,10 +22,11 @@ the agent.
 
 ```
 deploy/install.{sh,ps1}     canonical source. PRs edit these.
+deploy/windows_service.py   pywin32 SCM wrapper; co-versioned with install.ps1.
         │
         │ publish-gh-pages.yml on push: main with paths
-        │ deploy/install.{sh,ps1}. workflow_dispatch is the
-        │ manual fallback when the chain breaks.
+        │ deploy/install.{sh,ps1} or deploy/windows_service.py.
+        │ workflow_dispatch is the manual fallback when the chain breaks.
         ▼
 gh-pages branch root        also holds CNAME and .nojekyll. This is the
         │                   actual GitHub Pages source.
@@ -35,16 +37,17 @@ https://get.mobaide.com/    public CDN. The CNAME at the gh-pages root
                             provisions the custom domain.
 ```
 
-Two places hold copies of the install scripts: `deploy/` on `main` and
+Three places hold copies of these files: `deploy/` on `main` and
 the root of the `gh-pages` branch. The second is auto-published from
 `deploy/` by `publish-gh-pages.yml` on every push to `main` that
-touches `deploy/install.{sh,ps1}`.
+touches `deploy/install.{sh,ps1}` or `deploy/windows_service.py`.
 
 ## When to use the manual fallback
 
 `publish-gh-pages.yml` listens for `push: main` events that touch
-`deploy/install.{sh,ps1}`. Direct PR merges trigger it cleanly under
-the default `GITHUB_TOKEN`, so the common path is fully automatic.
+`deploy/install.{sh,ps1}` or `deploy/windows_service.py`. Direct PR
+merges trigger it cleanly under the default `GITHUB_TOKEN`, so the
+common path is fully automatic.
 
 Use the runbook below only when the workflow did not fire (transient
 Actions outage, paths filter mismatch from a partial revert), an
@@ -54,7 +57,7 @@ locally for debugging.
 ## What to watch after a release
 
 The Actions tab is the source of truth. After any merge that touches
-`deploy/install.{sh,ps1}`, confirm that "Publish install scripts to
+`deploy/install.{sh,ps1}` or `deploy/windows_service.py`, confirm that "Publish install scripts to
 gh-pages" ran green on the resulting `main` SHA. There is no automated
 alarm: if the workflow ever silently skips, the served scripts will
 lag the canonical source until the next push or a `workflow_dispatch`
@@ -76,16 +79,17 @@ git checkout gh-pages
 git pull --ff-only origin gh-pages
 
 # 3. Overwrite the served scripts with the latest main content.
-git show origin/main:deploy/install.sh  > install.sh
-git show origin/main:deploy/install.ps1 > install.ps1
+git show origin/main:deploy/install.sh         > install.sh
+git show origin/main:deploy/install.ps1        > install.ps1
+git show origin/main:deploy/windows_service.py > windows_service.py
 
-# 4. Sanity-check the diff (you should only see install.{sh,ps1} change;
-#    CNAME and .nojekyll must stay untouched).
+# 4. Sanity-check the diff (you should only see install.{sh,ps1} and
+#    windows_service.py change; CNAME and .nojekyll must stay untouched).
 git status
-git diff -- install.sh install.ps1
+git diff -- install.sh install.ps1 windows_service.py
 
 # 5. Commit and push.
-git add install.sh install.ps1
+git add install.sh install.ps1 windows_service.py
 git commit -m "publish: sync install scripts from main"
 git push origin gh-pages
 ```
@@ -96,9 +100,10 @@ Worktree variant (does not require switching the current branch):
 git fetch origin
 git worktree add ../mobaide-gh-pages gh-pages
 git -C ../mobaide-gh-pages pull --ff-only origin gh-pages
-git show origin/main:deploy/install.sh  > ../mobaide-gh-pages/install.sh
-git show origin/main:deploy/install.ps1 > ../mobaide-gh-pages/install.ps1
-git -C ../mobaide-gh-pages add install.sh install.ps1
+git show origin/main:deploy/install.sh         > ../mobaide-gh-pages/install.sh
+git show origin/main:deploy/install.ps1        > ../mobaide-gh-pages/install.ps1
+git show origin/main:deploy/windows_service.py > ../mobaide-gh-pages/windows_service.py
+git -C ../mobaide-gh-pages add install.sh install.ps1 windows_service.py
 git -C ../mobaide-gh-pages commit -m "publish: sync install scripts from main"
 git -C ../mobaide-gh-pages push origin gh-pages
 git worktree remove ../mobaide-gh-pages
@@ -131,13 +136,14 @@ or a stale build.
 
 ## What lives on `gh-pages`
 
-The branch root holds exactly four files. Treat the second pair as
+The branch root holds exactly five files. Treat the last pair as
 infrastructure — they should not move:
 
 | File | Purpose | Touched by sync? |
 |---|---|---|
 | `install.sh` | Linux/macOS bootstrap. Mirrors `deploy/install.sh` from `main`. | Yes — every sync. |
 | `install.ps1` | Windows bootstrap. Mirrors `deploy/install.ps1`. | Yes — every sync. |
+| `windows_service.py` | pywin32 SCM wrapper downloaded by `install.ps1` into `<prefix>\svc\mobaide_service.py`. Co-versioned with `install.ps1` so service-module API changes ship atomically with the installer. Mirrors `deploy/windows_service.py`. | Yes — every sync. |
 | `CNAME` | Single line `get.mobaide.com`. Provisions the custom domain. | No. |
 | `.nojekyll` | Empty file. Tells Pages **not** to run the Jekyll renderer, so the scripts are served as plain text rather than processed. | No. |
 

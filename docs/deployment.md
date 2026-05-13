@@ -135,6 +135,8 @@ The registered service binary path is:
 "<prefix>\svc\venv\Scripts\python.exe" -u "<prefix>\svc\mobaide_service.py"
 ```
 
+`mobaide_service.py` is fetched from `https://get.mobaide.com/windows_service.py` during install. It is co-versioned with `install.ps1` itself — the `publish-gh-pages` workflow ships both files in the same push — so installer changes that depend on a new service-module API can never desync from the module they ship against. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_SERVICE_URL`.
+
 On every service start, the wrapper reads `<prefix>\current_version`, spawns the active release's `python.exe -m mobaide.launcher` as a subprocess, reports `SERVICE_RUNNING` to SCM, and waits for either a stop signal or the subprocess exiting. The subprocess (`mobaide.launcher`) does the crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. The next service start picks up the rolled-back version.
 
 SCM is configured with `failure reset=600 actions=restart/5000/restart/5000/restart/5000`, composing with the launcher's heuristic so a third bad boot resolves to the previous release.
