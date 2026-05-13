@@ -78,6 +78,16 @@ _AGENT_LOG_FILE_NAME = "agent.err.log"
 _AGENT_LOG_BACKUP_NAME = "agent.err.log.1"
 _AGENT_LOG_ROTATE_BYTES = 5 * 1024 * 1024
 
+# Canonical in ``mobaide.agent.updater.EXIT_RESTART_REQUESTED``. Duplicated
+# here because the svc venv intentionally ships only ``pywin32`` + stdlib —
+# importing ``mobaide`` from this wrapper would defeat the "survives a
+# half-staged or rolled-back release" guarantee (same rationale that pinned
+# ``_default_prefix`` to a local copy). Drift between the two breaks the
+# post-pairing restart: agent exits 75, this side fails to recognise it,
+# service stops, and the user sees the operating system "service stopped"
+# state instead of the seamless restart the rest of the platform delivers.
+_EXIT_RESTART_REQUESTED = 75
+
 
 def _default_prefix() -> Path:
     """Mirror of ``mobaide.launcher._default_prefix`` (kept self-contained).
@@ -194,13 +204,31 @@ class MobaideAgentService(win32serviceutil.ServiceFramework):
       3. ``SvcDoRun`` reads ``current_version``, spawns
          ``release_python -m mobaide.launcher``, and waits for
          either a stop event (``SvcStop``) or subprocess exit.
-      4. Subprocess exit triggers SCM's recovery policy
-         (3 × 5000 ms restarts, configured by install.ps1) — which
-         composes with the launcher's own crash-loop rollback so a
-         third bad boot picks up the previous release.
-      5. ``SvcStop`` reports ``SERVICE_STOP_PENDING``, signals the
+      4. **Restart-requested loop**: when the launcher subprocess exits
+         with ``_EXIT_RESTART_REQUESTED`` (75), ``SvcDoRun`` re-resolves
+         ``current_version`` and re-spawns the launcher in-place. This
+         is the Windows counterpart to systemd's
+         ``RestartForceExitStatus=75`` and launchd's ``KeepAlive=true``:
+         the agent exits 75 after a successful QR pair (so the next boot
+         reads the just-written ``RELAY_AGENT_ID``/``RELAY_AGENT_TOKEN``
+         and brings up the relay client) and after a staged auto-update.
+         A previous design relied on ``sc.exe failure ... actions=
+         restart/...`` to handle this, but SCM recovery actions fire
+         only on abnormal exit / non-zero ``SetServiceStatus`` exit
+         code — a graceful ``SvcDoRun`` return is reported as
+         ``SERVICE_STOPPED`` (exit 0) and recovery does not apply, so
+         post-pairing the service simply stayed stopped.
+      5. Any other exit code (clean 0, crash, signal) falls through
+         out of the loop and ``SvcDoRun`` returns normally. The
+         launcher's own crash-loop rollback (which rewrites
+         ``current_version`` after three crashes in 60 s) still applies
+         across SCM-restart cycles.
+      6. ``SvcStop`` reports ``SERVICE_STOP_PENDING``, signals the
          event, terminates the subprocess (best-effort
          ``TerminateProcess`` since services run without a console).
+         The stop event is also re-checked between loop iterations so
+         a stop arriving exactly between launcher exit and re-spawn
+         terminates the service instead of restarting it.
     """
 
     _svc_name_ = _SERVICE_NAME
@@ -224,23 +252,43 @@ class MobaideAgentService(win32serviceutil.ServiceFramework):
             (self._svc_name_, ""),
         )
         prefix = _default_prefix()
-        try:
-            release_python = _resolve_release_python(prefix)
-        except FileNotFoundError as exc:
-            servicemanager.LogErrorMsg(
-                f"{self._svc_name_}: cannot resolve release interpreter: {exc}"
+        while True:
+            try:
+                release_python = _resolve_release_python(prefix)
+            except FileNotFoundError as exc:
+                servicemanager.LogErrorMsg(
+                    f"{self._svc_name_}: cannot resolve release interpreter: {exc}"
+                )
+                return
+            try:
+                self._proc = _spawn_launcher(release_python, prefix)
+            except OSError as exc:
+                servicemanager.LogErrorMsg(
+                    f"{self._svc_name_}: failed to spawn launcher "
+                    f"{release_python}: {exc}"
+                )
+                return
+            self._wait_until_stop_or_exit()
+
+            stop_signaled = (
+                win32event.WaitForSingleObject(self._stop_event, 0)
+                == win32event.WAIT_OBJECT_0
             )
-            return
-        try:
-            self._proc = _spawn_launcher(release_python, prefix)
-        except OSError as exc:
-            servicemanager.LogErrorMsg(
-                f"{self._svc_name_}: failed to spawn launcher "
-                f"{release_python}: {exc}"
+            if stop_signaled:
+                self._terminate_subprocess()
+                return
+
+            rc = self._proc.returncode if self._proc is not None else None
+            if rc != _EXIT_RESTART_REQUESTED:
+                self._terminate_subprocess()
+                return
+
+            servicemanager.LogInfoMsg(
+                f"{self._svc_name_}: launcher exited with "
+                f"{_EXIT_RESTART_REQUESTED} (restart requested — typically a "
+                "successful pair or staged update); re-spawning."
             )
-            return
-        self._wait_until_stop_or_exit()
-        self._terminate_subprocess()
+            self._proc = None
 
     def _wait_until_stop_or_exit(self) -> None:
         assert self._proc is not None
@@ -251,7 +299,8 @@ class MobaideAgentService(win32serviceutil.ServiceFramework):
             if self._proc.poll() is not None:
                 servicemanager.LogWarningMsg(
                     f"{self._svc_name_}: launcher subprocess exited with code "
-                    f"{self._proc.returncode}; SCM recovery policy will apply."
+                    f"{self._proc.returncode}; service host will route on the "
+                    "exit code (75 → re-spawn, otherwise stop)."
                 )
                 return
 
