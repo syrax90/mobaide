@@ -73,6 +73,11 @@ _DEFAULT_INSTALL_DIR_NAME = "MobaideAgent"
 _STOP_GRACE_SECONDS = 25
 _WAIT_TICK_MS = 5000
 
+_AGENT_LOG_DIR_NAME = "logs"
+_AGENT_LOG_FILE_NAME = "agent.err.log"
+_AGENT_LOG_BACKUP_NAME = "agent.err.log.1"
+_AGENT_LOG_ROTATE_BYTES = 5 * 1024 * 1024
+
 
 def _default_prefix() -> Path:
     """Mirror of ``mobaide.launcher._default_prefix`` (kept self-contained).
@@ -118,29 +123,65 @@ def _resolve_release_python(prefix: Path) -> Path:
     return python
 
 
-def _spawn_launcher(release_python: Path) -> subprocess.Popen[bytes]:
-    """Spawn the release-pinned launcher with stdio redirected to DEVNULL.
+def _open_err_log(prefix: Path):
+    """Open ``<prefix>/logs/agent.err.log`` for the launcher's stderr.
 
-    ``CREATE_NEW_PROCESS_GROUP`` lets us send ``CTRL_BREAK_EVENT`` if a
-    console is attached. Services normally run without one, so the
-    stop path falls back to ``TerminateProcess`` via
-    ``subprocess.terminate()``.
-
-    stdio is DEVNULL because the service host has no console; without
-    redirection, the child's writes to FD 1/2 inherit closed handles
-    and any ``print()`` raises in the subprocess (uvicorn does this).
+    Rotates at boot if the existing log is ≥ 5 MB (keep one backup
+    at ``agent.err.log.1``). Returns a binary append-mode file
+    object; the caller passes it to ``Popen`` as ``stderr`` and
+    closes its own wrapper after ``Popen`` returns — subprocess
+    has already dup'd the underlying OS handle into the child, and
+    leaving the parent wrapper open would pin the file open and
+    prevent the next boot's rotation.
     """
-    creationflags = 0
-    if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-    return subprocess.Popen(
-        [str(release_python), "-m", "mobaide.launcher"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=creationflags,
-        close_fds=True,
-    )
+    log_dir = prefix / _AGENT_LOG_DIR_NAME
+    log_path = log_dir / _AGENT_LOG_FILE_NAME
+    log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if log_path.stat().st_size >= _AGENT_LOG_ROTATE_BYTES:
+            backup = log_dir / _AGENT_LOG_BACKUP_NAME
+            try:
+                backup.unlink()
+            except FileNotFoundError:
+                pass
+            log_path.replace(backup)
+    except FileNotFoundError:
+        pass
+    return log_path.open("ab")
+
+
+def _spawn_launcher(release_python: Path, prefix: Path) -> subprocess.Popen[bytes]:
+    """Spawn the release-pinned launcher and capture its stderr.
+
+    stdout stays DEVNULL (uvicorn access logs are noisy; the app
+    uses structlog for its own sinks). stderr is redirected to
+    ``<prefix>/logs/agent.err.log`` instead of DEVNULL so a silent
+    crash at SvcDoRun — config error, missing dep, port conflict —
+    surfaces in a file ``install.ps1`` can point operators at.
+    Without this redirect, every diagnostic past the eventvwr
+    ``servicemanager.LogMsg`` write is lost (Python tracebacks
+    go to stderr, not the Event Log).
+
+    No ``CREATE_NEW_PROCESS_GROUP`` — Ctrl+Break delivery requires
+    a console, which the service host doesn't have. The launcher
+    handles its own teardown via a Job Object with
+    ``KILL_ON_JOB_CLOSE``; SCM's ``Stop-Service`` calls
+    ``TerminateProcess`` on the launcher, which closes its handles,
+    which closes the job, which kills the agent atomically. Adding
+    CREATE_NEW_PROCESS_GROUP here would put the launcher in its
+    own group AND complicate that teardown — drop it.
+    """
+    err_log = _open_err_log(prefix)
+    try:
+        return subprocess.Popen(
+            [str(release_python), "-m", "mobaide.launcher"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=err_log,
+            close_fds=True,
+        )
+    finally:
+        err_log.close()
 
 
 class MobaideAgentService(win32serviceutil.ServiceFramework):
@@ -191,7 +232,7 @@ class MobaideAgentService(win32serviceutil.ServiceFramework):
             )
             return
         try:
-            self._proc = _spawn_launcher(release_python)
+            self._proc = _spawn_launcher(release_python, prefix)
         except OSError as exc:
             servicemanager.LogErrorMsg(
                 f"{self._svc_name_}: failed to spawn launcher "
