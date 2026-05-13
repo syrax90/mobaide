@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import platform
+import random
 import socket
 import sys
 import time
@@ -333,44 +334,106 @@ async def run_pairing_monitor(
                 expected_relay_url=pending.relay_url,
             )
         except PairingWsError as exc:
-            logger.warning("pairing_monitor.ws_failed: %s", exc)
-            clear_pending_pairing(layout)
-            await asyncio.sleep(_BACKOFF_FLOOR_S)
+            # Do NOT clear pending_pairing.json. A WS drop mid-wait
+            # (CDN idle-close, TLS reset, proxy hiccup) can race against
+            # a successful mobile claim: the central server's
+            # ``claim_pairing_nonce`` persists ``claimed_token_raw`` BEFORE
+            # ``dispatch_to_waiter`` and returns 200 to the mobile
+            # regardless of WS delivery — so the mobile shows "Paired"
+            # while the credentials sit unconsumed server-side. Reconnecting
+            # to the SAME nonce on the next iteration lets the server's
+            # ``read_and_clear_claimed_credentials`` recovery path deliver
+            # those stranded credentials (see
+            # ``central_server/pairing/router.py`` :func:`pairing_ws`).
+            # The natural TTL check in :func:`load_pending_pairing`
+            # evicts the entry once the nonce truly expires, so a
+            # permanently broken WS (signature mismatch, dead server)
+            # still rolls over to a fresh nonce within the 120 s TTL.
+            #
+            # Exponential backoff + jitter on the retry: the previous
+            # one-attempt-then-clear path bounded reconnect pressure
+            # at 1 connection per nonce per agent. Retain-pending lifts
+            # that ceiling, so without growth a fleet-wide CDN glitch
+            # would fan into ~60 reconnects per nonce per agent
+            # (120 s TTL / 2 s floor) hammering the central server in
+            # a tight thundering herd. Reusing the same ``backoff``
+            # state as the initiate-failure branch caps the per-nonce
+            # attempt count at ~6 (2 → 4 → 8 → 16 → 32 → 60 s ceiling)
+            # and the ``random.uniform(0, 1)`` jitter staggers any
+            # synchronised fleet retry. ``backoff`` resets to
+            # ``_BACKOFF_FLOOR_S`` when ``_initiate_with_metadata``
+            # succeeds for a new nonce (line ~309), so a transient
+            # outage that resolves into a fresh successful initiate
+            # immediately recovers the fast-retry cadence.
+            logger.warning(
+                "pairing_monitor.ws_failed nonce=%s: %s; retaining pending so "
+                "the next reconnect can trigger the server's recovery path "
+                "(sleep=%.2fs)",
+                pending.nonce[:8], exc, backoff,
+            )
+            await asyncio.sleep(backoff + random.uniform(0, 1))
+            backoff = min(_BACKOFF_CEIL_S, backoff * 2)
             continue
 
-        logger.info(
-            "pairing_monitor.writing_credentials env_path=%s agent_id=%s",
-            env_path, claim.agent_id,
-        )
-        try:
-            await write_credentials_to_env(env_path, claim)
-        except Exception as exc:
-            # Defence-in-depth: an unhandled exception here would silently
-            # kill the pairing-monitor task (the task is created via
-            # ``asyncio.create_task`` in ``app.py`` and never awaited, so
-            # exceptions don't propagate). The original Windows surface
-            # was ``PermissionError`` (subclass of ``OSError``) from
-            # ``os.replace`` under a ``SYSTEM:R`` ACL — fixed at the ACL
-            # layer in ``_restrict_perms_windows`` — but
-            # ``write_credentials_to_env`` can also raise
-            # ``UnicodeDecodeError`` on a corrupt-encoding ``.env`` or
-            # ``ValueError`` from ``render_template``'s control-character
-            # injection guard, neither of which are ``OSError`` subclasses.
-            # Catch every non-Cancellation exception so the task survives
-            # any failure mode and the operator sees the cause in
-            # ``agent.err.log`` rather than a silent task death. The
-            # ``asyncio.CancelledError`` raised by lifespan-shutdown
-            # ``pairing_task.cancel()`` is a ``BaseException`` subclass
-            # and is not caught here, so cancellation still propagates.
-            logger.error(
-                "pairing_monitor.write_failed path=%s exc_type=%s: %s; will retry",
-                env_path,
-                type(exc).__name__,
-                exc,
+        # The claim is single-use server-side — once dispatched-or-recovered
+        # by the WS handler, the server cleared ``claimed_token_raw`` and
+        # cannot re-deliver. Falling back to the outer WS loop on a write
+        # failure would re-initiate a new nonce and orphan the credentials.
+        # Hold the claim in memory and retry the WRITE locally until it
+        # lands. ``asyncio.CancelledError`` is a ``BaseException`` subclass
+        # and is not caught below, so lifespan-shutdown still cancels the
+        # task cleanly.
+        #
+        # ``write_backoff`` is a local separate from the outer ``backoff``:
+        # the outer one tracks WS / initiate failures and resets when a new
+        # nonce is initiated; this one tracks disk-write failures only and
+        # is reset implicitly per pairing claim (the variable doesn't
+        # outlive the inner loop). Without exponential growth the inner
+        # loop emits one ERROR log every 2 s under a persistent disk-full
+        # / ACL condition — ~86 400 lines/day — which can itself exhaust
+        # log disk space. Capping at ``_BACKOFF_CEIL_S`` (60 s) reduces
+        # that to ~2 lines/min at steady state while preserving the
+        # plan-chosen "hold until success" semantics.
+        write_attempts = 0
+        write_backoff = _BACKOFF_FLOOR_S
+        while True:
+            write_attempts += 1
+            logger.info(
+                "pairing_monitor.writing_credentials env_path=%s agent_id=%s "
+                "attempt=%d",
+                env_path, claim.agent_id, write_attempts,
             )
-            clear_pending_pairing(layout)
-            await asyncio.sleep(_BACKOFF_FLOOR_S)
-            continue
+            try:
+                await write_credentials_to_env(env_path, claim)
+                break
+            except Exception as exc:
+                # Defence-in-depth: an unhandled exception here would silently
+                # kill the pairing-monitor task (the task is created via
+                # ``asyncio.create_task`` in ``app.py`` and never awaited, so
+                # exceptions don't propagate). The original Windows surface
+                # was ``PermissionError`` (subclass of ``OSError``) from
+                # ``os.replace`` under a ``SYSTEM:R`` ACL — fixed at the ACL
+                # layer in ``_restrict_perms_windows`` — but
+                # ``write_credentials_to_env`` can also raise
+                # ``UnicodeDecodeError`` on a corrupt-encoding ``.env`` or
+                # ``ValueError`` from ``render_template``'s control-character
+                # injection guard, neither of which are ``OSError`` subclasses.
+                # Catch every non-Cancellation exception so the task survives
+                # any failure mode and the operator sees the cause in
+                # ``agent.err.log`` rather than a silent task death.
+                logger.error(
+                    "pairing_monitor.write_failed attempt=%d path=%s "
+                    "exc_type=%s: %s; retrying the write in %.1fs (claim is "
+                    "single-use server-side; cannot fall back to a fresh WS dial)",
+                    write_attempts,
+                    env_path,
+                    type(exc).__name__,
+                    exc,
+                    write_backoff,
+                )
+                await asyncio.sleep(write_backoff)
+                write_backoff = min(_BACKOFF_CEIL_S, write_backoff * 2)
+                continue
         clear_pending_pairing(layout)
         logger.info(
             "pairing_monitor.paired agent_id=%s relay=%s",
