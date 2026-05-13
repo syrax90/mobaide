@@ -414,3 +414,346 @@ def test_open_err_log_creates_logs_dir_when_missing(tmp_path: Path) -> None:
         "(install only guarantees <prefix> itself)"
     )
     assert (tmp_path / "logs" / "agent.err.log").exists()
+
+
+def test_exit_restart_requested_constant_matches_agent_updater() -> None:
+    """The service host's local ``_EXIT_RESTART_REQUESTED`` constant MUST
+    equal ``mobaide.agent.updater.EXIT_RESTART_REQUESTED``.
+
+    The svc venv intentionally cannot import ``mobaide`` (it ships only
+    pywin32 + stdlib, by design — the wrapper has to survive a
+    half-staged or rolled-back release), so the constant is duplicated.
+    A drift between the two breaks the post-pairing restart silently:
+    the agent exits with the canonical value, the service host sees a
+    different number, falls through to "stop normally", and the service
+    stays stopped. This test imports the canonical definition from the
+    in-tree source and asserts equality.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(repo_root / "mobaide_agent"))
+    try:
+        from mobaide.agent.updater import (  # type: ignore[import-not-found]
+            EXIT_RESTART_REQUESTED,
+        )
+    finally:
+        sys.path.pop(0)
+    assert windows_service._EXIT_RESTART_REQUESTED == EXIT_RESTART_REQUESTED, (
+        f"windows_service._EXIT_RESTART_REQUESTED="
+        f"{windows_service._EXIT_RESTART_REQUESTED!r} must equal "
+        f"mobaide.agent.updater.EXIT_RESTART_REQUESTED="
+        f"{EXIT_RESTART_REQUESTED!r} — see the comment on the duplicated "
+        "constant in deploy/windows_service.py for why this is duplicated "
+        "and why drift is a silent break"
+    )
+
+
+class _StubProc:
+    """Minimal stand-in for ``subprocess.Popen`` used by SvcDoRun tests.
+
+    ``poll`` returns ``None`` for the first ``poll_none_count`` calls,
+    then ``returncode``; ``returncode`` mirrors what the launcher
+    subprocess would have exited with.
+    """
+
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+        self.pid = 12345
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        pass
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self.returncode
+
+    def kill(self) -> None:
+        pass
+
+
+def _install_svcdorun_stubs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exit_codes: list[int],
+    stop_after_iteration: int | None = None,
+):
+    """Wire the SvcDoRun loop's collaborators with deterministic stubs.
+
+    Returns ``(spawn_log, log_messages)`` for assertions. ``exit_codes``
+    is consumed one entry per spawned launcher; if exhausted, the test
+    fails (indicates an unexpected re-spawn). ``stop_after_iteration``
+    causes the stop event WaitForSingleObject to return WAIT_OBJECT_0
+    before the n-th re-spawn check (0-indexed), simulating ``Stop-Service``
+    arriving between launcher exit and the re-spawn decision.
+    """
+    spawn_log: list[Path] = []
+    log_messages: list[tuple[str, object]] = []
+    iteration = [0]
+
+    def fake_resolve(prefix: Path) -> Path:
+        return prefix / "fake_python.exe"
+
+    def fake_spawn(python_path: Path, prefix: Path):
+        if not exit_codes:
+            raise AssertionError(
+                "unexpected re-spawn: exit_codes list exhausted; SvcDoRun "
+                "looped more times than the test expected"
+            )
+        spawn_log.append(python_path)
+        rc = exit_codes.pop(0)
+        return _StubProc(rc)
+
+    def fake_wait_single(event: object, timeout: object) -> int:
+        # Called from two places in SvcDoRun:
+        #   (a) inside _wait_until_stop_or_exit (handled separately —
+        #       we drive that path by making poll() return immediately,
+        #       so _wait_until_stop_or_exit only checks the stop event
+        #       once with the tick timeout and returns when poll yields
+        #       a returncode); the timeout argument there is _WAIT_TICK_MS.
+        #   (b) the post-_wait_until_stop_or_exit stop-event check with
+        #       timeout=0.
+        # Stub: never signal at (a); signal at (b) only when the test
+        # requested it for this iteration.
+        if timeout == 0:
+            if (
+                stop_after_iteration is not None
+                and iteration[0] == stop_after_iteration
+            ):
+                return 0  # WAIT_OBJECT_0
+            iteration[0] += 1
+            return 258  # WAIT_TIMEOUT
+        return 258  # WAIT_TIMEOUT
+
+    def fake_log_info(msg: str) -> None:
+        log_messages.append(("info", msg))
+
+    def fake_log_warning(msg: str) -> None:
+        log_messages.append(("warning", msg))
+
+    def fake_log_error(msg: str) -> None:
+        log_messages.append(("error", msg))
+
+    def fake_log_msg(*args: object, **kwargs: object) -> None:
+        log_messages.append(("msg", args))
+
+    monkeypatch.setattr(
+        windows_service, "_resolve_release_python", fake_resolve
+    )
+    monkeypatch.setattr(windows_service, "_spawn_launcher", fake_spawn)
+    monkeypatch.setattr(
+        windows_service.win32event, "WaitForSingleObject", fake_wait_single
+    )
+    monkeypatch.setattr(windows_service.win32event, "WAIT_OBJECT_0", 0)
+    monkeypatch.setattr(
+        windows_service.servicemanager, "LogInfoMsg", fake_log_info
+    )
+    monkeypatch.setattr(
+        windows_service.servicemanager, "LogWarningMsg", fake_log_warning
+    )
+    monkeypatch.setattr(
+        windows_service.servicemanager, "LogErrorMsg", fake_log_error
+    )
+    monkeypatch.setattr(
+        windows_service.servicemanager, "LogMsg", fake_log_msg
+    )
+    monkeypatch.setattr(
+        windows_service.servicemanager, "EVENTLOG_INFORMATION_TYPE", 4
+    )
+    monkeypatch.setattr(
+        windows_service.servicemanager, "PYS_SERVICE_STARTED", 7
+    )
+    return spawn_log, log_messages
+
+
+def _make_service_instance(monkeypatch: pytest.MonkeyPatch):
+    """Construct a ``MobaideAgentService`` for SvcDoRun unit tests.
+
+    ``ServiceFramework.__init__`` would normally allocate SCM-side state;
+    sidestep that and instantiate the bare class so the test can invoke
+    ``SvcDoRun`` directly without an SCM dispatcher.
+    """
+    instance = windows_service.MobaideAgentService.__new__(
+        windows_service.MobaideAgentService
+    )
+    instance._stop_event = object()
+    instance._proc = None
+    return instance
+
+
+def test_svcdorun_respawns_on_exit_restart_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Windows counterpart to systemd's ``RestartForceExitStatus=75``.
+
+    Agent exits 75 after a successful pair (or after a staged
+    auto-update); the service host must re-spawn the launcher so the
+    next boot reads the just-written ``RELAY_AGENT_ID`` /
+    ``RELAY_AGENT_TOKEN`` and brings up the relay client. Without this
+    re-spawn loop, SvcDoRun would return on first exit, ServiceFramework
+    would report SERVICE_STOPPED, and the user would be forced to
+    ``Restart-Service MobaideAgent`` manually — exactly the
+    "no additional actions" gap the loop was added to close.
+    """
+    spawn_log, log_messages = _install_svcdorun_stubs(
+        monkeypatch,
+        exit_codes=[
+            windows_service._EXIT_RESTART_REQUESTED,
+            0,  # second spawn exits cleanly; loop terminates
+        ],
+    )
+    monkeypatch.setenv(
+        "MOBAIDE_AGENT_PREFIX", r"C:\Program Files\MobaideAgent"
+    )
+    instance = _make_service_instance(monkeypatch)
+
+    instance.SvcDoRun()
+
+    assert len(spawn_log) == 2, (
+        f"expected exactly 2 spawns (initial + re-spawn after exit 75), "
+        f"got {len(spawn_log)}"
+    )
+    info_messages = [
+        str(msg) for level, msg in log_messages if level == "info"
+    ]
+    assert any(
+        "restart requested" in msg for msg in info_messages
+    ), (
+        f"SvcDoRun must emit an Event-Log info line when re-spawning "
+        f"after exit 75 so operators can correlate the restart with "
+        f"the agent's pairing-complete event; got logs: {log_messages!r}"
+    )
+
+
+def test_svcdorun_does_not_respawn_on_clean_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exit code 0 (clean stop) must NOT trigger a re-spawn.
+
+    Only ``_EXIT_RESTART_REQUESTED`` (75) is the restart signal; other
+    codes mean the launcher decided to stop and the service host should
+    not paper over that (let SCM observe a normal stop).
+    """
+    spawn_log, _ = _install_svcdorun_stubs(
+        monkeypatch,
+        exit_codes=[0],
+    )
+    monkeypatch.setenv(
+        "MOBAIDE_AGENT_PREFIX", r"C:\Program Files\MobaideAgent"
+    )
+    instance = _make_service_instance(monkeypatch)
+
+    instance.SvcDoRun()
+
+    assert len(spawn_log) == 1, (
+        f"clean-exit (rc=0) must not trigger a re-spawn; got "
+        f"{len(spawn_log)} spawns"
+    )
+
+
+def test_svcdorun_does_not_respawn_on_crash_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Crash exit codes (e.g. 70 from the launcher's missing-interpreter
+    path) must NOT trigger a re-spawn — those are real failures the
+    operator needs to see, and the launcher's own crash-loop rollback
+    handles repeated failures across full service-restart cycles.
+    """
+    spawn_log, _ = _install_svcdorun_stubs(
+        monkeypatch,
+        exit_codes=[70],
+    )
+    monkeypatch.setenv(
+        "MOBAIDE_AGENT_PREFIX", r"C:\Program Files\MobaideAgent"
+    )
+    instance = _make_service_instance(monkeypatch)
+
+    instance.SvcDoRun()
+
+    assert len(spawn_log) == 1, (
+        f"crash exit (rc=70) must not trigger a re-spawn; got "
+        f"{len(spawn_log)} spawns"
+    )
+
+
+def test_svcdorun_stop_event_short_circuits_respawn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``Stop-Service`` arriving between launcher exit and the re-spawn
+    decision must terminate the service, not loop into another spawn.
+
+    The re-spawn loop polls the stop event with timeout=0 right after
+    ``_wait_until_stop_or_exit`` returns; without that check, a stop
+    arriving in the narrow window after exit 75 but before the
+    re-spawn would still be honoured eventually (next iteration of
+    ``_wait_until_stop_or_exit`` would see the event) but only after
+    a spurious extra agent boot. The check makes the stop deterministic.
+    """
+    spawn_log, _ = _install_svcdorun_stubs(
+        monkeypatch,
+        exit_codes=[
+            windows_service._EXIT_RESTART_REQUESTED,
+            # We never expect to consume this — the stop event short-
+            # circuits between iterations. Provide one so an unwanted
+            # re-spawn doesn't AssertionError before the test's own
+            # spawn-count assertion runs.
+            0,
+        ],
+        stop_after_iteration=0,
+    )
+    monkeypatch.setenv(
+        "MOBAIDE_AGENT_PREFIX", r"C:\Program Files\MobaideAgent"
+    )
+    instance = _make_service_instance(monkeypatch)
+
+    instance.SvcDoRun()
+
+    assert len(spawn_log) == 1, (
+        "stop event signaled after exit 75 must terminate without "
+        f"re-spawning; got {len(spawn_log)} spawns"
+    )
+
+
+def test_svcdorun_resolves_release_python_each_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Between re-spawns, ``_resolve_release_python`` is called again so a
+    ``current_version`` rewritten by the auto-updater between iterations
+    is picked up on the next boot.
+
+    Without this, a staged auto-update + ``exit 75`` would re-spawn
+    the launcher pinned to the OLD release, defeating the staged
+    rollout — the operator would see the agent restart but stay on
+    the previous version until the SERVICE itself was restarted.
+    """
+    _install_svcdorun_stubs(
+        monkeypatch,
+        exit_codes=[
+            windows_service._EXIT_RESTART_REQUESTED,
+            windows_service._EXIT_RESTART_REQUESTED,
+            0,
+        ],
+    )
+    # Override the helper's fake_resolve with a counting variant so the
+    # test can assert on the number of invocations across the loop.
+    resolve_calls: list[Path] = []
+
+    def counting_resolve(prefix: Path) -> Path:
+        resolve_calls.append(prefix)
+        return prefix / "fake_python.exe"
+
+    monkeypatch.setattr(
+        windows_service, "_resolve_release_python", counting_resolve
+    )
+    monkeypatch.setenv(
+        "MOBAIDE_AGENT_PREFIX", r"C:\Program Files\MobaideAgent"
+    )
+    instance = _make_service_instance(monkeypatch)
+
+    instance.SvcDoRun()
+
+    assert len(resolve_calls) == 3, (
+        f"_resolve_release_python must be called once per spawn (3 spawns "
+        f"-> 3 resolves so a between-restart ``current_version`` rewrite "
+        f"is picked up); got {len(resolve_calls)} calls"
+    )

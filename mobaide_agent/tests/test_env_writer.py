@@ -403,7 +403,17 @@ class TestParseEnvFileStringOverload:
 
 class TestRestrictPermsWindowsAclArgv:
     """Verify the Windows ACL hardening invokes icacls with the correct
-    SYSTEM:R + Administrators:F + USERNAME:F grants.
+    SYSTEM:F + Administrators:F + USERNAME:F grants.
+
+    The grant for SYSTEM was ``:R`` (read-only) in an earlier design,
+    chosen so the LocalSystem-hosted MobaideAgent service could read the
+    env file at startup. That broke after the QR-pairing flow added the
+    ``pairing_monitor.write_credentials_to_env`` codepath: the same
+    LocalSystem service now needs to atomic-replace ``.env`` (requires
+    ``DELETE``) and re-tighten the ACL via icacls (requires
+    ``WRITE_DAC``), neither of which ``:R`` includes. ``:F`` is the
+    minimum grant that satisfies both. Do not "tighten" this back to
+    ``:R`` without first re-checking the pairing-monitor flow.
 
     Tested by monkeypatching ``subprocess.run`` so the assertions work on
     every host. We also force ``sys.platform = 'win32'`` so the
@@ -436,7 +446,7 @@ class TestRestrictPermsWindowsAclArgv:
         # /inheritance:r is required to drop broad-readers like Users.
         assert "/inheritance:r" in cmd
 
-    def test_grants_system_read(self, tmp_path, monkeypatch):
+    def test_grants_system_full_control(self, tmp_path, monkeypatch):
         target = tmp_path / ".env"
         target.write_text("x=1\n", encoding="utf-8")
         captured = self._capture_run(monkeypatch)
@@ -446,14 +456,25 @@ class TestRestrictPermsWindowsAclArgv:
         restrict_perms(target)
 
         cmd = captured["cmd"]
-        # SYSTEM must have READ — without it the LocalSystem-hosted
-        # MobaideAgent service cannot read the env file and crashes on
-        # missing JWT_SECRET_KEY.
+        # SYSTEM must have FULL CONTROL — the LocalSystem-hosted
+        # MobaideAgent service reads .env at boot AND writes it at
+        # post-pair time via pairing_monitor.write_credentials_to_env.
+        # SYSTEM:R was sufficient for the read but blocked the write
+        # (MoveFileEx needs DELETE on the target file) AND the
+        # follow-up icacls re-tighten (needs WRITE_DAC), so the
+        # post-pairing write silently failed and the agent stayed in
+        # pairing_pending. SYSTEM:F is the minimal grant that satisfies
+        # both. Do not change to :R, :M, or :RX without re-validating
+        # the post-pairing write path on Windows.
         assert "/grant" in cmd
-        assert "SYSTEM:R" in cmd
-        # The /grant flag must immediately precede SYSTEM:R.
-        sys_idx = cmd.index("SYSTEM:R")
+        assert "SYSTEM:F" in cmd
+        # The /grant flag must immediately precede SYSTEM:F.
+        sys_idx = cmd.index("SYSTEM:F")
         assert cmd[sys_idx - 1] == "/grant"
+        # Regression guard: no leftover ``SYSTEM:R`` from the previous
+        # design. A future refactor that re-introduces the read-only
+        # grant would re-break the pairing flow silently.
+        assert "SYSTEM:R" not in cmd
 
     def test_grants_administrators_full(self, tmp_path, monkeypatch):
         target = tmp_path / ".env"
@@ -493,16 +514,15 @@ class TestRestrictPermsWindowsAclArgv:
         cmd = captured["cmd"]
         # SYSTEM and Administrators grants must still be present even
         # without an interactive USERNAME.
-        assert "SYSTEM:R" in cmd
+        assert "SYSTEM:F" in cmd
         assert "Administrators:F" in cmd
-        # No malformed ``:F`` grant (would happen if the empty username
-        # were f-stringed in unconditionally — production code skips the
-        # ``/grant {user}:F`` pair entirely when ``user`` is empty).
-        assert ":F" not in cmd
-        # Exactly one /grant per principal: SYSTEM:R + Administrators:F.
-        # No third grant is appended for the missing user.
+        # Exactly two ``:F`` grants — SYSTEM:F + Administrators:F — when
+        # there is no interactive USERNAME. A third ``:F`` would indicate
+        # the empty username was f-stringed in (producing a malformed
+        # ``:F`` grant); the production code skips the ``/grant {user}:F``
+        # pair entirely when ``user`` is empty.
         f_grants = [p for p in cmd if p.endswith(":F")]
-        assert f_grants == ["Administrators:F"]
+        assert f_grants == ["SYSTEM:F", "Administrators:F"]
 
     def test_subprocess_failure_does_not_raise(self, tmp_path, monkeypatch):
         target = tmp_path / ".env"

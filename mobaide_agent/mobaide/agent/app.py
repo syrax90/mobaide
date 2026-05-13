@@ -169,7 +169,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 # Recognised by:
                 #   * Linux systemd: RestartForceExitStatus=75
                 #   * macOS launchd:  KeepAlive=true
-                #   * Windows SC:     sc.exe failure ... actions= restart/...
+                #   * Windows:        ``deploy/windows_service.py``'s
+                #     ``SvcDoRun`` re-spawn loop on
+                #     ``_EXIT_RESTART_REQUESTED``. SCM's own
+                #     ``sc.exe failure ... actions=restart/...`` policy
+                #     does NOT cover this path — those actions fire only
+                #     on abnormal service exit, and a graceful
+                #     ``SvcDoRun`` return is reported as a clean stop.
                 #
                 # The 0.5s defer mirrors the updater's pattern in
                 # ``relay/client.py`` — gives the structured log line a
