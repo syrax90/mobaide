@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.10](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.9...agent-v0.1.10) (2026-05-13)
+
+
+### Bug Fixes
+
+* **agent:** force SelectorEventLoop on Windows to prevent Proactor WSARecv data-loss ([65da3c8](https://github.com/syrax90/claude_mobile/commit/65da3c87e71d58d0db93cece881a3bc09510fd7a))
+* **pairing:** force SelectorEventLoop on Windows to prevent Proactor WSARecv data-loss ([c5b1dd1](https://github.com/syrax90/claude_mobile/commit/c5b1dd109f69dc4cebbb7d88401fd9aaa8166304))
+
 ## [0.1.9](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.8...agent-v0.1.9) (2026-05-13)
 
 
