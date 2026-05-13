@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,7 +34,7 @@ from mobaide.agent.pairing_monitor import (
     write_credentials_to_env,
 )
 from mobaide.agent.pairing_qr import PendingPairing
-from mobaide.agent.pairing_ws import PairingClaim
+from mobaide.agent.pairing_ws import PairingClaim, PairingWsError
 from mobaide.agent.updater import InstallLayout
 
 
@@ -343,30 +344,27 @@ class TestWriteCredentialsToEnv:
         assert "RELAY_AGENT_TOKEN=t" in text
 
 
-class TestRunPairingMonitorWriteFailureHandling:
-    """Pin the defence-in-depth ``try/except OSError`` around the
-    ``write_credentials_to_env`` call inside ``run_pairing_monitor``.
+class _RunPairingMonitorTestBase:
+    """Shared scaffolding for the two ``run_pairing_monitor`` integration
+    test classes (write-failure and ws-failure).
 
-    The original Windows pairing bug surfaced precisely because an
-    unhandled ``PermissionError`` (from ``os.replace`` on a
-    ``SYSTEM:R``-locked ``.env``) escaped the monitor task. The task is
-    spawned via ``asyncio.create_task`` from ``app.py`` and never
-    awaited, so the exception silently killed the task — the agent
-    stayed in ``pairing_pending`` forever and operators saw no
-    traceback in ``agent.err.log``.
-
-    The fix wraps the call in ``except OSError`` and emits a structured
-    ``pairing_monitor.write_failed`` log line plus a backoff-and-retry.
-    These tests pin that contract so a future refactor that drops or
-    narrows the handler reintroduces a visible test failure rather than
-    a silent regression of the original bug.
+    Each child class supplies its own ``_install_*_stubs`` helper that
+    constructs the scenario-specific WS client class and write stub,
+    then delegates the seven monkeypatched collaborator hooks plus the
+    shared layout / pending fixtures to this base. The shared helpers
+    avoid drifting the seven ``monkeypatch.setattr`` lines across two
+    classes; the scenario-specific bits stay in the children where the
+    difference is locally visible.
     """
 
     @pytest.fixture(autouse=True)
     def _fast_backoff(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The retry path sleeps for ``_BACKOFF_FLOOR_S`` (2s in prod).
         # Compress to make the test fast without changing the
-        # behavioural contract we're pinning.
+        # behavioural contract we're pinning. ``_BACKOFF_CEIL_S`` is
+        # left at the production value (60s) because no test exercises
+        # the ceiling-clamped path; bringing it down would erase the
+        # cap-vs-uncapped distinction the perf tests rely on.
         monkeypatch.setattr(_pm, "_BACKOFF_FLOOR_S", 0.01)
 
     def _make_layout(self, tmp_path: Path) -> InstallLayout:
@@ -395,6 +393,88 @@ class TestRunPairingMonitorWriteFailureHandling:
             issued_at="2026-05-07T00:00:00+00:00",
         )
 
+    def _wire_base_collaborators(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        recorder: dict,
+        *,
+        pending: PendingPairing,
+        ws_client_class: type,
+        write_stub,
+    ) -> None:
+        """Install the seven scenario-independent monkeypatches.
+
+        The five inner stubs (initiate, load, save, clear, render) plus
+        the trust-key lambda and the on_paired closure are byte-identical
+        across the write-failure and ws-failure scenarios; only the WS
+        client class and the write stub differ. Children pass those in
+        and this method installs the full set.
+
+        Mutates ``recorder`` to attach the on_paired closure as
+        ``recorder["on_paired"]`` so the test body has a callable to
+        forward into ``run_pairing_monitor``.
+        """
+
+        async def _stub_initiate(
+            relay_server_url, layout, *,
+            hostname, os_name, current_agent_id,
+        ):
+            return pending
+
+        def _stub_load(_layout):
+            # Always start fresh — force the initiate path through
+            # ``_stub_initiate`` each iteration. The save_calls counter
+            # then ticks once per outer-loop pass, which both child
+            # scenarios use as a proxy for "the loop actually cycled".
+            return None
+
+        def _stub_save(_layout, _pending):
+            recorder["save_calls"] = recorder.get("save_calls", 0) + 1
+
+        def _stub_clear(_layout):
+            recorder["clear_calls"] = recorder.get("clear_calls", 0) + 1
+
+        async def _stub_render(_pending):
+            return None
+
+        async def _on_paired(received_claim) -> None:
+            recorder["on_paired_calls"] = (
+                recorder.get("on_paired_calls", 0) + 1
+            )
+            recorder["on_paired_claim"] = received_claim
+        recorder["on_paired"] = _on_paired
+
+        monkeypatch.setattr(
+            _pm, "read_trust_public_key", lambda _layout: "stub-pub-key"
+        )
+        monkeypatch.setattr(_pm, "_initiate_with_metadata", _stub_initiate)
+        monkeypatch.setattr(_pm, "load_pending_pairing", _stub_load)
+        monkeypatch.setattr(_pm, "save_pending_pairing", _stub_save)
+        monkeypatch.setattr(_pm, "clear_pending_pairing", _stub_clear)
+        monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
+        monkeypatch.setattr(_pm, "PairingWsClient", ws_client_class)
+        monkeypatch.setattr(_pm, "write_credentials_to_env", write_stub)
+
+
+class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
+    """Pin the defence-in-depth ``try/except OSError`` around the
+    ``write_credentials_to_env`` call inside ``run_pairing_monitor``.
+
+    The original Windows pairing bug surfaced precisely because an
+    unhandled ``PermissionError`` (from ``os.replace`` on a
+    ``SYSTEM:R``-locked ``.env``) escaped the monitor task. The task is
+    spawned via ``asyncio.create_task`` from ``app.py`` and never
+    awaited, so the exception silently killed the task — the agent
+    stayed in ``pairing_pending`` forever and operators saw no
+    traceback in ``agent.err.log``.
+
+    The fix wraps the call in ``except OSError`` and emits a structured
+    ``pairing_monitor.write_failed`` log line plus a backoff-and-retry.
+    These tests pin that contract so a future refactor that drops or
+    narrows the handler reintroduces a visible test failure rather than
+    a silent regression of the original bug.
+    """
+
     def _install_loop_stubs(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -419,27 +499,6 @@ class TestRunPairingMonitorWriteFailureHandling:
         pending = self._make_pending()
         claim = self._make_claim()
 
-        async def _stub_initiate(
-            relay_server_url, layout, *,
-            hostname, os_name, current_agent_id,
-        ):
-            return pending
-
-        def _stub_load(_layout):
-            # Always start fresh — force the initiate path through
-            # ``_stub_initiate`` each iteration. Verifies the loop
-            # actually re-enters the cycle on the OSError branch.
-            return None
-
-        def _stub_save(_layout, _pending):
-            recorder["save_calls"] += 1
-
-        def _stub_clear(_layout):
-            recorder["clear_calls"] += 1
-
-        async def _stub_render(_pending):
-            return None
-
         class _StubWsClient:
             async def wait_for_claim(self, **_kwargs):
                 return claim
@@ -458,22 +517,12 @@ class TestRunPairingMonitorWriteFailureHandling:
                 raise effect
             # None => success path
 
-        async def _on_paired(received_claim) -> None:
-            recorder["on_paired_calls"] += 1
-            recorder["on_paired_claim"] = received_claim
-
-        recorder["on_paired"] = _on_paired
-
-        monkeypatch.setattr(
-            _pm, "read_trust_public_key", lambda _layout: "stub-pub-key"
+        self._wire_base_collaborators(
+            monkeypatch, recorder,
+            pending=pending,
+            ws_client_class=_StubWsClient,
+            write_stub=_stub_write,
         )
-        monkeypatch.setattr(_pm, "_initiate_with_metadata", _stub_initiate)
-        monkeypatch.setattr(_pm, "load_pending_pairing", _stub_load)
-        monkeypatch.setattr(_pm, "save_pending_pairing", _stub_save)
-        monkeypatch.setattr(_pm, "clear_pending_pairing", _stub_clear)
-        monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
-        monkeypatch.setattr(_pm, "PairingWsClient", _StubWsClient)
-        monkeypatch.setattr(_pm, "write_credentials_to_env", _stub_write)
         return recorder
 
     async def test_oserror_during_write_does_not_crash_task(
@@ -573,18 +622,27 @@ class TestRunPairingMonitorWriteFailureHandling:
             "fix only converts one silent failure into another"
         )
 
-    async def test_oserror_during_write_clears_pending_before_retry(
+    async def test_write_failure_retries_inline_and_does_not_clear_pending(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # The retry contract is "clear the pending-pairing record so
-        # the next cycle re-initiates with a fresh nonce". If we
-        # retried with the SAME pending record, the WS would
-        # eventually reject the now-expired nonce and the user would
-        # have to wait through the longer initiate-backoff cycle
-        # before another QR appeared. ``clear_pending_pairing`` on
-        # the failure path is the user-visible recovery handle.
+        # The post-fix retry contract is "hold the claim in memory and
+        # retry the WRITE in an inner loop — never fall back to the outer
+        # WS loop on write failure". The claim is single-use server-side:
+        # ``claim_pairing_nonce`` consumed the nonce and stored
+        # ``claimed_token_raw``, then the WS push (or recovery read)
+        # delivered the payload and cleared ``claimed_token_raw``. After
+        # that point the server has no way to re-deliver — a fresh WS
+        # dial on a new nonce would orphan the just-received credentials.
+        #
+        # Concrete pin: ``clear_pending_pairing`` is called EXACTLY ONCE
+        # on the success path (after the inner retry breaks out), never
+        # on the write-failure path. The prior contract (clear-then-
+        # re-initiate on write failure) caused the user-reported bug:
+        # on a Cloudflare-induced WS drop the agent moved to a new nonce
+        # while the mobile-supplied credentials sat stranded on the old
+        # one, and ``.env`` stayed empty forever.
         recorder = self._install_loop_stubs(
             monkeypatch,
             write_side_effects=[
@@ -603,13 +661,37 @@ class TestRunPairingMonitorWriteFailureHandling:
             timeout=5.0,
         )
 
-        # First cycle: failure path -> clear (1). Second cycle:
-        # success path -> clear (2). Two clears total proves the
-        # failure path performed its own clear instead of relying on
-        # the success path's clear that it would never reach.
-        assert recorder["clear_calls"] == 2, (
-            f"expected clear_pending_pairing on both cycles (failure "
-            f"+ success), got {recorder['clear_calls']} calls"
+        # Exactly one clear, on the success path. A regression that
+        # re-introduces ``clear_pending_pairing`` in the write-failure
+        # branch would push this to 2; a regression that drops the
+        # success-path clear entirely would push this to 0 (and the
+        # next cold boot would re-dial the just-paired nonce, getting
+        # a server-side 4410 "already delivered" close). Both are
+        # independently load-bearing.
+        assert recorder["clear_calls"] == 1, (
+            f"expected exactly one clear_pending_pairing on the success "
+            f"path; got {recorder['clear_calls']}"
+        )
+        # The WS was dialled exactly once: the inner retry never falls
+        # back to a fresh wait_for_claim, so no second initiate happens.
+        # ``_install_loop_stubs`` records ``save_calls`` per
+        # ``save_pending_pairing`` invocation, which is the per-iteration
+        # signal of "the outer loop initiated a new nonce".
+        assert recorder["save_calls"] == 1, (
+            f"expected exactly one save_pending_pairing (one outer loop "
+            f"iteration); got {recorder['save_calls']} — a regression "
+            f"that re-enters the WS loop on write failure would push "
+            f"this above 1 and orphan the stranded server-side claim"
+        )
+        # Both writes executed: the failure path retried in-place.
+        assert recorder["write_calls"] == 2, (
+            f"expected 2 write attempts (one failure + one success in "
+            f"the inner retry loop); got {recorder['write_calls']}"
+        )
+        # The success-path handoff fired exactly once.
+        assert recorder["on_paired_calls"] == 1, (
+            f"expected exactly one on_paired call on the successful "
+            f"write; got {recorder['on_paired_calls']}"
         )
 
     async def test_oserror_during_write_skips_on_paired_for_that_cycle(
@@ -907,4 +989,605 @@ class TestRunPairingMonitorWriteFailureHandling:
         assert str(layout.prefix) in msg or ".env" in msg, (
             f"expected layout prefix or .env in writing_credentials "
             f"log; got: {msg!r}"
+        )
+
+    async def test_write_failure_retries_write_not_ws(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Post-fix contract: a failing write retries the WRITE in an
+        # inner loop while holding the claim in memory; it never falls
+        # back to the outer WS loop. The claim is single-use server-side
+        # (``claim_pairing_nonce`` consumed it and the WS push/recovery
+        # cleared ``claimed_token_raw``), so a fresh ``wait_for_claim``
+        # on a new nonce would orphan the credentials forever — exactly
+        # the user-reported bug.
+        #
+        # Pin both signals so a regression that re-introduces the
+        # "fall back to outer WS loop on write failure" path is caught:
+        # (1) ``write_calls`` reflects every inner-loop attempt
+        #     (2 failures + 1 success = 3 here);
+        # (2) the WS was dialled exactly once. The existing fixture's
+        #     ``save_calls`` is a per-outer-iteration counter (``_stub_load``
+        #     returns None, so every outer iteration must initiate + save)
+        #     and is the cleanest "outer loop didn't re-enter" proof; we
+        #     additionally instrument the WS stub with a class-level
+        #     counter so the assertion message names the exact regression
+        #     symptom an operator would see.
+        ws_dial_count = {"n": 0}
+
+        recorder = self._install_loop_stubs(
+            monkeypatch,
+            write_side_effects=[
+                OSError("simulated disk-full attempt 1"),
+                OSError("simulated disk-full attempt 2"),
+                None,
+            ],
+        )
+
+        # Replace the fixture's ``_StubWsClient`` with one that increments
+        # a counter on every dial — gives a direct, non-proxied signal
+        # of "the outer WS loop was re-entered". The fixture installed
+        # its own stub via ``monkeypatch.setattr``; the subsequent setattr
+        # below is undone automatically at teardown by monkeypatch.
+        claim = self._make_claim()
+
+        class _CountingWsClient:
+            async def wait_for_claim(self, **_kwargs):
+                ws_dial_count["n"] += 1
+                return claim
+
+        monkeypatch.setattr(_pm, "PairingWsClient", _CountingWsClient)
+
+        layout = self._make_layout(tmp_path)
+
+        await asyncio.wait_for(
+            run_pairing_monitor(
+                layout=layout,
+                relay_server_url="wss://relay.test",
+                on_paired=recorder["on_paired"],
+            ),
+            timeout=5.0,
+        )
+
+        # Three write attempts: two failures + one success in the inner
+        # retry loop. A regression that re-entered the outer WS loop on
+        # write failure would still write 3 times overall but spread
+        # across multiple WS dials.
+        assert recorder["write_calls"] == 3, (
+            f"expected 3 write attempts (2 OSError + 1 success in the "
+            f"inner retry loop); got {recorder['write_calls']}"
+        )
+        # The smoking-gun pin: exactly one WS dial across all three
+        # write attempts. A regression that fell back to the outer loop
+        # on write failure would push this to 3, and the second/third
+        # WS dial would deliver a fresh nonce — orphaning the original
+        # claim server-side.
+        assert ws_dial_count["n"] == 1, (
+            f"expected exactly one PairingWsClient.wait_for_claim call "
+            f"across the inner write retry loop; got {ws_dial_count['n']} "
+            f"— a regression that re-enters the outer WS loop on write "
+            f"failure would dial again and orphan the just-received "
+            f"single-use claim"
+        )
+        # Reinforcing signal: only one outer iteration ran, so only one
+        # save_pending_pairing was issued.
+        assert recorder["save_calls"] == 1, (
+            f"expected exactly one save_pending_pairing (one outer "
+            f"iteration); got {recorder['save_calls']}"
+        )
+        # The success path's ``on_paired`` fired exactly once.
+        assert recorder["on_paired_calls"] == 1, (
+            f"expected on_paired to fire exactly once after the "
+            f"inner-loop success; got {recorder['on_paired_calls']}"
+        )
+
+    async def test_writing_credentials_log_carries_attempt_number(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Operator-visibility contract for the inner retry loop: each
+        # write attempt emits its OWN ``pairing_monitor.writing_credentials``
+        # INFO log carrying ``attempt=N``. Without per-attempt logging an
+        # operator grepping ``agent.err.log`` for retry pressure has no
+        # way to see "we've been trying for 30 seconds" — only the final
+        # success or a flat error stream. The pre-fix code wrote the log
+        # exactly once before the (then non-retried) write; the post-fix
+        # inner loop must emit one per attempt with a monotonically
+        # increasing ``attempt=`` field.
+        recorder = self._install_loop_stubs(
+            monkeypatch,
+            write_side_effects=[
+                OSError("simulated transient failure"),
+                OSError("simulated transient failure"),
+                None,
+            ],
+        )
+        layout = self._make_layout(tmp_path)
+
+        with caplog.at_level(logging.INFO, logger=_pm.__name__):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                    on_paired=recorder["on_paired"],
+                ),
+                timeout=5.0,
+            )
+
+        info_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.INFO
+            and "pairing_monitor.writing_credentials" in r.getMessage()
+        ]
+        # One log per write attempt — three writes (two fails + success)
+        # so three writing_credentials logs.
+        assert len(info_messages) == 3, (
+            f"expected one 'pairing_monitor.writing_credentials' INFO "
+            f"log per write attempt (3 total); got {len(info_messages)}: "
+            f"{info_messages!r}"
+        )
+        # Each log line names its attempt number so retry pressure is
+        # visible to ``Get-Content agent.err.log -Tail 50``. Pin the
+        # full ``attempt=N`` strings rather than just the substring
+        # ``attempt=`` so a regression that hard-codes ``attempt=1`` on
+        # every log line is caught.
+        assert any("attempt=1" in msg for msg in info_messages), (
+            f"expected at least one writing_credentials log with "
+            f"'attempt=1'; got: {info_messages!r}"
+        )
+        assert any("attempt=2" in msg for msg in info_messages), (
+            f"expected at least one writing_credentials log with "
+            f"'attempt=2'; got: {info_messages!r}"
+        )
+        assert any("attempt=3" in msg for msg in info_messages), (
+            f"expected at least one writing_credentials log with "
+            f"'attempt=3'; got: {info_messages!r}"
+        )
+
+    async def test_write_failure_backoff_grows_between_attempts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The inner write-retry loop applies a GROWING backoff between
+        # successive failed write attempts. The pre-growth code slept
+        # exactly ``_BACKOFF_FLOOR_S`` (2 s) between every retry, which
+        # emits ~30 ERROR lines/min under a persistent ACL or disk-full
+        # condition — enough to fill the operator's log disk overnight.
+        # The post-fix loop doubles the write-retry sleep on each
+        # failure (capped at ``_BACKOFF_CEIL_S``) so steady-state error
+        # log volume is bounded.
+        #
+        # We pin the GROWTH DIRECTION (strictly increasing successive
+        # sleeps) rather than the exact 2x factor or cap value, so a
+        # future tuning of the growth rate doesn't force a test edit.
+        # The signal that's load-bearing is "growth is happening at all".
+        captured_sleeps: list[float] = []
+        real_sleep = asyncio.sleep
+
+        async def _capturing_sleep(duration: float) -> None:
+            captured_sleeps.append(duration)
+            # Yield control without burning real wall-clock time so
+            # the bounded run can collect many iterations quickly.
+            await real_sleep(0)
+
+        # Replace the module-bound ``asyncio`` reference with a
+        # SimpleNamespace shim. The production code does
+        # ``await asyncio.sleep(...)`` and ``await asyncio.to_thread(...)``
+        # via attribute lookup on the module-level ``asyncio`` name, so
+        # patching ``_pm.asyncio`` redirects only this module's sleeps
+        # without mutating the global ``asyncio`` module (which would
+        # also break ``asyncio.wait_for`` below).
+        fake_asyncio = types.SimpleNamespace(
+            **{
+                name: getattr(asyncio, name)
+                for name in dir(asyncio)
+                if not name.startswith("__")
+            }
+        )
+        fake_asyncio.sleep = _capturing_sleep
+        monkeypatch.setattr(_pm, "asyncio", fake_asyncio)
+
+        # Five write failures + one success — enough to observe four
+        # growth steps (sleep is captured AFTER each failure, so 5
+        # failures yield 5 captured write-retry sleeps).
+        recorder = self._install_loop_stubs(
+            monkeypatch,
+            write_side_effects=[
+                OSError("simulated transient failure 1"),
+                OSError("simulated transient failure 2"),
+                OSError("simulated transient failure 3"),
+                OSError("simulated transient failure 4"),
+                OSError("simulated transient failure 5"),
+                None,
+            ],
+        )
+        layout = self._make_layout(tmp_path)
+
+        await asyncio.wait_for(
+            run_pairing_monitor(
+                layout=layout,
+                relay_server_url="wss://relay.test",
+                on_paired=recorder["on_paired"],
+            ),
+            timeout=5.0,
+        )
+
+        # Sanity check: every captured sleep happened inside the inner
+        # write-retry loop because the WS path delivers a claim on the
+        # first call (no WS-failure backoff captured) and the success
+        # path doesn't sleep. So all captures are write-retry sleeps.
+        assert recorder["write_calls"] == 6, (
+            f"expected 6 write attempts (5 failures + 1 success); "
+            f"got {recorder['write_calls']}"
+        )
+        assert len(captured_sleeps) >= 4, (
+            f"expected at least 4 captured write-retry sleeps "
+            f"(one per failed write attempt); got {len(captured_sleeps)}: "
+            f"{captured_sleeps!r}"
+        )
+
+        # Smoking-gun pin: take the first five captured sleeps (one per
+        # failure) and assert each is strictly greater than its
+        # predecessor. A regression that drops the growth math
+        # (``write_backoff = min(_BACKOFF_CEIL_S, write_backoff * 2)``)
+        # and reverts to a fixed-floor sleep would produce equal values
+        # and trip this assertion immediately. We deliberately don't
+        # assert the exact ratio (e.g. 2.0x) so future tuning of the
+        # growth rate (1.5x, 1.8x, …) doesn't require a test edit.
+        retry_sleeps = captured_sleeps[:5]
+        for i in range(1, len(retry_sleeps)):
+            assert retry_sleeps[i] > retry_sleeps[i - 1], (
+                f"write-retry sleep #{i + 1} ({retry_sleeps[i]}) "
+                f"must be strictly greater than #{i} "
+                f"({retry_sleeps[i - 1]}); full sequence: "
+                f"{retry_sleeps!r}. A regression that drops the "
+                f"exponential growth math would emit a constant sleep "
+                f"of _BACKOFF_FLOOR_S and produce equal values here."
+            )
+
+
+class TestRunPairingMonitorWsFailureHandling(_RunPairingMonitorTestBase):
+    """Pin the post-fix WS-failure branch contract.
+
+    Before the fix, a transient WS drop (CDN idle-close, TLS reset,
+    proxy hiccup) eagerly invoked ``clear_pending_pairing(layout)``
+    and forced the next iteration to initiate a brand-new nonce.
+    Under realistic timing — a mobile that scanned the QR during the
+    WS drop — this orphaned the credentials server-side: the central
+    server's ``claim_pairing_nonce`` persisted ``claimed_token_raw``
+    and returned 200 to the mobile (so the mobile showed "Paired"),
+    but the agent's next WS connect was for a different nonce, so the
+    server's ``read_and_clear_claimed_credentials`` recovery path never
+    fired against the right nonce.
+
+    The post-fix contract is: on ``PairingWsError`` the pending file is
+    RETAINED so the next outer-loop iteration reconnects to the SAME
+    nonce, giving the server's recovery path a chance to deliver any
+    stranded claim. The natural TTL check in ``load_pending_pairing``
+    evicts the entry once the nonce truly expires.
+
+    These tests pin "WS failure does not call clear_pending_pairing"
+    so a regression that re-introduces the eager-clear bug fails loudly.
+    """
+
+    def _install_ws_failure_stubs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> dict:
+        """Drive the loop deterministically with a WS that always raises.
+
+        Mirrors ``_install_loop_stubs`` in the sibling class but swaps
+        the WS stub for one that raises ``PairingWsError`` on every
+        attempt — so the loop never reaches the write path and the
+        bounded test window observes only the WS-failure branch.
+        """
+        recorder: dict = {
+            "clear_calls": 0,
+            "save_calls": 0,
+            "ws_calls": 0,
+            "write_calls": 0,
+            "on_paired_calls": 0,
+        }
+        pending = self._make_pending()
+
+        class _FailingWsClient:
+            async def wait_for_claim(self, **_kwargs):
+                recorder["ws_calls"] += 1
+                raise PairingWsError("simulated transport failure")
+
+        async def _stub_write(_env_path, _claim):
+            # Should never be reached — the WS always raises before the
+            # write step. Assert loudly if it does to catch a regression
+            # that lets PairingWsError fall through to the write branch.
+            recorder["write_calls"] += 1
+            raise AssertionError(
+                "write_credentials_to_env reached on the WS-failure "
+                "path; the post-fix code must continue to the next "
+                "outer-loop iteration without writing"
+            )
+
+        self._wire_base_collaborators(
+            monkeypatch, recorder,
+            pending=pending,
+            ws_client_class=_FailingWsClient,
+            write_stub=_stub_write,
+        )
+        return recorder
+
+    async def test_ws_failure_does_not_clear_pending(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Bound the run with a short timeout — the loop is infinite as
+        # long as the WS keeps raising. A TimeoutError on
+        # ``asyncio.wait_for`` is the EXPECTED exit signal here: the
+        # behaviour we pin is "did the loop call clear_pending_pairing
+        # during this bounded window?" not "did the loop terminate".
+        recorder = self._install_ws_failure_stubs(monkeypatch)
+        layout = self._make_layout(tmp_path)
+
+        with caplog.at_level(logging.WARNING, logger=_pm.__name__):
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    run_pairing_monitor(
+                        layout=layout,
+                        relay_server_url="wss://relay.test",
+                        on_paired=recorder["on_paired"],
+                    ),
+                    timeout=0.1,
+                )
+
+        # The loop reached the WS dial at least once during the window.
+        # If it didn't, the test isn't actually exercising the branch
+        # we claim to be pinning.
+        assert recorder["ws_calls"] >= 1, (
+            f"loop never reached PairingWsClient.wait_for_claim; "
+            f"test is not exercising the WS-failure branch "
+            f"(ws_calls={recorder['ws_calls']})"
+        )
+        # The smoking-gun pin: on the WS-failure path,
+        # clear_pending_pairing MUST NOT be called. A regression that
+        # re-introduces the eager-clear bug — which is the exact
+        # user-reported failure mode where the agent moves to a new
+        # nonce while the mobile-supplied credentials sit stranded on
+        # the old one — would push this above 0.
+        assert recorder["clear_calls"] == 0, (
+            f"clear_pending_pairing was called {recorder['clear_calls']} "
+            f"times on the WS-failure branch; the post-fix contract is "
+            f"that the pending file is RETAINED so the next iteration "
+            f"can reconnect to the same nonce and trigger the server's "
+            f"recovery path"
+        )
+        # The write path must not have been reached on the WS-failure
+        # branch (the stub raises if it is, but the explicit assert
+        # makes the contract obvious).
+        assert recorder["write_calls"] == 0, (
+            f"write_credentials_to_env must not be called on the "
+            f"WS-failure path; got {recorder['write_calls']} calls"
+        )
+        # ``on_paired`` must not fire on a WS failure — the claim was
+        # never delivered.
+        assert recorder["on_paired_calls"] == 0, (
+            f"on_paired must not fire on a WS-failure-only run; "
+            f"got {recorder['on_paired_calls']} calls"
+        )
+        # Operator-visibility check: every WS failure emits the
+        # ``pairing_monitor.ws_failed`` structured log line. Pin the
+        # event name so ops dashboards keying off this string keep
+        # working across refactors.
+        warning_messages = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.WARNING
+        ]
+        assert any(
+            "pairing_monitor.ws_failed" in msg
+            for msg in warning_messages
+        ), (
+            f"expected 'pairing_monitor.ws_failed' WARNING log on the "
+            f"WS-failure branch; got: {warning_messages!r}"
+        )
+
+    async def test_ws_failure_backoff_grows_between_attempts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Successive WS-failure retries apply a GROWING backoff.
+        # Before the fix, the WS-failure branch slept
+        # ``_BACKOFF_FLOOR_S`` (2 s) flat and then cleared pending —
+        # bounded at 1 attempt/nonce. The post-fix branch RETAINS
+        # pending and re-dials, which without growth would fan a
+        # fleet-wide CDN glitch into ~60 reconnects/nonce/agent
+        # (120 s TTL / 2 s floor) — a thundering herd against the
+        # central server. Reusing the outer ``backoff`` local with
+        # ``backoff = min(_BACKOFF_CEIL_S, backoff * 2)`` caps the
+        # per-nonce attempt count at ~6.
+        #
+        # We pin the GROWTH DIRECTION (strictly increasing successive
+        # sleeps) and neutralise the jitter to keep the assertion
+        # deterministic. The jitter itself is verified separately in
+        # ``test_ws_failure_applies_jitter`` so a regression that
+        # drops jitter while keeping growth (or vice versa) fails
+        # exactly one of these tests with a clear message.
+        captured_sleeps: list[float] = []
+        real_sleep = asyncio.sleep
+
+        async def _capturing_sleep(duration: float) -> None:
+            captured_sleeps.append(duration)
+            # Yield control without real wall-clock burn so the
+            # bounded run can iterate many times quickly.
+            await real_sleep(0)
+
+        fake_asyncio = types.SimpleNamespace(
+            **{
+                name: getattr(asyncio, name)
+                for name in dir(asyncio)
+                if not name.startswith("__")
+            }
+        )
+        fake_asyncio.sleep = _capturing_sleep
+        monkeypatch.setattr(_pm, "asyncio", fake_asyncio)
+
+        # Neutralise jitter for monotonicity: the production code adds
+        # ``random.uniform(0, 1)`` to each WS-failure sleep, which can
+        # add up to 1 s of noise. Without neutralisation, a sleep of
+        # 0.01 + 0.9 (jitter) followed by 0.02 + 0.05 (jitter) would
+        # appear to DECREASE — masking the growth we want to pin.
+        # Replacing ``_pm.random`` with a SimpleNamespace exposing
+        # ``uniform = lambda _a, _b: 0.0`` zeroes the jitter for this
+        # test only without touching the global ``random`` module.
+        # ``test_ws_failure_applies_jitter`` below pins that the
+        # jitter call still happens.
+        fake_random = types.SimpleNamespace(uniform=lambda _a, _b: 0.0)
+        monkeypatch.setattr(_pm, "random", fake_random)
+
+        recorder = self._install_ws_failure_stubs(monkeypatch)
+
+        # Override the shared ``_stub_load`` (which returns None per
+        # iteration to force re-initiate) with one that returns the
+        # SAME pending across iterations. In production,
+        # ``load_pending_pairing`` reads the persisted file each time
+        # so a same-nonce WS failure path skips the
+        # ``_initiate_with_metadata`` branch and the
+        # ``backoff = _BACKOFF_FLOOR_S`` reset that fires on a
+        # successful re-initiate (line ~310). Without this override
+        # every outer-loop iteration would reset ``backoff`` to the
+        # floor and growth would be invisible — masking the very
+        # contract we're trying to pin. The override mirrors the
+        # real-world same-nonce reconnect this branch protects.
+        stable_pending = self._make_pending()
+        monkeypatch.setattr(
+            _pm, "load_pending_pairing", lambda _layout: stable_pending,
+        )
+
+        layout = self._make_layout(tmp_path)
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                    on_paired=recorder["on_paired"],
+                ),
+                timeout=0.5,
+            )
+
+        assert recorder["ws_calls"] >= 3, (
+            f"loop must reach the WS-failure branch at least 3 times "
+            f"to observe growth across successive sleeps; got "
+            f"ws_calls={recorder['ws_calls']}"
+        )
+        assert len(captured_sleeps) >= 3, (
+            f"expected at least 3 captured WS-failure sleeps; got "
+            f"{len(captured_sleeps)}: {captured_sleeps!r}"
+        )
+
+        # Smoking-gun pin: take the first three captured sleeps and
+        # assert each is strictly greater than its predecessor.
+        # A regression that removes the
+        # ``backoff = min(_BACKOFF_CEIL_S, backoff * 2)`` line and
+        # reverts to the pre-fix flat-floor sleep would produce equal
+        # values and trip this assertion. We pin only the first three
+        # samples to avoid coupling to ``_BACKOFF_CEIL_S`` (later
+        # samples may hit the cap and become equal).
+        first_three = captured_sleeps[:3]
+        for i in range(1, len(first_three)):
+            assert first_three[i] > first_three[i - 1], (
+                f"WS-failure sleep #{i + 1} ({first_three[i]}) must "
+                f"be strictly greater than #{i} ({first_three[i - 1]}); "
+                f"full first-three sequence: {first_three!r}. A "
+                f"regression that drops the exponential growth math "
+                f"would emit a constant sleep of _BACKOFF_FLOOR_S and "
+                f"produce equal values here."
+            )
+
+    async def test_ws_failure_applies_jitter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The WS-failure branch adds ``random.uniform(0, 1)`` to the
+        # sleep duration. The jitter de-synchronises a synchronised
+        # fleet retry after a global event like a CDN restart —
+        # without jitter, every agent that reconnected at T+0 would
+        # also reconnect at T+2, T+4, … in lockstep, peaking the
+        # central server's connect rate.
+        #
+        # Pin the existence of the jitter call rather than its
+        # statistical distribution: a regression that hard-codes the
+        # jitter to a constant 0 (or removes the addition entirely)
+        # will not invoke ``random.uniform(0, 1)`` and this test will
+        # fail with a precise diagnostic. We verify the call shape
+        # (``(0, 1)``) so a regression that calls ``random.uniform``
+        # with a degenerate range like ``(0, 0)`` is also caught.
+        uniform_calls: list[tuple] = []
+
+        def _capturing_uniform(a: float, b: float) -> float:
+            uniform_calls.append((a, b))
+            return 0.0
+
+        fake_random = types.SimpleNamespace(uniform=_capturing_uniform)
+        monkeypatch.setattr(_pm, "random", fake_random)
+
+        # Patch asyncio.sleep to yield without real waits so the bounded
+        # run iterates several times within the 0.1 s timeout.
+        real_sleep = asyncio.sleep
+
+        async def _instant_sleep(_duration: float) -> None:
+            await real_sleep(0)
+
+        fake_asyncio = types.SimpleNamespace(
+            **{
+                name: getattr(asyncio, name)
+                for name in dir(asyncio)
+                if not name.startswith("__")
+            }
+        )
+        fake_asyncio.sleep = _instant_sleep
+        monkeypatch.setattr(_pm, "asyncio", fake_asyncio)
+
+        recorder = self._install_ws_failure_stubs(monkeypatch)
+        layout = self._make_layout(tmp_path)
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                    on_paired=recorder["on_paired"],
+                ),
+                timeout=0.1,
+            )
+
+        assert recorder["ws_calls"] >= 1, (
+            f"loop never reached the WS-failure branch "
+            f"(ws_calls={recorder['ws_calls']}); test is not "
+            f"exercising the path it claims to pin"
+        )
+        # At least one ``random.uniform(0, 1)`` call must have happened
+        # — one per WS failure. A regression that drops the jitter
+        # addition entirely would produce zero calls here.
+        assert len(uniform_calls) >= 1, (
+            f"expected ``random.uniform`` to be called at least once "
+            f"on the WS-failure branch (one per retry); got "
+            f"{len(uniform_calls)} calls. A regression that drops the "
+            f"jitter addition would produce zero calls — re-synchronising "
+            f"a fleet retry storm against the central server."
+        )
+        # Every captured call uses the (0, 1) range — pins the jitter
+        # window so a regression that narrows it to a degenerate
+        # ``(0, 0)`` (effectively no jitter) is also caught.
+        assert all(call == (0, 1) for call in uniform_calls), (
+            f"expected every ``random.uniform`` call to use the (0, 1) "
+            f"range; got: {uniform_calls!r}. A degenerate range like "
+            f"(0, 0) silently disables jitter without removing the call."
         )
