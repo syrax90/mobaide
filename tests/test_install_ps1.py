@@ -2506,3 +2506,229 @@ def test_install_service_verifies_service_exists_before_starting() -> None:
         "away from the actual cause. Body slice after registration:\n"
         + repr(tail)
     )
+
+
+@pytest.mark.parametrize(
+    "func_name",
+    [
+        "Read-EnvValue",
+        "Wait-AgentHealthy",
+        "Show-PairingQrFromService",
+    ],
+)
+def test_pairing_qr_helpers_are_defined(func_name: str) -> None:
+    """The post-service pairing-QR flow depends on three new functions.
+
+    The original install order rendered the QR via ``Write-PairingQr``
+    BEFORE ``Install-Service`` ran, so a mobile scan during the gap had
+    nowhere to dispatch the pairing claim and ``RELAY_AGENT_ID`` /
+    ``RELAY_AGENT_TOKEN`` silently stayed empty. The fix:
+    ``Install-Service`` runs first, ``Wait-AgentHealthy`` confirms
+    ``/api/health`` returns 200 (the agent is actually up, not just
+    "SCM accepted the start request"), then
+    ``Show-PairingQrFromService`` waits for the running service's
+    pairing-monitor to write ``run/pending_pairing.json`` and renders
+    via ``mobaide-agent show-qr --require-pending``. If any of the
+    three helpers is renamed or deleted, ``Main`` calls into the void.
+    """
+    funcs = _list_function_names()
+    assert func_name in funcs, (
+        f"expected function {func_name!r} in {_DEPLOY_INSTALL_PS1}; "
+        f"found functions: {funcs!r}. Main() depends on Read-EnvValue "
+        f"(port lookup from .env), Wait-AgentHealthy (poll /api/health "
+        f"until 200), and Show-PairingQrFromService (wait for "
+        f"pending_pairing.json, render via show-qr --require-pending)."
+    )
+
+
+def test_old_write_pairing_qr_function_is_removed() -> None:
+    """The pre-fix ``Write-PairingQr`` must NOT be defined anymore.
+
+    The old function ran ``mobaide-agent pair-qr --print`` BEFORE the
+    service was up — exactly the ordering bug the rewrite eliminates.
+    Leaving the old definition behind would mean a future caller could
+    re-introduce the pre-service-up render, reproducing the original
+    "QR scans but credentials never land" symptom.
+    """
+    funcs = _list_function_names()
+    assert "Write-PairingQr" not in funcs, (
+        f"Write-PairingQr must be removed from {_DEPLOY_INSTALL_PS1} "
+        f"after the service-first reorder; Show-PairingQrFromService "
+        f"replaces it. Found functions: {funcs!r}."
+    )
+
+
+def test_main_orders_install_service_before_health_before_qr() -> None:
+    """``Main`` must call ``Install-Service`` before ``Wait-AgentHealthy``
+    before ``Show-PairingQrFromService`` before ``Write-Completion``.
+
+    The whole point of this rewrite is the ordering. Pinning it via
+    string positions in the ``Main`` body catches any future refactor
+    that accidentally moves the QR render back ahead of the service
+    start.
+
+    Comments are stripped before the position search — the
+    explanatory paragraph in ``Main`` documents the four function
+    names in the order they're called, so a naive ``.find()`` on the
+    raw body would resolve them to comment positions instead of the
+    actual call lines.
+    """
+    body = _strip_powershell_comments(_function_body_text("Main"))
+    install_pos = body.find("Install-Service")
+    health_pos = body.find("Wait-AgentHealthy")
+    qr_pos = body.find("Show-PairingQrFromService")
+    completion_pos = body.find("Write-Completion")
+    assert install_pos >= 0, (
+        "Main must call Install-Service. Body:\n" + repr(body)
+    )
+    assert health_pos >= 0, (
+        "Main must call Wait-AgentHealthy after Install-Service so the "
+        "QR is only rendered once the agent is actually responding. "
+        "Body:\n" + repr(body)
+    )
+    assert qr_pos >= 0, (
+        "Main must call Show-PairingQrFromService. Body:\n" + repr(body)
+    )
+    assert completion_pos >= 0, (
+        "Main must call Write-Completion. Body:\n" + repr(body)
+    )
+    assert install_pos < health_pos < qr_pos < completion_pos, (
+        f"Main ordering is broken. Required order: Install-Service "
+        f"({install_pos}) < Wait-AgentHealthy ({health_pos}) < "
+        f"Show-PairingQrFromService ({qr_pos}) < Write-Completion "
+        f"({completion_pos}). The QR must render AFTER the service is "
+        f"confirmed healthy, otherwise a mobile scan during the boot "
+        f"gap will silently fail to pair and .env will stay empty."
+    )
+
+
+def test_main_no_longer_renders_qr_before_install_service() -> None:
+    """No ``Write-PairingQr`` / ``pair-qr --print`` call may appear in
+    ``Main`` ahead of ``Install-Service``.
+
+    Catches accidental partial-revert that re-adds the pre-fix render
+    call alongside the new service-first flow. The new install-time
+    render goes exclusively through ``Show-PairingQrFromService``,
+    which lives AFTER the service is healthy.
+    """
+    body = _function_body_text("Main")
+    assert "Write-PairingQr" not in body, (
+        "Main must not call Write-PairingQr — that function was "
+        "removed and its replacement (Show-PairingQrFromService) "
+        "runs after Install-Service + Wait-AgentHealthy. Body:\n"
+        + repr(body)
+    )
+    assert "pair-qr --print" not in body, (
+        "Main must not invoke `mobaide-agent pair-qr --print` "
+        "directly — that's the pre-fix shape that fired before the "
+        "service was up. The new flow uses `mobaide-agent show-qr "
+        "--require-pending` from inside Show-PairingQrFromService, "
+        "which only runs after Wait-AgentHealthy succeeds. Body:\n"
+        + repr(body)
+    )
+
+
+def test_wait_agent_healthy_polls_api_health_with_timeout() -> None:
+    """``Wait-AgentHealthy`` must poll the FastAPI health endpoint.
+
+    Pin the actual path (``/api/health``) and ``127.0.0.1`` (not the
+    agent's bind ``HOST`` which defaults to ``0.0.0.0`` — the installer
+    contacts the loopback address) and a default 60-second budget.
+    Pin ``Invoke-WebRequest`` (PowerShell's cross-trust-store HTTP
+    primitive — same rationale as ``Invoke-AgentDownload`` documents).
+    """
+    body = _function_body_text("Wait-AgentHealthy")
+    assert "/api/health" in body, (
+        "Wait-AgentHealthy must hit the agent's `/api/health` route "
+        "(defined at mobaide/agent/app.py:380). Body:\n" + repr(body)
+    )
+    assert "127.0.0.1" in body, (
+        "Wait-AgentHealthy must contact 127.0.0.1, not the agent's "
+        "configured HOST (which defaults to 0.0.0.0, the bind "
+        "address; the installer hits the loopback contact address). "
+        "Body:\n" + repr(body)
+    )
+    assert re.search(r"Invoke-WebRequest\b", body), (
+        "Wait-AgentHealthy must use Invoke-WebRequest (backed by .NET "
+        "HttpClient / Schannel; trusts the Windows root store and "
+        "enterprise GPO-injected CAs). Same rationale as "
+        "Invoke-AgentDownload — do not regress to urllib here. "
+        "Body:\n" + repr(body)
+    )
+
+
+def test_wait_agent_healthy_fails_with_event_log_pointer() -> None:
+    """On timeout, ``Wait-AgentHealthy`` must surface the Event Viewer.
+
+    The user's original bug report was "service doesn't start
+    automatically" — operators need a clear pointer to the diagnostic
+    surface (Event Log, Source: MobaideAgent) so a silent crash at
+    SvcDoRun shows up as a discoverable failure instead of "the QR I
+    scanned didn't pair".
+    """
+    body = _function_body_text("Wait-AgentHealthy")
+    assert "Write-Fail" in body, (
+        "Wait-AgentHealthy must hard-fail on timeout (via Write-Fail), "
+        "not silently fall through. The whole point of this guard is "
+        "to surface a service crash that Start-Service masked. "
+        "Body:\n" + repr(body)
+    )
+    assert "eventvwr" in body or "EventLog" in body, (
+        "Wait-AgentHealthy's diagnostic message must reference the "
+        "Windows Event Viewer / Event Log so the operator can find "
+        "the underlying service-crash trace. Body:\n" + repr(body)
+    )
+    assert "MobaideAgent" in body, (
+        "Wait-AgentHealthy's diagnostic must name the service "
+        "(`MobaideAgent`) so the operator's eventvwr / Get-EventLog "
+        "filter matches. Body:\n" + repr(body)
+    )
+
+
+def test_show_pairing_qr_uses_require_pending_flag() -> None:
+    """``Show-PairingQrFromService`` must call ``show-qr --require-pending``.
+
+    The flag prevents the CLI from initiating a second pairing nonce
+    when the file is briefly absent. The running service is the single
+    initiator; the installer renders from the file the service wrote.
+    Without the flag, the CLI falls through to ``_run_pair_qr`` (which
+    initiates), and two concurrent /ws/pairing/{nonce} dials race for
+    the same nonce — central_server rejects the loser with WS close
+    4001 (single-use ws semantics).
+    """
+    body = _function_body_text("Show-PairingQrFromService")
+    assert "show-qr" in body, (
+        "Show-PairingQrFromService must invoke `mobaide-agent show-qr` "
+        "(rather than `pair-qr --print`) so the CLI reads the running "
+        "service's pending_pairing.json. Body:\n" + repr(body)
+    )
+    assert "--require-pending" in body, (
+        "Show-PairingQrFromService must pass `--require-pending` to "
+        "the show-qr CLI so it never initiates a second nonce; the "
+        "running agent service is the single initiator. Without this "
+        "flag, two processes race for the same /ws/pairing/{nonce} "
+        "dial and central_server rejects the loser (WS close 4001). "
+        "Body:\n" + repr(body)
+    )
+    assert "pending_pairing.json" in body, (
+        "Show-PairingQrFromService must wait for "
+        "`pending_pairing.json` written by the running service before "
+        "rendering — the lifespan task is concurrent with the yield, "
+        "so /api/health responds 200 before the file appears. Body:\n"
+        + repr(body)
+    )
+
+
+def test_show_pairing_qr_preserves_skip_env_var() -> None:
+    """``MOBAIDE_AGENT_SKIP_INSTALL_QR=1`` must still suppress the QR.
+
+    Documented env-var contract in docs/deployment.md, used by CI /
+    unattended installs that don't have an operator at the terminal.
+    The reorder MUST NOT silently drop this hook.
+    """
+    body = _function_body_text("Show-PairingQrFromService")
+    assert "MOBAIDE_AGENT_SKIP_INSTALL_QR" in body, (
+        "Show-PairingQrFromService must honour the documented "
+        "MOBAIDE_AGENT_SKIP_INSTALL_QR opt-out env var. Body:\n"
+        + repr(body)
+    )

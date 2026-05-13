@@ -718,22 +718,140 @@ function Write-AgentEnv {
     if ($LASTEXITCODE -ne 0) { Write-Fail "init-env failed (exit $LASTEXITCODE)" }
 }
 
-function Write-PairingQr {
-    param($Version)
-    # Best-effort: render a pairing QR for the operator to scan from the
-    # Mobaide mobile app before the service starts. Non-fatal — the
-    # boot-time autorun retries on its own.
-    if ($env:MOBAIDE_AGENT_SKIP_INSTALL_QR) { return }
-    $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $Version
+# Parse a KEY=VALUE line from <prefix>/mobaide_agent/.env. Single
+# lookup, no global caching: this helper is called twice per install
+# (port for /api/health, future fields if added) and the file is small.
+function Read-EnvValue {
+    param(
+        [Parameter(Mandatory=$true)] [string] $Path,
+        [Parameter(Mandatory=$true)] [string] $Key,
+        [string] $Default = ""
+    )
+    if (-not (Test-Path -LiteralPath $Path)) { return $Default }
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        # Match `KEY=VALUE` with optional surrounding whitespace; ignore
+        # comments and blank lines. The env-writer renders one key per
+        # line, no quoting (init-env at mobaide.agent.config), so a
+        # naive split on the first `=` is sufficient and matches what
+        # pydantic-settings consumes at agent boot.
+        if ($line -match "^\s*$Key\s*=\s*(.*)\s*$") {
+            return $matches[1]
+        }
+    }
+    return $Default
+}
+
+# Block until the agent's FastAPI /api/health endpoint responds 200,
+# or hard-fail with an Event-Viewer diagnostic. The Windows-service
+# bug this guards against (the user's original report): `Start-Service`
+# returns success because SCM accepted the start request, but the
+# Python service host can still crash inside SvcDoRun before the
+# launcher subprocess opens the HTTP socket — and the operator only
+# discovers the failure when the QR they scan never pairs. The 60s
+# budget covers a cold-start that includes SCM init + svc-venv import
+# + uvicorn bind on slow hosts; failing fast with the Event-Viewer
+# pointer is the difference between "obvious install bug" and "QR
+# silently doesn't work".
+function Wait-AgentHealthy {
+    param(
+        [Parameter(Mandatory=$true)] [string] $Prefix,
+        [int] $TimeoutSec = 60
+    )
+    $envFile = Join-Path (Join-Path $Prefix "mobaide_agent") ".env"
+    # ``port`` and ``host`` default to AgentConfig's documented defaults
+    # (mobaide/agent/config.py:43-44): 0.0.0.0:8000. The installer always
+    # hits 127.0.0.1 (HOST is the bind address, not the contact address).
+    $port = Read-EnvValue -Path $envFile -Key 'PORT' -Default '8000'
+    $url = "http://127.0.0.1:$port/api/health"
+    Write-Info "Waiting for agent /api/health at $url (timeout ${TimeoutSec}s)"
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $oldProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        while ((Get-Date) -lt $deadline) {
+            try {
+                $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2
+                if ($resp.StatusCode -eq 200) {
+                    return ($resp.Content | ConvertFrom-Json)
+                }
+            } catch {
+                # Connection refused / timeout / 5xx — keep polling.
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    } finally {
+        $ProgressPreference = $oldProgress
+    }
+    Write-Fail @"
+Agent service registered but /api/health did not respond within ${TimeoutSec}s.
+The service may have crashed at startup. Inspect:
+    eventvwr.msc -> Windows Logs -> Application (Source: MobaideAgent)
+Or from an elevated PowerShell:
+    Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
+    Get-Service MobaideAgent
+"@
+}
+
+function Show-PairingQrFromService {
+    param(
+        [Parameter(Mandatory=$true)] [string] $Prefix,
+        [Parameter(Mandatory=$true)] [string] $Version,
+        $Health,
+        [int] $PendingTimeoutSec = 60
+    )
+    # Documented opt-out for unattended/CI provisioning. Identical
+    # contract to deploy/install.sh's MOBAIDE_AGENT_SKIP_INSTALL_QR.
+    if ($env:MOBAIDE_AGENT_SKIP_INSTALL_QR) {
+        Write-Info "MOBAIDE_AGENT_SKIP_INSTALL_QR set; not rendering pairing QR."
+        return
+    }
+    # Re-install on an already-paired agent: /api/health.pairing_pending
+    # is $false because credentials are already in .env. No QR needed;
+    # avoids a stale "scan me" prompt on an idempotent re-run.
+    if ($Health -and $Health.pairing_pending -eq $false) {
+        Write-Info "Agent reports pairing_pending=false; already paired. Skipping QR."
+        return
+    }
+    # Lifespan creates the pairing-monitor task concurrently with the
+    # yield, so /api/health responds 200 BEFORE the monitor has called
+    # /api/pairing/initiate and saved the pending file. Poll for the
+    # file to appear; if it never does within the budget, the service
+    # is up but can't reach central_server (most likely network /
+    # firewall) — surface a directed error rather than rendering a
+    # nonexistent QR.
+    $pendingFile = Join-Path (Join-Path $Prefix "run") "pending_pairing.json"
+    Write-Info "Waiting for pairing nonce at $pendingFile (timeout ${PendingTimeoutSec}s)"
+    $deadline = (Get-Date).AddSeconds($PendingTimeoutSec)
+    while ((Get-Date) -lt $deadline -and -not (Test-Path -LiteralPath $pendingFile)) {
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not (Test-Path -LiteralPath $pendingFile)) {
+        Write-Fail @"
+Agent service is up but did not initiate pairing within ${PendingTimeoutSec}s
+(no $pendingFile). The service likely cannot reach central_server. Check:
+    Test-NetConnection -ComputerName api.mobaide.com -Port 443
+    Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
+The service is still running; once connectivity is restored it will
+initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
+"@
+    }
+    $releaseDir = Join-Path (Join-Path $Prefix "releases") $Version
     $releaseScripts = Join-Path $releaseDir "venv\Scripts"
     $mobaideAgent = Join-Path $releaseScripts "mobaide-agent.exe"
-    if (-not (Test-Path $mobaideAgent)) {
+    if (-not (Test-Path -LiteralPath $mobaideAgent)) {
         $mobaideAgent = Join-Path $releaseScripts "mobaide-agent"
     }
     Write-Info "Rendering pairing QR (scan from the Mobaide mobile app)"
-    & $mobaideAgent pair-qr --print --prefix $Script:Prefix
+    # ``--require-pending`` keeps this call from initiating a second
+    # nonce (the running service has already initiated): two concurrent
+    # /ws/pairing/{nonce} dials for the same nonce would race, and the
+    # central server rejects the loser with WS close 4001. The flag
+    # makes the CLI render-from-file only; on exit 7 (file vanished
+    # between our Test-Path and the CLI's load) we hard-fail rather
+    # than fall through to a fresh initiate.
+    & $mobaideAgent show-qr --require-pending --prefix $Prefix
     if ($LASTEXITCODE -ne 0) {
-        Write-Info "QR render failed; the agent will re-render at boot."
+        Write-Fail "mobaide-agent show-qr --require-pending failed (exit $LASTEXITCODE). Run `mobaide-agent show-qr` from a new PowerShell window."
     }
 }
 
@@ -869,7 +987,11 @@ function Write-Completion {
     Write-Host "  Mobaide agent installed"
     Write-Host "  Prefix:  $Script:Prefix"
     Write-Host "  Version: $Version"
-    Write-Host "  Service: $Script:ServiceName"
+    Write-Host "  Service: $Script:ServiceName (Running)"
+    Write-Host ""
+    Write-Host "  Re-render QR:  mobaide-agent show-qr"
+    Write-Host "  Re-pair:       mobaide-agent re-pair"
+    Write-Host "  Restart:       Restart-Service $Script:ServiceName"
     Write-Host "============================================"
 }
 
@@ -911,9 +1033,29 @@ function Main {
     }
 
     Write-AgentEnv -Version $version
-    Write-PairingQr -Version $version
 
+    # New ordering (the fix for the original "service doesn't start +
+    # QR shows but pairing doesn't land" report):
+    #   1. Install + Start-Service        — bring the agent service up.
+    #   2. Wait-AgentHealthy              — poll /api/health until 200,
+    #                                       so we KNOW the service is
+    #                                       fully booted (not just that
+    #                                       SCM accepted the start).
+    #   3. Show-PairingQrFromService      — wait for the service's
+    #                                       pairing-monitor to write
+    #                                       pending_pairing.json, then
+    #                                       render the QR from it.
+    # The previous order rendered the QR before the service was up,
+    # so a scan during the gap had nothing to dispatch the claim to
+    # and RELAY_AGENT_ID / RELAY_AGENT_TOKEN stayed empty. Inverting
+    # makes the running service the single initiator of the nonce
+    # (no two-process race) and surfaces a clear diagnostic when the
+    # service fails to start (Wait-AgentHealthy hard-fails with an
+    # Event-Viewer pointer).
     Install-Service -PythonExe $python
+    $health = Wait-AgentHealthy -Prefix $Script:Prefix -TimeoutSec 60
+    Show-PairingQrFromService -Prefix $Script:Prefix -Version $version -Health $health
+
     Write-Completion -Version $version
 }
 

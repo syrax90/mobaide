@@ -134,6 +134,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--prefix",
         help="Override install prefix (default: install_paths.default_prefix()).",
     )
+    show_qr.add_argument(
+        "--require-pending",
+        action="store_true",
+        help=(
+            "Only render if a pending-pairing file already exists; never "
+            "initiate a new nonce. Used by installers that delegate the "
+            "initiate call to the running agent service."
+        ),
+    )
 
     re_pair = sub.add_parser(
         "re-pair",
@@ -602,6 +611,13 @@ def _run_show_qr(args: argparse.Namespace) -> int:
 
     If the agent already has both ``RELAY_AGENT_ID`` and
     ``RELAY_AGENT_TOKEN`` set, prints ``already paired`` and exits.
+
+    With ``--require-pending`` the fall-through to ``pair-qr --print``
+    (which initiates a new nonce) is disabled — the verb instead exits
+    7 if no pending file is found. Used by the install scripts so the
+    running agent service is the single initiator of the pairing
+    nonce; two competing initiates would race for the same WebSocket
+    endpoint.
     """
     from mobaide.agent._env_writer import env_path_for_prefix, parse_env_file
     from mobaide.agent.install_paths import default_prefix
@@ -637,6 +653,16 @@ def _run_show_qr(args: argparse.Namespace) -> int:
             f"{pending.expires_at}\n"
         )
         return 0
+
+    if getattr(args, "require_pending", False):
+        sys.stderr.write(
+            "mobaide-agent show-qr: no pending-pairing file at "
+            f"{layout.prefix / 'run' / 'pending_pairing.json'} and "
+            "--require-pending is set; refusing to initiate a new nonce. "
+            "Wait for the agent service to write the pending file, or "
+            "drop --require-pending to initiate from this process.\n"
+        )
+        return 7
 
     fake_args = argparse.Namespace(
         prefix=str(prefix), print=True, wait=False, no_restart=True
