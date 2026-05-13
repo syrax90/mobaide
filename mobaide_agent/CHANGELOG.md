@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.9](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.8...agent-v0.1.9) (2026-05-13)
+
+
+### Bug Fixes
+
+* **agent:** retain pending nonce on WS failure + retry write inline ([19f42ed](https://github.com/syrax90/claude_mobile/commit/19f42edef8bf46e6514522eec1deb927bcdd6167))
+* **pairing:** retain pending nonce on WS failure + retry write inline ([f876146](https://github.com/syrax90/claude_mobile/commit/f876146bf640b21bbd8ca5aeae8245bb2b99df75))
+
 ## [0.1.8](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.7...agent-v0.1.8) (2026-05-13)
 
 
