@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.3](https://github.com/syrax90/claude_mobile/compare/server-v0.1.2...server-v0.1.3) (2026-05-13)
+
+
+### Bug Fixes
+
+* **database:** clear claimed_agent_id FK before deleting agent ([ac416fd](https://github.com/syrax90/claude_mobile/commit/ac416fd8d93b06bc581f65a773db706f3d61f04b))
+* **database:** clear claimed_agent_id FK before deleting agent ([9f909ee](https://github.com/syrax90/claude_mobile/commit/9f909ee835bf87782de9c364fdc0f6e6671cd9b9))
+
 ## [0.1.2](https://github.com/syrax90/claude_mobile/compare/server-v0.1.1...server-v0.1.2) (2026-05-08)
 
 

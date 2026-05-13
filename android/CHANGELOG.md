@@ -1,5 +1,15 @@
 # Android Changelog
 
+## [1.2.0](https://github.com/syrax90/claude_mobile/compare/android-v1.1.0...android-v1.2.0) (2026-05-13)
+
+
+### Features
+
+* **android:** promote QR scan to primary FAB on AgentListScreen ([02f4b9e](https://github.com/syrax90/claude_mobile/commit/02f4b9e7a19cbff51b622b4a4bfaec5b721111d3))
+* **android:** promote QR scan to primary FAB on AgentListScreen ([63c8e17](https://github.com/syrax90/claude_mobile/commit/63c8e17355989b4838d4fa3fd31f16a6246f910e))
+* **linear:** make Auto Scan Mode filter configurable per project (CLA-52) ([4882d3a](https://github.com/syrax90/claude_mobile/commit/4882d3a09f97c37c3bc9485b86a09cb7e454ff1b))
+* **linear:** make Auto Scan Mode filter configurable per project (CLA-52) ([fa18866](https://github.com/syrax90/claude_mobile/commit/fa18866e414a4b6da9abc189f10090675f63e5e2))
+
 ## [1.1.0](https://github.com/syrax90/claude_mobile/compare/android-v1.0.0...android-v1.1.0) (2026-05-08)
 
 

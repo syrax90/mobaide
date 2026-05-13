@@ -1,5 +1,15 @@
 # mobaide_agent Changelog
 
+## [0.1.5](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.4...agent-v0.1.5) (2026-05-13)
+
+
+### Features
+
+* **agent:** render pairing QR only after agent service is confirmed healthy ([cb8bb5b](https://github.com/syrax90/claude_mobile/commit/cb8bb5b7d28b464e4445d02e149eaf19fdfb8d59))
+* **install:** render pairing QR only after agent service is confirmed healthy ([8407e59](https://github.com/syrax90/claude_mobile/commit/8407e5908452cf08035d7c829e535fc88e2a6a49))
+* **linear:** make Auto Scan Mode filter configurable per project (CLA-52) ([4882d3a](https://github.com/syrax90/claude_mobile/commit/4882d3a09f97c37c3bc9485b86a09cb7e454ff1b))
+* **linear:** make Auto Scan Mode filter configurable per project (CLA-52) ([fa18866](https://github.com/syrax90/claude_mobile/commit/fa18866e414a4b6da9abc189f10090675f63e5e2))
+
 ## [0.1.4](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.3...agent-v0.1.4) (2026-05-08)
 
 
