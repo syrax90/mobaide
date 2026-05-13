@@ -327,7 +327,27 @@ async def run_pairing_monitor(
             await asyncio.sleep(_BACKOFF_FLOOR_S)
             continue
 
-        await write_credentials_to_env(env_path, claim)
+        try:
+            await write_credentials_to_env(env_path, claim)
+        except OSError as exc:
+            # Defence-in-depth: an unhandled exception here would silently
+            # kill the pairing-monitor task (the task is created via
+            # ``asyncio.create_task`` in ``app.py`` and never awaited, so
+            # exceptions don't propagate). The most likely cause on
+            # Windows was ``SYSTEM:R`` on ``.env`` blocking ``os.replace``
+            # — that's fixed at the ACL layer in ``_restrict_perms_windows``,
+            # but a future ACL drift, disk-full, or read-only-fs condition
+            # would re-introduce the silent failure mode. Log loudly and
+            # retry the cycle so the operator can see the problem and the
+            # next QR scan has a fresh chance.
+            logger.error(
+                "pairing_monitor.write_failed path=%s: %s; will retry",
+                env_path,
+                exc,
+            )
+            clear_pending_pairing(layout)
+            await asyncio.sleep(_BACKOFF_FLOOR_S)
+            continue
         clear_pending_pairing(layout)
         logger.info(
             "pairing_monitor.paired agent_id=%s relay=%s",
