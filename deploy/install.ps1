@@ -789,6 +789,7 @@ The service may have crashed at startup. Inspect:
 Or from an elevated PowerShell:
     Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
     Get-Service MobaideAgent
+    Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 "@
 }
 

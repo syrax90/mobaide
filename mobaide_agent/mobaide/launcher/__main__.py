@@ -12,13 +12,33 @@ Self-contained on purpose — this module runs across release directories
 (it's installed at ``<prefix>/bin/mobaide-agent-launcher``, not inside
 any ``releases/<v>/venv``) and must not import ``mobaide`` so it
 survives a partially-staged or corrupt release.
+
+POSIX vs Windows hand-off
+-------------------------
+On Linux/macOS the launcher ``os.execv``-s into the release venv's
+Python — the kernel replaces the current process image in place, so
+the supervisor's PID watch still tracks the same PID as before.
+
+On Windows ``os.execv`` is not what the docs claim. CPython delegates
+to MSVC ``_wexecv``, which is implemented as ``CreateProcess`` +
+``ExitProcess``: the new process gets a *different* PID, and the
+calling process exits immediately (Python issue #9148). A Windows
+service supervising the launcher via ``subprocess.Popen.poll()`` then
+sees the launcher die and marks the service STOPPED — even though
+the agent is running fine under a new orphan PID. To preserve the
+supervisor's PID watch, the Windows branch spawns the agent as a
+subprocess and waits for it, holding a Job Object with
+``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` so the agent dies cleanly when
+the launcher itself is terminated.
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import NoReturn
 
 # Crash-loop window. A version that is exec'd this many times within
 # this many seconds is considered failing, and the launcher reverts to
@@ -166,7 +186,133 @@ def _exec_release(prefix: Path, version: str) -> None:
         )
         sys.exit(70)
     args = [str(python), "-m", "mobaide", "run", *sys.argv[1:]]
-    os.execv(str(python), args)
+    _run_release(python, args)
+
+
+def _run_release(python: Path, args: list[str]) -> NoReturn:
+    """Hand control to the release-venv Python and never return.
+
+    Single seam the launcher tests monkeypatch: capturing this call
+    avoids replacing ``os.execv`` directly (which would also break
+    every other caller in the process for the lifetime of the test).
+    """
+    if sys.platform == "win32":
+        _spawn_and_wait_windows(args)
+    else:
+        os.execv(str(python), args)
+    raise RuntimeError("unreachable: _run_release branches both terminate")
+
+
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_JOB_INFO_CLASS_EXTENDED_LIMIT = 9
+_PROCESS_SET_QUOTA = 0x0100
+_PROCESS_TERMINATE = 0x0001
+
+
+def _spawn_and_wait_windows(args: list[str]) -> NoReturn:
+    """Spawn the agent and propagate its exit code. Windows-only.
+
+    ``os.execv`` on Windows does NOT preserve the calling process's
+    PID (Python issue #9148: MSVC ``_wexecv`` is internally
+    ``CreateProcess`` + ``ExitProcess``). When the launcher runs
+    under the SCM-spawned service host (``deploy/windows_service.py``),
+    that host watches the launcher PID via ``Popen.poll()``; an
+    ``os.execv`` here would make the host see the launcher exit
+    instantly and mark the service STOPPED, while the agent runs
+    orphaned. Spawning + waiting keeps the launcher PID alive for the
+    agent's lifetime, so the host's poll tracks the actual agent.
+
+    A Job Object with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` is
+    attached to the agent. When the launcher exits (cleanly or via
+    SCM's ``TerminateProcess`` during ``Stop-Service``), all its
+    handles close, the job closes, and Windows tears down the agent
+    atomically — no orphan to fight over port 8000 on the next
+    restart. Nested jobs are required (the SCM service host itself
+    is in a job); they're guaranteed on Windows 8.1+, and the
+    project pins Python 3.12 (``pyproject.toml:9``) which mandates
+    that floor.
+
+    Fail-soft: if any ctypes call fails (older Windows, restrictive
+    job-policy, ctypes import failure), skip the job assignment and
+    still ``Popen``-and-``wait`` so the primary PID-preservation fix
+    holds even in degraded-teardown mode.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    class _JobObjectBasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _JobObjectExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JobObjectBasicLimitInformation),
+            ("IoInfo", _IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job_handle = kernel32.CreateJobObjectW(None, None)
+    if job_handle:
+        info = _JobObjectExtendedLimitInformation()
+        info.BasicLimitInformation.LimitFlags = (
+            _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        if not kernel32.SetInformationJobObject(
+            job_handle,
+            _JOB_INFO_CLASS_EXTENDED_LIMIT,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        ):
+            kernel32.CloseHandle(job_handle)
+            job_handle = None
+
+    proc = subprocess.Popen(args, close_fds=True)
+
+    if job_handle:
+        child = kernel32.OpenProcess(
+            _PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, proc.pid
+        )
+        if child:
+            try:
+                kernel32.AssignProcessToJobObject(job_handle, child)
+            finally:
+                kernel32.CloseHandle(child)
+
+    try:
+        rc = proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        rc = proc.wait()
+    sys.exit(rc)
 
 
 def main() -> None:

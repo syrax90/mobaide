@@ -137,7 +137,7 @@ The registered service binary path is:
 
 `mobaide_service.py` is fetched from `https://get.mobaide.com/windows_service.py` during install. It is co-versioned with `install.ps1` itself — the `publish-gh-pages` workflow ships both files in the same push — so installer changes that depend on a new service-module API can never desync from the module they ship against. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_SERVICE_URL`.
 
-On every service start, the wrapper reads `<prefix>\current_version`, spawns the active release's `python.exe -m mobaide.launcher` as a subprocess, reports `SERVICE_RUNNING` to SCM, and waits for either a stop signal or the subprocess exiting. The subprocess (`mobaide.launcher`) does the crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. The next service start picks up the rolled-back version.
+On every service start, the wrapper reads `<prefix>\current_version`, spawns the active release's `python.exe -m mobaide.launcher` as a subprocess, reports `SERVICE_RUNNING` to SCM, and waits for either a stop signal or the subprocess exiting. The subprocess (`mobaide.launcher`) does the crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. The next service start picks up the rolled-back version. On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv` (which creates a new PID on Windows, breaking the service host's `poll()` supervision — Python issue #9148). The agent's stderr is captured to `<prefix>\logs\agent.err.log` (rotated at 5 MB, one backup kept) so silent startup failures surface in a file rather than being lost to DEVNULL.
 
 SCM is configured with `failure reset=600 actions=restart/5000/restart/5000/restart/5000`, composing with the launcher's heuristic so a third bad boot resolves to the previous release.
 
@@ -155,6 +155,9 @@ sc.exe queryex MobaideAgent     # shows PID, current state, dependencies
 # Service start / stop events land in the Windows Event Log under
 # "Application", source = "MobaideAgent".
 Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
+
+# Launcher / agent stderr (config errors, Python tracebacks, port conflicts).
+Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 ```
 
 The service runs as `LocalSystem` (the SCM default). Per-user / Group Managed Service Account hardening is a separate concern and is not configured by the install script.
