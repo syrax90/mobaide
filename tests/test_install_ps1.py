@@ -2683,6 +2683,17 @@ def test_wait_agent_healthy_fails_with_event_log_pointer() -> None:
         "(`MobaideAgent`) so the operator's eventvwr / Get-EventLog "
         "filter matches. Body:\n" + repr(body)
     )
+    assert "agent.err.log" in body, (
+        "Wait-AgentHealthy's diagnostic must point at the launcher's "
+        "captured stderr at <prefix>/logs/agent.err.log. Before this "
+        "log existed (deploy/windows_service.py:_spawn_launcher passed "
+        "stderr=DEVNULL), every Python traceback from the launcher or "
+        "agent was discarded — operators only saw the eventvwr "
+        "service-started line, never the real error. The eventvwr "
+        "pointer stays for SCM-level failures; agent.err.log is for "
+        "the silent agent-side ones the eventvwr cannot see. Body:\n"
+        + repr(body)
+    )
 
 
 def test_show_pairing_qr_uses_require_pending_flag() -> None:
