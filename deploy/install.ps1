@@ -726,69 +726,107 @@ function Write-PairingQr {
 }
 
 function Install-Service {
-    param($Version)
-    $launcherDir = Join-Path $Script:Prefix "bin"
-    New-Item -ItemType Directory -Path $launcherDir -Force | Out-Null
-    $launcherCmd = Join-Path $launcherDir "mobaide-agent-launcher.cmd"
-    # Default $Script:Prefix is "C:\Program Files\MobaideAgent" — a path
-    # containing a space — so the .cmd has to be space-safe:
-    #   * `set "VAR=value"` quotes the assignment so a future env-overridden
-    #     prefix containing &/</>/| does not break the line either.
-    #   * `for /f "usebackq tokens=*"` makes a double-quoted file-set
-    #     refer to a filename (with spaces). Without usebackq, cmd's
-    #     for /f splits the unquoted file-set on whitespace and tries to
-    #     open "C:\Program" and "Files\MobaideAgent\current_version" as
-    #     two separate files, leaving CLAUDE_VERSION empty.
-    #   * The `if not defined` guard exits 1 with a real error message so
-    #     a missing/empty current_version surfaces in the Windows Event
-    #     Log instead of resolving to ...\releases\\venv\... (an empty
-    #     version segment) and crashing further down the chain.
-    $launcherBody = @"
-@echo off
-setlocal
-set "MOBAIDE_AGENT_PREFIX=$Script:Prefix"
-for /f "usebackq tokens=*" %%v in ("%MOBAIDE_AGENT_PREFIX%\current_version") do set "CLAUDE_VERSION=%%v"
-if not defined CLAUDE_VERSION (
-    echo Failed to read %MOBAIDE_AGENT_PREFIX%\current_version 1>&2
-    exit /b 1
-)
-"%MOBAIDE_AGENT_PREFIX%\releases\%CLAUDE_VERSION%\venv\Scripts\python.exe" -m mobaide.launcher
-"@
-    Set-Content -Path $launcherCmd -Value $launcherBody
+    param($PythonExe, $Version)
+    # Architectural note: a Windows service binary MUST implement the
+    # SCM ABI (StartServiceCtrlDispatcher / SetServiceStatus(RUNNING)
+    # within ~30s, SERVICE_CONTROL_* handlers). The pre-fix design
+    # registered `cmd.exe /c launcher.cmd` — cmd.exe is a console
+    # interpreter and does none of those, so SCM timed out with
+    # "Cannot start service MobaideAgent on computer '.'" (error 1053).
+    #
+    # The fix: a real service hosted in a dedicated, version-independent
+    # venv at <prefix>/svc/venv/, running mobaide_service.py (a pywin32
+    # ServiceFramework subclass). The service module reads current_version
+    # at each start and spawns the active release's
+    # `python -m mobaide.launcher` as a subprocess; the launcher then
+    # does crash-loop detection + rollback exactly as before.
+    $svcDir = Join-Path $Script:Prefix "svc"
+    $svcVenv = Join-Path $svcDir "venv"
+    $svcVenvPython = Join-Path $svcVenv "Scripts\python.exe"
+    $svcModule = Join-Path $svcDir "mobaide_service.py"
 
+    New-Item -ItemType Directory -Path $svcDir -Force | Out-Null
+
+    if (-not (Test-Path $svcVenvPython)) {
+        Write-Info "Creating service host venv at $svcVenv"
+        # `| Out-Host` so `python -m venv`'s chatter does not pile onto
+        # this function's success pipeline. Same precedent as
+        # Install-Release / New-BootstrapVenv (both pin this pattern in
+        # tests/test_install_ps1.py).
+        & $PythonExe -m venv $svcVenv | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "Failed to create service host venv at $svcVenv (python -m venv exit $LASTEXITCODE)"
+        }
+    } else {
+        Write-Info "Reusing existing service host venv at $svcVenv"
+    }
+
+    # `pip install pywin32` into the svc venv. --isolated mirrors the
+    # New-BootstrapVenv hardening: closes PIP_EXTRA_INDEX_URL /
+    # PIP_FIND_LINKS dependency-confusion (CVE-2018-20225-class) and
+    # ignores user/system pip.ini that could otherwise redirect pywin32
+    # to a hostile mirror.
+    Write-Info "Installing pywin32 in service host venv"
+    & $svcVenvPython -m pip install --isolated --no-cache-dir --disable-pip-version-check --index-url https://pypi.org/simple pywin32 | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Failed to install pywin32 in service host venv (pip exit $LASTEXITCODE)"
+    }
+
+    # The service module ships inside the agent wheel at
+    # mobaide/windows_service.py; the wheel was installed in the
+    # release venv above (Install-Release), so we copy it from there
+    # to <prefix>/svc/mobaide_service.py. We DO NOT install the whole
+    # mobaide package into the svc venv — it would pull pywinpty +
+    # cryptography + uvicorn for no reason; the wrapper is stdlib +
+    # pywin32 only. The renamed-on-copy filename keeps the on-disk
+    # entry short and avoids `mobaide.` import paths in the svc venv
+    # (where the mobaide package isn't installed).
+    $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $Version
+    $sourceModule = Join-Path $releaseDir "venv\Lib\site-packages\mobaide\windows_service.py"
+    if (-not (Test-Path $sourceModule)) {
+        Write-Fail "Service module source not found at $sourceModule — release venv is missing mobaide/windows_service.py. Check the wheel build."
+    }
+    Copy-Item -LiteralPath $sourceModule -Destination $svcModule -Force
+    Write-Info "Copied service module to $svcModule"
+
+    # If the service already exists, stop it before re-registering so
+    # the running python.exe doesn't hold the svc-venv files locked.
+    # Removing-and-re-installing is the safe path when the binPath may
+    # have changed (e.g. upgrading from the pre-fix cmd.exe binPath).
     $existing = Get-Service -Name $Script:ServiceName -ErrorAction SilentlyContinue
     if ($existing) {
-        Write-Info "Restarting existing $Script:ServiceName service"
-        Restart-Service -Name $Script:ServiceName
-        return
+        Write-Info "Stopping existing $Script:ServiceName service before re-registering"
+        try {
+            Stop-Service -Name $Script:ServiceName -Force -ErrorAction Stop
+        } catch {
+            Write-Warn "Could not stop existing service (continuing): $($_.Exception.Message)"
+        }
+        # `python mobaide_service.py remove` calls
+        # win32serviceutil.RemoveService — idempotent if SCM already
+        # cleared the entry.
+        & $svcVenvPython $svcModule remove | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Existing $Script:ServiceName remove returned exit $LASTEXITCODE; continuing."
+        }
     }
 
-    Write-Info "Registering $Script:ServiceName service"
-    # Use New-Service (CreateServiceW via P/Invoke) rather than `sc.exe
-    # create` because the binPath contains both spaces and embedded
-    # double quotes (`cmd.exe /c "C:\Program Files\..."`). PowerShell's
-    # NativeCommandProcessor re-serialises such an argument with
-    # CRT-style `\"` escaping, which sc.exe's own command-line parser
-    # does not recognise. The old code silently registered a corrupted
-    # ImagePath (or, more often, sc.exe rejected the call with a
-    # non-zero exit that `| Out-Null` swallowed), and the failure
-    # surfaced much later as "Cannot find any service with service name
-    # 'MobaideAgent'" at Start-Service.
-    $binaryPath = 'cmd.exe /c "' + $launcherCmd + '"'
-    try {
-        New-Service -Name $Script:ServiceName `
-            -BinaryPathName $binaryPath `
-            -DisplayName "Mobaide Agent" `
-            -StartupType Automatic | Out-Null
-    } catch {
-        Write-Fail "Failed to register $Script:ServiceName service: $($_.Exception.Message)"
+    Write-Info "Registering $Script:ServiceName service via pywin32"
+    # The module's `install` verb calls win32serviceutil.InstallService
+    # with exeName=sys.executable (the svc venv's python.exe) and
+    # exeArgs="-u <this_file>". This sidesteps pythonservice.exe's
+    # python<N>.dll search problem inside a venv (pywin32 #1450, #2032)
+    # and produces a service binary path of
+    # `<svc venv>\Scripts\python.exe -u <prefix>\svc\mobaide_service.py`.
+    & $svcVenvPython $svcModule install | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Failed to register $Script:ServiceName service (pywin32 install exit $LASTEXITCODE)"
     }
     # Defence-in-depth on the silent-failure anti-pattern that hid the
-    # original bug: re-check SCM after New-Service and fail with a
+    # pre-fix bug: re-check SCM after the install verb and fail with a
     # message that names the real problem, instead of letting the next
     # cmdlet emit its own confusing "Cannot find any service" error.
     if (-not (Get-Service -Name $Script:ServiceName -ErrorAction SilentlyContinue)) {
-        Write-Fail "Service $Script:ServiceName did not appear in SCM after New-Service. Re-run as Administrator and check the Windows Event Log."
+        Write-Fail "Service $Script:ServiceName did not appear in SCM after pywin32 install. Re-run as Administrator and check the Windows Event Log."
     }
 
     # Three SCM-driven restarts at 5s spacing — the launcher rolls back
@@ -856,7 +894,7 @@ function Main {
     Write-AgentEnv -Version $version
     Write-PairingQr -Version $version
 
-    Install-Service -Version $version
+    Install-Service -PythonExe $python -Version $version
     Write-Completion -Version $version
 }
 
