@@ -137,10 +137,14 @@ transfer by triggering `mobaide-agent re-pair` on that host.
 
 ### First install
 
-The install scripts (`deploy/install.sh`, `deploy/install.ps1`) render
-the pairing QR after `init-env` and before service start. SSH-attached
-operators see the QR in their terminal immediately and can scan it
-from the Mobaide mobile app to complete pairing.
+The install scripts (`deploy/install.sh`, `deploy/install.ps1`) start
+the supervisor, wait for the agent to report healthy and for the service
+to write the pairing nonce file, then render the pairing QR. This
+ordering guarantees the service is ready to accept the incoming pairing
+claim before the operator scans — eliminating the boot-gap race that
+left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty. SSH-attached
+operators see the QR once the service is up and can scan it from the
+Mobaide mobile app to complete pairing.
 
 If the operator misses the QR (e.g., SSH disconnected before scanning),
 the agent's boot-time autorun re-renders it. Run on the agent host:
@@ -151,6 +155,12 @@ mobaide-agent show-qr
 
 This re-renders the most-recent pending QR; if the cached nonce has
 expired, it initiates a fresh one.
+
+The installers pass `--require-pending` to `show-qr` so that the
+installer itself never initiates a fresh nonce — the running service
+is the single initiator. This prevents a race on `/ws/pairing/{nonce}`
+if the installer and the boot autorun both tried to open a pairing WS
+simultaneously.
 
 ### Re-pair to a different account
 

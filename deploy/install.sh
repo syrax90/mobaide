@@ -510,20 +510,124 @@ write_agent_env() {
         --prefix "$MOBAIDE_AGENT_PREFIX"
 }
 
-print_pairing_qr() {
-    # Best-effort: render a pairing QR for SSH-attached operators before
-    # the service starts. Non-fatal — if the agent cannot reach the
-    # central server (e.g., during CI installs without network access),
-    # the boot-time autorun retries automatically once the service is up.
-    local version release_dir
+# Parse a KEY=VALUE line from ``<prefix>/mobaide_agent/.env``.
+# Mirrors the PowerShell helper in ``deploy/install.ps1``; used by
+# ``wait_agent_healthy`` to discover the agent's HTTP port without
+# importing Python. Naive split on the first ``=`` matches what
+# pydantic-settings + the env-writer agree on at boot (one key per
+# line, no quoting; see mobaide.agent.config.init-env).
+read_env_value() {
+    local path="$1" key="$2" default="${3:-}"
+    if [ ! -f "$path" ]; then
+        printf '%s' "$default"
+        return 0
+    fi
+    local line value
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            "$key"=*|" $key"=*|"	$key"=*)
+                value="${line#*=}"
+                printf '%s' "$value"
+                return 0
+                ;;
+        esac
+    done < "$path"
+    printf '%s' "$default"
+}
+
+# Poll the agent's /api/health endpoint until it responds 200, or
+# hard-fail with a journalctl / log-tail pointer. Same role as
+# ``Wait-AgentHealthy`` in install.ps1: distinguishes "supervisor
+# reported started, service silently crashed" from "service is
+# healthy". On Linux, systemd starts quickly enough that this almost
+# always succeeds on the first poll; the guard mostly catches
+# crashes-at-boot that would previously have hidden behind the
+# "rendered QR doesn't pair" symptom.
+wait_agent_healthy() {
+    local timeout_sec="${1:-60}"
+    local env_file="${MOBAIDE_AGENT_PREFIX}/mobaide_agent/.env"
+    local port
+    port="$(read_env_value "$env_file" 'PORT' '8000')"
+    local url="http://127.0.0.1:${port}/api/health"
+    # main() captures this function's stdout into $health_json, so any
+    # diagnostic must go to stderr or it would corrupt the JSON body
+    # downstream. ``info`` writes to stdout by default; force stderr.
+    info "Waiting for agent /api/health at ${url} (timeout ${timeout_sec}s)" >&2
+    local deadline=$(( $(date +%s) + timeout_sec ))
+    local body
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        if body="$(curl -fsS --max-time 2 "$url" 2>/dev/null)"; then
+            printf '%s' "$body"
+            return 0
+        fi
+        sleep 0.5
+    done
+    if [ "$PLATFORM" = "linux" ]; then
+        fail "Agent service registered but ${url} did not respond within ${timeout_sec}s.
+Service may have crashed at startup. Inspect:
+    systemctl status mobaide-agent
+    journalctl -u mobaide-agent -n 200"
+    else
+        fail "Agent service registered but ${url} did not respond within ${timeout_sec}s.
+Service may have crashed at startup. Inspect:
+    launchctl list | grep com.mobaide.agent
+    tail -n 200 ${MOBAIDE_AGENT_PREFIX}/agent.err.log"
+    fi
+}
+
+show_pairing_qr_from_service() {
+    # Render the pairing QR after the agent service is up. The running
+    # service's boot-time pairing-monitor calls /api/pairing/initiate
+    # and writes <prefix>/run/pending_pairing.json; this function waits
+    # for the file and renders it via the CLI. Mirrors
+    # ``Show-PairingQrFromService`` in install.ps1.
+    local health_json="$1"
+    local pending_timeout_sec="${2:-60}"
+    if [ -n "${MOBAIDE_AGENT_SKIP_INSTALL_QR:-}" ]; then
+        info "MOBAIDE_AGENT_SKIP_INSTALL_QR set; not rendering pairing QR."
+        return 0
+    fi
+    # Re-install on a paired agent: pairing_pending=false → skip QR.
+    # Use Python for the JSON read to stay portable across distros
+    # (jq is not guaranteed; bash's no-JSON is a fact of life).
+    local pairing_pending
+    pairing_pending="$(printf '%s' "$health_json" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("true")
+else:
+    print("true" if data.get("pairing_pending") else "false")
+')"
+    if [ "$pairing_pending" = "false" ]; then
+        info "Agent reports pairing_pending=false; already paired. Skipping QR."
+        return 0
+    fi
+    local version release_dir pending_file
     version="$(cat "${MOBAIDE_AGENT_PREFIX}/current_version")"
     release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${version}"
-    if [ -z "${MOBAIDE_AGENT_SKIP_INSTALL_QR:-}" ]; then
-        info "Rendering pairing QR (scan from the Mobaide mobile app)"
-        "$release_dir/venv/bin/mobaide-agent" pair-qr --print \
-            --prefix "$MOBAIDE_AGENT_PREFIX" \
-            || info "QR render failed; the agent will re-render at boot."
+    pending_file="${MOBAIDE_AGENT_PREFIX}/run/pending_pairing.json"
+    info "Waiting for pairing nonce at ${pending_file} (timeout ${pending_timeout_sec}s)"
+    local deadline=$(( $(date +%s) + pending_timeout_sec ))
+    while [ "$(date +%s)" -lt "$deadline" ] && [ ! -f "$pending_file" ]; do
+        sleep 0.5
+    done
+    if [ ! -f "$pending_file" ]; then
+        fail "Agent service is up but did not initiate pairing within ${pending_timeout_sec}s
+(no ${pending_file}). The service likely cannot reach central_server. Check:
+    curl -fsS ${MOBAIDE_AGENT_MANIFEST_URL%/api/*}/api/v1/agent/trust_key
+The service is still running; once connectivity is restored it will
+initiate a nonce on its own. Run 'mobaide-agent show-qr' to re-display."
     fi
+    info "Rendering pairing QR (scan from the Mobaide mobile app)"
+    # --require-pending guards against a double-initiate race with the
+    # service's pairing-monitor: the CLI renders the existing file or
+    # exits 7, never initiates a second nonce. Two concurrent
+    # /ws/pairing/{nonce} dials for the same nonce would race; the
+    # central server rejects the loser with WS close 4001.
+    "$release_dir/venv/bin/mobaide-agent" show-qr --require-pending \
+        --prefix "$MOBAIDE_AGENT_PREFIX"
 }
 
 resolve_run_as_user() {
@@ -683,6 +787,9 @@ print_completion() {
     else
         echo "  Logs:    tail -f $MOBAIDE_AGENT_PREFIX/agent.err.log"
     fi
+    echo
+    echo "  Re-render QR:  mobaide-agent show-qr"
+    echo "  Re-pair:       mobaide-agent re-pair"
     echo "============================================"
 }
 
@@ -718,14 +825,24 @@ main() {
     rm -f "$manifest"
 
     write_agent_env
-    print_pairing_qr
 
+    # New ordering: bring the agent service up FIRST, then render the
+    # QR from the file the running service's pairing-monitor writes.
+    # The previous order rendered the QR before the service was up,
+    # so a mobile scan during the gap had nothing to dispatch the
+    # claim to (the pairing WebSocket is dialed inside the agent
+    # process; until uvicorn binds, the central server can't push the
+    # signed claim). Mirrors the install.ps1 reorder.
     if [ "$PLATFORM" = "linux" ]; then
         resolve_run_as_user
         install_systemd_unit
     else
         install_launchd_plist
     fi
+
+    local health_json
+    health_json="$(wait_agent_healthy 60)"
+    show_pairing_qr_from_service "$health_json" 60
 
     print_completion
 }

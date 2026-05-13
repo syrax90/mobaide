@@ -113,7 +113,7 @@ For the full local stack (Caddy + central-server in Docker + agent native), use 
 irm https://get.mobaide.com/install.ps1 | iex
 ```
 
-The script self-elevates via UAC, auto-installs Python 3.12 (`winget` fast path, python.org installer fallback), stages the signed release into `<prefix>\releases\<version>\venv\` (default prefix `C:\Program Files\MobaideAgent`), writes `<prefix>\current_version`, and registers the **MobaideAgent** SCM service. After the service registration completes, the script renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app.
+The script self-elevates via UAC, auto-installs Python 3.12 (`winget` fast path, python.org installer fallback), stages the signed release into `<prefix>\releases\<version>\venv\` (default prefix `C:\Program Files\MobaideAgent`), writes `<prefix>\current_version`, and registers the **MobaideAgent** SCM service. After the service starts, the script waits for the agent to report healthy and for the service to write the pairing nonce file, then renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app. This ordering ensures the QR is shown only once the service is ready to accept a pairing claim, eliminating the race where scans during boot left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty.
 
 #### Service architecture
 
@@ -191,11 +191,12 @@ and registers the supervisor:
 The install script auto-generates `<prefix>/mobaide_agent/.env` with a
 random `JWT_SECRET_KEY` and prefilled `RELAY_SERVER_URL=wss://mobaide.com`,
 so the agent boots in **pairing-pending** state immediately. The install
-script renders a pairing QR before service start; if the operator misses
-it, the boot autorun re-renders, and `mobaide-agent show-qr` prints the
-most-recent pending QR on demand. Scan from the Mobaide mobile app to
-complete pairing — see [docs/qr-pairing.md](qr-pairing.md) for the full
-flow.
+script starts the supervisor, waits for the agent to be healthy and for the
+service to write the pairing nonce file, then renders the pairing QR code
+for the operator to scan from the Mobaide mobile app. If the operator misses
+the QR, run `mobaide-agent show-qr` on the agent host to re-render the most-recent
+pending QR (or initiate a fresh one if the cached nonce expired). See
+[docs/qr-pairing.md](qr-pairing.md) for the full flow.
 
 Until paired, the agent exposes `pairing_pending: true` on `/api/health`.
 Re-running the installer never clobbers paired credentials; pass
@@ -293,7 +294,7 @@ sudo systemctl restart mobaide-agent
 3. Set the **Server URL** to your central-server base URL, e.g. `https://mobaide.com`
 4. Sign in (or sign up), then go to **Agents → Scan QR**
 5. Scan the QR code rendered on the agent host (printed by the install
-   script before service start, or via `mobaide-agent show-qr`). The
+   script after the service is up and healthy, or via `mobaide-agent show-qr`). The
    server pushes the credentials directly to the agent over a
    pairing WebSocket; no token ever appears in the mobile UI. See
    [docs/qr-pairing.md](qr-pairing.md) for the protocol details.

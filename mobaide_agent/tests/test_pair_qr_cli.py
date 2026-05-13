@@ -27,6 +27,7 @@ def _ns(**overrides) -> argparse.Namespace:
         "no_restart": True,
         "print": False,
         "wait": False,
+        "require_pending": False,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -133,6 +134,106 @@ class TestRunShowQr:
         rc = _run_show_qr(_ns(prefix=str(tmp_path)))
 
         assert rc == 2
+
+
+class TestRunShowQrRequirePending:
+    """The ``--require-pending`` flag (added for the install-time flow).
+
+    The installer now starts the agent service BEFORE rendering the
+    QR, and lets the running service's pairing-monitor be the single
+    initiator of the pairing nonce. The installer then calls
+    ``mobaide-agent show-qr --require-pending`` to render the existing
+    pending file — never initiate a new one. Two concurrent
+    /ws/pairing/{nonce} dials for the same nonce would race; the
+    central server rejects the loser with WS close 4001.
+    """
+
+    def test_no_pending_with_flag_returns_7_and_does_not_initiate(
+        self, tmp_path, capsys
+    ):
+        # No env, no pending file → exit 7. CRITICAL: must NOT call
+        # initiate_pairing or open any network connection. Stub urlopen
+        # to assert it's never reached.
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=AssertionError(
+                "show-qr --require-pending must not initiate a nonce"
+            ),
+        ):
+            rc = _run_show_qr(
+                _ns(prefix=str(tmp_path), require_pending=True)
+            )
+
+        assert rc == 7
+        err = capsys.readouterr().err
+        assert "--require-pending" in err
+        # Exit code is dedicated (7) so the installer can distinguish
+        # this precondition failure from other show-qr exit codes.
+
+    def test_pending_file_with_flag_renders_existing_payload(
+        self, tmp_path, capsys
+    ):
+        # A pending file written by the service's pairing-monitor →
+        # show-qr --require-pending renders it and exits 0 without
+        # initiating anything.
+        from mobaide.agent.pairing_qr import (
+            PendingPairing,
+            save_pending_pairing,
+        )
+        from mobaide.agent.updater import InstallLayout
+
+        layout = InstallLayout(prefix=tmp_path)
+        save_pending_pairing(
+            layout,
+            PendingPairing(
+                nonce="installer-nonce",
+                expires_at="2099-01-01T00:00:00+00:00",
+                trust_key_fp="ee" * 32,
+                ws_url="wss://relay.test/ws/pairing/installer-nonce",
+                relay_url="https://relay.test",
+                qr_payload=(
+                    f"MOBA1|https://relay.test|installer-nonce|"
+                    f"{'ee' * 32}|2999999999"
+                ),
+            ),
+        )
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=AssertionError(
+                "show-qr --require-pending must not initiate when "
+                "pending file exists"
+            ),
+        ):
+            rc = _run_show_qr(
+                _ns(prefix=str(tmp_path), require_pending=True)
+            )
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Pending pairing QR" in out
+
+    def test_already_paired_with_flag_returns_0_without_render(
+        self, tmp_path, capsys
+    ):
+        # Re-install on an already-paired agent: env has both id and
+        # token. show-qr --require-pending must exit 0 without
+        # rendering (same as the no-flag form).
+        _seed_env(
+            tmp_path,
+            RELAY_SERVER_URL="wss://relay.test",
+            RELAY_AGENT_ID="x",
+            RELAY_AGENT_TOKEN="y",
+        )
+
+        rc = _run_show_qr(
+            _ns(prefix=str(tmp_path), require_pending=True)
+        )
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Already paired" in out
+        assert "Pairing QR" not in out
 
 
 class TestRunRePair:
