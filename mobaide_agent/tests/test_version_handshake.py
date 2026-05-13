@@ -21,14 +21,17 @@ async def test_get_version(client) -> None:
     assert body["protocol_versions"] == list(SUPPORTED_PROTOCOL_VERSIONS)
     assert body["min_client_version"] == MIN_CLIENT_PROTOCOL_VERSION
     assert body["latest_agent_version"] is None
-    assert body["manifest_url"] is None
-    assert body["manifest_signature"] is None
     assert body["capabilities"] == {}
+    # The signed manifest body now travels inline over the relay WebSocket
+    # — it is not exposed via this REST surface.
+    assert "manifest_url" not in body
+    assert "manifest_signature" not in body
 
 
 def test_protocol_version_constants() -> None:
-    # The agent advertises exactly one protocol version today; the support
-    # window is provisioned for forward growth.
-    assert PROTOCOL_VERSION == 1
-    assert MIN_CLIENT_PROTOCOL_VERSION == 1
-    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (1,)
+    # proto-v2: agent and central_server advertise exactly v2 after the
+    # manifest-inlining wire-format change. The support window is provisioned
+    # for forward growth.
+    assert PROTOCOL_VERSION == 2
+    assert MIN_CLIENT_PROTOCOL_VERSION == 2
+    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (2,)

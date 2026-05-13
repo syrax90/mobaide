@@ -147,7 +147,7 @@ def broadcast_manifest_update(
     body = {
         "type": "agent_manifest_update",
         "version": record.body.get("version"),
-        "manifest_url": "/api/v1/agent/manifest.json",
+        "manifest_body": record.body,
         "manifest_signature": record.signature_b64,
     }
     envelope = encode(CH_CONTROL, "", json.dumps(body).encode())

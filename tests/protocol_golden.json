@@ -1,7 +1,7 @@
 {
-  "protocol_version": 1,
-  "min_client_protocol_version": 1,
-  "supported_protocol_versions": [1],
+  "protocol_version": 2,
+  "min_client_protocol_version": 2,
+  "supported_protocol_versions": [2],
   "close_codes": {
     "auth_failed": 4001,
     "protocol_incompatible": 4002,
@@ -21,7 +21,7 @@
         "server_version",
         "capabilities",
         "latest_agent_version",
-        "manifest_url",
+        "manifest_body",
         "manifest_signature"
       ]
     },
@@ -40,9 +40,7 @@
         "protocol_versions",
         "min_client_version",
         "capabilities",
-        "latest_agent_version",
-        "manifest_url",
-        "manifest_signature"
+        "latest_agent_version"
       ]
     }
   }

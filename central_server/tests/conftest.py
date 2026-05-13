@@ -35,6 +35,9 @@ def config(tmp_path) -> CentralServerConfig:
         # Bypass OTP flow for legacy tests — covered by the dedicated
         # test_email_verification.py suite with this flag flipped back on.
         email_verification_required=False,
+        # Isolate manifest store per test so test_manifest_broadcast cannot
+        # pollute test_version_handshake (pre-existing ordering bug).
+        manifest_store_path=str(tmp_path / "manifest.json"),
     )
 
 

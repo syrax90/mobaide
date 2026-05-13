@@ -145,7 +145,6 @@ class StagedBinaryUpdater:
         session_manager: Any | None,
         *,
         current_version: str,
-        downloader: Any | None = None,
         installer: Any | None = None,
         exit_func: Any | None = None,
     ) -> None:
@@ -153,7 +152,6 @@ class StagedBinaryUpdater:
         self._public_key_b64 = public_key_b64
         self._session_manager = session_manager
         self._current_version = current_version
-        self._downloader = downloader or _http_download
         self._installer = installer or _install_wheel_into_venv
         self._exit_func = exit_func or sys.exit
         self._first_deferred_at: float | None = None
@@ -165,7 +163,7 @@ class StagedBinaryUpdater:
 
     async def consider_manifest(
         self,
-        manifest_url: str,
+        manifest_body: dict[str, Any],
         signature_b64: str,
         latest_version: str,
         *,
@@ -173,6 +171,10 @@ class StagedBinaryUpdater:
         exit_after_stage: bool = True,
     ) -> str:
         """Apply the manifest if appropriate.
+
+        ``manifest_body`` is the full manifest dict (the same shape that was
+        Ed25519-signed by the release pipeline). Delivered inline over the
+        relay WebSocket — no HTTP fetch on this path.
 
         Returns one of:
             ``"no_change"`` — already on this version.
@@ -197,19 +199,22 @@ class StagedBinaryUpdater:
                 return "deferred"
             self._first_deferred_at = None
 
+            if not isinstance(manifest_body, dict):
+                logger.error(
+                    "updater.signature_failed: manifest body is not a dict (got %s)",
+                    type(manifest_body).__name__,
+                )
+                return "signature_failed"
+
             try:
-                manifest_body = await self._download_manifest(manifest_url)
                 verify_signature(manifest_body, signature_b64, self._public_key_b64)
             except ManifestSignatureError as exc:
-                logger.error("updater.signature_failed url=%s: %s", manifest_url, exc)
-                return "signature_failed"
-            except Exception as exc:
-                logger.warning("updater.manifest_fetch_failed url=%s: %s", manifest_url, exc)
+                logger.error("updater.signature_failed: %s", exc)
                 return "signature_failed"
 
             target_version = str(manifest_body.get("version", ""))
             if not target_version:
-                logger.warning("updater.manifest_missing_version url=%s", manifest_url)
+                logger.warning("updater.manifest_missing_version")
                 return "signature_failed"
 
             try:
@@ -240,7 +245,7 @@ class StagedBinaryUpdater:
 
     async def force_update_now(
         self,
-        manifest_url: str,
+        manifest_body: dict[str, Any],
         signature_b64: str,
         latest_version: str,
         *,
@@ -248,7 +253,7 @@ class StagedBinaryUpdater:
     ) -> str:
         """User-triggered update — skips activity-awareness."""
         return await self.consider_manifest(
-            manifest_url,
+            manifest_body,
             signature_b64,
             latest_version,
             force=True,
@@ -281,18 +286,6 @@ class StagedBinaryUpdater:
                 "updater.deferred_too_long seconds=%d threshold=%d",
                 int(elapsed), LONG_DEFER_WARN_SECONDS,
             )
-
-    async def _download_manifest(self, manifest_url: str) -> dict[str, Any]:
-        if manifest_url.startswith("file://") or manifest_url.startswith("/"):
-            path = Path(manifest_url.removeprefix("file://"))
-            text = path.read_text(encoding="utf-8")
-        else:
-            text = await asyncio.to_thread(self._downloader, manifest_url)
-        import json as _json
-        record = _json.loads(text)
-        if isinstance(record, dict) and "body" in record and "signature_b64" in record:
-            return record["body"]
-        return record
 
     def _stage_release(
         self, manifest_body: dict[str, Any], target_version: str
@@ -362,11 +355,6 @@ class StagedBinaryUpdater:
         tmp = target.with_suffix(target.suffix + ".tmp")
         tmp.write_text(new_version + "\n", encoding="utf-8")
         os.replace(tmp, target)
-
-
-def _http_download(url: str) -> str:
-    with _http.urlopen(url, timeout=30) as resp:
-        return resp.read().decode("utf-8")
 
 
 def _install_wheel_into_venv(venv_dir: Path, wheel_path: Path) -> None:

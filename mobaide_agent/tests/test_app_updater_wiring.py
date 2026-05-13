@@ -114,22 +114,24 @@ async def test_relay_callback_registration_invokes_updater(tmp_path, monkeypatch
 
     captured: dict[str, Any] = {}
 
-    async def fake_consider(url, sig, ver, *, force=False):
-        captured.update(url=url, sig=sig, ver=ver, force=force)
+    async def fake_consider(body, sig, ver, *, force=False):
+        captured.update(body=body, sig=sig, ver=ver, force=force)
         return "no_change"
 
     # Point the callback at our spy so we don't drag in the real
-    # download/install path.
+    # stage/install path. ``manifest_body`` is delivered inline over the
+    # WebSocket and handed verbatim to the updater — no HTTP fetch.
     relay._on_manifest_update = fake_consider
+    body = {"version": "0.2.0", "tarball_url": "https://example.com/a.tar.gz"}
     await relay._maybe_dispatch_manifest_update(
         {
             "version": "0.2.0",
-            "manifest_url": "http://example.invalid/manifest.json",
+            "manifest_body": body,
             "manifest_signature": "sig",
         }
     )
     assert captured == {
-        "url": "http://example.invalid/manifest.json",
+        "body": body,
         "sig": "sig",
         "ver": "0.2.0",
         "force": False,
@@ -151,14 +153,12 @@ def test_version_info_reads_relay_manifest():
     fake_relay = SimpleNamespace(
         latest_manifest={
             "version": "0.5.0",
-            "manifest_url": "/api/v1/agent/manifest.json",
+            "manifest_body": {"version": "0.5.0"},
             "manifest_signature": "sig",
         }
     )
     fake_state = SimpleNamespace(relay_client=fake_relay)
 
-    # Reproduce the route body verbatim — kept tight so a future schema
-    # change here will fail the test and force docs/spec to follow.
     manifest = fake_state.relay_client.latest_manifest
     payload = {
         "name": "mobaide_agent",
@@ -167,9 +167,7 @@ def test_version_info_reads_relay_manifest():
         "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
         "capabilities": {},
         "latest_agent_version": (manifest or {}).get("version"),
-        "manifest_url": (manifest or {}).get("manifest_url"),
-        "manifest_signature": (manifest or {}).get("manifest_signature"),
     }
     assert payload["latest_agent_version"] == "0.5.0"
-    assert payload["manifest_url"] == "/api/v1/agent/manifest.json"
-    assert payload["manifest_signature"] == "sig"
+    assert "manifest_url" not in payload
+    assert "manifest_signature" not in payload

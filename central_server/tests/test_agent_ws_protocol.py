@@ -100,7 +100,7 @@ class TestAgentTunnelProtocolHandshake:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "agent_version": "0.1.0",
                 "capabilities": {},
             }))
@@ -114,17 +114,16 @@ class TestAgentTunnelProtocolHandshake:
             assert resp["capabilities"] == {}
             # No manifest_store wired -> manifest fields stay null.
             assert resp["latest_agent_version"] is None
-            assert resp["manifest_url"] is None
+            assert resp["manifest_body"] is None
             assert resp["manifest_signature"] is None
 
-    def test_missing_protocol_version_defaults_to_compatible(
+    def test_missing_protocol_version_defaults_to_incompatible(
         self, app, registered_agent,
     ):
-        # Older agent builds may not carry ``protocol_version`` yet; the
-        # handshake must default to v1 and accept the connection so that
-        # the rolling-update window doesn't accidentally lock out
-        # last-known-good clients during the very deploy that introduces
-        # the field.
+        # proto-v2 raised ``MIN_CLIENT_PROTOCOL_VERSION`` to 2 — the legacy
+        # default (``protocol_version=1``) the parser falls back to is no
+        # longer in ``SUPPORTED_PROTOCOL_VERSIONS``. A pre-v2 build with no
+        # ``protocol_version`` field is correctly rejected here.
         agent_id, raw_token = registered_agent
         client = TestClient(app)
         with client.websocket_connect("/ws/agent-tunnel") as ws:
@@ -133,10 +132,10 @@ class TestAgentTunnelProtocolHandshake:
                 "agent_id": agent_id,
                 "token": raw_token,
             }))
-            resp = json.loads(ws.receive_text())
-            assert resp["type"] == "auth_ok"
+            incompat = json.loads(ws.receive_text())
+            assert incompat["type"] == "incompatible"
 
-    def test_auth_ok_carries_manifest_pointer_when_store_populated(
+    def test_auth_ok_carries_manifest_body_when_store_populated(
         self, app, registered_agent, tmp_path,
     ):
         agent_id, raw_token = registered_agent
@@ -160,12 +159,12 @@ class TestAgentTunnelProtocolHandshake:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 1,
+                "protocol_version": 2,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"
             assert resp["latest_agent_version"] == "0.9.9"
-            assert resp["manifest_url"] == "/api/v1/agent/manifest.json"
+            assert resp["manifest_body"] == body
             assert resp["manifest_signature"] == sig_b64
 
 

@@ -474,8 +474,6 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
             "capabilities": {},
             "latest_agent_version": (manifest or {}).get("version"),
-            "manifest_url": (manifest or {}).get("manifest_url"),
-            "manifest_signature": (manifest or {}).get("manifest_signature"),
         }
 
     return app

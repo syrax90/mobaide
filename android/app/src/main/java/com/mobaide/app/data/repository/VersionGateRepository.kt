@@ -16,9 +16,9 @@ import kotlinx.coroutines.flow.asStateFlow
  * Out-of-range → [ServerCompatibility.Incompatible] → the UI replaces the
  * entire navigation graph with [com.mobaide.app.ui.update.IncompatibleServerScreen].
  *
- * Server responses also include ``latest_agent_version`` / ``manifest_url`` /
- * ``manifest_signature`` (central_server hop only) — recorded here so the
- * "agent outdated" banner can compare without a separate round trip.
+ * Server responses also carry ``latest_agent_version`` (central_server hop
+ * only) — recorded here so the "agent outdated" banner can compare without
+ * a separate round trip.
  */
 class VersionGateRepository(
     private val centralApi: CentralApi,

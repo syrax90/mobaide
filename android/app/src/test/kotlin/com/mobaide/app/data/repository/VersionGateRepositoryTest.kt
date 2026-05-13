@@ -25,8 +25,6 @@ class VersionGateRepositoryTest {
         min_client_version = minClientVersion,
         capabilities = JsonObject(emptyMap()),
         latest_agent_version = latestAgent,
-        manifest_url = null,
-        manifest_signature = null,
     )
 
     @Test

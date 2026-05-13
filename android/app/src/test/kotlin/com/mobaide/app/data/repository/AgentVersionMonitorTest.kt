@@ -34,12 +34,10 @@ class AgentVersionMonitorTest {
     ) = VersionInfoResponse(
         name = "mobaide_agent",
         server_version = serverVersion,
-        protocol_versions = listOf(1),
-        min_client_version = 1,
+        protocol_versions = listOf(2),
+        min_client_version = 2,
         capabilities = JsonObject(emptyMap()),
         latest_agent_version = latestAgent,
-        manifest_url = null,
-        manifest_signature = null,
     )
 
     private fun newMonitor(

@@ -37,7 +37,8 @@ def test_broadcast_enqueues_frame_on_each_online_agent():
     routing.register_agent("agent-1", MagicMock())
     routing.register_agent("agent-2", MagicMock())
 
-    delivered = broadcast_manifest_update(routing, _stored_manifest("0.3.0"))
+    record = _stored_manifest("0.3.0")
+    delivered = broadcast_manifest_update(routing, record)
     assert delivered == 2
 
     for agent_id in ("agent-1", "agent-2"):
@@ -50,7 +51,7 @@ def test_broadcast_enqueues_frame_on_each_online_agent():
         assert body == {
             "type": "agent_manifest_update",
             "version": "0.3.0",
-            "manifest_url": "/api/v1/agent/manifest.json",
+            "manifest_body": record.body,
             "manifest_signature": "sig-b64",
         }
 

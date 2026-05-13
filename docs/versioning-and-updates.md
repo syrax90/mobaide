@@ -227,14 +227,17 @@ range is rejected up front.
 {
   "name": "central_server",
   "server_version": "0.1.0",
-  "protocol_versions": [1],
-  "min_client_version": 1,
+  "protocol_versions": [2],
+  "min_client_version": 2,
   "capabilities": {},
-  "latest_agent_version": "0.1.0",
-  "manifest_url": "/api/v1/agent/manifest.json",
-  "manifest_signature": "<base64>"
+  "latest_agent_version": "0.1.0"
 }
 ```
+
+(The signed manifest body / signature is NOT echoed back through this REST
+surface — it is delivered to the agent inline over the relay WebSocket as
+of proto-v2. The Android client only needs `latest_agent_version` to drive
+the "agent outdated" banner.)
 
 The Android client (`VersionGateRepository`) compares
 `BuildConfig.APP_PROTOCOL_VERSION` against the server's
@@ -294,13 +297,19 @@ be running. It is a small JSON document:
   with header `X-Release-Token: $CENTRAL_SERVER_RELEASE_TOKEN`. The
   route validates the signature **before** persisting; an invalid
   signature returns 400 and the manifest is not stored.
-* **Distribution** — agents read the manifest from
-  `GET /api/v1/agent/manifest.json` and via the `auth_ok` reply on the agent
-  tunnel. After a successful `POST /api/internal/agent_manifest`, the
-  router fans out an `agent_manifest_update` CH_CONTROL frame to every
-  connected agent in the routing table (`broadcast_manifest_update`),
-  so a freshly-published manifest reaches running agents within one
-  heartbeat without a reconnect.
+* **Distribution** — agents receive the signed manifest **body** inline in
+  the `auth_ok` reply on the agent tunnel and in `agent_manifest_update`
+  CH_CONTROL push frames (proto-v2). The fields carried are
+  `manifest_body` (the full signed dict) and `manifest_signature` (the
+  base64 Ed25519 signature); no HTTP fetch is required to apply an update.
+  After a successful `POST /api/internal/agent_manifest`, the router fans
+  out an `agent_manifest_update` frame to every connected agent in the
+  routing table (`broadcast_manifest_update`), so a freshly-published
+  manifest reaches running agents within one heartbeat without a
+  reconnect. `GET /api/v1/agent/manifest.json` continues to serve the same
+  record over HTTP — install scripts and the `mobaide-agent update` CLI
+  consume that endpoint for bootstrap / out-of-band refresh, but the
+  user-triggered "Install now" path no longer touches it.
 * **Storage** — `ManifestStore` writes atomically via `os.replace`; reads are
   served from an in-memory last-good cache.
 
@@ -662,10 +671,12 @@ single in-process pytest run:
    `__version__ = "0.2.0"` payload + a placeholder wheel), signs the
    manifest, and POSTs it to `/api/internal/agent_manifest`.
 4. Asserts `GET /api/v1/agent/manifest.json` returns the published record.
-5. Runs `StagedBinaryUpdater.consider_manifest()` against the served
-   manifest URL with a stubbed installer; asserts the staged release dir
-   was created, the staged `__init__.py` carries the expected version
-   string, and `current_version` was atomically swapped.
+5. Hands the served manifest body (and its base64 Ed25519 signature) to
+   `StagedBinaryUpdater.consider_manifest()` inline — the same shape the
+   agent now receives over the relay WebSocket — with a stubbed installer;
+   asserts the staged release dir was created, the staged `__init__.py`
+   carries the expected version string, and `current_version` was
+   atomically swapped.
 6. **Negative cases:** corrupting the tarball sha256 in the manifest body
    makes the updater return `signature_failed` and leaves
    `current_version` untouched (fail-closed). An invalid `X-Release-Token`

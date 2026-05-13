@@ -1,14 +1,13 @@
 """Cover the staged-binary auto-updater state machine.
 
-The download / install paths are stubbed via injected ``downloader`` /
-``installer`` callables — what we exercise is signature verification, idle
-deferral, and the atomic swap of ``current_version``.
+The install path is stubbed via the injected ``installer`` callable — what
+we exercise is signature verification, idle deferral, and the atomic swap
+of ``current_version``. The manifest body itself is passed in directly
+(no HTTP fetch in the relay-driven update path).
 """
 from __future__ import annotations
 
 import base64
-import json
-import sys
 import tarfile
 from io import BytesIO
 from pathlib import Path
@@ -20,7 +19,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from mobaide.agent.updater import (
     InstallLayout,
     StagedBinaryUpdater,
-    _http_download,
     _wheel_basename_from_url,
 )
 from mobaide.manifest_signing import canonical_json
@@ -56,8 +54,7 @@ def _signed_manifest(temp_files_dir: Path):
     }
     signature = private_key.sign(canonical_json(body))
     signature_b64 = base64.b64encode(signature).decode()
-    record = {"body": body, "signature_b64": signature_b64}
-    return public_key_b64, record
+    return public_key_b64, body, signature_b64
 
 
 @pytest.fixture
@@ -69,9 +66,7 @@ def layout(tmp_path: Path) -> InstallLayout:
 
 
 async def test_no_change_when_versions_match(layout) -> None:
-    public_key_b64, record = _signed_manifest(layout.prefix / "tmp")
-    manifest_url = layout.prefix / "manifest.json"
-    manifest_url.write_text(json.dumps(record))
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
     updater = StagedBinaryUpdater(
         layout=layout,
         public_key_b64=public_key_b64,
@@ -80,15 +75,13 @@ async def test_no_change_when_versions_match(layout) -> None:
         installer=lambda venv, wheel: None,
     )
     outcome = await updater.consider_manifest(
-        f"file://{manifest_url}", record["signature_b64"], record["body"]["version"],
+        body, signature_b64, body["version"],
     )
     assert outcome == "no_change"
 
 
 async def test_signature_failed_blocks_swap(layout) -> None:
-    _, record = _signed_manifest(layout.prefix / "tmp")
-    manifest_url = layout.prefix / "manifest.json"
-    manifest_url.write_text(json.dumps(record))
+    _, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
     updater = StagedBinaryUpdater(
         layout=layout,
         public_key_b64=base64.b64encode(b"\x00" * 32).decode(),
@@ -97,7 +90,7 @@ async def test_signature_failed_blocks_swap(layout) -> None:
         installer=lambda venv, wheel: None,
     )
     outcome = await updater.consider_manifest(
-        f"file://{manifest_url}", record["signature_b64"], record["body"]["version"],
+        body, signature_b64, body["version"],
     )
     assert outcome == "signature_failed"
     assert not (layout.releases_dir / "0.2.0").exists()
@@ -105,9 +98,7 @@ async def test_signature_failed_blocks_swap(layout) -> None:
 
 
 async def test_deferred_when_session_active(layout, monkeypatch) -> None:
-    public_key_b64, record = _signed_manifest(layout.prefix / "tmp")
-    manifest_url = layout.prefix / "manifest.json"
-    manifest_url.write_text(json.dumps(record))
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
 
     busy_session = MagicMock()
     busy_session.state = "running"
@@ -122,15 +113,13 @@ async def test_deferred_when_session_active(layout, monkeypatch) -> None:
         installer=lambda venv, wheel: None,
     )
     outcome = await updater.consider_manifest(
-        f"file://{manifest_url}", record["signature_b64"], record["body"]["version"],
+        body, signature_b64, body["version"],
     )
     assert outcome == "deferred"
 
 
 async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
-    public_key_b64, record = _signed_manifest(layout.prefix / "tmp")
-    manifest_url = layout.prefix / "manifest.json"
-    manifest_url.write_text(json.dumps(record))
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
 
     exits: list[int] = []
 
@@ -146,12 +135,33 @@ async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
         exit_func=fake_exit,
     )
     outcome = await updater.consider_manifest(
-        f"file://{manifest_url}", record["signature_b64"], record["body"]["version"],
+        body, signature_b64, body["version"],
     )
     assert outcome == "staged"
     assert (layout.releases_dir / "0.2.0").is_dir()
     assert layout.current_version_file.read_text().strip() == "0.2.0"
     assert exits == [75]
+
+
+async def test_non_dict_body_fails_closed(layout) -> None:
+    """A garbage payload arriving on the WebSocket (e.g. a serialised
+    list or a stray string) must short-circuit before reaching
+    ``verify_signature`` rather than blowing up with a TypeError."""
+    public_key_b64 = base64.b64encode(b"\x00" * 32).decode()
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        installer=lambda venv, wheel: None,
+    )
+    outcome = await updater.consider_manifest(
+        ["not", "a", "dict"],  # type: ignore[arg-type]
+        "sig",
+        "0.2.0",
+    )
+    assert outcome == "signature_failed"
+    assert not layout.current_version_file.exists()
 
 
 async def test_staging_rejects_non_pep427_wheel_url(layout) -> None:
@@ -188,8 +198,6 @@ async def test_staging_rejects_non_pep427_wheel_url(layout) -> None:
         "released_at": "2026-04-26T00:00:00+00:00",
     }
     sig_b64 = base64.b64encode(private_key.sign(canonical_json(body))).decode()
-    manifest_url = layout.prefix / "manifest.json"
-    manifest_url.write_text(json.dumps({"body": body, "signature_b64": sig_b64}))
 
     updater = StagedBinaryUpdater(
         layout=layout,
@@ -199,7 +207,7 @@ async def test_staging_rejects_non_pep427_wheel_url(layout) -> None:
         installer=lambda venv, wheel: None,
     )
     outcome = await updater.consider_manifest(
-        f"file://{manifest_url}", sig_b64, body["version"],
+        body, sig_b64, body["version"],
     )
     assert outcome == "signature_failed"
     assert not (layout.releases_dir / "0.2.0").exists()
@@ -292,31 +300,116 @@ class _FakeBytesResp:
         return out
 
 
-def test_http_download_routes_through_user_agent_wrapper(tmp_path) -> None:
-    # Regression guard for the Cloudflare 1010 UA block on the manifest-fetch path. ``_http_download``
-    # is the default ``downloader`` injected into ``StagedBinaryUpdater``; if
-    # this ever reverts to bare ``urllib.request.urlopen``, every running
-    # agent's auto-update polling against a Cloudflare-fronted manifest URL
-    # would silently start 403'ing.
-    captured: dict = {}
+async def test_consider_manifest_apply_path_never_calls_urlopen(
+    layout, monkeypatch,
+) -> None:
+    """Regression guard for the deleted ``_download_manifest`` HTTP fetch.
 
-    def _fake_urlopen(req, timeout=None):
-        captured["request"] = req
-        return _FakeBytesResp(b'{"version":"x"}')
+    The original bug was a relative ``manifest_url`` ("/api/v1/agent/manifest.json")
+    being read as a local filesystem path inside ``_download_manifest``, which
+    silently failed-closed to ``"signature_failed"``. The fix deletes that
+    function entirely and delivers the body inline over the relay WebSocket.
 
-    with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
-        body = _http_download("https://manifest.example/manifest.json")
+    This test pins the *architectural* invariant the fix relies on: the
+    manifest-apply path (``consider_manifest`` -> stage release -> swap) must
+    not, under any circumstance, perform an HTTP fetch for the manifest. We
+    enforce that by patching ``_http.urlopen`` to raise — and feeding the
+    updater ``file://`` tarball/wheel URLs so the legitimate asset-download
+    branch short-circuits inside ``_download_to`` without ever calling
+    ``urlopen``. If a future change re-introduces any HTTP fetch on the
+    manifest path (a re-fetch for "freshness", a CDN warm-up, etc.) this
+    test fails loudly instead of producing a fail-closed signature_failed at
+    runtime against real users.
+    """
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
 
-    assert body == '{"version":"x"}'
-    ua = captured["request"].get_header("User-agent")
-    assert ua is not None and ua.startswith("mobaide-agent/")
+    urlopen_calls: list[str] = []
+
+    def _urlopen_must_not_be_called(*args, **kwargs):
+        urlopen_calls.append(repr((args, kwargs)))
+        raise AssertionError(
+            "manifest-apply path must not call _http.urlopen — body is "
+            "delivered inline over the relay WebSocket (see plan: 'eliminates "
+            "the entire _download_manifest HTTP path')"
+        )
+
+    monkeypatch.setattr(
+        "mobaide.agent.updater._http.urlopen", _urlopen_must_not_be_called
+    )
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        installer=lambda venv, wheel: venv.mkdir(parents=True, exist_ok=True),
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.consider_manifest(
+        body, signature_b64, body["version"],
+    )
+
+    assert outcome == "staged", (
+        f"expected 'staged' on file:// asset paths; got {outcome!r}. The most "
+        f"likely cause is a regression that introduced an HTTP fetch on the "
+        f"manifest path. urlopen_calls={urlopen_calls!r}"
+    )
+    assert urlopen_calls == [], (
+        f"manifest-apply path called _http.urlopen — regression to pre-fix "
+        f"HTTP-fetch model. Calls captured: {urlopen_calls!r}"
+    )
+
+
+async def test_force_update_now_apply_path_never_calls_urlopen(
+    layout, monkeypatch,
+) -> None:
+    """Same invariant as the previous test, but exercising the
+    ``force_update_now`` entry point (the one wired to ``POST
+    /api/agent/update/force_now`` — the user-facing "Install now" CTA that
+    triggered the original production bug).
+
+    Force-update bypasses idle-deferral but goes through the exact same
+    ``consider_manifest`` body — a regression that adds an HTTP fetch only
+    inside the force path (rather than the watch-loop path) would still
+    reproduce the original UX failure even if the previous test stayed
+    green.
+    """
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+
+    urlopen_calls: list[str] = []
+
+    def _urlopen_must_not_be_called(*args, **kwargs):
+        urlopen_calls.append(repr((args, kwargs)))
+        raise AssertionError("force_update_now must not HTTP-fetch the manifest")
+
+    monkeypatch.setattr(
+        "mobaide.agent.updater._http.urlopen", _urlopen_must_not_be_called
+    )
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        installer=lambda venv, wheel: venv.mkdir(parents=True, exist_ok=True),
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.force_update_now(
+        body, signature_b64, body["version"], exit_after_stage=False,
+    )
+
+    assert outcome == "staged"
+    assert urlopen_calls == []
 
 
 def test_download_to_routes_through_user_agent_wrapper(tmp_path) -> None:
     # Regression guard for the Cloudflare 1010 UA block on the wheel/tarball download path. The
     # ``file://`` short-circuit in ``_download_to`` means existing tests
     # never touch ``urllib`` — pin the http(s) branch explicitly so a
-    # future revert can't slip past unnoticed.
+    # future revert can't slip past unnoticed. The manifest itself is no
+    # longer fetched over HTTP from the relay-driven update path (body
+    # arrives inline over the WebSocket), so the matching
+    # ``_http_download`` UA guard moved with the function deletion.
     captured: dict = {}
     payload = b"PK\x03\x04 fake wheel bytes"
 
