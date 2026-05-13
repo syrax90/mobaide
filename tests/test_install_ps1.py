@@ -211,6 +211,33 @@ def _function_body_text(name: str) -> str:
     return proc.stdout
 
 
+_PS_BLOCK_COMMENT_RE = re.compile(r"<#.*?#>", re.DOTALL)
+_PS_LINE_COMMENT_RE = re.compile(r"(?m)#.*$")
+
+
+def _strip_powershell_comments(text: str) -> str:
+    """Return ``text`` with PowerShell ``#`` and ``<# … #>`` comments removed.
+
+    Used by negative-pin assertions that want to forbid a substring from
+    *executable* code without false-positive-matching the same substring
+    inside a documentation comment. For example, the
+    ``test_install_service_does_not_register_cmd_exe_as_service_binary``
+    pin must reject a real ``cmd.exe`` service registration while
+    tolerating an architectural-note comment that *mentions* the pre-fix
+    ``cmd.exe /c launcher.cmd`` design as documentation of what the
+    current code avoids.
+
+    Limitation: a ``#`` literal inside a single-quoted PowerShell string
+    on a code-bearing line would be stripped along with the rest of the
+    line. ``deploy/install.ps1`` does not contain such constructs in the
+    function bodies these tests query (verified via the AST extraction
+    above), so the simpler regex pair is sufficient and avoids
+    re-implementing PowerShell's tokenizer in Python.
+    """
+    no_block = _PS_BLOCK_COMMENT_RE.sub("", text)
+    return _PS_LINE_COMMENT_RE.sub("", no_block)
+
+
 def test_install_ps1_parses_cleanly() -> None:
     """``deploy/install.ps1`` must parse under the AST parser.
 
@@ -2196,125 +2223,189 @@ def test_install_release_pip_self_upgrade_failure_warns_but_does_not_abort() -> 
     )
 
 
-def test_install_service_uses_new_service_cmdlet() -> None:
-    """``Install-Service`` must use ``New-Service``, not ``sc.exe create``.
+def test_install_service_does_not_register_cmd_exe_as_service_binary() -> None:
+    """``Install-Service`` must NOT register a ``cmd.exe`` wrapper as
+    the service binary.
 
-    Regression guard on the Windows-service-registration fix. The
-    binPath value (``cmd.exe /c "C:\\Program Files\\...\\launcher.cmd"``)
-    contains both spaces and embedded double quotes; PowerShell's
-    ``NativeCommandProcessor`` re-serialises such an argument with
-    CRT-style ``\\"`` escaping that ``sc.exe``'s own parser does not
-    recognise, so the registered ``ImagePath`` is corrupted (or the
-    call is rejected outright). The pre-fix bug surfaced much later as
-    ``Start-Service : Cannot find any service with service name
-    'MobaideAgent'``.
+    Real root cause of the original ``Start-Service : Cannot start
+    service MobaideAgent on computer '.'`` failure: the pre-fix design
+    registered ``cmd.exe /c launcher.cmd`` as the SCM service binary.
+    A Windows service binary MUST implement the SCM ABI
+    (``StartServiceCtrlDispatcher`` / ``ServiceMain`` /
+    ``SetServiceStatus(SERVICE_RUNNING)`` within ~30 s).
+    ``cmd.exe`` is a console interpreter; it does none of those things.
+    SCM times out waiting for ``SERVICE_RUNNING`` and reports
+    "Cannot start service ... on computer '.'" (error 1053).
 
-    ``New-Service`` calls ``CreateServiceW`` via P/Invoke and never
-    round-trips the binary path through a command line, so it is
-    immune to this class of quoting bug. If a future PR reintroduces
-    ``sc.exe create``, this test surfaces it locally.
+    The current fix replaces the cmd.exe wrapper with a real pywin32
+    ``ServiceFramework`` host. A regression that re-introduces the
+    ``cmd.exe /c`` binary-path pattern brings back the original
+    failure mode, so we pin it negatively here.
+
+    The assertion runs on the *comment-stripped* body so the
+    architectural-note comment at the top of ``Install-Service`` (which
+    documents the pre-fix bug to keep future readers from
+    reintroducing it) does not false-positive the pin.
+    """
+    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
+    assert "cmd.exe" not in body_code, (
+        "Install-Service must NOT reference `cmd.exe` in executable "
+        "code (the pre-fix design registered `cmd.exe /c launcher.cmd` "
+        "as the service binary; cmd.exe does not implement the SCM "
+        "ABI, so SCM timed out and reported `Cannot start service "
+        "MobaideAgent`). Comment-stripped body:\n" + repr(body_code)
+    )
+    assert not re.search(r"launcher\.cmd", body_code), (
+        "Install-Service must NOT generate a launcher.cmd template — "
+        "that was the pre-fix design. The svc-venv-hosted pywin32 "
+        "service module replaces it. Comment-stripped body:\n"
+        + repr(body_code)
+    )
+
+
+def test_install_service_creates_dedicated_svc_venv() -> None:
+    """``Install-Service`` must create a dedicated svc venv at
+    ``<prefix>/svc/venv``.
+
+    The service binary path is registered in SCM **once** and persists
+    across upgrades and rollbacks. Hosting the service in an active
+    release's venv would require re-registering on every upgrade and
+    would leave the binPath pointing at a deleted venv after rollback.
+    A dedicated, version-independent svc venv at ``<prefix>/svc/venv``
+    solves both: created once at install time, never moved, holds only
+    pywin32. Mirrors the launcher's "lives outside any release dir" design.
     """
     body = _function_body_text("Install-Service")
-    assert re.search(r"\bNew-Service\b", body), (
-        "Install-Service must register the service via the `New-Service` "
-        "cmdlet (CreateServiceW via P/Invoke). The historical "
-        "`sc.exe create` invocation is incompatible with PowerShell's "
-        "native-arg-passing: the binPath value contains both spaces "
-        "and embedded double quotes, and the resulting CRT-style `\\\"` "
-        "escaping is not understood by sc.exe's own parser. Found "
+    assert re.search(r'["\']svc["\']', body) or re.search(r'svc\\venv', body), (
+        "Install-Service must construct a path under `<prefix>\\svc\\` "
+        "(the version-independent service-host directory). Not found in "
         "body:\n" + repr(body)
     )
-    assert not re.search(r"\bsc\.exe\s+create\b", body), (
-        "Install-Service must NOT call `sc.exe create` (the pre-fix "
-        "invocation that PowerShell's native-arg-passing silently "
-        "corrupts when binPath contains both spaces and embedded "
-        "double quotes). Use `New-Service` instead. Found body:\n"
-        + repr(body)
+    assert re.search(r"-m\s+venv\b", body), (
+        "Install-Service must create the svc venv via `python -m venv` "
+        "(the canonical venv-creation invocation, same as Install-Release "
+        "and New-BootstrapVenv). Body:\n" + repr(body)
+    )
+
+
+def test_install_service_installs_pywin32_in_svc_venv() -> None:
+    """``Install-Service`` must ``pip install pywin32`` into the svc venv.
+
+    pywin32 provides ``win32serviceutil.ServiceFramework`` (the SCM ABI
+    plumbing the service module subclasses) and ``servicemanager``
+    (the SCM event-log helpers). Without pywin32 in the svc venv,
+    ``import win32serviceutil`` inside mobaide_service.py raises
+    ImportError and the service exits immediately on start.
+
+    The pip invocation must also pass ``--isolated`` so a hostile
+    ``PIP_EXTRA_INDEX_URL`` cannot redirect pywin32 to an attacker-
+    controlled mirror — same supply-chain posture as New-BootstrapVenv
+    pins for cryptography.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"pip\s+install[^|]*\bpywin32\b", body), (
+        "Install-Service must `pip install pywin32` into the svc venv "
+        "(provides win32serviceutil.ServiceFramework and the "
+        "servicemanager helpers). Not found in body:\n" + repr(body)
+    )
+    assert "--isolated" in body, (
+        "Install-Service's pip install must pass `--isolated` so pip "
+        "ignores PIP_EXTRA_INDEX_URL / PIP_FIND_LINKS / pip.ini — same "
+        "supply-chain hardening New-BootstrapVenv applies for "
+        "cryptography (closes CVE-2018-20225-class dependency confusion). "
+        "Body:\n" + repr(body)
+    )
+
+
+def test_install_service_copies_service_module_to_svc_dir() -> None:
+    """``Install-Service`` must place ``mobaide_service.py`` under
+    ``<prefix>/svc/``.
+
+    The pywin32 service registration points at this file (as
+    ``-u <path>``). It must exist on disk BEFORE the registration step
+    runs, and it must live in a version-independent location so the
+    registered binary path stays valid across upgrades and rollbacks.
+
+    The source is ``mobaide/windows_service.py`` inside the just-installed
+    release venv's site-packages (it ships in the agent wheel); the
+    target is ``<prefix>/svc/mobaide_service.py``. Either a ``Copy-Item``
+    or a ``Set-Content`` of the file contents satisfies the on-disk
+    contract.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"mobaide_service\.py", body), (
+        "Install-Service must reference `mobaide_service.py` (the "
+        "on-disk filename of the service module under <prefix>/svc/). "
+        "Not found in body:\n" + repr(body)
+    )
+    assert re.search(r"\bCopy-Item\b|\bSet-Content\b", body), (
+        "Install-Service must materialise the service module on disk "
+        "via `Copy-Item` (from the release venv's site-packages) or "
+        "`Set-Content` (inline). Neither found in body:\n" + repr(body)
+    )
+
+
+def test_install_service_registers_via_python_install_command() -> None:
+    """``Install-Service`` must register the service by invoking the svc
+    venv's ``python.exe`` with the ``install`` verb on the service module.
+
+    The service module's ``install`` handler calls
+    ``win32serviceutil.InstallService(exeName=sys.executable,
+    exeArgs="-u <this_file>")``, producing a service binary path of
+    ``"<svc venv>\\Scripts\\python.exe" -u "<prefix>\\svc\\mobaide_service.py"``.
+    This bypasses the default ``pythonservice.exe`` registration whose
+    DLL search does not work inside a venv (pywin32 #1450, #2032).
+
+    A regression that registers the service directly with ``New-Service``
+    (or any other path that doesn't go through the module's install
+    verb) re-introduces the pythonservice.exe DLL-search problem.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"\$svcVenvPython\s+\$svcModule\s+install\b", body) or \
+           re.search(r"mobaide_service\.py\s+install\b", body), (
+        "Install-Service must invoke the svc-venv python with the "
+        "`install` verb on mobaide_service.py to register the service. "
+        "The module's install handler routes the registration through "
+        "win32serviceutil.InstallService with the correct exeName / "
+        "exeArgs to sidestep pythonservice.exe's venv-DLL-search "
+        "problem. Not found in body:\n" + repr(body)
     )
 
 
 def test_install_service_verifies_service_exists_before_starting() -> None:
-    """``Install-Service`` must re-check SCM after ``New-Service``.
+    """``Install-Service`` must re-check SCM after registration.
 
-    The pre-fix silent-failure anti-pattern (``| Out-Null`` + no
-    ``$LASTEXITCODE`` check on ``sc.exe create``) hid the original bug
-    until ``Start-Service`` emitted its own opaque "Cannot find any
-    service" error. Defence-in-depth: after ``New-Service`` succeeds,
-    confirm the service actually appeared in SCM before invoking
-    ``Start-Service``. Surfaces a real error (with a real message)
-    immediately at install time rather than several lines later.
+    Defence-in-depth on the silent-failure anti-pattern that hid the
+    original bug. After the registration step succeeds, confirm the
+    service actually appeared in SCM (``Get-Service``) before invoking
+    ``Start-Service``. Surfaces a real error with a real message
+    immediately at install time rather than several lines later via
+    a confusing ``Start-Service : Cannot find any service`` /
+    ``Cannot start service`` exception.
+
+    The pattern was introduced for the pre-fix ``New-Service`` design
+    and survives the pywin32 rewrite verbatim — the same anti-pattern
+    (silent registration failure → opaque Start-Service error) applies
+    to any registration mechanism.
     """
     body = _function_body_text("Install-Service")
-    new_svc = re.search(r"\bNew-Service\b", body)
-    assert new_svc is not None, (
-        "Pre-condition for this test: Install-Service must use "
-        "`New-Service` (covered by "
-        "test_install_service_uses_new_service_cmdlet)."
+    install_match = re.search(
+        r"\binstall\b[^\r\n]*\|\s*Out-(?:Host|Null)|"
+        r"\$svcVenvPython\s+\$svcModule\s+install",
+        body,
     )
-    tail = body[new_svc.end():]
+    assert install_match is not None, (
+        "Pre-condition: Install-Service must invoke the registration "
+        "step (covered by "
+        "test_install_service_registers_via_python_install_command)."
+    )
+    tail = body[install_match.end():]
     assert re.search(r"\bGet-Service\b", tail), (
-        "After the `New-Service` call, Install-Service must re-check "
-        "the service's existence via `Get-Service` and fail loudly if "
-        "it is missing. This is the silent-failure-mode safeguard the "
-        "fix narrative calls out: without an explicit verification "
-        "step, the next regression in service registration will "
-        "surface as another opaque `Start-Service : Cannot find any "
-        "service` error far away from the actual cause. Body slice "
-        "after `New-Service`:\n" + repr(tail)
-    )
-
-
-def test_install_service_launcher_cmd_handles_paths_with_spaces() -> None:
-    """The launcher .cmd template in ``Install-Service`` must be
-    space-safe.
-
-    The default install prefix is ``C:\\Program Files\\MobaideAgent``,
-    which contains a space. cmd's ``for /f`` splits an unquoted
-    parenthesised file-set on whitespace; without ``usebackq``, a
-    double-quoted file-set is treated as a literal string rather than a
-    filename. The pre-fix template
-
-        for /f %%v in (%MOBAIDE_AGENT_PREFIX%\\current_version) ...
-
-    therefore tried to open ``C:\\Program`` and
-    ``Files\\MobaideAgent\\current_version`` as two separate files,
-    left ``CLAUDE_VERSION`` empty, and resolved the next line to a
-    non-existent python.exe. The fix requires both ``usebackq`` and a
-    double-quoted ``"%MOBAIDE_AGENT_PREFIX%\\current_version"``.
-
-    Also guards the ``if not defined CLAUDE_VERSION`` exit branch — a
-    missing/empty ``current_version`` must surface as a real error in
-    the Windows Event Log, not as an empty-version-segment
-    NoSuchFile crash.
-    """
-    body = _function_body_text("Install-Service")
-    assert re.search(r"\busebackq\b", body), (
-        "Install-Service's launcher.cmd here-string must use the "
-        "`for /f \"usebackq tokens=*\"` form so a double-quoted "
-        "file-set is treated as a filename. Without `usebackq`, "
-        "the default install prefix `C:\\Program Files\\MobaideAgent` "
-        "breaks the for-loop's file-set parsing and CLAUDE_VERSION "
-        "is left empty. Body:\n" + repr(body)
-    )
-    assert re.search(
-        r'"%MOBAIDE_AGENT_PREFIX%\\current_version"', body
-    ), (
-        "Install-Service's launcher.cmd here-string must quote the "
-        "`%MOBAIDE_AGENT_PREFIX%\\current_version` path inside the "
-        "`for /f` file-set (e.g. "
-        "`for /f \"usebackq tokens=*\" %%v in "
-        "(\"%MOBAIDE_AGENT_PREFIX%\\current_version\") do ...`). "
-        "Otherwise the default prefix's embedded space splits the "
-        "file-set into two non-existent paths. Body:\n" + repr(body)
-    )
-    assert re.search(r"if\s+not\s+defined\s+CLAUDE_VERSION", body), (
-        "Install-Service's launcher.cmd here-string must contain an "
-        "`if not defined CLAUDE_VERSION` guard that exits non-zero "
-        "with a real error message. A missing or empty "
-        "current_version file must surface in the Windows Event Log "
-        "as a clear failure -- the pre-fix template would silently "
-        "resolve `%MOBAIDE_AGENT_PREFIX%\\releases\\%CLAUDE_VERSION%\\"
-        "venv\\Scripts\\python.exe` to a path with an empty version "
-        "segment and produce a confusing NoSuchFile crash instead. "
-        "Body:\n" + repr(body)
+        "After the service registration step, Install-Service must "
+        "re-check the service's existence via `Get-Service` and fail "
+        "loudly if it is missing. Without this check, a silent "
+        "registration failure surfaces as an opaque `Start-Service : "
+        "Cannot find any service` / `Cannot start service` error far "
+        "away from the actual cause. Body slice after registration:\n"
+        + repr(tail)
     )

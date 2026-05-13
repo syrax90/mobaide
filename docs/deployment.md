@@ -105,6 +105,58 @@ mobaide-agent pair-qr --wait --prefix .\mobaide_dev_prefix
 
 For the full local stack (Caddy + central-server in Docker + agent native), use `start-all.ps1` from the repo root.
 
+### Windows (SCM service) — automated
+
+**End-user / production install:** run the one-liner in a regular (non-admin) PowerShell window:
+
+```powershell
+irm https://get.mobaide.com/install.ps1 | iex
+```
+
+The script self-elevates via UAC, auto-installs Python 3.12 (`winget` fast path, python.org installer fallback), stages the signed release into `<prefix>\releases\<version>\venv\` (default prefix `C:\Program Files\MobaideAgent`), writes `<prefix>\current_version`, and registers the **MobaideAgent** SCM service. After the service registration completes, the script renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app.
+
+#### Service architecture
+
+The agent runs as a real Windows service registered with SCM. The service host is **version-independent** — it lives at `<prefix>\svc\` and never moves between releases, so the SCM binPath stays valid across upgrades and rollbacks.
+
+```
+<prefix>\
+├── current_version              # text file: "X.Y.Z"
+├── releases\<version>\venv\     # per-release venv (mobaide + deps)
+├── trust\central_server.pub     # pinned manifest-signing public key
+└── svc\                         # version-independent service host
+    ├── venv\                    #   dedicated venv with only pywin32
+    └── mobaide_service.py       #   pywin32 ServiceFramework wrapper
+```
+
+The registered service binary path is:
+
+```
+"<prefix>\svc\venv\Scripts\python.exe" -u "<prefix>\svc\mobaide_service.py"
+```
+
+On every service start, the wrapper reads `<prefix>\current_version`, spawns the active release's `python.exe -m mobaide.launcher` as a subprocess, reports `SERVICE_RUNNING` to SCM, and waits for either a stop signal or the subprocess exiting. The subprocess (`mobaide.launcher`) does the crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. The next service start picks up the rolled-back version.
+
+SCM is configured with `failure reset=600 actions=restart/5000/restart/5000/restart/5000`, composing with the launcher's heuristic so a third bad boot resolves to the previous release.
+
+> **Note (breaking change vs. pre-fix builds):** older installs registered `cmd.exe /c launcher.cmd` as the service binary. That was the root cause of the `Start-Service : Cannot start service MobaideAgent on computer '.'` failure — a Windows service binary must implement the SCM ABI (`StartServiceCtrlDispatcher` / `SetServiceStatus(SERVICE_RUNNING)` within ~30 s), which cmd.exe does not. Re-running `install.ps1` on a host with the pre-fix design stops the old service, removes the cmd.exe registration, and re-registers the pywin32 host. The old `<prefix>\bin\mobaide-agent-launcher.cmd` is no longer used and can be deleted.
+
+#### Service management
+
+```powershell
+Get-Service MobaideAgent
+Start-Service MobaideAgent
+Stop-Service MobaideAgent
+Restart-Service MobaideAgent
+sc.exe queryex MobaideAgent     # shows PID, current state, dependencies
+
+# Service start / stop events land in the Windows Event Log under
+# "Application", source = "MobaideAgent".
+Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
+```
+
+The service runs as `LocalSystem` (the SCM default). Per-user / Group Managed Service Account hardening is a separate concern and is not configured by the install script.
+
 ### Linux (systemd) and macOS (launchd) — automated
 
 **End-user / production install (recommended):** pull a signed release from `central_server` via the install script:
