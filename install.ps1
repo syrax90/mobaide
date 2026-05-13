@@ -40,6 +40,18 @@ $Script:InstallUrl = if ($env:MOBAIDE_AGENT_INSTALL_URL) {
 } else {
     "https://get.mobaide.com/install.ps1"
 }
+# Service-host module URL. Co-versioned with install.ps1 itself: the
+# publish-gh-pages workflow ships both files together on every push to
+# main, so an installer change that depends on a new service-module API
+# can never desync from the module it ships against. The previous design
+# copied the module out of the installed wheel, which coupled installer
+# changes to wheel re-tagging and produced the
+# "Service module source not found at ...\releases\<v>\venv\..." failure.
+$Script:WindowsServiceUrl = if ($env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL) {
+    $env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL
+} else {
+    "https://get.mobaide.com/windows_service.py"
+}
 # Opt out of the auto-Python-install path for CI / locked-down hosts; the
 # installer then falls back to the legacy "fail if no Python 3.12+" behaviour.
 $Script:SkipPythonInstall = [bool]$env:MOBAIDE_AGENT_SKIP_PYTHON_INSTALL
@@ -168,8 +180,8 @@ function Assert-AdminOrElevate {
     $passthrough = @(
         'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
         'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
-        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_SKIP_INSTALL_QR',
-        'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL'
+        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_SERVICE_URL',
+        'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL'
     )
     $envStmts = foreach ($name in $passthrough) {
         $val = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -726,7 +738,7 @@ function Write-PairingQr {
 }
 
 function Install-Service {
-    param($PythonExe, $Version)
+    param($PythonExe)
     # Architectural note: a Windows service binary MUST implement the
     # SCM ABI (StartServiceCtrlDispatcher / SetServiceStatus(RUNNING)
     # within ~30s, SERVICE_CONTROL_* handlers). The pre-fix design
@@ -772,22 +784,29 @@ function Install-Service {
         Write-Fail "Failed to install pywin32 in service host venv (pip exit $LASTEXITCODE)"
     }
 
-    # The service module ships inside the agent wheel at
-    # mobaide/windows_service.py; the wheel was installed in the
-    # release venv above (Install-Release), so we copy it from there
-    # to <prefix>/svc/mobaide_service.py. We DO NOT install the whole
-    # mobaide package into the svc venv — it would pull pywinpty +
-    # cryptography + uvicorn for no reason; the wrapper is stdlib +
-    # pywin32 only. The renamed-on-copy filename keeps the on-disk
-    # entry short and avoids `mobaide.` import paths in the svc venv
-    # (where the mobaide package isn't installed).
-    $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $Version
-    $sourceModule = Join-Path $releaseDir "venv\Lib\site-packages\mobaide\windows_service.py"
-    if (-not (Test-Path $sourceModule)) {
-        Write-Fail "Service module source not found at $sourceModule — release venv is missing mobaide/windows_service.py. Check the wheel build."
+    # Fetch the service module from the same distribution channel as
+    # install.ps1 itself (gh-pages → get.mobaide.com). The publish-gh-pages
+    # workflow ships deploy/install.ps1 and deploy/windows_service.py in
+    # the same push, so the two cannot desync. The pre-fix design copied
+    # the file out of the installed wheel, which coupled installer changes
+    # to wheel re-tagging and produced
+    # "Service module source not found at ...\releases\<v>\venv\..." when
+    # the installer was newer than the wheel. The svc venv only needs
+    # pywin32 + stdlib, so we don't install the whole mobaide package
+    # here.
+    Write-Info "Downloading service module from $Script:WindowsServiceUrl"
+    # Versionless UA: deliberate divergence from Install-Release's
+    # `mobaide-agent-installer/$version` form. The version token there
+    # exists to pass Cloudflare Bot Fight Mode on the CDN-fronted wheel
+    # host (see Invoke-AgentDownload header). gh-pages is not Cloudflare-
+    # fronted in the same way, and $Version is no longer in scope after
+    # the Install-Service `-Version` param removal, so the bare string
+    # is sufficient.
+    Invoke-AgentDownload -Url $Script:WindowsServiceUrl -OutFile $svcModule -UserAgent "mobaide-agent-installer"
+    if (-not (Test-Path $svcModule)) {
+        Write-Fail "Service module download failed: $svcModule does not exist after fetch from $Script:WindowsServiceUrl"
     }
-    Copy-Item -LiteralPath $sourceModule -Destination $svcModule -Force
-    Write-Info "Copied service module to $svcModule"
+    Write-Info "Wrote service module to $svcModule"
 
     # If the service already exists, stop it before re-registering so
     # the running python.exe doesn't hold the svc-venv files locked.
@@ -894,7 +913,7 @@ function Main {
     Write-AgentEnv -Version $version
     Write-PairingQr -Version $version
 
-    Install-Service -PythonExe $python -Version $version
+    Install-Service -PythonExe $python
     Write-Completion -Version $version
 }
 
