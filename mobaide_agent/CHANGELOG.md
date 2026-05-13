@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.6](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.5...agent-v0.1.6) (2026-05-13)
+
+
+### Bug Fixes
+
+* **agent:** preserve launcher PID on Windows by spawning agent as subprocess ([e9fd851](https://github.com/syrax90/claude_mobile/commit/e9fd85151cedfef4e2ac2169b95de9a41b8371cc))
+* **launcher:** preserve launcher PID on Windows by spawning agent as subprocess ([46a0a33](https://github.com/syrax90/claude_mobile/commit/46a0a33e32d75bfcf891eabf60ffacada7ac0c2b))
+
 ## [0.1.5](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.4...agent-v0.1.5) (2026-05-13)
 
 
