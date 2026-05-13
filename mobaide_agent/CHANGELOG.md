@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.7](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.6...agent-v0.1.7) (2026-05-13)
+
+
+### Bug Fixes
+
+* **agent:** write relay credentials to .env after pairing and auto-restart service ([ba7594f](https://github.com/syrax90/claude_mobile/commit/ba7594f65da49162138b3df1a807f5dec349623a))
+* **windows:** write relay credentials to .env after pairing and auto-restart service ([7b9c581](https://github.com/syrax90/claude_mobile/commit/7b9c581bf42ae6c99bf06baacee2d6097146bb78))
+
 ## [0.1.6](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.5...agent-v0.1.6) (2026-05-13)
 
 
