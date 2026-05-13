@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.8](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.7...agent-v0.1.8) (2026-05-13)
+
+
+### Bug Fixes
+
+* **agent:** replace post-pair sys.exit(75) with in-process relay startup ([7abe076](https://github.com/syrax90/claude_mobile/commit/7abe076833cb012be2c0d85af5ef3e4d83f7a813))
+* **pairing:** replace post-pair sys.exit(75) with in-process relay startup ([4adbcca](https://github.com/syrax90/claude_mobile/commit/4adbcca68d3dbefac2553c8b37f343751463e7a2))
+
 ## [0.1.7](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.6...agent-v0.1.7) (2026-05-13)
 
 
