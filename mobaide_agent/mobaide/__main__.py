@@ -167,6 +167,41 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    if sys.platform == "win32":
+        # Install WindowsSelectorEventLoopPolicy for the CLI-verb path.
+        # Python 3.8+ defaults to WindowsProactorEventLoopPolicy on Windows,
+        # but python-websockets has long-standing TLS-recv hangs / silent
+        # data-loss under Proactor — the agent's pairing flow calls
+        # ``await ws.recv()`` to receive an Ed25519-signed credential push
+        # from the central server, and on Windows under Proactor that push
+        # can be dropped after the mobile already paired successfully,
+        # producing the "mobile shows Paired, agent .env stays blank"
+        # symptom that the in-band WS-clear-pending fix alone cannot reach
+        # (every reconnect re-hits the same Proactor recv bug). See
+        # https://github.com/python-websockets/websockets/issues/1118 and
+        # https://vstinner.github.io/asyncio-proactor-wsarecv-cancellation-data-loss.html
+        # for the underlying issue, and the ``_run_agent`` site below for
+        # the matching Runner-based override needed by the ``run``
+        # subcommand path.
+        #
+        # The global policy installed here flows to every entry point that
+        # creates its loop via ``asyncio.run`` / ``asyncio.get_event_loop``
+        # — the CLI verbs (``pair-qr --wait``, ``fetch-trust-key``,
+        # ``re-pair``, ``update``). It does NOT flow to uvicorn's
+        # single-process ``run`` path: uvicorn 0.36+ constructs its loop
+        # via ``asyncio.Runner(loop_factory=Config.get_loop_factory())``,
+        # bypassing the policy entirely. The ``run`` subcommand handles
+        # that separately in ``_run_agent``.
+        #
+        # WindowsSelectorEventLoopPolicy is backed by ``select()`` (capped
+        # at 64 sockets — fine for the agent's workload). It does not
+        # support ``asyncio.create_subprocess_exec``; the agent's one
+        # caller of that API has been migrated to
+        # ``asyncio.to_thread(subprocess.run, ...)`` in
+        # ``mobaide.linear.worktree._run_git`` (so Linear-driven worktree
+        # operations keep working on Windows under either loop policy).
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     parser = _build_parser()
     args = parser.parse_args(argv)
     command = args.command or "run"
@@ -192,11 +227,39 @@ def _run_agent() -> None:
     from mobaide.agent.app import create_app
 
     app = create_app()
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host=app.state.config.host,
         port=app.state.config.port,
     )
+    server = uvicorn.Server(config)
+    if sys.platform == "win32":
+        # uvicorn 0.36+ bypasses ``asyncio.get_event_loop_policy()`` in
+        # single-process mode by calling
+        # ``asyncio.Runner(loop_factory=Config.get_loop_factory())``, and on
+        # Windows ``get_loop_factory()`` returns the bare
+        # ``asyncio.ProactorEventLoop`` constructor — the policy installed
+        # at the top of ``main()`` is therefore not honoured for the
+        # ``run`` subcommand (the path the Windows service actually takes).
+        # Drop down to the underlying ``uvicorn.Server.serve()`` coroutine
+        # and run it on an ``asyncio.Runner`` we explicitly construct with
+        # ``loop_factory=asyncio.SelectorEventLoop``. The global policy set
+        # in ``main()`` still serves the CLI verbs (``pair-qr --wait`` and
+        # friends) that go through ``asyncio.run`` directly. This is the
+        # specific code path the user's pairing flow exercises, so the
+        # event-loop fix has to land here to reach
+        # ``run_pairing_monitor`` → ``PairingWsClient.wait_for_claim``.
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            runner.run(server.serve())
+    else:
+        # POSIX: native ``asyncio.SelectorEventLoop`` is the default;
+        # ``uvicorn.run`` handles signals + loop creation correctly without
+        # extra plumbing.
+        uvicorn.run(
+            app,
+            host=app.state.config.host,
+            port=app.state.config.port,
+        )
 
 
 def _run_update() -> int:

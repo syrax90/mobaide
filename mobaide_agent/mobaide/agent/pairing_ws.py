@@ -78,17 +78,41 @@ class PairingWsClient:
                 The caller should surface this to the operator and
                 re-render a fresh QR — the nonce is single-use.
         """
+        logger.info("pairing_ws.connecting ws_url=%s", ws_url)
         try:
             async with websockets.connect(
-                ws_url, open_timeout=15, close_timeout=5
+                ws_url,
+                open_timeout=15,
+                close_timeout=5,
+                # Explicit keepalive: a Cloudflare-style idle drop
+                # (free-tier WebSocket connections close at 100 s,
+                # business-tier configurable) surfaces as a
+                # ConnectionClosedError within ~25 s instead of stalling
+                # an ``await ws.recv()`` until ``timeout_s`` (up to
+                # 120 s for a fresh nonce). Fast drop-detection is what
+                # lets ``run_pairing_monitor``'s retain-pending +
+                # exponential-backoff retry hit the server's
+                # ``read_and_clear_claimed_credentials`` recovery path
+                # while the nonce is still in its TTL window. The
+                # python-websockets default is also 20 s/20 s, but
+                # pinning the values explicitly survives a library
+                # default change.
+                ping_interval=20,
+                ping_timeout=20,
             ) as ws:
+                logger.info("pairing_ws.connected ws_url=%s", ws_url)
                 ready = await asyncio.wait_for(ws.recv(), timeout=15)
                 ready_msg = self._decode_text(ready)
                 if not isinstance(ready_msg, dict) or ready_msg.get("type") != "ready":
                     raise PairingWsError(
                         f"Expected 'ready' frame, got: {ready_msg!r}"
                     )
+                logger.info("pairing_ws.ready_received ws_url=%s", ws_url)
 
+                logger.info(
+                    "pairing_ws.recv_claim_begin ws_url=%s timeout_s=%.1f",
+                    ws_url, timeout_s,
+                )
                 payload_raw = await asyncio.wait_for(
                     ws.recv(), timeout=max(1.0, timeout_s)
                 )
@@ -97,7 +121,14 @@ class PairingWsClient:
                 else:
                     payload_bytes = bytes(payload_raw)
                 push = json.loads(payload_bytes.decode("utf-8"))
+                logger.info(
+                    "pairing_ws.recv_claim_payload ws_url=%s bytes=%d",
+                    ws_url, len(payload_bytes),
+                )
         except asyncio.TimeoutError as exc:
+            logger.warning(
+                "pairing_ws.timeout ws_url=%s timeout_s=%.1f", ws_url, timeout_s,
+            )
             raise PairingWsError(
                 "pairing ws timed out before claim arrived"
             ) from exc
@@ -107,13 +138,22 @@ class PairingWsClient:
             OSError,
             json.JSONDecodeError,
         ) as exc:
+            logger.warning(
+                "pairing_ws.transport_error ws_url=%s exc_type=%s: %s",
+                ws_url, type(exc).__name__, exc,
+            )
             raise PairingWsError(f"pairing ws transport failure: {exc}") from exc
 
-        return self._parse_and_verify(
+        claim = self._parse_and_verify(
             push,
             trust_pub_key_b64=trust_pub_key_b64,
             expected_relay_url=expected_relay_url,
         )
+        logger.info(
+            "pairing_ws.claim_verified agent_id=%s relay_url=%s",
+            claim.agent_id, claim.relay_url,
+        )
+        return claim
 
     @staticmethod
     def _decode_text(raw):

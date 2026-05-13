@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -120,21 +121,29 @@ def convert_to_worktree_slug(identifier: str, title: str) -> str:
 async def _run_git(
     *args: str, cwd: str
 ) -> tuple[int, str, str]:
-    """Run a git command and return (returncode, stdout, stderr)."""
+    """Run a git command and return (returncode, stdout, stderr).
+
+    Uses ``asyncio.to_thread(subprocess.run, ...)`` rather than
+    ``asyncio.create_subprocess_exec``: the latter raises
+    ``NotImplementedError`` under ``WindowsSelectorEventLoop`` (the policy
+    the agent installs on Windows to work around python-websockets'
+    Proactor recv hangs — see ``mobaide.__main__.main`` for the rationale).
+    Wrapping the blocking ``subprocess.run`` in a thread keeps the
+    coroutine API unchanged for callers while staying loop-agnostic on
+    every platform.
+    """
     if not os.path.isdir(cwd):
         return (1, "", f"Directory does not exist: {cwd}")
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        *args,
+    completed = await asyncio.to_thread(
+        subprocess.run,
+        ["git", *args],
         cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+        capture_output=True,
     )
-    stdout, stderr = await proc.communicate()
     return (
-        proc.returncode or 0,
-        stdout.decode(errors="replace"),
-        stderr.decode(errors="replace"),
+        completed.returncode or 0,
+        completed.stdout.decode(errors="replace"),
+        completed.stderr.decode(errors="replace"),
     )
 
 
