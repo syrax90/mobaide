@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.14](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.13...agent-v0.1.14) (2026-05-14)
+
+
+### Bug Fixes
+
+* **agent:** auto-detect & persist claude.cmd for Windows service ([2d3abd8](https://github.com/syrax90/claude_mobile/commit/2d3abd83b3bc1d174d429a5bb3fe51c48504f97e))
+* **claude-cli:** auto-detect & persist claude.cmd for Windows service ([6f6471d](https://github.com/syrax90/claude_mobile/commit/6f6471db2a7ac9399bf3c5e45d45ea2a5ffb2df2))
+
 ## [0.1.13](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.12...agent-v0.1.13) (2026-05-14)
 
 
