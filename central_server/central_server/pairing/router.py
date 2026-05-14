@@ -141,13 +141,14 @@ async def initiate_pairing(
         if v is not None
     }
     metadata_json = json.dumps(metadata, sort_keys=True) if metadata else None
+    relay_url = _resolve_public_base_url(request)
     raw_nonce, expires_at = await db.create_pairing_token(
         agent_id=None,
         ttl_seconds=config.pairing_qr_token_ttl_seconds,
         agent_metadata=metadata_json,
+        relay_url=relay_url,
     )
 
-    relay_url = _resolve_public_base_url(request)
     trust_key_fp = compute_trust_key_fp(pub_key_b64)
     exp_unix = int(datetime.fromisoformat(expires_at).timestamp())
     qr_payload = (
@@ -263,7 +264,17 @@ async def claim_pairing(
             detail="Pairing nonce already consumed",
         )
 
-    relay_url = _resolve_public_base_url(request)
+    # Echo the relay_url persisted at initiate time, not whatever
+    # ``request.base_url`` happens to resolve to now. Two reasons:
+    # (1) when the mobile and the agent reach the relay via
+    # differently-configured proxy paths (e.g. mobile direct over
+    # https, agent through a tunnel that lands as http), the scheme
+    # the claim handler infers can disagree with the scheme the
+    # initiate handler inferred — the agent then rejects its own
+    # credentials on relay_url strict-equality. (2) the WS recovery
+    # branch reads the same column, so dispatch and recovery now
+    # produce byte-identical payloads.
+    relay_url = pre.get("relay_url") or _resolve_public_base_url(request)
     issued_at = datetime.now(timezone.utc).isoformat()
     push_payload_unsigned = {
         "type": "claim_completed",
@@ -390,7 +401,21 @@ async def pairing_ws(websocket: WebSocket, nonce: str) -> None:
             )
             return
         if consumed is not None:
-            relay_url = _resolve_public_base_url_from_app(websocket)
+            # Echo the persisted relay_url from initiate time. This is
+            # the same column the claim handler reads when building the
+            # dispatch push, so dispatch and recovery now produce
+            # byte-identical payloads — the agent's strict-equality
+            # check on ``relay_url`` cannot disagree between the two
+            # paths. Falling back to ``request.base_url``-style
+            # resolution only happens for legacy rows (pre-migration-8)
+            # where the column is still NULL; those nonces will time
+            # out within the 120 s TTL after upgrade, after which the
+            # fallback is unused.
+            relay_url = (
+                consumed.get("relay_url")
+                or pre.get("relay_url")
+                or _resolve_public_base_url_from_app(websocket)
+            )
             payload = await _build_signed_push_for_consumed(
                 db,
                 agent_id=consumed["claimed_agent_id"],
@@ -431,7 +456,13 @@ async def pairing_ws(websocket: WebSocket, nonce: str) -> None:
 
 
 def _resolve_public_base_url_from_app(websocket: WebSocket) -> str:
-    """Mirror of `_resolve_public_base_url` for WS context (no Request)."""
+    """Legacy-row fallback for WS context (no Request).
+
+    Used only when ``pairing_tokens.relay_url`` is NULL (rows created
+    before migration 8). The dispatch/recovery paths read the persisted
+    column first; this function never runs for nonces issued by the
+    current server build.
+    """
     config = websocket.app.state.config
     if config.public_base_url:
         return config.public_base_url.rstrip("/")

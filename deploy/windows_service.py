@@ -74,8 +74,10 @@ _STOP_GRACE_SECONDS = 25
 _WAIT_TICK_MS = 5000
 
 _AGENT_LOG_DIR_NAME = "logs"
-_AGENT_LOG_FILE_NAME = "agent.err.log"
-_AGENT_LOG_BACKUP_NAME = "agent.err.log.1"
+_AGENT_ERR_LOG_FILE_NAME = "agent.err.log"
+_AGENT_ERR_LOG_BACKUP_NAME = "agent.err.log.1"
+_AGENT_OUT_LOG_FILE_NAME = "agent.out.log"
+_AGENT_OUT_LOG_BACKUP_NAME = "agent.out.log.1"
 _AGENT_LOG_ROTATE_BYTES = 5 * 1024 * 1024
 
 # Canonical in ``mobaide.agent.updater.EXIT_RESTART_REQUESTED``. Duplicated
@@ -133,23 +135,23 @@ def _resolve_release_python(prefix: Path) -> Path:
     return python
 
 
-def _open_err_log(prefix: Path):
-    """Open ``<prefix>/logs/agent.err.log`` for the launcher's stderr.
+def _open_log(prefix: Path, file_name: str, backup_name: str):
+    """Open ``<prefix>/logs/<file_name>`` in append mode with boot-time rotation.
 
-    Rotates at boot if the existing log is ≥ 5 MB (keep one backup
-    at ``agent.err.log.1``). Returns a binary append-mode file
-    object; the caller passes it to ``Popen`` as ``stderr`` and
-    closes its own wrapper after ``Popen`` returns — subprocess
-    has already dup'd the underlying OS handle into the child, and
-    leaving the parent wrapper open would pin the file open and
-    prevent the next boot's rotation.
+    Rotates if the existing log is ≥ 5 MB (keep one backup at
+    ``<backup_name>``). Returns a binary append-mode file object; the
+    caller passes it to ``Popen`` as ``stdout`` / ``stderr`` and closes
+    its own wrapper after ``Popen`` returns — subprocess has already
+    dup'd the underlying OS handle into the child, and leaving the
+    parent wrapper open would pin the file open and prevent the next
+    boot's rotation.
     """
     log_dir = prefix / _AGENT_LOG_DIR_NAME
-    log_path = log_dir / _AGENT_LOG_FILE_NAME
+    log_path = log_dir / file_name
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
         if log_path.stat().st_size >= _AGENT_LOG_ROTATE_BYTES:
-            backup = log_dir / _AGENT_LOG_BACKUP_NAME
+            backup = log_dir / backup_name
             try:
                 backup.unlink()
             except FileNotFoundError:
@@ -161,16 +163,16 @@ def _open_err_log(prefix: Path):
 
 
 def _spawn_launcher(release_python: Path, prefix: Path) -> subprocess.Popen[bytes]:
-    """Spawn the release-pinned launcher and capture its stderr.
+    """Spawn the release-pinned launcher and capture its stdout + stderr.
 
-    stdout stays DEVNULL (uvicorn access logs are noisy; the app
-    uses structlog for its own sinks). stderr is redirected to
-    ``<prefix>/logs/agent.err.log`` instead of DEVNULL so a silent
-    crash at SvcDoRun — config error, missing dep, port conflict —
-    surfaces in a file ``install.ps1`` can point operators at.
-    Without this redirect, every diagnostic past the eventvwr
-    ``servicemanager.LogMsg`` write is lost (Python tracebacks
-    go to stderr, not the Event Log).
+    Both streams are redirected to per-stream rotated log files under
+    ``<prefix>/logs/`` rather than DEVNULL. structlog's queue listener
+    writes its records to ``sys.stdout``; without this redirect every
+    ``pairing_monitor.*`` / ``relay_client.*`` / ``http.request.*``
+    diagnostic vanishes into the void and operators have no way to
+    determine why a pairing-pending agent never claimed its credentials.
+    The previous design assumed structlog had its own file sinks — it
+    does not (see ``mobaide/agent/logging_setup.py``).
 
     No ``CREATE_NEW_PROCESS_GROUP`` — Ctrl+Break delivery requires
     a console, which the service host doesn't have. The launcher
@@ -181,16 +183,18 @@ def _spawn_launcher(release_python: Path, prefix: Path) -> subprocess.Popen[byte
     CREATE_NEW_PROCESS_GROUP here would put the launcher in its
     own group AND complicate that teardown — drop it.
     """
-    err_log = _open_err_log(prefix)
+    out_log = _open_log(prefix, _AGENT_OUT_LOG_FILE_NAME, _AGENT_OUT_LOG_BACKUP_NAME)
+    err_log = _open_log(prefix, _AGENT_ERR_LOG_FILE_NAME, _AGENT_ERR_LOG_BACKUP_NAME)
     try:
         return subprocess.Popen(
             [str(release_python), "-m", "mobaide.launcher"],
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
+            stdout=out_log,
             stderr=err_log,
             close_fds=True,
         )
     finally:
+        out_log.close()
         err_log.close()
 
 

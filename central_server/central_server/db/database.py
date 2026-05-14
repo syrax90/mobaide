@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS pairing_tokens (
     consumed_by        TEXT,
     claimed_token_raw  TEXT,
     claimed_agent_id   TEXT REFERENCES agents(agent_id),
-    agent_metadata     TEXT
+    agent_metadata     TEXT,
+    relay_url          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
@@ -270,6 +271,35 @@ class Database:
                         )
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 7")
+
+        if version < 8:
+            # Persist the relay_url chosen at /api/pairing/initiate time
+            # so the claim handler and the WS recovery handler both
+            # echo the SAME url in the credential push payload. Before
+            # this column existed the recovery branch recomputed
+            # relay_url from ``websocket.url.scheme`` (wss → https),
+            # while the initiate / claim branches recomputed it from
+            # ``request.base_url`` (often http behind a reverse proxy
+            # that doesn't forward X-Forwarded-Proto to uvicorn). The
+            # agent enforced strict equality on the two values; a
+            # mismatch silently consumed the credentials without
+            # delivering them. Now both branches read the column.
+            #
+            # Pure additive ALTER. Idempotent: only adds the column
+            # when missing. Legacy rows have relay_url = NULL; the
+            # router's compatibility branch recomputes the URL for
+            # those (limited blast radius — only nonces issued before
+            # this upgrade).
+            pti_cursor = await self._conn.execute(
+                "PRAGMA table_info(pairing_tokens)"
+            )
+            pti_rows = await pti_cursor.fetchall()
+            existing_cols = {r[1] for r in pti_rows}
+            if "relay_url" not in existing_cols:
+                await self._conn.execute(
+                    "ALTER TABLE pairing_tokens ADD COLUMN relay_url TEXT"
+                )
+            await self._conn.execute("PRAGMA user_version = 8")
 
         await self._conn.commit()
 
@@ -626,6 +656,7 @@ class Database:
         agent_id: str | None = None,
         ttl_seconds: int = 300,
         agent_metadata: str | None = None,
+        relay_url: str | None = None,
     ) -> tuple[str, str]:
         """Create a pairing token. Returns (raw_token, expires_at ISO).
 
@@ -633,6 +664,12 @@ class Database:
         is created at claim time. ``agent_metadata`` is a JSON string blob
         carrying initiate-time hints (hostname, os, current_agent_id) used
         by the claim handler to distinguish first-pair from re-pair.
+
+        ``relay_url`` is the public base URL the agent will see in the
+        claim push. Persisted at initiate time so the claim and
+        WS-recovery branches both read the same value rather than each
+        recomputing it from a request context that can disagree behind
+        a reverse proxy.
         """
         raw_token = secrets.token_urlsafe(24)  # 192 bits
         token_hash = _hash_token(raw_token)
@@ -642,14 +679,15 @@ class Database:
         )
         await self.conn.execute(
             "INSERT INTO pairing_tokens "
-            "(token_hash, agent_id, created_at, expires_at, agent_metadata) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(token_hash, agent_id, created_at, expires_at, agent_metadata, relay_url) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 token_hash,
                 agent_id,
                 now.isoformat(),
                 expires_at.isoformat(),
                 agent_metadata,
+                relay_url,
             ),
         )
         await self.conn.commit()
@@ -686,14 +724,16 @@ class Database:
         """Read pre-claim state for a QR pairing nonce.
 
         Returns a dict with ``token_hash, expires_at, agent_metadata,
-        consumed_at`` or None if the row does not exist. Used by the claim
-        handler before CAS to inspect ``agent_metadata`` (which encodes
-        re-pair vs. first-pair intent), and by the WS handler to validate
-        nonce existence + TTL before accepting the connection.
+        consumed_at, relay_url`` or None if the row does not exist. Used
+        by the claim handler before CAS to inspect ``agent_metadata``
+        (which encodes re-pair vs. first-pair intent) and the persisted
+        ``relay_url`` (echoed in the credential push), and by the WS
+        handler to validate nonce existence + TTL and read the same
+        persisted ``relay_url`` for the recovery push.
         """
         token_hash = _hash_token(raw_token)
         cursor = await self.conn.execute(
-            "SELECT token_hash, expires_at, agent_metadata, consumed_at "
+            "SELECT token_hash, expires_at, agent_metadata, consumed_at, relay_url "
             "FROM pairing_tokens WHERE token_hash = ?",
             (token_hash,),
         )
@@ -746,17 +786,20 @@ class Database:
     ) -> dict | None:
         """Single-flight read of credentials to deliver, then clear.
 
-        Atomically reads ``(claimed_agent_id, claimed_token_raw)`` for a
-        consumed row AND clears ``claimed_token_raw`` to NULL so a second
-        reader (e.g., a reconnecting WS) cannot re-deliver. Returns None if
-        the row is not consumed, has no claimed token, or doesn't exist.
+        Atomically reads ``(claimed_agent_id, claimed_token_raw,
+        relay_url)`` for a consumed row AND clears ``claimed_token_raw``
+        to NULL so a second reader (e.g., a reconnecting WS) cannot
+        re-deliver. Returns None if the row is not consumed, has no
+        claimed token, or doesn't exist.
 
-        Note: ``claimed_agent_id`` remains populated for forensics; only
-        the raw token is cleared at rest.
+        Note: ``claimed_agent_id`` and ``relay_url`` remain populated
+        for forensics / replay; only the raw token is cleared at rest.
+        ``relay_url`` is the one persisted at initiate time and is the
+        single source of truth across the dispatch and recovery paths.
         """
         token_hash = _hash_token(raw_token)
         cursor = await self.conn.execute(
-            "SELECT claimed_agent_id, claimed_token_raw "
+            "SELECT claimed_agent_id, claimed_token_raw, relay_url "
             "FROM pairing_tokens "
             "WHERE token_hash = ? "
             "  AND consumed_at IS NOT NULL "
@@ -768,6 +811,7 @@ class Database:
             return None
         agent_id = row["claimed_agent_id"]
         raw = row["claimed_token_raw"]
+        relay_url = row["relay_url"]
         clear_cursor = await self.conn.execute(
             "UPDATE pairing_tokens SET claimed_token_raw = NULL "
             "WHERE token_hash = ? AND claimed_token_raw IS NOT NULL",
@@ -776,7 +820,11 @@ class Database:
         await self.conn.commit()
         if clear_cursor.rowcount != 1:
             return None
-        return {"claimed_agent_id": agent_id, "claimed_token_raw": raw}
+        return {
+            "claimed_agent_id": agent_id,
+            "claimed_token_raw": raw,
+            "relay_url": relay_url,
+        }
 
     async def transfer_agent_owner(
         self, agent_id: str, new_owner_user_id: str

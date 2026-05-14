@@ -17,6 +17,7 @@ Targets:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import types
@@ -36,6 +37,33 @@ from mobaide.agent.pairing_monitor import (
 from mobaide.agent.pairing_qr import PendingPairing
 from mobaide.agent.pairing_ws import PairingClaim, PairingWsError
 from mobaide.agent.updater import InstallLayout
+
+
+def _make_two_phase_ws_client(claim_or_exc):
+    """Build a stub ``PairingWsClient`` honouring the two-phase API.
+
+    Production code uses ``async with PairingWsClient.connect(url) as conn``
+    then ``await conn.wait_for_claim(...)``. Tests parametrise the
+    inner ``wait_for_claim`` behaviour by passing either a ready
+    ``PairingClaim`` (returned from the connection) or a callable
+    consumed once per call.
+    """
+
+    class _StubConn:
+        async def wait_for_claim(self, **_kwargs):
+            if callable(claim_or_exc):
+                return claim_or_exc()
+            if isinstance(claim_or_exc, BaseException):
+                raise claim_or_exc
+            return claim_or_exc
+
+    class _StubWsClient:
+        @classmethod
+        @contextlib.asynccontextmanager
+        async def connect(cls, _ws_url):
+            yield _StubConn()
+
+    return _StubWsClient
 
 
 def _initiate_response(**overrides) -> dict:
@@ -499,9 +527,7 @@ class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
         pending = self._make_pending()
         claim = self._make_claim()
 
-        class _StubWsClient:
-            async def wait_for_claim(self, **_kwargs):
-                return claim
+        _StubWsClient = _make_two_phase_ws_client(claim)
 
         async def _stub_write(_env_path, _claim):
             recorder["write_calls"] += 1
@@ -673,7 +699,7 @@ class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
             f"path; got {recorder['clear_calls']}"
         )
         # The WS was dialled exactly once: the inner retry never falls
-        # back to a fresh wait_for_claim, so no second initiate happens.
+        # back to a fresh wait-for-claim, so no second initiate happens.
         # ``_install_loop_stubs`` records ``save_calls`` per
         # ``save_pending_pairing`` invocation, which is the per-iteration
         # signal of "the outer loop initiated a new nonce".
@@ -1033,10 +1059,16 @@ class TestRunPairingMonitorWriteFailureHandling(_RunPairingMonitorTestBase):
         # below is undone automatically at teardown by monkeypatch.
         claim = self._make_claim()
 
-        class _CountingWsClient:
+        class _CountingConn:
             async def wait_for_claim(self, **_kwargs):
-                ws_dial_count["n"] += 1
                 return claim
+
+        class _CountingWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, _ws_url):
+                ws_dial_count["n"] += 1
+                yield _CountingConn()
 
         monkeypatch.setattr(_pm, "PairingWsClient", _CountingWsClient)
 
@@ -1296,10 +1328,23 @@ class TestRunPairingMonitorWsFailureHandling(_RunPairingMonitorTestBase):
         }
         pending = self._make_pending()
 
-        class _FailingWsClient:
+        class _FailingConn:
             async def wait_for_claim(self, **_kwargs):
+                # Connection's wait_for_claim is never reached in this
+                # scenario — the ``connect`` ctx manager raises before
+                # yielding (matching real Cloudflare-idle / TLS-reset
+                # symptoms where the WS handshake itself fails).
+                raise AssertionError(
+                    "wait_for_claim must not be reached when connect() raises"
+                )
+
+        class _FailingWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, _ws_url):
                 recorder["ws_calls"] += 1
                 raise PairingWsError("simulated transport failure")
+                yield _FailingConn()  # pragma: no cover — make this a generator
 
         async def _stub_write(_env_path, _claim):
             # Should never be reached — the WS always raises before the
@@ -1590,4 +1635,292 @@ class TestRunPairingMonitorWsFailureHandling(_RunPairingMonitorTestBase):
             f"expected every ``random.uniform`` call to use the (0, 1) "
             f"range; got: {uniform_calls!r}. A degenerate range like "
             f"(0, 0) silently disables jitter without removing the call."
+        )
+
+
+class TestRunPairingMonitorWsBeforeSaveOrdering(_RunPairingMonitorTestBase):
+    """Pin the new ordering: ``pending_pairing.json`` is written ONLY
+    after ``PairingWsClient.connect`` yields (i.e. after the server's
+    ``"ready"`` frame has been received).
+
+    Before the fix, the monitor saved the pending file immediately
+    after the HTTP initiate call. ``install.ps1``'s
+    ``Show-PairingQrFromService`` polls that file and renders the QR
+    to the user as soon as it appears. The user scanned within a
+    1-2 second window while the agent's WS handshake was still
+    pending; the mobile claim arrived before
+    ``register_waiter(nonce)`` had run, so the server's claim handler
+    stashed ``claimed_token_raw`` and fell through to the recovery
+    branch on the agent's later WS connect. The recovery branch
+    re-signed the push with a different ``relay_url`` than the
+    initiate handler returned (one came from ``websocket.url.scheme``,
+    the other from ``request.base_url``), and the agent's strict-
+    equality check on ``relay_url`` rejected its own credentials.
+    The single-use server-side claim was then lost; ``.env`` stayed
+    blank forever.
+
+    The fix moves ``save_pending_pairing`` INSIDE the
+    ``async with PairingWsClient.connect(...) as conn`` block.
+    ``connect`` only returns after ``"ready"`` is received, which is
+    exactly when the server's ``register_waiter`` has run and the
+    dispatch path can win against any concurrent mobile claim.
+    """
+
+    async def test_save_pending_pairing_happens_inside_connect_block(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Order recorder: collect the literal names in the exact
+        # sequence the monitor calls them. The expected sequence is
+        # ``connect_entered`` first, then ``save_pending_pairing``,
+        # then ``connect_exited``. A regression that moves
+        # ``save_pending_pairing`` back outside the ctx manager
+        # surfaces as ``save_pending_pairing`` BEFORE
+        # ``connect_entered`` in the list.
+        order: list[str] = []
+        claim = self._make_claim()
+        pending = self._make_pending()
+
+        recorder: dict = {
+            "clear_calls": 0,
+            "save_calls": 0,
+            "on_paired_calls": 0,
+            "on_paired_claim": None,
+            "write_calls": 0,
+        }
+
+        async def _stub_initiate(
+            relay_server_url, layout, *,
+            hostname, os_name, current_agent_id,
+        ):
+            return pending
+
+        def _stub_load(_layout):
+            return None
+
+        def _stub_save(_layout, _pending):
+            order.append("save_pending_pairing")
+            recorder["save_calls"] += 1
+
+        def _stub_clear(_layout):
+            order.append("clear_pending_pairing")
+            recorder["clear_calls"] += 1
+
+        async def _stub_render(_pending):
+            order.append("render_qr")
+
+        async def _stub_write(_env_path, _claim):
+            order.append("write_credentials_to_env")
+            recorder["write_calls"] += 1
+
+        async def _on_paired(received):
+            order.append("on_paired")
+            recorder["on_paired_calls"] += 1
+            recorder["on_paired_claim"] = received
+
+        class _OrderingConn:
+            async def wait_for_claim(self, **_kwargs):
+                order.append("wait_for_claim")
+                return claim
+
+        class _OrderingWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, _ws_url):
+                order.append("connect_entered")
+                try:
+                    yield _OrderingConn()
+                finally:
+                    order.append("connect_exited")
+
+        monkeypatch.setattr(
+            _pm, "read_trust_public_key", lambda _layout: "stub-pub-key"
+        )
+        monkeypatch.setattr(_pm, "_initiate_with_metadata", _stub_initiate)
+        monkeypatch.setattr(_pm, "load_pending_pairing", _stub_load)
+        monkeypatch.setattr(_pm, "save_pending_pairing", _stub_save)
+        monkeypatch.setattr(_pm, "clear_pending_pairing", _stub_clear)
+        monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
+        monkeypatch.setattr(_pm, "PairingWsClient", _OrderingWsClient)
+        monkeypatch.setattr(_pm, "write_credentials_to_env", _stub_write)
+
+        layout = self._make_layout(tmp_path)
+
+        await asyncio.wait_for(
+            run_pairing_monitor(
+                layout=layout,
+                relay_server_url="wss://relay.test",
+                on_paired=_on_paired,
+            ),
+            timeout=5.0,
+        )
+
+        # Smoking-gun: ``connect_entered`` MUST appear before
+        # ``save_pending_pairing``. If a regression moves the save
+        # back outside the context manager, this assertion is the
+        # earliest visible signal.
+        assert "connect_entered" in order, (
+            f"PairingWsClient.connect was never entered; "
+            f"order={order!r}"
+        )
+        assert "save_pending_pairing" in order, (
+            f"save_pending_pairing was never called; order={order!r}"
+        )
+        connect_idx = order.index("connect_entered")
+        save_idx = order.index("save_pending_pairing")
+        assert connect_idx < save_idx, (
+            f"save_pending_pairing happened BEFORE the WS connect "
+            f"handshake completed — this is the QR-before-WS race "
+            f"the fix is meant to close. The install.ps1 polling "
+            f"loop would see the pending file before the agent's "
+            f"WS waiter was registered, so a fast mobile scan could "
+            f"deliver the claim into the server's recovery path and "
+            f"the agent would reject its own credentials on the "
+            f"resulting relay_url mismatch. Order: {order!r}"
+        )
+
+        # Reinforcing: save → render → wait_for_claim → connect_exited
+        # → write → clear → on_paired
+        render_idx = order.index("render_qr")
+        wait_idx = order.index("wait_for_claim")
+        write_idx = order.index("write_credentials_to_env")
+        on_paired_idx = order.index("on_paired")
+        assert save_idx < render_idx < wait_idx, (
+            f"expected save → render → wait_for_claim ordering inside "
+            f"the connect block; got: {order!r}"
+        )
+        assert wait_idx < write_idx < on_paired_idx, (
+            f"expected wait → write → on_paired ordering after the "
+            f"claim is received; got: {order!r}"
+        )
+
+    async def test_pending_file_not_saved_when_connect_fails_before_ready(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Negative case of ``test_save_pending_pairing_happens_inside_connect_block``.
+        # When ``PairingWsClient.connect`` raises ``PairingWsError`` BEFORE
+        # yielding (i.e. before the server's ``"ready"`` frame is received),
+        # ``save_pending_pairing`` MUST NOT be called for the fresh nonce.
+        # This is the on-disk side of the QR-before-WS race fix: the
+        # ``install.ps1`` polling loop must not see a pending-pairing file
+        # for a nonce the agent never finished WS-handshaking on, because
+        # a fast mobile scan against such a file would land the claim in
+        # the server's recovery branch — exactly the failure mode the
+        # two-phase API is meant to eliminate.
+        #
+        # If a regression moves the save back outside the ``async with``
+        # block (or above the ``"ready"`` await), this assertion is the
+        # smallest visible signal: ``save_calls`` will be ≥ 1 even though
+        # ``connect`` never yielded.
+        pending = self._make_pending()
+
+        recorder: dict = {
+            "save_calls": 0,
+            "ws_connect_calls": 0,
+            "render_calls": 0,
+            "write_calls": 0,
+        }
+
+        async def _stub_initiate(
+            relay_server_url, layout, *,
+            hostname, os_name, current_agent_id,
+        ):
+            return pending
+
+        def _stub_load(_layout):
+            return None
+
+        def _stub_save(_layout, _pending):
+            recorder["save_calls"] += 1
+
+        def _stub_clear(_layout):
+            pass
+
+        async def _stub_render(_pending):
+            recorder["render_calls"] += 1
+
+        async def _stub_write(_env_path, _claim):
+            recorder["write_calls"] += 1
+
+        async def _on_paired(_received):
+            pass
+
+        class _FailBeforeReadyWsClient:
+            @classmethod
+            @contextlib.asynccontextmanager
+            async def connect(cls, _ws_url):
+                # Raise BEFORE yielding — models the real ``"ready"``-timeout
+                # path in ``PairingWsClient.connect`` (asyncio.TimeoutError
+                # on ``ws.recv()`` for the ready frame is wrapped into
+                # PairingWsError). Production code branches into the
+                # ``except PairingWsError`` arm with no connection ever
+                # having been handed to the caller.
+                recorder["ws_connect_calls"] += 1
+                raise PairingWsError("simulated pre-ready failure")
+                yield  # pragma: no cover — make this an async generator
+
+        monkeypatch.setattr(
+            _pm, "read_trust_public_key", lambda _layout: "stub-pub-key"
+        )
+        monkeypatch.setattr(_pm, "_initiate_with_metadata", _stub_initiate)
+        monkeypatch.setattr(_pm, "load_pending_pairing", _stub_load)
+        monkeypatch.setattr(_pm, "save_pending_pairing", _stub_save)
+        monkeypatch.setattr(_pm, "clear_pending_pairing", _stub_clear)
+        monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
+        monkeypatch.setattr(_pm, "PairingWsClient", _FailBeforeReadyWsClient)
+        monkeypatch.setattr(_pm, "write_credentials_to_env", _stub_write)
+
+        layout = self._make_layout(tmp_path)
+
+        # Bounded run — the loop is infinite while connect keeps raising.
+        # The TimeoutError is the EXPECTED exit; what we pin is the
+        # behaviour observed inside the bounded window.
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                    on_paired=_on_paired,
+                ),
+                timeout=0.2,
+            )
+
+        # Sanity: the loop did reach the WS connect step at least once,
+        # so the assertion below is exercising the new ordering and not
+        # silently passing because the loop never got that far.
+        assert recorder["ws_connect_calls"] >= 1, (
+            f"PairingWsClient.connect was never called; the bounded "
+            f"window did not reach the WS step "
+            f"(ws_connect_calls={recorder['ws_connect_calls']!r}). "
+            f"Without exercising connect, this test cannot prove the "
+            f"new WS-before-save ordering."
+        )
+        # Smoking gun: ``save_pending_pairing`` MUST stay at zero across
+        # every retry iteration. A regression that re-introduces the
+        # pre-fix ordering (save BEFORE connect) would tick this up to
+        # ws_connect_calls.
+        assert recorder["save_calls"] == 0, (
+            f"save_pending_pairing was called {recorder['save_calls']} "
+            f"times even though PairingWsClient.connect raised before "
+            f"the ``\"ready\"`` frame on every iteration. The new "
+            f"two-phase API anchors the on-disk pending-pairing signal "
+            f"AFTER ``\"ready\"`` precisely so a connect failure does "
+            f"not publish a file that install.ps1's polling loop would "
+            f"render to a mobile scanner before the agent is reachable "
+            f"for dispatch. A non-zero count here means the save was "
+            f"moved back outside the ``async with`` block, re-opening "
+            f"the QR-before-WS race that caused the empty-.env bug."
+        )
+        # Reinforcing: render/write must also be unreached.
+        assert recorder["render_calls"] == 0, (
+            f"_render_pending_to_stdout was called {recorder['render_calls']} "
+            f"times on the connect-failed path; the QR render is also "
+            f"inside the ``async with`` block and must stay there"
+        )
+        assert recorder["write_calls"] == 0, (
+            f"write_credentials_to_env reached on the connect-failed "
+            f"path; got {recorder['write_calls']} calls"
         )

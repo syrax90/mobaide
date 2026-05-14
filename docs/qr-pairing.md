@@ -97,6 +97,29 @@ and removes a class of bugs where a deployment-skewed central_server
 returned an `https://` ws_url that the Python `websockets` client
 hard-rejected (`scheme isn't ws or wss`).
 
+### `relay_url` is persisted at initiate time
+
+The `relay_url` field in the QR payload **and** in every credential
+push is read from `pairing_tokens.relay_url`, which the
+`/api/pairing/initiate` handler writes once at nonce-creation time.
+Both the claim-handler dispatch path and the WS-recovery branch use
+the persisted column. Without this single source of truth the two
+branches recomputed `relay_url` independently from different request
+contexts (`request.base_url` for HTTP, `websocket.url.scheme` for
+WS), which can disagree behind a reverse proxy that does not forward
+`X-Forwarded-Proto` to uvicorn — the agent then rejected its own
+credentials on the resulting strict-equality mismatch.
+
+### `pending_pairing.json` is written AFTER the WS is open
+
+`run_pairing_monitor` enters `async with PairingWsClient.connect(...)`
+*before* saving `pending_pairing.json`. The on-disk file is the signal
+that `install.ps1`'s `Show-PairingQrFromService` polls before rendering
+the QR; pinning that signal to the WS-ready handshake ensures a fast
+mobile claim cannot arrive while the agent's WS waiter is still
+unregistered (which would force the server's recovery branch and
+expose the deployment-skew bug described above).
+
 ## Trust-On-First-Scan (TOFS) on the mobile
 
 The first scan against a given `relay_url` pins that relay's
@@ -223,7 +246,7 @@ holding the agent's WS, and the push is silently dropped. Mitigations:
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
-| QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. | Upgrade to v0.1.7+. The agent now transitions in-process after a successful QR scan — no restart required. On older installs that cannot be upgraded, manually run `sudo systemctl restart mobaide-agent` (Linux) or `launchctl unload … && launchctl load …` (macOS) once after the initial pairing scan. |
+| QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures); a fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials. | Upgrade to v0.1.9+. The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths. On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan. |
 
 ## Security tests
 

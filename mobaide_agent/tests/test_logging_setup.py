@@ -207,6 +207,79 @@ class TestConfigureLogging:
         )
 
 
+class TestMobaideAgentLogFileEnvVar:
+    """Pin the ``MOBAIDE_AGENT_LOG_FILE`` belt-and-suspenders sink.
+
+    The Windows service wrapper redirects the agent subprocess's
+    stdout to ``<prefix>/logs/agent.out.log``; that handles the
+    bulk-of-deployments case. ``MOBAIDE_AGENT_LOG_FILE`` is an
+    explicit operator-visible sink for the (rare) case where a
+    custom supervisor pins stdout elsewhere — and so unit tests
+    can opt into file logging without grappling with the
+    subprocess wiring.
+    """
+
+    def test_log_file_handler_attached_when_env_var_set(
+        self, tmp_path, monkeypatch
+    ):
+        log_path = tmp_path / "agent.out.log"
+        monkeypatch.setenv("MOBAIDE_AGENT_LOG_FILE", str(log_path))
+
+        configure_logging(_make_config())
+
+        listener = logging_setup._listener
+        assert listener is not None
+        handler_types = [type(h) for h in listener.handlers]
+        # The RotatingFileHandler MUST be wired in addition to the
+        # stdout handler so a future subprocess-wiring change cannot
+        # silently regress observability.
+        assert logging.handlers.RotatingFileHandler in handler_types, (
+            f"expected RotatingFileHandler when MOBAIDE_AGENT_LOG_FILE "
+            f"is set; got: {handler_types!r}"
+        )
+
+    def test_no_log_file_handler_when_env_var_unset(self, monkeypatch):
+        monkeypatch.delenv("MOBAIDE_AGENT_LOG_FILE", raising=False)
+
+        configure_logging(_make_config())
+
+        listener = logging_setup._listener
+        assert listener is not None
+        assert not any(
+            isinstance(h, logging.handlers.RotatingFileHandler)
+            for h in listener.handlers
+        ), (
+            "no RotatingFileHandler should be attached when "
+            "MOBAIDE_AGENT_LOG_FILE is unset — the stdout handler is "
+            "the only sink, and a regression that always attaches one "
+            "would silently double-write every log line on every "
+            "deployment"
+        )
+
+    def test_falls_back_when_log_file_unopenable(self, tmp_path, monkeypatch):
+        # An unwritable path (directory missing in a way that mkdir
+        # can't recover from — e.g. parent is a file) must not crash
+        # the agent. The handler is best-effort; the stdout handler
+        # remains as the primary sink.
+        parent_is_file = tmp_path / "blocker"
+        parent_is_file.write_text("not a directory")
+        bad_path = parent_is_file / "agent.out.log"
+        monkeypatch.setenv("MOBAIDE_AGENT_LOG_FILE", str(bad_path))
+
+        # Must not raise.
+        configure_logging(_make_config())
+
+        listener = logging_setup._listener
+        assert listener is not None
+        # No file handler attached, but the listener is still running
+        # on the stdout handler.
+        assert any(
+            isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.FileHandler)
+            for h in listener.handlers
+        )
+
+
 class TestShutdownLogging:
     def test_stops_listener_and_clears_global(self):
         configure_logging(_make_config())
