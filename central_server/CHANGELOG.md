@@ -1,5 +1,15 @@
 # central_server Changelog
 
+## [0.1.4](https://github.com/syrax90/claude_mobile/compare/server-v0.1.3...server-v0.1.4) (2026-05-14)
+
+
+### Bug Fixes
+
+* **agent:** restore agent log observability and close QR-before-WS race ([2d94149](https://github.com/syrax90/claude_mobile/commit/2d9414997294e747d1e30c232830d97d09513108))
+* **pairing:** harden agent relay_url comparator (scheme family, default-port normalisation, userinfo/query/fragment rejection) ([4b34cd5](https://github.com/syrax90/claude_mobile/commit/4b34cd5c2f8ec5f1506b314d2fbfab61485a1ca6))
+* **pairing:** persist relay_url server-side so dispatch and recovery agree ([4b34cd5](https://github.com/syrax90/claude_mobile/commit/4b34cd5c2f8ec5f1506b314d2fbfab61485a1ca6))
+* **pairing:** restore agent log observability and close QR-before-WS race ([4b34cd5](https://github.com/syrax90/claude_mobile/commit/4b34cd5c2f8ec5f1506b314d2fbfab61485a1ca6))
+
 ## [0.1.3](https://github.com/syrax90/claude_mobile/compare/server-v0.1.2...server-v0.1.3) (2026-05-13)
 
 
