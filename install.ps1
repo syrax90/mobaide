@@ -177,11 +177,24 @@ function Test-IsAdmin {
 function Assert-AdminOrElevate {
     if (Test-IsAdmin) { return }
     Write-Info "Not running elevated; relaunching under UAC to register the Windows service."
+    # Discover claude.cmd here, BEFORE the UAC relaunch, so the lookup
+    # runs under the originating user's env. For the standard `irm | iex`
+    # consent flow the elevated session is the same user — env vars
+    # carry through naturally — but if the operator supplies a different
+    # admin account at the UAC prompt, that admin's profile may not
+    # contain claude.cmd. Capturing under the originating user's env and
+    # passing the absolute path through MOBAIDE_AGENT_CLAUDE_BIN_HINT
+    # makes the discovery resilient to that cross-account elevation.
+    $claudeBin = Find-ClaudeBinary
+    if ($claudeBin) {
+        $env:MOBAIDE_AGENT_CLAUDE_BIN_HINT = $claudeBin
+    }
     $passthrough = @(
         'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
         'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
         'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_SERVICE_URL',
-        'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL'
+        'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
+        'MOBAIDE_AGENT_CLAUDE_BIN_HINT'
     )
     $envStmts = foreach ($name in $passthrough) {
         $val = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -221,6 +234,56 @@ function Find-Python {
                 return $exe.Source
             }
         } catch {}
+    }
+    return $null
+}
+
+# Locate the user's claude.cmd at install time. Critical because the
+# Windows service registers as LocalSystem (Install-Service line ~952
+# calls pywin32's install verb with no obj= override), and LocalSystem's
+# PATH is C:\Windows\system32;C:\Windows;... — it does NOT contain the
+# installing user's %APPDATA%\npm, which is where `npm install -g
+# @anthropic-ai/claude-code` lands claude.cmd. shutil.which("claude.cmd")
+# inside the service therefore returns None and session creation 503s
+# with claude_cli_missing=true. We capture the path now (while running
+# under the user's env) and pin it into .env so the service can find it.
+#
+# Returns the absolute claude path as a string, or $null if not found
+# (caller writes a warning and continues — the missing-CLI 503 then
+# guides the operator at session-create time).
+function Find-ClaudeBinary {
+    foreach ($name in @('claude.cmd', 'claude.exe', 'claude')) {
+        $hit = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $hit) { continue }
+        # Skip the App Execution Alias trampoline under WindowsApps for
+        # the same reason Find-Python does: it's a reparse-point that
+        # never runs a real claude binary.
+        if ($hit.Source -like "*\WindowsApps\*") { continue }
+        return $hit.Source
+    }
+    # PATH miss: probe common npm install locations under the installing
+    # user's profile. These cover default npm-global (%APPDATA%\npm),
+    # relocated npm-global (%LOCALAPPDATA%\npm), machine-scope installs
+    # (C:\ProgramData\npm), and the bundled-with-Node fallback.
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:APPDATA) {
+        $candidates.Add((Join-Path $env:APPDATA 'npm\claude.cmd'))
+        $candidates.Add((Join-Path $env:APPDATA 'npm\claude.exe'))
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'npm\claude.cmd'))
+    }
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE 'AppData\Roaming\npm\claude.cmd'))
+    }
+    $candidates.Add('C:\ProgramData\npm\claude.cmd')
+    if ($env:ProgramFiles) {
+        $candidates.Add((Join-Path $env:ProgramFiles 'nodejs\claude.cmd'))
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) {
+            return (Resolve-Path -LiteralPath $c).ProviderPath
+        }
     }
     return $null
 }
@@ -713,9 +776,57 @@ function Write-AgentEnv {
     # prefills RELAY_SERVER_URL on first install.
     $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $Version
     $releasePython = Join-Path $releaseDir "venv\Scripts\python.exe"
-    Write-Info "Writing prepared agent .env via init-env"
-    & $releasePython -m mobaide.agent.config init-env --prefix $Script:Prefix
-    if ($LASTEXITCODE -ne 0) { Write-Fail "init-env failed (exit $LASTEXITCODE)" }
+
+    # Prefer the pre-UAC hint captured under the originating user's env
+    # (see Assert-AdminOrElevate). Falls back to a fresh probe inside
+    # the elevated session, which for the canonical `irm | iex` consent
+    # flow runs as the same user. Falls back to $null if neither path
+    # discovers claude.cmd — we still complete the install (warn only)
+    # so the agent boots and the operator can fix the missing CLI
+    # post-install per "warn-and-continue" policy.
+    $claudeBin = $env:MOBAIDE_AGENT_CLAUDE_BIN_HINT
+    if (-not $claudeBin) { $claudeBin = Find-ClaudeBinary }
+    if ($claudeBin) {
+        Write-Info "Detected Claude CLI at $claudeBin"
+    } else {
+        Write-Warn @"
+Could not auto-detect the Claude Code CLI (claude.cmd). Install it with:
+    npm install -g @anthropic-ai/claude-code
+Then either re-run this installer, or set MOBAIDE_CLAUDE_BIN to the
+absolute path in $Script:Prefix\mobaide_agent\.env and restart:
+    Restart-Service $Script:ServiceName
+"@
+    }
+
+    $envFile = Join-Path (Join-Path $Script:Prefix "mobaide_agent") ".env"
+    $envExists = Test-Path -LiteralPath $envFile
+
+    if (-not $envExists) {
+        Write-Info "Writing prepared agent .env via init-env"
+        $extraArgs = @()
+        if ($claudeBin) { $extraArgs += @('--claude-bin', $claudeBin) }
+        & $releasePython -m mobaide.agent.config init-env --prefix $Script:Prefix @extraArgs
+        if ($LASTEXITCODE -ne 0) { Write-Fail "init-env failed (exit $LASTEXITCODE)" }
+        return
+    }
+
+    # Existing .env (re-install over a paired agent): leave credentials
+    # alone. Surgically backfill MOBAIDE_CLAUDE_BIN only if it's not
+    # already set — an operator's manual edit always wins. This
+    # implements the "Surgical set-env only" policy.
+    Write-Info "Existing $envFile preserved (re-install)."
+    if (-not $claudeBin) { return }
+    $existingClaudeBin = Read-EnvValue -Path $envFile -Key 'MOBAIDE_CLAUDE_BIN'
+    if ($existingClaudeBin) {
+        Write-Info "MOBAIDE_CLAUDE_BIN already set in $envFile; leaving as-is."
+        return
+    }
+    Write-Info "Backfilling MOBAIDE_CLAUDE_BIN=$claudeBin into $envFile"
+    & $releasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
+        --key MOBAIDE_CLAUDE_BIN --value $claudeBin
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "set-env failed (exit $LASTEXITCODE); edit $envFile manually and restart $Script:ServiceName."
+    }
 }
 
 # Parse a KEY=VALUE line from <prefix>/mobaide_agent/.env. Single
