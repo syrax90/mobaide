@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.12](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.11...agent-v0.1.12) (2026-05-14)
+
+
+### Bug Fixes
+
+* **agent:** gate mobile "Paired" on agent.online=true; harden silent failure paths ([a863117](https://github.com/syrax90/claude_mobile/commit/a86311778e090c15da3bdbfe3c17bcb8f5c6a634))
+* **pairing:** gate mobile "Paired" on agent.online=true; harden silent failure paths ([b45d31a](https://github.com/syrax90/claude_mobile/commit/b45d31aff702acca8fd3d06701af08911930604b))
+
 ## [0.1.11](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.10...agent-v0.1.11) (2026-05-14)
 
 
