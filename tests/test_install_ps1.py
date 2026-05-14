@@ -2743,3 +2743,357 @@ def test_show_pairing_qr_preserves_skip_env_var() -> None:
         "MOBAIDE_AGENT_SKIP_INSTALL_QR opt-out env var. Body:\n"
         + repr(body)
     )
+
+
+# ----------------------------------------------------------------------
+# Find-ClaudeBinary / MOBAIDE_AGENT_CLAUDE_BIN_HINT / Write-AgentEnv pins
+# ----------------------------------------------------------------------
+#
+# These guard the Windows-service ``claude_cli_missing`` fix. The service
+# runs as LocalSystem with a stripped PATH that excludes
+# ``%APPDATA%\npm\claude.cmd`` (where ``npm install -g @anthropic-ai/
+# claude-code`` lands the binary). The installer must (a) discover the
+# user's claude path BEFORE the UAC relaunch (under the originating user's
+# env), (b) carry the path across the UAC boundary via the
+# ``MOBAIDE_AGENT_CLAUDE_BIN_HINT`` passthrough env var, (c) write it into
+# ``<prefix>\mobaide_agent\.env`` as ``MOBAIDE_CLAUDE_BIN`` using either
+# ``init-env --claude-bin`` (fresh install) or ``set-env --key
+# MOBAIDE_CLAUDE_BIN`` (re-install backfill). Each leg of this contract
+# is pinned below; a regression on any one re-opens the 503.
+
+
+def test_find_claude_binary_is_defined() -> None:
+    """The ``Find-ClaudeBinary`` helper must exist as a real function.
+
+    Called by both ``Assert-AdminOrElevate`` (pre-UAC discovery) and
+    ``Write-AgentEnv`` (post-UAC fallback). If the function is renamed
+    or deleted, both callsites silently lose claude.cmd auto-detection
+    and the Windows-service install regresses to the pre-fix 503.
+    """
+    funcs = _list_function_names()
+    assert "Find-ClaudeBinary" in funcs, (
+        f"expected function 'Find-ClaudeBinary' in "
+        f"{_DEPLOY_INSTALL_PS1}; found functions: {funcs!r}. The pre-UAC "
+        f"helper in Assert-AdminOrElevate AND the post-UAC fallback in "
+        f"Write-AgentEnv both call into this name; if it's missing, the "
+        f"Windows-service install regresses to claude_cli_missing 503."
+    )
+
+
+def test_find_claude_binary_probes_appdata_npm() -> None:
+    """``Find-ClaudeBinary`` must probe ``%APPDATA%\\npm\\claude.cmd``.
+
+    That's the default landing site for ``npm install -g
+    @anthropic-ai/claude-code`` on Windows. Probing PATH alone misses
+    this — many users have npm on PATH only for interactive shells, and
+    the LocalSystem service's PATH never sees ``%APPDATA%\\npm`` at all.
+    The whole point of the fallback list is to catch this case
+    explicitly. A regression to a PATH-only check re-opens the 503.
+    """
+    body = _function_body_text("Find-ClaudeBinary")
+    assert "APPDATA" in body, (
+        "Find-ClaudeBinary must read $env:APPDATA to probe the user's "
+        "npm prefix; not found in body:\n" + repr(body)
+    )
+    # The literal 'npm' path segment combined with 'claude.cmd' is the
+    # canonical install location — pin both so a refactor that splits
+    # them across variables is still caught.
+    assert "npm" in body and "claude.cmd" in body, (
+        "Find-ClaudeBinary must reference both 'npm' and 'claude.cmd' "
+        "(default Windows install path: %APPDATA%\\npm\\claude.cmd). "
+        "Body:\n" + repr(body)
+    )
+
+
+def test_find_claude_binary_skips_windowsapps_stub() -> None:
+    """``Find-ClaudeBinary`` must filter out the WindowsApps reparse stub.
+
+    Mirrors the exact same WindowsApps guard ``Find-Python`` already
+    has: ``Get-Command claude`` can resolve to an App Execution Alias
+    trampoline under ``%LOCALAPPDATA%\\Microsoft\\WindowsApps\\`` (e.g.,
+    if Microsoft Store ever ships an ``alias-only`` claude package).
+    That trampoline never actually runs the CLI in an unattended ``irm
+    | iex`` flow; it opens the Store UI. If discovery returns the stub
+    path, the agent later spawns it under LocalSystem with no UI and
+    hangs / errors opaquely. Filter on ``$exe.Source -like
+    "*\\WindowsApps\\*"`` mirrors the same protection ``Find-Python``
+    documents.
+    """
+    body = _function_body_text("Find-ClaudeBinary")
+    assert "WindowsApps" in body, (
+        "Find-ClaudeBinary must filter out the WindowsApps App "
+        "Execution Alias stub (same protection as Find-Python); not "
+        "found in body:\n" + repr(body)
+    )
+
+
+def test_assert_admin_or_elevate_captures_claude_bin_pre_uac() -> None:
+    """``Assert-AdminOrElevate`` must call ``Find-ClaudeBinary`` BEFORE
+    starting the elevated child, so the lookup runs under the
+    originating user's env (where ``%APPDATA%\\npm\\claude.cmd`` actually
+    resolves to a real path).
+
+    The plan is explicit: capture pre-UAC, pass across the boundary via
+    ``MOBAIDE_AGENT_CLAUDE_BIN_HINT``. If a future refactor moves
+    ``Find-ClaudeBinary`` to AFTER ``Start-Process``, the discovery runs
+    inside an already-elevated session — for the ``Run as different
+    user`` consent flow that elevated session has a different profile,
+    so the discovery sees no claude.cmd and the hint never lands. The
+    cross-account elevation path then regresses to the 503.
+    """
+    body = _function_body_text("Assert-AdminOrElevate")
+    find_at = body.find("Find-ClaudeBinary")
+    start_at = body.find("Start-Process")
+    assert find_at != -1, (
+        "Assert-AdminOrElevate must call Find-ClaudeBinary; not found "
+        "in body:\n" + repr(body)
+    )
+    assert start_at != -1, (
+        "Assert-AdminOrElevate must call Start-Process (the UAC "
+        "relaunch); not found in body:\n" + repr(body)
+    )
+    assert find_at < start_at, (
+        f"Assert-AdminOrElevate must call Find-ClaudeBinary BEFORE "
+        f"Start-Process. Discovery after elevation runs under whatever "
+        f"profile the UAC consent picked, which may have no "
+        f"%APPDATA%\\npm\\claude.cmd. Pre-UAC discovery is the only "
+        f"way to make the cross-account elevation path resilient. "
+        f"Found Find-ClaudeBinary at offset {find_at}, Start-Process "
+        f"at offset {start_at}. Body:\n" + repr(body)
+    )
+
+
+def test_claude_bin_hint_is_preserved_across_uac_elevation() -> None:
+    """``MOBAIDE_AGENT_CLAUDE_BIN_HINT`` must be in the elevation
+    passthrough array literal inside ``Assert-AdminOrElevate``.
+
+    Same regression class as ``MOBAIDE_AGENT_SKIP_PYTHON_INSTALL`` /
+    ``MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` (already pinned upstream): if
+    the new hint variable is not in ``$passthrough``, the elevated
+    child re-fetches without it, falls back to its own
+    ``Find-ClaudeBinary`` from inside the elevated session, and on a
+    ``Run as different user`` consent picks up the wrong profile (or no
+    claude.cmd at all). The whole point of the pre-UAC discovery is
+    defeated.
+    """
+    body = _function_body_text("Assert-AdminOrElevate")
+    assert re.search(
+        r"['\"]MOBAIDE_AGENT_CLAUDE_BIN_HINT['\"]", body
+    ), (
+        "MOBAIDE_AGENT_CLAUDE_BIN_HINT must appear in the $passthrough "
+        "array inside Assert-AdminOrElevate so the pre-UAC-discovered "
+        "claude.cmd path survives the UAC re-launch. Without it, the "
+        "elevated child falls back to its own Find-ClaudeBinary which "
+        "may see no claude.cmd under a different-user elevation. "
+        "Function body:\n" + repr(body)
+    )
+
+
+def test_write_agent_env_passes_claude_bin_to_init_env_fresh_install() -> None:
+    """``Write-AgentEnv`` must pass ``--claude-bin <path>`` to
+    ``init-env`` when ``.env`` does not yet exist.
+
+    Fresh-install path: the file is written from scratch, so the
+    surgical ``set-env`` verb does not apply (it requires a pre-existing
+    file). The plan wires the discovered claude path into ``init-env``
+    via its new ``--claude-bin`` flag so the freshly rendered .env
+    lands ``MOBAIDE_CLAUDE_BIN=<path>`` uncommented in a single step.
+    A regression that drops ``--claude-bin`` here would render a .env
+    with the commented placeholder, and the service would 503 on
+    first session-create.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    assert "init-env" in body, (
+        "Write-AgentEnv must invoke `init-env` on fresh install; not "
+        "found in body:\n" + repr(body)
+    )
+    assert "--claude-bin" in body, (
+        "Write-AgentEnv must pass `--claude-bin` to init-env so the "
+        "fresh .env carries MOBAIDE_CLAUDE_BIN. Without the flag the "
+        "template's commented placeholder passes through unchanged and "
+        "the LocalSystem service 503s on session-create. Body:\n"
+        + repr(body)
+    )
+
+
+def test_write_agent_env_invokes_set_env_for_reinstall_backfill() -> None:
+    """``Write-AgentEnv`` must invoke ``set-env --key MOBAIDE_CLAUDE_BIN``
+    on the re-install path (``.env`` already exists).
+
+    Re-install policy from the plan: leave the operator's existing .env
+    (RELAY_AGENT_ID/TOKEN, JWT_SECRET_KEY, any manual edits) intact;
+    surgically backfill only ``MOBAIDE_CLAUDE_BIN``. ``init-env
+    --force`` would achieve the same outcome but it rewrites every
+    templated line and an operator-edited LOG_LEVEL or similar would
+    silently revert. ``set-env`` touches one key only. A regression
+    to ``init-env --force`` re-opens the manual-edit-clobber gap.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    assert "set-env" in body, (
+        "Write-AgentEnv must invoke `set-env` on the re-install path "
+        "to surgically backfill MOBAIDE_CLAUDE_BIN. Replacing it with "
+        "`init-env --force` would clobber the operator's other manual "
+        "edits. Body:\n" + repr(body)
+    )
+    # Pin both the key flag AND the value flag — the set-env verb
+    # requires both as named args. A future refactor that drops the
+    # explicit `--key MOBAIDE_CLAUDE_BIN` (e.g., by routing through a
+    # positional arg) would silently change the contract.
+    assert re.search(r"--key\s+MOBAIDE_CLAUDE_BIN", body), (
+        "Write-AgentEnv must pass `--key MOBAIDE_CLAUDE_BIN` to "
+        "set-env (the surgical key under test for this fix); not "
+        "found in body:\n" + repr(body)
+    )
+    assert "--value" in body, (
+        "Write-AgentEnv must pass `--value` to set-env (set-env "
+        "requires both --key and --value to land a line). Body:\n"
+        + repr(body)
+    )
+
+
+def test_write_agent_env_reads_existing_claude_bin_before_backfill() -> None:
+    """``Write-AgentEnv`` must consult ``Read-EnvValue`` for
+    ``MOBAIDE_CLAUDE_BIN`` before calling ``set-env``.
+
+    Per plan policy "Surgical set-env only" / "operator-managed always
+    wins": if the operator has hand-edited the .env to point at a
+    custom claude install (e.g., a non-default npm prefix or a tarball
+    extraction), the installer must NOT silently overwrite that value
+    with whatever ``Find-ClaudeBinary`` discovered. Read first, only
+    backfill when the slot is empty. A regression that drops the
+    Read-EnvValue probe means every re-install stamps over the
+    operator's edit.
+
+    Strip comments before the position search: the explanatory comment
+    block in ``Write-AgentEnv`` mentions the literal token ``set-env``
+    inside the "Surgical set-env only" policy documentation, which a
+    naive ``.find()`` on the raw body matches before the actual call
+    line. Comments-stripped search isolates the real call positions.
+    """
+    body = _strip_powershell_comments(_function_body_text("Write-AgentEnv"))
+    read_at = body.find("Read-EnvValue")
+    setenv_at = body.find("set-env")
+    assert read_at != -1, (
+        "Write-AgentEnv must consult Read-EnvValue for "
+        "MOBAIDE_CLAUDE_BIN before calling set-env (per the "
+        "operator-managed-wins policy); not found in body:\n"
+        + repr(body)
+    )
+    assert setenv_at != -1, (
+        "Write-AgentEnv must call set-env on the re-install path. "
+        "Body:\n" + repr(body)
+    )
+    assert read_at < setenv_at, (
+        f"Write-AgentEnv must call Read-EnvValue BEFORE set-env so an "
+        f"existing operator-set MOBAIDE_CLAUDE_BIN is preserved. "
+        f"Read-EnvValue at offset {read_at}, set-env at offset "
+        f"{setenv_at}. Body:\n" + repr(body)
+    )
+
+
+def test_write_agent_env_prefers_hint_then_falls_back_to_find() -> None:
+    """``Write-AgentEnv`` must read ``$env:MOBAIDE_AGENT_CLAUDE_BIN_HINT``
+    first and only fall back to ``Find-ClaudeBinary`` if the hint is
+    empty.
+
+    The hint is the pre-UAC discovery captured under the originating
+    user's env (see ``Assert-AdminOrElevate``). For the canonical ``irm
+    | iex`` consent flow the elevated session is the same user, so
+    ``Find-ClaudeBinary`` would also resolve correctly — but for the
+    ``Run as different user`` consent it won't. Preferring the hint
+    closes that gap. A regression to "always call Find-ClaudeBinary"
+    silently breaks cross-account elevation.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    hint_at = body.find("MOBAIDE_AGENT_CLAUDE_BIN_HINT")
+    find_at = body.find("Find-ClaudeBinary")
+    assert hint_at != -1, (
+        "Write-AgentEnv must read $env:MOBAIDE_AGENT_CLAUDE_BIN_HINT "
+        "(the pre-UAC discovery). Body:\n" + repr(body)
+    )
+    assert find_at != -1, (
+        "Write-AgentEnv must call Find-ClaudeBinary as a fallback "
+        "(for installs that did not go through Assert-AdminOrElevate, "
+        "e.g., an already-elevated PowerShell). Body:\n" + repr(body)
+    )
+    assert hint_at < find_at, (
+        f"Write-AgentEnv must check MOBAIDE_AGENT_CLAUDE_BIN_HINT "
+        f"BEFORE falling back to Find-ClaudeBinary. The hint carries "
+        f"the originating-user discovery across UAC; the fallback "
+        f"runs under whatever profile the elevated session has. Hint "
+        f"at offset {hint_at}, Find-ClaudeBinary at offset {find_at}. "
+        f"Body:\n" + repr(body)
+    )
+
+
+def test_main_calls_write_agent_env() -> None:
+    """``Main`` must call ``Write-AgentEnv`` so the discovered claude
+    path actually lands in ``.env``.
+
+    Sanity guard for refactors that touch ``Main``'s call chain: if
+    ``Write-AgentEnv`` is renamed, inlined, or silently dropped, every
+    Windows install regresses to the 503 — discovery still runs (the
+    pre-UAC hint and Find-ClaudeBinary helpers are intact), but nothing
+    persists the result into the file the service reads at boot.
+    """
+    body = _function_body_text("Main")
+    assert "Write-AgentEnv" in body, (
+        "Main must call Write-AgentEnv to persist the discovered "
+        "claude path into .env. Without this call, every install "
+        "regresses to claude_cli_missing 503 even though discovery "
+        "succeeded. Body:\n" + repr(body)
+    )
+
+
+def test_set_env_subcommand_is_defined_in_config_module() -> None:
+    """The CLI verb ``set-env`` invoked by ``Write-AgentEnv`` must
+    exist as a subcommand in ``mobaide.agent.config``.
+
+    Cross-language contract: ``install.ps1`` is the producer
+    (constructs the argv); ``mobaide.agent.config`` is the consumer
+    (registers the subcommand). If either side drifts, the install
+    silently fails with ``argparse: invalid choice: 'set-env'``. The
+    Python-side definition is tested separately in
+    ``test_set_env_cli.py``; this test pins the spelling install.ps1
+    expects on the PS5.1 side.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    # The exact subcommand string must appear verbatim — pydantic's
+    # argparse subparsers reject anything else.
+    assert "set-env" in body, (
+        "Write-AgentEnv must spell the subcommand 'set-env' exactly "
+        "(must match the argparse subparser name in "
+        "mobaide.agent.config._build_parser). Body:\n" + repr(body)
+    )
+
+
+def test_write_agent_env_warns_when_claude_not_found() -> None:
+    """``Write-AgentEnv`` must ``Write-Warn`` (not ``Write-Fail``) when
+    neither the hint nor ``Find-ClaudeBinary`` produced a path.
+
+    Per plan policy "warn and continue": missing claude at install time
+    is a user-recoverable condition (operator installs claude later via
+    ``npm install -g @anthropic-ai/claude-code`` and either restarts
+    the service or re-runs the installer). Hard-failing the install
+    here would block the pairing flow entirely — the agent never
+    starts, the QR never renders, the operator can't recover without
+    re-running the installer. The 503 surfacing at session-create time
+    with the install-hint message is the better UX.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    assert "Write-Warn" in body, (
+        "Write-AgentEnv must Write-Warn when claude.cmd is not found "
+        "(warn-and-continue policy). Body:\n" + repr(body)
+    )
+    # Defensive negative pin: hard-fail would block install entirely.
+    # ``Write-Fail`` may legitimately appear in unrelated init-env error
+    # branches inside Write-AgentEnv, so we check that the "missing
+    # claude" path is reachable via Write-Warn rather than asserting
+    # Write-Fail is fully absent.
+    # The "npm install -g" hint must appear in the body so the warning
+    # itself tells the operator how to fix it.
+    assert "npm install" in body, (
+        "Write-AgentEnv's warning must mention `npm install -g "
+        "@anthropic-ai/claude-code` so the operator has an actionable "
+        "next step. Body:\n" + repr(body)
+    )

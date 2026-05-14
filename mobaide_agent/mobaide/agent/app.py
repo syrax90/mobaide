@@ -422,7 +422,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         main_branch=auto_scan_cfg.main_branch,
     )
     app.state.worktree_manager = worktree_mgr
-    app.state.claude_launcher = ClaudeLauncher(worktree_mgr=worktree_mgr)
+    app.state.claude_launcher = ClaudeLauncher(
+        worktree_mgr=worktree_mgr,
+        claude_bin_override=config.claude_bin,
+    )
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
     # so the on_session_created hook can attach a SessionEventFanout

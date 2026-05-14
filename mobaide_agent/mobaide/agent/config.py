@@ -55,6 +55,21 @@ class AgentConfig(BaseSettings):
     # on platforms whose supervisor doesn't pre-load the env file (Windows).
     projects: str | None = Field(default=None, validation_alias="PROJECTS")
 
+    # Operator override pointing at the absolute path of the Claude Code CLI
+    # executable (e.g. ``C:\\Users\\<u>\\AppData\\Roaming\\npm\\claude.cmd`` on
+    # Windows). Read here for the same reason as ``projects`` above:
+    # pydantic-settings populates this instance from .env but does NOT mutate
+    # ``os.environ``, so without a typed field the resolver in
+    # ``claude_launcher.py`` would never see a ``MOBAIDE_CLAUDE_BIN`` line in
+    # .env (``extra="ignore"`` drops it on the floor). The Windows service
+    # runs as ``LocalSystem`` with a stripped PATH that excludes
+    # ``%APPDATA%\\npm`` — ``install.ps1`` detects the user's ``claude.cmd``
+    # and writes its absolute path here so the service can find it without
+    # manual edits.
+    claude_bin: str | None = Field(
+        default=None, validation_alias="MOBAIDE_CLAUDE_BIN",
+    )
+
     auto_scan_config: AutoScanConfig | None = Field(default=None, exclude=True)
     relay_config: RelayConfig | None = Field(default=None, exclude=True)
 
@@ -176,6 +191,14 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
                 overrides[key] = existing[key]
         if existing.get("RELAY_SERVER_URL"):
             overrides["RELAY_SERVER_URL"] = existing["RELAY_SERVER_URL"]
+        if existing.get("MOBAIDE_CLAUDE_BIN"):
+            overrides["MOBAIDE_CLAUDE_BIN"] = existing["MOBAIDE_CLAUDE_BIN"]
+
+    # An explicit --claude-bin from the installer wins over a preserved
+    # existing value: a re-install where the operator just moved the
+    # claude package to a new prefix needs the new path to land.
+    if args.claude_bin:
+        overrides["MOBAIDE_CLAUDE_BIN"] = args.claude_bin
 
     rendered = render_template(template, overrides=overrides)
     atomic_write(target, rendered)
@@ -189,6 +212,39 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
         f"or edit the file directly:\n"
         f"    {target}\n"
     )
+    return 0
+
+
+def _cmd_set_env(args: argparse.Namespace) -> int:
+    """Set a single ``KEY=value`` in an existing ``.env`` in-place.
+
+    Used by ``install.ps1`` to surgically backfill ``MOBAIDE_CLAUDE_BIN``
+    on a re-install over an already-paired agent without touching
+    ``JWT_SECRET_KEY`` / ``RELAY_AGENT_TOKEN``. ``init-env --force``
+    preserves those keys explicitly, but it's heavier — it rewrites
+    every templated line. ``set-env`` is the smallest operation that
+    achieves the same outcome for one key.
+    """
+    from mobaide.agent._env_writer import (
+        atomic_write,
+        env_path_for_prefix,
+        render_template,
+        restrict_perms,
+    )
+
+    prefix = _resolve_prefix(args.prefix)
+    target = env_path_for_prefix(prefix)
+    if not target.exists():
+        sys.stderr.write(
+            f"[mobaide-agent] {target} does not exist; run init-env first.\n"
+        )
+        return 1
+
+    existing_text = target.read_text(encoding="utf-8")
+    rendered = render_template(existing_text, overrides={args.key: args.value})
+    atomic_write(target, rendered)
+    restrict_perms(target)
+    sys.stdout.write(f"[mobaide-agent] Set {args.key} in {target}.\n")
     return 0
 
 
@@ -212,7 +268,34 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Regenerate even if .env exists; preserves RELAY_AGENT_*.",
     )
+    init.add_argument(
+        "--claude-bin",
+        dest="claude_bin",
+        help=(
+            "Absolute path to claude.cmd / claude executable; written as "
+            "MOBAIDE_CLAUDE_BIN. Used by install.ps1 on Windows."
+        ),
+    )
     init.set_defaults(func=_cmd_init_env)
+
+    set_env = sub.add_parser(
+        "set-env",
+        help=(
+            "Set a single KEY=value in an existing .env (in-place; preserves "
+            "all other keys). Used by install.ps1 to backfill MOBAIDE_CLAUDE_BIN."
+        ),
+    )
+    set_env.add_argument(
+        "--prefix",
+        help="Install prefix (defaults to install_paths.default_prefix()).",
+    )
+    set_env.add_argument(
+        "--key", required=True, help="The KEY to set in .env.",
+    )
+    set_env.add_argument(
+        "--value", required=True, help="The value to write for --key.",
+    )
+    set_env.set_defaults(func=_cmd_set_env)
 
     pt = sub.add_parser(
         "print-template",
