@@ -347,6 +347,39 @@ class TestClaim:
         assert "agent_token" not in body
         assert "token" not in body
 
+    async def test_response_carries_ws_delivered_flag(
+        self, client, qr_app, api_auth_headers
+    ):
+        # The mobile uses ``ws_delivered`` to refine the timeout-error copy
+        # when the just-paired agent never comes online. With no WS waiter
+        # registered for this nonce (no agent is listening on the pairing
+        # WS in this test setup), the dispatch attempt returns False and
+        # the credentials are staged in claimed_token_raw for the agent's
+        # next reconnect to recover. The response must surface this state.
+        nonce = await self._initiate_nonce(client)
+        fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
+
+        resp = await client.post(
+            "/api/pairing/claim",
+            json={
+                "nonce": nonce,
+                "trust_key_fp": fp,
+                "mobile_device_id": "dev-1",
+            },
+            headers=api_auth_headers,
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "ws_delivered" in body, (
+            "PairingClaimResponse must include the ws_delivered field — "
+            "the mobile uses it to distinguish 'dispatched to agent WS' "
+            "from 'staged for agent recovery' when building the "
+            "pairing-failed diagnostic message"
+        )
+        # No waiter registered → dispatch returns False → ws_delivered=False.
+        assert body["ws_delivered"] is False
+
 
 class TestClaimRepair:
     async def test_same_owner_rotates_token(
@@ -472,6 +505,12 @@ class TestClaimWsDispatch:
         )
 
         assert resp.status_code == 200
+        # When a waiter is registered the dispatch succeeds and the
+        # response must surface that — the mobile uses ``ws_delivered=True``
+        # to refine its diagnostic copy (no need to mention the "credentials
+        # were staged for recovery" remediation when the agent already
+        # received the push at claim time).
+        assert resp.json()["ws_delivered"] is True
         # Payload is queued.
         raw = await queue.get()
         push = json.loads(raw.decode("utf-8"))

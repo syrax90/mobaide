@@ -429,3 +429,143 @@ class TestOnPairedFailureFallback:
             f"expected exit code {EXIT_RESTART_REQUESTED} in fallback "
             f"log line; got: {out!r}"
         )
+
+
+class TestPairingTaskDoneCallback:
+    """Pin the ``_pairing_task_done`` callback contract in ``app.py``.
+
+    The pairing task is scheduled with ``asyncio.create_task`` and is
+    not awaited until lifespan shutdown. Without the done-callback added
+    in this change, an uncaught exception inside the task only surfaces
+    via Python's "Task exception was never retrieved" GC log, which on a
+    long-running service may never trigger — the failure mode that
+    motivated RC-1 in the plan. ``run_pairing_monitor`` already has its
+    own outer-loop ``try/except Exception`` (tested in
+    ``TestRunPairingMonitorBroadenedExceptionHandling`` in
+    ``test_pairing_monitor.py``), so this callback is the last-line
+    defence: it fires only if the monitor returns normally, is
+    cancelled, or escapes a ``BaseException`` the inner catch-all does
+    not swallow. Pinning each branch keeps a future refactor that
+    removes either layer from silently regressing.
+    """
+
+    @pytest.fixture
+    def _stub_layout(self, monkeypatch):
+        import mobaide.agent.pairing_monitor as _pm
+
+        monkeypatch.setattr(_pm, "default_layout", lambda: object())
+        return _pm
+
+    @pytest.mark.asyncio
+    async def test_task_died_unexpectedly_is_logged_when_monitor_raises(
+        self, tmp_path: Path, monkeypatch, capsys, _stub_layout,
+    ):
+        # Simulate the silent-task-death failure mode: the monitor
+        # escapes ``BaseException`` (or a regression removes the outer
+        # ``except Exception``) and the task ends with an exception.
+        # The done-callback MUST log
+        # ``pairing_monitor.task_died_unexpectedly`` so an operator
+        # grepping ``agent.err.log`` sees the failure within seconds
+        # rather than at process shutdown 24 hours later.
+        async def _exploding_monitor(**_kwargs: Any) -> None:
+            raise SystemError("simulated unanticipated monitor death")
+
+        monkeypatch.setattr(
+            _stub_layout, "run_pairing_monitor", _exploding_monitor,
+        )
+
+        app = create_app(config=_make_pairing_pending_config(tmp_path))
+
+        with TestClient(app):
+            # The task must (a) be scheduled, (b) raise, (c) trigger the
+            # done-callback. Yielding two rounds covers both schedule and
+            # done-callback dispatch on the same loop.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        out = capsys.readouterr().out
+        assert "pairing_monitor.task_died_unexpectedly" in out, (
+            f"expected 'pairing_monitor.task_died_unexpectedly' in "
+            f"stdout when the monitor raises — this is the defence-"
+            f"in-depth log that surfaces silent task death within "
+            f"seconds. Got: {out!r}"
+        )
+        # The structured log carries the exception type so operators
+        # can route to the right cause without re-running the install.
+        assert "SystemError" in out, (
+            f"expected exception type 'SystemError' in the structured "
+            f"log line; without ``exc_type=%s`` an operator cannot "
+            f"distinguish a JSON parse failure from a permission denial "
+            f"from a panicked relay client. Got: {out!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_task_completed_normally_is_logged_on_return(
+        self, tmp_path: Path, monkeypatch, capsys, _stub_layout,
+    ):
+        # On the happy path (the monitor pairs and returns), the done-
+        # callback should emit the ``task_completed_normally`` INFO
+        # breadcrumb. This is what an operator looking at
+        # ``agent.out.log`` post-pair expects to see, and is the
+        # positive counterpart to ``task_died_unexpectedly``.
+        async def _returning_monitor(**_kwargs: Any) -> None:
+            return None
+
+        monkeypatch.setattr(
+            _stub_layout, "run_pairing_monitor", _returning_monitor,
+        )
+
+        app = create_app(config=_make_pairing_pending_config(tmp_path))
+
+        with TestClient(app):
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        out = capsys.readouterr().out
+        assert "pairing_monitor.task_completed_normally" in out, (
+            f"expected 'pairing_monitor.task_completed_normally' in "
+            f"stdout when the monitor returns cleanly; got: {out!r}"
+        )
+        # The failure log must NOT fire on the happy path — otherwise
+        # an operator grepping for ``task_died_unexpectedly`` would get
+        # false positives every time pairing succeeds.
+        assert "pairing_monitor.task_died_unexpectedly" not in out, (
+            f"task_died_unexpectedly must NOT fire when the monitor "
+            f"returns normally; got: {out!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_task_cancellation_at_shutdown_is_silent(
+        self, tmp_path: Path, monkeypatch, capsys, _stub_layout,
+    ):
+        # Lifespan shutdown cancels the pairing task — that is the
+        # designed path, not a failure. The done-callback must
+        # short-circuit on ``task.cancelled()`` and NOT log a failure;
+        # otherwise every clean shutdown would emit a false-positive
+        # ``task_died_unexpectedly`` and operators would learn to
+        # ignore the alarm that exists to surface RC-1.
+        async def _sleep_forever_monitor(**_kwargs: Any) -> None:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                raise
+
+        monkeypatch.setattr(
+            _stub_layout, "run_pairing_monitor", _sleep_forever_monitor,
+        )
+
+        app = create_app(config=_make_pairing_pending_config(tmp_path))
+
+        with TestClient(app):
+            await asyncio.sleep(0)
+        # ``with TestClient(app):`` exit triggers lifespan shutdown
+        # which cancels the task. Drain one more event-loop tick so the
+        # done-callback runs.
+        await asyncio.sleep(0)
+
+        out = capsys.readouterr().out
+        assert "pairing_monitor.task_died_unexpectedly" not in out, (
+            f"a shutdown-driven cancellation must NOT be reported as "
+            f"unexpected death — the done-callback's first branch "
+            f"explicitly returns on ``task.cancelled()``. Got: {out!r}"
+        )

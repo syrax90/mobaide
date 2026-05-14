@@ -257,7 +257,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                     )
 
             layout = default_layout()
-            app.state.pairing_task = asyncio.create_task(
+            pairing_task = asyncio.create_task(
                 run_pairing_monitor(
                     layout=layout,
                     relay_server_url=relay_cfg.server_url,
@@ -266,6 +266,39 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 ),
                 name="pairing-monitor",
             )
+
+            def _pairing_task_done(task: "asyncio.Task[None]") -> None:
+                # Surface unanticipated pairing-task failures within
+                # seconds instead of waiting for shutdown's re-await
+                # (and the asyncio GC "Task exception was never retrieved"
+                # message, which on a long-running service may never fire).
+                # ``run_pairing_monitor`` already has a catch-all
+                # ``except Exception`` around its outer loop body, so this
+                # callback only fires for: (1) intentional return (paired
+                # successfully); (2) cancellation at shutdown; or (3) a
+                # ``BaseException`` (system exit, ``KeyboardInterrupt``) we
+                # deliberately do not swallow inside the loop. Case 3 uses
+                # ``logger.error(..., exc_info=exc)`` to render the full
+                # traceback into ``agent.err.log`` — ``logger.exception()``
+                # cannot be used here because a done-callback runs outside
+                # any active ``except`` block, so its implicit
+                # ``exc_info=True`` would resolve to ``None`` instead of
+                # the task's exception. Passing ``exc_info=exc`` explicitly
+                # threads the task exception through the same formatter
+                # used elsewhere in the file.
+                if task.cancelled():
+                    return
+                exc = task.exception()
+                if exc is None:
+                    logger.info("pairing_monitor.task_completed_normally")
+                    return
+                logger.error(
+                    "pairing_monitor.task_died_unexpectedly exc_type=%s exc=%s",
+                    type(exc).__name__, exc, exc_info=exc,
+                )
+
+            pairing_task.add_done_callback(_pairing_task_done)
+            app.state.pairing_task = pairing_task
         else:
             app.state.relay_client = None
             app.state.updater = None

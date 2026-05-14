@@ -18,9 +18,20 @@ data class PairingClaimRequest(
     val friendly_name: String? = null,
 )
 
-/** Server response on a successful claim — never includes the token. */
+/**
+ * Server response on a successful claim — never includes the token.
+ *
+ * [ws_delivered] is an optional, forward-compatible hint about whether the
+ * credential push was dispatched to the agent's pairing WebSocket at claim
+ * time (`true`) or staged in the server-side recovery slot for the agent's
+ * next reconnect (`false`). `null` from older central-server builds that
+ * predate the field. The mobile uses this only to refine the timeout-error
+ * copy in [QrPairingState.WaitingForOnline]; the authoritative
+ * "actually paired" signal remains the routing-table `online=true` event.
+ */
 @Serializable
 data class PairingClaimResponse(
     val agent_id: String,
     val agent_friendly_name: String,
+    val ws_delivered: Boolean? = null,
 )

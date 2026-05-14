@@ -328,6 +328,41 @@ private fun QrPairingDialogs(
             },
             confirmButton = {},
         )
+        is QrPairingState.WaitingForOnline -> AlertDialog(
+            // The watcher coroutine owns the timeout — letting the user
+            // dismiss only abandons the wait, it does not cancel the
+            // server-side claim (which has already succeeded). The dismiss
+            // button is wired so a user who wants to stop watching can.
+            onDismissRequest = onDismiss,
+            title = { Text("Waiting for agent…") },
+            text = {
+                Column {
+                    Text(
+                        "Pairing request accepted. Waiting for " +
+                            "${state.friendlyName} (${state.agentId.take(8)}…) " +
+                            "to come online.",
+                    )
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Text(
+                        "Elapsed: ${state.elapsedSeconds}s / " +
+                            "$WAIT_FOR_ONLINE_TIMEOUT_SECONDS s",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Stop waiting") }
+            },
+        )
         is QrPairingState.Success -> AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Paired") },
