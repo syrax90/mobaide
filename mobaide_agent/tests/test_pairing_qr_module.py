@@ -3,13 +3,16 @@
 Pure-function tests for ``compute_trust_key_fp``, ``encode_qr_payload``,
 ``parse_qr_payload``, plus the ``PendingPairing`` JSON persistence
 lifecycle (``save`` / ``load`` / ``clear``). The agent's QR-rendering
-``segno`` integration is not exercised — it would require capturing
-terminal output and is integration-shaped.
+``segno`` integration is exercised for the encoding-dispatch behaviour
+(half-block path on UTF-8 streams, ASCII fallback on cp1252 and on
+streams with no declared encoding) using in-memory ``io.TextIOWrapper``
+stand-ins so the assertions hold without a real terminal.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import time
 from dataclasses import dataclass
@@ -27,6 +30,7 @@ from mobaide.agent.pairing_qr import (
     parse_qr_payload,
     pending_pairing_path,
     read_pinned_trust_key_fp,
+    render_qr_to_terminal,
     save_pending_pairing,
 )
 
@@ -218,3 +222,114 @@ class TestPendingPairingLifecycle:
 
         assert decoded["nonce"] == pending.nonce
         assert decoded["qr_payload"] == pending.qr_payload
+
+
+_SAMPLE_QR_PAYLOAD = (
+    f"MOBA1|wss://relay.test|abcdef0123456789|{'ff' * 32}|9999999999"
+)
+_BLOCK_GLYPH_RANGE = range(0x2580, 0x25A0)
+
+
+def _utf8_stream() -> tuple[io.TextIOWrapper, io.BytesIO]:
+    buf = io.BytesIO()
+    return io.TextIOWrapper(
+        buf, encoding="utf-8", newline="", write_through=True
+    ), buf
+
+
+def _cp1252_stream() -> tuple[io.TextIOWrapper, io.BytesIO]:
+    buf = io.BytesIO()
+    return io.TextIOWrapper(
+        buf, encoding="cp1252", newline="", write_through=True
+    ), buf
+
+
+class TestRenderQrToTerminal:
+    """Encoding-dispatch behaviour of ``render_qr_to_terminal``.
+
+    Pins the contract that:
+
+    * a UTF-8-capable stream gets segno's compact half-block rendering
+      (at least one glyph in U+2580–U+259F appears);
+    * a cp1252 stream (and any stream whose codec cannot carry those
+      glyphs) silently falls back to the ASCII ``##`` rendering — no
+      ``UnicodeEncodeError`` propagates, no half-block glyphs leak into
+      the output.
+
+    The Windows-service crash in ``agent.out.log`` came from the second
+    contract being absent: segno wrote half-blocks straight to a
+    cp1252-redirected stdout, the write raised, and the pairing flow
+    aborted before ``wait_for_claim``. These tests would have caught it.
+    """
+
+    def test_compact_block_glyphs_on_utf8_stream(self):
+        stream, buf = _utf8_stream()
+
+        render_qr_to_terminal(_SAMPLE_QR_PAYLOAD, stream=stream)
+        stream.flush()
+        output = buf.getvalue().decode("utf-8")
+
+        assert any(
+            ord(c) in _BLOCK_GLYPH_RANGE for c in output
+        ), "expected at least one half-block glyph on a UTF-8 stream"
+
+    def test_ascii_fallback_on_cp1252_stream(self):
+        stream, buf = _cp1252_stream()
+
+        render_qr_to_terminal(_SAMPLE_QR_PAYLOAD, stream=stream)
+        stream.flush()
+        output = buf.getvalue().decode("cp1252")
+
+        assert "##" in output, "ASCII fallback must emit '##' dark cells"
+        assert not any(
+            ord(c) in _BLOCK_GLYPH_RANGE for c in output
+        ), "ASCII fallback must not emit half-block glyphs"
+
+    def test_ascii_fallback_when_stream_has_no_encoding(self):
+        # io.StringIO has encoding=None — exercises the no-encoding branch
+        # of _stream_supports_block_glyphs without needing a real codec.
+        stream = io.StringIO()
+
+        render_qr_to_terminal(_SAMPLE_QR_PAYLOAD, stream=stream)
+        output = stream.getvalue()
+
+        assert "##" in output
+        assert all(
+            ord(c) < 128 for c in output
+        ), "encoding=None must use the pure-ASCII fallback"
+
+    def test_ascii_fallback_when_stream_encoding_is_unknown_codec(self):
+        # A misconfigured ``PYTHONIOENCODING`` (or a custom stream wrapper
+        # that advertises a bogus codec name) makes the encoding probe
+        # raise ``LookupError`` rather than ``UnicodeEncodeError``. The
+        # ``except (UnicodeEncodeError, LookupError)`` tuple in
+        # ``_stream_supports_block_glyphs`` exists specifically for this
+        # case — pin it so a future refactor that narrows the except to
+        # only ``UnicodeEncodeError`` would crash the pairing flow on
+        # bogus-codec stdout instead of falling back cleanly.
+        class _BogusEncodingStream:
+            encoding = "definitely-not-a-real-codec-name"
+
+            def __init__(self) -> None:
+                self.buffer: list[str] = []
+
+            def write(self, s: str) -> int:
+                self.buffer.append(s)
+                return len(s)
+
+            def flush(self) -> None:
+                pass
+
+        stream = _BogusEncodingStream()
+
+        render_qr_to_terminal(_SAMPLE_QR_PAYLOAD, stream=stream)
+        output = "".join(stream.buffer)
+
+        assert "##" in output, (
+            "unknown-codec stream must fall back to ASCII; if this "
+            "fires, ``LookupError`` was likely dropped from the "
+            "encoding-probe except tuple"
+        )
+        assert not any(
+            ord(c) in _BLOCK_GLYPH_RANGE for c in output
+        ), "unknown-codec fallback must not emit half-block glyphs"
