@@ -196,3 +196,106 @@ class TestInitEnvOutputContents:
         # Fresh install: pairing has not happened yet.
         assert values.get("RELAY_AGENT_ID", "") == ""
         assert values.get("RELAY_AGENT_TOKEN", "") == ""
+
+
+class TestInitEnvClaudeBin:
+    """``--claude-bin`` writes ``MOBAIDE_CLAUDE_BIN`` so the Windows-service
+    LocalSystem process can find ``claude.cmd`` outside its stripped PATH.
+
+    The installer captures the user's ``%APPDATA%\\npm\\claude.cmd`` before
+    elevation (under the originating user's env), then re-invokes
+    ``init-env --claude-bin <abs-path>`` from the elevated session. The
+    flag must land an uncommented ``MOBAIDE_CLAUDE_BIN=<path>`` line —
+    the template ships the key commented out (``env.template:40``) so
+    ``render_template``'s ``^\\s*#?\\s*KEY=`` matcher must uncomment it.
+    """
+
+    def test_writes_claude_bin_when_flag_passed_fresh(self, tmp_path):
+        rc = _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--claude-bin", r"C:\Users\u\AppData\Roaming\npm\claude.cmd",
+        ])
+
+        assert rc == 0
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        assert values["MOBAIDE_CLAUDE_BIN"] == (
+            r"C:\Users\u\AppData\Roaming\npm\claude.cmd"
+        )
+
+    def test_writes_claude_bin_uncomments_template_line(self, tmp_path):
+        # The template ships ``# MOBAIDE_CLAUDE_BIN=`` commented (see
+        # env.template:40). ``render_template`` must rewrite that line as
+        # an uncommented ``MOBAIDE_CLAUDE_BIN=<value>`` — not append a
+        # duplicate alongside the commented form (which would then be
+        # ambiguous: pydantic-settings reads the LAST key wins, and the
+        # commented form would be skipped, but the duplicate is still
+        # cosmetic noise that confuses operators auditing the file).
+        _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--claude-bin", "/abs/claude",
+        ])
+
+        text = env_path_for_prefix(tmp_path).read_text(encoding="utf-8")
+        # Exactly one uncommented line.
+        assert "\nMOBAIDE_CLAUDE_BIN=/abs/claude\n" in text
+        # The commented placeholder is gone — not preserved alongside.
+        assert "# MOBAIDE_CLAUDE_BIN=" not in text
+
+    def test_no_flag_leaves_claude_bin_commented(self, tmp_path):
+        # Default flow (no ``--claude-bin``): the commented template
+        # line passes through unchanged; ``MOBAIDE_CLAUDE_BIN`` does
+        # not appear in ``parse_env_file`` output because comments are
+        # skipped. The resolver then falls back to PATH / fallback
+        # candidates, which is the POSIX / "developer-on-PATH" path.
+        _run(["init-env", "--prefix", str(tmp_path)])
+
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        assert "MOBAIDE_CLAUDE_BIN" not in values
+        # The commented placeholder is preserved so the operator can
+        # hand-edit it post-install if needed.
+        text = env_path_for_prefix(tmp_path).read_text(encoding="utf-8")
+        assert "# MOBAIDE_CLAUDE_BIN=" in text
+
+    def test_force_preserves_existing_claude_bin(self, tmp_path):
+        # Re-install path: ``init-env --force`` must preserve a
+        # previously-set ``MOBAIDE_CLAUDE_BIN`` exactly like it preserves
+        # ``RELAY_AGENT_ID`` / ``RELAY_AGENT_TOKEN`` /
+        # ``RELAY_SERVER_URL``. Operators who hand-edited the path
+        # should never lose it on a stock re-run.
+        _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--claude-bin", "/originally/written",
+        ])
+        original = parse_env_file(
+            env_path_for_prefix(tmp_path)
+        )["MOBAIDE_CLAUDE_BIN"]
+        assert original == "/originally/written"
+
+        rc = _run(["init-env", "--prefix", str(tmp_path), "--force"])
+
+        assert rc == 0
+        preserved = parse_env_file(
+            env_path_for_prefix(tmp_path)
+        )["MOBAIDE_CLAUDE_BIN"]
+        assert preserved == "/originally/written"
+
+    def test_force_with_new_claude_bin_overrides_existing(self, tmp_path):
+        # Re-install where the operator just moved the claude package to
+        # a new prefix: passing ``--claude-bin /new`` to a ``--force``
+        # run must win over the preserved old value. This is the
+        # "operator manually updates and re-runs the installer" path —
+        # the installer always discovers the current location and
+        # passes it through.
+        _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--claude-bin", "/old/location/claude",
+        ])
+
+        rc = _run([
+            "init-env", "--prefix", str(tmp_path), "--force",
+            "--claude-bin", "/new/location/claude",
+        ])
+
+        assert rc == 0
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        assert values["MOBAIDE_CLAUDE_BIN"] == "/new/location/claude"

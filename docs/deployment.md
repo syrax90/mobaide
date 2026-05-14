@@ -318,7 +318,15 @@ Common causes:
 - Missing `JWT_SECRET_KEY` in `.env`
 - Port 8000 already in use (change `PORT`, or stop the other process)
 - Python version < 3.12
-- Claude CLI not on the service's `PATH` — the agent returns HTTP 503 with `claude_cli_missing: true` and a `searched_paths` list. Fix: add `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` to `<prefix>/agent.env`, or ensure the CLI is under `~/.npm-global/bin` or `~/.local/bin` (already in the unit's `PATH`).
+- Claude CLI not on the service's `PATH` — the agent returns HTTP 503 with `claude_cli_missing: true` and a `searched_paths` list (each entry tagged with its source: `override:`, `env:`, `PATH:`, `fallback:`). The Windows installer auto-detects `claude.cmd` in the installing user's `%APPDATA%\npm` and writes its absolute path as `MOBAIDE_CLAUDE_BIN` into the agent's `.env`, so a clean install on a host where the user already ran `npm install -g @anthropic-ai/claude-code` works without manual edits. Manual fix paths:
+  - Linux/macOS: install the CLI under `~/.npm-global/bin`, `~/.local/bin`, `/usr/local/bin`, or `/opt/homebrew/bin` (all in the resolver's POSIX fallback list); or add `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` to `<prefix>/agent.env`.
+  - Windows: edit `<prefix>\mobaide_agent\.env`, set `MOBAIDE_CLAUDE_BIN=C:\Users\<you>\AppData\Roaming\npm\claude.cmd`, then `Restart-Service MobaideAgent`. Or, if you installed Claude CLI after the agent service: re-run `irm https://get.mobaide.com/install.ps1 | iex` (the install script will surgically backfill `MOBAIDE_CLAUDE_BIN` without touching pairing credentials), or run the `set-env` verb directly:
+    ```powershell
+    & "$env:ProgramFiles\MobaideAgent\releases\<version>\venv\Scripts\python.exe" `
+      -m mobaide.agent.config set-env --key MOBAIDE_CLAUDE_BIN `
+      --value "C:\Users\<you>\AppData\Roaming\npm\claude.cmd"
+    Restart-Service MobaideAgent
+    ```
 
 #### Agent not showing as online in the Android app
 

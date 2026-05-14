@@ -38,11 +38,14 @@ class ClaudeBinaryNotFoundError(RuntimeError):
 
 
 _CLAUDE_BIN_ENV_VAR = "MOBAIDE_CLAUDE_BIN"
-_resolved_claude_bin: str | None = None
 
 
 def _is_executable_file(path: str) -> bool:
     return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def _normalise_user_path(path: str) -> str:
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
 
 
 def _nvm_version_key(path: str) -> tuple[int, ...]:
@@ -77,51 +80,99 @@ def _posix_fallback_candidates() -> list[str]:
     return candidates
 
 
-def _resolve_claude_binary() -> str:
+def _windows_fallback_candidates() -> list[str]:
+    """Common Windows install locations for ``claude.cmd``.
+
+    Critical for the Windows-service case: the service runs as
+    ``LocalSystem`` (``deploy/install.ps1`` registers ``MobaideAgent``
+    without an ``obj=`` override), and ``LocalSystem``'s ``%APPDATA%``
+    resolves to the *system profile*
+    (``C:\\Windows\\system32\\config\\systemprofile\\AppData\\Roaming``),
+    not the installing user's. ``npm install -g @anthropic-ai/claude-code``
+    lands ``claude.cmd`` under the *user's* ``%APPDATA%\\npm``, so the
+    expansion below cannot reach it when running as ``LocalSystem``.
+    The install script captures the user's path under elevation and writes
+    it into ``.env`` as ``MOBAIDE_CLAUDE_BIN``; this fallback list is the
+    last-ditch guess for environments where the override is missing AND
+    PATH happens not to include the npm dir.
+    """
+    candidates: list[str] = []
+    for var in ("APPDATA", "LOCALAPPDATA", "USERPROFILE"):
+        base = os.environ.get(var)
+        if not base:
+            continue
+        if var == "USERPROFILE":
+            for suffix in (
+                r"AppData\Roaming\npm\claude.cmd",
+                r"AppData\Roaming\npm\claude.exe",
+            ):
+                candidates.append(os.path.join(base, suffix))
+        else:
+            for suffix in (r"npm\claude.cmd", r"npm\claude.exe"):
+                candidates.append(os.path.join(base, suffix))
+    program_data = os.environ.get("ProgramData") or r"C:\ProgramData"
+    candidates.append(os.path.join(program_data, "npm", "claude.cmd"))
+    program_files = os.environ.get("ProgramFiles")
+    if program_files:
+        candidates.append(os.path.join(program_files, "nodejs", "claude.cmd"))
+    return candidates
+
+
+def _resolve_claude_binary(override: str | None = None) -> str:
     """Locate the Claude Code CLI executable.
 
-    Resolution order:
-      1. ``MOBAIDE_CLAUDE_BIN`` env var (operator override).
-      2. ``shutil.which`` against the current PATH.
-      3. (POSIX) common npm/nvm/homebrew install locations.
+    Resolution order (high → low):
+      1. ``override`` arg (config-supplied ``MOBAIDE_CLAUDE_BIN``).
+      2. ``MOBAIDE_CLAUDE_BIN`` env var (direct shell export).
+      3. ``shutil.which`` against the current PATH.
+      4. Platform-specific fallback candidates (Windows: ``%APPDATA%\\npm``
+         and friends; POSIX: ``~/.npm-global/bin``, ``/usr/local/bin``,
+         nvm).
 
-    Result is cached for the process lifetime in ``_resolved_claude_bin``.
+    Stateless — caching is the caller's responsibility. ``ClaudeLauncher``
+    caches the result for the lifetime of one launcher instance, which is
+    the natural unit because the launcher is constructed once per app
+    boot from a fixed ``AgentConfig``.
+
     Raises :class:`ClaudeBinaryNotFoundError` with an actionable message
-    listing every path that was probed.
+    listing every path that was probed, each tagged with its source
+    (``override:``, ``env:``, ``PATH:``, ``fallback:``) so the mobile
+    client can tell the operator which lookup channel was tried.
     """
-    global _resolved_claude_bin
-    if _resolved_claude_bin is not None:
-        return _resolved_claude_bin
-
     searched: list[str] = []
 
-    override = os.environ.get(_CLAUDE_BIN_ENV_VAR)
+    typed_candidates: list[tuple[str, str]] = []
     if override:
-        override_path = os.path.abspath(override)
-        searched.append(f"{_CLAUDE_BIN_ENV_VAR}={override_path}")
-        if _is_executable_file(override_path):
-            _resolved_claude_bin = override_path
-            return _resolved_claude_bin
+        typed_candidates.append(("override", _normalise_user_path(override)))
+    env_val = os.environ.get(_CLAUDE_BIN_ENV_VAR)
+    if env_val:
+        typed_candidates.append(("env", _normalise_user_path(env_val)))
+
+    for label, path in typed_candidates:
+        searched.append(f"{label}:{path}")
+        if _is_executable_file(path):
+            return path
 
     if sys.platform == "win32":
         for name in ("claude", "claude.cmd", "claude.exe"):
             hit = shutil.which(name)
             searched.append(f"PATH:{name}")
             if hit:
-                _resolved_claude_bin = os.path.abspath(hit)
-                return _resolved_claude_bin
+                return os.path.abspath(hit)
+        for candidate in _windows_fallback_candidates():
+            searched.append(f"fallback:{candidate}")
+            if _is_executable_file(candidate):
+                return candidate
     else:
         hit = shutil.which("claude")
         searched.append("PATH:claude")
         if hit:
-            _resolved_claude_bin = os.path.abspath(hit)
-            return _resolved_claude_bin
+            return os.path.abspath(hit)
 
         for candidate in _posix_fallback_candidates():
-            searched.append(candidate)
+            searched.append(f"fallback:{candidate}")
             if _is_executable_file(candidate):
-                _resolved_claude_bin = candidate
-                return _resolved_claude_bin
+                return candidate
 
     raise ClaudeBinaryNotFoundError(searched)
 
@@ -188,8 +239,18 @@ class ClaudeLauncher:
     def __init__(
         self,
         worktree_mgr: WorktreeManager | None = None,
+        claude_bin_override: str | None = None,
     ) -> None:
         self._worktree_mgr: WorktreeManager | None = worktree_mgr
+        self._claude_bin_override = claude_bin_override
+        self._resolved_binary: str | None = None
+
+    def _resolve_binary(self) -> str:
+        if self._resolved_binary is None:
+            self._resolved_binary = _resolve_claude_binary(
+                override=self._claude_bin_override,
+            )
+        return self._resolved_binary
 
     async def build(
         self,
@@ -206,9 +267,8 @@ class ClaudeLauncher:
         created = self._write_project_files(project, cwd)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
 
-    @staticmethod
-    def _build_argv(options: ClaudeOptions) -> list[str]:
-        argv: list[str] = [_resolve_claude_binary(), "--debug"]
+    def _build_argv(self, options: ClaudeOptions) -> list[str]:
+        argv: list[str] = [self._resolve_binary(), "--debug"]
         if options.plan_mode and options.skip_permissions:
             argv += ["--permission-mode", "plan",
                      "--allow-dangerously-skip-permissions"]
@@ -222,8 +282,7 @@ class ClaudeLauncher:
             argv += ["--", options.initial_prompt]
         return argv
 
-    @staticmethod
-    def _build_env(project: ProjectConfig, options: ClaudeOptions) -> dict[str, str]:
+    def _build_env(self, project: ProjectConfig, options: ClaudeOptions) -> dict[str, str]:
         env = os.environ.copy()
         env.update(CLAUDE_SESSION_PRESET_ENV)
         if project.linear_api_key:
@@ -240,7 +299,7 @@ class ClaudeLauncher:
                 env["PATH"] = f"{conda_bin}{sep}{env.get('PATH', '')}"
 
         try:
-            claude_dir = os.path.dirname(_resolve_claude_binary())
+            claude_dir = os.path.dirname(self._resolve_binary())
         except ClaudeBinaryNotFoundError:
             claude_dir = ""
         if claude_dir:

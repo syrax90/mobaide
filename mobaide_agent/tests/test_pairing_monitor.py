@@ -371,6 +371,47 @@ class TestWriteCredentialsToEnv:
         assert "RELAY_AGENT_ID=i" in text
         assert "RELAY_AGENT_TOKEN=t" in text
 
+    async def test_preserves_claude_bin_when_rewriting_credentials(
+        self, env_path: Path
+    ):
+        # Critical contract for the Windows-service flow: the installer
+        # writes ``MOBAIDE_CLAUDE_BIN=<path>`` BEFORE pairing happens
+        # (init-env --claude-bin), then the mobile-app pairing flow
+        # later rewrites the same .env to land RELAY_AGENT_ID/TOKEN.
+        # ``write_credentials_to_env`` MUST NOT drop the claude_bin
+        # line — otherwise pairing would silently un-set the resolver
+        # override and session creation would 503 with
+        # claude_cli_missing on the next launch. The rewrite is a full
+        # render_template walk (pairing_monitor.py:222); set-env-style
+        # surgical updates do not apply here.
+        env_path.write_text(
+            "JWT_SECRET_KEY=existing-secret\n"
+            "MOBAIDE_CLAUDE_BIN=/abs/path/to/claude\n"
+            "RELAY_SERVER_URL=wss://relay.existing\n"
+            "RELAY_AGENT_ID=\n"
+            "RELAY_AGENT_TOKEN=\n",
+            encoding="utf-8",
+        )
+        claim = PairingClaim(
+            agent_id="new-id",
+            agent_token="new-token",
+            relay_url="https://relay.test",
+            agent_friendly_name="lab",
+            issued_at="2026-05-07T00:00:00+00:00",
+        )
+
+        await write_credentials_to_env(env_path, claim)
+
+        contents = env_path.read_text(encoding="utf-8")
+        # Pairing creds landed.
+        assert "RELAY_AGENT_ID=new-id" in contents
+        assert "RELAY_AGENT_TOKEN=new-token" in contents
+        # And the claude binary override survived, byte-for-byte.
+        assert "MOBAIDE_CLAUDE_BIN=/abs/path/to/claude" in contents
+        # The pre-existing JWT secret stays put too (the rewrite must
+        # not rotate it; the same pattern as RELAY_SERVER_URL).
+        assert "JWT_SECRET_KEY=existing-secret" in contents
+
 
 class _RunPairingMonitorTestBase:
     """Shared scaffolding for the two ``run_pairing_monitor`` integration

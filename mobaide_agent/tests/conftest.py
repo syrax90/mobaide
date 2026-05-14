@@ -37,11 +37,9 @@ def _pin_claude_binary(monkeypatch):
     from mobaide.core import claude_launcher
 
     monkeypatch.setattr(
-        claude_launcher, "_resolve_claude_binary", lambda: "claude"
+        claude_launcher, "_resolve_claude_binary", lambda *_a, **_kw: "claude"
     )
-    claude_launcher._resolved_claude_bin = None
     yield
-    claude_launcher._resolved_claude_bin = None
 
 TEST_JWT_SECRET = "test-secret-key-for-jwt-signing-do-not-use-in-prod"
 TEST_USERNAME = "testuser"
