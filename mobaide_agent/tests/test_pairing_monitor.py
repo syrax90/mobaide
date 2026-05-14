@@ -1924,3 +1924,179 @@ class TestRunPairingMonitorWsBeforeSaveOrdering(_RunPairingMonitorTestBase):
             f"write_credentials_to_env reached on the connect-failed "
             f"path; got {recorder['write_calls']} calls"
         )
+
+
+class TestRunPairingMonitorBroadenedExceptionHandling(_RunPairingMonitorTestBase):
+    """Pin the broadened-exception contract on the outer loop.
+
+    Before this fix, the initiate branch caught only
+    ``(PairingMonitorError, urllib.error.URLError, OSError)``. A
+    ``json.JSONDecodeError`` (server returned an HTML proxy error
+    page), a ``KeyError`` (server response missing a required field),
+    or a ``ValueError`` from URL parsing would escape the loop and
+    kill the asyncio task — silently, because ``app.py``'s
+    ``asyncio.create_task`` never ``await``s the task. The fix
+    broadens the inner except to ``Exception`` and wraps the whole
+    loop body in a catch-all ``except Exception`` so any unanticipated
+    raise still results in a logged warning + backoff + retry instead
+    of a dead task.
+
+    Two tests pin two different escape routes (initiate, outer loop)
+    to avoid a single regression silently re-opening either side.
+    """
+
+    async def test_json_decode_error_during_initiate_is_caught_and_retries(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # First initiate raises JSONDecodeError (proxy returned an HTML
+        # error page); second initiate succeeds. The pre-fix code would
+        # crash on the first call; the post-fix code retries and reaches
+        # the happy path.
+        pending = self._make_pending()
+        claim = self._make_claim()
+        recorder = {"initiate_calls": 0, "save_calls": 0}
+
+        async def _flaky_initiate(*args, **kwargs):
+            recorder["initiate_calls"] += 1
+            if recorder["initiate_calls"] == 1:
+                raise json.JSONDecodeError("not json", "<html>", 0)
+            return pending
+
+        def _stub_load(_layout):
+            return None
+
+        def _stub_save(_layout, _pending):
+            recorder["save_calls"] += 1
+
+        def _stub_clear(_layout):
+            pass
+
+        async def _stub_render(_pending):
+            pass
+
+        async def _stub_write(_env_path, _claim):
+            pass
+
+        ws_client_class = _make_two_phase_ws_client(claim)
+
+        monkeypatch.setattr(
+            _pm, "read_trust_public_key", lambda _layout: "stub-pub-key"
+        )
+        monkeypatch.setattr(_pm, "_initiate_with_metadata", _flaky_initiate)
+        monkeypatch.setattr(_pm, "load_pending_pairing", _stub_load)
+        monkeypatch.setattr(_pm, "save_pending_pairing", _stub_save)
+        monkeypatch.setattr(_pm, "clear_pending_pairing", _stub_clear)
+        monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
+        monkeypatch.setattr(_pm, "PairingWsClient", ws_client_class)
+        monkeypatch.setattr(_pm, "write_credentials_to_env", _stub_write)
+
+        layout = self._make_layout(tmp_path)
+        await asyncio.wait_for(
+            run_pairing_monitor(
+                layout=layout,
+                relay_server_url="wss://relay.test",
+                on_paired=None,
+            ),
+            timeout=5.0,
+        )
+
+        assert recorder["initiate_calls"] >= 2, (
+            "expected the loop to retry after JSONDecodeError; "
+            f"only got {recorder['initiate_calls']} initiate call(s) — "
+            "regression: the inner except may have been narrowed back "
+            "to (PairingMonitorError, URLError, OSError), letting "
+            "JSONDecodeError kill the task on the first failure"
+        )
+        assert recorder["save_calls"] == 1, (
+            "expected pairing to succeed on the retry — got "
+            f"{recorder['save_calls']} save_pending_pairing calls"
+        )
+
+    async def test_unexpected_exception_in_loop_body_does_not_kill_task(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # An unanticipated exception from a code path NOT wrapped by the
+        # inner try/except blocks (e.g. ``parse_qr_payload`` raising
+        # instead of returning None) must still result in a logged
+        # warning + retry, not a silent task death.
+        pending = self._make_pending()
+        claim = self._make_claim()
+        recorder = {"parse_calls": 0}
+
+        original_parse = _pm.parse_qr_payload
+
+        def _flaky_parse(text):
+            recorder["parse_calls"] += 1
+            if recorder["parse_calls"] == 1:
+                # parse_qr_payload's contract is "return None on
+                # malformedness"; a raise here is unanticipated by the
+                # narrow inner handlers and is exactly the kind of
+                # surface the outer catch-all is designed for.
+                raise ValueError("synthetic unexpected exception")
+            return original_parse(text)
+
+        async def _stub_initiate(*args, **kwargs):
+            return pending
+
+        def _stub_load(_layout):
+            return None
+
+        recorder["save_calls"] = 0
+
+        def _stub_save(_layout, _pending):
+            recorder["save_calls"] += 1
+
+        def _stub_clear(_layout):
+            pass
+
+        async def _stub_render(_pending):
+            pass
+
+        async def _stub_write(_env_path, _claim):
+            pass
+
+        ws_client_class = _make_two_phase_ws_client(claim)
+
+        monkeypatch.setattr(
+            _pm, "read_trust_public_key", lambda _layout: "stub-pub-key"
+        )
+        monkeypatch.setattr(_pm, "_initiate_with_metadata", _stub_initiate)
+        monkeypatch.setattr(_pm, "load_pending_pairing", _stub_load)
+        monkeypatch.setattr(_pm, "save_pending_pairing", _stub_save)
+        monkeypatch.setattr(_pm, "clear_pending_pairing", _stub_clear)
+        monkeypatch.setattr(_pm, "_render_pending_to_stdout", _stub_render)
+        monkeypatch.setattr(_pm, "PairingWsClient", ws_client_class)
+        monkeypatch.setattr(_pm, "write_credentials_to_env", _stub_write)
+        monkeypatch.setattr(_pm, "parse_qr_payload", _flaky_parse)
+
+        layout = self._make_layout(tmp_path)
+        with caplog.at_level(logging.WARNING, logger=_pm.logger.name):
+            await asyncio.wait_for(
+                run_pairing_monitor(
+                    layout=layout,
+                    relay_server_url="wss://relay.test",
+                    on_paired=None,
+                ),
+                timeout=5.0,
+            )
+
+        assert recorder["parse_calls"] >= 2, (
+            "expected the loop to retry after the unexpected ValueError; "
+            f"only got {recorder['parse_calls']} parse call(s)"
+        )
+        assert recorder["save_calls"] == 1, (
+            "expected pairing to succeed on the retry"
+        )
+        assert any(
+            "loop_iter_unexpected" in rec.getMessage() for rec in caplog.records
+        ), (
+            "expected the outer catch-all to log "
+            "``pairing_monitor.loop_iter_unexpected``; if this assertion "
+            "fires, the catch-all may have been removed or moved — "
+            "regression risk is silent task death"
+        )

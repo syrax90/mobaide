@@ -56,10 +56,23 @@ class PairingClaimRequest(BaseModel):
 
 
 class PairingClaimResponse(BaseModel):
-    """Server's reply to a successful claim — no token reaches the mobile."""
+    """Server's reply to a successful claim — no token reaches the mobile.
+
+    ``ws_delivered`` is a diagnostic hint, not an authority signal. ``True``
+    means the credential push was dispatched directly to the agent's pairing
+    WebSocket (the agent was connected at claim time); ``False`` means the
+    push was staged in the server-side recovery slot for the agent's next
+    WS reconnect to consume. The mobile uses this to refine the timeout-error
+    copy when the agent does not subsequently come online — it does NOT
+    treat ``True`` as "the agent is now paired" (the agent could still fail
+    to validate the signature, fail to write ``.env``, or fail to start its
+    relay client; only the routing-table ``agent.status_changed=true``
+    event is authoritative).
+    """
 
     agent_id: str
     agent_friendly_name: str
+    ws_delivered: bool | None = None
 
 
 class PairingPushPayload(BaseModel):

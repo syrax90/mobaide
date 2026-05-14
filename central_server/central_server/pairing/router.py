@@ -301,7 +301,9 @@ async def claim_pairing(
     )
 
     return PairingClaimResponse(
-        agent_id=agent_id, agent_friendly_name=friendly_name
+        agent_id=agent_id,
+        agent_friendly_name=friendly_name,
+        ws_delivered=delivered,
     )
 
 

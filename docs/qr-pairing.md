@@ -49,14 +49,15 @@ agent (mobaide-agent)        central_server                 mobile (Mobaide app)
         │                          │ else:                           │
         │                          │   register_agent()              │
         │                          │ sign payload (Ed25519)          │
-        │                          │ ── 200 {agent_id, name} ────────►│
-        │ ◄── {agent_id, agent_token, relay_url, signature_b64}      │
+        │                          │ ── 200 {agent_id, name,  ───────►│
+        │                          │        ws_delivered?}            │ ← "Waiting for agent…"
+        │ ◄── {agent_id, agent_token, relay_url, signature_b64}      │   (polls agent.online)
         │ verify Ed25519 signature                                   │
         │ atomic .env write        │                                 │
         │ close WS                 │ clear claimed_token_raw         │
-        │ _start_relay_in_process  │                                 │
-        │ (relay client comes up   │                                 │
-        │  in ~1-2 s, same proc)   │                                 │
+        │ _start_relay_in_process  │ agent.status_changed ──────────►│ ← "Paired"
+        │ (relay client comes up   │  (online=true via               │
+        │  in ~1-2 s, same proc)   │   UserEventBus push)            │
 ```
 
 ## QR payload schema
@@ -119,6 +120,21 @@ the QR; pinning that signal to the WS-ready handshake ensures a fast
 mobile claim cannot arrive while the agent's WS waiter is still
 unregistered (which would force the server's recovery branch and
 expose the deployment-skew bug described above).
+
+### `ws_delivered` in the claim response
+
+`POST /api/pairing/claim` returns an optional `ws_delivered: bool | null`
+field (added in this fix; `null` from older server builds). When `true` the
+server dispatched the credential push directly to the agent's open pairing
+WebSocket; when `false` the push was staged in the recovery slot for the
+agent's next WS reconnect to consume.
+
+The mobile uses this only to refine the 60-second timeout-error copy in the
+"Waiting for agent…" phase — it is **not** treated as confirmation that
+pairing succeeded. The authoritative "paired" signal remains the
+`agent.status_changed` event carrying `online=true` delivered via the
+`UserEventBus`. The field is forward-compatible: older mobile clients that
+ignore unknown JSON fields are unaffected.
 
 ## Trust-On-First-Scan (TOFS) on the mobile
 
@@ -246,6 +262,7 @@ holding the agent's WS, and the push is silently dropped. Mitigations:
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
+| QR scan succeeded but mobile shows "Waiting for agent…" then times out with an error after 60 s | Agent relay client did not come online within the timeout. Possible causes: agent process crashed after writing `.env`, Windows service stdout silenced (pre-v0.1.9), or `relay_url` scheme mismatch caused the agent to discard its own credentials. | On the agent host run: `mobaide-agent show-qr` (re-render QR and restart pairing), `Get-Service MobaideAgent` (check service state on Windows), `Get-Content "$env:ProgramFiles\MobaideAgent\logs\agent.err.log" -Tail 50` (Windows error log). Upgrade to v0.1.9+ if below that version. |
 | QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures); a fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials. | Upgrade to v0.1.9+. The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths. On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan. |
 
 ## Security tests

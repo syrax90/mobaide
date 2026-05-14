@@ -13,6 +13,8 @@ import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.repository.AgentRepository
 import com.mobaide.app.data.security.TrustKeyPinning
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -28,9 +30,54 @@ sealed interface QrPairingState {
     data object Idle : QrPairingState
     data class Confirming(val payload: ParsedQrPairingPayload) : QrPairingState
     data class Claiming(val payload: ParsedQrPairingPayload) : QrPairingState
+
+    /**
+     * Server accepted the claim; mobile is now waiting for the agent's relay
+     * tunnel to come online. The previous design transitioned straight to
+     * [Success] on the claim HTTP 200, but the 200 only confirms the central
+     * server persisted the credentials — it says nothing about whether the
+     * agent's WS received them, whether the agent's `.env` write succeeded,
+     * or whether the agent's relay client successfully dialled
+     * `/ws/agent-tunnel`. Without this intermediate state the UI lied: a
+     * fully-broken agent host (firewall, ACL, credential write failure)
+     * was shown as "Paired" with no error surface.
+     *
+     * The watcher coroutine in [AgentListViewModel.startWaitingForOnlineWatcher]
+     * collects `agent.status_changed` events (delivered via [UserEventBus] on
+     * `ws/user-events` → [AgentRepository.updateAgentOnline]) until either the
+     * agent flips to `online=true` ([Success]) or the timeout expires
+     * ([Error]). The timeout error message intentionally enumerates the
+     * remediation commands (`mobaide-agent show-qr`, `Get-Service`,
+     * `Get-Content agent.err.log`) so a Windows operator can act without
+     * a docs round-trip.
+     *
+     * [wsDeliveredAtClaim] is the server's optional hint: `true` means
+     * the agent's WS was registered at claim time and the credential push
+     * was dispatched directly; `false` means it was staged for the agent's
+     * next reconnect to recover. `null` covers servers older than the
+     * `ws_delivered` rollout. The mobile uses it only to refine the
+     * timeout-error copy.
+     */
+    data class WaitingForOnline(
+        val agentId: String,
+        val friendlyName: String,
+        val elapsedSeconds: Int = 0,
+        val wsDeliveredAtClaim: Boolean? = null,
+    ) : QrPairingState
     data class Success(val agentId: String, val friendlyName: String) : QrPairingState
     data class Error(val message: String) : QrPairingState
 }
+
+/**
+ * How long the mobile waits for the agent to come online after a successful
+ * claim before declaring the pairing failed. End-to-end happy path is
+ * usually <5s (claim push → .env write → relay client dial → tunnel auth →
+ * `_broadcast_status(online=true)`); the agent's inner write-retry loop
+ * caps at a 60s ceiling so anything beyond that signals a hard failure
+ * (write keeps failing, tunnel can't connect, etc.). Pulled out as a
+ * named constant so tests can reference the same value.
+ */
+internal const val WAIT_FOR_ONLINE_TIMEOUT_SECONDS: Int = 60
 
 data class AgentListUiState(
     val agents: List<AgentSummaryResponse> = emptyList(),
@@ -73,6 +120,16 @@ class AgentListViewModel @Inject constructor(
     private val _scanRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val scanRequests: SharedFlow<Unit> = _scanRequests.asSharedFlow()
 
+    /**
+     * Watcher job for the [QrPairingState.WaitingForOnline] phase. Held on
+     * the ViewModel (not inside the state object) so every transition out
+     * of `WaitingForOnline` — success, timeout, user-dismiss, scan-restart —
+     * can cancel it from a single place. Re-assigning this field cancels
+     * the previous job under the lock implicit in `viewModelScope`'s single
+     * `Dispatchers.Main.immediate` execution.
+     */
+    private var waitForOnlineJob: Job? = null
+
     init {
         viewModelScope.launch {
             agentRepository.observeAgents().collect { agents ->
@@ -80,6 +137,12 @@ class AgentListViewModel @Inject constructor(
             }
         }
         refresh()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        waitForOnlineJob?.cancel()
+        waitForOnlineJob = null
     }
 
     fun refresh() {
@@ -201,6 +264,7 @@ class AgentListViewModel @Inject constructor(
 
     fun onScanQrClicked() {
         if (_uiState.value.isScannerLaunching) return
+        cancelWaitForOnlineWatcher()
         _uiState.update {
             it.copy(qrPairing = QrPairingState.Idle, isScannerLaunching = true)
         }
@@ -208,7 +272,13 @@ class AgentListViewModel @Inject constructor(
     }
 
     fun dismissQrPairing() {
+        cancelWaitForOnlineWatcher()
         _uiState.update { it.copy(qrPairing = QrPairingState.Idle) }
+    }
+
+    private fun cancelWaitForOnlineWatcher() {
+        waitForOnlineJob?.cancel()
+        waitForOnlineJob = null
     }
 
     /**
@@ -290,14 +360,15 @@ class AgentListViewModel @Inject constructor(
                     hostnameHint = null,
                     friendlyName = null,
                 )
-                _uiState.update {
-                    it.copy(
-                        qrPairing = QrPairingState.Success(
-                            agentId = response.agent_id,
-                            friendlyName = response.agent_friendly_name,
-                        ),
-                    )
-                }
+                // 200 from /api/pairing/claim only confirms the server
+                // persisted credentials. The agent may still fail to
+                // receive, validate, or write them — see WaitingForOnline's
+                // KDoc for the full chain of post-claim failure modes.
+                startWaitingForOnlineWatcher(
+                    agentId = response.agent_id,
+                    friendlyName = response.agent_friendly_name,
+                    wsDeliveredAtClaim = response.ws_delivered,
+                )
             } catch (e: ApiException) {
                 val msg = if (e.code == 410) {
                     "Pairing code consumed or expired. Render a fresh QR on the agent."
@@ -315,6 +386,130 @@ class AgentListViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Drive the [QrPairingState.WaitingForOnline] phase. Cancels any prior
+     * watcher first — re-entrancy guard for a double-claim attempt or a
+     * rapid dismiss/re-scan.
+     *
+     * Two parallel signals decide the outcome:
+     *  * `online=true` in [AgentRepository.observeAgents] — pushed by
+     *    [UserEventBus] from the relay's `agent.status_changed` event when
+     *    the agent's `/ws/agent-tunnel` connects. This is the authoritative
+     *    "actually paired" signal.
+     *  * 1 s tick — emits an updated `elapsedSeconds` for the UI counter
+     *    and short-circuits to [QrPairingState.Error] at
+     *    [WAIT_FOR_ONLINE_TIMEOUT_SECONDS].
+     *
+     * One extra `refreshAgents()` is fired as a defensive resync: the
+     * [AgentRepository.claimAgentByPairing] call already does one, but a
+     * `agent.status_changed=true` event delivered between those two calls
+     * would be re-overwritten by the stale REST snapshot otherwise.
+     */
+    private fun startWaitingForOnlineWatcher(
+        agentId: String,
+        friendlyName: String,
+        wsDeliveredAtClaim: Boolean?,
+    ) {
+        cancelWaitForOnlineWatcher()
+        _uiState.update {
+            it.copy(
+                qrPairing = QrPairingState.WaitingForOnline(
+                    agentId = agentId,
+                    friendlyName = friendlyName,
+                    elapsedSeconds = 0,
+                    wsDeliveredAtClaim = wsDeliveredAtClaim,
+                ),
+            )
+        }
+        // Snapshot the just-claimed agent's online status in case the
+        // status_changed event raced ahead of the REST snapshot inside
+        // claimAgentByPairing — observed in CI on fast loopback networks.
+        val seedOnline = _uiState.value.agents
+            .firstOrNull { it.agent_id == agentId }?.online == true
+        if (seedOnline) {
+            _uiState.update {
+                it.copy(qrPairing = QrPairingState.Success(agentId, friendlyName))
+            }
+            return
+        }
+        waitForOnlineJob = viewModelScope.launch {
+            try {
+                agentRepository.refreshAgents()
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                // Structured concurrency requires CancellationException to
+                // propagate. A bare ``catch (_: Throwable)`` would swallow it
+                // and let the coroutine continue into the for-loop below;
+                // the subsequent ``delay`` would re-throw, but any non-
+                // suspending side-effect added between here and that delay
+                // would execute in a "zombie" coroutine — exactly the
+                // future-edit footgun that motivates re-throwing here.
+                throw e
+            } catch (_: Throwable) {
+                // Best-effort resync; the watcher loop still observes the
+                // flow for status_changed pushes regardless.
+            }
+            for (elapsed in 1..WAIT_FOR_ONLINE_TIMEOUT_SECONDS) {
+                delay(1000L)
+                val current = _uiState.value
+                val online = current.agents
+                    .firstOrNull { it.agent_id == agentId }?.online == true
+                if (online) {
+                    _uiState.update {
+                        it.copy(qrPairing = QrPairingState.Success(agentId, friendlyName))
+                    }
+                    return@launch
+                }
+                val pairing = current.qrPairing
+                if (pairing is QrPairingState.WaitingForOnline &&
+                    pairing.agentId == agentId
+                ) {
+                    _uiState.update {
+                        it.copy(qrPairing = pairing.copy(elapsedSeconds = elapsed))
+                    }
+                } else {
+                    return@launch
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    qrPairing = QrPairingState.Error(
+                        buildPairingTimeoutMessage(
+                            agentId = agentId,
+                            friendlyName = friendlyName,
+                            wsDeliveredAtClaim = wsDeliveredAtClaim,
+                        ),
+                    ),
+                )
+            }
+        }
+    }
+
+    private fun buildPairingTimeoutMessage(
+        agentId: String,
+        friendlyName: String,
+        wsDeliveredAtClaim: Boolean?,
+    ): String {
+        val shortId = agentId.take(8)
+        val baseMessage = "Agent $friendlyName ($shortId…) did not come online " +
+            "within $WAIT_FOR_ONLINE_TIMEOUT_SECONDS seconds. " +
+            "The pairing request was accepted by the server, but the agent " +
+            "never connected back."
+        val dispatchHint = when (wsDeliveredAtClaim) {
+            true -> " The server reports the credential push was delivered " +
+                "to the agent's WebSocket, so the agent likely received " +
+                "credentials but failed to start its relay client " +
+                "(check the agent host's network/firewall to the relay)."
+            false -> " The server reports the agent's WebSocket was NOT open " +
+                "at claim time; credentials were staged for the agent's " +
+                "next reconnect (check that the agent service is running)."
+            null -> ""
+        }
+        val remediation = " On the agent host: `mobaide-agent show-qr` " +
+            "(re-render QR), `Get-Service MobaideAgent` (service state), " +
+            "`Get-Content \"\$env:ProgramFiles\\MobaideAgent\\logs\\agent.err.log\" -Tail 50`."
+        return baseMessage + dispatchHint + remediation
     }
 
     fun connectToAgent(agent: AgentSummaryResponse) {

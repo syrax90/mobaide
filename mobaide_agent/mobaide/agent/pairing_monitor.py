@@ -22,7 +22,6 @@ import random
 import socket
 import sys
 import time
-import urllib.error
 from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -283,7 +282,25 @@ async def run_pairing_monitor(
     on a fragile chain of exit-code propagation through
     asyncio/uvicorn/launcher/supervisor that the in-process design
     avoids entirely.
+
+    Outer-loop exception policy: every iteration runs inside a
+    catch-all ``try/except Exception`` so an unanticipated exception
+    class (``json.JSONDecodeError`` from a proxy error page,
+    ``KeyError`` from a partial server response, ``ValueError`` from
+    URL parsing, ...) cannot kill the task silently. The pairing task
+    is scheduled with ``asyncio.create_task`` in ``app.py``'s lifespan
+    and is not awaited until shutdown — without this guard, an uncaught
+    exception only surfaces via Python's "Task exception was never
+    retrieved" GC log, which on a long-running service may never trigger.
+    ``asyncio.CancelledError`` is NOT caught (it's a ``BaseException``
+    subclass) so lifespan shutdown still cancels the task cleanly.
     """
+    logger.info(
+        "pairing_monitor.task_started prefix=%s relay_server_url=%s "
+        "current_agent_id=%s",
+        layout.prefix, relay_server_url,
+        (current_agent_id[:8] + "…") if current_agent_id else None,
+    )
     env_path = env_path_for_prefix(layout.prefix)
     pinned_pub_key = read_trust_public_key(layout)
     if not pinned_pub_key:
@@ -296,181 +313,171 @@ async def run_pairing_monitor(
 
     backoff = _BACKOFF_FLOOR_S
     while True:
-        pending = load_pending_pairing(layout)
-        fresh_nonce = False
-        if pending is None:
-            try:
-                pending = await _initiate_with_metadata(
-                    relay_server_url,
-                    layout,
-                    hostname=socket.gethostname(),
-                    os_name=platform.system(),
-                    current_agent_id=current_agent_id,
-                )
-                fresh_nonce = True
-                backoff = _BACKOFF_FLOOR_S
-            except (PairingMonitorError, urllib.error.URLError, OSError) as exc:
+        try:
+            pending = load_pending_pairing(layout)
+            logger.info(
+                "pairing_monitor.loop_iter has_pending=%s env_path=%s",
+                pending is not None, env_path,
+            )
+            fresh_nonce = False
+            if pending is None:
+                try:
+                    pending = await _initiate_with_metadata(
+                        relay_server_url,
+                        layout,
+                        hostname=socket.gethostname(),
+                        os_name=platform.system(),
+                        current_agent_id=current_agent_id,
+                    )
+                    fresh_nonce = True
+                    backoff = _BACKOFF_FLOOR_S
+                except Exception as exc:
+                    # Catch-all rather than the narrow (PairingMonitorError,
+                    # URLError, OSError) triplet: the server can return
+                    # non-JSON behind a proxy error page (JSONDecodeError),
+                    # miss expected fields (KeyError), or _http.urlopen can
+                    # raise something we haven't anticipated. The task is
+                    # scheduled via asyncio.create_task and never awaited
+                    # before lifespan shutdown, so an uncaught exception
+                    # here dies silently. We back off and retry — pairing
+                    # is eventually-consistent against transient outages.
+                    logger.warning(
+                        "pairing_monitor.initiate_failed exc_type=%s exc=%s "
+                        "(retry in %.1fs)",
+                        type(exc).__name__, exc, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(_BACKOFF_CEIL_S, backoff * 2)
+                    continue
+
+            parsed = parse_qr_payload(pending.qr_payload)
+            if parsed is None:
                 logger.warning(
-                    "pairing_monitor.initiate_failed: %s (retry in %.1fs)",
-                    exc,
-                    backoff,
+                    "pairing_monitor.malformed_pending_qr_payload "
+                    "nonce_prefix=%s — clearing and re-initiating",
+                    pending.nonce[:8],
                 )
-                await asyncio.sleep(backoff)
+                clear_pending_pairing(layout)
+                continue
+            timeout_s = max(1.0, parsed.exp_unix - time.time())
+
+            # Two-phase WS handshake: open the connection and await
+            # ``"ready"`` BEFORE save_pending_pairing or QR render. The
+            # ``pending_pairing.json`` on-disk file is the install-time
+            # signal (`install.ps1`'s Show-PairingQrFromService polls it)
+            # that the agent is ready to receive a claim. If we wrote the
+            # file before the WS was open, a fast mobile scan could claim
+            # the nonce while the agent was still TCP/TLS-handshaking; the
+            # server's claim handler would fall through to the recovery
+            # path on our later WS reconnect, and the recovery path
+            # historically re-signed the push with a different ``relay_url``
+            # than the initiate handler produced — agent then rejected its
+            # own credentials. Anchoring the on-disk signal to the WS-ready
+            # handshake closes the race at the source.
+            try:
+                async with PairingWsClient.connect(pending.ws_url) as conn:
+                    # Server is now in the ready-for-dispatch state. Safe
+                    # to publish the pending-pairing file and render the QR.
+                    if fresh_nonce:
+                        save_pending_pairing(layout, pending)
+                    await _render_pending_to_stdout(pending)
+                    claim = await conn.wait_for_claim(
+                        timeout_s=timeout_s,
+                        trust_pub_key_b64=pinned_pub_key,
+                        expected_relay_url=pending.relay_url,
+                    )
+            except PairingWsError as exc:
+                # Do NOT clear pending_pairing.json. A WS drop mid-wait
+                # (CDN idle-close, TLS reset, proxy hiccup) can race against
+                # a successful mobile claim: the central server's
+                # ``claim_pairing_nonce`` persists ``claimed_token_raw`` BEFORE
+                # ``dispatch_to_waiter`` and returns 200 to the mobile
+                # regardless of WS delivery — so the mobile shows "Paired"
+                # while the credentials sit unconsumed server-side. Reconnecting
+                # to the SAME nonce on the next iteration lets the server's
+                # ``read_and_clear_claimed_credentials`` recovery path deliver
+                # those stranded credentials (see
+                # ``central_server/pairing/router.py`` :func:`pairing_ws`).
+                # The natural TTL check in :func:`load_pending_pairing`
+                # evicts the entry once the nonce truly expires, so a
+                # permanently broken WS (signature mismatch, dead server)
+                # still rolls over to a fresh nonce within the 120 s TTL.
+                logger.warning(
+                    "pairing_monitor.ws_failed nonce=%s: %s; retaining pending so "
+                    "the next reconnect can trigger the server's recovery path "
+                    "(sleep=%.2fs)",
+                    pending.nonce[:8], exc, backoff,
+                )
+                await asyncio.sleep(backoff + random.uniform(0, 1))
                 backoff = min(_BACKOFF_CEIL_S, backoff * 2)
                 continue
 
-        parsed = parse_qr_payload(pending.qr_payload)
-        if parsed is None:
-            clear_pending_pairing(layout)
-            continue
-        timeout_s = max(1.0, parsed.exp_unix - time.time())
-
-        # Two-phase WS handshake: open the connection and await
-        # ``"ready"`` BEFORE save_pending_pairing or QR render. The
-        # ``pending_pairing.json`` on-disk file is the install-time
-        # signal (`install.ps1`'s Show-PairingQrFromService polls it)
-        # that the agent is ready to receive a claim. If we wrote the
-        # file before the WS was open, a fast mobile scan could claim
-        # the nonce while the agent was still TCP/TLS-handshaking; the
-        # server's claim handler would fall through to the recovery
-        # path on our later WS reconnect, and the recovery path
-        # historically re-signed the push with a different ``relay_url``
-        # than the initiate handler produced — agent then rejected its
-        # own credentials. Anchoring the on-disk signal to the WS-ready
-        # handshake closes the race at the source.
-        try:
-            async with PairingWsClient.connect(pending.ws_url) as conn:
-                # Server is now in the ready-for-dispatch state. Safe
-                # to publish the pending-pairing file and render the QR.
-                if fresh_nonce:
-                    save_pending_pairing(layout, pending)
-                await _render_pending_to_stdout(pending)
-                claim = await conn.wait_for_claim(
-                    timeout_s=timeout_s,
-                    trust_pub_key_b64=pinned_pub_key,
-                    expected_relay_url=pending.relay_url,
+            # The claim is single-use server-side — once dispatched-or-recovered
+            # by the WS handler, the server cleared ``claimed_token_raw`` and
+            # cannot re-deliver. Falling back to the outer WS loop on a write
+            # failure would re-initiate a new nonce and orphan the credentials.
+            # Hold the claim in memory and retry the WRITE locally until it
+            # lands. ``asyncio.CancelledError`` is a ``BaseException`` subclass
+            # and is not caught below, so lifespan-shutdown still cancels the
+            # task cleanly.
+            write_attempts = 0
+            write_backoff = _BACKOFF_FLOOR_S
+            while True:
+                write_attempts += 1
+                logger.info(
+                    "pairing_monitor.writing_credentials env_path=%s agent_id=%s "
+                    "attempt=%d",
+                    env_path, claim.agent_id, write_attempts,
                 )
-        except PairingWsError as exc:
-            # Do NOT clear pending_pairing.json. A WS drop mid-wait
-            # (CDN idle-close, TLS reset, proxy hiccup) can race against
-            # a successful mobile claim: the central server's
-            # ``claim_pairing_nonce`` persists ``claimed_token_raw`` BEFORE
-            # ``dispatch_to_waiter`` and returns 200 to the mobile
-            # regardless of WS delivery — so the mobile shows "Paired"
-            # while the credentials sit unconsumed server-side. Reconnecting
-            # to the SAME nonce on the next iteration lets the server's
-            # ``read_and_clear_claimed_credentials`` recovery path deliver
-            # those stranded credentials (see
-            # ``central_server/pairing/router.py`` :func:`pairing_ws`).
-            # The natural TTL check in :func:`load_pending_pairing`
-            # evicts the entry once the nonce truly expires, so a
-            # permanently broken WS (signature mismatch, dead server)
-            # still rolls over to a fresh nonce within the 120 s TTL.
-            #
-            # If the failure happened on the initial ``"ready"`` await
-            # for a freshly-issued nonce (``fresh_nonce`` and the
-            # pending file was never written), nothing externally
-            # visible has been published yet; the next iteration will
-            # initiate again from a clean slate.
-            #
-            # Exponential backoff + jitter on the retry: the previous
-            # one-attempt-then-clear path bounded reconnect pressure
-            # at 1 connection per nonce per agent. Retain-pending lifts
-            # that ceiling, so without growth a fleet-wide CDN glitch
-            # would fan into ~60 reconnects per nonce per agent
-            # (120 s TTL / 2 s floor) hammering the central server in
-            # a tight thundering herd. Reusing the same ``backoff``
-            # state as the initiate-failure branch caps the per-nonce
-            # attempt count at ~6 (2 → 4 → 8 → 16 → 32 → 60 s ceiling)
-            # and the ``random.uniform(0, 1)`` jitter staggers any
-            # synchronised fleet retry. ``backoff`` resets to
-            # ``_BACKOFF_FLOOR_S`` when ``_initiate_with_metadata``
-            # succeeds for a new nonce, so a transient outage that
-            # resolves into a fresh successful initiate immediately
-            # recovers the fast-retry cadence.
-            logger.warning(
-                "pairing_monitor.ws_failed nonce=%s: %s; retaining pending so "
-                "the next reconnect can trigger the server's recovery path "
-                "(sleep=%.2fs)",
-                pending.nonce[:8], exc, backoff,
+                try:
+                    await write_credentials_to_env(env_path, claim)
+                    break
+                except Exception as exc:
+                    logger.error(
+                        "pairing_monitor.write_failed attempt=%d path=%s "
+                        "exc_type=%s: %s; retrying the write in %.1fs (claim is "
+                        "single-use server-side; cannot fall back to a fresh WS dial)",
+                        write_attempts,
+                        env_path,
+                        type(exc).__name__,
+                        exc,
+                        write_backoff,
+                    )
+                    await asyncio.sleep(write_backoff)
+                    write_backoff = min(_BACKOFF_CEIL_S, write_backoff * 2)
+                    continue
+            clear_pending_pairing(layout)
+            logger.info(
+                "pairing_monitor.paired agent_id=%s relay=%s",
+                claim.agent_id,
+                claim.relay_url,
             )
-            await asyncio.sleep(backoff + random.uniform(0, 1))
+            if on_paired is not None:
+                try:
+                    await on_paired(claim)
+                except Exception as exc:
+                    logger.warning(
+                        "pairing_monitor.on_paired_callback_failed: %s", exc
+                    )
+            return
+        except Exception as exc:
+            # Outer-loop safety net. The inner ``try/except`` blocks above
+            # cover the named failure points (initiate, WS, write); this
+            # catch-all only fires for an unanticipated raise from a code
+            # path the inner handlers don't wrap — e.g. ``parse_qr_payload``
+            # blowing up on a non-string ``qr_payload``, ``clear_pending_pairing``
+            # raising on a permission-denied unlink, or a future refactor
+            # introducing a new failure surface inside the loop body.
+            # Without this guard those exceptions would escape the task and
+            # die silently (see the function docstring).
+            logger.exception(
+                "pairing_monitor.loop_iter_unexpected exc_type=%s exc=%s "
+                "(retry in %.1fs)",
+                type(exc).__name__, exc, backoff,
+            )
+            await asyncio.sleep(backoff)
             backoff = min(_BACKOFF_CEIL_S, backoff * 2)
             continue
-
-        # The claim is single-use server-side — once dispatched-or-recovered
-        # by the WS handler, the server cleared ``claimed_token_raw`` and
-        # cannot re-deliver. Falling back to the outer WS loop on a write
-        # failure would re-initiate a new nonce and orphan the credentials.
-        # Hold the claim in memory and retry the WRITE locally until it
-        # lands. ``asyncio.CancelledError`` is a ``BaseException`` subclass
-        # and is not caught below, so lifespan-shutdown still cancels the
-        # task cleanly.
-        #
-        # ``write_backoff`` is a local separate from the outer ``backoff``:
-        # the outer one tracks WS / initiate failures and resets when a new
-        # nonce is initiated; this one tracks disk-write failures only and
-        # is reset implicitly per pairing claim (the variable doesn't
-        # outlive the inner loop). Without exponential growth the inner
-        # loop emits one ERROR log every 2 s under a persistent disk-full
-        # / ACL condition — ~86 400 lines/day — which can itself exhaust
-        # log disk space. Capping at ``_BACKOFF_CEIL_S`` (60 s) reduces
-        # that to ~2 lines/min at steady state while preserving the
-        # plan-chosen "hold until success" semantics.
-        write_attempts = 0
-        write_backoff = _BACKOFF_FLOOR_S
-        while True:
-            write_attempts += 1
-            logger.info(
-                "pairing_monitor.writing_credentials env_path=%s agent_id=%s "
-                "attempt=%d",
-                env_path, claim.agent_id, write_attempts,
-            )
-            try:
-                await write_credentials_to_env(env_path, claim)
-                break
-            except Exception as exc:
-                # Defence-in-depth: an unhandled exception here would silently
-                # kill the pairing-monitor task (the task is created via
-                # ``asyncio.create_task`` in ``app.py`` and never awaited, so
-                # exceptions don't propagate). The original Windows surface
-                # was ``PermissionError`` (subclass of ``OSError``) from
-                # ``os.replace`` under a ``SYSTEM:R`` ACL — fixed at the ACL
-                # layer in ``_restrict_perms_windows`` — but
-                # ``write_credentials_to_env`` can also raise
-                # ``UnicodeDecodeError`` on a corrupt-encoding ``.env`` or
-                # ``ValueError`` from ``render_template``'s control-character
-                # injection guard, neither of which are ``OSError`` subclasses.
-                # Catch every non-Cancellation exception so the task survives
-                # any failure mode and the operator sees the cause in
-                # ``agent.err.log`` rather than a silent task death.
-                logger.error(
-                    "pairing_monitor.write_failed attempt=%d path=%s "
-                    "exc_type=%s: %s; retrying the write in %.1fs (claim is "
-                    "single-use server-side; cannot fall back to a fresh WS dial)",
-                    write_attempts,
-                    env_path,
-                    type(exc).__name__,
-                    exc,
-                    write_backoff,
-                )
-                await asyncio.sleep(write_backoff)
-                write_backoff = min(_BACKOFF_CEIL_S, write_backoff * 2)
-                continue
-        clear_pending_pairing(layout)
-        logger.info(
-            "pairing_monitor.paired agent_id=%s relay=%s",
-            claim.agent_id,
-            claim.relay_url,
-        )
-        if on_paired is not None:
-            try:
-                await on_paired(claim)
-            except Exception as exc:
-                logger.warning(
-                    "pairing_monitor.on_paired_callback_failed: %s", exc
-                )
-        return
 
 
 def default_layout() -> InstallLayout:
