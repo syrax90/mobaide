@@ -225,15 +225,37 @@ async def write_credentials_to_env(
 
 
 async def _render_pending_to_stdout(pending: PendingPairing) -> None:
-    """Print the QR header + the QR itself for SSH-attached operators."""
-    sys.stdout.write(
-        "[mobaide-agent] Pairing QR — scan from the Mobaide mobile app:\n"
-    )
-    render_qr_to_terminal(pending.qr_payload)
-    sys.stdout.write(
-        f"[mobaide-agent] Pairing nonce expires at {pending.expires_at}\n"
-    )
-    sys.stdout.flush()
+    """Print the QR header + the QR itself for SSH-attached operators.
+
+    The stdout QR is a convenience for operators tailing the service log
+    or attached over SSH. The cross-process signal for ``install.ps1``'s
+    ``Show-PairingQrFromService`` is ``pending_pairing.json``, which the
+    caller has already persisted before this runs, and the central
+    server's mobile-claim flow is independent. So a failure here — a
+    rare ``UnicodeEncodeError`` on a non-UTF-8 redirected stdout that
+    slipped past the renderer's encoding probe, a closed stdout, an
+    OSError on a full disk — must NOT propagate. If it did, it would
+    abort the surrounding ``async with PairingWsClient.connect(...)``
+    block before ``wait_for_claim`` is awaited, the WS would tear down,
+    the same nonce would then be rejected with HTTP 403 on every
+    reconnect, and pairing would silently fail (the failure mode that
+    motivated this safety net — see ``agent.out.log`` from the original
+    incident).
+    """
+    try:
+        sys.stdout.write(
+            "[mobaide-agent] Pairing QR — scan from the Mobaide mobile app:\n"
+        )
+        render_qr_to_terminal(pending.qr_payload)
+        sys.stdout.write(
+            f"[mobaide-agent] Pairing nonce expires at {pending.expires_at}\n"
+        )
+        sys.stdout.flush()
+    except Exception as exc:
+        logger.warning(
+            "pairing_monitor.qr_render_skipped exc_type=%s exc=%s nonce=%s",
+            type(exc).__name__, exc, pending.nonce[:8],
+        )
 
 
 async def _initiate_with_metadata(

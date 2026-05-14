@@ -2100,3 +2100,83 @@ class TestRunPairingMonitorBroadenedExceptionHandling(_RunPairingMonitorTestBase
             "fires, the catch-all may have been removed or moved — "
             "regression risk is silent task death"
         )
+
+
+class TestRenderPendingToStdout:
+    """Safety-net behaviour of ``_render_pending_to_stdout``.
+
+    The stdout QR is a convenience — the cross-process pairing signal
+    is ``pending_pairing.json`` (already on disk before this is called),
+    and the central server's mobile-claim flow is independent. So a
+    rendering failure MUST NOT propagate out of this helper, because it
+    is awaited from inside the surrounding ``async with
+    PairingWsClient.connect(...)`` block in ``run_pairing_monitor``: a
+    raised exception there would tear down the WS before
+    ``wait_for_claim`` could run, the same nonce would then be rejected
+    with HTTP 403 on every reconnect, and pairing would silently fail.
+
+    This is exactly the failure mode that the original ``agent.out.log``
+    captured — segno raised ``UnicodeEncodeError`` on cp1252-redirected
+    stdout, the WS dropped, and the agent looped on HTTP 403 until the
+    nonce TTL expired. These tests pin the contract that any exception
+    from the renderer is swallowed and logged as
+    ``pairing_monitor.qr_render_skipped``.
+    """
+
+    def _make_pending(self) -> PendingPairing:
+        return PendingPairing(
+            nonce="n-render-1",
+            expires_at="2999-01-01T00:00:00+00:00",
+            trust_key_fp="ff" * 32,
+            ws_url="wss://relay.test/ws/pairing/n-render-1",
+            relay_url="https://relay.test",
+            qr_payload=(
+                f"MOBA1|https://relay.test|n-render-1|{'ff' * 32}|2999999999"
+            ),
+        )
+
+    async def test_swallows_unicode_encode_error(
+        self, monkeypatch, caplog
+    ) -> None:
+        def _raise_unicode(*_args, **_kwargs):
+            raise UnicodeEncodeError(
+                "cp1252", "▀", 0, 1, "character maps to <undefined>"
+            )
+
+        monkeypatch.setattr(_pm, "render_qr_to_terminal", _raise_unicode)
+        caplog.set_level(logging.WARNING, logger="mobaide.agent.pairing_monitor")
+
+        await _pm._render_pending_to_stdout(self._make_pending())
+
+        assert any(
+            "qr_render_skipped" in rec.getMessage()
+            and "UnicodeEncodeError" in rec.getMessage()
+            for rec in caplog.records
+        ), (
+            "expected the safety net to log "
+            "``pairing_monitor.qr_render_skipped`` with the exception "
+            "type; if this fires, the try/except around the QR render "
+            "may have been removed — regression risk is the original "
+            "Windows-service pairing crash (UnicodeEncodeError tears "
+            "down the WS before ``wait_for_claim``)"
+        )
+
+    async def test_swallows_unexpected_error(
+        self, monkeypatch, caplog
+    ) -> None:
+        def _raise_runtime(*_args, **_kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(_pm, "render_qr_to_terminal", _raise_runtime)
+        caplog.set_level(logging.WARNING, logger="mobaide.agent.pairing_monitor")
+
+        await _pm._render_pending_to_stdout(self._make_pending())
+
+        assert any(
+            "qr_render_skipped" in rec.getMessage()
+            and "RuntimeError" in rec.getMessage()
+            for rec in caplog.records
+        ), (
+            "expected the safety net to also swallow generic "
+            "exceptions, not only UnicodeEncodeError"
+        )

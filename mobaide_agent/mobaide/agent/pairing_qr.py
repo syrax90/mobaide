@@ -111,19 +111,81 @@ def parse_qr_payload(text: str) -> ParsedQrPayload | None:
     )
 
 
+_BLOCK_GLYPH_PROBE = "▀"
+
+
+def _stream_supports_block_glyphs(out) -> bool:
+    """Return True iff ``out``'s declared encoding can carry U+2580–U+259F.
+
+    segno's ``compact=True`` terminal renderer emits Unicode half-block
+    glyphs. On a Windows service whose stdout is redirected to a
+    ``cp1252`` log file the write raises ``UnicodeEncodeError`` mid-
+    pairing-handshake and the WS tears down before ``wait_for_claim``
+    runs — see ``pairing_monitor.run_pairing_monitor``. We probe the
+    stream's ``encoding`` attribute (``None`` for raw binary wrappers,
+    a codec name for ``TextIOWrapper``) by attempting to encode a
+    representative block glyph, and fall back to ASCII rendering when
+    the codec cannot carry it.
+    """
+    encoding = getattr(out, "encoding", None)
+    if not encoding:
+        return False
+    try:
+        _BLOCK_GLYPH_PROBE.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+def _render_qr_ascii(code, out) -> None:
+    """ASCII-only QR renderer for streams that can't encode half-blocks.
+
+    Uses ``##`` for dark modules and two spaces for light modules with a
+    4-module quiet zone (ISO/IEC 18004 minimum, matches segno's own
+    default). Two characters per module approximates a square cell in
+    standard monospace fonts so the result remains scannable from a
+    cp1252-encoded service log on Windows, or any other code page that
+    cannot carry U+2580–U+259F.
+    """
+    quiet = 4
+    matrix = code.matrix
+    size = len(matrix)
+    blank_row = "  " * (size + 2 * quiet) + "\n"
+    pad = "  " * quiet
+    for _ in range(quiet):
+        out.write(blank_row)
+    for row in matrix:
+        out.write(pad)
+        for cell in row:
+            out.write("##" if cell else "  ")
+        out.write(pad)
+        out.write("\n")
+    for _ in range(quiet):
+        out.write(blank_row)
+
+
 def render_qr_to_terminal(payload: str, *, stream=None) -> None:
     """Render the QR code to a terminal stream using segno.
 
     Defaults to error-correction level M for a payload-size /
-    code-density balance that fits comfortably in 80x24.
-    ``compact=True`` uses Unicode half-blocks so the code looks
-    rectangular on monospace terminals.
+    code-density balance that fits comfortably in 80x24. When the
+    target stream's encoding can carry segno's half-block glyphs
+    (UTF-8 Linux/macOS, Windows Terminal, PowerShell 7 with UTF-8
+    default, ``cmd.exe`` after ``chcp 65001``), ``compact=True`` is
+    used so the code looks rectangular. Otherwise (``cp1252`` /
+    ``cp437`` / ASCII / unknown encoding — typical Windows service
+    stdout redirected to a log file) the function falls back to an
+    ASCII ``##`` rendering so the call never raises
+    ``UnicodeEncodeError``.
     """
     import segno
 
     out = stream if stream is not None else sys.stdout
     code = segno.make(payload, error="m")
-    code.terminal(out=out, compact=True)
+    if _stream_supports_block_glyphs(out):
+        code.terminal(out=out, compact=True)
+    else:
+        _render_qr_ascii(code, out)
     out.write("\n")
     out.flush()
 
