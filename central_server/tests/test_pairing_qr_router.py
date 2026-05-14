@@ -144,6 +144,35 @@ class TestInitiate:
         assert decoded["current_agent_id"] == "agent-old-id"
         assert decoded["hostname"] == "alpha"
 
+    async def test_relay_url_persisted_for_recovery_handler(
+        self, client, qr_app
+    ):
+        # Regression guard: ``pairing_tokens.relay_url`` is written at
+        # initiate time and read back by both the claim handler and the
+        # WS recovery handler. Without this column, the recovery branch
+        # recomputed relay_url from ``websocket.url.scheme`` (wss → https)
+        # while the initiate branch recomputed it from ``request.base_url``
+        # (often http behind a reverse proxy that doesn't forward
+        # X-Forwarded-Proto to uvicorn). The agent's strict-equality
+        # check then rejected its own credentials on recovery — the
+        # exact failure mode of the "RELAY_AGENT_* stays empty after
+        # pairing" bug.
+        resp = await client.post(
+            "/api/pairing/initiate",
+            json={"hostname": "alpha", "os": "Linux"},
+        )
+        assert resp.status_code == 200
+        nonce = resp.json()["nonce"]
+
+        meta = await qr_app.state.db.lookup_pairing_token_metadata(nonce)
+        assert meta is not None
+        # ``public_base_url`` set in the qr_app fixture: "https://relay.test".
+        assert meta["relay_url"] == "https://relay.test", (
+            f"expected relay_url to be persisted at initiate; got "
+            f"{meta.get('relay_url')!r}. The QR payload also carries it: "
+            f"{resp.json()['qr_payload']!r}"
+        )
+
 
 class TestClaim:
     async def _initiate_nonce(self, client) -> str:
@@ -480,3 +509,79 @@ class TestClaimWsDispatch:
         )
 
         assert resp.status_code == 200
+
+    async def test_claim_relay_url_matches_persisted_value(
+        self, client, qr_app, api_auth_headers
+    ):
+        # The relay_url echoed in the dispatch push MUST equal the
+        # value persisted at initiate time. Before this fix the claim
+        # handler recomputed it from ``request.base_url`` per request,
+        # which can disagree with what initiate stored when the proxy
+        # configuration differs between requests (or doesn't forward
+        # X-Forwarded-Proto consistently). After the fix the column
+        # is the single source of truth across initiate / claim /
+        # WS recovery.
+        nonce = await TestClaim._initiate_nonce(self, client)
+        persisted = await qr_app.state.db.lookup_pairing_token_metadata(nonce)
+        assert persisted is not None
+        persisted_relay = persisted["relay_url"]
+        fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
+
+        queue = await qr_app.state.pairing_ws_registry.register_waiter(nonce)
+        resp = await client.post(
+            "/api/pairing/claim",
+            json={
+                "nonce": nonce,
+                "trust_key_fp": fp,
+                "mobile_device_id": "dev-1",
+            },
+            headers=api_auth_headers,
+        )
+        assert resp.status_code == 200
+
+        raw = await queue.get()
+        push = json.loads(raw.decode("utf-8"))
+        assert push["relay_url"] == persisted_relay, (
+            f"dispatch path's relay_url ({push['relay_url']!r}) "
+            f"diverged from the persisted value ({persisted_relay!r}); "
+            f"the WS recovery branch reads the same column, so any "
+            f"divergence here means dispatch and recovery deliver "
+            f"different payloads to the agent — the original "
+            f"strict-equality failure mode."
+        )
+
+    async def test_recovery_uses_persisted_relay_url(
+        self, client, qr_app, api_auth_headers
+    ):
+        # WS-recovery branch regression: when ``read_and_clear_claimed_credentials``
+        # returns a row that carries a persisted ``relay_url``, the
+        # router MUST echo that value (not recompute it from the WS
+        # request context).
+        nonce = await TestClaim._initiate_nonce(self, client)
+        fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
+        # Claim without registering a waiter so ``claimed_token_raw``
+        # stays in the row for the recovery path to read.
+        claim_resp = await client.post(
+            "/api/pairing/claim",
+            json={
+                "nonce": nonce,
+                "trust_key_fp": fp,
+                "mobile_device_id": "dev-1",
+            },
+            headers=api_auth_headers,
+        )
+        assert claim_resp.status_code == 200
+
+        consumed = await qr_app.state.db.read_and_clear_claimed_credentials(
+            nonce
+        )
+        assert consumed is not None
+        # Pin: the row carries the persisted relay_url. Without this
+        # the recovery branch falls through to
+        # ``_resolve_public_base_url_from_app(websocket)`` which is
+        # what caused the cross-path mismatch.
+        assert consumed["relay_url"] == "https://relay.test", (
+            f"expected persisted relay_url to flow through "
+            f"read_and_clear_claimed_credentials; got "
+            f"{consumed.get('relay_url')!r}"
+        )

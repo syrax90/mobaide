@@ -297,6 +297,7 @@ async def run_pairing_monitor(
     backoff = _BACKOFF_FLOOR_S
     while True:
         pending = load_pending_pairing(layout)
+        fresh_nonce = False
         if pending is None:
             try:
                 pending = await _initiate_with_metadata(
@@ -306,7 +307,7 @@ async def run_pairing_monitor(
                     os_name=platform.system(),
                     current_agent_id=current_agent_id,
                 )
-                save_pending_pairing(layout, pending)
+                fresh_nonce = True
                 backoff = _BACKOFF_FLOOR_S
             except (PairingMonitorError, urllib.error.URLError, OSError) as exc:
                 logger.warning(
@@ -318,21 +319,37 @@ async def run_pairing_monitor(
                 backoff = min(_BACKOFF_CEIL_S, backoff * 2)
                 continue
 
-        await _render_pending_to_stdout(pending)
-
         parsed = parse_qr_payload(pending.qr_payload)
         if parsed is None:
             clear_pending_pairing(layout)
             continue
         timeout_s = max(1.0, parsed.exp_unix - time.time())
 
+        # Two-phase WS handshake: open the connection and await
+        # ``"ready"`` BEFORE save_pending_pairing or QR render. The
+        # ``pending_pairing.json`` on-disk file is the install-time
+        # signal (`install.ps1`'s Show-PairingQrFromService polls it)
+        # that the agent is ready to receive a claim. If we wrote the
+        # file before the WS was open, a fast mobile scan could claim
+        # the nonce while the agent was still TCP/TLS-handshaking; the
+        # server's claim handler would fall through to the recovery
+        # path on our later WS reconnect, and the recovery path
+        # historically re-signed the push with a different ``relay_url``
+        # than the initiate handler produced — agent then rejected its
+        # own credentials. Anchoring the on-disk signal to the WS-ready
+        # handshake closes the race at the source.
         try:
-            claim = await PairingWsClient().wait_for_claim(
-                ws_url=pending.ws_url,
-                timeout_s=timeout_s,
-                trust_pub_key_b64=pinned_pub_key,
-                expected_relay_url=pending.relay_url,
-            )
+            async with PairingWsClient.connect(pending.ws_url) as conn:
+                # Server is now in the ready-for-dispatch state. Safe
+                # to publish the pending-pairing file and render the QR.
+                if fresh_nonce:
+                    save_pending_pairing(layout, pending)
+                await _render_pending_to_stdout(pending)
+                claim = await conn.wait_for_claim(
+                    timeout_s=timeout_s,
+                    trust_pub_key_b64=pinned_pub_key,
+                    expected_relay_url=pending.relay_url,
+                )
         except PairingWsError as exc:
             # Do NOT clear pending_pairing.json. A WS drop mid-wait
             # (CDN idle-close, TLS reset, proxy hiccup) can race against
@@ -350,6 +367,12 @@ async def run_pairing_monitor(
             # permanently broken WS (signature mismatch, dead server)
             # still rolls over to a fresh nonce within the 120 s TTL.
             #
+            # If the failure happened on the initial ``"ready"`` await
+            # for a freshly-issued nonce (``fresh_nonce`` and the
+            # pending file was never written), nothing externally
+            # visible has been published yet; the next iteration will
+            # initiate again from a clean slate.
+            #
             # Exponential backoff + jitter on the retry: the previous
             # one-attempt-then-clear path bounded reconnect pressure
             # at 1 connection per nonce per agent. Retain-pending lifts
@@ -362,9 +385,9 @@ async def run_pairing_monitor(
             # and the ``random.uniform(0, 1)`` jitter staggers any
             # synchronised fleet retry. ``backoff`` resets to
             # ``_BACKOFF_FLOOR_S`` when ``_initiate_with_metadata``
-            # succeeds for a new nonce (line ~309), so a transient
-            # outage that resolves into a fresh successful initiate
-            # immediately recovers the fast-retry cadence.
+            # succeeds for a new nonce, so a transient outage that
+            # resolves into a fresh successful initiate immediately
+            # recovers the fast-retry cadence.
             logger.warning(
                 "pairing_monitor.ws_failed nonce=%s: %s; retaining pending so "
                 "the next reconnect can trigger the server's recovery path "

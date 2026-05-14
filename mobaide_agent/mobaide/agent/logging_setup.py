@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import queue
 import sys
 from typing import TYPE_CHECKING
@@ -33,6 +34,10 @@ if TYPE_CHECKING:
 
 
 _listener: logging.handlers.QueueListener | None = None
+
+_LOG_FILE_ENV = "MOBAIDE_AGENT_LOG_FILE"
+_LOG_FILE_ROTATE_BYTES = 5 * 1024 * 1024
+_LOG_FILE_BACKUP_COUNT = 1
 
 
 class _RawQueueHandler(logging.handlers.QueueHandler):
@@ -104,9 +109,33 @@ def configure_logging(config: "AgentConfig") -> None:
 
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setFormatter(formatter)
+    handlers: list[logging.Handler] = [stdout_handler]
+
+    # Belt-and-suspenders: a supervisor that hard-pins agent stdout to
+    # DEVNULL (some Windows service hosts) would otherwise silently drop
+    # every structlog record. ``MOBAIDE_AGENT_LOG_FILE`` lets operators
+    # pin a deterministic file sink that survives supervisor wiring
+    # changes; the Windows installer sets it to ``<prefix>/logs/agent.out.log``.
+    log_file_path = os.environ.get(_LOG_FILE_ENV, "").strip()
+    if log_file_path:
+        try:
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file_path,
+                maxBytes=_LOG_FILE_ROTATE_BYTES,
+                backupCount=_LOG_FILE_BACKUP_COUNT,
+                encoding="utf-8",
+                delay=True,
+            )
+            file_handler.setFormatter(formatter)
+            handlers.append(file_handler)
+        except OSError as exc:
+            sys.stderr.write(
+                f"[mobaide-agent] cannot open {_LOG_FILE_ENV}={log_file_path!r} "
+                f"for logging: {exc}; continuing with stdout-only logging.\n"
+            )
 
     _listener = logging.handlers.QueueListener(
-        log_queue, stdout_handler, respect_handler_level=True
+        log_queue, *handlers, respect_handler_level=True
     )
     _listener.start()
 

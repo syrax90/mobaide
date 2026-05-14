@@ -281,17 +281,23 @@ def test_spawn_launcher_does_not_set_create_new_process_group(
     )
 
 
-def test_spawn_launcher_keeps_stdout_devnull(tmp_path: Path) -> None:
-    """``_spawn_launcher`` must redirect stdout to ``DEVNULL`` — the
-    stderr-to-file change deliberately does not touch stdout.
+def test_spawn_launcher_redirects_stdout_to_agent_out_log(tmp_path: Path) -> None:
+    """``_spawn_launcher`` must redirect the launcher's stdout to
+    ``<prefix>/logs/agent.out.log`` (not DEVNULL).
 
-    Rationale from the production docstring: uvicorn access logs
-    are noisy and the app already uses structlog for its own sinks,
-    so a stdout file would just bloat the log directory with traffic
-    noise. Verifying stdout stays DEVNULL guards against an
-    over-eager future refactor that "unifies" both streams onto the
-    same file and floods ``agent.err.log`` with uvicorn ``GET
-    /api/health 200`` lines on every Wait-AgentHealthy poll.
+    structlog's queue listener writes its records to ``sys.stdout``;
+    routing stdout to DEVNULL silently discarded every
+    ``pairing_monitor.*`` / ``relay_client.*`` / ``http.request.*``
+    log line. That gap is what hid the original "RELAY_AGENT_*
+    stays empty after pairing" failure mode — operators saw an
+    empty err log and had no signal pointing at which step of
+    the pairing flow had failed.
+
+    Pinning the redirect here so a regression that reverts to
+    DEVNULL surfaces immediately. Note: separate file from
+    agent.err.log so a noisy structlog stream (every HTTP request
+    is one line) doesn't push real tracebacks off the err log
+    tail that operators check first.
     """
     captured_kwargs: dict[str, object] = {}
 
@@ -302,18 +308,47 @@ def test_spawn_launcher_keeps_stdout_devnull(tmp_path: Path) -> None:
     with mock.patch.object(windows_service.subprocess, "Popen", _FakePopen):
         windows_service._spawn_launcher(Path(r"C:\fake\python.exe"), tmp_path)
 
-    assert captured_kwargs.get("stdout") is windows_service.subprocess.DEVNULL, (
-        "stdout must remain DEVNULL — only stderr is re-routed. "
-        "uvicorn access logs into the err log would defeat its "
-        "diagnostic value (every health-check poll would push a real "
-        "traceback off the tail)"
+    stdout = captured_kwargs.get("stdout")
+    assert stdout is not windows_service.subprocess.DEVNULL, (
+        "stdout must NOT be DEVNULL — every structlog line going to "
+        "/dev/null was the systemic blocker on every prior debugging "
+        "attempt of the empty-.env pairing failure mode"
     )
+    out_log = tmp_path / "logs" / "agent.out.log"
+    assert out_log.exists(), (
+        "logs/agent.out.log must be created on the parent side; "
+        f"missing at {out_log}"
+    )
+
+
+def test_spawn_launcher_rotates_oversized_out_log(tmp_path: Path) -> None:
+    """Pre-existing ``agent.out.log`` larger than 5 MB must be
+    rotated to ``agent.out.log.1`` so structlog's per-request lines
+    can't fill the disk on a long-running agent.
+    """
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    out_log_path = log_dir / "agent.out.log"
+    out_log_path.write_bytes(b"\x00" * (6 * 1024 * 1024))
+
+    class _FakePopen:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    with mock.patch.object(windows_service.subprocess, "Popen", _FakePopen):
+        windows_service._spawn_launcher(Path(r"C:\fake\python.exe"), tmp_path)
+
+    assert (log_dir / "agent.out.log.1").exists(), (
+        "oversized stdout log must be rotated to .1 backup"
+    )
+    assert out_log_path.exists(), "fresh out log file must exist after rotation"
+    assert out_log_path.stat().st_size < 6 * 1024 * 1024
 
 
 def test_spawn_launcher_closes_parent_file_handle_after_popen(
     tmp_path: Path,
 ) -> None:
-    """The parent's file wrapper opened by ``_open_err_log`` must be
+    """The parent's file wrapper opened by ``_open_log`` must be
     closed once ``subprocess.Popen`` has dup'd the underlying OS
     handle into the child.
 
@@ -348,7 +383,49 @@ def test_spawn_launcher_closes_parent_file_handle_after_popen(
     )
 
 
-def test_open_err_log_overwrites_existing_backup(tmp_path: Path) -> None:
+def test_spawn_launcher_closes_parent_stdout_handle_after_popen(
+    tmp_path: Path,
+) -> None:
+    """Symmetric companion to
+    ``test_spawn_launcher_closes_parent_file_handle_after_popen``: the
+    parent's stdout wrapper opened for ``agent.out.log`` must also be
+    closed once ``subprocess.Popen`` returns.
+
+    The pre-fix code only redirected stderr to a file; the new
+    redirect-stdout path opens a SECOND file handle (for
+    ``agent.out.log``). The existing close-after-Popen test only
+    verifies the stderr handle. Without an explicit pin on stdout, a
+    regression that drops the ``out_log.close()`` call in
+    ``_spawn_launcher``'s ``finally`` block would re-introduce the
+    file-pin-on-Windows rotation bug for the out log specifically:
+    next service-host boot would see oversized ``agent.out.log``,
+    call ``log_path.replace(backup)``, and fail with
+    ``WinError 32: file is being used by another process`` because
+    the prior wrapper handle was leaked.
+    """
+    captured_stdout: list[object] = []
+
+    class _FakePopen:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            captured_stdout.append(kwargs.get("stdout"))
+
+    with mock.patch.object(windows_service.subprocess, "Popen", _FakePopen):
+        windows_service._spawn_launcher(Path(r"C:\fake\python.exe"), tmp_path)
+
+    assert captured_stdout, "Popen was not invoked"
+    fh = captured_stdout[0]
+    assert hasattr(fh, "closed"), (
+        f"expected stdout to be a file-like object, got {type(fh).__name__}"
+    )
+    assert getattr(fh, "closed", None) is True, (
+        "parent's stdout wrapper for agent.out.log must be closed after "
+        "Popen returns — leaving it open pins the out log file on "
+        "Windows and blocks the next boot's rotation rename. "
+        "The fix lives in _spawn_launcher's ``finally: out_log.close()``"
+    )
+
+
+def test_open_log_overwrites_existing_backup(tmp_path: Path) -> None:
     """When ``agent.err.log`` is oversized AND ``agent.err.log.1``
     already exists, rotation must unlink the stale backup first,
     then replace the live log onto the backup name.
@@ -388,8 +465,8 @@ def test_open_err_log_overwrites_existing_backup(tmp_path: Path) -> None:
     )
 
 
-def test_open_err_log_creates_logs_dir_when_missing(tmp_path: Path) -> None:
-    """``_open_err_log`` must create the ``logs/`` subdirectory on a
+def test_open_log_creates_logs_dir_when_missing(tmp_path: Path) -> None:
+    """``_open_log`` must create the ``logs/`` subdirectory on a
     fresh prefix (no pre-existing dir).
 
     The MobaideAgent install flow only guarantees ``<prefix>`` and
@@ -410,7 +487,7 @@ def test_open_err_log_creates_logs_dir_when_missing(tmp_path: Path) -> None:
         windows_service._spawn_launcher(Path(r"C:\fake\python.exe"), tmp_path)
 
     assert (tmp_path / "logs").is_dir(), (
-        "_open_err_log must create <prefix>/logs/ when absent "
+        "_open_log must create <prefix>/logs/ when absent "
         "(install only guarantees <prefix> itself)"
     )
     assert (tmp_path / "logs" / "agent.err.log").exists()

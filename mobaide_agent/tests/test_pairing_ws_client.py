@@ -181,6 +181,193 @@ class TestParseAndVerifyRejections:
                 expected_relay_url="https://relay.test",
             )
 
+    def test_accepts_relay_url_scheme_difference(self):
+        # Deployment-skew safety net: the central server's initiate
+        # handler (``request.base_url``-based) and the WS recovery
+        # handler used to disagree on scheme behind a reverse proxy
+        # that doesn't forward X-Forwarded-Proto to uvicorn — one
+        # returned ``http://...`` and the other ``https://...``. The
+        # agent's strict-scheme check then rejected its own
+        # credentials on the recovery path. The post-fix compare is
+        # host/port/path only; the Ed25519 signature + pinned trust
+        # key + agent-controlled RELAY_SERVER_URL are the real
+        # security boundaries.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "https://relay.test"},
+        )
+
+        claim = PairingWsClient._parse_and_verify(
+            push,
+            trust_pub_key_b64=pub_b64,
+            expected_relay_url="http://relay.test",
+        )
+
+        assert claim.relay_url == "https://relay.test"
+
+    def test_accepts_relay_url_default_port_omitted(self):
+        # ``https://relay.test`` (port 443 implied) matches
+        # ``https://relay.test:443`` (explicit). Pin so a regression
+        # that switches to raw string compare regresses here first.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "https://relay.test:443"},
+        )
+
+        claim = PairingWsClient._parse_and_verify(
+            push,
+            trust_pub_key_b64=pub_b64,
+            expected_relay_url="https://relay.test",
+        )
+
+        assert claim.relay_url == "https://relay.test:443"
+
+    def test_rejects_relay_url_port_mismatch(self):
+        # A real port mismatch (different listening service) MUST
+        # still reject — relaxed scheme matching is not a free pass
+        # to ignore network location.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "https://relay.test:9000"},
+        )
+
+        with pytest.raises(PairingWsError, match="relay_url mismatch"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_key_b64=pub_b64,
+                expected_relay_url="https://relay.test",
+            )
+
+    def test_rejects_relay_url_path_mismatch(self):
+        # A different path on the same host is still a mismatch
+        # (deployments may colocate relays on /agent vs /other on a
+        # single hostname).
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "https://relay.test/v2"},
+        )
+
+        with pytest.raises(PairingWsError, match="relay_url mismatch"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_key_b64=pub_b64,
+                expected_relay_url="https://relay.test/v1",
+            )
+
+    def test_accepts_implicit_port_against_explicit_default_port(self):
+        # Regression: ``https://relay.test`` and
+        # ``https://relay.test:443`` describe the same endpoint. The
+        # pre-fix comparator's "both implicit" early-return missed the
+        # asymmetric case where one side carried the explicit default
+        # port — it then compared 80 vs 443 and rejected.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "http://relay.test:80"},
+        )
+
+        claim = PairingWsClient._parse_and_verify(
+            push,
+            trust_pub_key_b64=pub_b64,
+            expected_relay_url="https://relay.test",
+        )
+
+        assert claim.relay_url == "http://relay.test:80"
+
+    def test_rejects_cross_protocol_family_scheme_drift(self):
+        # Defense-in-depth: ``ws://`` against ``https://`` is rejected
+        # even when host/port match. No legitimate
+        # central_server code path produces this drift (the dispatch
+        # and recovery handlers both yield http/https), so accepting
+        # it would only widen the attack surface in the
+        # trust-key-compromise threat model.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "ws://relay.test"},
+        )
+
+        with pytest.raises(PairingWsError, match="relay_url mismatch"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_key_b64=pub_b64,
+                expected_relay_url="https://relay.test",
+            )
+
+    def test_accepts_ws_wss_intra_family_drift(self):
+        # The same defense-in-depth check must still allow drift
+        # WITHIN a protocol family. ``ws://`` and ``wss://`` are in
+        # the same family, so host-and-port-equal pushes are accepted.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "ws://relay.test"},
+        )
+
+        claim = PairingWsClient._parse_and_verify(
+            push,
+            trust_pub_key_b64=pub_b64,
+            expected_relay_url="wss://relay.test",
+        )
+
+        assert claim.relay_url == "ws://relay.test"
+
+    def test_rejects_relay_url_with_userinfo(self):
+        # A trust-key-compromised push that smuggles
+        # ``user:pass@`` past the hostname-match check would persist
+        # the embedded credentials into RELAY_SERVER_URL via the
+        # write_credentials_to_env blank-backfill branch. Reject
+        # outright — legitimate base_url never carries userinfo.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "https://userinfo@relay.test"},
+        )
+
+        with pytest.raises(PairingWsError, match="relay_url mismatch"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_key_b64=pub_b64,
+                expected_relay_url="https://relay.test",
+            )
+
+    def test_rejects_relay_url_with_query_string(self):
+        # A query string preserved into RELAY_SERVER_URL would shape
+        # downstream relay-client URL construction in
+        # ways the agent did not consent to. Starlette's base_url
+        # never carries query; reject.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "https://relay.test?evil=foo"},
+        )
+
+        with pytest.raises(PairingWsError, match="relay_url mismatch"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_key_b64=pub_b64,
+                expected_relay_url="https://relay.test",
+            )
+
+    def test_rejects_relay_url_with_fragment(self):
+        # Same rationale as the query-string regression.
+        priv_b64, pub_b64 = _ed25519_keypair_b64()
+        push = _signed_push(
+            private_key_b64=priv_b64,
+            overrides={"relay_url": "https://relay.test#evil"},
+        )
+
+        with pytest.raises(PairingWsError, match="relay_url mismatch"):
+            PairingWsClient._parse_and_verify(
+                push,
+                trust_pub_key_b64=pub_b64,
+                expected_relay_url="https://relay.test",
+            )
+
     def test_rejects_clock_skew_too_large(self):
         # ``issued_at`` more than 5 min off → reject.
         priv_b64, pub_b64 = _ed25519_keypair_b64()
