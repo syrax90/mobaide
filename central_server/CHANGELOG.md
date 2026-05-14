@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.5](https://github.com/syrax90/claude_mobile/compare/server-v0.1.4...server-v0.1.5) (2026-05-14)
+
+
+### Bug Fixes
+
+* **agent:** gate mobile "Paired" on agent.online=true; harden silent failure paths ([a863117](https://github.com/syrax90/claude_mobile/commit/a86311778e090c15da3bdbfe3c17bcb8f5c6a634))
+* **pairing:** gate mobile "Paired" on agent.online=true; harden silent failure paths ([b45d31a](https://github.com/syrax90/claude_mobile/commit/b45d31aff702acca8fd3d06701af08911930604b))
+
 ## [0.1.4](https://github.com/syrax90/claude_mobile/compare/server-v0.1.3...server-v0.1.4) (2026-05-14)
 
 
