@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.1.13](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.12...agent-v0.1.13) (2026-05-14)
+
+
+### Bug Fixes
+
+* **agent:** tolerate non-UTF-8 stdout when rendering pairing QR ([cb0cb1b](https://github.com/syrax90/claude_mobile/commit/cb0cb1bd7ea490909e54c5a8cdcbd7342ff86898))
+* **pairing:** tolerate non-UTF-8 stdout when rendering pairing QR ([679944d](https://github.com/syrax90/claude_mobile/commit/679944d29771b2d1b9c5178c86b72462451429a8))
+
 ## [0.1.12](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.11...agent-v0.1.12) (2026-05-14)
 
 
