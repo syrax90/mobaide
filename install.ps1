@@ -790,6 +790,7 @@ Or from an elevated PowerShell:
     Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
     Get-Service MobaideAgent
     Get-Content "$Prefix\logs\agent.err.log" -Tail 50
+    Get-Content "$Prefix\logs\agent.out.log" -Tail 100
 "@
 }
 
