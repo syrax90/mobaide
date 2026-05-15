@@ -127,12 +127,12 @@ async def agent_tunnel(websocket: WebSocket) -> None:
         "server_version": __version__,
         "capabilities": {},
         "latest_agent_version": None,
-        "manifest_url": None,
+        "manifest_body": None,
         "manifest_signature": None,
     }
     if manifest_record is not None:
         auth_ok_payload["latest_agent_version"] = manifest_record.body.get("version")
-        auth_ok_payload["manifest_url"] = "/api/v1/agent/manifest.json"
+        auth_ok_payload["manifest_body"] = manifest_record.body
         auth_ok_payload["manifest_signature"] = manifest_record.signature_b64
     await websocket.send_text(json.dumps(auth_ok_payload))
     logger.info(

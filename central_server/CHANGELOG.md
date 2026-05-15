@@ -129,8 +129,9 @@
   the relay handshake ``server_version`` field.
 - ``[project.scripts]`` entry ``claude-central``.
 - ``GET /api/version`` endpoint returning name, server_version,
-  protocol_versions, min_client_version, capabilities, and the latest
-  manifest pointer when one has been published.
+  protocol_versions, min_client_version, capabilities, and
+  latest_agent_version. The manifest body/signature is NOT returned here;
+  agents receive it inline over the relay tunnel (proto-v2).
 - Manifest store and HTTP routes:
   * ``GET /api/v1/agent/manifest.json`` — public read (404 when no manifest
     has been published yet — install scripts treat 404 as a first-install
@@ -140,8 +141,9 @@
     persisting.
 - Agent-tunnel handshake validates ``protocol_version`` against
   ``SUPPORTED_PROTOCOL_VERSIONS`` and closes with code ``4002`` when the
-  agent is outside the supported range. ``auth_ok`` now carries the manifest
-  rollout pointer.
+  agent is outside the supported range. ``auth_ok`` now carries the signed
+  manifest body inline (``manifest_body`` + ``manifest_signature``) — proto-v2
+  replaces the earlier URL-pointer design.
 - Forward-compat ``unknown_control_type`` counter + WARN logging on
   ``_handle_control_json`` fall-through.
 - ``cryptography>=43.0`` runtime dependency for Ed25519 verification.

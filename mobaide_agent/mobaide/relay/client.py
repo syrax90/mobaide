@@ -289,11 +289,13 @@ class RelayClient:
                 self._ws = None
 
     def set_manifest_update_callback(self, callback: Any) -> None:
-        """Register an async callback fired with (manifest_url, signature_b64,
+        """Register an async callback fired with (manifest_body, signature_b64,
         latest_version) whenever the central server publishes a new agent
         manifest, either at handshake time or via a mid-connection control
-        frame. The callback is best-effort — exceptions are logged and never
-        propagated to the relay reader loop."""
+        frame. The body arrives inline (proto-v2 inlined the signed manifest
+        on the relay channel — no HTTP fetch on this path). The callback is
+        best-effort — exceptions are logged and never propagated to the relay
+        reader loop."""
         self._on_manifest_update = callback
 
     @property
@@ -323,7 +325,7 @@ class RelayClient:
             raise ConnectionError(f"Relay auth failed: {resp}")
         self._latest_manifest = {
             "version": resp.get("latest_agent_version"),
-            "manifest_url": resp.get("manifest_url"),
+            "manifest_body": resp.get("manifest_body"),
             "manifest_signature": resp.get("manifest_signature"),
         }
         await self._maybe_dispatch_manifest_update(self._latest_manifest)
@@ -333,11 +335,11 @@ class RelayClient:
     ) -> None:
         if self._on_manifest_update is None:
             return
-        if not manifest.get("version") or not manifest.get("manifest_url"):
+        if not manifest.get("version") or not manifest.get("manifest_body"):
             return
         try:
             await self._on_manifest_update(
-                manifest.get("manifest_url"),
+                manifest.get("manifest_body"),
                 manifest.get("manifest_signature"),
                 manifest.get("version"),
             )
@@ -443,7 +445,7 @@ class RelayClient:
         elif msg_type == "agent_manifest_update":
             manifest = {
                 "version": ctrl.get("version"),
-                "manifest_url": ctrl.get("manifest_url"),
+                "manifest_body": ctrl.get("manifest_body"),
                 "manifest_signature": ctrl.get("manifest_signature"),
             }
             self._latest_manifest = manifest
@@ -927,8 +929,6 @@ class RelayClient:
                     "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
                     "capabilities": {},
                     "latest_agent_version": (manifest or {}).get("version"),
-                    "manifest_url": (manifest or {}).get("manifest_url"),
-                    "manifest_signature": (manifest or {}).get("manifest_signature"),
                 },
             }
 
@@ -944,7 +944,7 @@ class RelayClient:
             manifest = self._latest_manifest
             if (
                 not manifest
-                or not manifest.get("manifest_url")
+                or not manifest.get("manifest_body")
                 or not manifest.get("version")
             ):
                 return {
@@ -957,7 +957,7 @@ class RelayClient:
                     },
                 }
             outcome = await updater.force_update_now(
-                manifest["manifest_url"],
+                manifest["manifest_body"],
                 manifest.get("manifest_signature", ""),
                 manifest["version"],
                 exit_after_stage=False,

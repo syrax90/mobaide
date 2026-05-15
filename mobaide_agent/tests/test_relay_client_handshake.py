@@ -53,18 +53,26 @@ class TestAuthenticateExtensions:
         assert sent["capabilities"] == {}
 
     async def test_auth_ok_persists_manifest_pointer(self, client):
+        body = {
+            "version": "0.3.1",
+            "tarball_url": "https://example.com/agent-0.3.1.tar.gz",
+            "tarball_sha256": "0" * 64,
+            "wheel_url": "https://example.com/mobaide_agent-0.3.1-py3-none-any.whl",
+            "wheel_sha256": "1" * 64,
+            "released_at": "2026-04-26T00:00:00+00:00",
+        }
         ws = AsyncMock()
         ws.recv = AsyncMock(return_value=json.dumps({
             "type": "auth_ok",
             "latest_agent_version": "0.3.1",
-            "manifest_url": "/api/v1/agent/manifest.json",
+            "manifest_body": body,
             "manifest_signature": "sig-b64-payload",
         }))
         await client._authenticate(ws)
 
         assert client.latest_manifest == {
             "version": "0.3.1",
-            "manifest_url": "/api/v1/agent/manifest.json",
+            "manifest_body": body,
             "manifest_signature": "sig-b64-payload",
         }
 
@@ -75,7 +83,7 @@ class TestAuthenticateExtensions:
 
         assert client.latest_manifest is not None
         assert client.latest_manifest["version"] is None
-        assert client.latest_manifest["manifest_url"] is None
+        assert client.latest_manifest["manifest_body"] is None
         assert client.latest_manifest["manifest_signature"] is None
 
     async def test_auth_incompatible_raises_connection_error(self, client):
@@ -92,28 +100,27 @@ class TestAuthenticateExtensions:
     async def test_auth_ok_dispatches_manifest_callback(self, client):
         captured: list[tuple[object, object, object]] = []
 
-        async def cb(url, signature, version):
-            captured.append((url, signature, version))
+        async def cb(body, signature, version):
+            captured.append((body, signature, version))
 
         client.set_manifest_update_callback(cb)
+        body = {"version": "0.4.0", "tarball_url": "https://example.com/x.tar.gz"}
         ws = AsyncMock()
         ws.recv = AsyncMock(return_value=json.dumps({
             "type": "auth_ok",
             "latest_agent_version": "0.4.0",
-            "manifest_url": "https://central.example/manifest.json",
+            "manifest_body": body,
             "manifest_signature": "abc",
         }))
         await client._authenticate(ws)
 
-        assert captured == [
-            ("https://central.example/manifest.json", "abc", "0.4.0"),
-        ]
+        assert captured == [(body, "abc", "0.4.0")]
 
     async def test_auth_ok_skips_callback_when_no_manifest(self, client):
         captured: list[object] = []
 
-        async def cb(url, signature, version):
-            captured.append((url, signature, version))
+        async def cb(body, signature, version):
+            captured.append((body, signature, version))
 
         client.set_manifest_update_callback(cb)
         ws = AsyncMock()
@@ -131,7 +138,7 @@ class TestAuthenticateExtensions:
         ws.recv = AsyncMock(return_value=json.dumps({
             "type": "auth_ok",
             "latest_agent_version": "0.5.0",
-            "manifest_url": "u",
+            "manifest_body": {"version": "0.5.0"},
             "manifest_signature": "s",
         }))
         await client._authenticate(ws)
@@ -139,38 +146,40 @@ class TestAuthenticateExtensions:
 
 class TestAgentManifestUpdateControl:
     async def test_agent_manifest_update_stores_pointer(self, client):
+        body = {"version": "0.6.0", "tarball_url": "https://example.com/a.tar.gz"}
         ws = AsyncMock()
         ctrl = {
             "type": "agent_manifest_update",
             "version": "0.6.0",
-            "manifest_url": "/api/v1/agent/manifest.json",
+            "manifest_body": body,
             "manifest_signature": "newsig",
         }
         await client._handle_control(json.dumps(ctrl).encode(), ws)
 
         assert client.latest_manifest == {
             "version": "0.6.0",
-            "manifest_url": "/api/v1/agent/manifest.json",
+            "manifest_body": body,
             "manifest_signature": "newsig",
         }
 
     async def test_agent_manifest_update_fires_callback(self, client):
         captured: list[tuple[object, ...]] = []
 
-        async def cb(url, signature, version):
-            captured.append((url, signature, version))
+        async def cb(body, signature, version):
+            captured.append((body, signature, version))
 
         client.set_manifest_update_callback(cb)
+        body = {"version": "0.7.0", "tarball_url": "https://example.com/b.tar.gz"}
         ws = AsyncMock()
         ctrl = {
             "type": "agent_manifest_update",
             "version": "0.7.0",
-            "manifest_url": "/api/v1/agent/manifest.json",
+            "manifest_body": body,
             "manifest_signature": "sig7",
         }
         await client._handle_control(json.dumps(ctrl).encode(), ws)
 
-        assert captured == [("/api/v1/agent/manifest.json", "sig7", "0.7.0")]
+        assert captured == [(body, "sig7", "0.7.0")]
 
 
 class TestUnknownControlTelemetry:

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import tarfile
 from io import BytesIO
 from pathlib import Path
@@ -180,9 +179,9 @@ async def test_e2e_publish_and_swap(
     assert served["body"]["version"] == version
     assert served["signature_b64"] == record["signature_b64"]
 
-    manifest_local = tmp_path / "manifest-cache.json"
-    manifest_local.write_text(json.dumps(served), encoding="utf-8")
-
+    # proto-v2: the agent receives the manifest body inline over the relay
+    # WebSocket — no HTTP fetch on the apply path. We mirror that here by
+    # handing the body straight to ``consider_manifest``.
     updater = StagedBinaryUpdater(
         layout=agent_layout,
         public_key_b64=public_key_b64,
@@ -192,7 +191,7 @@ async def test_e2e_publish_and_swap(
         exit_func=lambda code: None,
     )
     outcome = await updater.consider_manifest(
-        f"file://{manifest_local}",
+        served["body"],
         served["signature_b64"],
         version,
     )
@@ -225,8 +224,6 @@ async def test_e2e_corrupt_sha256_fails_closed(
     assert publish_response.status_code == 200, publish_response.text
 
     served = (await server_client.get("/api/v1/agent/manifest.json")).json()
-    manifest_local = tmp_path / "manifest-cache.json"
-    manifest_local.write_text(json.dumps(served), encoding="utf-8")
 
     updater = StagedBinaryUpdater(
         layout=agent_layout,
@@ -237,7 +234,7 @@ async def test_e2e_corrupt_sha256_fails_closed(
         exit_func=lambda code: None,
     )
     outcome = await updater.consider_manifest(
-        f"file://{manifest_local}",
+        served["body"],
         served["signature_b64"],
         version,
     )

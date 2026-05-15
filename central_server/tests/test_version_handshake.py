@@ -42,8 +42,10 @@ async def test_get_version_without_manifest(client) -> None:
     assert body["protocol_versions"] == list(SUPPORTED_PROTOCOL_VERSIONS)
     assert body["min_client_version"] == MIN_CLIENT_PROTOCOL_VERSION
     assert body["latest_agent_version"] is None
-    assert body["manifest_url"] is None
-    assert body["manifest_signature"] is None
+    # proto-v2: the signed manifest body is delivered inline to the agent
+    # over the relay WebSocket; it is not echoed back through ``/api/version``.
+    assert "manifest_url" not in body
+    assert "manifest_signature" not in body
 
 
 async def test_get_version_with_manifest(client, app, tmp_path) -> None:
@@ -56,8 +58,8 @@ async def test_get_version_with_manifest(client, app, tmp_path) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["latest_agent_version"] == "0.2.0"
-    assert payload["manifest_url"] == "/api/v1/agent/manifest.json"
-    assert payload["manifest_signature"] == signature_b64
+    assert "manifest_url" not in payload
+    assert "manifest_signature" not in payload
 
 
 async def test_publish_manifest_requires_token(client) -> None:

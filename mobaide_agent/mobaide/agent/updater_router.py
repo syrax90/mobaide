@@ -51,14 +51,14 @@ async def force_update_now(
             detail="Auto-updater is not configured on this agent.",
         )
     manifest = relay_client.latest_manifest
-    if not manifest or not manifest.get("manifest_url") or not manifest.get("version"):
+    if not manifest or not manifest.get("manifest_body") or not manifest.get("version"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="No manifest pointer available — agent has not received a rollout yet.",
         )
 
     outcome = await updater.force_update_now(
-        manifest["manifest_url"],
+        manifest["manifest_body"],
         manifest.get("manifest_signature", ""),
         manifest["version"],
         exit_after_stage=False,

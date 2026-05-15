@@ -211,11 +211,6 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     @app.get("/api/version", tags=["version"])
     async def version_info() -> dict[str, object]:
         manifest = app.state.manifest_store.read()
-        manifest_url: str | None
-        if manifest is not None:
-            manifest_url = "/api/v1/agent/manifest.json"
-        else:
-            manifest_url = None
         return {
             "name": "central_server",
             "server_version": __version__,
@@ -223,8 +218,6 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
             "capabilities": {},
             "latest_agent_version": manifest.body.get("version") if manifest else None,
-            "manifest_url": manifest_url,
-            "manifest_signature": manifest.signature_b64 if manifest else None,
         }
 
     return app

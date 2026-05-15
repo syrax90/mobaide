@@ -5,9 +5,11 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * Wire shape returned by ``GET /api/version`` on both ``central_server`` and
- * ``mobaide_agent``. ``latest_agent_version`` / ``manifest_url`` /
- * ``manifest_signature`` are populated only on the central_server side; the
- * agent returns ``null`` for those fields.
+ * ``mobaide_agent``. ``latest_agent_version`` is populated only on the
+ * central_server side (the agent returns ``null``) and drives the
+ * "agent outdated" banner. The signed manifest body itself is delivered to
+ * the agent inline over the relay WebSocket (``agent_manifest_update``
+ * control frame) and is never carried in this REST response.
  */
 @Serializable
 data class VersionInfoResponse(
@@ -17,6 +19,4 @@ data class VersionInfoResponse(
     val min_client_version: Int,
     val capabilities: JsonObject = JsonObject(emptyMap()),
     val latest_agent_version: String? = null,
-    val manifest_url: String? = null,
-    val manifest_signature: String? = null,
 )

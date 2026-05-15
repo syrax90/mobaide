@@ -114,6 +114,19 @@
   recognized by the systemd unit's `RestartForceExitStatus=75`, macOS
   launchd's `KeepAlive`, and Windows SC's failure-restart actions —
   same pattern the auto-updater already uses.
+- **Auto-update "Install now" always returned `signature_failed`.**
+  `central_server` sent ``manifest_url = "/api/v1/agent/manifest.json"``
+  as a relative path; `StagedBinaryUpdater._download_manifest` treated
+  any ``/``-prefixed value as a local filesystem path
+  (``Path(...).read_text()``), which raised `FileNotFoundError`, was
+  caught by the broad `except Exception` handler, and returned
+  ``"signature_failed"`` — causing every user-triggered update to fail
+  silently. Fixed by bumping wire protocol 1→2 (``PROTOCOL_VERSION = 2``):
+  the server now delivers the full signed manifest body inline in
+  ``auth_ok`` and ``agent_manifest_update`` frames (field ``manifest_body``
+  replaces ``manifest_url``). `_download_manifest`, `_http_download`, and
+  the `downloader` constructor knob are removed;
+  `consider_manifest`/`force_update_now` accept a body dict directly.
 
 ## [0.1.3](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.2...agent-v0.1.3) (2026-05-08)
 

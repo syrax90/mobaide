@@ -324,7 +324,7 @@ async def _drive_update(layout, public_key_b64, manifest_url, *, force) -> int:
         current_version=__version__,
     )
     outcome = await updater.consider_manifest(
-        manifest_url, signature_b64, latest_version, force=force,
+        body, signature_b64, latest_version, force=force,
     )
     return _outcome_exit_code(outcome)
 
