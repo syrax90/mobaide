@@ -529,7 +529,10 @@ def _run_fetch_trust_key(args: argparse.Namespace) -> int:
                 "    launchctl kickstart -k gui/$(id -u)/com.mobaide.agent\n",
             )
         elif sys.platform == "win32":
-            sys.stdout.write("    Restart-Service MobaideAgent\n")
+            sys.stdout.write(
+                "    Stop-ScheduledTask  -TaskName MobaideAgent\n"
+                "    Start-ScheduledTask -TaskName MobaideAgent\n"
+            )
         return 0
 
     return _try_restart_service()
@@ -886,19 +889,61 @@ def _try_restart_launchd() -> int:
 
 
 def _try_restart_windows_service() -> int:
+    """Restart the agent on Windows.
+
+    Probes for the per-user Scheduled Task first (post-migration shape);
+    falls back to the legacy SCM service detection during the upgrade
+    window where a host may still have the old service registered.
+    """
     name = "MobaideAgent"
+    rc, _, _ = _run_with_timeout(["schtasks.exe", "/Query", "/TN", name])
+    if rc == 0:
+        return _restart_windows_scheduled_task(name)
     rc, _, _ = _run_with_timeout(["sc.exe", "query", name])
-    if rc != 0:
-        sys.stdout.write(
-            f"[mobaide-agent] Service {name} is not registered; "
-            "skipping restart.\n"
-        )
+    if rc == 0:
+        return _restart_windows_scm_service(name)
+    sys.stdout.write(
+        f"[mobaide-agent] No {name} Scheduled Task or service "
+        "registered; skipping restart.\n"
+    )
+    return 0
+
+
+def _restart_windows_scheduled_task(name: str) -> int:
+    """End and re-Run the Scheduled Task ``name``.
+
+    ``schtasks.exe /End`` terminates any running instance and is
+    best-effort (rc 1 is treated as "nothing was running"). We then
+    poll for ``Status: Ready`` so the subsequent ``/Run`` does not
+    race with the still-tearing-down instance, then ``/Run`` to start
+    a fresh one.
+    """
+    _run_with_timeout(
+        ["schtasks.exe", "/End", "/TN", name], timeout=_AGENT_STOP_TIMEOUT_S,
+    )
+    _wait_for_windows_scheduled_task_ready(name)
+    rc, _, _ = _run_with_timeout(["schtasks.exe", "/Run", "/TN", name])
+    if rc == 0:
+        sys.stdout.write(f"[mobaide-agent] Restarted {name} Scheduled Task.\n")
         return 0
-    # `sc.exe stop` is asynchronous — it submits a STOP control to SCM and
-    # returns immediately. Issuing `sc.exe start` while the service is in
-    # STOP_PENDING gets rejected with error 1056 ("service already running"),
-    # which surfaces as a misleading "need admin?" message. Poll until the
-    # service is fully STOPPED before attempting to start it again.
+    sys.stdout.write(
+        f"[mobaide-agent] Could not restart automatically (need admin?); "
+        "run from an elevated PowerShell:\n"
+        f"    Stop-ScheduledTask  -TaskName {name}\n"
+        f"    Start-ScheduledTask -TaskName {name}\n"
+    )
+    return 0
+
+
+def _restart_windows_scm_service(name: str) -> int:
+    """Legacy SCM service restart path (pre-migration upgrade window).
+
+    `sc.exe stop` is asynchronous — it submits a STOP control to SCM and
+    returns immediately. Issuing `sc.exe start` while the service is in
+    STOP_PENDING gets rejected with error 1056 ("service already running"),
+    which surfaces as a misleading "need admin?" message. Poll until the
+    service is fully STOPPED before attempting to start it again.
+    """
     rc, _, _ = _run_with_timeout(
         ["sc.exe", "stop", name], timeout=_AGENT_STOP_TIMEOUT_S,
     )
@@ -907,11 +952,15 @@ def _try_restart_windows_service() -> int:
         _wait_for_windows_service_stopped(name)
     rc, _, _ = _run_with_timeout(["sc.exe", "start", name])
     if stop_acceptable and rc == 0:
-        sys.stdout.write(f"[mobaide-agent] Restarted {name} service.\n")
+        sys.stdout.write(
+            f"[mobaide-agent] Restarted legacy {name} service. "
+            "Re-run the installer to migrate to the Scheduled Task.\n"
+        )
         return 0
     sys.stdout.write(
-        f"[mobaide-agent] Could not restart automatically (need admin?); "
-        "run from an elevated PowerShell:\n"
+        f"[mobaide-agent] Could not restart legacy service automatically; "
+        "re-run the installer to migrate to the Scheduled Task, or from "
+        "an elevated PowerShell:\n"
         f"    Restart-Service {name}\n"
     )
     return 0
@@ -931,6 +980,28 @@ def _wait_for_windows_service_stopped(name: str) -> None:
             return
         if "STOPPED" in stdout.upper():
             return
+        time.sleep(_WINDOWS_STOP_POLL_INTERVAL_S)
+
+
+def _wait_for_windows_scheduled_task_ready(name: str) -> None:
+    """Poll ``schtasks.exe /Query`` until ``Status:`` reads ``Ready``.
+
+    Best-effort: returns silently after the timeout. The follow-up
+    ``schtasks.exe /Run`` will then either succeed (task is really
+    Ready) or fail with a non-zero exit, which the caller handles.
+    """
+    deadline = time.monotonic() + _WINDOWS_STOP_POLL_TIMEOUT_S
+    while time.monotonic() < deadline:
+        rc, stdout, _ = _run_with_timeout(
+            ["schtasks.exe", "/Query", "/TN", name, "/FO", "LIST", "/V"],
+            timeout=5,
+        )
+        if rc != 0:
+            return
+        for line in stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Status:") and "Ready" in stripped:
+                return
         time.sleep(_WINDOWS_STOP_POLL_INTERVAL_S)
 
 

@@ -6,7 +6,7 @@ on:
     paths:
       - "deploy/install.sh"
       - "deploy/install.ps1"
-      - "deploy/windows_service.py"
+      - "deploy/windows_launcher.py"
   workflow_dispatch:
 
 concurrency:
@@ -32,23 +32,24 @@ jobs:
           GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
         run: |
           git fetch origin main --depth=1
-          git show origin/main:deploy/install.sh         > install.sh
-          git show origin/main:deploy/install.ps1        > install.ps1
-          # windows_service.py is the pywin32 ServiceFramework wrapper that
-          # install.ps1 downloads into <prefix>\svc\mobaide_service.py at
-          # install time. Co-versioned with install.ps1 so an installer
-          # change that depends on the service module ships them together.
-          # The pre-fix design copied this file out of the installed wheel,
-          # which coupled installer changes to wheel re-tagging and broke
-          # whenever an install.ps1 change shipped (via gh-pages) faster
-          # than a new wheel tag.
-          git show origin/main:deploy/windows_service.py > windows_service.py
+          git show origin/main:deploy/install.sh          > install.sh
+          git show origin/main:deploy/install.ps1         > install.ps1
+          # windows_launcher.py is the stdlib-only Scheduled-Task supervisor
+          # that install.ps1 downloads into <prefix>\svc\mobaide_launcher.py
+          # at install time. Co-versioned with install.ps1 so an installer
+          # change that depends on a new supervisor API ships them together.
+          # The previous LocalSystem SCM-service design was replaced with a
+          # per-user Scheduled Task; the supervisor wraps the release
+          # launcher with log rotation and exit-75 respawn so the agent
+          # process tree has a real %USERPROFILE% (mirrors Linux's
+          # $SUDO_USER semantics).
+          git show origin/main:deploy/windows_launcher.py > windows_launcher.py
 
-          if git diff --quiet -- install.sh install.ps1 windows_service.py; then
+          if git diff --quiet -- install.sh install.ps1 windows_launcher.py; then
             echo "gh-pages install scripts already match main — nothing to publish."
             exit 0
           fi
 
-          git add install.sh install.ps1 windows_service.py
+          git add install.sh install.ps1 windows_launcher.py
           git commit -m "publish: sync install scripts from main@${GITHUB_SHA::7}"
           git push origin gh-pages

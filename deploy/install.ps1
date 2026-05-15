@@ -3,14 +3,22 @@
 # Usage:
 #     irm https://get.mobaide.com/install.ps1 | iex
 #
-# Self-elevates via UAC if run unelevated (the SCM service registration and
+# Self-elevates via UAC if run unelevated (Scheduled Task registration and
 # %ProgramFiles%\MobaideAgent writes both require admin). Auto-installs
 # Python 3.12 via winget if no qualifying interpreter is on PATH.
 #
+# Installs the agent as a per-user Scheduled Task ``MobaideAgent`` pinned
+# to the installing user with ``-LogonType Interactive``, triggered
+# ``-AtLogOn``. The task runs in the user's session so the Claude CLI in
+# the agent's PTY sees the user's ``%USERPROFILE%`` (``C:\Users\<u>``) and
+# the user's ``~/.claude`` credentials / skills. Requires an interactive
+# logon: the task starts at logon and stops on logoff (lock-screen is
+# fine). Headless / unattended hosts are out of scope for this installer.
+#
 # Idempotent: re-running upgrades the agent in place. Each release is staged
 # into a sibling releases\<version>\ directory and the current_version
-# pointer is rewritten atomically; the launcher boots into whichever release
-# is current.
+# pointer is rewritten atomically; the supervisor boots into whichever
+# release is current.
 #
 # Wrapped in a single Main function called once at the bottom so a partial
 # download (irm | iex) cannot execute half a script.
@@ -40,17 +48,17 @@ $Script:InstallUrl = if ($env:MOBAIDE_AGENT_INSTALL_URL) {
 } else {
     "https://get.mobaide.com/install.ps1"
 }
-# Service-host module URL. Co-versioned with install.ps1 itself: the
+# Scheduled-Task supervisor URL. Co-versioned with install.ps1 itself: the
 # publish-gh-pages workflow ships both files together on every push to
-# main, so an installer change that depends on a new service-module API
-# can never desync from the module it ships against. The previous design
-# copied the module out of the installed wheel, which coupled installer
-# changes to wheel re-tagging and produced the
-# "Service module source not found at ...\releases\<v>\venv\..." failure.
-$Script:WindowsServiceUrl = if ($env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL) {
-    $env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL
+# main, so an installer change that depends on a new supervisor API can
+# never desync from the module it ships against. Loaded into the Scheduled
+# Task at install time and stored at <prefix>\svc\mobaide_launcher.py —
+# outside any release dir, so the registered task ``Execute`` path stays
+# stable across upgrades and rollbacks.
+$Script:WindowsLauncherUrl = if ($env:MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL) {
+    $env:MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL
 } else {
-    "https://get.mobaide.com/windows_service.py"
+    "https://get.mobaide.com/windows_launcher.py"
 }
 # Opt out of the auto-Python-install path for CI / locked-down hosts; the
 # installer then falls back to the legacy "fail if no Python 3.12+" behaviour.
@@ -176,7 +184,7 @@ function Test-IsAdmin {
 # same install URL, with the relevant MOBAIDE_* env vars reinstated.
 function Assert-AdminOrElevate {
     if (Test-IsAdmin) { return }
-    Write-Info "Not running elevated; relaunching under UAC to register the Windows service."
+    Write-Info "Not running elevated; relaunching under UAC to register the Scheduled Task."
     # Discover claude.cmd here, BEFORE the UAC relaunch, so the lookup
     # runs under the originating user's env. For the standard `irm | iex`
     # consent flow the elevated session is the same user — env vars
@@ -192,7 +200,7 @@ function Assert-AdminOrElevate {
     $passthrough = @(
         'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
         'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
-        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_SERVICE_URL',
+        'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
         'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
         'MOBAIDE_AGENT_CLAUDE_BIN_HINT'
     )
@@ -238,15 +246,16 @@ function Find-Python {
     return $null
 }
 
-# Locate the user's claude.cmd at install time. Critical because the
-# Windows service registers as LocalSystem (Install-Service line ~952
-# calls pywin32's install verb with no obj= override), and LocalSystem's
-# PATH is C:\Windows\system32;C:\Windows;... — it does NOT contain the
-# installing user's %APPDATA%\npm, which is where `npm install -g
-# @anthropic-ai/claude-code` lands claude.cmd. shutil.which("claude.cmd")
-# inside the service therefore returns None and session creation 503s
-# with claude_cli_missing=true. We capture the path now (while running
-# under the user's env) and pin it into .env so the service can find it.
+# Locate the user's claude.cmd at install time, BEFORE the UAC relaunch.
+# The elevated session that Start-Process -Verb RunAs creates may not
+# inherit the originating user's PATH (especially on "Run as different
+# user" consent), and even when it does, the absolute path written into
+# .env is more robust than a future PATH lookup: a regular user who
+# later changes their PATH or removes the npm-global directory still
+# has a working claude binary. shutil.which("claude.cmd") inside the
+# agent would otherwise return None and session creation 503s with
+# claude_cli_missing=true. We capture the path under the user's env
+# and pin it into .env so the agent always resolves it.
 #
 # Returns the absolute claude path as a string, or $null if not found
 # (caller writes a warning and continues — the missing-CLI 503 then
@@ -297,10 +306,11 @@ function Update-CurrentSessionPath {
                 [Environment]::GetEnvironmentVariable('Path', 'User')
 }
 
-# Fast path: winget install Python.Python.3.12 at machine scope so the SCM
-# service (running as LocalSystem by default) can later see the interpreter.
-# Returns $true on success, $false on any failure (caller falls back to the
-# python.org installer).
+# Fast path: winget install Python.Python.3.12 at machine scope so the
+# Scheduled Task's `Execute` path (pinned to this Python at install
+# time) stays valid across user-account changes and is discoverable
+# from any logged-in session. Returns $true on success, $false on any
+# failure (caller falls back to the python.org installer).
 function Install-PythonViaWinget {
     Write-Info "Installing Python 3.12 via winget (machine scope, silent)..."
     # `| Out-Host` so winget's progress chatter prints to the operator but
@@ -356,9 +366,12 @@ function Install-PythonFromPythonOrg {
         }
         Write-Info "Running Python $version installer (silent, machine scope)..."
         # Machine-scope (InstallAllUsers=1) matches the prior winget
-        # --scope machine choice so the SCM service running as LocalSystem
-        # sees the interpreter. SimpleInstall=1 suppresses the optional-
-        # features page; Include_test=0 trims the install footprint.
+        # --scope machine choice. The Scheduled Task action's Execute
+        # path is recorded at install time; using a machine-scope
+        # install keeps that path valid across user-account changes
+        # and discoverable from any logged-in session. SimpleInstall=1
+        # suppresses the optional-features page; Include_test=0 trims
+        # the install footprint.
         try {
             $proc = Start-Process -FilePath $tmp -Wait -PassThru -ArgumentList `
                 '/quiet', 'InstallAllUsers=1', 'PrependPath=1', `
@@ -794,7 +807,8 @@ Could not auto-detect the Claude Code CLI (claude.cmd). Install it with:
     npm install -g @anthropic-ai/claude-code
 Then either re-run this installer, or set MOBAIDE_CLAUDE_BIN to the
 absolute path in $Script:Prefix\mobaide_agent\.env and restart:
-    Restart-Service $Script:ServiceName
+    Stop-ScheduledTask  -TaskName $Script:ServiceName
+    Start-ScheduledTask -TaskName $Script:ServiceName
 "@
     }
 
@@ -853,16 +867,15 @@ function Read-EnvValue {
 }
 
 # Block until the agent's FastAPI /api/health endpoint responds 200,
-# or hard-fail with an Event-Viewer diagnostic. The Windows-service
-# bug this guards against (the user's original report): `Start-Service`
-# returns success because SCM accepted the start request, but the
-# Python service host can still crash inside SvcDoRun before the
-# launcher subprocess opens the HTTP socket — and the operator only
-# discovers the failure when the QR they scan never pairs. The 60s
-# budget covers a cold-start that includes SCM init + svc-venv import
-# + uvicorn bind on slow hosts; failing fast with the Event-Viewer
-# pointer is the difference between "obvious install bug" and "QR
-# silently doesn't work".
+# or hard-fail with a diagnostic pointer. The bug this guards against:
+# `Start-ScheduledTask` returns immediately once Task Scheduler
+# accepts the start request, but the supervisor / launcher / agent
+# chain can still crash before uvicorn opens the HTTP socket — and
+# the operator only discovers the failure when the QR they scan
+# never pairs. The 60s budget covers a cold-start that includes
+# Python import + uvicorn bind on slow hosts; failing fast with a
+# Task-Scheduler / log-file pointer is the difference between
+# "obvious install bug" and "QR silently doesn't work".
 function Wait-AgentHealthy {
     param(
         [Parameter(Mandatory=$true)] [string] $Prefix,
@@ -894,12 +907,13 @@ function Wait-AgentHealthy {
         $ProgressPreference = $oldProgress
     }
     Write-Fail @"
-Agent service registered but /api/health did not respond within ${TimeoutSec}s.
-The service may have crashed at startup. Inspect:
-    eventvwr.msc -> Windows Logs -> Application (Source: MobaideAgent)
-Or from an elevated PowerShell:
-    Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
-    Get-Service MobaideAgent
+Scheduled Task registered but /api/health did not respond within ${TimeoutSec}s.
+The agent may have crashed at startup. Inspect:
+    eventvwr.msc -> Applications and Services Logs -> Microsoft
+        -> Windows -> TaskScheduler -> Operational
+Or from PowerShell:
+    Get-ScheduledTask     -TaskName MobaideAgent
+    Get-ScheduledTaskInfo -TaskName MobaideAgent
     Get-Content "$Prefix\logs\agent.err.log" -Tail 50
     Get-Content "$Prefix\logs\agent.out.log" -Tail 100
 "@
@@ -940,11 +954,11 @@ function Show-PairingQrFromService {
     }
     if (-not (Test-Path -LiteralPath $pendingFile)) {
         Write-Fail @"
-Agent service is up but did not initiate pairing within ${PendingTimeoutSec}s
-(no $pendingFile). The service likely cannot reach central_server. Check:
+Agent is up but did not initiate pairing within ${PendingTimeoutSec}s
+(no $pendingFile). The agent likely cannot reach central_server. Check:
     Test-NetConnection -ComputerName api.mobaide.com -Port 443
-    Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
-The service is still running; once connectivity is restored it will
+    Get-Content "$Prefix\logs\agent.err.log" -Tail 50
+The agent is still running; once connectivity is restored it will
 initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
 "@
     }
@@ -970,127 +984,127 @@ initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
 
 function Install-Service {
     param($PythonExe)
-    # Architectural note: a Windows service binary MUST implement the
-    # SCM ABI (StartServiceCtrlDispatcher / SetServiceStatus(RUNNING)
-    # within ~30s, SERVICE_CONTROL_* handlers). The pre-fix design
-    # registered `cmd.exe /c launcher.cmd` — cmd.exe is a console
-    # interpreter and does none of those, so SCM timed out with
-    # "Cannot start service MobaideAgent on computer '.'" (error 1053).
+    # Registers the agent as a per-user Scheduled Task pinned to the
+    # installing user. Replaces the prior SCM-service-as-LocalSystem
+    # design: that model gave the agent process tree the system profile
+    # (%USERPROFILE% = C:\Windows\system32\config\systemprofile), which
+    # hid the user's ~/.claude credentials and skills from the Claude
+    # CLI in the agent's PTY. Scheduled Task with -LogonType Interactive
+    # runs the agent in the user's session — no password capture, real
+    # %USERPROFILE%, mirrors Linux's $SUDO_USER semantics.
     #
-    # The fix: a real service hosted in a dedicated, version-independent
-    # venv at <prefix>/svc/venv/, running mobaide_service.py (a pywin32
-    # ServiceFramework subclass). The service module reads current_version
-    # at each start and spawns the active release's
-    # `python -m mobaide.launcher` as a subprocess; the launcher then
-    # does crash-loop detection + rollback exactly as before.
+    # Function name preserved (`Install-Service`) so Main's call site
+    # and the ordering pin in tests/test_install_ps1.py stay stable.
     $svcDir = Join-Path $Script:Prefix "svc"
-    $svcVenv = Join-Path $svcDir "venv"
-    $svcVenvPython = Join-Path $svcVenv "Scripts\python.exe"
-    $svcModule = Join-Path $svcDir "mobaide_service.py"
+    $svcEntry = Join-Path $svcDir "mobaide_launcher.py"
 
     New-Item -ItemType Directory -Path $svcDir -Force | Out-Null
 
-    if (-not (Test-Path $svcVenvPython)) {
-        Write-Info "Creating service host venv at $svcVenv"
-        # `| Out-Host` so `python -m venv`'s chatter does not pile onto
-        # this function's success pipeline. Same precedent as
-        # Install-Release / New-BootstrapVenv (both pin this pattern in
-        # tests/test_install_ps1.py).
-        & $PythonExe -m venv $svcVenv | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "Failed to create service host venv at $svcVenv (python -m venv exit $LASTEXITCODE)"
-        }
-    } else {
-        Write-Info "Reusing existing service host venv at $svcVenv"
-    }
-
-    # `pip install pywin32` into the svc venv. --isolated mirrors the
-    # New-BootstrapVenv hardening: closes PIP_EXTRA_INDEX_URL /
-    # PIP_FIND_LINKS dependency-confusion (CVE-2018-20225-class) and
-    # ignores user/system pip.ini that could otherwise redirect pywin32
-    # to a hostile mirror.
-    Write-Info "Installing pywin32 in service host venv"
-    & $svcVenvPython -m pip install --isolated --no-cache-dir --disable-pip-version-check --index-url https://pypi.org/simple pywin32 | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Failed to install pywin32 in service host venv (pip exit $LASTEXITCODE)"
-    }
-
-    # Fetch the service module from the same distribution channel as
-    # install.ps1 itself (gh-pages → get.mobaide.com). The publish-gh-pages
-    # workflow ships deploy/install.ps1 and deploy/windows_service.py in
-    # the same push, so the two cannot desync. The pre-fix design copied
-    # the file out of the installed wheel, which coupled installer changes
-    # to wheel re-tagging and produced
-    # "Service module source not found at ...\releases\<v>\venv\..." when
-    # the installer was newer than the wheel. The svc venv only needs
-    # pywin32 + stdlib, so we don't install the whole mobaide package
-    # here.
-    Write-Info "Downloading service module from $Script:WindowsServiceUrl"
-    # Versionless UA: deliberate divergence from Install-Release's
-    # `mobaide-agent-installer/$version` form. The version token there
-    # exists to pass Cloudflare Bot Fight Mode on the CDN-fronted wheel
-    # host (see Invoke-AgentDownload header). gh-pages is not Cloudflare-
-    # fronted in the same way, and $Version is no longer in scope after
-    # the Install-Service `-Version` param removal, so the bare string
-    # is sufficient.
-    Invoke-AgentDownload -Url $Script:WindowsServiceUrl -OutFile $svcModule -UserAgent "mobaide-agent-installer"
-    if (-not (Test-Path $svcModule)) {
-        Write-Fail "Service module download failed: $svcModule does not exist after fetch from $Script:WindowsServiceUrl"
-    }
-    Write-Info "Wrote service module to $svcModule"
-
-    # If the service already exists, stop it before re-registering so
-    # the running python.exe doesn't hold the svc-venv files locked.
-    # Removing-and-re-installing is the safe path when the binPath may
-    # have changed (e.g. upgrading from the pre-fix cmd.exe binPath).
-    $existing = Get-Service -Name $Script:ServiceName -ErrorAction SilentlyContinue
-    if ($existing) {
-        Write-Info "Stopping existing $Script:ServiceName service before re-registering"
+    # Migration: a previous install may have left a LocalSystem SCM
+    # service named MobaideAgent on the host. Detect and remove it
+    # before registering the new Scheduled Task — same name, two
+    # different OS-level objects. sc.exe delete is the idempotent
+    # primitive (Get-Service returns nothing if SCM has already
+    # cleared the entry, so the Get-Service guard makes the cleanup
+    # a no-op on a clean machine).
+    $legacyService = Get-Service -Name $Script:ServiceName -ErrorAction SilentlyContinue
+    if ($legacyService) {
+        Write-Info "Removing legacy LocalSystem SCM service $Script:ServiceName from prior install"
         try {
             Stop-Service -Name $Script:ServiceName -Force -ErrorAction Stop
         } catch {
-            Write-Warn "Could not stop existing service (continuing): $($_.Exception.Message)"
+            Write-Warn "Could not stop legacy service (continuing): $($_.Exception.Message)"
         }
-        # `python mobaide_service.py remove` calls
-        # win32serviceutil.RemoveService — idempotent if SCM already
-        # cleared the entry.
-        & $svcVenvPython $svcModule remove | Out-Host
+        & sc.exe delete $Script:ServiceName | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            Write-Warn "Existing $Script:ServiceName remove returned exit $LASTEXITCODE; continuing."
+            Write-Warn "sc.exe delete $Script:ServiceName returned exit $LASTEXITCODE; continuing."
         }
     }
 
-    Write-Info "Registering $Script:ServiceName service via pywin32"
-    # The module's `install` verb calls win32serviceutil.InstallService
-    # with exeName=sys.executable (the svc venv's python.exe) and
-    # exeArgs="-u <this_file>". This sidesteps pythonservice.exe's
-    # python<N>.dll search problem inside a venv (pywin32 #1450, #2032)
-    # and produces a service binary path of
-    # `<svc venv>\Scripts\python.exe -u <prefix>\svc\mobaide_service.py`.
-    & $svcVenvPython $svcModule install | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Failed to register $Script:ServiceName service (pywin32 install exit $LASTEXITCODE)"
+    # Clean up the legacy svc venv (pywin32 binaries from the prior
+    # design). Best-effort — files held open by a still-running
+    # legacy service would already have been freed by Stop-Service
+    # above. Failure is logged and ignored.
+    $legacySvcVenv = Join-Path $svcDir "venv"
+    if (Test-Path $legacySvcVenv) {
+        Write-Info "Removing legacy service venv at $legacySvcVenv"
+        Remove-Item -Recurse -Force $legacySvcVenv -ErrorAction SilentlyContinue
     }
-    # Defence-in-depth on the silent-failure anti-pattern that hid the
-    # pre-fix bug: re-check SCM after the install verb and fail with a
-    # message that names the real problem, instead of letting the next
-    # cmdlet emit its own confusing "Cannot find any service" error.
-    if (-not (Get-Service -Name $Script:ServiceName -ErrorAction SilentlyContinue)) {
-        Write-Fail "Service $Script:ServiceName did not appear in SCM after pywin32 install. Re-run as Administrator and check the Windows Event Log."
+    $legacyServiceModule = Join-Path $svcDir "mobaide_service.py"
+    if (Test-Path $legacyServiceModule) {
+        Remove-Item -Force $legacyServiceModule -ErrorAction SilentlyContinue
     }
 
-    # Three SCM-driven restarts at 5s spacing — the launcher rolls back
-    # on its third boot attempt within the same window. reset=600 keeps
-    # the failure counter alive long enough for the rolled-back release
-    # to prove stable before SCM forgets the prior crash burst.
-    # Best-effort: a recovery-policy misconfig is a warning, not fatal —
-    # the launcher's own crash-loop rollback (mobaide.launcher) still
-    # works without SCM-side restarts.
-    & sc.exe failure $Script:ServiceName reset= 600 actions= restart/5000/restart/5000/restart/5000 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Could not configure failure recovery for $Script:ServiceName (sc.exe failure exit $LASTEXITCODE); continuing."
+    # Idempotency: if a previous run of THIS installer already
+    # registered the Scheduled Task, unregister it before re-creating
+    # so Register-ScheduledTask -Force has a clean slate (and so a
+    # changed Execute / Argument path doesn't leave a stale entry).
+    $existingTask = Get-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
+    if ($existingTask) {
+        Write-Info "Unregistering existing Scheduled Task $Script:ServiceName before re-registering"
+        try {
+            Stop-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue
+        } catch {
+            # Stop-ScheduledTask on a not-currently-running task is harmless noise.
+        }
+        Unregister-ScheduledTask -TaskName $Script:ServiceName -Confirm:$false -ErrorAction Stop
     }
-    Start-Service -Name $Script:ServiceName
+
+    # Fetch the supervisor module from the same distribution channel as
+    # install.ps1 itself (gh-pages → get.mobaide.com). publish-gh-pages
+    # ships deploy/install.ps1 and deploy/windows_launcher.py in the
+    # same push, so the two cannot desync. The supervisor is stdlib-only
+    # (no pywin32 needed), so the previously-required svc venv is gone.
+    Write-Info "Downloading supervisor module from $Script:WindowsLauncherUrl"
+    Invoke-AgentDownload -Url $Script:WindowsLauncherUrl -OutFile $svcEntry -UserAgent "mobaide-agent-installer"
+    if (-not (Test-Path $svcEntry)) {
+        Write-Fail "Supervisor module download failed: $svcEntry does not exist after fetch from $Script:WindowsLauncherUrl"
+    }
+    Write-Info "Wrote supervisor module to $svcEntry"
+
+    Write-Info "Registering Scheduled Task $Script:ServiceName for user $env:USERNAME"
+    # -LogonType Interactive runs in the installing user's session at
+    # logon — gives the agent a real %USERPROFILE% so Claude finds the
+    # user's ~/.claude. -RunLevel Highest lets the agent write under
+    # %ProgramFiles%\MobaideAgent (logs, current_version) without a
+    # per-call UAC prompt. -AtLogOn -User $env:USERNAME triggers the
+    # task automatically every time the user logs in.
+    #
+    # Settings:
+    #   -RestartCount/-RestartInterval: outer-layer restart on
+    #     task-level failure. The supervisor's own exit-75 in-process
+    #     loop handles the immediate post-pair / post-update respawn;
+    #     Task Scheduler's 1-minute floor catches the cases where the
+    #     supervisor itself crashes.
+    #   -ExecutionTimeLimit (New-TimeSpan -Seconds 0): documented
+    #     "no time limit" — without this, the task is killed at 72 h.
+    #   -AllowStartIfOnBatteries / -DontStopIfGoingOnBatteries: the
+    #     agent must keep running on laptops regardless of power state.
+    $taskArg = "-u `"$svcEntry`" --prefix `"$Script:Prefix`""
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $action    = New-ScheduledTaskAction -Execute $PythonExe -Argument $taskArg
+    $settings  = New-ScheduledTaskSettingsSet `
+        -RestartCount 5 `
+        -RestartInterval (New-TimeSpan -Minutes 1) `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+    Register-ScheduledTask -TaskName $Script:ServiceName `
+        -Principal $principal -Trigger $trigger -Action $action -Settings $settings -Force | Out-Null
+
+    # Defence-in-depth on silent-failure: re-check that the task is
+    # registered before we hand off to Wait-AgentHealthy. Surfaces
+    # the real problem at install time rather than as an opaque
+    # 60-second polling timeout downstream.
+    if (-not (Get-ScheduledTask -TaskName $Script:ServiceName -ErrorAction SilentlyContinue)) {
+        Write-Fail "Scheduled Task $Script:ServiceName did not register. Re-run as Administrator and check Task Scheduler / Event Viewer."
+    }
+
+    # Start immediately instead of waiting for the next user logon —
+    # the installer is interactive and the user expects the agent up
+    # within seconds of install completion.
+    Start-ScheduledTask -TaskName $Script:ServiceName
 }
 
 function Write-Completion {
@@ -1100,11 +1114,11 @@ function Write-Completion {
     Write-Host "  Mobaide agent installed"
     Write-Host "  Prefix:  $Script:Prefix"
     Write-Host "  Version: $Version"
-    Write-Host "  Service: $Script:ServiceName (Running)"
+    Write-Host "  Task:    $Script:ServiceName (Running as $env:USERNAME)"
     Write-Host ""
     Write-Host "  Re-render QR:  mobaide-agent show-qr"
     Write-Host "  Re-pair:       mobaide-agent re-pair"
-    Write-Host "  Restart:       Restart-Service $Script:ServiceName"
+    Write-Host "  Restart:       Stop-ScheduledTask $Script:ServiceName; Start-ScheduledTask $Script:ServiceName"
     Write-Host "============================================"
 }
 

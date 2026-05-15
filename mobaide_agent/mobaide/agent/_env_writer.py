@@ -149,11 +149,8 @@ def restrict_perms(path: Path) -> None:
     """Tighten ``.env`` permissions; never raises.
 
     POSIX: ``chmod 0o600`` (owner-only read/write).
-    Windows: best-effort ``icacls`` call grants ``SYSTEM:F`` /
-    ``Administrators:F`` / ``${USERNAME}:F`` and strips inheritance. The
-    LocalSystem-hosted service needs full control (not just read) because
-    ``pairing_monitor.write_credentials_to_env`` runs inside that service
-    and atomic-replaces the file at pair time. If the call fails, the file
+    Windows: best-effort ``icacls`` call grants ``Administrators:F`` /
+    ``${USERNAME}:F`` and strips inheritance. If the call fails, the file
     keeps its inherited NTFS ACL — log and continue.
     """
     if not path.exists():
@@ -173,31 +170,22 @@ def _restrict_perms_windows(path: Path) -> None:
     ``/inheritance:r`` strips broad-readers like ``Users``. We then re-grant
     the principals that legitimately need to access the file:
 
-    * ``SYSTEM:F`` — the Windows service runs as LocalSystem
-      (``deploy/install.ps1`` registers ``MobaideAgent`` without an ``obj=``
-      override) AND ``pairing_monitor.write_credentials_to_env`` writes
-      ``RELAY_AGENT_ID`` / ``RELAY_AGENT_TOKEN`` into this same file at
-      runtime. ``atomic_write``'s ``os.replace(tmp, target)`` is
-      ``MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)`` which needs ``DELETE``
-      on the target; the follow-up ``restrict_perms`` after the rewrite
-      needs ``WRITE_DAC`` to re-tighten the ACL (without it the rewritten
-      file inherits Program Files' default ``Users:Read``, leaking the
-      newly-written ``RELAY_AGENT_TOKEN`` to every local account). A
-      previous design granted ``SYSTEM:R`` which satisfied the boot-time
-      read but silently failed the post-pairing write — the pairing-monitor
-      task raised ``PermissionError`` inside ``os.replace`` and the agent
-      stayed in ``pairing_pending`` forever. Granting ``F`` does not expand
-      the attack surface: ``NT AUTHORITY\\SYSTEM`` already has unconstrained
-      access to every file on the machine via the kernel object manager.
     * ``Administrators:F`` — the install scripts run elevated and may need
       to re-run ``init-env --force`` to rotate credentials.
-    * ``${USERNAME}:F`` — the interactive user who ran the installer.
+    * ``${USERNAME}:F`` — the interactive user who ran the installer; the
+      Scheduled Task ``MobaideAgent`` runs in this user's session and
+      ``pairing_monitor.write_credentials_to_env`` atomic-replaces the
+      file at pair time, which needs ``DELETE`` on the target and
+      ``WRITE_DAC`` for the follow-up icacls re-tighten — both included
+      in ``F``. The historic ``SYSTEM:F`` grant was for a LocalSystem
+      SCM service host; that host is gone (the agent now runs in the
+      user's session — see ``deploy/install.ps1:Install-Service``), so
+      the SYSTEM grant was dropped with it.
 
     Failures are logged at DEBUG and never raised.
     """
     user = os.environ.get("USERNAME") or ""
     grants: list[str] = [
-        "/grant", "SYSTEM:F",
         "/grant", "Administrators:F",
     ]
     if user:

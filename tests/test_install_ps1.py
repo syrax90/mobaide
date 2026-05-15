@@ -375,7 +375,7 @@ def test_old_test_python_function_is_removed() -> None:
     [
         "MOBAIDE_AGENT_INSTALL_URL",
         "MOBAIDE_AGENT_SKIP_PYTHON_INSTALL",
-        "MOBAIDE_AGENT_WINDOWS_SERVICE_URL",
+        "MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL",
     ],
 )
 def test_new_env_var_contract_is_wired(env_var: str) -> None:
@@ -425,25 +425,25 @@ def test_skip_python_install_is_preserved_across_uac_elevation() -> None:
     )
 
 
-def test_windows_service_url_is_preserved_across_uac_elevation() -> None:
-    """``MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` must be in the elevation
+def test_windows_launcher_url_is_preserved_across_uac_elevation() -> None:
+    """``MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`` must be in the elevation
     passthrough array literal inside ``Assert-AdminOrElevate``.
 
     Same class of regression as
     ``test_skip_python_install_is_preserved_across_uac_elevation`` —
-    if the new self-hosted-mirror override is not in the passthrough
+    if the self-hosted-mirror override is not in the passthrough
     array, a user invoking the one-liner non-admin with
-    ``$env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` set will see the UAC
+    ``$env:MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`` set will see the UAC
     child silently fall back to the canonical ``get.mobaide.com`` URL.
-    The user thinks they are fully self-hosted; in reality the service
-    module fetch silently goes to the canonical endpoint, defeating
+    The user thinks they are fully self-hosted; in reality the
+    supervisor fetch silently goes to the canonical endpoint, defeating
     the whole point of the override.
     """
     body = _function_body_text("Assert-AdminOrElevate")
     assert re.search(
-        r"['\"]MOBAIDE_AGENT_WINDOWS_SERVICE_URL['\"]", body
+        r"['\"]MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL['\"]", body
     ), (
-        f"MOBAIDE_AGENT_WINDOWS_SERVICE_URL must appear in the "
+        f"MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL must appear in the "
         f"$passthrough array inside Assert-AdminOrElevate so the "
         f"self-hosted-mirror override survives the UAC re-launch. "
         f"Function body:\n{body!r}"
@@ -550,10 +550,11 @@ def test_pythonorg_fallback_uses_silent_machine_scope() -> None:
     Three flags pinned by this test:
     * ``/quiet`` — no UI, required for unattended ``irm | iex``.
     * ``InstallAllUsers=1`` — machine-scope install. Matches the
-      prior ``winget --scope machine`` choice so the SCM service
-      (LocalSystem) sees the interpreter at runtime. A per-user
-      install would be invisible to LocalSystem and break the
-      service launcher.
+      prior ``winget --scope machine`` choice. The Scheduled Task
+      action's ``Execute`` path is recorded at install time; using
+      a machine-scope Python install means that path stays valid
+      across user-account changes and is discoverable from any
+      logged-in session.
     * ``PrependPath=1`` — drops Python on system PATH so the
       ``Update-CurrentSessionPath`` refresh resolves it without a
       reboot.
@@ -2249,262 +2250,393 @@ def test_install_release_pip_self_upgrade_failure_warns_but_does_not_abort() -> 
     )
 
 
-def test_install_service_does_not_register_cmd_exe_as_service_binary() -> None:
-    """``Install-Service`` must NOT register a ``cmd.exe`` wrapper as
-    the service binary.
+def test_install_service_registers_scheduled_task() -> None:
+    """``Install-Service`` must call ``Register-ScheduledTask``.
 
-    Real root cause of the original ``Start-Service : Cannot start
-    service MobaideAgent on computer '.'`` failure: the pre-fix design
-    registered ``cmd.exe /c launcher.cmd`` as the SCM service binary.
-    A Windows service binary MUST implement the SCM ABI
-    (``StartServiceCtrlDispatcher`` / ``ServiceMain`` /
-    ``SetServiceStatus(SERVICE_RUNNING)`` within ~30 s).
-    ``cmd.exe`` is a console interpreter; it does none of those things.
-    SCM times out waiting for ``SERVICE_RUNNING`` and reports
-    "Cannot start service ... on computer '.'" (error 1053).
-
-    The current fix replaces the cmd.exe wrapper with a real pywin32
-    ``ServiceFramework`` host. A regression that re-introduces the
-    ``cmd.exe /c`` binary-path pattern brings back the original
-    failure mode, so we pin it negatively here.
-
-    The assertion runs on the *comment-stripped* body so the
-    architectural-note comment at the top of ``Install-Service`` (which
-    documents the pre-fix bug to keep future readers from
-    reintroducing it) does not false-positive the pin.
-    """
-    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
-    assert "cmd.exe" not in body_code, (
-        "Install-Service must NOT reference `cmd.exe` in executable "
-        "code (the pre-fix design registered `cmd.exe /c launcher.cmd` "
-        "as the service binary; cmd.exe does not implement the SCM "
-        "ABI, so SCM timed out and reported `Cannot start service "
-        "MobaideAgent`). Comment-stripped body:\n" + repr(body_code)
-    )
-    assert not re.search(r"launcher\.cmd", body_code), (
-        "Install-Service must NOT generate a launcher.cmd template — "
-        "that was the pre-fix design. The svc-venv-hosted pywin32 "
-        "service module replaces it. Comment-stripped body:\n"
-        + repr(body_code)
-    )
-
-
-def test_install_service_creates_dedicated_svc_venv() -> None:
-    """``Install-Service`` must create a dedicated svc venv at
-    ``<prefix>/svc/venv``.
-
-    The service binary path is registered in SCM **once** and persists
-    across upgrades and rollbacks. Hosting the service in an active
-    release's venv would require re-registering on every upgrade and
-    would leave the binPath pointing at a deleted venv after rollback.
-    A dedicated, version-independent svc venv at ``<prefix>/svc/venv``
-    solves both: created once at install time, never moved, holds only
-    pywin32. Mirrors the launcher's "lives outside any release dir" design.
+    The whole point of the SCM-service → Scheduled-Task migration is
+    that the agent process tree runs under the installing user (real
+    ``%USERPROFILE%``), not LocalSystem. ``Register-ScheduledTask`` is
+    the documented modern primitive (Microsoft Learn /
+    Register-ScheduledTask) — no password capture, survives password
+    changes, lets the Claude CLI in the PTY find the user's
+    ``~/.claude`` credentials and skills. A regression that uses
+    ``New-Service`` / ``sc.exe create`` / ``win32serviceutil.InstallService``
+    re-introduces the LocalSystem trap.
     """
     body = _function_body_text("Install-Service")
-    assert re.search(r'["\']svc["\']', body) or re.search(r'svc\\venv', body), (
-        "Install-Service must construct a path under `<prefix>\\svc\\` "
-        "(the version-independent service-host directory). Not found in "
-        "body:\n" + repr(body)
-    )
-    assert re.search(r"-m\s+venv\b", body), (
-        "Install-Service must create the svc venv via `python -m venv` "
-        "(the canonical venv-creation invocation, same as Install-Release "
-        "and New-BootstrapVenv). Body:\n" + repr(body)
+    assert re.search(r"\bRegister-ScheduledTask\b", body), (
+        "Install-Service must call `Register-ScheduledTask` to install "
+        "the per-user MobaideAgent task. Not found in body:\n"
+        + repr(body)
     )
 
 
-def test_install_service_installs_pywin32_in_svc_venv() -> None:
-    """``Install-Service`` must ``pip install pywin32`` into the svc venv.
+def test_install_service_pins_task_to_current_user() -> None:
+    """``Install-Service`` must pin the task to ``$env:USERNAME``.
 
-    pywin32 provides ``win32serviceutil.ServiceFramework`` (the SCM ABI
-    plumbing the service module subclasses) and ``servicemanager``
-    (the SCM event-log helpers). Without pywin32 in the svc venv,
-    ``import win32serviceutil`` inside mobaide_service.py raises
-    ImportError and the service exits immediately on start.
-
-    The pip invocation must also pass ``--isolated`` so a hostile
-    ``PIP_EXTRA_INDEX_URL`` cannot redirect pywin32 to an attacker-
-    controlled mirror — same supply-chain posture as New-BootstrapVenv
-    pins for cryptography.
+    Both ``New-ScheduledTaskPrincipal -UserId`` and
+    ``New-ScheduledTaskTrigger -User`` must resolve to the installing
+    user's name (``$env:USERNAME``). Hardcoding any other principal
+    (``LocalSystem``, ``LocalService``, ``NT AUTHORITY\\...``) or
+    omitting the trigger ``-User`` defeats the per-user model: the
+    task would run under the wrong account and ``%USERPROFILE%`` would
+    no longer resolve to ``C:\\Users\\<u>``. Mirrors Linux's
+    ``User=$SUDO_USER`` semantics in ``deploy/install.sh``.
     """
     body = _function_body_text("Install-Service")
-    assert re.search(r"pip\s+install[^|]*\bpywin32\b", body), (
-        "Install-Service must `pip install pywin32` into the svc venv "
-        "(provides win32serviceutil.ServiceFramework and the "
-        "servicemanager helpers). Not found in body:\n" + repr(body)
-    )
-    assert "--isolated" in body, (
-        "Install-Service's pip install must pass `--isolated` so pip "
-        "ignores PIP_EXTRA_INDEX_URL / PIP_FIND_LINKS / pip.ini — same "
-        "supply-chain hardening New-BootstrapVenv applies for "
-        "cryptography (closes CVE-2018-20225-class dependency confusion). "
-        "Body:\n" + repr(body)
-    )
-
-
-def test_install_service_downloads_service_module_to_svc_dir() -> None:
-    """``Install-Service`` must place ``mobaide_service.py`` under
-    ``<prefix>/svc/`` by downloading it from a configurable URL.
-
-    The pywin32 service registration points at this file (as
-    ``-u <path>``). It must exist on disk BEFORE the registration step
-    runs, and it must live in a version-independent location so the
-    registered binary path stays valid across upgrades and rollbacks.
-
-    The source is ``$Script:WindowsServiceUrl`` (defaults to
-    ``https://get.mobaide.com/windows_service.py``); the target is
-    ``<prefix>/svc/mobaide_service.py``. The pre-fix design copied the
-    file from the installed wheel at
-    ``releases/<v>/venv/Lib/site-packages/mobaide/windows_service.py`` —
-    that coupled the installer to the wheel's contents and broke when an
-    install.ps1 change shipped (via gh-pages) faster than a new wheel tag.
-    Pinned negatively below.
-    """
-    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
-    assert re.search(r"mobaide_service\.py", body_code), (
-        "Install-Service must reference `mobaide_service.py` (the "
-        "on-disk filename of the service module under <prefix>/svc/). "
-        "Not found in body:\n" + repr(body_code)
+    assert re.search(
+        r"New-ScheduledTaskPrincipal[^\r\n]*-UserId\s+\$env:USERNAME",
+        body,
+    ), (
+        "Install-Service must call `New-ScheduledTaskPrincipal -UserId "
+        "$env:USERNAME` so the task runs as the installing user. Not "
+        "found in body:\n" + repr(body)
     )
     assert re.search(
-        r"Invoke-AgentDownload[^|\r\n]*\$Script:WindowsServiceUrl",
+        r"New-ScheduledTaskTrigger[^\r\n]*-User\s+\$env:USERNAME",
+        body,
+    ), (
+        "Install-Service must call `New-ScheduledTaskTrigger -AtLogOn "
+        "-User $env:USERNAME` so the task triggers on the installing "
+        "user's logon. Not found in body:\n" + repr(body)
+    )
+
+
+def test_install_service_uses_logon_type_interactive() -> None:
+    """``Install-Service`` must use ``-LogonType Interactive``.
+
+    This is the entire point of the rewrite. ``Interactive`` runs the
+    task in the user's session (real ``%USERPROFILE%``, real
+    ``%APPDATA%``, real ``~/.claude``). Alternatives:
+      * ``S4U`` runs without storing a password but doesn't load the
+        user's profile — same shape problem as LocalSystem.
+      * ``Password`` captures the user's password (rejected — VS Code
+        Remote Tunnel hit microsoft/vscode#167741 with that approach).
+      * ``ServiceAccount`` requires gMSA / virtual account — wrong
+        profile shape, explicitly out of scope.
+    A regression on this flag re-opens the original bug.
+    """
+    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
+    assert re.search(r"-LogonType\s+Interactive\b", body_code), (
+        "Install-Service must pass `-LogonType Interactive` to "
+        "New-ScheduledTaskPrincipal so the task runs in the user's "
+        "session and `%USERPROFILE%` resolves to `C:\\Users\\<u>`. "
+        "Comment-stripped body:\n" + repr(body_code)
+    )
+
+
+def test_install_service_uses_at_logon_trigger() -> None:
+    """``Install-Service`` must trigger the task at user logon.
+
+    ``-AtLogOn -User $env:USERNAME`` matches systemd's
+    ``WantedBy=default.target`` semantics — the agent comes up as
+    soon as the user is logged in, without requiring the user to
+    start it manually. Calendar / boot triggers don't apply because
+    Interactive tasks only run with a logged-in user anyway.
+    """
+    body = _function_body_text("Install-Service")
+    assert "-AtLogOn" in body, (
+        "Install-Service must pass `-AtLogOn` to "
+        "New-ScheduledTaskTrigger. Not found in body:\n" + repr(body)
+    )
+
+
+def test_install_service_action_invokes_supervisor_script() -> None:
+    """``Install-Service`` must wire the task action to the supervisor.
+
+    The supervisor lives at ``<prefix>\\svc\\mobaide_launcher.py``
+    (downloaded earlier in Install-Service). Task action:
+      * ``-Execute <python_exe>`` — the Python ``Resolve-Python``
+        returned at install time.
+      * ``-Argument`` — ``-u "<path>\\mobaide_launcher.py" --prefix
+        "<prefix>"``. The ``--prefix`` argv passes the install prefix
+        explicitly because the Scheduled Task's environment doesn't
+        get ``MOBAIDE_AGENT_PREFIX`` set automatically.
+    """
+    body = _function_body_text("Install-Service")
+    assert "mobaide_launcher.py" in body, (
+        "Install-Service must reference `mobaide_launcher.py` (the "
+        "on-disk filename of the supervisor under <prefix>/svc/). Not "
+        "found in body:\n" + repr(body)
+    )
+    assert re.search(r"--prefix\b", body), (
+        "Install-Service must pass `--prefix <prefix>` in the task "
+        "action's `-Argument` so the supervisor resolves the install "
+        "prefix without depending on environment variables Task "
+        "Scheduler does not propagate. Not found in body:\n"
+        + repr(body)
+    )
+
+
+def test_install_service_no_execution_time_limit() -> None:
+    """``Install-Service`` must disable the 72-hour execution time limit.
+
+    ``New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan
+    -Seconds 0)`` is the documented way to disable the default 72-hour
+    cap (Microsoft Learn / New-ScheduledTaskSettingsSet). Without this,
+    Task Scheduler kills the agent at the 72-hour mark — the user sees
+    the agent silently disappear three days after each logon.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(
+        r"-ExecutionTimeLimit\s+\(New-TimeSpan\s+-Seconds\s+0\)",
+        body,
+    ), (
+        "Install-Service must pass `-ExecutionTimeLimit (New-TimeSpan "
+        "-Seconds 0)` to disable Task Scheduler's 72-hour task TTL. "
+        "Not found in body:\n" + repr(body)
+    )
+
+
+def test_install_service_restart_on_failure_settings() -> None:
+    """``Install-Service`` must configure Task Scheduler restart-on-failure.
+
+    Outer-layer restart in case the supervisor itself crashes. The
+    supervisor's in-process exit-75 respawn loop handles the
+    fast-restart post-pair / post-update path; ``RestartCount`` /
+    ``RestartInterval`` (1-minute floor in Task Scheduler) catches
+    supervisor-level failure.
+    """
+    body = _function_body_text("Install-Service")
+    assert "-RestartCount" in body, (
+        "Install-Service must pass `-RestartCount` to "
+        "New-ScheduledTaskSettingsSet. Not found in body:\n"
+        + repr(body)
+    )
+    assert "-RestartInterval" in body, (
+        "Install-Service must pass `-RestartInterval` to "
+        "New-ScheduledTaskSettingsSet. Not found in body:\n"
+        + repr(body)
+    )
+
+
+def test_install_service_cleans_up_legacy_scm_service() -> None:
+    """``Install-Service`` must detect and remove the legacy SCM service.
+
+    Migration path: a previous install may have left a LocalSystem
+    SCM service ``MobaideAgent`` on the host. The new installer must
+    stop and ``sc.exe delete`` it before registering the Scheduled
+    Task (same name, two different OS-level objects). Idempotent on
+    a clean machine — ``Get-Service`` returns nothing if SCM has
+    already cleared the entry, so the cleanup is a no-op.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"\bGet-Service\b", body), (
+        "Install-Service must call `Get-Service` to detect the legacy "
+        "SCM service before deleting it. Not found in body:\n"
+        + repr(body)
+    )
+    assert re.search(r"sc\.exe\s+delete", body), (
+        "Install-Service must call `sc.exe delete $Script:ServiceName` "
+        "to remove the legacy SCM service. (PowerShell has no built-in "
+        "service-removal cmdlet on Win10 / Server 2019 — sc.exe is the "
+        "stable primitive.) Not found in body:\n" + repr(body)
+    )
+
+
+def test_install_service_is_idempotent_on_existing_scheduled_task() -> None:
+    """``Install-Service`` must be safe to re-run.
+
+    Re-installation must unregister any pre-existing Scheduled Task
+    with the same name before re-registering. ``Get-ScheduledTask``
+    detects the existing task; ``Unregister-ScheduledTask`` removes
+    it. Without this, ``Register-ScheduledTask -Force`` may keep a
+    stale ``Execute`` / ``Argument`` path (the docs are inconsistent
+    on the exact replace semantics across Windows versions), so we
+    explicitly unregister first.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"\bGet-ScheduledTask\b", body), (
+        "Install-Service must call `Get-ScheduledTask` to detect an "
+        "existing task before re-registering. Not found in body:\n"
+        + repr(body)
+    )
+    assert re.search(r"\bUnregister-ScheduledTask\b", body), (
+        "Install-Service must call `Unregister-ScheduledTask` to "
+        "remove a pre-existing task before re-creating it (re-install "
+        "idempotency). Not found in body:\n" + repr(body)
+    )
+
+
+def test_install_service_does_not_install_pywin32() -> None:
+    """``Install-Service`` must NOT install pywin32.
+
+    Regression pin: the previous SCM-service design needed pywin32
+    in a dedicated svc venv to host ``win32serviceutil.ServiceFramework``.
+    The Scheduled Task supervisor is stdlib-only — invoking the
+    legacy pywin32 install path on a clean machine would waste
+    bandwidth and leave dead bytes on disk.
+    """
+    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
+    assert "pywin32" not in body_code, (
+        "Install-Service must NOT `pip install pywin32` — the "
+        "Scheduled Task supervisor (deploy/windows_launcher.py) is "
+        "stdlib-only. Comment-stripped body:\n" + repr(body_code)
+    )
+
+
+def test_install_service_does_not_create_svc_venv() -> None:
+    """``Install-Service`` must NOT create a service-host venv.
+
+    Regression pin: the previous design created
+    ``<prefix>/svc/venv`` for pywin32. The supervisor is now a
+    standalone script invoked by the same Python ``Resolve-Python``
+    returned, so no dedicated venv is needed. A regression that
+    re-creates the svc venv would double the install footprint
+    and resurrect the pywin32 supply-chain surface.
+    """
+    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
+    assert not re.search(r"-m\s+venv\b", body_code), (
+        "Install-Service must NOT run `python -m venv` — the "
+        "Scheduled Task supervisor needs no dedicated venv. "
+        "Comment-stripped body:\n" + repr(body_code)
+    )
+
+
+def test_install_service_starts_task_immediately() -> None:
+    """``Install-Service`` must call ``Start-ScheduledTask`` after registering.
+
+    The installer is interactive; the user expects the agent up
+    within seconds of install completion (not at the next logon).
+    Without ``Start-ScheduledTask``, ``Wait-AgentHealthy`` (which
+    comes next in ``Main``) would time out polling ``/api/health``
+    because the agent only starts at the user's next logon.
+    """
+    body = _function_body_text("Install-Service")
+    assert re.search(r"\bStart-ScheduledTask\b", body), (
+        "Install-Service must call `Start-ScheduledTask "
+        "-TaskName $Script:ServiceName` so the agent comes up "
+        "immediately. Not found in body:\n" + repr(body)
+    )
+
+
+def test_install_service_downloads_supervisor_module_to_svc_dir() -> None:
+    """``Install-Service`` must download the supervisor module to
+    ``<prefix>/svc/mobaide_launcher.py``.
+
+    The Scheduled Task action's ``-Argument`` points at this file
+    (``-u "<path>"``). It must exist on disk BEFORE
+    ``Register-ScheduledTask`` runs, and it must live in a
+    version-independent location so the registered action path stays
+    valid across upgrades and rollbacks.
+
+    Source: ``$Script:WindowsLauncherUrl`` (defaults to
+    ``https://get.mobaide.com/windows_launcher.py``).
+    """
+    body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
+    assert re.search(r"mobaide_launcher\.py", body_code), (
+        "Install-Service must reference `mobaide_launcher.py` (the "
+        "on-disk filename of the supervisor under <prefix>/svc/). Not "
+        "found in body:\n" + repr(body_code)
+    )
+    assert re.search(
+        r"Invoke-AgentDownload[^|\r\n]*\$Script:WindowsLauncherUrl",
         body_code,
     ), (
-        "Install-Service must materialise the service module on disk by "
-        "calling `Invoke-AgentDownload -Url $Script:WindowsServiceUrl` "
-        "(the same download helper Install-Release uses for the tarball "
-        "and wheel; centralised SSL/UA handling). Comment-stripped body:\n"
-        + repr(body_code)
+        "Install-Service must materialise the supervisor on disk by "
+        "calling `Invoke-AgentDownload -Url $Script:WindowsLauncherUrl` "
+        "(same download helper Install-Release uses; centralised "
+        "SSL/UA handling). Comment-stripped body:\n" + repr(body_code)
     )
 
 
 def test_install_service_does_not_copy_from_release_wheel() -> None:
-    """``Install-Service`` must NOT copy the service module from the
-    installed release wheel.
+    """``Install-Service`` must NOT copy the supervisor from the release wheel.
 
-    Regression pin for the
-    "Service module source not found at ...\\releases\\<v>\\venv\\..."
-    failure. The pre-fix design copied
-    ``releases/<v>/venv/Lib/site-packages/mobaide/windows_service.py``
-    into ``<prefix>/svc/mobaide_service.py``, coupling install.ps1 to
-    whatever the just-installed wheel happened to contain. install.ps1
-    ships via gh-pages on every push to main, but the wheel ships only
-    on a tag push, so any installer change that referenced a new wheel
-    path failed against any older signed release.
-
-    The fix decouples them by fetching the module from gh-pages
-    alongside install.ps1 itself.
+    Regression pin retained from the SCM-service era: the supervisor
+    must come from gh-pages (co-versioned with install.ps1), not
+    from the wheel (which ships only on tag pushes — a desync hazard).
     """
     body_code = _strip_powershell_comments(_function_body_text("Install-Service"))
     assert not re.search(
-        r"site-packages\\mobaide\\windows_service\.py",
+        r"site-packages\\mobaide\\windows_(?:service|launcher)\.py",
         body_code,
     ), (
-        "Install-Service must NOT reference the wheel-installed "
-        "`site-packages\\mobaide\\windows_service.py` path (pre-fix "
-        "design coupled the installer to wheel contents). "
+        "Install-Service must NOT reference any wheel-installed "
+        "`site-packages\\mobaide\\windows_*.py` path. The supervisor "
+        "must come from gh-pages (co-versioned with install.ps1). "
         "Comment-stripped body:\n" + repr(body_code)
     )
     assert not re.search(r"\bCopy-Item\b", body_code), (
-        "Install-Service must NOT use `Copy-Item` for the service "
-        "module (the pre-fix design copied it out of the release "
-        "venv; the fix downloads it from gh-pages so installer and "
-        "service module are co-versioned). Comment-stripped body:\n"
+        "Install-Service must NOT use `Copy-Item` for the supervisor "
+        "module (must be downloaded from gh-pages so installer and "
+        "supervisor are co-versioned). Comment-stripped body:\n"
         + repr(body_code)
     )
 
 
-def test_install_ps1_defines_windows_service_url_with_env_override() -> None:
-    """install.ps1 must expose ``$Script:WindowsServiceUrl`` with a
-    ``MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` env override.
+def test_install_ps1_defines_windows_launcher_url_with_env_override() -> None:
+    """install.ps1 must expose ``$Script:WindowsLauncherUrl`` with a
+    ``MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`` env override.
 
     Mirrors ``$Script:InstallUrl`` / ``MOBAIDE_AGENT_INSTALL_URL`` — same
     distribution channel (gh-pages), same override mechanism for
     self-hosted mirrors and CI fixtures. A self-hosted distribution that
-    mirrors install.ps1 must mirror windows_service.py too, or set this
+    mirrors install.ps1 must mirror windows_launcher.py too, or set this
     env var to point at the canonical URL.
     """
     text = _DEPLOY_INSTALL_PS1.read_text(encoding="utf-8")
     assert re.search(
-        r"\$Script:WindowsServiceUrl\s*=\s*if\s*\(\s*\$env:MOBAIDE_AGENT_WINDOWS_SERVICE_URL\s*\)",
+        r"\$Script:WindowsLauncherUrl\s*=\s*if\s*\(\s*\$env:MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL\s*\)",
         text,
     ), (
-        "install.ps1 must declare `$Script:WindowsServiceUrl` with a "
-        "MOBAIDE_AGENT_WINDOWS_SERVICE_URL env override, parallel to "
+        "install.ps1 must declare `$Script:WindowsLauncherUrl` with a "
+        "MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL env override, parallel to "
         "$Script:InstallUrl / MOBAIDE_AGENT_INSTALL_URL. Not found."
     )
-    assert "https://get.mobaide.com/windows_service.py" in text, (
-        "install.ps1 must default $Script:WindowsServiceUrl to "
-        "https://get.mobaide.com/windows_service.py (the gh-pages-"
+    assert "https://get.mobaide.com/windows_launcher.py" in text, (
+        "install.ps1 must default $Script:WindowsLauncherUrl to "
+        "https://get.mobaide.com/windows_launcher.py (the gh-pages-"
         "published canonical URL, co-versioned with install.ps1). "
         "Not found."
     )
 
 
-def test_install_service_registers_via_python_install_command() -> None:
-    """``Install-Service`` must register the service by invoking the svc
-    venv's ``python.exe`` with the ``install`` verb on the service module.
+def test_install_ps1_removes_legacy_windows_service_url_constant() -> None:
+    """``$Script:WindowsServiceUrl`` must NOT exist (renamed to LauncherUrl).
 
-    The service module's ``install`` handler calls
-    ``win32serviceutil.InstallService(exeName=sys.executable,
-    exeArgs="-u <this_file>")``, producing a service binary path of
-    ``"<svc venv>\\Scripts\\python.exe" -u "<prefix>\\svc\\mobaide_service.py"``.
-    This bypasses the default ``pythonservice.exe`` registration whose
-    DLL search does not work inside a venv (pywin32 #1450, #2032).
+    Regression pin: a partial-revert that re-introduces the old
+    ``$Script:WindowsServiceUrl`` constant alongside the new
+    ``$Script:WindowsLauncherUrl`` would silently re-route the
+    supervisor download through a stale URL (different file at the
+    same gh-pages publisher).
+    """
+    text = _DEPLOY_INSTALL_PS1.read_text(encoding="utf-8")
+    assert "$Script:WindowsServiceUrl" not in text, (
+        "$Script:WindowsServiceUrl must be removed from install.ps1 "
+        "after the SCM-service → Scheduled-Task rename. The new "
+        "constant is $Script:WindowsLauncherUrl."
+    )
+    assert "MOBAIDE_AGENT_WINDOWS_SERVICE_URL" not in text, (
+        "MOBAIDE_AGENT_WINDOWS_SERVICE_URL must be removed from "
+        "install.ps1 after the rename. The new override env var is "
+        "MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL."
+    )
 
-    A regression that registers the service directly with ``New-Service``
-    (or any other path that doesn't go through the module's install
-    verb) re-introduces the pythonservice.exe DLL-search problem.
+
+def test_install_service_verifies_task_exists_before_starting() -> None:
+    """``Install-Service`` must re-check Task Scheduler after registration.
+
+    Defence-in-depth on the silent-failure anti-pattern. After
+    ``Register-ScheduledTask`` succeeds, confirm the task actually
+    appears (``Get-ScheduledTask``) before invoking
+    ``Start-ScheduledTask`` / handing off to ``Wait-AgentHealthy``.
+    Surfaces a real error at install time instead of a 60-second
+    polling timeout downstream.
     """
     body = _function_body_text("Install-Service")
-    assert re.search(r"\$svcVenvPython\s+\$svcModule\s+install\b", body) or \
-           re.search(r"mobaide_service\.py\s+install\b", body), (
-        "Install-Service must invoke the svc-venv python with the "
-        "`install` verb on mobaide_service.py to register the service. "
-        "The module's install handler routes the registration through "
-        "win32serviceutil.InstallService with the correct exeName / "
-        "exeArgs to sidestep pythonservice.exe's venv-DLL-search "
-        "problem. Not found in body:\n" + repr(body)
+    register_match = re.search(r"\bRegister-ScheduledTask\b", body)
+    assert register_match is not None, (
+        "Pre-condition: Install-Service must call Register-ScheduledTask "
+        "(covered by test_install_service_registers_scheduled_task)."
     )
-
-
-def test_install_service_verifies_service_exists_before_starting() -> None:
-    """``Install-Service`` must re-check SCM after registration.
-
-    Defence-in-depth on the silent-failure anti-pattern that hid the
-    original bug. After the registration step succeeds, confirm the
-    service actually appeared in SCM (``Get-Service``) before invoking
-    ``Start-Service``. Surfaces a real error with a real message
-    immediately at install time rather than several lines later via
-    a confusing ``Start-Service : Cannot find any service`` /
-    ``Cannot start service`` exception.
-
-    The pattern was introduced for the pre-fix ``New-Service`` design
-    and survives the pywin32 rewrite verbatim — the same anti-pattern
-    (silent registration failure → opaque Start-Service error) applies
-    to any registration mechanism.
-    """
-    body = _function_body_text("Install-Service")
-    install_match = re.search(
-        r"\binstall\b[^\r\n]*\|\s*Out-(?:Host|Null)|"
-        r"\$svcVenvPython\s+\$svcModule\s+install",
-        body,
-    )
-    assert install_match is not None, (
-        "Pre-condition: Install-Service must invoke the registration "
-        "step (covered by "
-        "test_install_service_registers_via_python_install_command)."
-    )
-    tail = body[install_match.end():]
-    assert re.search(r"\bGet-Service\b", tail), (
-        "After the service registration step, Install-Service must "
-        "re-check the service's existence via `Get-Service` and fail "
-        "loudly if it is missing. Without this check, a silent "
-        "registration failure surfaces as an opaque `Start-Service : "
-        "Cannot find any service` / `Cannot start service` error far "
-        "away from the actual cause. Body slice after registration:\n"
-        + repr(tail)
+    tail = body[register_match.end():]
+    assert re.search(r"\bGet-ScheduledTask\b", tail), (
+        "After Register-ScheduledTask, Install-Service must re-check "
+        "the task's existence via `Get-ScheduledTask` and fail loudly "
+        "if it is missing. Without this check, a silent registration "
+        "failure surfaces as an opaque Wait-AgentHealthy timeout. "
+        "Body slice after registration:\n" + repr(tail)
     )
 
 
@@ -2660,11 +2792,13 @@ def test_wait_agent_healthy_polls_api_health_with_timeout() -> None:
 def test_wait_agent_healthy_fails_with_event_log_pointer() -> None:
     """On timeout, ``Wait-AgentHealthy`` must surface the Event Viewer.
 
-    The user's original bug report was "service doesn't start
-    automatically" — operators need a clear pointer to the diagnostic
-    surface (Event Log, Source: MobaideAgent) so a silent crash at
-    SvcDoRun shows up as a discoverable failure instead of "the QR I
-    scanned didn't pair".
+    Operators need a clear pointer to the diagnostic surface so a
+    silent supervisor crash shows up as a discoverable failure instead
+    of "the QR I scanned didn't pair". The Scheduled Task surface
+    lives under
+    ``Event Viewer → Applications and Services Logs → Microsoft →
+    Windows → TaskScheduler → Operational``; the agent's own captured
+    stderr is at ``<prefix>/logs/agent.err.log``.
     """
     body = _function_body_text("Wait-AgentHealthy")
     assert "Write-Fail" in body, (
@@ -2684,15 +2818,13 @@ def test_wait_agent_healthy_fails_with_event_log_pointer() -> None:
         "filter matches. Body:\n" + repr(body)
     )
     assert "agent.err.log" in body, (
-        "Wait-AgentHealthy's diagnostic must point at the launcher's "
-        "captured stderr at <prefix>/logs/agent.err.log. Before this "
-        "log existed (deploy/windows_service.py:_spawn_launcher passed "
-        "stderr=DEVNULL), every Python traceback from the launcher or "
-        "agent was discarded — operators only saw the eventvwr "
-        "service-started line, never the real error. The eventvwr "
-        "pointer stays for SCM-level failures; agent.err.log is for "
-        "the silent agent-side ones the eventvwr cannot see. Body:\n"
-        + repr(body)
+        "Wait-AgentHealthy's diagnostic must point at the supervisor's "
+        "captured stderr at <prefix>/logs/agent.err.log. Without this "
+        "log capture (deploy/windows_launcher.py:_spawn_release_launcher "
+        "redirects stderr to the rotated log file), every Python "
+        "traceback from the launcher or agent would be discarded — "
+        "operators would only see Task Scheduler's exit-code line, "
+        "never the real error. Body:\n" + repr(body)
     )
 
 
@@ -2749,10 +2881,10 @@ def test_show_pairing_qr_preserves_skip_env_var() -> None:
 # Find-ClaudeBinary / MOBAIDE_AGENT_CLAUDE_BIN_HINT / Write-AgentEnv pins
 # ----------------------------------------------------------------------
 #
-# These guard the Windows-service ``claude_cli_missing`` fix. The service
-# runs as LocalSystem with a stripped PATH that excludes
-# ``%APPDATA%\npm\claude.cmd`` (where ``npm install -g @anthropic-ai/
-# claude-code`` lands the binary). The installer must (a) discover the
+# These guard the ``claude_cli_missing`` 503 — most users only have
+# ``%APPDATA%\npm\claude.cmd`` on their interactive PATH, not in the
+# elevated installer's session or in any environment Task Scheduler
+# might use for diagnostic actions. The installer must (a) discover the
 # user's claude path BEFORE the UAC relaunch (under the originating user's
 # env), (b) carry the path across the UAC boundary via the
 # ``MOBAIDE_AGENT_CLAUDE_BIN_HINT`` passthrough env var, (c) write it into
@@ -2768,7 +2900,7 @@ def test_find_claude_binary_is_defined() -> None:
     Called by both ``Assert-AdminOrElevate`` (pre-UAC discovery) and
     ``Write-AgentEnv`` (post-UAC fallback). If the function is renamed
     or deleted, both callsites silently lose claude.cmd auto-detection
-    and the Windows-service install regresses to the pre-fix 503.
+    and the install regresses to the pre-fix ``claude_cli_missing`` 503.
     """
     funcs = _list_function_names()
     assert "Find-ClaudeBinary" in funcs, (
@@ -2776,7 +2908,7 @@ def test_find_claude_binary_is_defined() -> None:
         f"{_DEPLOY_INSTALL_PS1}; found functions: {funcs!r}. The pre-UAC "
         f"helper in Assert-AdminOrElevate AND the post-UAC fallback in "
         f"Write-AgentEnv both call into this name; if it's missing, the "
-        f"Windows-service install regresses to claude_cli_missing 503."
+        f"install regresses to claude_cli_missing 503."
     )
 
 
@@ -2786,9 +2918,10 @@ def test_find_claude_binary_probes_appdata_npm() -> None:
     That's the default landing site for ``npm install -g
     @anthropic-ai/claude-code`` on Windows. Probing PATH alone misses
     this — many users have npm on PATH only for interactive shells, and
-    the LocalSystem service's PATH never sees ``%APPDATA%\\npm`` at all.
-    The whole point of the fallback list is to catch this case
-    explicitly. A regression to a PATH-only check re-opens the 503.
+    the elevated installer's session (relaunched via UAC ``Start-Process
+    -Verb RunAs``) may not inherit the originating user's PATH. The
+    whole point of the fallback list is to catch this case explicitly.
+    A regression to a PATH-only check re-opens the 503.
     """
     body = _function_body_text("Find-ClaudeBinary")
     assert "APPDATA" in body, (
@@ -2814,8 +2947,9 @@ def test_find_claude_binary_skips_windowsapps_stub() -> None:
     if Microsoft Store ever ships an ``alias-only`` claude package).
     That trampoline never actually runs the CLI in an unattended ``irm
     | iex`` flow; it opens the Store UI. If discovery returns the stub
-    path, the agent later spawns it under LocalSystem with no UI and
-    hangs / errors opaquely. Filter on ``$exe.Source -like
+    path, the agent later spawns it from a non-interactive context
+    (the Scheduled Task's action) where the Store UI cannot surface,
+    so it hangs or errors opaquely. Filter on ``$exe.Source -like
     "*\\WindowsApps\\*"`` mirrors the same protection ``Find-Python``
     documents.
     """
@@ -2868,7 +3002,7 @@ def test_claude_bin_hint_is_preserved_across_uac_elevation() -> None:
     passthrough array literal inside ``Assert-AdminOrElevate``.
 
     Same regression class as ``MOBAIDE_AGENT_SKIP_PYTHON_INSTALL`` /
-    ``MOBAIDE_AGENT_WINDOWS_SERVICE_URL`` (already pinned upstream): if
+    ``MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`` (already pinned upstream): if
     the new hint variable is not in ``$passthrough``, the elevated
     child re-fetches without it, falls back to its own
     ``Find-ClaudeBinary`` from inside the elevated session, and on a
@@ -2911,8 +3045,7 @@ def test_write_agent_env_passes_claude_bin_to_init_env_fresh_install() -> None:
         "Write-AgentEnv must pass `--claude-bin` to init-env so the "
         "fresh .env carries MOBAIDE_CLAUDE_BIN. Without the flag the "
         "template's commented placeholder passes through unchanged and "
-        "the LocalSystem service 503s on session-create. Body:\n"
-        + repr(body)
+        "the agent 503s on session-create. Body:\n" + repr(body)
     )
 
 

@@ -214,23 +214,24 @@ def _spawn_and_wait_windows(args: list[str]) -> NoReturn:
 
     ``os.execv`` on Windows does NOT preserve the calling process's
     PID (Python issue #9148: MSVC ``_wexecv`` is internally
-    ``CreateProcess`` + ``ExitProcess``). When the launcher runs
-    under the SCM-spawned service host (``deploy/windows_service.py``),
-    that host watches the launcher PID via ``Popen.poll()``; an
-    ``os.execv`` here would make the host see the launcher exit
-    instantly and mark the service STOPPED, while the agent runs
+    ``CreateProcess`` + ``ExitProcess``). The launcher runs under the
+    Scheduled-Task supervisor (``deploy/windows_launcher.py``), which
+    watches the launcher PID via ``Popen.poll()`` to drive its
+    exit-75 respawn loop; an ``os.execv`` here would make the
+    supervisor see the launcher exit instantly while the agent ran
     orphaned. Spawning + waiting keeps the launcher PID alive for the
-    agent's lifetime, so the host's poll tracks the actual agent.
+    agent's lifetime, so the supervisor's poll tracks the actual
+    agent.
 
     A Job Object with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` is
     attached to the agent. When the launcher exits (cleanly or via
-    SCM's ``TerminateProcess`` during ``Stop-Service``), all its
-    handles close, the job closes, and Windows tears down the agent
-    atomically — no orphan to fight over port 8000 on the next
-    restart. Nested jobs are required (the SCM service host itself
-    is in a job); they're guaranteed on Windows 8.1+, and the
-    project pins Python 3.12 (``pyproject.toml:9``) which mandates
-    that floor.
+    Task Scheduler's ``TerminateProcess`` during
+    ``Stop-ScheduledTask``), all its handles close, the job closes,
+    and Windows tears down the agent atomically — no orphan to fight
+    over port 8000 on the next restart. Nested jobs are required (the
+    supervisor itself may be in a job); they're guaranteed on Windows
+    8.1+, and the project pins Python 3.12 (``pyproject.toml:9``)
+    which mandates that floor.
 
     Fail-soft: if any ctypes call fails (older Windows, restrictive
     job-policy, ctypes import failure), skip the job assignment and

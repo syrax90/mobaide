@@ -61,11 +61,11 @@ class AgentConfig(BaseSettings):
     # pydantic-settings populates this instance from .env but does NOT mutate
     # ``os.environ``, so without a typed field the resolver in
     # ``claude_launcher.py`` would never see a ``MOBAIDE_CLAUDE_BIN`` line in
-    # .env (``extra="ignore"`` drops it on the floor). The Windows service
-    # runs as ``LocalSystem`` with a stripped PATH that excludes
-    # ``%APPDATA%\\npm`` — ``install.ps1`` detects the user's ``claude.cmd``
-    # and writes its absolute path here so the service can find it without
-    # manual edits.
+    # .env (``extra="ignore"`` drops it on the floor). ``install.ps1``
+    # detects the user's ``claude.cmd`` at install time (under the
+    # originating user's env, before UAC elevation) and writes its
+    # absolute path here so the agent always resolves it regardless of
+    # PATH layout in its runtime session.
     claude_bin: str | None = Field(
         default=None, validation_alias="MOBAIDE_CLAUDE_BIN",
     )

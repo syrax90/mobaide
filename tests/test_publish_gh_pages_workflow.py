@@ -1,26 +1,24 @@
 """Regression tests for ``.github/workflows/publish-gh-pages.yml``.
 
 The workflow publishes ``deploy/install.sh``, ``deploy/install.ps1`` and
-``deploy/windows_service.py`` from ``main`` to the ``gh-pages`` branch on
-every push to ``main`` that touches those files. The triple is the
+``deploy/windows_launcher.py`` from ``main`` to the ``gh-pages`` branch
+on every push to ``main`` that touches those files. The triple is the
 canonical content of ``get.mobaide.com``.
 
-This test module pins the co-versioning contract that the
-``Service module source not found at ...\\releases\\<v>\\venv\\...``
-failure-class fix relies on. ``install.ps1`` downloads
-``windows_service.py`` from the same gh-pages distribution channel it is
-itself served from; both files MUST move together. If a future PR drops
-``deploy/windows_service.py`` from any of the four references in the
-workflow YAML (the ``paths:`` trigger, the ``git show`` copy, the
-``git diff --quiet`` no-op gate, or the ``git add`` stage), the bug
-class returns silently: a user running the new ``install.ps1`` would
-hit a stale or 404 ``windows_service.py`` URL because the workflow
-either failed to fire or failed to publish the updated file.
+This test module pins the co-versioning contract. ``install.ps1``
+downloads ``windows_launcher.py`` from the same gh-pages distribution
+channel it is itself served from; both files MUST move together. If a
+future PR drops ``deploy/windows_launcher.py`` from any of the four
+references in the workflow YAML (the ``paths:`` trigger, the ``git
+show`` copy, the ``git diff --quiet`` no-op gate, or the ``git add``
+stage), the co-versioning contract is silently broken: a user running
+the new ``install.ps1`` would hit a stale or 404 ``windows_launcher.py``
+URL because the workflow either failed to fire or failed to publish the
+updated file.
 
 Mirror of the install.ps1 pins in ``tests/test_install_ps1.py``:
-``test_install_service_downloads_service_module_to_svc_dir``,
-``test_install_service_does_not_copy_from_release_wheel`` and
-``test_install_ps1_defines_windows_service_url_with_env_override``.
+``test_install_service_downloads_supervisor_module_to_svc_dir`` and
+``test_install_ps1_defines_windows_launcher_url_with_env_override``.
 Those pin the installer side; this module pins the publisher side.
 """
 from __future__ import annotations
@@ -101,17 +99,16 @@ def test_workflow_yaml_parses_cleanly(workflow_doc: dict) -> None:
     )
 
 
-def test_workflow_triggers_on_windows_service_py_change(workflow_doc: dict) -> None:
-    """``deploy/windows_service.py`` must be in ``on.push.paths``.
+def test_workflow_triggers_on_windows_launcher_py_change(workflow_doc: dict) -> None:
+    """``deploy/windows_launcher.py`` must be in ``on.push.paths``.
 
-    Without this entry, a PR that updates ``deploy/windows_service.py``
+    Without this entry, a PR that updates ``deploy/windows_launcher.py``
     without also touching ``install.sh`` / ``install.ps1`` would not
     fire the publish workflow at all. gh-pages would keep serving the
     previous revision while ``install.ps1`` (unchanged) downloads it,
-    so the on-disk ``<prefix>\\svc\\mobaide_service.py`` would silently
-    desync from the source tree. This is the exact failure mode the
-    decoupling fix was written to eliminate; the trigger is half of
-    the co-versioning contract.
+    so the on-disk ``<prefix>\\svc\\mobaide_launcher.py`` would silently
+    desync from the source tree. This is half of the co-versioning
+    contract that lets ``install.ps1`` fetch the supervisor safely.
     """
     on_block = workflow_doc.get("on") or workflow_doc.get(True)
     assert isinstance(on_block, dict), (
@@ -124,110 +121,112 @@ def test_workflow_triggers_on_windows_service_py_change(workflow_doc: dict) -> N
         "trigger for gh-pages publishes). Got: " + repr(push)
     )
     paths = push.get("paths") or []
-    assert "deploy/windows_service.py" in paths, (
+    assert "deploy/windows_launcher.py" in paths, (
         "publish-gh-pages.yml's `on.push.paths` must include "
-        "`deploy/windows_service.py` so changes to the service module "
-        "fire the publish workflow. Without this trigger, a "
-        "windows_service.py edit ships to main but gh-pages keeps "
+        "`deploy/windows_launcher.py` so changes to the supervisor "
+        "module fire the publish workflow. Without this trigger, a "
+        "windows_launcher.py edit ships to main but gh-pages keeps "
         "serving the stale revision, breaking the co-versioning "
         "contract that lets install.ps1 fetch it safely. "
         "Found paths: " + repr(paths)
     )
 
 
-def test_workflow_copies_windows_service_py_into_gh_pages_root(
+def test_workflow_copies_windows_launcher_py_into_gh_pages_root(
     publish_step_run: str,
 ) -> None:
-    """The publish step must materialise ``windows_service.py``.
+    """The publish step must materialise ``windows_launcher.py``.
 
     The step copies the three publishable files out of ``main`` into the
     gh-pages worktree via ``git show origin/main:<path> > <basename>``.
-    The ``windows_service.py`` line must be present, point at the
+    The ``windows_launcher.py`` line must be present, point at the
     ``deploy/`` source path, and write to the top-level filename
-    ``windows_service.py`` (the file ``install.ps1`` will request as
-    ``https://get.mobaide.com/windows_service.py``).
+    ``windows_launcher.py`` (the file ``install.ps1`` will request as
+    ``https://get.mobaide.com/windows_launcher.py``).
     """
     pattern = (
-        r"git\s+show\s+origin/main:deploy/windows_service\.py\s*>\s*"
-        r"windows_service\.py"
+        r"git\s+show\s+origin/main:deploy/windows_launcher\.py\s*>\s*"
+        r"windows_launcher\.py"
     )
     assert re.search(pattern, publish_step_run), (
         "publish-gh-pages.yml's publish step must include the line "
-        "`git show origin/main:deploy/windows_service.py > "
-        "windows_service.py` so the file appears at the gh-pages root. "
+        "`git show origin/main:deploy/windows_launcher.py > "
+        "windows_launcher.py` so the file appears at the gh-pages root. "
         "Without it, the trigger fires but no file is staged, the "
         "`git diff --quiet` short-circuits, and the workflow exits "
         "without publishing. Publish-step body:\n" + publish_step_run
     )
 
 
-def test_workflow_diff_gate_includes_windows_service_py(
+def test_workflow_diff_gate_includes_windows_launcher_py(
     publish_step_run: str,
 ) -> None:
-    """The ``git diff --quiet`` no-op gate must list ``windows_service.py``.
+    """The ``git diff --quiet`` no-op gate must list ``windows_launcher.py``.
 
     The publish step bails out early when none of the three publishable
     files changed (``git diff --quiet -- install.sh install.ps1
-    windows_service.py``). If ``windows_service.py`` is missing from
-    the gate, a workflow run triggered by a windows_service.py-only
+    windows_launcher.py``). If ``windows_launcher.py`` is missing from
+    the gate, a workflow run triggered by a windows_launcher.py-only
     change would short-circuit on the install.sh/install.ps1 comparison
     (which would be a no-op) and exit without publishing. The trigger
-    fires, but the publish never happens — a textbook missing-tracked-
-    files bug.
+    fires, but the publish never happens — a textbook
+    missing-tracked-files bug.
     """
     assert re.search(
-        r"git\s+diff\s+--quiet[^\r\n]*\bwindows_service\.py\b",
+        r"git\s+diff\s+--quiet[^\r\n]*\bwindows_launcher\.py\b",
         publish_step_run,
     ), (
         "publish-gh-pages.yml's `git diff --quiet -- ...` no-op gate "
-        "must include `windows_service.py` so the gate detects "
-        "windows_service.py-only changes. Otherwise the workflow "
-        "silently exits without publishing when only the service "
+        "must include `windows_launcher.py` so the gate detects "
+        "windows_launcher.py-only changes. Otherwise the workflow "
+        "silently exits without publishing when only the supervisor "
         "module is updated. Publish-step body:\n" + publish_step_run
     )
 
 
-def test_workflow_git_add_includes_windows_service_py(
+def test_workflow_git_add_includes_windows_launcher_py(
     publish_step_run: str,
 ) -> None:
-    """The ``git add`` line must stage ``windows_service.py`` for commit.
+    """The ``git add`` line must stage ``windows_launcher.py`` for commit.
 
     The publish step ends with ``git add install.sh install.ps1
-    windows_service.py`` followed by ``git commit`` + ``git push``. If
-    ``windows_service.py`` is omitted from the ``git add`` argument
+    windows_launcher.py`` followed by ``git commit`` + ``git push``. If
+    ``windows_launcher.py`` is omitted from the ``git add`` argument
     list (but the ``git show`` line is still there), the file is
     written to the worktree but never committed, so the gh-pages push
     publishes a tree that still serves the previous revision.
     """
     assert re.search(
-        r"git\s+add[^\r\n]*\bwindows_service\.py\b",
+        r"git\s+add[^\r\n]*\bwindows_launcher\.py\b",
         publish_step_run,
     ), (
         "publish-gh-pages.yml's `git add` line must include "
-        "`windows_service.py` so the file is committed and pushed. "
+        "`windows_launcher.py` so the file is committed and pushed. "
         "Without it, `git show` writes the file but the subsequent "
         "commit excludes it; gh-pages publishes an unchanged tree. "
         "Publish-step body:\n" + publish_step_run
     )
 
 
-def test_deploy_windows_service_py_exists_in_tree() -> None:
-    """``deploy/windows_service.py`` must exist in the source tree.
+def test_deploy_windows_launcher_py_exists_in_tree() -> None:
+    """``deploy/windows_launcher.py`` must exist in the source tree.
 
     The four workflow assertions above pin the *references* in the
     workflow YAML; this one pins the referent. A workflow that
     references a non-existent path would still parse fine but every
-    run would fail with ``fatal: path 'deploy/windows_service.py'
+    run would fail with ``fatal: path 'deploy/windows_launcher.py'
     does not exist`` at the ``git show`` step.
     """
-    deploy_module = _REPO_ROOT / "deploy" / "windows_service.py"
+    deploy_module = _REPO_ROOT / "deploy" / "windows_launcher.py"
     assert deploy_module.is_file(), (
-        "`deploy/windows_service.py` must exist in the repo (it is the "
+        "`deploy/windows_launcher.py` must exist in the repo (it is the "
         "source the publish-gh-pages workflow copies to the gh-pages "
-        "branch). The file was moved here from "
-        "`mobaide_agent/mobaide/windows_service.py` to decouple it "
-        "from the agent wheel. If this assertion fails, the move was "
-        "reverted without updating the workflow. Missing: " + str(deploy_module)
+        "branch). The file is the per-user Scheduled-Task supervisor "
+        "that install.ps1 downloads into "
+        "`<prefix>\\svc\\mobaide_launcher.py`. If this assertion fails, "
+        "either the file was renamed without updating the workflow, or "
+        "the supervisor was unexpectedly removed. Missing: "
+        + str(deploy_module)
     )
 
 

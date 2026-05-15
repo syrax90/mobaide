@@ -83,18 +83,17 @@ def _posix_fallback_candidates() -> list[str]:
 def _windows_fallback_candidates() -> list[str]:
     """Common Windows install locations for ``claude.cmd``.
 
-    Critical for the Windows-service case: the service runs as
-    ``LocalSystem`` (``deploy/install.ps1`` registers ``MobaideAgent``
-    without an ``obj=`` override), and ``LocalSystem``'s ``%APPDATA%``
-    resolves to the *system profile*
-    (``C:\\Windows\\system32\\config\\systemprofile\\AppData\\Roaming``),
-    not the installing user's. ``npm install -g @anthropic-ai/claude-code``
-    lands ``claude.cmd`` under the *user's* ``%APPDATA%\\npm``, so the
-    expansion below cannot reach it when running as ``LocalSystem``.
-    The install script captures the user's path under elevation and writes
-    it into ``.env`` as ``MOBAIDE_CLAUDE_BIN``; this fallback list is the
-    last-ditch guess for environments where the override is missing AND
-    PATH happens not to include the npm dir.
+    Last-ditch guess for environments where neither ``MOBAIDE_CLAUDE_BIN``
+    nor PATH resolves ``claude.cmd``: probe the default
+    ``%APPDATA%\\npm\\`` landing site for
+    ``npm install -g @anthropic-ai/claude-code``, plus the relocated
+    variants under ``%LOCALAPPDATA%`` / ``%USERPROFILE%`` and the
+    machine-scope ``%ProgramData%\\npm`` / ``%ProgramFiles%\\nodejs``
+    locations some operators use. The agent now runs in the installing
+    user's session (Scheduled Task with ``-LogonType Interactive``), so
+    these env vars resolve correctly and PATH usually contains the npm
+    dir already; this fallback is belt-and-suspenders for non-standard
+    installs (chocolatey, relocated npm prefix, etc.).
     """
     candidates: list[str] = []
     for var in ("APPDATA", "LOCALAPPDATA", "USERPROFILE"):
