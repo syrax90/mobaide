@@ -124,7 +124,8 @@ fun InputBar(
                         hasFocus = focusState.isFocused
                     },
                 placeholder = { Text("Type command...") },
-                maxLines = 4,
+                minLines = 1,
+                maxLines = 10,
                 enabled = enabled,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     fontFamily = FontFamily.Monospace,

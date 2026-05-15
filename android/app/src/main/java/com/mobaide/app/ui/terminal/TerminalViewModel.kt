@@ -221,9 +221,23 @@ class TerminalViewModel @Inject constructor(
 
     fun sendInput(text: String) {
         setFollowMode(true)
-        // CR (\r), not LF (\n): Ink/React TUIs in raw mode submit on CR.
+        // Wrap multi-line input in xterm bracketed-paste markers so Ink/React TUIs
+        // (Claude CLI) treat the whole buffer as a single paste instead of submitting
+        // on every embedded LF. Single-line input stays raw — bracketed-paste markers
+        // would surface as literal "[200~..." on shells that have not enabled mode 2004.
+        // Trade-off: if the user's paste itself contains the raw byte sequence
+        // ESC[201~, the receiving TUI will close paste mode early at that point and
+        // treat the remainder as keystrokes. Real-world Android clipboards almost never
+        // carry raw ESC bytes; the user owns both ends of the session so no privilege
+        // boundary is crossed. Strip ESC[201~ from `text` here if a shared-session
+        // feature is ever added that lets one user paste into another's session.
+        val payload = if ('\n' in text) {
+            "[200~$text[201~\r"
+        } else {
+            text + "\r"
+        }
         sendChannel.trySend(
-            TerminalProtocol.encodeInput((text + "\r").toByteArray(Charsets.UTF_8))
+            TerminalProtocol.encodeInput(payload.toByteArray(Charsets.UTF_8))
         )
         _inputText.value = TextFieldValue("")
     }

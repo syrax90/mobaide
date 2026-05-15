@@ -194,8 +194,29 @@ class LinuxPtyBackend:
             return b""
 
     def write(self, data: bytes) -> None:
+        import select
+
         assert self._master_fd is not None, "PTY not spawned"
-        os.write(self._master_fd, data)
+        view = memoryview(data)
+        total = 0
+        while total < len(view):
+            try:
+                n = os.write(self._master_fd, view[total:])
+            except BlockingIOError:
+                # Defensive: today pty.openpty() returns a blocking fd so EAGAIN
+                # never fires here. If the fd is ever switched to O_NONBLOCK,
+                # block on writability via select() instead of busy-spinning —
+                # the canonical POSIX retry pattern; releases the GIL.
+                select.select([], [self._master_fd], [])
+                continue
+            if n <= 0:
+                break
+            total += n
+        if total < len(view):
+            logger.warning(
+                "pty.write_short bytes_written=%d expected=%d session_master=%d",
+                total, len(view), self._master_fd,
+            )
 
     def resize(self, rows: int, cols: int) -> None:
         import fcntl

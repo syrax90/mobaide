@@ -141,6 +141,85 @@ class TerminalViewModelSendInputTest {
     }
 
     @Test
+    fun sendInput_multilineText_wrapsInBracketedPasteMarkers() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("line1\nline2")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertArrayEquals(
+            "multi-line input must be wrapped with xterm bracketed-paste markers",
+            "[200~line1\nline2[201~\r".toByteArray(Charsets.UTF_8),
+            payloadOf(captured.captured),
+        )
+    }
+
+    @Test
+    fun sendInput_multilineText_usesInputFrame() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("line1\nline2")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertEquals(
+            "multi-line input must still use 'i' (input) frame, not a new frame type",
+            'i'.code.toByte(),
+            frameTypeOf(captured.captured),
+        )
+    }
+
+    @Test
+    fun sendInput_multilineText_markerBytes() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("a\nb")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        val payload = payloadOf(captured.captured)
+
+        // Typo guard: assert the literal escape-sequence bytes for the markers,
+        // not the Kotlin string literal that produced them. If someone replaces
+        // "[200~" with "[200~" the bytes will differ even if the source
+        // still "looks right".
+        val startMarker = byteArrayOf(0x1B, 0x5B, 0x32, 0x30, 0x30, 0x7E)
+        val endMarker = byteArrayOf(0x1B, 0x5B, 0x32, 0x30, 0x31, 0x7E)
+
+        assertArrayEquals(
+            "start marker must be ESC [ 2 0 0 ~  (0x1B 0x5B 0x32 0x30 0x30 0x7E)",
+            startMarker,
+            payload.copyOfRange(0, 6),
+        )
+        assertArrayEquals(
+            "end marker must be ESC [ 2 0 1 ~  (0x1B 0x5B 0x32 0x30 0x31 0x7E)",
+            endMarker,
+            payload.copyOfRange(payload.size - 7, payload.size - 1),
+        )
+        assertEquals(
+            "payload must end with CR after the close marker",
+            '\r'.code.toByte(),
+            payload[payload.size - 1],
+        )
+    }
+
+    @Test
+    fun sendInput_singleLineText_doesNotWrap() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("single line")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertArrayEquals(
+            "single-line input (no LF) must NOT be wrapped — markers would surface on non-Claude shells",
+            "single line\r".toByteArray(Charsets.UTF_8),
+            payloadOf(captured.captured),
+        )
+    }
+
+    @Test
     fun sendTappedRow_currentInput_sendsBareCR() = runTest {
         val vm = createViewModel()
         goLive()
