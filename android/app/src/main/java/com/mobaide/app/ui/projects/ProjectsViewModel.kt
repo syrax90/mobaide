@@ -56,6 +56,14 @@ class ProjectsViewModel @Inject constructor(
     )
     val events: SharedFlow<ProjectsUiEvent> = _events.asSharedFlow()
 
+    /**
+     * Emitted once per successful create. Lets in-context create flows
+     * (e.g. CreateSessionScreen's dropdown action) auto-select the new
+     * project without waiting for the `projects.changed` bus event.
+     */
+    private val _projectCreated = MutableSharedFlow<ProjectInfo>(extraBufferCapacity = 1)
+    val projectCreated: SharedFlow<ProjectInfo> = _projectCreated.asSharedFlow()
+
     /** While non-null, the UI renders this order instead of the repo's. */
     private val _pendingOrder = MutableStateFlow<List<String>?>(null)
 
@@ -88,18 +96,25 @@ class ProjectsViewModel @Inject constructor(
             }
             .launchIn(viewModelScope)
 
-        // Fallback REST seed if the bus snapshot hasn't arrived yet.
-        viewModelScope.launch {
-            try {
-                val list = projectsRepository.listProjects()
-                if (_uiState.value.projects.isEmpty()) {
-                    _uiState.update { it.copy(projects = list.sortedBy { p -> p.order }, isLoading = false) }
-                } else {
+        // Fallback REST seed if the bus snapshot hasn't arrived yet. Skip when
+        // the singleton repository's StateFlow is already populated — a prior
+        // VM instance (or an `AgentEvent.ProjectsChanged` event) has seeded it
+        // and the bus collector above will deliver the current value
+        // synchronously on subscription. Saves a redundant GET when a second
+        // ProjectsViewModel is instantiated (e.g. CreateSessionScreen entry).
+        if (projectsRepository.observeProjects().value.isEmpty()) {
+            viewModelScope.launch {
+                try {
+                    val list = projectsRepository.listProjects()
+                    if (_uiState.value.projects.isEmpty()) {
+                        _uiState.update { it.copy(projects = list.sortedBy { p -> p.order }, isLoading = false) }
+                    } else {
+                        _uiState.update { it.copy(isLoading = false) }
+                    }
+                } catch (e: Exception) {
                     _uiState.update { it.copy(isLoading = false) }
+                    _events.tryEmit(ProjectsUiEvent.Message("Failed to load projects: ${e.message}"))
                 }
-            } catch (e: Exception) {
-                _uiState.update { it.copy(isLoading = false) }
-                _events.tryEmit(ProjectsUiEvent.Message("Failed to load projects: ${e.message}"))
             }
         }
     }
@@ -304,7 +319,8 @@ class ProjectsViewModel @Inject constructor(
                 if (form.isEdit) {
                     projectsRepository.updateProject(form.editing!!.name, attempted.toUpdateBody())
                 } else {
-                    projectsRepository.createProject(attempted.toCreateBody())
+                    val created = projectsRepository.createProject(attempted.toCreateBody())
+                    _projectCreated.tryEmit(created)
                 }
                 _uiState.update { it.copy(form = null) }
                 _events.tryEmit(ProjectsUiEvent.CloseSheet)

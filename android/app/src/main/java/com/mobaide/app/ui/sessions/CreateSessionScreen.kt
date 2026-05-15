@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -21,6 +22,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -40,18 +42,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.ui.projects.ProjectFormSheet
+import com.mobaide.app.ui.projects.ProjectsUiEvent
+import com.mobaide.app.ui.projects.ProjectsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CreateSessionScreen(
     viewModel: CreateSessionViewModel,
+    projectsViewModel: ProjectsViewModel,
     onBack: () -> Unit,
     onSessionCreated: (String) -> Unit,
     onAutoScanStarted: (String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val projectsState by projectsViewModel.uiState.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -62,6 +73,18 @@ fun CreateSessionScreen(
     }
     LaunchedEffect(viewModel) {
         viewModel.transientMessages.collect { msg -> snackbar.showSnackbar(msg) }
+    }
+    LaunchedEffect(projectsViewModel) {
+        projectsViewModel.projectCreated.collect { newProject ->
+            viewModel.onProjectCreated(newProject)
+        }
+    }
+    LaunchedEffect(projectsViewModel) {
+        // Only Message events apply to the create-only flow on this screen.
+        // DeletedWithUndo / LinearKeyReminder / CloseSheet belong to ProjectsScreen.
+        projectsViewModel.events.collect { event ->
+            if (event is ProjectsUiEvent.Message) snackbar.showSnackbar(event.text)
+        }
     }
     LaunchedEffect(state.error) {
         state.error?.let {
@@ -122,6 +145,7 @@ fun CreateSessionScreen(
                     state = state,
                     selectedProject = selectedProject,
                     onSelect = viewModel::selectProject,
+                    onCreateProjectClicked = projectsViewModel::openCreateSheet,
                     onContinue = viewModel::confirmProject,
                 )
                 CreateSessionStep.ModePick -> ModePickerSection(
@@ -147,6 +171,31 @@ fun CreateSessionScreen(
             }
         }
     }
+
+    val form = projectsState.form
+    if (form != null) {
+        ProjectFormSheet(
+            state = form,
+            onDismiss = projectsViewModel::closeSheet,
+            onNameChange = projectsViewModel::onNameChange,
+            onPathChange = projectsViewModel::onPathChange,
+            onCondaChange = projectsViewModel::onCondaChange,
+            onLinearKeyChange = projectsViewModel::onLinearKeyChange,
+            onToggleKeyVisible = projectsViewModel::toggleLinearKeyVisible,
+            onRequestClearLinearKey = projectsViewModel::requestClearLinearKey,
+            onTouch = projectsViewModel::touch,
+            onAddFlag = projectsViewModel::addFlag,
+            onUpdateFlag = projectsViewModel::updateFlag,
+            onRemoveFlag = projectsViewModel::removeFlag,
+            onToggleTriggerLabel = projectsViewModel::toggleTriggerLabel,
+            onToggleTriggerState = projectsViewModel::toggleTriggerState,
+            onActiveStateChange = projectsViewModel::onActiveStateChange,
+            onDoneStateChange = projectsViewModel::onDoneStateChange,
+            onRemovalLabelChange = projectsViewModel::onRemovalLabelChange,
+            onRefreshFilterMetadata = projectsViewModel::refreshFilterMetadata,
+            onSave = projectsViewModel::save,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -155,6 +204,7 @@ private fun ProjectSelectSection(
     state: CreateSessionUiState,
     selectedProject: com.mobaide.app.data.network.dto.ProjectInfo?,
     onSelect: (String) -> Unit,
+    onCreateProjectClicked: () -> Unit,
     onContinue: () -> Unit,
 ) {
     var dropdownExpanded by remember { mutableStateOf(false) }
@@ -183,6 +233,23 @@ private fun ProjectSelectSection(
                     },
                 )
             }
+            if (state.projects.isNotEmpty()) {
+                HorizontalDivider()
+            }
+            DropdownMenuItem(
+                text = { Text("Create new project…") },
+                leadingIcon = {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                },
+                modifier = Modifier.semantics {
+                    role = Role.Button
+                    contentDescription = "Create new project"
+                },
+                onClick = {
+                    dropdownExpanded = false
+                    onCreateProjectClicked()
+                },
+            )
         }
     }
 
