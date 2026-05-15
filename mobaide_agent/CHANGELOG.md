@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.1.16](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.15...agent-v0.1.16) (2026-05-15)
+
+
+### Bug Fixes
+
+* **agent:** prevent long-paste truncation across Android UI, ViewModel, and PTY backend ([836fd89](https://github.com/syrax90/claude_mobile/commit/836fd898293d930a708e016adc82d03e42a4ab03))
+
 ## [0.1.15](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.14...agent-v0.1.15) (2026-05-15)
 
 

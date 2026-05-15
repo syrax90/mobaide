@@ -1,5 +1,12 @@
 # Android Changelog
 
+## [1.2.3](https://github.com/syrax90/claude_mobile/compare/android-v1.2.2...android-v1.2.3) (2026-05-15)
+
+
+### Bug Fixes
+
+* **agent:** prevent long-paste truncation across Android UI, ViewModel, and PTY backend ([836fd89](https://github.com/syrax90/claude_mobile/commit/836fd898293d930a708e016adc82d03e42a4ab03))
+
 ## [1.2.2](https://github.com/syrax90/claude_mobile/compare/android-v1.2.1...android-v1.2.2) (2026-05-15)
 
 
