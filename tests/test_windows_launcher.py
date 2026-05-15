@@ -586,6 +586,70 @@ class TestSpawnReleaseLauncher:
         assert (log_dir / "agent.err.log.1").exists()
         assert err_log_path.stat().st_size < windows_launcher._AGENT_LOG_ROTATE_BYTES
 
+    def test_passes_create_no_window_creationflag(self, tmp_path: Path) -> None:
+        """``Popen`` must be called with ``creationflags=CREATE_NO_WINDOW``.
+
+        The Scheduled Task action invokes the supervisor under
+        ``pythonw.exe`` (GUI subsystem, no console allocated). Without
+        ``CREATE_NO_WINDOW`` on the child ``Popen``, the spawned
+        release-pinned launcher's ``python.exe`` is a console-subsystem
+        binary -- Windows would allocate a fresh ``conhost.exe`` window
+        for it, defeating the whole hidden-process design. The literal
+        ``0x08000000`` is the documented ``CREATE_NO_WINDOW`` value
+        (matches ``subprocess.CREATE_NO_WINDOW``); duplicated in the
+        supervisor module because the stdlib-only contract forbids
+        importing ``mobaide`` or its constants.
+        """
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        kwargs = _FakePopen.captured_kwargs[-1]
+        flags = kwargs.get("creationflags")
+        assert flags is not None, (
+            "Popen must receive a ``creationflags`` kwarg so the spawned "
+            "launcher does not allocate a console window under "
+            "pythonw.exe; got kwargs without the key"
+        )
+        assert flags & 0x08000000, (
+            "creationflags must include CREATE_NO_WINDOW (0x08000000) so "
+            "the release-pinned ``python.exe`` child does not pop a "
+            "console window when the supervisor runs under pythonw.exe. "
+            f"Got creationflags={flags!r}"
+        )
+
+    def test_create_no_window_does_not_set_breakaway_from_job(
+        self, tmp_path: Path
+    ) -> None:
+        """``creationflags`` must not include ``CREATE_BREAKAWAY_FROM_JOB``.
+
+        The release-pinned launcher (``mobaide.launcher``) wraps the
+        agent in a Windows Job Object with
+        ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE``; setting
+        ``CREATE_BREAKAWAY_FROM_JOB`` (``0x01000000``) on the supervisor's
+        spawn of the launcher would let a future descendant escape the
+        job, defeating the clean-teardown guarantee. A regression that
+        OR's in unrelated flags must surface here before it ships.
+        """
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        kwargs = _FakePopen.captured_kwargs[-1]
+        flags = kwargs.get("creationflags", 0)
+        assert not (flags & 0x01000000), (
+            "creationflags must NOT include CREATE_BREAKAWAY_FROM_JOB "
+            "(0x01000000) -- the launcher's KILL_ON_JOB_CLOSE teardown "
+            "relies on the supervisor->launcher->agent process tree "
+            f"staying inside the job. Got creationflags={flags!r}"
+        )
+
 
 class TestSpawnReleaseLauncherErrorPath:
     """``_spawn_release_launcher`` opens ``agent.out.log`` before
@@ -1116,6 +1180,205 @@ class TestSupervise:
             "phrase 'restart requested' so operators can correlate the "
             "restart with the agent's pairing-complete event; got "
             f"stderr: {err!r}"
+        )
+
+
+class TestRedirectSupervisorStderr:
+    """``_redirect_supervisor_stderr`` rebinds ``sys.stderr`` to a writer
+    pointed at ``<prefix>/logs/launcher.err.log``.
+
+    Under ``pythonw.exe`` (GUI subsystem, no console allocated) the
+    interpreter's default ``sys.stderr`` is a no-op writer that silently
+    drops every byte. The supervisor's own emergency diagnostics ("cannot
+    resolve release interpreter", "failed to spawn launcher") are
+    operator-facing and silently discarding them turns "agent never
+    started" into an opaque failure mode. The redirect routes those
+    writes onto a dedicated rotated log file (distinct from
+    ``agent.err.log`` so supervisor-level failures are not interleaved
+    with the spawned launcher's stderr).
+
+    Each test monkeypatches ``sys.stderr`` so the global handle is
+    restored on teardown; ``capsys`` is not used here because the
+    helper assigns directly to ``sys.stderr`` and pytest's own
+    redirection would interfere with that assignment.
+    """
+
+    def test_writes_land_in_launcher_err_log(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        original_stderr = sys.stderr
+        try:
+            windows_launcher._redirect_supervisor_stderr(tmp_path)
+            sys.stderr.write("supervisor: cannot resolve release interpreter\n")
+            sys.stderr.flush()
+        finally:
+            # Restore stderr BEFORE asserting so a failing assertion is
+            # surfaced through pytest's normal stderr -- not redirected
+            # into the temp log where it would vanish.
+            redirected = sys.stderr
+            sys.stderr = original_stderr
+            try:
+                redirected.close()
+            except OSError:
+                pass
+
+        log_path = tmp_path / "logs" / "launcher.err.log"
+        assert log_path.exists(), (
+            "_redirect_supervisor_stderr must create "
+            "<prefix>/logs/launcher.err.log on first call -- without it, "
+            "the supervisor's own diagnostics under pythonw.exe go to the "
+            "interpreter's no-op stderr and operators see no signal"
+        )
+        contents = log_path.read_text(encoding="utf-8")
+        assert "cannot resolve release interpreter" in contents, (
+            "writes to ``sys.stderr`` after _redirect_supervisor_stderr "
+            "must reach <prefix>/logs/launcher.err.log; got "
+            f"contents={contents!r}"
+        )
+
+    def test_creates_log_file_with_distinct_filename_from_agent_err_log(
+        self, tmp_path: Path
+    ) -> None:
+        """``_redirect_supervisor_stderr`` opens ``launcher.err.log``,
+        not ``agent.err.log``.
+
+        ``agent.err.log`` is reserved for the spawned launcher's stderr
+        (redirected by ``_spawn_release_launcher`` via the ``stderr=``
+        Popen kwarg). Sharing one filename would interleave supervisor-
+        level "cannot spawn launcher" messages with release-pinned
+        launcher / agent failures and (worse) introduce a concurrent-
+        write race between the parent supervisor and the dup'd child
+        handle. The two log files MUST be distinct on disk.
+
+        We assert the file-system effect of the call, NOT subsequent
+        ``sys.stderr`` writes -- the writes are pinned by the companion
+        ``test_writes_land_in_launcher_err_log`` test.
+        """
+        original_stderr = sys.stderr
+        try:
+            windows_launcher._redirect_supervisor_stderr(tmp_path)
+        finally:
+            # Restore stderr immediately -- this test does not depend
+            # on the redirect surviving; it only checks the file-creation
+            # side-effect.
+            redirected = sys.stderr
+            sys.stderr = original_stderr
+            try:
+                redirected.close()
+            except (OSError, AttributeError):
+                pass
+
+        log_dir = tmp_path / "logs"
+        assert (log_dir / "launcher.err.log").exists(), (
+            "the supervisor's stderr log MUST be named launcher.err.log "
+            "so it is distinct from agent.err.log (which captures the "
+            "spawned launcher subprocess stderr)"
+        )
+        # The agent err log file must NOT have been created by the
+        # supervisor's stderr redirect -- only ``_spawn_release_launcher``
+        # writes there.
+        assert not (log_dir / "agent.err.log").exists(), (
+            "_redirect_supervisor_stderr must NOT touch agent.err.log -- "
+            "that filename is reserved for the spawned launcher's stderr "
+            "redirect via Popen(stderr=...). Creating it here would race "
+            "the child handle"
+        )
+
+    def test_uses_documented_filename_constant(self) -> None:
+        """The on-disk filename comes from
+        ``_LAUNCHER_ERR_LOG_FILE_NAME`` -- a module-level constant so
+        operators tailing ``launcher.err.log`` and docs referencing the
+        same path cannot drift out of sync.
+        """
+        assert windows_launcher._LAUNCHER_ERR_LOG_FILE_NAME == "launcher.err.log"
+        assert (
+            windows_launcher._LAUNCHER_ERR_LOG_BACKUP_NAME
+            == "launcher.err.log.1"
+        ), (
+            "rotation backup constant must shadow the live-log name with "
+            "the ``.1`` suffix used by every other supervisor log -- a "
+            "regression here would put the backup at an undocumented "
+            "name and break ``Get-ChildItem <prefix>/logs`` cleanup"
+        )
+
+class TestMainWiresStderrRedirect:
+    """``main`` calls ``_redirect_supervisor_stderr`` BEFORE
+    ``_supervise`` so the supervisor's own diagnostics during resolve /
+    spawn errors land in ``launcher.err.log``.
+
+    Order matters: if ``_supervise`` runs first and hits a resolve
+    error, the stderr write at ``_supervise``'s exit-70 branch would
+    silently disappear under pythonw.exe. The fix is to install the
+    redirect at ``main`` top so every subsequent stderr write lands in
+    the file.
+    """
+
+    def test_main_calls_redirect_before_supervise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+
+        def fake_redirect(_prefix: Path) -> None:
+            order.append("redirect")
+
+        def fake_supervise(_prefix: Path) -> int:
+            order.append("supervise")
+            return 0
+
+        monkeypatch.setattr(
+            windows_launcher, "_install_signal_handlers", lambda: None
+        )
+        monkeypatch.setattr(
+            windows_launcher, "_redirect_supervisor_stderr", fake_redirect
+        )
+        monkeypatch.setattr(windows_launcher, "_supervise", fake_supervise)
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", r"D:\foo")
+
+        rc = windows_launcher.main([])
+
+        assert rc == 0
+        assert order == ["redirect", "supervise"], (
+            "_redirect_supervisor_stderr must be called BEFORE "
+            "_supervise so resolve/spawn-error diagnostics land in "
+            "<prefix>/logs/launcher.err.log instead of pythonw.exe's "
+            f"no-op stderr; got call order {order!r}"
+        )
+
+    def test_main_passes_resolved_prefix_to_redirect(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same prefix used by ``_supervise`` MUST be threaded into
+        ``_redirect_supervisor_stderr`` -- otherwise the stderr log
+        could land under one install prefix while the supervisor reads
+        ``current_version`` from a different one (e.g. ProgramFiles
+        default vs. a ``--prefix D:\\custom`` override).
+        """
+        prefix_calls: dict[str, Path] = {}
+
+        def fake_redirect(prefix: Path) -> None:
+            prefix_calls["redirect"] = prefix
+
+        def fake_supervise(prefix: Path) -> int:
+            prefix_calls["supervise"] = prefix
+            return 0
+
+        monkeypatch.setattr(
+            windows_launcher, "_install_signal_handlers", lambda: None
+        )
+        monkeypatch.setattr(
+            windows_launcher, "_redirect_supervisor_stderr", fake_redirect
+        )
+        monkeypatch.setattr(windows_launcher, "_supervise", fake_supervise)
+
+        windows_launcher.main(["--prefix", r"D:\custom\install"])
+
+        assert prefix_calls.get("redirect") == Path(r"D:\custom\install")
+        assert prefix_calls["redirect"] == prefix_calls["supervise"], (
+            "_redirect_supervisor_stderr and _supervise must receive "
+            "the same resolved Path -- a divergence would put the "
+            "stderr log under one prefix and current_version reads "
+            f"under another. Got {prefix_calls!r}"
         )
 
 

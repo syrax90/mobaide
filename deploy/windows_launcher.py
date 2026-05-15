@@ -49,7 +49,19 @@ _AGENT_ERR_LOG_FILE_NAME = "agent.err.log"
 _AGENT_ERR_LOG_BACKUP_NAME = "agent.err.log.1"
 _AGENT_OUT_LOG_FILE_NAME = "agent.out.log"
 _AGENT_OUT_LOG_BACKUP_NAME = "agent.out.log.1"
+_LAUNCHER_ERR_LOG_FILE_NAME = "launcher.err.log"
+_LAUNCHER_ERR_LOG_BACKUP_NAME = "launcher.err.log.1"
 _AGENT_LOG_ROTATE_BYTES = 5 * 1024 * 1024
+
+# ``subprocess.CREATE_NO_WINDOW`` — hardcoded literal so this stdlib-only
+# script is independent of the agent's ``subprocess`` re-exports. The
+# Scheduled Task runs the supervisor under ``pythonw.exe`` (GUI subsystem,
+# no console allocated). Without this flag, ``Popen``-ing a console-
+# subsystem ``python.exe`` child would still pop a fresh console window,
+# defeating the whole hidden-process design. Compatible with
+# ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` (it does not set
+# ``CREATE_BREAKAWAY_FROM_JOB``).
+_CREATE_NO_WINDOW = 0x08000000
 
 # Canonical in ``mobaide.agent.updater.EXIT_RESTART_REQUESTED``. Duplicated
 # here because this supervisor is a standalone stdlib script — importing
@@ -164,6 +176,7 @@ def _spawn_release_launcher(
             stdout=out_log,
             stderr=err_log,
             close_fds=True,
+            creationflags=_CREATE_NO_WINDOW,
         )
     finally:
         out_log.close()
@@ -248,6 +261,47 @@ def _supervise(prefix: Path) -> int:
         return 0
 
 
+def _redirect_supervisor_stderr(prefix: Path) -> None:
+    """Reopen ``sys.stderr`` onto ``<prefix>/logs/launcher.err.log``.
+
+    Under ``pythonw.exe`` (Scheduled Task hidden-process entry point) the
+    interpreter's ``sys.stdout`` / ``sys.stderr`` are bound to a no-op
+    writer — they accept ``.write`` calls but drop the bytes. The
+    supervisor's own diagnostics ("cannot resolve release interpreter",
+    "failed to spawn launcher") are emergency-only and operator-facing;
+    silently discarding them turns "agent never started" into an opaque
+    failure mode. Reopen ``sys.stderr`` onto a dedicated rotated log file
+    so those messages always land somewhere a ``Get-Content`` can find.
+    Distinct from ``agent.err.log`` (which captures the spawned launcher
+    subprocess's stderr) so supervisor-level failures are not interleaved
+    with release-pinned launcher / agent failures.
+
+    Implementation note — fd ownership. ``_open_log`` returns a binary
+    file wrapper that owns its OS fd; if we just pass its ``fileno()``
+    to a second ``open(..., closefd=False)`` and let the original
+    wrapper fall out of scope, the original's destructor closes the fd
+    and the new ``sys.stderr`` writes raise ``OSError: Bad file
+    descriptor``. ``os.dup`` gives the new wrapper an independent fd so
+    both can manage their own lifecycle: the original ``fh`` closes its
+    fd when GC'd at function exit, and the new ``sys.stderr`` owns the
+    duplicate.
+    """
+    fh = _open_log(prefix, _LAUNCHER_ERR_LOG_FILE_NAME, _LAUNCHER_ERR_LOG_BACKUP_NAME)
+    try:
+        try:
+            dup_fd = os.dup(fh.fileno())
+        except OSError:
+            return
+    finally:
+        fh.close()
+    try:
+        sys.stderr = os.fdopen(
+            dup_fd, mode="w", encoding="utf-8", buffering=1
+        )
+    except Exception:
+        os.close(dup_fd)
+
+
 def _install_signal_handlers() -> None:
     """Translate Windows console-control signals into ``KeyboardInterrupt``.
 
@@ -282,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     _install_signal_handlers()
     prefix = _default_prefix(args.prefix)
+    _redirect_supervisor_stderr(prefix)
     return _supervise(prefix)
 
 

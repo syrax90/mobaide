@@ -241,6 +241,80 @@ class TestRunGitSubprocessContract:
         )
 
 
+class TestRunGitHidesConsoleWindow:
+    """Pin ``creationflags=_WINDOWS_NO_WINDOW`` on the ``subprocess.run``
+    call inside ``_run_git``.
+
+    Linear / auto-scan invokes ``_run_git`` for every worktree listing,
+    branch query, and worktree-add operation. Under ``pythonw.exe`` via
+    the per-user Scheduled Task (no parent console), each ``git.exe``
+    child would otherwise pop a fresh console window. The flag
+    suppresses that without breaking ``capture_output=True``'s stdio
+    inheritance.
+    """
+
+    async def test_subprocess_run_passes_creationflags(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        cwd = str(tmp_path)
+        recorder = _SubprocessRunRecorder(returncode=0)
+        monkeypatch.setattr(_wt.subprocess, "run", recorder)
+
+        await _run_git("--version", cwd=cwd)
+
+        assert len(recorder.calls) == 1
+        call = recorder.calls[0]
+        kwargs = call["kwargs"]
+        assert "creationflags" in kwargs, (
+            "_run_git's subprocess.run kwargs must include the "
+            "literal `creationflags` key -- a missing key (defaulting "
+            "to 0) means every Linear/auto-scan git invocation pops "
+            "a transient git.exe console under pythonw.exe; got "
+            f"kwargs={kwargs!r}"
+        )
+        flag = kwargs["creationflags"]
+        assert flag == _wt._WINDOWS_NO_WINDOW, (
+            "_run_git must pass creationflags=_WINDOWS_NO_WINDOW so "
+            "the flag value matches the platform-conditional "
+            f"constant; got creationflags={flag!r}"
+        )
+
+    async def test_creationflags_threaded_through_asyncio_to_thread(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        """Regression guard: ``_run_git`` invokes
+        ``asyncio.to_thread(subprocess.run, ["git", *args],
+        creationflags=_WINDOWS_NO_WINDOW, ...)``. ``asyncio.to_thread``'s
+        signature is ``(func, /, *args, **kwargs)`` — it forwards every
+        keyword argument to ``func`` (``subprocess.run`` here), so the
+        flag reaches the subprocess layer through the same plumbing as
+        ``cwd`` and ``capture_output``. This test pins that the flag
+        survives the to_thread → subprocess.run hop on every call.
+        """
+        cwd = str(tmp_path)
+        recorder = _SubprocessRunRecorder(returncode=0)
+        monkeypatch.setattr(_wt.subprocess, "run", recorder)
+
+        # Multiple invocations to confirm the flag is per-call, not
+        # set once at module import via a default-argument trick that
+        # could be silently overridden on subsequent calls.
+        await _run_git("status", "--porcelain", cwd=cwd)
+        await _run_git("branch", "--list", cwd=cwd)
+
+        assert len(recorder.calls) == 2
+        for idx, call in enumerate(recorder.calls):
+            flag = call["kwargs"].get("creationflags")
+            assert flag == _wt._WINDOWS_NO_WINDOW, (
+                f"_run_git call #{idx + 1} (cmd={call['args'][0]!r}) "
+                f"must pass creationflags=_WINDOWS_NO_WINDOW; got "
+                f"creationflags={flag!r}"
+            )
+
+
 class TestRunGitDoesNotUseCreateSubprocessExec:
     """Negative regression guard for the subprocess.run migration.
 

@@ -77,6 +77,14 @@ DEFERRED_RETRY_SECONDS = 30 * 60
 # Log a WARN if a single update has been deferred for longer than this.
 LONG_DEFER_WARN_SECONDS = 24 * 60 * 60
 
+# Suppress the transient console window every ``python -m venv`` and
+# ``pip install`` would otherwise pop into the user's session. The agent
+# runs under ``pythonw.exe`` via the Scheduled Task (no parent console),
+# so a default ``subprocess.run`` of a console-mode child creates a fresh
+# console for the child. ``CREATE_NO_WINDOW`` suppresses that while
+# preserving ``capture_output=True``'s stdio inheritance.
+_WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
 
 @dataclass(frozen=True)
 class InstallLayout:
@@ -364,6 +372,7 @@ def _install_wheel_into_venv(venv_dir: Path, wheel_path: Path) -> None:
         [sys.executable, "-m", "venv", str(venv_dir)],
         check=True,
         capture_output=True,
+        creationflags=_WINDOWS_NO_WINDOW,
     )
     if sys.platform == "win32":
         pip = venv_dir / "Scripts" / "pip.exe"
@@ -373,9 +382,11 @@ def _install_wheel_into_venv(venv_dir: Path, wheel_path: Path) -> None:
         [str(pip), "install", "--no-cache-dir", "--upgrade", "pip"],
         check=True,
         capture_output=True,
+        creationflags=_WINDOWS_NO_WINDOW,
     )
     subprocess.run(
         [str(pip), "install", "--no-cache-dir", str(wheel_path)],
         check=True,
         capture_output=True,
+        creationflags=_WINDOWS_NO_WINDOW,
     )

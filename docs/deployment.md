@@ -133,13 +133,15 @@ The agent runs under a per-user Scheduled Task. The Scheduled Task action points
 The registered task action is:
 
 ```
-Execute  : <python.exe resolved by Resolve-Python at install time>
+Execute  : <pythonw.exe resolved by Resolve-Pythonw at install time>
 Argument : -u "<prefix>\svc\mobaide_launcher.py" --prefix "<prefix>"
 ```
 
 `mobaide_launcher.py` is fetched from `https://get.mobaide.com/windows_launcher.py` during install. It is co-versioned with `install.ps1` itself — the `publish-gh-pages` workflow ships both files in the same push — so installer changes that depend on a new supervisor API can never desync. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`.
 
-On every task start, the supervisor reads `<prefix>\current_version`, resolves the active release's `python.exe`, and spawns `python.exe -m mobaide.launcher` as a subprocess. The launcher does crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv` (which creates a new PID on Windows, breaking the supervisor's `poll()` supervision — Python issue #9148). The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log` (each rotated at 5 MB, one backup kept).
+On every task start, the supervisor (`mobaide_launcher.py`) is launched by `pythonw.exe` — the GUI-subsystem variant of CPython, which does not allocate a console window. This is what prevents the transient py.exe window from appearing at logon or during `irm install.ps1 | iex`. Because `pythonw.exe` binds its stdio to no-op handles, the supervisor redirects its own `sys.stderr` to `<prefix>\logs\launcher.err.log` at startup so diagnostics (config errors, Python tracebacks) survive. The supervisor then reads `<prefix>\current_version`, resolves the active release's `python.exe`, and spawns `python.exe -m mobaide.launcher` as a subprocess. The launcher does crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv` (which creates a new PID on Windows, breaking the supervisor's `poll()` supervision — Python issue #9148). Every `subprocess.Popen` / `subprocess.run` call in the Windows agent code path also passes `creationflags=CREATE_NO_WINDOW` as defense-in-depth so child processes inherit the no-window behaviour. The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log` (each rotated at 5 MB, one backup kept).
+
+> **CPython 3.13.0 caveat:** on CPython 3.13.0, `pythonw.exe` inside a venv still allocates a transient console due to [CPython issue #126084](https://github.com/python/cpython/issues/126084). This was fixed in 3.13.1. The installer's `winget` fast path targets Python 3.12, which is unaffected; if you are using a self-managed 3.13.0 environment and observe a brief window flash, upgrade to 3.13.1+.
 
 When the launcher subprocess exits with code 75 (`_EXIT_RESTART_REQUESTED` — emitted on successful pair or staged update), the supervisor re-resolves `current_version` and respawns immediately. This in-process loop gives the user a sub-second post-pair restart; Task Scheduler's outer `-RestartCount` / `-RestartInterval` (1-minute floor) catches the supervisor-level failure case.
 
@@ -160,7 +162,9 @@ Unregister-ScheduledTask -TaskName MobaideAgent -Confirm:$false   # uninstall th
 #   Event Viewer -> Applications and Services Logs ->
 #     Microsoft -> Windows -> TaskScheduler -> Operational
 
-# Launcher / agent stderr (config errors, Python tracebacks, port conflicts).
+# Supervisor stderr (pythonw.exe startup errors, config errors before the agent forks).
+Get-Content "$Prefix\logs\launcher.err.log" -Tail 50
+# Agent stderr (Python tracebacks, port conflicts).
 Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 # Agent stdout (structlog: pairing flow, relay client, HTTP, auto-scan).
 Get-Content "$Prefix\logs\agent.out.log" -Tail 100

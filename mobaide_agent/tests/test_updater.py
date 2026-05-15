@@ -8,6 +8,7 @@ of ``current_version``. The manifest body itself is passed in directly
 from __future__ import annotations
 
 import base64
+import sys
 import tarfile
 from io import BytesIO
 from pathlib import Path
@@ -19,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from mobaide.agent.updater import (
     InstallLayout,
     StagedBinaryUpdater,
+    _install_wheel_into_venv,
     _wheel_basename_from_url,
 )
 from mobaide.manifest_signing import canonical_json
@@ -427,3 +429,102 @@ def test_download_to_routes_through_user_agent_wrapper(tmp_path) -> None:
     assert dest.read_bytes() == payload
     ua = captured["request"].get_header("User-agent")
     assert ua is not None and ua.startswith("mobaide-agent/")
+
+
+class TestInstallWheelIntoVenvHidesWindow:
+    """Pin the Windows ``CREATE_NO_WINDOW`` flag on every ``subprocess.run``
+    invocation in ``_install_wheel_into_venv``.
+
+    The updater runs inside the long-lived agent process. The agent
+    runs under ``pythonw.exe`` via the per-user Scheduled Task (no
+    parent console). A default ``subprocess.run`` of a console-mode
+    child like ``python -m venv`` or ``pip install`` would therefore
+    pop a fresh console window into the user's session on every
+    auto-update. ``CREATE_NO_WINDOW`` (0x08000000) suppresses that
+    while preserving ``capture_output=True``'s stdio inheritance
+    (unlike ``DETACHED_PROCESS``).
+
+    The flag is module-level ``_WINDOWS_NO_WINDOW``: equals
+    ``subprocess.CREATE_NO_WINDOW`` on win32, ``0`` elsewhere. Tests
+    monkeypatch ``subprocess.run`` so they run on every host
+    regardless of whether the actual venv/pip invocations would
+    succeed.
+    """
+
+    def _capture_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> list[dict]:
+        """Wire a deterministic ``subprocess.run`` recorder onto the
+        updater module's bound ``subprocess`` reference (mirrors the
+        pattern in ``test_env_writer.TestRestrictPermsWindowsAclArgv``).
+        """
+        calls: list[dict] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append({"cmd": list(cmd), "kwargs": dict(kwargs)})
+            return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+        import mobaide.agent.updater as _updater_mod
+
+        monkeypatch.setattr(_updater_mod.subprocess, "run", fake_run)
+        return calls
+
+    def test_all_three_subprocess_run_calls_pass_creationflags(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        # _install_wheel_into_venv makes three subprocess.run calls:
+        #   1. python -m venv <venv_dir>
+        #   2. <venv>/Scripts/pip.exe install --upgrade pip
+        #   3. <venv>/Scripts/pip.exe install <wheel>
+        # All three MUST pass ``creationflags=_WINDOWS_NO_WINDOW``.
+        # Without any one, that subprocess pops a console window on
+        # Windows on every auto-update cycle.
+        calls = self._capture_run(monkeypatch)
+        import mobaide.agent.updater as _updater_mod
+
+        venv_dir = tmp_path / "venv"
+        wheel_path = tmp_path / "mobaide_agent-0.2.0-py3-none-any.whl"
+        wheel_path.write_bytes(b"PK\x03\x04 fake")
+
+        _install_wheel_into_venv(venv_dir, wheel_path)
+
+        assert len(calls) == 3, (
+            f"expected exactly 3 subprocess.run calls (venv, pip "
+            f"upgrade, wheel install); got {len(calls)}"
+        )
+
+        expected_flag = _updater_mod._WINDOWS_NO_WINDOW
+        for idx, call in enumerate(calls):
+            flag = call["kwargs"].get("creationflags")
+            assert flag == expected_flag, (
+                f"subprocess.run call #{idx + 1} "
+                f"(cmd={call['cmd']!r}) must pass "
+                f"creationflags=_WINDOWS_NO_WINDOW ({expected_flag!r}); "
+                f"got creationflags={flag!r}. On Windows this means "
+                f"the call would pop a console window for the "
+                f"subprocess (pip / venv / python.exe child)"
+            )
+
+    def test_windows_no_window_constant_resolves_correctly(self) -> None:
+        """On win32, ``_WINDOWS_NO_WINDOW`` MUST equal
+        ``subprocess.CREATE_NO_WINDOW`` (0x08000000). On every other
+        platform it MUST be 0 so the flag is a no-op (CPython's
+        Linux/macOS ``subprocess`` ignores unknown ``creationflags``
+        values, but a non-zero literal on non-Windows is a sign the
+        constant has drifted from its intended platform-conditional
+        shape).
+        """
+        import mobaide.agent.updater as _updater_mod
+
+        if sys.platform == "win32":
+            import subprocess as _sp
+            assert _updater_mod._WINDOWS_NO_WINDOW == _sp.CREATE_NO_WINDOW
+            assert _updater_mod._WINDOWS_NO_WINDOW == 0x08000000, (
+                "the literal value MUST be 0x08000000 -- if Python's "
+                "subprocess module changes the symbol's value this "
+                "assertion will surface that ABI break before it ships"
+            )
+        else:
+            assert _updater_mod._WINDOWS_NO_WINDOW == 0

@@ -237,6 +237,15 @@ def _spawn_and_wait_windows(args: list[str]) -> NoReturn:
     job-policy, ctypes import failure), skip the job assignment and
     still ``Popen``-and-``wait`` so the primary PID-preservation fix
     holds even in degraded-teardown mode.
+
+    ``creationflags=CREATE_NO_WINDOW`` suppresses console allocation
+    for the spawned agent. The Scheduled-Task supervisor runs under
+    ``pythonw.exe`` so it has no parent console to inherit; without
+    this flag, Windows allocates a fresh console window for the
+    console-subsystem ``python.exe`` child. The flag is mutually
+    distinct from ``CREATE_NEW_PROCESS_GROUP`` (which would set
+    ``CREATE_BREAKAWAY_FROM_JOB`` semantics and break the
+    KILL_ON_JOB_CLOSE teardown contract above).
     """
     import ctypes
     from ctypes import wintypes
@@ -296,7 +305,9 @@ def _spawn_and_wait_windows(args: list[str]) -> NoReturn:
             kernel32.CloseHandle(job_handle)
             job_handle = None
 
-    proc = subprocess.Popen(args, close_fds=True)
+    proc = subprocess.Popen(
+        args, close_fds=True, creationflags=subprocess.CREATE_NO_WINDOW
+    )
 
     if job_handle:
         child = kernel32.OpenProcess(

@@ -319,11 +319,15 @@ def test_spawn_and_wait_windows_attaches_job_object(monkeypatch):
     popen_call = next(c for c in calls if c[0] == "Popen")
     popen_kwargs = popen_call[1][1]
     assert popen_kwargs.get("close_fds") is True
-    assert "creationflags" not in popen_kwargs or popen_kwargs[
-        "creationflags"
-    ] == 0, (
+    flags = popen_kwargs.get("creationflags", 0)
+    assert not (flags & _subprocess.CREATE_NEW_PROCESS_GROUP), (
         "CREATE_NEW_PROCESS_GROUP is incompatible with the "
         "KILL_ON_JOB_CLOSE teardown semantics — must not be set"
+    )
+    assert flags & _subprocess.CREATE_NO_WINDOW, (
+        "CREATE_NO_WINDOW must be set so the agent process does not "
+        "allocate a console window when the supervisor runs under "
+        "pythonw.exe via the per-user Scheduled Task"
     )
 
     set_info_call = next(c for c in calls if c[0] == "SetInformationJobObject")

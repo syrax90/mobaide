@@ -4,8 +4,15 @@ import asyncio
 import os
 import re
 import subprocess
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
+
+# Suppress the transient ``git`` console window the Scheduled-Task-spawned
+# agent (no parent console under ``pythonw.exe``) would otherwise pop on
+# every worktree / branch listing call. ``CREATE_NO_WINDOW`` keeps
+# ``capture_output=True``'s stdio inheritance intact.
+_WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 try:
     from mobaide.agent.logging import audit_event, get_logger, log_call
@@ -139,6 +146,7 @@ async def _run_git(
         ["git", *args],
         cwd=cwd,
         capture_output=True,
+        creationflags=_WINDOWS_NO_WINDOW,
     )
     return (
         completed.returncode or 0,

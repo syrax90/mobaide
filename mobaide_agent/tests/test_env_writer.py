@@ -533,3 +533,67 @@ class TestRestrictPermsWindowsAclArgv:
         # never raise even when icacls is broken/missing.
         restrict_perms(target)
         assert target.exists()
+
+    def test_icacls_invocation_passes_create_no_window_flag(
+        self, tmp_path, monkeypatch
+    ):
+        """``subprocess.run`` for ``icacls`` MUST pass
+        ``creationflags=_WINDOWS_NO_WINDOW``.
+
+        The agent runs under ``pythonw.exe`` via the per-user Scheduled
+        Task (no parent console). Without ``CREATE_NO_WINDOW``, every
+        env-file write (``init-env``, ``pair``, post-pair credential
+        atomic-replace) would pop a transient ``icacls.exe`` console
+        window into the user's session. ``CREATE_NO_WINDOW`` keeps
+        ``capture_output=True``'s stdio inheritance intact (unlike
+        ``DETACHED_PROCESS`` which severs handle inheritance).
+
+        We assert the flag matches the production constant (rather
+        than the raw 0x08000000 literal) so the test runs identically
+        on both win32 and non-win32 hosts: the constant resolves to
+        ``CREATE_NO_WINDOW`` on win32 and ``0`` elsewhere, and the
+        production code uses exactly that constant. The companion
+        ``test_windows_no_window_constant_on_win32`` test pins the
+        literal value when running on Windows.
+        """
+        target = tmp_path / ".env"
+        target.write_text("x=1\n", encoding="utf-8")
+        captured = self._capture_run(monkeypatch)
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setenv("USERNAME", "alice")
+
+        restrict_perms(target)
+
+        kwargs = captured["kwargs"]
+        assert "creationflags" in kwargs, (
+            "icacls subprocess.run kwargs must include the literal "
+            "`creationflags` key -- a missing key (defaulting to 0) "
+            "means a console window pops up under pythonw.exe on "
+            f"every env-file write; got kwargs={kwargs!r}"
+        )
+        flag = kwargs["creationflags"]
+        assert flag == _env_writer._WINDOWS_NO_WINDOW, (
+            "icacls subprocess.run must pass "
+            "creationflags=_WINDOWS_NO_WINDOW (the production "
+            "constant) so the flag value matches the documented "
+            f"platform-conditional shape; got creationflags={flag!r}"
+        )
+
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason="Win32 literal value pin",
+    )
+    def test_windows_no_window_constant_on_win32(self) -> None:
+        """On win32, ``_env_writer._WINDOWS_NO_WINDOW`` MUST equal
+        ``0x08000000`` (subprocess.CREATE_NO_WINDOW).
+
+        Pinning the literal here proves the module-level conditional
+        ``CREATE_NO_WINDOW if sys.platform == "win32" else 0``
+        resolves to the documented value at import time on Windows.
+        A regression that flips the conditional or drops the import
+        would surface as ``flag=0`` here.
+        """
+        import subprocess as _sp
+
+        assert _env_writer._WINDOWS_NO_WINDOW == _sp.CREATE_NO_WINDOW
+        assert _env_writer._WINDOWS_NO_WINDOW == 0x08000000
