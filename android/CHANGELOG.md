@@ -1,5 +1,17 @@
 # Android Changelog
 
+## [2.0.0](https://github.com/syrax90/claude_mobile/compare/android-v1.2.3...android-v2.0.0) (2026-05-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **windows:** the Windows SCM service (MobaideAgent) is removed. On upgrade, install.ps1 detects and unregisters the old service before registering the new Scheduled Task, which runs as the current interactive user instead of SYSTEM.
+
+### Features
+
+* **agent:** replace LocalSystem SCM service with per-user Scheduled Task (CLA-53) ([21d1007](https://github.com/syrax90/claude_mobile/commit/21d1007de612a56dc4b820aac5209d44eaee3e39))
+* **windows:** replace LocalSystem SCM service with per-user Scheduled Task (CLA-53) ([761ff72](https://github.com/syrax90/claude_mobile/commit/761ff72069102851e8322e84356b882423851f3d))
+
 ## [1.2.3](https://github.com/syrax90/claude_mobile/compare/android-v1.2.2...android-v1.2.3) (2026-05-15)
 
 
