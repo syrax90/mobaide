@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.1.15](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.14...agent-v0.1.15) (2026-05-15)
+
+
+### Bug Fixes
+
+* **agent:** deliver manifest body inline over relay (proto-v2) ([a7ebd08](https://github.com/syrax90/claude_mobile/commit/a7ebd08837774992fb60f28fbe89891ae1408d26))
+
 ## [0.1.14](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.13...agent-v0.1.14) (2026-05-14)
 
 

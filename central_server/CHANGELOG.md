@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.1.6](https://github.com/syrax90/claude_mobile/compare/server-v0.1.5...server-v0.1.6) (2026-05-15)
+
+
+### Bug Fixes
+
+* **agent:** deliver manifest body inline over relay (proto-v2) ([a7ebd08](https://github.com/syrax90/claude_mobile/commit/a7ebd08837774992fb60f28fbe89891ae1408d26))
+
 ## [0.1.5](https://github.com/syrax90/claude_mobile/compare/server-v0.1.4...server-v0.1.5) (2026-05-14)
 
 
