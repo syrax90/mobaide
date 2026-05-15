@@ -59,6 +59,8 @@ class AgentSummary(BaseModel):
     online: bool
     created_at: str
     last_seen_at: str | None
+    agent_version: str | None = None
+    agent_protocol_version: int | None = None
 
 
 class ReregisterAgentResponse(BaseModel):

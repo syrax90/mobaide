@@ -255,7 +255,12 @@ The Android client (`VersionGateRepository`) compares
 server emits `{type:"incompatible", reason, min_client_version,
 server_protocol_versions}` and closes with WebSocket code **4002**
 (`PROTOCOL_INCOMPATIBLE_CLOSE_CODE`). The agent treats 4002 as a terminal
-condition and does not retry on the same binary.
+condition and does not retry on the same binary. On a successful auth the
+server persists `agent_version` and `agent_protocol_version` (the
+`protocol_version` the agent declared) into the `agents` DB row; both fields
+are exposed via `GET /api/agents` (`AgentSummary`) and rendered on the admin
+dashboard — the agent-list page shows a **Version** column and the agent-detail
+page shows a badge ("Up to date" or "latest: X.Y.Z" when behind the manifest).
 
 ## Agent rollout manifest
 

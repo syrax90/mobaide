@@ -15,6 +15,23 @@
     <div><strong>Owner:</strong> {{ owner_email or "—" }}</div>
     <div><strong>Created:</strong> {{ agent.created_at }}</div>
     <div><strong>Last Seen:</strong> {{ agent.last_seen_at or "Never" }}</div>
+    <div>
+        <strong>Version:</strong>
+        {% if agent.agent_version %}
+        <code>{{ agent.agent_version }}</code>
+        {% if latest_agent_version %}
+            {% if agent.agent_version == latest_agent_version %}
+            <span class="badge badge-online">Up to date</span>
+            {% else %}
+            <span class="text-muted">(latest: {{ latest_agent_version }})</span>
+            {% endif %}
+        {% endif %}
+        {% else %}—{% endif %}
+    </div>
+    <div>
+        <strong>Protocol:</strong>
+        {% if agent.agent_protocol_version %}v{{ agent.agent_protocol_version }}{% else %}—{% endif %}
+    </div>
 </div>
 
 <section>

@@ -144,6 +144,178 @@ class TestAgentCRUD:
         assert await cur.fetchone() is None
 
 
+class TestAgentHandshakeInfo:
+    """Cover ``Database.update_agent_handshake_info`` + the new
+    ``agent_version`` / ``agent_protocol_version`` columns surfaced
+    through ``get_agent`` / ``list_agents`` / ``list_agents_with_owner``
+    / ``list_agents_for_user``.
+
+    The COALESCE-based update is the load-bearing invariant: an
+    auth message that omits ``agent_version`` must not clobber a
+    previously-recorded value.
+    """
+
+    async def test_update_persists_both_fields(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        agent = await db.get_agent(agent_id)
+        assert agent is not None
+        assert agent["agent_version"] == "0.3.0"
+        assert agent["agent_protocol_version"] == 2
+
+    async def test_freshly_registered_agent_has_null_handshake_fields(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+
+        agent = await db.get_agent(agent_id)
+        assert agent is not None
+        assert agent["agent_version"] is None
+        assert agent["agent_protocol_version"] is None
+
+    async def test_update_with_none_version_preserves_existing(
+        self, db: Database
+    ):
+        """A reconnect that omitted ``agent_version`` from the handshake
+        must not wipe the previously-stored value — that's the COALESCE
+        contract.
+        """
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        await db.update_agent_handshake_info(agent_id, None, 2)
+
+        agent = await db.get_agent(agent_id)
+        assert agent["agent_version"] == "0.3.0"
+        assert agent["agent_protocol_version"] == 2
+
+    async def test_update_with_none_protocol_version_preserves_existing(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        await db.update_agent_handshake_info(agent_id, "0.4.0", None)
+
+        agent = await db.get_agent(agent_id)
+        assert agent["agent_version"] == "0.4.0"
+        assert agent["agent_protocol_version"] == 2
+
+    async def test_update_with_both_none_is_noop_on_existing_values(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        await db.update_agent_handshake_info(agent_id, None, None)
+
+        agent = await db.get_agent(agent_id)
+        assert agent["agent_version"] == "0.3.0"
+        assert agent["agent_protocol_version"] == 2
+
+    async def test_update_overwrites_with_newer_version(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        await db.update_agent_handshake_info(agent_id, "0.4.0", 3)
+
+        agent = await db.get_agent(agent_id)
+        assert agent["agent_version"] == "0.4.0"
+        assert agent["agent_protocol_version"] == 3
+
+    async def test_update_nonexistent_agent_is_noop(self, db: Database):
+        # No row matches; UPDATE affects 0 rows but must not raise.
+        await db.update_agent_handshake_info("nonexistent", "0.3.0", 2)
+        assert await db.get_agent("nonexistent") is None
+
+    async def test_list_agents_includes_handshake_fields(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("a1", owner)
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        agents = await db.list_agents()
+        assert len(agents) == 1
+        assert agents[0]["agent_version"] == "0.3.0"
+        assert agents[0]["agent_protocol_version"] == 2
+
+    async def test_list_agents_with_owner_includes_handshake_fields(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("a1", owner)
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        agents = await db.list_agents_with_owner()
+        assert len(agents) == 1
+        assert agents[0]["agent_version"] == "0.3.0"
+        assert agents[0]["agent_protocol_version"] == 2
+        # Existing owner_email projection must still work alongside the
+        # new columns — guards against an accidental column drop in the
+        # JOIN SELECT list.
+        assert agents[0]["owner_email"] == "owner@test.local"
+
+    async def test_list_agents_for_user_includes_handshake_fields(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("a1", owner)
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        agents = await db.list_agents_for_user(owner)
+        assert len(agents) == 1
+        assert agents[0]["agent_version"] == "0.3.0"
+        assert agents[0]["agent_protocol_version"] == 2
+
+    async def test_update_refreshes_last_seen_on_fresh_row(self, db: Database):
+        """The connect path no longer calls ``touch_agent_last_seen``
+        separately — ``update_agent_handshake_info`` is now responsible
+        for bumping ``last_seen_at`` in the same UPDATE+commit. A
+        freshly-registered agent has ``last_seen_at IS NULL``; one
+        handshake must populate it.
+        """
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        before = await db.get_agent(agent_id)
+        assert before is not None
+        assert before["last_seen_at"] is None
+
+        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        after = await db.get_agent(agent_id)
+        assert after["last_seen_at"] is not None
+        # _now_iso() emits an ISO-8601 string with a UTC offset.
+        assert after["last_seen_at"].endswith("+00:00")
+
+    async def test_update_refreshes_last_seen_when_both_versions_none(
+        self, db: Database
+    ):
+        """``last_seen_at`` is always refreshed, regardless of the
+        COALESCE-preserve-on-None rule that governs ``agent_version`` /
+        ``agent_protocol_version``. A reconnect where the agent omitted
+        both version fields still counts as "seen now".
+        """
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        assert (await db.get_agent(agent_id))["last_seen_at"] is None
+
+        await db.update_agent_handshake_info(agent_id, None, None)
+
+        agent = await db.get_agent(agent_id)
+        # last_seen_at must be set even though the COALESCE branches for
+        # the two version columns are no-ops.
+        assert agent["last_seen_at"] is not None
+        assert agent["agent_version"] is None
+        assert agent["agent_protocol_version"] is None
+
+
 class TestPairingTokens:
     async def test_create_and_consume(self, db: Database):
         owner = await _create_test_user(db)
@@ -274,7 +446,7 @@ class TestUserCRUD:
         """Verify that PRAGMA user_version is set after migration."""
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 5
+        assert row[0] == 9
 
 
 class TestAdminOwnedAgentPurgeMigration:
@@ -316,7 +488,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 5
+        assert row[0] == 9
 
         assert await db.get_agent(admin_agent_id) is None
         assert await db.list_pairings_for_agent(admin_agent_id) == []
@@ -342,12 +514,12 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         await db.close()
 
-        # Reopen — version is already 4, migration is a no-op.
+        # Reopen — version is already 9, migration is a no-op.
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 5
+        assert row[0] == 9
         await db.close()
 
 
