@@ -1,5 +1,12 @@
 # Android Changelog
 
+## [1.2.2](https://github.com/syrax90/claude_mobile/compare/android-v1.2.1...android-v1.2.2) (2026-05-15)
+
+
+### Bug Fixes
+
+* **agent:** deliver manifest body inline over relay (proto-v2) ([a7ebd08](https://github.com/syrax90/claude_mobile/commit/a7ebd08837774992fb60f28fbe89891ae1408d26))
+
 ## [1.2.1](https://github.com/syrax90/claude_mobile/compare/android-v1.2.0...android-v1.2.1) (2026-05-14)
 
 
