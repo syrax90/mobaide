@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 _KEY_LINE = re.compile(r"^(?P<lead>\s*#?\s*)(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<rest>.*)$")
 _FORBIDDEN_VALUE_CHARS = frozenset({"\n", "\r", "\x00"})
 
+# Suppress the ``icacls`` console window the Scheduled-Task-spawned agent
+# (no parent console under ``pythonw.exe``) would otherwise pop into the
+# user's session on every env-file write. ``CREATE_NO_WINDOW`` leaves
+# stdio inheritance intact so ``capture_output=True`` still works.
+_WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
 
 def render_template(
     template_text: str,
@@ -196,6 +202,7 @@ def _restrict_perms_windows(path: Path) -> None:
             check=False,
             capture_output=True,
             timeout=10,
+            creationflags=_WINDOWS_NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug(

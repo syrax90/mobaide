@@ -322,6 +322,7 @@ def test_requires_runasadministrator_directive_is_removed() -> None:
         "Install-PythonFromPythonOrg",
         "Update-CurrentSessionPath",
         "Resolve-Python",
+        "Resolve-Pythonw",
         "Invoke-PythonScript",
         "Install-Service",
     ],
@@ -2365,6 +2366,138 @@ def test_install_service_action_invokes_supervisor_script() -> None:
         "prefix without depending on environment variables Task "
         "Scheduler does not propagate. Not found in body:\n"
         + repr(body)
+    )
+
+
+def test_install_service_action_uses_pythonw_to_hide_console() -> None:
+    """``New-ScheduledTaskAction -Execute`` must reference ``$PythonwExe``.
+
+    The Scheduled Task action's ``-Execute`` must point at the GUI-
+    subsystem Python (``pythonw.exe`` / ``pyw.exe``) so Task Scheduler
+    does NOT allocate a console window at logon. Switching to
+    ``$PythonExe`` (console-subsystem) re-introduces the "py.exe
+    console pops up on boot" regression that the
+    ``Hide the Mobaide agent's py.exe console window`` plan exists
+    to fix.
+
+    Pinned via regex on the executable code (comments stripped) so
+    the negative-pin against ``$PythonExe`` in the same position does
+    not collide with the architectural-note comment that explains
+    *why* ``$PythonwExe`` is used here.
+    """
+    body = _function_body_text("Install-Service")
+    code = _strip_powershell_comments(body)
+    assert re.search(
+        r"New-ScheduledTaskAction\s+-Execute\s+\$PythonwExe\b", code
+    ), (
+        "Install-Service must call `New-ScheduledTaskAction -Execute "
+        "$PythonwExe`. Without this, Task Scheduler launches the "
+        "supervisor under console-subsystem python.exe and Windows "
+        "allocates a fresh conhost window at logon. Not found in "
+        "function body (comments stripped):\n" + repr(code)
+    )
+    # Negative pin: the action must NOT pass `$PythonExe` to
+    # `-Execute`. Other references to ``$PythonExe`` are allowed (e.g.
+    # the function still accepts it as a parameter for install-time
+    # work), so the assertion targets the `-Execute` neighbourhood
+    # specifically.
+    assert not re.search(
+        r"New-ScheduledTaskAction\s+-Execute\s+\$PythonExe\b", code
+    ), (
+        "Install-Service must NOT pass `$PythonExe` (console-subsystem) "
+        "to `New-ScheduledTaskAction -Execute`. A regression here brings "
+        "back the py.exe console window at logon -- the exact bug the "
+        "Layer-1 fix in the hidden-py.exe plan removes. Found in code:\n"
+        + repr(code)
+    )
+
+
+def test_install_service_takes_pythonw_exe_param() -> None:
+    """``Install-Service`` must accept ``$PythonwExe`` as a parameter.
+
+    ``Main`` resolves the pythonw.exe path once (via ``Resolve-Pythonw``)
+    and threads it through to ``Install-Service``. Hardcoding the path
+    inside ``Install-Service`` (or shelling out to ``Resolve-Pythonw``
+    a second time) would break the install-time invariant that
+    "a missing pythonw.exe fails the install BEFORE we register the
+    task". Tested via regex on the parameter block; a future refactor
+    that splits the function or renames the parameter must keep both
+    pieces in sync.
+    """
+    body = _function_body_text("Install-Service")
+    code = _strip_powershell_comments(body)
+    assert re.search(r"\$PythonwExe\b", code), (
+        "Install-Service must declare a `$PythonwExe` parameter. "
+        "Without it, `Main` has no way to thread the resolved "
+        "pythonw.exe path into the task action, and the function "
+        "would have to re-run Resolve-Pythonw (silently degrading "
+        "the install-time hard-fail semantics). Function body "
+        "(comments stripped):\n" + repr(code)
+    )
+
+
+def test_main_calls_resolve_pythonw_and_passes_to_install_service() -> None:
+    """``Main`` must call ``Resolve-Pythonw`` and forward the result
+    to ``Install-Service -PythonwExe``.
+
+    Two invariants in one test (cheaper than two AST-walks for the
+    same function body):
+
+    1. ``Main`` invokes ``Resolve-Pythonw`` (the call site, not just
+       the function definition pinned by
+       ``test_required_function_is_defined``). Without this call,
+       the function exists but is dead code and ``$pythonwExe`` is
+       never set.
+    2. ``Install-Service`` is invoked with ``-PythonwExe <expr>``.
+       Without this, even a successful ``Resolve-Pythonw`` does not
+       reach the action's ``-Execute`` clause.
+    """
+    body = _function_body_text("Main")
+    code = _strip_powershell_comments(body)
+    assert re.search(r"\bResolve-Pythonw\b", code), (
+        "Main must invoke Resolve-Pythonw so the pythonw.exe path is "
+        "computed at install time (and a missing pythonw.exe fails "
+        "loudly BEFORE the task is registered). Function body "
+        "(comments stripped):\n" + repr(code)
+    )
+    assert re.search(
+        r"Install-Service\b[^{}]*-PythonwExe\b", code
+    ), (
+        "Main must call `Install-Service` with `-PythonwExe <expr>` "
+        "so the resolved path threads through to "
+        "`New-ScheduledTaskAction -Execute`. Without this, "
+        "Resolve-Pythonw is dead code. Function body "
+        "(comments stripped):\n" + repr(code)
+    )
+
+
+def test_resolve_pythonw_handles_py_to_pyw_basename_swap() -> None:
+    """``Resolve-Pythonw`` must map ``py.exe`` -> ``pyw.exe``.
+
+    The Python Launcher for Windows ships as ``py.exe`` /
+    ``pyw.exe`` (NOT ``pyw.exe`` is NOT just ``py.exe`` with a ``w``
+    appended -- the standard "<name>w.exe" rule would produce
+    ``pyw.exe`` by coincidence here, but the rule for ``py`` is
+    distinct in the wider Python ecosystem: ``python.exe`` ->
+    ``pythonw.exe`` is the major case, and ``py`` is the only short-
+    name special case). Encode the dual mapping in code so a future
+    refactor cannot drop the ``py`` -> ``pyw`` branch.
+
+    Pinned via regex on the function body looking for the literal
+    ``pyw.exe`` string -- proves the special case is encoded, not
+    silently bypassed by a single ``<name>w.exe`` substitution.
+    """
+    body = _function_body_text("Resolve-Pythonw")
+    assert "pyw.exe" in body, (
+        "Resolve-Pythonw must contain the literal `pyw.exe` so the "
+        "py.exe Python Launcher case maps to `pyw.exe` (NOT "
+        "`pyw.exe` derived from a generic `<name>w.exe` rule "
+        "applied to the `py` basename). Function body:\n" + repr(body)
+    )
+    assert "pythonw.exe" in body, (
+        "Resolve-Pythonw must contain the literal `pythonw.exe` so "
+        "the canonical python.exe -> pythonw.exe mapping is "
+        "explicitly encoded. Function body:\n" + repr(body)
     )
 
 

@@ -246,6 +246,44 @@ function Find-Python {
     return $null
 }
 
+# Derive the path to ``pythonw.exe`` (GUI subsystem — no console allocated)
+# from a resolved ``python.exe`` path. Required for the Scheduled Task
+# action's ``-Execute`` so logon / install does NOT pop a transient
+# console window into the user's session.
+#
+# Naming convention (CPython distribution): ``python.exe`` → ``pythonw.exe``;
+# ``py.exe`` (Python Launcher) → ``pyw.exe``. The console / GUI variants
+# always live side-by-side in the same directory. We probe the
+# canonical name first; on miss, fall back to ``<dir>\pythonw.exe``
+# (covers older distributions and venv-redirector layouts). Hard-fail
+# loudly if neither exists — silently downgrading to ``python.exe``
+# defeats the whole hidden-process design.
+function Resolve-Pythonw {
+    param([Parameter(Mandatory=$true)] [string] $PythonExe)
+    $dir = [System.IO.Path]::GetDirectoryName($PythonExe)
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($PythonExe)
+    $pythonwName = if ($name -eq 'py') { 'pyw.exe' } else { $name + 'w.exe' }
+    $candidate = Join-Path $dir $pythonwName
+    if (Test-Path -LiteralPath $candidate) {
+        Write-Info "Using $candidate for the Scheduled Task (no console window)."
+        return $candidate
+    }
+    $fallback = Join-Path $dir "pythonw.exe"
+    if (Test-Path -LiteralPath $fallback) {
+        Write-Info "Using $fallback for the Scheduled Task (no console window)."
+        return $fallback
+    }
+    Write-Fail @"
+Could not find a GUI-subsystem Python (pythonw.exe / pyw.exe) alongside
+$PythonExe. The per-user Scheduled Task action must launch a no-console
+Python so the agent does not pop a window into the user's session at
+logon. Re-install Python from https://www.python.org/downloads/release/python-3120/
+(the standard distribution ships pythonw.exe next to python.exe), or
+set MOBAIDE_AGENT_SKIP_PYTHON_INSTALL=1 and point your interpreter at a
+distribution that includes pythonw.exe.
+"@
+}
+
 # Locate the user's claude.cmd at install time, BEFORE the UAC relaunch.
 # The elevated session that Start-Process -Verb RunAs creates may not
 # inherit the originating user's PATH (especially on "Run as different
@@ -983,7 +1021,7 @@ initiate a nonce on its own. Run `mobaide-agent show-qr` to re-display.
 }
 
 function Install-Service {
-    param($PythonExe)
+    param($PythonExe, $PythonwExe)
     # Registers the agent as a per-user Scheduled Task pinned to the
     # installing user. Replaces the prior SCM-service-as-LocalSystem
     # design: that model gave the agent process tree the system profile
@@ -992,6 +1030,11 @@ function Install-Service {
     # CLI in the agent's PTY. Scheduled Task with -LogonType Interactive
     # runs the agent in the user's session — no password capture, real
     # %USERPROFILE%, mirrors Linux's $SUDO_USER semantics.
+    #
+    # ``$PythonwExe`` (GUI subsystem) is the action target so the task
+    # never allocates a console window. Console / install-time work
+    # (e.g., wheel install) still uses ``$PythonExe`` in PowerShell's
+    # own console.
     #
     # Function name preserved (`Install-Service`) so Main's call site
     # and the ordering pin in tests/test_install_ps1.py stay stable.
@@ -1083,7 +1126,12 @@ function Install-Service {
     $taskArg = "-u `"$svcEntry`" --prefix `"$Script:Prefix`""
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
     $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $action    = New-ScheduledTaskAction -Execute $PythonExe -Argument $taskArg
+    # ``-Execute $PythonwExe`` (NOT ``$PythonExe``): the GUI-subsystem
+    # variant of CPython does not request a console at process start,
+    # so Task Scheduler launches the supervisor with no visible window
+    # at logon or during install. Switching this to ``$PythonExe``
+    # reintroduces the original "py.exe window pops up on boot" bug.
+    $action    = New-ScheduledTaskAction -Execute $PythonwExe -Argument $taskArg
     $settings  = New-ScheduledTaskSettingsSet `
         -RestartCount 5 `
         -RestartInterval (New-TimeSpan -Minutes 1) `
@@ -1128,6 +1176,10 @@ function Main {
     New-Item -ItemType Directory -Path $Script:Prefix -Force | Out-Null
 
     $python = Resolve-Python
+    # Resolve the GUI-subsystem counterpart now (alongside python.exe) so a
+    # missing pythonw.exe surfaces BEFORE we stage releases / register the
+    # task. Failing here is far more debuggable than failing at logon.
+    $pythonwExe = Resolve-Pythonw -PythonExe $python
     # Verifier Python carries `cryptography` for trust-key + manifest signature
     # checks. Fast path returns $python unchanged ($verifier.Root = $null); slow
     # path returns an ephemeral bootstrap venv that the outer finally tears
@@ -1179,7 +1231,7 @@ function Main {
     # (no two-process race) and surfaces a clear diagnostic when the
     # service fails to start (Wait-AgentHealthy hard-fails with an
     # Event-Viewer pointer).
-    Install-Service -PythonExe $python
+    Install-Service -PythonExe $python -PythonwExe $pythonwExe
     $health = Wait-AgentHealthy -Prefix $Script:Prefix -TimeoutSec 60
     Show-PairingQrFromService -Prefix $Script:Prefix -Version $version -Health $health
 

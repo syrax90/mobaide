@@ -48,6 +48,16 @@ _AGENT_STOP_TIMEOUT_S = 30
 _WINDOWS_STOP_POLL_INTERVAL_S = 0.5
 _WINDOWS_STOP_POLL_TIMEOUT_S = 10.0
 
+# Set ``creationflags=_WINDOWS_NO_WINDOW`` on every subprocess invocation
+# on Windows. The agent runs under ``pythonw.exe`` via the Scheduled Task
+# (no parent console), so a default ``subprocess.run`` of a console-mode
+# executable like ``schtasks.exe`` / ``sc.exe`` would otherwise pop a
+# transient console window into the user's session. ``CREATE_NO_WINDOW``
+# suppresses that without affecting stdio inheritance (unlike
+# ``DETACHED_PROCESS``, which severs handle inheritance and breaks
+# ``capture_output``).
+_WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -831,6 +841,7 @@ def _run_with_timeout(
             text=True,
             check=False,
             timeout=timeout,
+            creationflags=_WINDOWS_NO_WINDOW,
         )
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:

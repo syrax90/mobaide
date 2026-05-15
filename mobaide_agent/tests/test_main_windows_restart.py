@@ -675,3 +675,117 @@ class TestWaitForWindowsScheduledTaskReady:
             f"({_main._WINDOWS_STOP_POLL_INTERVAL_S}s); got "
             f"{sleep_calls[0]}s"
         )
+
+
+class TestRunWithTimeoutHidesConsoleWindow:
+    """Pin ``creationflags=_WINDOWS_NO_WINDOW`` on ``_run_with_timeout``.
+
+    ``_run_with_timeout`` is the shared subprocess shim that every
+    Windows restart helper funnels through (``schtasks.exe``,
+    ``sc.exe``). The agent runs under ``pythonw.exe`` via the
+    per-user Scheduled Task (no parent console). Without
+    ``CREATE_NO_WINDOW``, each schtasks / sc invocation pops a
+    transient console window into the user's session on every
+    post-pair restart, ``fetch-trust-key``, and ``re-pair``
+    invocation. The flag is OS-conditional via the module-level
+    ``_WINDOWS_NO_WINDOW`` constant (``CREATE_NO_WINDOW`` on win32,
+    ``0`` elsewhere).
+    """
+
+    def test_subprocess_run_passes_creationflags(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Tests the lowest-level shim directly (rather than going
+        # through the dispatcher) so a regression here is attributed to
+        # the helper, not the caller. The pattern matches the existing
+        # ``test_env_writer.TestRestrictPermsWindowsAclArgv._capture_run``
+        # helper on the mobaide-agent test side.
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            captured["kwargs"] = dict(kwargs)
+            return _DummyCompleted()
+
+        monkeypatch.setattr(_main.subprocess, "run", fake_run)
+
+        rc, stdout, stderr = _main._run_with_timeout(
+            ["schtasks.exe", "/Query", "/TN", "MobaideAgent"]
+        )
+
+        assert rc == 0
+        kwargs = captured["kwargs"]
+        assert "creationflags" in kwargs, (
+            "_run_with_timeout's subprocess.run kwargs must include "
+            "the literal `creationflags` key -- a missing key "
+            "(defaulting to 0) means every schtasks / sc.exe call "
+            "pops a transient console under pythonw.exe; got "
+            f"kwargs={kwargs!r}"
+        )
+        flag = kwargs["creationflags"]
+        assert flag == _main._WINDOWS_NO_WINDOW, (
+            "_run_with_timeout must pass "
+            "creationflags=_WINDOWS_NO_WINDOW so the flag value "
+            "matches the platform-conditional constant; got "
+            f"creationflags={flag!r}"
+        )
+
+    def test_keeps_capture_output_alongside_creationflags(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The flag must be additive: ``capture_output=True`` MUST also
+        remain in the kwargs.
+
+        Switching to ``DETACHED_PROCESS`` instead of
+        ``CREATE_NO_WINDOW`` would suppress the console but also sever
+        stdio inheritance, breaking ``capture_output=True`` -- the
+        callers (dispatcher branches) parse the stdout / stderr for
+        ``Status: Ready`` / ``Status: Running`` lines, so losing
+        capture_output silently produces empty strings and the polling
+        helpers fall through to their timeout branch.
+        """
+        captured: dict[str, object] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["kwargs"] = dict(kwargs)
+            return _DummyCompleted(stdout="ok\n")
+
+        monkeypatch.setattr(_main.subprocess, "run", fake_run)
+
+        _main._run_with_timeout(["sc.exe", "query", "MobaideAgent"])
+
+        kwargs = captured["kwargs"]
+        assert kwargs.get("capture_output") is True, (
+            "_run_with_timeout must keep capture_output=True alongside "
+            "the creationflags kwarg; dropping it would silently empty "
+            f"the returned stdout/stderr. Got kwargs={kwargs!r}"
+        )
+        # text=True is the documented contract: the callers strip and
+        # match string literals against the output.
+        assert kwargs.get("text") is True, (
+            "_run_with_timeout must keep text=True so the returned "
+            "stdout/stderr are decoded strings (callers do `.strip()` "
+            "and substring search on them); got kwargs={!r}".format(kwargs)
+        )
+
+
+class _DummyCompleted:
+    """Minimal stand-in for ``subprocess.CompletedProcess`` for the
+    ``_run_with_timeout`` shim's happy-path branch.
+
+    The shim reads ``returncode``, ``stdout``, ``stderr`` off the
+    returned object; ``SimpleNamespace`` would do too, but a tiny
+    class is clearer about intent and lets the test surface a
+    ``MissingAttribute`` error if the shim's contract drifts (e.g.
+    starts reading ``args``).
+    """
+
+    def __init__(
+        self,
+        returncode: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
