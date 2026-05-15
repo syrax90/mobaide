@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.1](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.0...agent-v0.2.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **agent:** hide py.exe console window for per-user Scheduled Task ([7494c80](https://github.com/syrax90/claude_mobile/commit/7494c80343cdb47f5cc9d63ee35705dde2a556f2))
+* **windows:** hide py.exe console window for per-user Scheduled Task ([9c49515](https://github.com/syrax90/claude_mobile/commit/9c4951506cdf20edd53e71172122f2286a9cd5b4))
+
 ## [0.2.0](https://github.com/syrax90/claude_mobile/compare/agent-v0.1.16...agent-v0.2.0) (2026-05-15)
 
 
