@@ -393,4 +393,98 @@ class CreateSessionViewModelTest {
         assertEquals("Failed to start Auto Scan: capacity", vm.uiState.value.error)
         assertFalse(vm.uiState.value.autoScanStarting)
     }
+
+    @Test
+    fun onProjectCreated_gitProject_selectsByNameAndPreservesWorktreeAndBranch() = runTest {
+        // Why `onProjectCreated` exists rather than reusing
+        // `selectProject(name)`. The new project is NOT yet in `state.projects`
+        // (the `AgentEvent.ProjectsChanged` bus event arrives asynchronously),
+        // so `selectProject(name)`'s lookup would default `is_git` to `false`
+        // via `firstOrNull()?.is_git == true` and incorrectly clear worktree
+        // for a real git project. `onProjectCreated` reads `is_git` off the
+        // passed `ProjectInfo` directly.
+        val fx = newFixture(initialProjects = emptyList())  // simulate bus lag
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        // User had configured a worktree before opening the create-project
+        // sheet (e.g. switched modes). Their settings must survive selection.
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+
+        vm.onProjectCreated(project("gamma", isGit = true))
+
+        val s = vm.uiState.value
+        assertEquals("gamma", s.selectedProjectName)
+        assertTrue(
+            "Worktree must be preserved when the newly-created project is git",
+            s.worktree,
+        )
+        assertEquals("feature/x", s.branchName)
+    }
+
+    @Test
+    fun onProjectCreated_nonGitProject_clampsWorktreeOff_andClearsBranchName() = runTest {
+        val fx = newFixture(initialProjects = emptyList())
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+
+        vm.onProjectCreated(project("gamma", isGit = false))
+
+        val s = vm.uiState.value
+        assertEquals("gamma", s.selectedProjectName)
+        assertFalse(
+            "Worktree must clamp off for a non-git newly-created project",
+            s.worktree,
+        )
+        assertEquals("", s.branchName)
+    }
+
+    @Test
+    fun onProjectCreated_doesNotConsultProjectsList_ignoringStaleEntry() = runTest {
+        // Even when `state.projects` is populated AND happens to
+        // contain a same-named project with a CONFLICTING `is_git` (e.g.
+        // the projects flow hasn't refreshed yet with the latest server
+        // snapshot), `onProjectCreated` must trust the passed-in
+        // ProjectInfo, never `state.projects`. This pins the contract that
+        // `selectProject(name)` would violate.
+        val fx = newFixture(
+            // Stale fixture says "gamma" is non-git...
+            initialProjects = listOf(project("gamma", isGit = false)),
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+
+        // ...but the freshly-returned ProjectInfo from the create call says
+        // it IS git. The new method must believe the argument, not the list.
+        vm.onProjectCreated(project("gamma", isGit = true))
+
+        val s = vm.uiState.value
+        assertEquals("gamma", s.selectedProjectName)
+        assertTrue(
+            "Worktree must follow the passed ProjectInfo.is_git, not state.projects",
+            s.worktree,
+        )
+        assertEquals("feature/x", s.branchName)
+    }
+
+    @Test
+    fun onProjectCreated_doesNotChangeWizardStep() = runTest {
+        // After the sheet closes the user remains on the
+        // ProjectSelect step — the new project is auto-selected in the
+        // dropdown, but the wizard does NOT advance. Pinning this so a
+        // future "auto-confirm on create" tweak surfaces as a test failure
+        // rather than silently changing UX.
+        val fx = newFixture(initialProjects = emptyList())
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+
+        vm.onProjectCreated(project("gamma", isGit = true))
+
+        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+    }
 }

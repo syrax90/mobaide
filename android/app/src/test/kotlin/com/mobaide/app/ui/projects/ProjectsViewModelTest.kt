@@ -1145,4 +1145,99 @@ class ProjectsViewModelTest {
         assertEquals(1, bodySlot.captured.default_flags!!.size)
         assertTrue(bodySlot.captured.default_flags!!.containsKey("model"))
     }
+
+    @Test
+    fun save_createMode_success_emitsRepositoryReturnedProjectOn_projectCreated() = runTest {
+        // A successful create must surface the *exact* ProjectInfo
+        // returned by the repository through `projectCreated`. The in-context
+        // CreateSession dropdown depends on this object's `is_git` flag to
+        // decide whether to clamp worktree — it cannot wait for the
+        // `projects.changed` bus event, which is eventually-consistent.
+        val f = newFixture()
+        advanceUntilIdle()
+        val created = project("gamma", path = "/p/gamma")  // is_git = true by helper default
+        coEvery { f.projectsRepo.createProject(any()) } returns created
+
+        f.vm.openCreateSheet()
+        f.vm.onNameChange("gamma")
+        f.vm.onPathChange("/p/gamma")
+
+        f.vm.projectCreated.test {
+            f.vm.save()
+            advanceUntilIdle()
+            val emitted = awaitItem()
+            // Must be the repository's returned instance — not a synthetic
+            // re-build from the form fields. Subscribers rely on `is_git`
+            // and other server-supplied fields landing as-is.
+            assertEquals("gamma", emitted.name)
+            assertTrue(
+                "Emitted ProjectInfo must carry the server's is_git verbatim",
+                emitted.is_git,
+            )
+            assertEquals("/p/gamma", emitted.path)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun save_editMode_doesNotEmit_projectCreated() = runTest {
+        // `projectCreated` is the *create-only* signal. Edit-mode
+        // saves must NOT emit on it — otherwise an unrelated edit would
+        // hijack the CreateSession dropdown's selection.
+        val f = newFixture()
+        advanceUntilIdle()
+        val target = project("alpha")
+        coEvery { f.projectsRepo.updateProject(any(), any()) } returns target
+
+        f.vm.projectCreated.test {
+            f.vm.openEditSheet(target)
+            f.vm.save()
+            advanceUntilIdle()
+            // Drain the buffer: nothing should be there. expectNoEvents() is
+            // the precise contract — no emission, ever, on the edit path.
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun save_createMode_failure_doesNotEmit_projectCreated() = runTest {
+        // A failed create must not emit on `projectCreated` — only
+        // successful creates select the new project. A premature emission
+        // would auto-select a phantom project that the server rejected.
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.projectsRepo.createProject(any()) } throws RuntimeException("net down")
+
+        f.vm.projectCreated.test {
+            f.vm.openCreateSheet()
+            f.vm.onNameChange("gamma")
+            f.vm.onPathChange("/p/gamma")
+            f.vm.save()
+            advanceUntilIdle()
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun save_createMode_409Conflict_doesNotEmit_projectCreated() = runTest {
+        // 409 (duplicate name) takes the same no-emit path as a
+        // generic failure — pinned separately so a refactor of the
+        // catch-block ordering can't accidentally emit before raising.
+        val f = newFixture()
+        advanceUntilIdle()
+        coEvery { f.projectsRepo.createProject(any()) } throws
+            ProjectConflictException("Project 'alpha' already exists")
+
+        f.vm.projectCreated.test {
+            f.vm.openCreateSheet()
+            f.vm.onNameChange("alpha")
+            f.vm.onPathChange("/p/alpha")
+            f.vm.save()
+            advanceUntilIdle()
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
 }

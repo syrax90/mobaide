@@ -115,6 +115,20 @@ class CreateSessionViewModel @Inject constructor(
         )
     }
 
+    /**
+     * Called after `ProjectsViewModel.projectCreated` emits — uses the new
+     * project's own `is_git` directly rather than looking it up in
+     * `state.projects`, which has not yet been refreshed by the
+     * `AgentEvent.ProjectsChanged` bus event.
+     */
+    fun onProjectCreated(project: ProjectInfo) = _uiState.update {
+        it.copy(
+            selectedProjectName = project.name,
+            worktree = if (project.is_git) it.worktree else false,
+            branchName = if (project.is_git) it.branchName else "",
+        )
+    }
+
     fun confirmProject() = _uiState.update {
         if (it.selectedProjectName != null) it.copy(step = CreateSessionStep.ModePick) else it
     }

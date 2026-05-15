@@ -188,6 +188,7 @@ fun AppNavigation(
         composable(Routes.CREATE_SESSION) {
             CreateSessionScreen(
                 viewModel = hiltViewModel(),
+                projectsViewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
                 onSessionCreated = { sessionId ->
                     navController.navigate(Routes.sessionDetail(sessionId)) {
