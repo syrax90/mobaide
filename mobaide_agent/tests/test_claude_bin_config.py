@@ -7,10 +7,10 @@ declared explicitly with ``validation_alias="MOBAIDE_CLAUDE_BIN"``,
 the gotcha already documented for the ``projects`` / ``PROJECTS`` pair.
 
 The Windows installer writes ``MOBAIDE_CLAUDE_BIN=<abs-path>`` into
-``<prefix>/mobaide_agent/.env`` so the LocalSystem-hosted service can
-find ``claude.cmd`` without the user's ``%APPDATA%\\npm`` on PATH; if
-this field regresses the entire install flow's auto-detection becomes
-dead code.
+``<prefix>/mobaide_agent/.env`` so the agent always finds ``claude.cmd``
+even when PATH is non-standard (relocated npm prefix, chocolatey, etc.);
+if this field regresses the entire install flow's auto-detection
+becomes dead code.
 """
 from __future__ import annotations
 

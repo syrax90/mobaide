@@ -603,11 +603,14 @@ def test_spawn_and_wait_windows_propagates_nonzero_exit_code(monkeypatch):
     """On the happy path with a non-zero ``proc.wait()`` return code,
     ``_spawn_and_wait_windows`` must ``sys.exit`` with that exact code.
 
-    The service host (``deploy/windows_service.py``) reads
-    ``self._proc.returncode`` after the wait and feeds it into the
-    SCM warning message; the SCM recovery policy keys off non-zero
+    The Scheduled-Task supervisor (``deploy/windows_launcher.py``)
+    reads ``proc.returncode`` after the wait and uses it both to
+    decide whether to respawn (exit 75 → in-process respawn) and to
+    propagate the exit code to Task Scheduler (everything else).
+    Task Scheduler's restart-on-failure policy keys off non-zero
     exits. Swallowing or re-mapping the code (e.g. to 1 or to 0)
-    would mask the underlying crash from both the operator and SCM.
+    would mask the underlying crash from both the operator and Task
+    Scheduler.
     """
     calls: list[tuple[str, tuple]] = []
     _install_full_kernel32_fake(monkeypatch, calls)
@@ -616,9 +619,10 @@ def test_spawn_and_wait_windows_propagates_nonzero_exit_code(monkeypatch):
     with pytest.raises(SystemExit) as excinfo:
         launcher._spawn_and_wait_windows(["python.exe", "-m", "mobaide", "run"])
     assert excinfo.value.code == 42, (
-        "agent exit code must be propagated verbatim so SCM's "
-        "recovery policy and the service host's warning log show "
-        "the real failure code, not a synthesised one"
+        "agent exit code must be propagated verbatim so Task "
+        "Scheduler's restart-on-failure policy and the supervisor's "
+        "exit-75 vs. other-code branching see the real failure "
+        "code, not a synthesised one"
     )
 
 

@@ -78,7 +78,7 @@ The Android app never talks to the agent directly; it always goes through `centr
 
 - Python 3.12+ (the production `install.ps1` flow on Windows auto-installs Python 3.12 via `winget`, with a python.org-installer fallback when `winget` is unavailable; the conda dev path still needs it pre-installed)
 - `git`, `curl`
-- Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code). **v2.1.108 or newer is recommended** — the agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)); older CLIs will simply ignore the variable. When running as a systemd or launchd service the CLI must be on the service's `PATH` — the unit files ship with `%h/.npm-global/bin` and `%h/.local/bin` already appended. To use a non-standard install location set `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` in `<prefix>/agent.env`.
+- Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code). **v2.1.108 or newer is recommended** — the agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)); older CLIs will simply ignore the variable. The CLI must be on the agent's `PATH` — Windows installs auto-detect `claude.cmd` from the installing user's `%APPDATA%\npm` and pin it as `MOBAIDE_CLAUDE_BIN` in `<prefix>\mobaide_agent\.env`; the Linux/macOS unit files ship with `%h/.npm-global/bin` and `%h/.local/bin` already appended. To use a non-standard install location set `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` in `<prefix>/agent.env`.
 - A paired agent: `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` issued by `central-server`. Pair from the Android app: **Settings → Agents → Pair new**, or via the admin REST API.
 
 ### Windows (conda — recommended for development)
@@ -105,7 +105,7 @@ mobaide-agent pair-qr --wait --prefix .\mobaide_dev_prefix
 
 For the full local stack (Caddy + central-server in Docker + agent native), use `start-all.ps1` from the repo root.
 
-### Windows (SCM service) — automated
+### Windows (Scheduled Task) — automated
 
 **End-user / production install:** run the one-liner in a regular (non-admin) PowerShell window:
 
@@ -113,48 +113,52 @@ For the full local stack (Caddy + central-server in Docker + agent native), use 
 irm https://get.mobaide.com/install.ps1 | iex
 ```
 
-The script self-elevates via UAC, auto-installs Python 3.12 (`winget` fast path, python.org installer fallback), stages the signed release into `<prefix>\releases\<version>\venv\` (default prefix `C:\Program Files\MobaideAgent`), writes `<prefix>\current_version`, and registers the **MobaideAgent** SCM service. After the service starts, the script waits for the agent to report healthy and for the service to write the pairing nonce file, then renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app. This ordering ensures the QR is shown only once the service is ready to accept a pairing claim, eliminating the race where scans during boot left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty.
+The script self-elevates via UAC, auto-installs Python 3.12 (`winget` fast path, python.org installer fallback), stages the signed release into `<prefix>\releases\<version>\venv\` (default prefix `C:\Program Files\MobaideAgent`), writes `<prefix>\current_version`, and registers a **per-user Scheduled Task** named `MobaideAgent`. The task is pinned to the installing user (`$env:USERNAME`) with `-LogonType Interactive` and triggered `-AtLogOn`, so the agent process tree runs in that user's session — `%USERPROFILE%` resolves to `C:\Users\<u>`, and the Claude CLI in the agent's PTY sees the user's `~/.claude` credentials and skills, just like a desktop terminal session does. After the task starts, the script waits for the agent to report healthy and for the supervisor to write the pairing nonce file, then renders the pairing QR code in the console window for the operator to scan from the Mobaide mobile app. This ordering ensures the QR is shown only once the agent is ready to accept a pairing claim, eliminating the race where scans during boot left `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` empty.
 
-#### Service architecture
+> **Requires an interactive logon.** The task only runs while the installing user has an interactive session (the lock screen is fine; a full logoff stops the task). Headless / unattended Windows hosts (build agents, CI runners, Windows servers without a logged-in user) are out of scope for this installer — there is no service-account mode. Multi-user machines: each user re-runs the installer in their own session and gets their own task pinned to themselves (no shared agent state across local accounts), mirroring Linux's `$SUDO_USER` semantics.
 
-The agent runs as a real Windows service registered with SCM. The service host is **version-independent** — it lives at `<prefix>\svc\` and never moves between releases, so the SCM binPath stays valid across upgrades and rollbacks.
+#### Architecture
+
+The agent runs under a per-user Scheduled Task. The Scheduled Task action points at a **version-independent supervisor** at `<prefix>\svc\mobaide_launcher.py` so the registered task `Execute` / `-Argument` path stays valid across upgrades and rollbacks.
 
 ```
 <prefix>\
 ├── current_version              # text file: "X.Y.Z"
 ├── releases\<version>\venv\     # per-release venv (mobaide + deps)
 ├── trust\central_server.pub     # pinned manifest-signing public key
-└── svc\                         # version-independent service host
-    ├── venv\                    #   dedicated venv with only pywin32
-    └── mobaide_service.py       #   pywin32 ServiceFramework wrapper
+└── svc\
+    └── mobaide_launcher.py      # stdlib-only Scheduled-Task supervisor
 ```
 
-The registered service binary path is:
+The registered task action is:
 
 ```
-"<prefix>\svc\venv\Scripts\python.exe" -u "<prefix>\svc\mobaide_service.py"
+Execute  : <python.exe resolved by Resolve-Python at install time>
+Argument : -u "<prefix>\svc\mobaide_launcher.py" --prefix "<prefix>"
 ```
 
-`mobaide_service.py` is fetched from `https://get.mobaide.com/windows_service.py` during install. It is co-versioned with `install.ps1` itself — the `publish-gh-pages` workflow ships both files in the same push — so installer changes that depend on a new service-module API can never desync from the module they ship against. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_SERVICE_URL`.
+`mobaide_launcher.py` is fetched from `https://get.mobaide.com/windows_launcher.py` during install. It is co-versioned with `install.ps1` itself — the `publish-gh-pages` workflow ships both files in the same push — so installer changes that depend on a new supervisor API can never desync. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`.
 
-On every service start, the wrapper reads `<prefix>\current_version`, spawns the active release's `python.exe -m mobaide.launcher` as a subprocess, reports `SERVICE_RUNNING` to SCM, and waits for either a stop signal or the subprocess exiting. The subprocess (`mobaide.launcher`) does the crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. The next service start picks up the rolled-back version. On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv` (which creates a new PID on Windows, breaking the service host's `poll()` supervision — Python issue #9148). The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log` (each rotated at 5 MB, one backup kept). Routing stdout to DEVNULL on the prior builds silently discarded every structlog line — the systemic blocker behind every "pairing completed on the mobile but `.env` stayed blank" debugging attempt.
+On every task start, the supervisor reads `<prefix>\current_version`, resolves the active release's `python.exe`, and spawns `python.exe -m mobaide.launcher` as a subprocess. The launcher does crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv` (which creates a new PID on Windows, breaking the supervisor's `poll()` supervision — Python issue #9148). The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log` (each rotated at 5 MB, one backup kept).
 
-SCM is configured with `failure reset=600 actions=restart/5000/restart/5000/restart/5000`, composing with the launcher's heuristic so a third bad boot resolves to the previous release.
+When the launcher subprocess exits with code 75 (`_EXIT_RESTART_REQUESTED` — emitted on successful pair or staged update), the supervisor re-resolves `current_version` and respawns immediately. This in-process loop gives the user a sub-second post-pair restart; Task Scheduler's outer `-RestartCount` / `-RestartInterval` (1-minute floor) catches the supervisor-level failure case.
 
-> **Note (breaking change vs. pre-fix builds):** older installs registered `cmd.exe /c launcher.cmd` as the service binary. That was the root cause of the `Start-Service : Cannot start service MobaideAgent on computer '.'` failure — a Windows service binary must implement the SCM ABI (`StartServiceCtrlDispatcher` / `SetServiceStatus(SERVICE_RUNNING)` within ~30 s), which cmd.exe does not. Re-running `install.ps1` on a host with the pre-fix design stops the old service, removes the cmd.exe registration, and re-registers the pywin32 host. The old `<prefix>\bin\mobaide-agent-launcher.cmd` is no longer used and can be deleted.
+Task Scheduler restart-on-failure settings: `-RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1)`. `-ExecutionTimeLimit (New-TimeSpan -Seconds 0)` disables the default 72-hour task TTL. `-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries` keep the agent running on laptops regardless of power state.
 
-#### Service management
+> **Note (breaking change vs. older builds):** prior builds registered the agent as a LocalSystem SCM service. That model gave the agent process tree `%USERPROFILE%=C:\Windows\system32\config\systemprofile`, which hid the user's `~/.claude` credentials and skills from the Claude CLI in the agent's PTY. Re-running `install.ps1` on a host with the SCM-service design `sc.exe delete`s the legacy `MobaideAgent` service, removes the legacy `<prefix>\svc\venv\` (the pywin32 host venv from that era), and registers the new Scheduled Task. An even-older `cmd.exe /c launcher.cmd` registration is also cleaned up by the same path.
+
+#### Task management
 
 ```powershell
-Get-Service MobaideAgent
-Start-Service MobaideAgent
-Stop-Service MobaideAgent
-Restart-Service MobaideAgent
-sc.exe queryex MobaideAgent     # shows PID, current state, dependencies
+Get-ScheduledTask     -TaskName MobaideAgent           # state (Ready / Running / …)
+Get-ScheduledTaskInfo -TaskName MobaideAgent           # LastRunTime, LastTaskResult, NextRunTime
+Start-ScheduledTask   -TaskName MobaideAgent
+Stop-ScheduledTask    -TaskName MobaideAgent
+Unregister-ScheduledTask -TaskName MobaideAgent -Confirm:$false   # uninstall the task
 
-# Service start / stop events land in the Windows Event Log under
-# "Application", source = "MobaideAgent".
-Get-EventLog -LogName Application -Source MobaideAgent -Newest 20
+# Task-Scheduler start/stop/failure events:
+#   Event Viewer -> Applications and Services Logs ->
+#     Microsoft -> Windows -> TaskScheduler -> Operational
 
 # Launcher / agent stderr (config errors, Python tracebacks, port conflicts).
 Get-Content "$Prefix\logs\agent.err.log" -Tail 50
@@ -162,7 +166,7 @@ Get-Content "$Prefix\logs\agent.err.log" -Tail 50
 Get-Content "$Prefix\logs\agent.out.log" -Tail 100
 ```
 
-The service runs as `LocalSystem` (the SCM default). Per-user / Group Managed Service Account hardening is a separate concern and is not configured by the install script.
+The task runs as the installing user (one task per user); no Group Managed Service Account / virtual account configuration is needed or supported. To pair a second user on the same machine, that user re-runs `install.ps1` in their own session — they get their own Scheduled Task pinned to themselves.
 
 ### Linux (systemd) and macOS (launchd) — automated
 
@@ -320,12 +324,13 @@ Common causes:
 - Python version < 3.12
 - Claude CLI not on the service's `PATH` — the agent returns HTTP 503 with `claude_cli_missing: true` and a `searched_paths` list (each entry tagged with its source: `override:`, `env:`, `PATH:`, `fallback:`). The Windows installer auto-detects `claude.cmd` in the installing user's `%APPDATA%\npm` and writes its absolute path as `MOBAIDE_CLAUDE_BIN` into the agent's `.env`, so a clean install on a host where the user already ran `npm install -g @anthropic-ai/claude-code` works without manual edits. Manual fix paths:
   - Linux/macOS: install the CLI under `~/.npm-global/bin`, `~/.local/bin`, `/usr/local/bin`, or `/opt/homebrew/bin` (all in the resolver's POSIX fallback list); or add `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` to `<prefix>/agent.env`.
-  - Windows: edit `<prefix>\mobaide_agent\.env`, set `MOBAIDE_CLAUDE_BIN=C:\Users\<you>\AppData\Roaming\npm\claude.cmd`, then `Restart-Service MobaideAgent`. Or, if you installed Claude CLI after the agent service: re-run `irm https://get.mobaide.com/install.ps1 | iex` (the install script will surgically backfill `MOBAIDE_CLAUDE_BIN` without touching pairing credentials), or run the `set-env` verb directly:
+  - Windows: edit `<prefix>\mobaide_agent\.env`, set `MOBAIDE_CLAUDE_BIN=C:\Users\<you>\AppData\Roaming\npm\claude.cmd`, then restart the task: `Stop-ScheduledTask MobaideAgent; Start-ScheduledTask MobaideAgent`. Or, if you installed Claude CLI after the agent: re-run `irm https://get.mobaide.com/install.ps1 | iex` (the install script will surgically backfill `MOBAIDE_CLAUDE_BIN` without touching pairing credentials), or run the `set-env` verb directly:
     ```powershell
     & "$env:ProgramFiles\MobaideAgent\releases\<version>\venv\Scripts\python.exe" `
       -m mobaide.agent.config set-env --key MOBAIDE_CLAUDE_BIN `
       --value "C:\Users\<you>\AppData\Roaming\npm\claude.cmd"
-    Restart-Service MobaideAgent
+    Stop-ScheduledTask -TaskName MobaideAgent
+    Start-ScheduledTask -TaskName MobaideAgent
     ```
 
 #### Agent not showing as online in the Android app

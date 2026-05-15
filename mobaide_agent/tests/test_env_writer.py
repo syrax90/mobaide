@@ -403,17 +403,19 @@ class TestParseEnvFileStringOverload:
 
 class TestRestrictPermsWindowsAclArgv:
     """Verify the Windows ACL hardening invokes icacls with the correct
-    SYSTEM:F + Administrators:F + USERNAME:F grants.
+    Administrators:F + USERNAME:F grants.
 
-    The grant for SYSTEM was ``:R`` (read-only) in an earlier design,
-    chosen so the LocalSystem-hosted MobaideAgent service could read the
-    env file at startup. That broke after the QR-pairing flow added the
-    ``pairing_monitor.write_credentials_to_env`` codepath: the same
-    LocalSystem service now needs to atomic-replace ``.env`` (requires
-    ``DELETE``) and re-tighten the ACL via icacls (requires
-    ``WRITE_DAC``), neither of which ``:R`` includes. ``:F`` is the
-    minimum grant that satisfies both. Do not "tighten" this back to
-    ``:R`` without first re-checking the pairing-monitor flow.
+    The agent runs in the installing user's session (Scheduled Task with
+    ``-LogonType Interactive`` — see ``deploy/install.ps1:Install-Service``),
+    so the user grant alone covers the runtime read/write path
+    (including ``pairing_monitor.write_credentials_to_env``'s
+    atomic-replace which needs ``DELETE``/``WRITE_DAC``, both contained
+    in ``F``). ``Administrators:F`` is kept so the elevated installer
+    can re-run ``init-env --force`` to rotate credentials.
+
+    The historic ``SYSTEM:F`` grant was for a LocalSystem-hosted SCM
+    service that has been removed; a regression guard below pins that
+    SYSTEM no longer appears in the icacls argv.
 
     Tested by monkeypatching ``subprocess.run`` so the assertions work on
     every host. We also force ``sys.platform = 'win32'`` so the
@@ -446,7 +448,7 @@ class TestRestrictPermsWindowsAclArgv:
         # /inheritance:r is required to drop broad-readers like Users.
         assert "/inheritance:r" in cmd
 
-    def test_grants_system_full_control(self, tmp_path, monkeypatch):
+    def test_does_not_grant_system(self, tmp_path, monkeypatch):
         target = tmp_path / ".env"
         target.write_text("x=1\n", encoding="utf-8")
         captured = self._capture_run(monkeypatch)
@@ -456,25 +458,16 @@ class TestRestrictPermsWindowsAclArgv:
         restrict_perms(target)
 
         cmd = captured["cmd"]
-        # SYSTEM must have FULL CONTROL — the LocalSystem-hosted
-        # MobaideAgent service reads .env at boot AND writes it at
-        # post-pair time via pairing_monitor.write_credentials_to_env.
-        # SYSTEM:R was sufficient for the read but blocked the write
-        # (MoveFileEx needs DELETE on the target file) AND the
-        # follow-up icacls re-tighten (needs WRITE_DAC), so the
-        # post-pairing write silently failed and the agent stayed in
-        # pairing_pending. SYSTEM:F is the minimal grant that satisfies
-        # both. Do not change to :R, :M, or :RX without re-validating
-        # the post-pairing write path on Windows.
-        assert "/grant" in cmd
-        assert "SYSTEM:F" in cmd
-        # The /grant flag must immediately precede SYSTEM:F.
-        sys_idx = cmd.index("SYSTEM:F")
-        assert cmd[sys_idx - 1] == "/grant"
-        # Regression guard: no leftover ``SYSTEM:R`` from the previous
-        # design. A future refactor that re-introduces the read-only
-        # grant would re-break the pairing flow silently.
-        assert "SYSTEM:R" not in cmd
+        # Regression guard against accidentally restoring the SYSTEM
+        # grant — the agent no longer runs as LocalSystem, so SYSTEM
+        # has no operational need for write/read access here. NT
+        # AUTHORITY\SYSTEM still has unconstrained kernel access if
+        # an admin tool needs it; the icacls ACL just stops being a
+        # discovery channel for that principal.
+        for variant in ("SYSTEM:F", "SYSTEM:R", "SYSTEM:M", "SYSTEM:RX"):
+            assert variant not in cmd, (
+                f"unexpected SYSTEM grant {variant} in icacls argv: {cmd}"
+            )
 
     def test_grants_administrators_full(self, tmp_path, monkeypatch):
         target = tmp_path / ".env"
@@ -501,6 +494,8 @@ class TestRestrictPermsWindowsAclArgv:
 
         cmd = captured["cmd"]
         assert "alice:F" in cmd
+        user_idx = cmd.index("alice:F")
+        assert cmd[user_idx - 1] == "/grant"
 
     def test_skips_user_grant_when_username_unset(self, tmp_path, monkeypatch):
         target = tmp_path / ".env"
@@ -512,17 +507,16 @@ class TestRestrictPermsWindowsAclArgv:
         restrict_perms(target)
 
         cmd = captured["cmd"]
-        # SYSTEM and Administrators grants must still be present even
-        # without an interactive USERNAME.
-        assert "SYSTEM:F" in cmd
+        # Administrators grant must still be present even without an
+        # interactive USERNAME.
         assert "Administrators:F" in cmd
-        # Exactly two ``:F`` grants — SYSTEM:F + Administrators:F — when
-        # there is no interactive USERNAME. A third ``:F`` would indicate
-        # the empty username was f-stringed in (producing a malformed
-        # ``:F`` grant); the production code skips the ``/grant {user}:F``
-        # pair entirely when ``user`` is empty.
+        # Exactly one ``:F`` grant — Administrators:F — when there is
+        # no interactive USERNAME. A second ``:F`` would indicate the
+        # empty username was f-stringed in (producing a malformed
+        # ``:F`` grant); the production code skips the
+        # ``/grant {user}:F`` pair entirely when ``user`` is empty.
         f_grants = [p for p in cmd if p.endswith(":F")]
-        assert f_grants == ["SYSTEM:F", "Administrators:F"]
+        assert f_grants == ["Administrators:F"]
 
     def test_subprocess_failure_does_not_raise(self, tmp_path, monkeypatch):
         target = tmp_path / ".env"

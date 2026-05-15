@@ -369,9 +369,10 @@ def test_windows_fallback_candidates_covers_localappdata_and_userprofile(
 ):
     """Per-user installs land in ``%APPDATA%`` (default npm), but some
     operators relocate npm-global to ``%LOCALAPPDATA%`` or run scripts
-    relative to ``%USERPROFILE%``. The fallback covers all three so a
-    LocalSystem-hosted service can find the binary if any of them is
-    set in its (typically stripped) env."""
+    relative to ``%USERPROFILE%``. The fallback covers all three so the
+    resolver can find the binary in non-standard installs (chocolatey,
+    relocated npm prefix) even if PATH and ``MOBAIDE_CLAUDE_BIN`` both
+    miss it."""
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "userprofile"))
@@ -389,11 +390,12 @@ def test_windows_fallback_candidates_covers_localappdata_and_userprofile(
 def test_windows_resolver_uses_fallback_when_path_misses(
     monkeypatch, tmp_path, clean_resolver_state
 ):
-    """End-to-end Windows path: shutil.which returns nothing (stripped
-    LocalSystem PATH), but ``%APPDATA%\\npm\\claude.cmd`` exists. The
-    resolver must find it via the fallback list. This is the actual bug
-    we're fixing — the service couldn't see claude.cmd because PATH
-    didn't include npm."""
+    """End-to-end Windows path: shutil.which returns nothing (e.g. a
+    user whose interactive PATH carries npm but whose non-interactive
+    Scheduled-Task session does not), but ``%APPDATA%\\npm\\claude.cmd``
+    exists. The resolver must find it via the fallback list — covers
+    the original ``claude_cli_missing`` 503 where PATH-only lookup
+    silently failed."""
     appdata = tmp_path / "user" / "AppData" / "Roaming"
     fake = appdata / "npm" / "claude.cmd"
     fake.parent.mkdir(parents=True, exist_ok=True)

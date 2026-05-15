@@ -199,15 +199,17 @@ class TestInitEnvOutputContents:
 
 
 class TestInitEnvClaudeBin:
-    """``--claude-bin`` writes ``MOBAIDE_CLAUDE_BIN`` so the Windows-service
-    LocalSystem process can find ``claude.cmd`` outside its stripped PATH.
+    """``--claude-bin`` writes ``MOBAIDE_CLAUDE_BIN`` so the agent
+    always resolves ``claude.cmd`` even when PATH is non-standard.
 
-    The installer captures the user's ``%APPDATA%\\npm\\claude.cmd`` before
-    elevation (under the originating user's env), then re-invokes
-    ``init-env --claude-bin <abs-path>`` from the elevated session. The
-    flag must land an uncommented ``MOBAIDE_CLAUDE_BIN=<path>`` line —
-    the template ships the key commented out (``env.template:40``) so
-    ``render_template``'s ``^\\s*#?\\s*KEY=`` matcher must uncomment it.
+    The Windows installer captures the user's
+    ``%APPDATA%\\npm\\claude.cmd`` before UAC elevation (under the
+    originating user's env), then re-invokes
+    ``init-env --claude-bin <abs-path>`` from the elevated session.
+    The flag must land an uncommented ``MOBAIDE_CLAUDE_BIN=<path>``
+    line — the template ships the key commented out
+    (``env.template:40``) so ``render_template``'s
+    ``^\\s*#?\\s*KEY=`` matcher must uncomment it.
     """
 
     def test_writes_claude_bin_when_flag_passed_fresh(self, tmp_path):

@@ -1,0 +1,1282 @@
+"""Tests for ``deploy/windows_launcher.py``.
+
+The module hosts the per-user Scheduled Task supervisor that replaces
+the previous LocalSystem SCM service (``deploy/windows_service.py``).
+The supervisor lives at ``<prefix>/svc/mobaide_launcher.py`` outside
+any release directory so the registered task ``Execute`` path stays
+stable across upgrades; it is stdlib-only by design (no pywin32, no
+``mobaide`` imports) so any host Python 3.x can run these tests
+regardless of platform.
+
+Lives under ``tests/`` (the repo-root test dir, NOT
+``mobaide_agent/tests/``) because the supervisor is deploy
+infrastructure -- nothing inside the ``mobaide`` package imports it.
+``install.ps1`` fetches the file from get.mobaide.com (gh-pages)
+alongside ``install.ps1`` itself; ``tests/test_publish_gh_pages_workflow.py``
+pins that co-versioning contract. This module pins the supervisor's
+own behavioural surface.
+
+Mirrors the parts of the deleted ``tests/test_windows_service.py``
+that survive the rewrite: ``_default_prefix`` precedence,
+``_resolve_release_python`` happy + error paths, ``_open_log`` rotation
++ logs-dir creation, ``_spawn_release_launcher`` stdio redirection +
+parent-handle close, ``_terminate_subprocess`` grace-period contract,
+and the new supervisor-loop coverage that subsumes the deleted
+``SvcDoRun`` tests: exit-75 respawn, exit-code propagation, current_version
+re-resolution between iterations, KeyboardInterrupt teardown, and the
+resolve/spawn error -> exit 70 paths.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO_ROOT / "deploy"))
+
+import windows_launcher  # noqa: E402
+
+
+class TestDefaultPrefix:
+    """Precedence: ``--prefix`` argv > ``MOBAIDE_AGENT_PREFIX`` env >
+    ``%ProgramFiles%\\MobaideAgent`` default.
+
+    The Scheduled Task action passes ``--prefix <prefix>`` explicitly
+    (the task's environment does NOT get ``MOBAIDE_AGENT_PREFIX`` set
+    automatically), so argv wins. The env var still works for
+    interactive smoke-tests where an operator launches the supervisor
+    by hand.
+    """
+
+    def test_cli_prefix_takes_precedence_over_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", r"D:\from\env")
+        assert windows_launcher._default_prefix(r"D:\from\argv") == Path(
+            r"D:\from\argv"
+        )
+
+    def test_env_used_when_cli_prefix_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``MOBAIDE_AGENT_PREFIX`` overrides the ProgramFiles default
+        when no ``--prefix`` is given on the command line.
+        """
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", r"D:\custom\mobaide")
+        assert windows_launcher._default_prefix(None) == Path(
+            r"D:\custom\mobaide"
+        )
+
+    def test_env_used_when_cli_prefix_empty_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty-string ``cli_prefix`` (defensive, in case argparse hands
+        in an empty value) falls through to the env-var branch rather
+        than being treated as a real prefix. ``Path("")`` is the cwd —
+        a silently wrong supervisor home that would resolve
+        ``current_version`` from the install user's working directory.
+        """
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", r"D:\custom\mobaide")
+        assert windows_launcher._default_prefix("") == Path(
+            r"D:\custom\mobaide"
+        )
+
+    def test_program_files_default_when_env_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ``--prefix`` and without ``MOBAIDE_AGENT_PREFIX``,
+        fall back to ``%ProgramFiles%\\MobaideAgent``.
+
+        Mirrors the resolution in install.ps1's ``$Script:Prefix``
+        default and ``mobaide.launcher._default_prefix``. Drift between
+        the three silently breaks the supervisor — it would read the
+        wrong ``current_version`` file.
+        """
+        monkeypatch.delenv("MOBAIDE_AGENT_PREFIX", raising=False)
+        monkeypatch.setenv("ProgramFiles", r"C:\Program Files")
+        assert (
+            windows_launcher._default_prefix(None)
+            == Path(r"C:\Program Files") / "MobaideAgent"
+        )
+
+    def test_program_files_default_when_program_files_env_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When ``%ProgramFiles%`` itself is unset (e.g. running the
+        supervisor under a stripped environment), fall back to the
+        hardcoded ``C:\\Program Files`` constant baked into
+        ``_DEFAULT_PROGRAM_FILES``. Documented defaults that keep the
+        supervisor functional in degraded environments.
+        """
+        monkeypatch.delenv("MOBAIDE_AGENT_PREFIX", raising=False)
+        monkeypatch.delenv("ProgramFiles", raising=False)
+        assert (
+            windows_launcher._default_prefix(None)
+            == Path(r"C:\Program Files") / "MobaideAgent"
+        )
+
+
+class TestResolveReleasePython:
+    """Read ``current_version`` and resolve the active release's
+    ``python.exe``. Three error paths plus the happy path; each error
+    path raises ``FileNotFoundError`` with an operator-readable message
+    that ``_supervise`` writes to ``stderr`` (which is itself redirected
+    to the rotated ``agent.err.log`` so operators can recover the
+    string after the fact).
+    """
+
+    def test_returns_release_interpreter_on_happy_path(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "current_version").write_text("1.2.3\n", encoding="utf-8")
+        release_scripts = tmp_path / "releases" / "1.2.3" / "venv" / "Scripts"
+        release_scripts.mkdir(parents=True)
+        (release_scripts / "python.exe").write_bytes(b"\x4d\x5a")  # MZ
+        resolved = windows_launcher._resolve_release_python(tmp_path)
+        assert resolved == release_scripts / "python.exe"
+
+    def test_strips_whitespace_from_current_version(
+        self, tmp_path: Path
+    ) -> None:
+        """``current_version`` may end with ``\\r\\n`` on Windows-written
+        files. Strip both ends so the release directory resolves
+        correctly. Without this, ``releases/1.2.3\\r/venv/...`` would
+        be looked up and the happy path would silently degrade to the
+        ``missing release interpreter`` error branch.
+        """
+        (tmp_path / "current_version").write_text(
+            "  1.2.3  \r\n", encoding="utf-8"
+        )
+        release_scripts = tmp_path / "releases" / "1.2.3" / "venv" / "Scripts"
+        release_scripts.mkdir(parents=True)
+        (release_scripts / "python.exe").write_bytes(b"\x4d\x5a")
+        resolved = windows_launcher._resolve_release_python(tmp_path)
+        assert resolved == release_scripts / "python.exe"
+
+    def test_raises_on_missing_current_version(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match="cannot read"):
+            windows_launcher._resolve_release_python(tmp_path)
+
+    def test_raises_on_empty_current_version(self, tmp_path: Path) -> None:
+        """A whitespace-only ``current_version`` is treated as empty.
+
+        The post-install gap (file written but flush incomplete on a
+        sudden reboot) and the failed-staging gap (updater rewrote
+        ``current_version`` to an empty file) both surface here as
+        ``empty`` rather than the more confusing ``missing release
+        interpreter <empty>/venv/...``.
+        """
+        (tmp_path / "current_version").write_text("   \n", encoding="utf-8")
+        with pytest.raises(FileNotFoundError, match="empty"):
+            windows_launcher._resolve_release_python(tmp_path)
+
+    def test_raises_on_missing_interpreter(self, tmp_path: Path) -> None:
+        """A ``current_version`` pointing at a non-existent release
+        surfaces as ``missing release interpreter`` with the resolved
+        path AND the requested version embedded in the message so the
+        operator can correlate it with the staged-update state.
+        """
+        (tmp_path / "current_version").write_text("9.9.9", encoding="utf-8")
+        with pytest.raises(
+            FileNotFoundError, match="missing release interpreter"
+        ) as excinfo:
+            windows_launcher._resolve_release_python(tmp_path)
+        # The error message must mention the version string so the
+        # operator can correlate it with the staged-update state.
+        assert "9.9.9" in str(excinfo.value)
+
+
+class TestOpenLog:
+    """``_open_log`` opens the per-stream log in append mode with
+    boot-time rotation at 5 MB (keep one backup). Used by
+    ``_spawn_release_launcher`` for both stdout and stderr — symmetric
+    coverage on the rotation branch matters because a regression on
+    one stream silently kills the other operator-visible diagnostic.
+    """
+
+    def test_creates_logs_dir_when_missing(self, tmp_path: Path) -> None:
+        """The MobaideAgent install flow only guarantees ``<prefix>``
+        and ``<prefix>/releases/<v>``; the ``logs/`` directory is
+        allocated lazily on first supervisor boot. Without
+        ``mkdir(parents=True, exist_ok=True)`` here, the first boot
+        would crash with ``FileNotFoundError`` opening the log, which
+        the operator would never see because stderr is going to that
+        very missing file.
+        """
+        assert not (tmp_path / "logs").exists()
+
+        fh = windows_launcher._open_log(
+            tmp_path,
+            windows_launcher._AGENT_ERR_LOG_FILE_NAME,
+            windows_launcher._AGENT_ERR_LOG_BACKUP_NAME,
+        )
+        try:
+            assert (tmp_path / "logs").is_dir()
+            assert (tmp_path / "logs" / "agent.err.log").exists()
+        finally:
+            fh.close()
+
+    def test_appends_to_existing_log(self, tmp_path: Path) -> None:
+        """An under-5MB existing log must be opened for append, not
+        truncated. Truncation would lose the recent crash-loop history
+        that the next-boot ``Wait-AgentHealthy`` tail relies on.
+        """
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log_path = log_dir / "agent.err.log"
+        log_path.write_bytes(b"prior content\n")
+
+        fh = windows_launcher._open_log(
+            tmp_path,
+            windows_launcher._AGENT_ERR_LOG_FILE_NAME,
+            windows_launcher._AGENT_ERR_LOG_BACKUP_NAME,
+        )
+        try:
+            fh.write(b"new content\n")
+        finally:
+            fh.close()
+
+        assert log_path.read_bytes() == b"prior content\nnew content\n"
+        assert not (log_dir / "agent.err.log.1").exists(), (
+            "small existing log must NOT be rotated; backup creation "
+            "indicates the size threshold check is broken"
+        )
+
+    def test_rotates_at_5mb_threshold(self, tmp_path: Path) -> None:
+        """A pre-existing log of >= 5 MB must be rotated to the .1
+        backup so a crash-loop with verbose tracebacks can't fill the
+        disk.
+        """
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log_path = log_dir / "agent.err.log"
+        # Write just over the rotation threshold.
+        log_path.write_bytes(b"\x00" * (windows_launcher._AGENT_LOG_ROTATE_BYTES + 1))
+
+        fh = windows_launcher._open_log(
+            tmp_path,
+            windows_launcher._AGENT_ERR_LOG_FILE_NAME,
+            windows_launcher._AGENT_ERR_LOG_BACKUP_NAME,
+        )
+        try:
+            pass
+        finally:
+            fh.close()
+
+        assert (log_dir / "agent.err.log.1").exists(), (
+            "oversized log must be rotated to .1 backup"
+        )
+        # The live log must exist (recreated by the append-mode open)
+        # and be smaller than the pre-rotation size.
+        assert log_path.exists()
+        assert log_path.stat().st_size < windows_launcher._AGENT_LOG_ROTATE_BYTES
+
+    def test_overwrites_stale_backup_on_rotation(self, tmp_path: Path) -> None:
+        """When ``agent.err.log`` is oversized AND ``agent.err.log.1``
+        already exists, rotation must unlink the stale backup first,
+        then replace the live log onto the backup name.
+
+        Without the unlink, ``log_path.replace(backup)`` on Windows
+        raises ``WinError 183: file already exists`` and the rotation
+        aborts. The stale-backup case is the steady state on any host
+        that has rolled over once.
+        """
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log_path = log_dir / "agent.err.log"
+        backup_path = log_dir / "agent.err.log.1"
+        log_path.write_bytes(b"NEW" * (2 * 1024 * 1024))
+        backup_path.write_bytes(b"OLD")
+        assert log_path.stat().st_size >= windows_launcher._AGENT_LOG_ROTATE_BYTES
+
+        fh = windows_launcher._open_log(
+            tmp_path,
+            windows_launcher._AGENT_ERR_LOG_FILE_NAME,
+            windows_launcher._AGENT_ERR_LOG_BACKUP_NAME,
+        )
+        try:
+            pass
+        finally:
+            fh.close()
+
+        assert backup_path.exists()
+        backup_content = backup_path.read_bytes()
+        assert backup_content.startswith(b"NEW"), (
+            "rotation must overwrite the stale backup with the just-"
+            "rotated live log content -- found bytes "
+            f"{backup_content[:8]!r} (looks like the original 'OLD' "
+            "backup, which means the rotation was aborted by the "
+            "FileExistsError that ``replace()`` raises on Windows when "
+            "the destination already exists)"
+        )
+
+    def test_returns_binary_append_mode_handle(self, tmp_path: Path) -> None:
+        """The handle must be in binary append mode (``ab``).
+
+        ``Popen`` calls ``fileno()`` on the handle and dups the OS file
+        descriptor into the child; text-mode wrappers would impose
+        Python-side newline translation on writes coming from the
+        child's C-level ``fwrite``, garbling structlog's JSON output.
+        Append mode (vs ``wb``) is the no-truncate guarantee that the
+        ``test_appends_to_existing_log`` test pins from the other
+        direction.
+        """
+        fh = windows_launcher._open_log(
+            tmp_path,
+            windows_launcher._AGENT_OUT_LOG_FILE_NAME,
+            windows_launcher._AGENT_OUT_LOG_BACKUP_NAME,
+        )
+        try:
+            # ``mode`` is the documented attribute on file objects from
+            # ``open()``; it contains ``b`` for binary and ``a`` for
+            # append. The order of flag characters is implementation-
+            # defined so check membership rather than equality.
+            mode = getattr(fh, "mode", "")
+            assert "a" in mode, f"expected append mode, got {mode!r}"
+            assert "b" in mode, f"expected binary mode, got {mode!r}"
+        finally:
+            fh.close()
+
+
+class _FakePopen:
+    """Captures the constructor kwargs without actually spawning a child.
+
+    The supervisor passes file-object kwargs (``stdout`` / ``stderr``)
+    that ``_FakePopen`` stores so tests can inspect both the redirect
+    target and the close-state after the ``Popen`` call completes (the
+    supervisor must release its parent-side wrapper once the OS-level
+    handle has been duplicated into the child).
+    """
+
+    captured_kwargs: list[dict[str, object]] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        _FakePopen.captured_kwargs.append(dict(kwargs))
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_popen() -> None:
+    """Tests share the class-level ``captured_kwargs`` list; reset it
+    between tests so cross-test contamination cannot mask a regression
+    (e.g. a test asserting on ``captured_kwargs[-1]`` accidentally
+    seeing a prior test's value when the current test's spawn was
+    skipped).
+    """
+    _FakePopen.captured_kwargs = []
+
+
+class TestSpawnReleaseLauncher:
+    """``_spawn_release_launcher`` redirects stdout + stderr to rotated
+    log files, NOT DEVNULL. structlog's queue listener writes to
+    ``sys.stdout``; routing stdout to DEVNULL silently discarded every
+    ``pairing_monitor.*`` / ``relay_client.*`` / ``http.request.*`` log
+    line. That gap was the systemic blocker on every prior debugging
+    attempt of the empty-.env pairing failure mode and is the reason
+    the supervisor opens TWO file handles (stdout + stderr) rather
+    than redirecting both streams to the same file or to DEVNULL.
+    """
+
+    def test_invokes_release_python_with_mobaide_launcher_module(
+        self, tmp_path: Path
+    ) -> None:
+        """The supervisor must spawn ``<release_python> -m mobaide.launcher``.
+
+        The ``-m`` form runs the package's ``__main__`` entry point;
+        the release-pinned launcher is responsible for the crash-loop
+        rollback + Job-Object teardown. Hardcoding a different module
+        name silently breaks the chain: the supervisor would Popen
+        successfully, the wrong module would print "no module" to the
+        captured stderr, exit non-zero, and Task Scheduler would
+        restart the supervisor in an inescapable crash loop.
+        """
+        captured_args: list[tuple[object, ...]] = []
+
+        class _Capture:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                captured_args.append(args)
+
+        with mock.patch.object(windows_launcher.subprocess, "Popen", _Capture):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        assert captured_args, "Popen was not invoked"
+        argv = captured_args[0][0]
+        assert isinstance(argv, list)
+        assert argv == [r"C:\fake\python.exe", "-m", "mobaide.launcher"], (
+            "Popen argv must be [<release_python>, '-m', 'mobaide.launcher']; "
+            f"got {argv!r}"
+        )
+
+    def test_redirects_stdout_to_agent_out_log(self, tmp_path: Path) -> None:
+        """``_spawn_release_launcher`` must redirect stdout to
+        ``<prefix>/logs/agent.out.log`` (not DEVNULL).
+
+        structlog's queue listener writes its records to
+        ``sys.stdout``; routing stdout to DEVNULL would re-introduce
+        the empty-.env pairing-failure debugging blocker.
+        """
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        kwargs = _FakePopen.captured_kwargs[-1]
+        stdout = kwargs.get("stdout")
+        assert stdout is not subprocess.DEVNULL, (
+            "stdout must NOT be DEVNULL -- every structlog line going to "
+            "/dev/null was the systemic blocker on every prior debugging "
+            "attempt of the empty-.env pairing failure mode"
+        )
+        assert (tmp_path / "logs" / "agent.out.log").exists()
+
+    def test_redirects_stderr_to_agent_err_log(self, tmp_path: Path) -> None:
+        """``_spawn_release_launcher`` must redirect stderr to
+        ``<prefix>/logs/agent.err.log`` (not DEVNULL).
+
+        Before the redirect, every Python traceback from the launcher
+        or the agent (config error, missing dep, port conflict) was
+        discarded -- operators only saw the eventvwr line, never the
+        real error. The fix routes stderr to a rotated log file that
+        install.ps1's ``Wait-AgentHealthy`` can point at.
+        """
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        kwargs = _FakePopen.captured_kwargs[-1]
+        stderr = kwargs.get("stderr")
+        assert stderr is not subprocess.DEVNULL, (
+            "stderr must NOT be DEVNULL -- a silent launcher crash is the "
+            "exact diagnostic gap install.ps1's Wait-AgentHealthy was "
+            "added to expose"
+        )
+        assert (tmp_path / "logs" / "agent.err.log").exists()
+
+    def test_uses_devnull_for_stdin(self, tmp_path: Path) -> None:
+        """``stdin`` must be DEVNULL -- the agent is a daemon and must
+        not inherit the supervisor's stdin (which is detached under
+        Task Scheduler anyway, but explicit DEVNULL is defence-in-depth
+        for the interactive smoke-test case where an operator runs the
+        supervisor by hand from a console).
+        """
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        kwargs = _FakePopen.captured_kwargs[-1]
+        assert kwargs.get("stdin") is subprocess.DEVNULL, (
+            "stdin must be DEVNULL so the agent inherits nothing the "
+            f"supervisor itself was reading; got {kwargs.get('stdin')!r}"
+        )
+
+    def test_closes_parent_stdout_handle_after_popen(
+        self, tmp_path: Path
+    ) -> None:
+        """The parent's stdout wrapper opened for ``agent.out.log``
+        must be closed once ``subprocess.Popen`` has dup'd the OS handle
+        into the child.
+
+        Leaving the wrapper open pins the file on Windows: the next
+        boot's rotation would see oversized ``agent.out.log``, call
+        ``log_path.replace(backup)``, and fail with
+        ``WinError 32: file is being used by another process``. The
+        fix lives in ``_spawn_release_launcher``'s
+        ``finally: out_log.close()``.
+        """
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        kwargs = _FakePopen.captured_kwargs[-1]
+        fh = kwargs.get("stdout")
+        assert hasattr(fh, "closed"), (
+            f"expected stdout to be a file-like object, got {type(fh).__name__}"
+        )
+        assert getattr(fh, "closed", None) is True, (
+            "parent's stdout wrapper for agent.out.log must be closed "
+            "after Popen returns -- leaving it open pins the out log "
+            "on Windows and blocks the next boot's rotation rename"
+        )
+
+    def test_closes_parent_stderr_handle_after_popen(
+        self, tmp_path: Path
+    ) -> None:
+        """Symmetric companion to the stdout-close test: the parent's
+        stderr wrapper opened for ``agent.err.log`` must also be closed
+        once ``Popen`` returns.
+        """
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        kwargs = _FakePopen.captured_kwargs[-1]
+        fh = kwargs.get("stderr")
+        assert hasattr(fh, "closed"), (
+            f"expected stderr to be a file-like object, got {type(fh).__name__}"
+        )
+        assert getattr(fh, "closed", None) is True, (
+            "parent's stderr wrapper must be closed after Popen returns "
+            "-- subprocess has already dup'd the OS fd into the child"
+        )
+
+    def test_rotates_oversized_stdout_log(self, tmp_path: Path) -> None:
+        """Pre-existing ``agent.out.log`` larger than 5 MB must be
+        rotated to ``agent.out.log.1`` so structlog's per-request lines
+        can't fill the disk on a long-running agent.
+
+        Distinct from the stderr-rotation pin because the stdout
+        redirect was added later and its rotation symmetry has burned
+        twice before: a regression that reverts to a single shared log
+        file or drops the second ``_open_log`` call breaks this without
+        breaking the stderr-rotation test.
+        """
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        out_log_path = log_dir / "agent.out.log"
+        out_log_path.write_bytes(
+            b"\x00" * (windows_launcher._AGENT_LOG_ROTATE_BYTES + 1)
+        )
+
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        assert (log_dir / "agent.out.log.1").exists()
+        assert out_log_path.stat().st_size < windows_launcher._AGENT_LOG_ROTATE_BYTES
+
+    def test_rotates_oversized_stderr_log(self, tmp_path: Path) -> None:
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        err_log_path = log_dir / "agent.err.log"
+        err_log_path.write_bytes(
+            b"\x00" * (windows_launcher._AGENT_LOG_ROTATE_BYTES + 1)
+        )
+
+        with mock.patch.object(
+            windows_launcher.subprocess, "Popen", _FakePopen
+        ):
+            windows_launcher._spawn_release_launcher(
+                Path(r"C:\fake\python.exe"), tmp_path
+            )
+
+        assert (log_dir / "agent.err.log.1").exists()
+        assert err_log_path.stat().st_size < windows_launcher._AGENT_LOG_ROTATE_BYTES
+
+
+class TestSpawnReleaseLauncherErrorPath:
+    """``_spawn_release_launcher`` opens ``agent.out.log`` before
+    ``agent.err.log``. If the err_log open fails (disk full, permission
+    denied, mid-supervise rotation race), the already-open out_log
+    wrapper MUST be closed before the exception propagates -- otherwise
+    the supervisor leaks a file handle every time a transient err_log
+    open fails, which pins the out_log on Windows and prevents the next
+    boot's rotation rename. The fix lives in
+    ``_spawn_release_launcher``'s ``try / except BaseException:
+    out_log.close(); raise`` guard.
+    """
+
+    def test_closes_out_log_when_err_log_open_raises(
+        self, tmp_path: Path
+    ) -> None:
+        # Stub ``_open_log`` to succeed on the first call (out_log) and
+        # raise ``OSError`` on the second (err_log). The first call's
+        # handle is captured so the test can assert .close() ran before
+        # the exception escaped ``_spawn_release_launcher``.
+        opened_handles: list[object] = []
+        call_count = [0]
+
+        real_open_log = windows_launcher._open_log
+
+        def fake_open_log(prefix: Path, file_name: str, backup_name: str):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                fh = real_open_log(prefix, file_name, backup_name)
+                opened_handles.append(fh)
+                return fh
+            raise OSError(28, "simulated disk-full on err_log open")
+
+        with mock.patch.object(windows_launcher, "_open_log", fake_open_log):
+            # The error must propagate as an OSError -- callers (the
+            # _supervise loop) catch OSError and return exit 70 with a
+            # stderr diagnostic. Swallowing the error here would mean
+            # the supervisor silently Popen-ed nothing and Task
+            # Scheduler would see a clean exit on what is actually a
+            # configuration failure.
+            with pytest.raises(OSError, match="simulated disk-full"):
+                windows_launcher._spawn_release_launcher(
+                    Path(r"C:\fake\python.exe"), tmp_path
+                )
+
+        # Exactly one handle was opened (out_log). err_log never got a
+        # successful open, so the test fixture only holds the out_log
+        # wrapper.
+        assert len(opened_handles) == 1, (
+            f"expected exactly one _open_log call to succeed (out_log) "
+            f"before the err_log call raises; got "
+            f"{len(opened_handles)} handles"
+        )
+        out_log = opened_handles[0]
+        # The smoking-gun assertion: the out_log wrapper must be closed
+        # by the time the exception propagates. Without the
+        # ``try / except BaseException: out_log.close(); raise`` guard
+        # around the err_log open, this would be False and the
+        # supervisor would leak a file handle every time the err_log
+        # open transient-fails.
+        assert getattr(out_log, "closed", None) is True, (
+            "out_log wrapper must be closed before the err_log "
+            "OSError propagates -- the leak guard lives at "
+            "_spawn_release_launcher's ``try / except BaseException: "
+            "out_log.close(); raise`` block. Without it, the supervisor "
+            "would pin the out_log on Windows and the next boot's "
+            "rotation rename would fail with WinError 32"
+        )
+
+    def test_closes_out_log_when_err_log_open_raises_keyboard_interrupt(
+        self, tmp_path: Path
+    ) -> None:
+        # The leak guard uses ``except BaseException`` (not just
+        # ``except Exception``). That distinction matters: a
+        # KeyboardInterrupt arriving in the narrow window between the
+        # two _open_log calls (e.g. the operator hit Ctrl+C during a
+        # supervisor smoke-test) must still close out_log on the way
+        # out. ``except Exception`` would miss
+        # KeyboardInterrupt / SystemExit and re-leak.
+        opened_handles: list[object] = []
+        call_count = [0]
+
+        real_open_log = windows_launcher._open_log
+
+        def fake_open_log(prefix: Path, file_name: str, backup_name: str):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                fh = real_open_log(prefix, file_name, backup_name)
+                opened_handles.append(fh)
+                return fh
+            raise KeyboardInterrupt
+
+        with mock.patch.object(windows_launcher, "_open_log", fake_open_log):
+            with pytest.raises(KeyboardInterrupt):
+                windows_launcher._spawn_release_launcher(
+                    Path(r"C:\fake\python.exe"), tmp_path
+                )
+
+        assert len(opened_handles) == 1
+        out_log = opened_handles[0]
+        assert getattr(out_log, "closed", None) is True, (
+            "out_log must be closed even when the err_log open is "
+            "interrupted by KeyboardInterrupt -- the guard uses "
+            "``except BaseException`` precisely so a Ctrl+C during the "
+            "supervisor smoke-test cannot leak the out_log handle"
+        )
+
+
+_UNSET = object()
+
+
+class _StubProc:
+    """Minimal stand-in for ``subprocess.Popen`` used by supervisor tests.
+
+    ``poll`` returns ``returncode`` so ``wait()`` doesn't block;
+    ``returncode`` mirrors what the launcher subprocess would have
+    exited with. Each call to a method is recorded in ``calls`` for
+    assertions.
+
+    ``poll_returncode`` defaults to a sentinel (``_UNSET``) that maps
+    onto ``returncode`` -- the common "process has already exited"
+    shape used by ``_supervise``'s test stubs. Tests exercising the
+    "process still running" branch pass ``poll_returncode=None``
+    explicitly so ``poll()`` returns the literal None.
+    """
+
+    def __init__(
+        self,
+        returncode: int = 0,
+        *,
+        poll_returncode: object = _UNSET,
+        wait_raises: BaseException | None = None,
+        terminate_raises: BaseException | None = None,
+    ) -> None:
+        self.returncode = returncode
+        self.pid = 12345
+        self.calls: list[str] = []
+        self._poll_returncode: object = (
+            returncode if poll_returncode is _UNSET else poll_returncode
+        )
+        self._wait_raises = wait_raises
+        self._terminate_raises = terminate_raises
+
+    def poll(self) -> int | None:
+        self.calls.append("poll")
+        if isinstance(self._poll_returncode, BaseException):
+            raise self._poll_returncode
+        return self._poll_returncode  # type: ignore[return-value]
+
+    def terminate(self) -> None:
+        self.calls.append("terminate")
+        if self._terminate_raises is not None:
+            raise self._terminate_raises
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.calls.append(f"wait(timeout={timeout})")
+        if self._wait_raises is not None:
+            raise self._wait_raises
+        return self.returncode
+
+    def kill(self) -> None:
+        self.calls.append("kill")
+
+
+class TestTerminateSubprocess:
+    """``_terminate_subprocess`` is the supervisor's graceful-stop
+    primitive. Called from the ``KeyboardInterrupt`` branch of
+    ``_supervise`` when ``Stop-ScheduledTask`` delivers a polite stop;
+    25-second grace via ``terminate`` then a hard ``kill`` fallback so
+    a wedged agent cannot pin the supervisor indefinitely.
+    """
+
+    def test_no_op_when_proc_is_none(self) -> None:
+        """Passing ``None`` must be a no-op. The supervisor sets
+        ``proc = None`` after ``wait()`` returns; calling
+        ``_terminate_subprocess(None)`` from the
+        ``KeyboardInterrupt`` branch must not raise.
+        """
+        windows_launcher._terminate_subprocess(None)
+
+    def test_no_op_when_proc_already_exited(self) -> None:
+        """If ``poll()`` returns a non-None value, the process has
+        already exited and there is nothing to terminate. The function
+        must NOT call ``terminate`` or ``kill`` in that case -- doing
+        so on Windows would log a meaningless ``OSError`` (handle
+        already closed) into the captured stderr.
+        """
+        proc = _StubProc(returncode=0, poll_returncode=0)
+        windows_launcher._terminate_subprocess(proc)
+        assert proc.calls == ["poll"]
+
+    def test_calls_terminate_then_wait(self) -> None:
+        """Running process: ``poll()`` returns ``None``, then
+        ``terminate()`` is invoked, then ``wait(timeout=25)`` collects
+        the exit.
+        """
+        proc = _StubProc(returncode=0, poll_returncode=None)
+        windows_launcher._terminate_subprocess(proc)
+        assert proc.calls[0] == "poll"
+        assert "terminate" in proc.calls
+        assert any(c.startswith("wait(") for c in proc.calls)
+        # Kill fallback must NOT fire when wait() returns within grace.
+        assert "kill" not in proc.calls
+
+    def test_falls_back_to_kill_on_wait_timeout(self) -> None:
+        """If ``terminate`` followed by ``wait`` exceeds the 25-second
+        grace, the function escalates to ``kill``. This guarantees the
+        supervisor unblocks even if the agent has hung on a stuck
+        atexit handler / final flush.
+        """
+        proc = _StubProc(
+            returncode=0,
+            poll_returncode=None,
+            wait_raises=subprocess.TimeoutExpired(cmd="x", timeout=25),
+        )
+        windows_launcher._terminate_subprocess(proc)
+        assert "terminate" in proc.calls
+        assert "kill" in proc.calls
+
+    def test_swallows_oserror_from_terminate(self) -> None:
+        """``terminate`` may race the process's own teardown -- the
+        process exits between the supervisor's ``poll`` and its
+        ``terminate``, and ``terminate`` raises ``OSError`` (Windows
+        handle-already-closed). The function must swallow this and
+        proceed to ``wait`` rather than propagate -- otherwise the
+        supervisor would print a confusing OSError traceback on every
+        polite stop that races a clean exit.
+        """
+        proc = _StubProc(
+            returncode=0,
+            poll_returncode=None,
+            terminate_raises=OSError("simulated already-closed handle"),
+        )
+        windows_launcher._terminate_subprocess(proc)
+        assert "terminate" in proc.calls
+        # The function continues to ``wait`` after the swallowed
+        # OSError; ``kill`` is not reached because wait returns normally
+        # in this stub.
+        assert any(c.startswith("wait(") for c in proc.calls)
+
+
+def _install_supervise_stubs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    exit_codes: list[int],
+    resolve_raises: BaseException | None = None,
+    spawn_raises: BaseException | None = None,
+) -> tuple[list[Path], list[Path]]:
+    """Wire the supervisor loop's collaborators with deterministic stubs.
+
+    Returns ``(spawn_log, resolve_log)`` for test assertions.
+    ``exit_codes`` is consumed one entry per spawned launcher; if
+    exhausted, the test fails (indicates an unexpected re-spawn).
+    """
+    spawn_log: list[Path] = []
+    resolve_log: list[Path] = []
+
+    def fake_resolve(prefix: Path) -> Path:
+        resolve_log.append(prefix)
+        if resolve_raises is not None:
+            raise resolve_raises
+        return prefix / "fake_python.exe"
+
+    def fake_spawn(python_path: Path, prefix: Path) -> _StubProc:
+        if spawn_raises is not None:
+            raise spawn_raises
+        if not exit_codes:
+            raise AssertionError(
+                "unexpected re-spawn: exit_codes list exhausted; _supervise "
+                "looped more times than the test expected"
+            )
+        spawn_log.append(python_path)
+        rc = exit_codes.pop(0)
+        return _StubProc(returncode=rc, poll_returncode=rc)
+
+    monkeypatch.setattr(
+        windows_launcher, "_resolve_release_python", fake_resolve
+    )
+    monkeypatch.setattr(
+        windows_launcher, "_spawn_release_launcher", fake_spawn
+    )
+    return spawn_log, resolve_log
+
+
+class TestSupervise:
+    """The supervisor loop is the Windows counterpart to systemd's
+    ``RestartForceExitStatus=75``. Agent exits 75 after a successful
+    pair (or after a staged auto-update); the supervisor must re-spawn
+    the launcher so the next boot reads the just-written
+    ``RELAY_AGENT_ID`` / ``RELAY_AGENT_TOKEN`` and brings up the relay
+    client. Without this re-spawn loop, ``_supervise`` would return on
+    first exit, Task Scheduler would report task-complete, and the
+    user would be forced to ``Start-ScheduledTask MobaideAgent``
+    manually -- exactly the "no additional actions" gap the loop was
+    added to close.
+    """
+
+    def test_respawns_on_exit_restart_requested(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        spawn_log, _ = _install_supervise_stubs(
+            monkeypatch,
+            exit_codes=[
+                windows_launcher._EXIT_RESTART_REQUESTED,
+                0,
+            ],
+        )
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 0
+        assert len(spawn_log) == 2, (
+            "expected exactly 2 spawns (initial + re-spawn after exit 75), "
+            f"got {len(spawn_log)}"
+        )
+
+    def test_does_not_respawn_on_clean_exit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Exit code 0 (clean stop) must NOT trigger a re-spawn.
+
+        Only ``_EXIT_RESTART_REQUESTED`` (75) is the restart signal;
+        other codes mean the launcher decided to stop and the
+        supervisor should propagate that to Task Scheduler unchanged.
+        """
+        spawn_log, _ = _install_supervise_stubs(
+            monkeypatch, exit_codes=[0]
+        )
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 0
+        assert len(spawn_log) == 1
+
+    def test_does_not_respawn_on_crash_exit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Crash exit codes (e.g. 70 from the launcher's missing-
+        interpreter path) must NOT trigger a re-spawn -- those are
+        real failures the operator needs to see, and Task Scheduler's
+        outer ``-RestartCount`` / ``-RestartInterval`` handles repeated
+        failures.
+        """
+        spawn_log, _ = _install_supervise_stubs(
+            monkeypatch, exit_codes=[70]
+        )
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 70
+        assert len(spawn_log) == 1
+
+    def test_propagates_arbitrary_exit_code(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The supervisor must propagate the launcher's exit code
+        verbatim (except for 75). A regression that silently maps any
+        non-zero exit to a canonical value would hide the launcher's
+        signal to Task Scheduler about WHY it failed (e.g. exit 137 on
+        OOM kill, exit 130 on SIGINT, exit 70 on resolve error).
+        """
+        _install_supervise_stubs(monkeypatch, exit_codes=[137])
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 137
+
+    def test_resolves_release_python_each_iteration(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Between re-spawns, ``_resolve_release_python`` is called
+        again so a ``current_version`` rewritten by the auto-updater
+        between iterations is picked up on the next boot.
+
+        Without this, a staged auto-update + ``exit 75`` would
+        re-spawn the launcher pinned to the OLD release, defeating the
+        staged rollout -- the operator would see the agent restart but
+        stay on the previous version until the SUPERVISOR itself was
+        restarted (i.e. a full ``Stop-ScheduledTask`` + ``Start-
+        ScheduledTask`` cycle).
+        """
+        _, resolve_log = _install_supervise_stubs(
+            monkeypatch,
+            exit_codes=[
+                windows_launcher._EXIT_RESTART_REQUESTED,
+                windows_launcher._EXIT_RESTART_REQUESTED,
+                0,
+            ],
+        )
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 0
+        assert len(resolve_log) == 3, (
+            "_resolve_release_python must be called once per spawn "
+            "(3 spawns -> 3 resolves so a between-restart "
+            "``current_version`` rewrite is picked up); got "
+            f"{len(resolve_log)} calls"
+        )
+
+    def test_resolve_error_returns_70(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``FileNotFoundError`` from ``_resolve_release_python``
+        (empty / missing / bad ``current_version``) maps to exit code
+        70. The constant matches systemd's ``EX_SOFTWARE``-style
+        "internal software error" code and is the documented signal to
+        Task Scheduler that "this is a configuration problem, not a
+        crash -- restarting will not help".
+        """
+        _install_supervise_stubs(
+            monkeypatch,
+            exit_codes=[],
+            resolve_raises=FileNotFoundError("empty current_version"),
+        )
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 70
+
+    def test_resolve_error_writes_to_stderr(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The resolve-error branch must emit an operator-readable
+        diagnostic to stderr. The supervisor's stderr is itself
+        redirected to ``<prefix>/logs/agent.err.log`` (by Task
+        Scheduler's action redirection or by the smoke-test invocation
+        env) so the message lands somewhere the operator can recover.
+        Silent exit 70 was the original SCM-service complaint: agent
+        gone, no signal.
+        """
+        _install_supervise_stubs(
+            monkeypatch,
+            exit_codes=[],
+            resolve_raises=FileNotFoundError(
+                "cannot read current_version: missing"
+            ),
+        )
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 70
+        err = capsys.readouterr().err
+        assert "cannot resolve release interpreter" in err, (
+            "resolve error must produce a stderr line with the prefix "
+            "``mobaide_launcher: cannot resolve release interpreter``; "
+            f"got stderr: {err!r}"
+        )
+        assert "current_version" in err
+
+    def test_spawn_oserror_returns_70(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``OSError`` from ``Popen`` (e.g. permission denied opening
+        the release ``python.exe`` after a partial AV quarantine) also
+        maps to exit 70 with a stderr diagnostic. Mirrors the
+        resolve-error path -- both are infrastructure problems that
+        Task Scheduler restarts cannot fix.
+        """
+        _install_supervise_stubs(
+            monkeypatch,
+            exit_codes=[],
+            spawn_raises=OSError(13, "permission denied"),
+        )
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 70
+
+    def test_keyboard_interrupt_returns_zero(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``KeyboardInterrupt`` (CTRL_C / CTRL_BREAK from
+        ``Stop-ScheduledTask``) terminates the launcher subprocess and
+        exits with code 0.
+
+        Returning 0 is the documented "polite stop" signal: Task
+        Scheduler must see a clean exit and not restart the task
+        immediately under its ``RestartCount`` setting (which would
+        defeat ``Stop-ScheduledTask`` from the operator's
+        perspective).
+        """
+        terminate_log: list[object] = []
+
+        def fake_resolve(prefix: Path) -> Path:
+            return prefix / "fake_python.exe"
+
+        def fake_spawn(python_path: Path, prefix: Path) -> _StubProc:
+            return _StubProc(returncode=0, poll_returncode=None)
+
+        def fake_terminate(proc: object) -> None:
+            terminate_log.append(proc)
+
+        def raise_kbd_interrupt(self_proc: _StubProc) -> int:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(
+            windows_launcher, "_resolve_release_python", fake_resolve
+        )
+        monkeypatch.setattr(
+            windows_launcher, "_spawn_release_launcher", fake_spawn
+        )
+        monkeypatch.setattr(
+            windows_launcher, "_terminate_subprocess", fake_terminate
+        )
+        # Make _StubProc.wait raise KeyboardInterrupt the first time
+        # it is called.
+        monkeypatch.setattr(_StubProc, "wait", raise_kbd_interrupt)
+
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 0
+        # The supervisor must terminate the in-flight subprocess via
+        # the centralised helper -- skipping it would orphan the
+        # launcher (and via the Job Object, the agent).
+        assert len(terminate_log) == 1, (
+            "_terminate_subprocess must be called exactly once when "
+            "KeyboardInterrupt unwinds the supervisor loop; got "
+            f"{len(terminate_log)} calls"
+        )
+
+    def test_logs_restart_diagnostic_to_stderr(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """An exit-75 respawn must emit an operator-readable diagnostic
+        to stderr so logs/agent.err.log carries a "restart requested"
+        line. Operators correlating "agent disappeared then reappeared"
+        with "I just paired" rely on this string; a silent re-spawn
+        looks like a crash.
+        """
+        _install_supervise_stubs(
+            monkeypatch,
+            exit_codes=[windows_launcher._EXIT_RESTART_REQUESTED, 0],
+        )
+        windows_launcher._supervise(tmp_path)
+        err = capsys.readouterr().err
+        assert "restart requested" in err, (
+            "exit-75 respawn must produce a stderr line containing the "
+            "phrase 'restart requested' so operators can correlate the "
+            "restart with the agent's pairing-complete event; got "
+            f"stderr: {err!r}"
+        )
+
+
+class TestParseArgs:
+    def test_prefix_argv(self) -> None:
+        ns = windows_launcher._parse_args(["--prefix", r"D:\custom"])
+        assert ns.prefix == r"D:\custom"
+
+    def test_prefix_defaults_to_none(self) -> None:
+        """Without ``--prefix``, the namespace's ``prefix`` attribute
+        is None so ``_default_prefix(None)`` falls through to the env-
+        var / ProgramFiles chain. A regression that defaulted ``prefix``
+        to an empty string would break the smoke-test invocation
+        ``python deploy/windows_launcher.py`` (cwd != install prefix).
+        """
+        ns = windows_launcher._parse_args([])
+        assert ns.prefix is None
+
+
+class TestMain:
+    """``main`` is the top-level entry point invoked by the Scheduled
+    Task action. Wires argparse + signal handlers + supervisor loop.
+    Tests verify the wiring without entering the actual loop.
+    """
+
+    def test_main_invokes_supervise_with_resolved_prefix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``main(['--prefix', 'D:\\foo'])`` must call
+        ``_supervise(Path('D:\\foo'))`` and propagate its return code.
+        """
+        calls: list[Path] = []
+
+        def fake_supervise(prefix: Path) -> int:
+            calls.append(prefix)
+            return 42
+
+        monkeypatch.setattr(windows_launcher, "_supervise", fake_supervise)
+        # Stub out signal-handler installation so this test does not
+        # leave a SIGBREAK handler in the test process on Windows.
+        monkeypatch.setattr(
+            windows_launcher, "_install_signal_handlers", lambda: None
+        )
+
+        rc = windows_launcher.main(["--prefix", r"D:\foo"])
+        assert rc == 42
+        assert calls == [Path(r"D:\foo")]
+
+    def test_main_falls_through_to_env_var_when_argv_omits_prefix(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``main([])`` must resolve the prefix from
+        ``MOBAIDE_AGENT_PREFIX`` when ``--prefix`` is not in argv. This
+        is the smoke-test path; the Scheduled Task always passes
+        ``--prefix``.
+        """
+        calls: list[Path] = []
+
+        def fake_supervise(prefix: Path) -> int:
+            calls.append(prefix)
+            return 0
+
+        monkeypatch.setattr(windows_launcher, "_supervise", fake_supervise)
+        monkeypatch.setattr(
+            windows_launcher, "_install_signal_handlers", lambda: None
+        )
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", r"D:\env\prefix")
+
+        rc = windows_launcher.main([])
+        assert rc == 0
+        assert calls == [Path(r"D:\env\prefix")]
+
+    def test_main_installs_signal_handlers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``main`` must call ``_install_signal_handlers`` before
+        entering ``_supervise``. Skipping the handler installation
+        leaves the default SIGBREAK behaviour (terminate without
+        Python finalisers running) which prevents the
+        ``KeyboardInterrupt`` branch of ``_supervise`` from firing on
+        ``Stop-ScheduledTask``.
+        """
+        handler_installed = []
+
+        def fake_install() -> None:
+            handler_installed.append(True)
+
+        def fake_supervise(prefix: Path) -> int:
+            # Pin the relative order: handlers must be installed BEFORE
+            # the supervisor loop starts (otherwise a stop signal
+            # arriving during the first iteration's wait would be
+            # silently dropped).
+            assert handler_installed, (
+                "_install_signal_handlers must be called BEFORE "
+                "_supervise enters its wait loop; otherwise a stop "
+                "signal arriving during the first iteration is dropped"
+            )
+            return 0
+
+        monkeypatch.setattr(
+            windows_launcher, "_install_signal_handlers", fake_install
+        )
+        monkeypatch.setattr(windows_launcher, "_supervise", fake_supervise)
+        monkeypatch.setattr(os, "environ", os.environ.copy())
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", r"D:\foo")
+
+        rc = windows_launcher.main([])
+        assert rc == 0
+        assert handler_installed == [True]
+
+
+class TestInstallSignalHandlers:
+    def test_no_op_on_non_windows(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """On Linux / macOS CI runners, ``_install_signal_handlers``
+        must be a silent no-op. ``signal.SIGBREAK`` only exists on
+        Windows; touching it elsewhere would raise ``AttributeError``
+        and abort the supervisor before it even reached the loop.
+        """
+        monkeypatch.setattr(sys, "platform", "linux")
+        # Must not raise.
+        windows_launcher._install_signal_handlers()
+
+
+def test_exit_restart_requested_constant_matches_agent_updater() -> None:
+    """The supervisor's local ``_EXIT_RESTART_REQUESTED`` constant MUST
+    equal ``mobaide.agent.updater.EXIT_RESTART_REQUESTED``.
+
+    The constant is intentionally duplicated because the supervisor
+    is stdlib-only -- importing ``mobaide`` would defeat the
+    "survives a half-staged or rolled-back release" guarantee (the
+    install on disk may not have ``mobaide`` yet, or may have a
+    broken ``mobaide`` mid-rollback). A drift between the two breaks
+    the post-pairing restart silently: the agent exits with the
+    canonical value, the supervisor sees a different number, falls
+    through to "stop normally", and the task stays stopped until the
+    user re-runs it manually. This test imports the canonical
+    definition from the in-tree source and asserts equality.
+    """
+    sys.path.insert(0, str(_REPO_ROOT / "mobaide_agent"))
+    try:
+        from mobaide.agent.updater import (  # type: ignore[import-not-found]
+            EXIT_RESTART_REQUESTED,
+        )
+    finally:
+        sys.path.pop(0)
+    assert windows_launcher._EXIT_RESTART_REQUESTED == EXIT_RESTART_REQUESTED, (
+        f"windows_launcher._EXIT_RESTART_REQUESTED="
+        f"{windows_launcher._EXIT_RESTART_REQUESTED!r} must equal "
+        f"mobaide.agent.updater.EXIT_RESTART_REQUESTED="
+        f"{EXIT_RESTART_REQUESTED!r} -- see the comment on the duplicated "
+        "constant in deploy/windows_launcher.py for why it is duplicated "
+        "and why drift is a silent break"
+    )
+
+
+def test_log_rotate_threshold_is_5mb() -> None:
+    """Pin the 5 MB rotation threshold. The value is referenced in
+    docs/deployment.md's troubleshooting section ("tail the last 5 MB
+    of agent.err.log") and a regression that drops the threshold
+    silently would invalidate that operator-facing guidance.
+    """
+    assert windows_launcher._AGENT_LOG_ROTATE_BYTES == 5 * 1024 * 1024

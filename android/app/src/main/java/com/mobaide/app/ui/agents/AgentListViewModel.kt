@@ -47,7 +47,7 @@ sealed interface QrPairingState {
      * `ws/user-events` → [AgentRepository.updateAgentOnline]) until either the
      * agent flips to `online=true` ([Success]) or the timeout expires
      * ([Error]). The timeout error message intentionally enumerates the
-     * remediation commands (`mobaide-agent show-qr`, `Get-Service`,
+     * remediation commands (`mobaide-agent show-qr`, `Get-ScheduledTask`,
      * `Get-Content agent.err.log`) so a Windows operator can act without
      * a docs round-trip.
      *
@@ -503,11 +503,11 @@ class AgentListViewModel @Inject constructor(
                 "(check the agent host's network/firewall to the relay)."
             false -> " The server reports the agent's WebSocket was NOT open " +
                 "at claim time; credentials were staged for the agent's " +
-                "next reconnect (check that the agent service is running)."
+                "next reconnect (check that the agent task is running)."
             null -> ""
         }
         val remediation = " On the agent host: `mobaide-agent show-qr` " +
-            "(re-render QR), `Get-Service MobaideAgent` (service state), " +
+            "(re-render QR), `Get-ScheduledTask MobaideAgent` (task state), " +
             "`Get-Content \"\$env:ProgramFiles\\MobaideAgent\\logs\\agent.err.log\" -Tail 50`."
         return baseMessage + dispatchHint + remediation
     }

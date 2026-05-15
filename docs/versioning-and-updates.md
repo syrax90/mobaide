@@ -371,7 +371,7 @@ Cloudflare-fronted relay and artifact hosts do not classify them as generic
 └── bin/                             # macOS/Windows launcher shims
 ```
 
-The platform-specific service unit (`systemd`, `launchd`, Windows SCM) does
+The platform-specific service unit (`systemd`, `launchd`, Windows Scheduled Task) does
 **not** invoke a release directly. It calls
 `python -m mobaide.launcher`, which:
 
@@ -390,7 +390,7 @@ only thing required to roll forward (or back). The launcher's rollback
 heuristic gives a deployed install one automatic recovery step before
 operator intervention is needed; matching supervisor settings —
 systemd `StartLimitBurst=10`/`StartLimitIntervalSec=600`, launchd
-`ThrottleInterval=10`, Windows SCM `sc failure … reset= 600` — give the
+`ThrottleInterval=10`, Windows Task Scheduler `-RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1)` — give the
 rolled-back release time to prove stable.
 
 ### State machine
@@ -439,10 +439,7 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
   observability.
 * **Atomic pointer swap** — `os.replace` of `current_version.tmp` →
   `current_version`.
-* **Supervisor restart** — the updater calls `sys.exit(75)`. Both
-  `RestartForceExitStatus=75` (systemd) and Windows SCM
-  `SC_ACTION_RESTART` interpret this as "please bring me back up", and the
-  launcher boots into the freshly-pinned release.
+* **Supervisor restart** — the updater calls `sys.exit(75)`. `RestartForceExitStatus=75` (systemd), the Windows `mobaide_launcher.py` supervisor's exit-code-75 respawn loop, and Task Scheduler's outer `-RestartCount` / `-RestartInterval` all interpret this as "please bring me back up", and the launcher boots into the freshly-pinned release.
 * **Rollback target** — the previous release directory is retained for one
   cycle; a future successful boot of the new release garbage-collects it.
 
@@ -509,7 +506,7 @@ Both scripts are auto-published from `deploy/` to the root of the
    or `apk`). Non-root user-prefix installs print a distro-aware error instead
    of attempting a privileged package install.
 4a. **(Windows only, before venv creation)** Auto-elevate via UAC if the
-    current PowerShell is not elevated — required for the SCM service
+    current PowerShell is not elevated — required for the Scheduled Task
     registration and `%ProgramFiles%\MobaideAgent` writes. If no Python 3.12+
     is found on PATH, auto-install at machine scope and refresh the current
     session's PATH from the Machine + User scopes. Two paths, in priority
@@ -525,7 +522,7 @@ Both scripts are auto-published from `deploy/` to the root of the
 5. Download tarball + wheel, verify sha256s, extract under
    `<prefix>/releases/<version>/`, install the wheel into a fresh venv.
 6. Atomically pin `<prefix>/current_version`.
-7. Generate `<prefix>/mobaide_agent/.env` via `python -m mobaide.agent.config init-env` — writes a random `JWT_SECRET_KEY` and prefills `RELAY_SERVER_URL=wss://mobaide.com`. On Windows, if the pre-elevation `Find-ClaudeBinary` helper located `claude.cmd`, the path is forwarded via `MOBAIDE_AGENT_CLAUDE_BIN_HINT` and written as `MOBAIDE_CLAUDE_BIN` (so the service process, which runs as SYSTEM without the installing user's PATH, can find the CLI). Re-running never overwrites an already-paired `.env` (pass `--force` to regenerate; paired credentials are preserved regardless).
+7. Generate `<prefix>/mobaide_agent/.env` via `python -m mobaide.agent.config init-env` — writes a random `JWT_SECRET_KEY` and prefills `RELAY_SERVER_URL=wss://mobaide.com`. On Windows, if the pre-elevation `Find-ClaudeBinary` helper located `claude.cmd`, the path is forwarded via `MOBAIDE_AGENT_CLAUDE_BIN_HINT` and written as `MOBAIDE_CLAUDE_BIN` into the agent's `.env`. Re-running never overwrites an already-paired `.env` (pass `--force` to regenerate; paired credentials are preserved regardless).
 8. Register the service:
    * **Linux** — resolve the runtime user from `$SUDO_USER` (or
      `MOBAIDE_RUN_AS_USER`), substitute `__RUN_USER__`/`__RUN_GROUP__`/`__RUN_HOME__`
@@ -535,13 +532,15 @@ Both scripts are auto-published from `deploy/` to the root of the
      `ReadWritePaths=$HOME /opt/mobaide`, and sets `RestartForceExitStatus=75`.
    * **macOS** — write `~/Library/LaunchAgents/com.mobaide.agent.plist`,
      `launchctl load`.
-   * **Windows** — download `windows_service.py` from
-     `https://get.mobaide.com/windows_service.py` (override via
-     `MOBAIDE_AGENT_WINDOWS_SERVICE_URL`) into `<prefix>\svc\`, create a
-     dedicated `svc\venv\` with only `pywin32`, and register the
-     `MobaideAgent` SCM service via `New-Service` with the pywin32 host as
-     the binary path, with restart-on-failure tuned to recover from updater
-     exit code 75.
+   * **Windows** — download `windows_launcher.py` from
+     `https://get.mobaide.com/windows_launcher.py` (override via
+     `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`) into
+     `<prefix>\svc\mobaide_launcher.py`, then register a per-user
+     Scheduled Task named `MobaideAgent` pinned to `$env:USERNAME` with
+     `-LogonType Interactive` and `-AtLogOn`. The supervisor handles
+     updater exit code 75 with an immediate in-process respawn;
+     Task Scheduler's outer `-RestartCount` / `-RestartInterval`
+     catches supervisor-level failure.
 
 Re-running an install script is idempotent: a higher-versioned manifest stages
 into a sibling `releases/<version>/` and re-pins the pointer, so the same
@@ -684,7 +683,7 @@ single in-process pytest run:
 
 The test is run by `.github/workflows/e2e-update.yml` on every PR and on
 push to `main`, with a 5-minute timeout. The implementation purposely
-does NOT spawn a real systemd / launchd / Windows SCM supervisor — that
+does NOT spawn a real systemd / launchd / Windows Scheduled Task supervisor — that
 boundary is platform-coupled and is exercised separately by
 `mobaide_agent/tests/test_launcher_rollback.py` and the install scripts'
 own integration tests.
