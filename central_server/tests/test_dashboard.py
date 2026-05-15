@@ -196,6 +196,152 @@ class TestDashboardPages:
         assert resp.status_code == 404
 
 
+class TestAgentDetailVersion:
+    """Cover the new ``Version`` row on ``GET /dashboard/agents/{id}``:
+    bare version when no manifest is wired, ``Up to date`` badge when
+    the stored version matches the manifest's ``latest_agent_version``,
+    and the ``(latest: X.Y.Z)`` hint when they diverge. Also asserts the
+    em-dash placeholder for a fresh agent (NULL columns) and the
+    ``Protocol`` row formatting (``v2``).
+    """
+
+    @staticmethod
+    def _populate_manifest(app, version: str) -> None:
+        """Write a minimal valid manifest record into the live store so
+        ``agent_detail_page`` reads back ``latest_agent_version=<version>``.
+
+        Uses the same shape ``ManifestStore.write`` enforces (see
+        ``test_version_handshake._signed_manifest``). A real signature is
+        required because ``ManifestStore.write`` validates structure.
+        """
+        import base64
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+            Ed25519PrivateKey,
+        )
+
+        from central_server.manifest.store import canonical_json
+
+        private = Ed25519PrivateKey.generate()
+        body = {
+            "version": version,
+            "tarball_url": "file:///tmp/agent.tar.gz",
+            "tarball_sha256": "0" * 64,
+            "wheel_url": "file:///tmp/agent.whl",
+            "wheel_sha256": "1" * 64,
+            "released_at": "2026-05-15T00:00:00+00:00",
+        }
+        sig_b64 = base64.b64encode(private.sign(canonical_json(body))).decode()
+        app.state.manifest_store.write(body, sig_b64)
+
+    async def test_renders_em_dash_when_version_missing(
+        self, client, dashboard_headers, registered_agent
+    ):
+        """Fresh agent with no handshake yet — ``agent_version`` is NULL,
+        so the template branch should emit the em-dash placeholder (and
+        no badge / hint).
+        """
+        agent_id, _ = registered_agent
+
+        resp = await client.get(
+            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "<strong>Version:</strong>" in body
+        assert "Up to date" not in body
+        assert "(latest:" not in body
+
+    async def test_renders_version_without_manifest(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        """A populated agent_version with NO manifest wired must render
+        the bare version (no badge, no hint).
+        """
+        agent_id, _ = registered_agent
+        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+        # Wipe the manifest_store to None to simulate "no published
+        # manifest" path through the ``getattr(..., None)`` guard.
+        app.state.manifest_store = None
+
+        resp = await client.get(
+            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "0.3.0" in body
+        assert "Up to date" not in body
+        assert "(latest:" not in body
+
+    async def test_renders_up_to_date_badge_when_versions_match(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+        self._populate_manifest(app, "0.3.0")
+
+        resp = await client.get(
+            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "0.3.0" in body
+        assert "Up to date" in body
+        assert "(latest:" not in body
+
+    async def test_renders_latest_hint_when_versions_differ(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+        self._populate_manifest(app, "0.9.9")
+
+        resp = await client.get(
+            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "0.3.0" in body
+        assert "(latest: 0.9.9)" in body
+        assert "Up to date" not in body
+
+    async def test_renders_protocol_version_when_set(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+
+        resp = await client.get(
+            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "<strong>Protocol:</strong>" in body
+        assert "v2" in body
+
+    async def test_agents_list_renders_version_column(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        """The new ``Version`` column on ``GET /dashboard`` must render
+        the stored version (after a successful handshake) and the
+        em-dash for agents that never reconnected since the migration.
+        """
+        agent_id, _ = registered_agent
+        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
+        # Register a second agent owned by the same viewer that has
+        # never reconnected — its row should show the em-dash placeholder.
+        owner_id = await app.state.db.get_agent_owner(agent_id)
+        await app.state.db.register_agent("stale-agent", owner_id)
+
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        body = resp.text
+        # Header column is present.
+        assert "<th>Version</th>" in body
+        # The configured agent shows its reported version.
+        assert "0.3.0" in body
+
+
 class TestDashboardRoleGate:
     """Dashboard is an admin-only platform-operator surface.
 

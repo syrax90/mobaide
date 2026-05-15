@@ -119,6 +119,12 @@ async def agent_detail_page(
     pairings = await pairing_service.list_pairings(agent_id)
     active_pairings = [p for p in pairings if p.get("revoked_at") is None]
 
+    manifest_store = getattr(request.app.state, "manifest_store", None)
+    manifest_record = manifest_store.read() if manifest_store is not None else None
+    latest_agent_version = (
+        manifest_record.body.get("version") if manifest_record is not None else None
+    )
+
     return templates.TemplateResponse(
         request,
         "agent_detail.html",
@@ -126,6 +132,7 @@ async def agent_detail_page(
             "agent": agent,
             "owner_email": owner_email,
             "pairings": active_pairings,
+            "latest_agent_version": latest_agent_version,
             "username": user.email,
         },
     )

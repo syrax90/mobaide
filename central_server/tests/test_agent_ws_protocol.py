@@ -168,6 +168,167 @@ class TestAgentTunnelProtocolHandshake:
             assert resp["manifest_signature"] == sig_b64
 
 
+class TestHandshakeVersionPersisted:
+    """The auth handshake is the SoT for the agent's reported version.
+    Cover the end-to-end DB write triggered by a successful auth, the
+    COALESCE-preserves-existing semantic on a follow-up auth that omits
+    the field, and the string-validation guard against non-string
+    ``agent_version`` payloads.
+    """
+
+    async def test_successful_auth_persists_version_and_protocol(
+        self, app, registered_agent, db,
+    ):
+        agent_id, raw_token = registered_agent
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 2,
+                "agent_version": "0.3.0",
+            }))
+            resp = json.loads(ws.receive_text())
+            assert resp["type"] == "auth_ok"
+
+        agent = await db.get_agent(agent_id)
+        assert agent is not None
+        assert agent["agent_version"] == "0.3.0"
+        assert agent["agent_protocol_version"] == 2
+
+    async def test_reauth_without_agent_version_preserves_stored_value(
+        self, app, registered_agent, db,
+    ):
+        """Regression: a follow-up reconnect whose auth payload omits
+        ``agent_version`` must not wipe the value persisted by an
+        earlier handshake — the agent's relay reconnect logic relies
+        on this COALESCE semantic so an in-progress upgrade where the
+        binary briefly forgets to send the field doesn't erase the
+        last good value the dashboard is showing.
+        """
+        agent_id, raw_token = registered_agent
+        client = TestClient(app)
+
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 2,
+                "agent_version": "0.3.0",
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 2,
+                # No agent_version field at all.
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+        agent = await db.get_agent(agent_id)
+        assert agent["agent_version"] == "0.3.0"
+        assert agent["agent_protocol_version"] == 2
+
+    async def test_non_string_agent_version_does_not_clobber(
+        self, app, registered_agent, db,
+    ):
+        """The string-validation guard in agent_ws coerces a non-string
+        (or empty-string) ``agent_version`` to None before calling
+        ``update_agent_handshake_info``, so COALESCE preserves whatever
+        was stored before. This test starts from a clean row (NULL) to
+        prove the write itself skips the field — the value stays NULL
+        rather than being persisted as ``"5"`` or ``""``.
+        """
+        agent_id, raw_token = registered_agent
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 2,
+                "agent_version": 5,  # int, not a string
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+        agent = await db.get_agent(agent_id)
+        assert agent["agent_version"] is None
+        # Protocol version is still captured because it has its own
+        # ``_coerce_int`` path, not the string guard.
+        assert agent["agent_protocol_version"] == 2
+
+    async def test_empty_string_agent_version_does_not_clobber(
+        self, app, registered_agent, db,
+    ):
+        agent_id, raw_token = registered_agent
+        client = TestClient(app)
+
+        # First, prime the row with a real version.
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 2,
+                "agent_version": "0.3.0",
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+        # Then reconnect with an empty string — the guard should
+        # treat this as "no value" (truthy check) and leave the prior
+        # version untouched.
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 2,
+                "agent_version": "",
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+        agent = await db.get_agent(agent_id)
+        assert agent["agent_version"] == "0.3.0"
+
+    async def test_successful_auth_populates_last_seen_at(
+        self, app, registered_agent, db,
+    ):
+        """Regression for the coalesced-write perf change: the connect
+        path used to call ``touch_agent_last_seen`` separately before
+        the version persistence; now ``update_agent_handshake_info``
+        bumps ``last_seen_at`` itself in the same UPDATE+commit. Verify
+        end-to-end that a fresh agent (``last_seen_at IS NULL`` after
+        ``register_agent``) gets its ``last_seen_at`` populated by the
+        auth handshake alone — no other write site on the connect path.
+        """
+        agent_id, raw_token = registered_agent
+
+        before = await db.get_agent(agent_id)
+        assert before is not None
+        assert before["last_seen_at"] is None
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 2,
+                "agent_version": "0.3.0",
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+        after = await db.get_agent(agent_id)
+        assert after["last_seen_at"] is not None
+        assert after["agent_version"] == "0.3.0"
+        assert after["agent_protocol_version"] == 2
+
+
 class TestUnknownControlTypeTelemetry:
     async def test_unknown_type_increments_module_counter(self):
         # The handler's ``else`` branch is the only writer of

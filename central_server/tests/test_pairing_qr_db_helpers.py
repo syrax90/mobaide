@@ -98,17 +98,17 @@ class TestSchema:
         await database.conn.commit()
         await database.close()
 
-        # First reopen — runs the v7 -> v8 migration. The column ALTER
-        # is wrapped in a column-existence guard, so this must be a
-        # no-op-or-add depending on whether the column already exists
+        # First reopen — runs the v7 -> v8 -> v9 migrations. The column
+        # ALTERs are wrapped in column-existence guards, so each step is
+        # a no-op-or-add depending on whether the column already exists
         # in the DDL (it does, on a freshly-seeded test DB).
         database = Database(db_path)
         await database.connect()
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_first_reopen = (await cur.fetchone())[0]
-        assert version_after_first_reopen == 8, (
-            f"after the v7->v8 migration runs, user_version must be 8; "
+        assert version_after_first_reopen == 9, (
+            f"after the v7->v8->v9 migrations run, user_version must be 9; "
             f"got {version_after_first_reopen}"
         )
         # The seeded row must survive the migration. The relay_url
@@ -124,26 +124,26 @@ class TestSchema:
         )
         await database.close()
 
-        # Second reopen — already at version 8, must be a no-op.
+        # Second reopen — already at version 9, must be a no-op.
         # A non-idempotent migration would error here with
-        # ``duplicate column name: relay_url`` from sqlite, exactly the
-        # failure mode the column-existence guard in database.py is
-        # meant to prevent. Pin idempotency so a regression that
-        # drops that guard (or moves the guard outside the version
-        # check) is caught.
+        # ``duplicate column name: relay_url`` or ``duplicate column name:
+        # agent_version`` from sqlite, exactly the failure mode the
+        # column-existence guards in database.py are meant to prevent.
+        # Pin idempotency so a regression that drops a guard (or moves
+        # it outside the version check) is caught.
         database = Database(db_path)
         await database.connect()
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_second_reopen = (await cur.fetchone())[0]
-        assert version_after_second_reopen == 8
+        assert version_after_second_reopen == 9
 
         # The seeded row is still there — second reopen is a no-op,
         # not a destructive rebuild.
         meta2 = await database.lookup_pairing_token_metadata(existing_raw)
         assert meta2 is not None, (
             "the seeded pairing_tokens row vanished on the second "
-            "reopen at user_version=8; the migration is not idempotent"
+            "reopen at user_version=9; the migration is not idempotent"
         )
         await database.close()
 

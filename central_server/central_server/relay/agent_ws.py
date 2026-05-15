@@ -117,7 +117,15 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     # Resolve owner once at registration so the offline-broadcast path
     # (which runs after the tunnel is torn down) doesn't have to hit the DB.
     conn.owner_user_id = await db.get_agent_owner(agent_id)
-    await db.touch_agent_last_seen(agent_id)
+    reported_version = auth_msg.get("agent_version")
+    if not (isinstance(reported_version, str) and reported_version):
+        reported_version = None
+    # update_agent_handshake_info also bumps last_seen_at so the connect
+    # path issues a single UPDATE+commit (the heartbeat path keeps its own
+    # touch_agent_last_seen which writes only that column).
+    await db.update_agent_handshake_info(
+        agent_id, reported_version, client_protocol_version,
+    )
 
     manifest_record = _read_manifest(websocket.app)
     auth_ok_payload: dict[str, object] = {

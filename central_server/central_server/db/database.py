@@ -26,12 +26,14 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS agents (
-    agent_id      TEXT PRIMARY KEY,
-    name          TEXT NOT NULL,
-    token_hash    TEXT NOT NULL,
-    owner_user_id TEXT REFERENCES users(id),
-    created_at    TEXT NOT NULL,
-    last_seen_at  TEXT
+    agent_id               TEXT PRIMARY KEY,
+    name                   TEXT NOT NULL,
+    token_hash             TEXT NOT NULL,
+    owner_user_id          TEXT REFERENCES users(id),
+    created_at             TEXT NOT NULL,
+    last_seen_at           TEXT,
+    agent_version          TEXT,
+    agent_protocol_version INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS pairings (
@@ -301,6 +303,30 @@ class Database:
                 )
             await self._conn.execute("PRAGMA user_version = 8")
 
+        if version < 9:
+            # Persist the agent_version / agent_protocol_version that the
+            # agent reports in its WebSocket auth handshake so the dashboard
+            # Details page can surface them — and so the values survive
+            # an agent disconnect (the read site is a synchronous template
+            # query, not an in-memory routing-table lookup).
+            #
+            # Pure additive ALTER. Idempotent: only adds each column when
+            # missing. Legacy rows are NULL until the agent next
+            # reconnects, at which point ``update_agent_handshake_info``
+            # backfills.
+            col_cursor = await self._conn.execute("PRAGMA table_info(agents)")
+            existing_agent_cols = {r[1] for r in await col_cursor.fetchall()}
+            if "agent_version" not in existing_agent_cols:
+                await self._conn.execute(
+                    "ALTER TABLE agents ADD COLUMN agent_version TEXT"
+                )
+            if "agent_protocol_version" not in existing_agent_cols:
+                await self._conn.execute(
+                    "ALTER TABLE agents "
+                    "ADD COLUMN agent_protocol_version INTEGER"
+                )
+            await self._conn.execute("PRAGMA user_version = 9")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -462,11 +488,15 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount == 1
 
+    _AGENT_COLUMNS = (
+        "agent_id, name, owner_user_id, created_at, last_seen_at, "
+        "agent_version, agent_protocol_version"
+    )
+
     async def list_agents(self) -> list[dict]:
         """List all agents (admin view)."""
         cursor = await self.conn.execute(
-            "SELECT agent_id, name, owner_user_id, created_at, last_seen_at "
-            "FROM agents ORDER BY created_at DESC"
+            f"SELECT {self._AGENT_COLUMNS} FROM agents ORDER BY created_at DESC"
         )
         return [dict(row) async for row in cursor]
 
@@ -474,6 +504,7 @@ class Database:
         """List all agents with owner email (admin dashboard view)."""
         cursor = await self.conn.execute(
             "SELECT a.agent_id, a.name, a.owner_user_id, a.created_at, a.last_seen_at, "
+            "a.agent_version, a.agent_protocol_version, "
             "u.email AS owner_email "
             "FROM agents a LEFT JOIN users u ON a.owner_user_id = u.id "
             "ORDER BY a.created_at DESC"
@@ -483,7 +514,7 @@ class Database:
     async def list_agents_for_user(self, user_id: str) -> list[dict]:
         """List agents owned by a specific user."""
         cursor = await self.conn.execute(
-            "SELECT agent_id, name, owner_user_id, created_at, last_seen_at "
+            f"SELECT {self._AGENT_COLUMNS} "
             "FROM agents WHERE owner_user_id = ? ORDER BY created_at DESC",
             (user_id,),
         )
@@ -491,8 +522,7 @@ class Database:
 
     async def get_agent(self, agent_id: str) -> dict | None:
         cursor = await self.conn.execute(
-            "SELECT agent_id, name, owner_user_id, created_at, last_seen_at "
-            "FROM agents WHERE agent_id = ?",
+            f"SELECT {self._AGENT_COLUMNS} FROM agents WHERE agent_id = ?",
             (agent_id,),
         )
         row = await cursor.fetchone()
@@ -519,6 +549,35 @@ class Database:
         await self.conn.execute(
             "UPDATE agents SET last_seen_at = ? WHERE agent_id = ?",
             (_now_iso(), agent_id),
+        )
+        await self.conn.commit()
+
+    async def update_agent_handshake_info(
+        self,
+        agent_id: str,
+        agent_version: str | None,
+        agent_protocol_version: int | None,
+    ) -> None:
+        """Record a successful agent handshake: bump ``last_seen_at`` and
+        persist the version + protocol-version reported in the auth message.
+
+        Coalesces the three writes that the connect path used to issue as
+        two separate UPDATE+commit calls (``touch_agent_last_seen`` followed
+        by a version-only UPDATE) into a single statement and a single
+        ``commit()`` — one fsync per reconnect instead of two.
+
+        Each of ``agent_version`` / ``agent_protocol_version`` is a no-op
+        when the caller passes ``None`` (e.g., the agent omitted the field
+        from its auth message), so a stale write never clobbers a
+        previously-stored value. ``last_seen_at`` is always refreshed.
+        """
+        await self.conn.execute(
+            "UPDATE agents "
+            "SET last_seen_at = ?, "
+            "    agent_version = COALESCE(?, agent_version), "
+            "    agent_protocol_version = COALESCE(?, agent_protocol_version) "
+            "WHERE agent_id = ?",
+            (_now_iso(), agent_version, agent_protocol_version, agent_id),
         )
         await self.conn.commit()
 
