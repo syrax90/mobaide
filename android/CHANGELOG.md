@@ -1,5 +1,12 @@
 # Android Changelog
 
+## Unreleased
+
+
+### Features
+
+* **agents:** add install-commands bottom sheet with empty-state guide and overflow recall (CLA-57)
+
 ## [2.0.0](https://github.com/syrax90/claude_mobile/compare/android-v1.2.3...android-v2.0.0) (2026-05-15)
 
 
