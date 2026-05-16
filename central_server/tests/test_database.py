@@ -316,6 +316,325 @@ class TestAgentHandshakeInfo:
         assert agent["agent_protocol_version"] is None
 
 
+class TestListUsersWithAgents:
+    """``Database.list_users_with_agents`` is the single query driving the
+    users-centric dashboard. Verifies the LEFT JOIN grouping shape, the
+    empty-agents path for an agentless user, ordering, and that every
+    documented field flows through the SELECT projection.
+    """
+
+    async def test_empty_db_returns_empty_list(self, db: Database):
+        assert await db.list_users_with_agents() == []
+
+    async def test_user_with_no_agents_has_empty_agents_list(self, db: Database):
+        """A user with zero agents must surface as a row with ``agents=[]``,
+        not be filtered out by the LEFT JOIN (the agentless-user branch in
+        the Python grouping is the load-bearing reason for the LEFT JOIN).
+        """
+        await db.create_user(email="solo@test.local", password_hash="h")
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 1
+        assert users[0]["email"] == "solo@test.local"
+        assert users[0]["agents"] == []
+
+    async def test_user_with_multiple_agents_groups_correctly(
+        self, db: Database
+    ):
+        """Two LEFT JOIN rows for one user must collapse to one user dict
+        with both agents nested in the ``agents`` list — the grouping
+        invariant.
+        """
+        owner = await db.create_user(email="multi@test.local", password_hash="h")
+        await db.register_agent("a1", owner)
+        await db.register_agent("a2", owner)
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 1
+        assert users[0]["id"] == owner
+        agent_names = {a["name"] for a in users[0]["agents"]}
+        assert agent_names == {"a1", "a2"}
+
+    async def test_users_ordered_newest_first(self, db: Database):
+        """``ORDER BY u.created_at DESC`` — the most recently created user
+        appears first. Sleeps a microsecond between creates so the ISO
+        timestamps sort strictly.
+        """
+        import asyncio
+
+        first = await db.create_user(email="first@test.local", password_hash="h")
+        await asyncio.sleep(0.001)
+        middle = await db.create_user(email="middle@test.local", password_hash="h")
+        await asyncio.sleep(0.001)
+        last = await db.create_user(email="last@test.local", password_hash="h")
+
+        users = await db.list_users_with_agents()
+        ids = [u["id"] for u in users]
+        assert ids == [last, middle, first]
+
+    async def test_agents_within_user_ordered_newest_first(self, db: Database):
+        """Per the SQL ``ORDER BY u.created_at DESC, a.created_at DESC`` the
+        nested ``agents`` list for each user must be newest-agent-first.
+        """
+        import asyncio
+
+        owner = await db.create_user(email="o@test.local", password_hash="h")
+        old_id, _ = await db.register_agent("old", owner)
+        await asyncio.sleep(0.001)
+        mid_id, _ = await db.register_agent("mid", owner)
+        await asyncio.sleep(0.001)
+        new_id, _ = await db.register_agent("new", owner)
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 1
+        agent_ids = [a["agent_id"] for a in users[0]["agents"]]
+        assert agent_ids == [new_id, mid_id, old_id]
+
+    async def test_projects_all_documented_user_fields(self, db: Database):
+        """The dashboard template reads ``id``, ``email``, ``role``,
+        ``created_at`` off each user dict. The function's docstring locks
+        these keys in — guard against an accidental SELECT-list trim.
+        """
+        owner = await db.create_user(
+            email="who@test.local", password_hash="h", role="viewer"
+        )
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 1
+        u = users[0]
+        assert u["id"] == owner
+        assert u["email"] == "who@test.local"
+        assert u["role"] == "viewer"
+        assert isinstance(u["created_at"], str)
+        # Trailing UTC offset confirms _now_iso() shape, not a stray
+        # naive datetime from a future regression.
+        assert u["created_at"].endswith("+00:00")
+
+    async def test_projects_all_documented_agent_fields(self, db: Database):
+        """The expanded per-user detail row reads ``agent_id``, ``name``,
+        ``created_at``, ``last_seen_at``, ``agent_version``,
+        ``agent_protocol_version`` off each nested agent dict. The
+        function's docstring locks these keys in.
+        """
+        owner = await db.create_user(email="o@test.local", password_hash="h")
+        agent_id, _ = await db.register_agent("the-agent", owner)
+        await db.update_agent_handshake_info(agent_id, "0.5.0", 2)
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 1
+        assert len(users[0]["agents"]) == 1
+        a = users[0]["agents"][0]
+        assert a["agent_id"] == agent_id
+        assert a["name"] == "the-agent"
+        assert a["agent_version"] == "0.5.0"
+        assert a["agent_protocol_version"] == 2
+        assert a["last_seen_at"] is not None
+        assert isinstance(a["created_at"], str)
+
+    async def test_fresh_agent_has_null_handshake_fields(self, db: Database):
+        """A just-registered agent has NULL ``last_seen_at``,
+        ``agent_version``, and ``agent_protocol_version``. These must
+        flow through as Python ``None``, not be dropped from the dict.
+        """
+        owner = await db.create_user(email="o@test.local", password_hash="h")
+        await db.register_agent("fresh", owner)
+
+        users = await db.list_users_with_agents()
+        a = users[0]["agents"][0]
+        assert a["last_seen_at"] is None
+        assert a["agent_version"] is None
+        assert a["agent_protocol_version"] is None
+
+    async def test_multiple_users_with_mixed_agent_counts(self, db: Database):
+        """A populated DB: one agentless user, one user with two agents,
+        one user with one agent. Every user appears exactly once with the
+        correct ``agents`` count.
+        """
+        import asyncio
+
+        # Creation order shapes the ORDER BY: u3 is newest.
+        u1 = await db.create_user(email="u1@test.local", password_hash="h")
+        await asyncio.sleep(0.001)
+        u2 = await db.create_user(email="u2@test.local", password_hash="h")
+        await asyncio.sleep(0.001)
+        u3 = await db.create_user(email="u3@test.local", password_hash="h")
+
+        # u1 has 2 agents, u2 has 0, u3 has 1.
+        await db.register_agent("u1-a1", u1)
+        await db.register_agent("u1-a2", u1)
+        await db.register_agent("u3-a1", u3)
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 3
+        # Newest-first ordering.
+        assert [u["id"] for u in users] == [u3, u2, u1]
+        counts = {u["id"]: len(u["agents"]) for u in users}
+        assert counts == {u1: 2, u2: 0, u3: 1}
+
+
+class TestDeleteUser:
+    """``Database.delete_user`` cascade — explicit per-table sequence that
+    returns the deleted agent IDs so the router can tear down live WSs.
+    """
+
+    async def test_delete_unknown_user_returns_empty_list(self, db: Database):
+        """Per docstring: ``Returns an empty list if user_id does not exist.``"""
+        assert await db.delete_user("ghost") == []
+
+    async def test_delete_user_with_no_agents_returns_empty_list(
+        self, db: Database
+    ):
+        """An agentless user yields an empty agent-id list — the dashboard
+        router uses that list to decide whether to fan out
+        ``disconnect_agent`` calls. Wrong shape (None / scalar) would
+        crash the router's ``for agent_id in agent_ids`` loop.
+        """
+        user_id = await db.create_user(email="solo@test.local", password_hash="h")
+
+        agent_ids = await db.delete_user(user_id)
+        assert agent_ids == []
+        assert await db.get_user_by_id(user_id) is None
+
+    async def test_delete_user_returns_owned_agent_ids(self, db: Database):
+        """Single-agent owner: returned list has exactly the one agent_id."""
+        owner = await db.create_user(email="o@test.local", password_hash="h")
+        agent_id, _ = await db.register_agent("the-agent", owner)
+
+        agent_ids = await db.delete_user(owner)
+        assert agent_ids == [agent_id]
+        assert await db.get_agent(agent_id) is None
+
+    async def test_delete_user_returns_all_owned_agent_ids(
+        self, db: Database
+    ):
+        """Multi-agent cascade: the router needs *every* agent_id back so
+        it can disconnect each agent's WS. The returned list must contain
+        all of them, even though a single SQL ``DELETE FROM agents WHERE
+        owner_user_id = ?`` drops them in one statement.
+        """
+        owner = await db.create_user(email="o@test.local", password_hash="h")
+        a1, _ = await db.register_agent("a1", owner)
+        a2, _ = await db.register_agent("a2", owner)
+        a3, _ = await db.register_agent("a3", owner)
+
+        agent_ids = await db.delete_user(owner)
+        assert isinstance(agent_ids, list)
+        assert set(agent_ids) == {a1, a2, a3}
+        for aid in (a1, a2, a3):
+            assert await db.get_agent(aid) is None
+
+    async def test_delete_user_cascades_all_dependent_rows(
+        self, db: Database
+    ):
+        """End-to-end cascade across every table the docstring enumerates:
+        ``mobile_refresh_tokens``, ``pairing_tokens``,
+        ``pairings``, ``agents``, ``email_verification_tokens``,
+        ``prompt_templates``, ``users``. Establish at least one row in
+        each (across two agents to exercise the IN-subquery shape) and
+        assert each table is empty for the deleted user afterward.
+        """
+        owner = await db.create_user(email="o@test.local", password_hash="h")
+        a1, _ = await db.register_agent("a1", owner)
+        a2, _ = await db.register_agent("a2", owner)
+
+        await db.create_pairing(a1, "dev-1")
+        await db.create_pairing(a2, "dev-2")
+        await db.create_pairing_token(a1, 300)
+        await db.create_pairing_token(a2, 300)
+        await db.store_refresh_token("r-1", "dev-1", a1, 60)
+        await db.store_refresh_token("r-2", "dev-2", a2, 60)
+        await db.create_template(owner, "tpl-1", "body-1")
+        await db.create_template(owner, "tpl-2", "body-2")
+        await db.create_verification_token(owner, "code-hash", ttl_seconds=300)
+
+        agent_ids = await db.delete_user(owner)
+        assert set(agent_ids) == {a1, a2}
+
+        # Every table is empty for the deleted user.
+        assert await db.get_user_by_id(owner) is None
+        assert await db.get_agent(a1) is None
+        assert await db.get_agent(a2) is None
+        assert await db.list_pairings_for_agent(a1) == []
+        assert await db.list_pairings_for_agent(a2) == []
+        assert await db.get_pending_pairing_tokens(a1) == []
+        assert await db.get_pending_pairing_tokens(a2) == []
+        assert await db.validate_and_consume_refresh("r-1") is None
+        assert await db.validate_and_consume_refresh("r-2") is None
+        assert await db.list_templates_for_user(owner) == []
+        # email_verification_tokens — direct count, no public reader.
+        cur = await db.conn.execute(
+            "SELECT COUNT(*) AS n FROM email_verification_tokens "
+            "WHERE user_id = ?",
+            (owner,),
+        )
+        row = await cur.fetchone()
+        assert row["n"] == 0
+
+    async def test_delete_user_preserves_other_users_data(self, db: Database):
+        """The IN-subquery cascade must scope strictly to the deleted user.
+        A second user's agents, pairings, refresh tokens, and templates
+        must be untouched.
+        """
+        victim = await db.create_user(email="victim@test.local", password_hash="h")
+        survivor = await db.create_user(email="survivor@test.local", password_hash="h")
+        v_agent, _ = await db.register_agent("v-agent", victim)
+        s_agent, _ = await db.register_agent("s-agent", survivor)
+
+        await db.create_pairing(v_agent, "v-dev")
+        await db.create_pairing(s_agent, "s-dev")
+        await db.store_refresh_token("v-r", "v-dev", v_agent, 60)
+        await db.store_refresh_token("s-r", "s-dev", s_agent, 60)
+        await db.create_template(victim, "v-tpl", "v")
+        await db.create_template(survivor, "s-tpl", "s")
+
+        agent_ids = await db.delete_user(victim)
+        assert agent_ids == [v_agent]
+
+        # Survivor's rows are intact.
+        assert await db.get_user_by_id(survivor) is not None
+        assert await db.get_agent(s_agent) is not None
+        assert await db.is_mobile_paired_to_agent("s-dev", s_agent) is True
+        assert await db.validate_and_consume_refresh("s-r") == ("s-dev", s_agent)
+        templates = await db.list_templates_for_user(survivor)
+        assert len(templates) == 1
+        assert templates[0]["name"] == "s-tpl"
+
+    async def test_delete_user_clears_qr_claimed_agent_id_rows(
+        self, db: Database
+    ):
+        """Regression: ``pairing_tokens.claimed_agent_id`` is the second FK
+        from pairing_tokens to agents (the QR-pairing post-claim shape).
+        The cascade's ``OR claimed_agent_id IN (...)`` branch must clear
+        these rows, otherwise the agents DELETE raises an FK violation
+        under ``PRAGMA foreign_keys=ON`` (mirrors the established
+        ``delete_agent`` regression).
+        """
+        owner = await db.create_user(email="o@test.local", password_hash="h")
+        agent_id, _ = await db.register_agent("qr-agent", owner)
+
+        raw_nonce, _ = await db.create_pairing_token(
+            agent_id=None, ttl_seconds=300
+        )
+        claimed = await db.claim_pairing_nonce(
+            raw_token=raw_nonce,
+            mobile_device_id="dev-1",
+            claimed_agent_id=agent_id,
+            claimed_token_raw="agent-token-stub",
+        )
+        assert claimed is True
+
+        agent_ids = await db.delete_user(owner)
+        assert agent_ids == [agent_id]
+        # Both the agent row AND the claimed_agent_id pairing-token row
+        # must be gone for the cascade to be FK-clean.
+        assert await db.get_agent(agent_id) is None
+        cur = await db.conn.execute(
+            "SELECT 1 FROM pairing_tokens WHERE claimed_agent_id = ?",
+            (agent_id,),
+        )
+        assert await cur.fetchone() is None
+
+
 class TestPairingTokens:
     async def test_create_and_consume(self, db: Database):
         owner = await _create_test_user(db)

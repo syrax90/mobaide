@@ -1,0 +1,63 @@
+<div class="modal-overlay"
+     onclick="if(event.target===this)document.getElementById('modal-root').innerHTML=''">
+    <div class="modal-card">
+        <h2>Unregister user</h2>
+        {% if is_seed_admin %}
+        <div class="alert alert-error">
+            This is the seed admin account and cannot be deleted.
+        </div>
+        <div style="text-align:right">
+            <button type="button"
+                    class="btn"
+                    onclick="document.getElementById('modal-root').innerHTML=''">
+                Close
+            </button>
+        </div>
+        {% elif is_self %}
+        <div class="alert alert-error">
+            You cannot delete your own account while logged in.
+        </div>
+        <div style="text-align:right">
+            <button type="button"
+                    class="btn"
+                    onclick="document.getElementById('modal-root').innerHTML=''">
+                Close
+            </button>
+        </div>
+        {% else %}
+        <p>You are about to permanently delete <strong>{{ user.email }}</strong>.</p>
+        <p>
+            This will revoke
+            <strong>{{ agents | length }}</strong> agent{{ '' if agents | length == 1 else 's' }}{% if agents %}:
+            <em>{% for a in agents %}{{ a.name }}{% if not loop.last %}, {% endif %}{% endfor %}</em>{% endif %}
+            and tear down every live session.
+        </p>
+        <form hx-delete="/dashboard/users/{{ user.id }}"
+              hx-target="#user-row-{{ user.id }}"
+              hx-swap="delete"
+              hx-on::after-request="if(event.detail.successful)document.getElementById('modal-root').innerHTML=''">
+            <label for="confirm-email-{{ user.id }}">Type <code>{{ user.email }}</code> to confirm:</label>
+            <input type="text"
+                   id="confirm-email-{{ user.id }}"
+                   name="confirm_email"
+                   data-expected="{{ user.email }}"
+                   autocomplete="off"
+                   autofocus
+                   hx-on:input="document.getElementById('confirm-delete-{{ user.id }}').disabled = this.value !== this.dataset.expected">
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem">
+                <button type="button"
+                        class="btn"
+                        onclick="document.getElementById('modal-root').innerHTML=''">
+                    Cancel
+                </button>
+                <button type="submit"
+                        id="confirm-delete-{{ user.id }}"
+                        class="btn btn-danger"
+                        disabled>
+                    Delete user
+                </button>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+</div>

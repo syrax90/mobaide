@@ -18,6 +18,37 @@ from .envelope import CH_CONTROL, encode
 
 logger = logging.getLogger(__name__)
 
+# Application-defined WebSocket close codes in the 4000-4999 range
+# (RFC 6455 §7.4.2). Documented here so the Android client and the
+# server share one source of truth.
+#
+# 4001/4002/4003 are reserved by the Android WebSocketConnection for
+# auth-failure / protocol-incompatibility / token-not-valid-for-agent
+# semantics — admin force-disconnect must NOT collide with those or the
+# client will wipe its session on what should be a transient boot.
+WS_CLOSE_ADMIN_FORCE_DISCONNECT = 4011  # non-destructive admin boot
+WS_CLOSE_ADMIN_REVOKED = 4010  # admin unregistered the user/agent
+
+
+async def safe_send_reason_and_close(
+    websocket: WebSocket, code: int, reason_code: str
+) -> None:
+    """Send ``{"reason": reason_code}`` as a text frame, then close the WS.
+
+    Both the send and the close are wrapped in try/except so an
+    already-closed or never-accepted socket is a no-op rather than a
+    raise (FastAPI issue #4672 — receiving a ``WebSocketDisconnect``
+    on an already-closed socket is a known footgun).
+    """
+    try:
+        await websocket.send_text(json.dumps({"reason": reason_code}))
+    except Exception:
+        pass
+    try:
+        await websocket.close(code=code, reason=reason_code)
+    except Exception:
+        pass
+
 
 def try_enqueue_control(
     conn: "AgentConnection | None", body: dict
@@ -253,3 +284,56 @@ class RoutingTable:
 
     def get_user_clients(self, user_id: str) -> set[UserClient]:
         return self._user_clients.get(user_id, set())
+
+    async def disconnect_user(
+        self,
+        user_id: str,
+        code: int = WS_CLOSE_ADMIN_REVOKED,
+        reason_code: str = "admin_revoked",
+    ) -> int:
+        """Close every user-scoped WS for ``user_id`` after a reason frame.
+
+        Pops the user_id from ``_user_clients`` atomically, then for each
+        snapshot client sends a ``{"reason": reason_code}`` text frame and
+        closes the underlying WebSocket. Returns the number of clients
+        that were closed (zero when the user has no live sessions).
+        """
+        clients = self._user_clients.pop(user_id, set())
+        for client in clients:
+            await safe_send_reason_and_close(
+                client.websocket, code, reason_code
+            )
+        if clients:
+            logger.info(
+                "routing.user_clients_disconnected user_id=%s count=%d "
+                "code=%d reason=%s",
+                user_id,
+                len(clients),
+                code,
+                reason_code,
+            )
+        return len(clients)
+
+    async def disconnect_agent(
+        self,
+        agent_id: str,
+        code: int = WS_CLOSE_ADMIN_REVOKED,
+        reason_code: str = "admin_revoked",
+    ) -> int:
+        """Close an agent's WS plus every paired mobile-client WS.
+
+        No-op when the agent is not online. Returns the total number of
+        sockets closed (agent + mobiles). Uses ``unregister_agent`` to
+        atomically pop the agent and its mobile-client list out of the
+        routing tables, then closes each WS with a reason frame.
+        """
+        conn = self._agents.get(agent_id)
+        if conn is None:
+            return 0
+        mobiles = self.unregister_agent(agent_id, conn.conn_id)
+        await safe_send_reason_and_close(conn.websocket, code, reason_code)
+        for client in mobiles:
+            await safe_send_reason_and_close(
+                client.websocket, code, reason_code
+            )
+        return 1 + len(mobiles)

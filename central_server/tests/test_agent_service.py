@@ -128,27 +128,60 @@ class TestDeleteAgent:
             await service.delete_agent("nonexistent-id", owner)
 
     async def test_delete_disconnects_online_agent(self, service, db, routing):
-        """Deleting an online agent should unregister it from routing and close mobile clients."""
+        """Deleting an online agent unregisters it and closes paired mobile WSs."""
         owner = await _create_owner(db)
         agent_id, _ = await service.create_agent("online-agent", owner)
 
-        # Simulate an online agent with a connected mobile client
         agent_ws = MagicMock()
-        conn = routing.register_agent(agent_id, agent_ws)
+        agent_ws.send_text = AsyncMock()
+        agent_ws.close = AsyncMock()
+        routing.register_agent(agent_id, agent_ws)
 
         mobile_ws = MagicMock()
+        mobile_ws.send_text = AsyncMock()
         mobile_ws.close = AsyncMock()
         mobile_client = MobileClient(device_id="dev-1", websocket=mobile_ws)
         routing.register_mobile(agent_id, "session_io:s1", mobile_client)
 
         await service.delete_agent(agent_id, owner)
 
-        # Agent should be removed from routing
         assert routing.is_agent_online(agent_id) is False
-        # Mobile client websocket should have been closed with code 4010
-        mobile_ws.close.assert_awaited_once_with(code=4010, reason="Agent deleted")
-        # Agent should be deleted from DB
+        mobile_ws.close.assert_awaited_once_with(code=4010, reason="admin_revoked")
+        agent_ws.close.assert_awaited_once_with(code=4010, reason="admin_revoked")
         assert await db.get_agent(agent_id) is None
+
+    async def test_delete_sends_admin_revoked_reason_frame(
+        self, service, db, routing
+    ):
+        """Admin-triggered close emits the JSON reason frame before close().
+
+        Required by the issue so the Android client can surface a
+        user-friendly message instead of a generic 'connection lost'.
+        """
+        import json
+
+        owner = await _create_owner(db)
+        agent_id, _ = await service.create_agent("agent", owner)
+
+        agent_ws = MagicMock()
+        agent_ws.send_text = AsyncMock()
+        agent_ws.close = AsyncMock()
+        routing.register_agent(agent_id, agent_ws)
+
+        mobile_ws = MagicMock()
+        mobile_ws.send_text = AsyncMock()
+        mobile_ws.close = AsyncMock()
+        routing.register_mobile(
+            agent_id,
+            "session_io:s1",
+            MobileClient(device_id="dev-1", websocket=mobile_ws),
+        )
+
+        await service.delete_agent(agent_id, owner)
+
+        expected = json.dumps({"reason": "admin_revoked"})
+        agent_ws.send_text.assert_awaited_once_with(expected)
+        mobile_ws.send_text.assert_awaited_once_with(expected)
 
     async def test_delete_offline_agent_skips_routing_cleanup(self, service, db, routing):
         """Deleting an offline agent should not attempt routing cleanup."""
@@ -177,6 +210,26 @@ class TestDeleteAgent:
         # Should not raise despite the mobile close error
         await service.delete_agent(agent_id, owner)
         assert await db.get_agent(agent_id) is None
+
+    async def test_delete_as_admin_bypasses_ownership(self, service, db):
+        """``as_admin=True`` skips the ownership check so the dashboard
+        can revoke any agent regardless of owner.
+        """
+        owner = await _create_owner(db)
+        agent_id, _ = await service.create_agent("agent", owner)
+        admin_user_id = "admin-acting-user-id"
+
+        # Admin (different user, not the owner) deletes the agent without raising.
+        await service.delete_agent(agent_id, admin_user_id, as_admin=True)
+        assert await db.get_agent(agent_id) is None
+
+    async def test_delete_non_admin_still_requires_owner(self, service, db):
+        """Regression: ``as_admin=False`` (default) keeps the ownership guard."""
+        owner = await _create_owner(db)
+        other = await db.create_user(email="other@test.local", password_hash="h")
+        agent_id, _ = await service.create_agent("agent", owner)
+        with pytest.raises(ValueError, match="Not the owner"):
+            await service.delete_agent(agent_id, other, as_admin=False)
 
     async def test_delete_agent_with_qr_claimed_token(self, service, db):
         """Service-layer regression for the QR-pairing post-claim shape:

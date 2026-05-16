@@ -1,0 +1,13 @@
+{% for u in users %}
+<span id="user-online-{{ u.id }}" hx-swap-oob="true">{{ u.online_count }}</span>
+<span id="user-last-activity-{{ u.id }}" hx-swap-oob="true">{{ u.last_activity or "—" }}</span>
+{% for agent in u.agents %}
+<span id="agent-status-{{ agent.agent_id }}" hx-swap-oob="true">
+    {% if agent.online %}
+    <span class="badge badge-online">Online</span>
+    {% else %}
+    <span class="badge badge-offline">Offline</span>
+    {% endif %}
+</span>
+{% endfor %}
+{% endfor %}

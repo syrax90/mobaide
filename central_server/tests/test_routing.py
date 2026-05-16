@@ -12,6 +12,8 @@ from central_server.relay.routing import (
     AgentConnection,
     MobileClient,
     RoutingTable,
+    UserClient,
+    safe_send_reason_and_close,
     try_enqueue_control,
 )
 
@@ -195,3 +197,175 @@ class TestTryEnqueueControl:
         # Helper must not eat or replace the queued item.
         assert conn.send_queue.qsize() == 1
         assert conn.send_queue.get_nowait() == b"already-full"
+
+
+def _admin_ws() -> MagicMock:
+    """Mock WebSocket with both send_text and close as AsyncMock.
+
+    The default ``_mock_ws`` only mocks ``close``; admin disconnect paths
+    also call ``send_text`` to deliver the JSON reason frame.
+    """
+    ws = MagicMock()
+    ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+    return ws
+
+
+class TestUserClientOps:
+    """Cover ``register_user_client``/``unregister_user_client`` and the
+    admin destructive ``disconnect_user`` helper.
+    """
+
+    def test_register_and_get(self, routing: RoutingTable):
+        client = UserClient(
+            user_id="u1", device_id="dev-1", websocket=_admin_ws()
+        )
+        routing.register_user_client("u1", client)
+        assert client in routing.get_user_clients("u1")
+
+    def test_get_returns_empty_set_when_unknown(self, routing: RoutingTable):
+        assert routing.get_user_clients("ghost") == set()
+
+    def test_unregister_pops_user_when_last_client_leaves(
+        self, routing: RoutingTable
+    ):
+        client = UserClient(
+            user_id="u1", device_id="dev-1", websocket=_admin_ws()
+        )
+        routing.register_user_client("u1", client)
+        routing.unregister_user_client("u1", client)
+        assert routing.get_user_clients("u1") == set()
+        assert "u1" not in routing._user_clients
+
+    async def test_disconnect_user_sends_reason_and_closes_each_client(
+        self, routing: RoutingTable
+    ):
+        ws1 = _admin_ws()
+        ws2 = _admin_ws()
+        c1 = UserClient(user_id="u1", device_id="dev-1", websocket=ws1)
+        c2 = UserClient(user_id="u1", device_id="dev-2", websocket=ws2)
+        routing.register_user_client("u1", c1)
+        routing.register_user_client("u1", c2)
+
+        count = await routing.disconnect_user("u1")
+
+        assert count == 2
+        for ws in (ws1, ws2):
+            ws.send_text.assert_awaited_once_with(
+                json.dumps({"reason": "admin_revoked"})
+            )
+            ws.close.assert_awaited_once_with(
+                code=4010, reason="admin_revoked"
+            )
+        assert "u1" not in routing._user_clients
+
+    async def test_disconnect_user_no_clients_returns_zero(
+        self, routing: RoutingTable
+    ):
+        count = await routing.disconnect_user("ghost")
+        assert count == 0
+
+    async def test_disconnect_user_custom_code_and_reason(
+        self, routing: RoutingTable
+    ):
+        ws = _admin_ws()
+        client = UserClient(
+            user_id="u1", device_id="dev-1", websocket=ws
+        )
+        routing.register_user_client("u1", client)
+
+        await routing.disconnect_user(
+            "u1", code=4011, reason_code="admin_force_disconnect"
+        )
+
+        ws.send_text.assert_awaited_once_with(
+            json.dumps({"reason": "admin_force_disconnect"})
+        )
+        ws.close.assert_awaited_once_with(
+            code=4011, reason="admin_force_disconnect"
+        )
+
+    async def test_disconnect_user_tolerates_already_closed_socket(
+        self, routing: RoutingTable
+    ):
+        ws = MagicMock()
+        ws.send_text = AsyncMock(side_effect=RuntimeError("already closed"))
+        ws.close = AsyncMock(side_effect=RuntimeError("already closed"))
+        client = UserClient(
+            user_id="u1", device_id="dev-1", websocket=ws
+        )
+        routing.register_user_client("u1", client)
+
+        count = await routing.disconnect_user("u1")
+        assert count == 1
+
+
+class TestDisconnectAgent:
+    """``RoutingTable.disconnect_agent`` is the symmetric admin helper:
+    closes the agent's WS and every paired mobile-client WS, after
+    sending a JSON reason frame on each.
+    """
+
+    async def test_no_op_when_agent_offline(self, routing: RoutingTable):
+        count = await routing.disconnect_agent("ghost")
+        assert count == 0
+
+    async def test_closes_agent_and_mobiles(self, routing: RoutingTable):
+        agent_ws = _admin_ws()
+        routing.register_agent("a1", agent_ws)
+        mobile_ws_1 = _admin_ws()
+        mobile_ws_2 = _admin_ws()
+        routing.register_mobile(
+            "a1",
+            "session_io:s1",
+            MobileClient(device_id="dev-1", websocket=mobile_ws_1),
+        )
+        routing.register_mobile(
+            "a1",
+            "events",
+            MobileClient(device_id="dev-2", websocket=mobile_ws_2),
+        )
+
+        count = await routing.disconnect_agent("a1")
+
+        # 1 agent + 2 mobiles
+        assert count == 3
+        assert routing.is_agent_online("a1") is False
+        for ws in (agent_ws, mobile_ws_1, mobile_ws_2):
+            ws.send_text.assert_awaited_once_with(
+                json.dumps({"reason": "admin_revoked"})
+            )
+            ws.close.assert_awaited_once_with(
+                code=4010, reason="admin_revoked"
+            )
+
+
+class TestSafeSendReasonAndClose:
+    """The shared helper used by both disconnect_user and disconnect_agent.
+    Each step is wrapped in try/except so an already-closed socket is a no-op.
+    """
+
+    async def test_sends_then_closes(self):
+        ws = _admin_ws()
+        await safe_send_reason_and_close(ws, 4010, "admin_revoked")
+        ws.send_text.assert_awaited_once_with(
+            json.dumps({"reason": "admin_revoked"})
+        )
+        ws.close.assert_awaited_once_with(
+            code=4010, reason="admin_revoked"
+        )
+
+    async def test_swallows_send_error(self):
+        ws = MagicMock()
+        ws.send_text = AsyncMock(side_effect=RuntimeError("dead"))
+        ws.close = AsyncMock()
+        # Must not raise — admin paths cannot let one bad socket fail the bulk close.
+        await safe_send_reason_and_close(ws, 4001, "boot")
+        ws.close.assert_awaited_once_with(code=4001, reason="boot")
+
+    async def test_swallows_close_error(self):
+        ws = MagicMock()
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock(side_effect=RuntimeError("dead"))
+        await safe_send_reason_and_close(ws, 4001, "boot")
+        ws.send_text.assert_awaited_once()
