@@ -18,9 +18,13 @@ object Routes {
     const val INCOMPATIBLE_SERVER = "incompatible_server"
     const val TEMPLATES = "templates"
 
+    const val FORGOT_PASSWORD = "forgot_password"
+    const val RESET_PASSWORD = "reset_password/{email}"
+
     fun sessionDetail(sessionId: String) = "session_detail/$sessionId"
     fun autoScanDetail(projectName: String) =
         "auto_scan_detail/${Uri.encode(projectName)}"
     fun verifyEmail(email: String) = "verify_email/${Uri.encode(email)}"
+    fun resetPassword(email: String) = "reset_password/${Uri.encode(email)}"
     fun gitManagement(projectName: String) = "git/${Uri.encode(projectName)}"
 }

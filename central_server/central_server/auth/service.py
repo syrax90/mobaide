@@ -70,6 +70,22 @@ class ResendRateLimitedError(Exception):
         self.cooldown_seconds_remaining = cooldown_seconds_remaining
 
 
+class InvalidResetCodeError(Exception):
+    """Supplied reset code did not match the active token."""
+
+
+class ExpiredResetCodeError(Exception):
+    """Active reset token has passed its TTL."""
+
+
+class ResetAttemptsExhaustedError(Exception):
+    """Too many failed attempts against the current reset code."""
+
+
+class NewPasswordSameAsOldError(Exception):
+    """New password matches the current password — reset rejected."""
+
+
 @dataclass
 class RegisterResult:
     """Outcome of ``AuthService.register_user``.
@@ -92,11 +108,13 @@ class AuthService:
         db: Database,
         email_sender: "EmailSender | None" = None,
         resend_limiter: "ResendRateLimiter | None" = None,
+        reset_email_limiter: "ResendRateLimiter | None" = None,
     ) -> None:
         self._config = config
         self._db = db
         self._email_sender = email_sender
         self._resend_limiter = resend_limiter
+        self._reset_email_limiter = reset_email_limiter
 
     async def _hash_password(self, password: str) -> str:
         loop = asyncio.get_running_loop()
@@ -314,6 +332,145 @@ class AuthService:
             return
 
         await self._issue_verification_code(user["id"], user["email"], background_tasks)
+
+    async def request_password_reset(
+        self,
+        email: str,
+        background_tasks: BackgroundTasks | None = None,
+        *,
+        client_ip: str | None = None,
+    ) -> None:
+        """Issue a password-reset OTP. Enumeration-resistant: always silent success.
+
+        Unknown email / unverified user → no DB write, no email. We deliberately
+        do NOT run a dummy Argon2id hash here: this endpoint's happy path is
+        HMAC + a single SQL INSERT (microsecond-millisecond range), so an
+        Argon2id (~50-100ms) on the unknown branch would INVERT timing parity
+        and turn the silent-success contract into a measurable enumeration
+        oracle. The residual differential (HMAC + insert vs lookup-only) is
+        well inside network jitter. The same dummy-hash anti-pattern is
+        intentionally preserved in ``reset_password``, where the happy path
+        actually does run Argon2id (verify_old + hash_new).
+        """
+        user = await self._db.get_user_by_email(email)
+        if user is None or not user.get("email_verified"):
+            return
+
+        if self._reset_email_limiter is not None:
+            wait = await self._reset_email_limiter.try_acquire(email)
+            if wait is not None:
+                return
+
+        code = self._generate_code()
+        code_hash = self._hash_code(user["id"], code)
+        ttl_seconds = self._config.password_reset_ttl_minutes * 60
+        await self._db.create_password_reset_token(user["id"], code_hash, ttl_seconds)
+
+        if self._email_sender is None:
+            logger.warning(
+                "password_reset.no_sender_configured user_id=%s — "
+                "code was generated but not emailed",
+                user["id"],
+            )
+            return
+
+        sender = self._email_sender
+        ttl_minutes = self._config.password_reset_ttl_minutes
+        if background_tasks is not None:
+            background_tasks.add_task(
+                sender.send_password_reset_email,
+                user["email"], code, ttl_minutes, client_ip,
+            )
+        else:
+            task = asyncio.create_task(
+                sender.send_password_reset_email(
+                    user["email"], code, ttl_minutes, client_ip,
+                )
+            )
+            _background_email_tasks.add(task)
+            task.add_done_callback(_background_email_tasks.discard)
+
+    async def reset_password(
+        self,
+        email: str,
+        code: str,
+        new_password: str,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> None:
+        """Consume the reset OTP, replace the password, and revoke mobile sessions.
+
+        Raises one of ``InvalidResetCodeError`` / ``ExpiredResetCodeError`` /
+        ``ResetAttemptsExhaustedError`` on a code failure, or
+        ``NewPasswordSameAsOldError`` if the new password matches the current
+        one. On success, persists the new Argon2id hash, logically revokes
+        every active mobile refresh token for agents this user owns, clears
+        the per-email rate-limit slot, and schedules a "password changed"
+        notification email (best-effort, never raises).
+        """
+        user = await self._db.get_user_by_email(email)
+        if user is None:
+            # Timing parity: still pay one Argon2id hash before failing.
+            await self._hash_password("timing-parity-dummy")
+            raise InvalidResetCodeError()
+
+        code_hash = self._hash_code(user["id"], code)
+        outcome = await self._db.consume_password_reset_token(
+            user["id"],
+            code_hash,
+            self._config.password_reset_max_attempts,
+        )
+        if outcome == "expired":
+            raise ExpiredResetCodeError()
+        if outcome == "exhausted":
+            raise ResetAttemptsExhaustedError()
+        if outcome != "ok":
+            raise InvalidResetCodeError()
+
+        if user["password_hash"] is not None and await self._verify_password(
+            user["password_hash"], new_password
+        ):
+            raise NewPasswordSameAsOldError()
+
+        new_hash = await self._hash_password(new_password)
+        # Revoke first, then update the password. If a concurrent refresh
+        # request slots in between the two commits, the worst case is that
+        # the user still has the OLD password live for a few ms after their
+        # sessions die — harmless, because the old password is what they're
+        # rotating away from. The reverse order would leave a tiny window
+        # where the new password is durable but stolen refresh tokens still
+        # work.
+        revoked = await self._db.revoke_all_refresh_tokens_for_user(user["id"])
+        await self._db.update_user_password(user["id"], new_hash)
+
+        if self._reset_email_limiter is not None:
+            await self._reset_email_limiter.reset(email)
+
+        if user["role"] == "admin":
+            logger.info(
+                "password_reset.admin_completed user_id=%s revoked_sessions=%d",
+                user["id"], revoked,
+            )
+        else:
+            logger.info(
+                "password_reset.completed user_id=%s revoked_sessions=%d",
+                user["id"], revoked,
+            )
+
+        if self._email_sender is None:
+            return
+
+        sender = self._email_sender
+        if background_tasks is not None:
+            background_tasks.add_task(
+                sender.send_password_changed_notification,
+                user["email"], revoked,
+            )
+        else:
+            task = asyncio.create_task(
+                sender.send_password_changed_notification(user["email"], revoked)
+            )
+            _background_email_tasks.add(task)
+            task.add_done_callback(_background_email_tasks.discard)
 
     async def google_authenticate(
         self, token_str: str

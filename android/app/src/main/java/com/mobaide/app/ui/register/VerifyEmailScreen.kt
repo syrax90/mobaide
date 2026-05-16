@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.ui.util.maskEmail
 
 @Composable
 fun VerifyEmailScreen(
@@ -145,19 +146,3 @@ fun VerifyEmailScreen(
     }
 }
 
-/**
- * Mask an email address for display: keeps the first character and the domain,
- * replaces the middle of the local part with bullets. Safe for empty input.
- */
-private fun maskEmail(email: String): String {
-    val at = email.indexOf('@')
-    if (at <= 0) return email
-    val local = email.substring(0, at)
-    val domain = email.substring(at)
-    val masked = when {
-        local.length <= 1 -> local + "•".repeat(3)
-        local.length <= 3 -> local.first() + "•".repeat(local.length - 1)
-        else -> local.first() + "•".repeat(local.length - 2) + local.last()
-    }
-    return masked + domain
-}

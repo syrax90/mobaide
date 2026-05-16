@@ -50,6 +50,7 @@ fun LoginScreen(
     onLoginSuccess: () -> Unit,
     onVerificationRequired: (String) -> Unit = {},
     onRegisterClick: () -> Unit = {},
+    onForgotPasswordClick: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -144,7 +145,21 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.End,
+            ) {
+                TextButton(
+                    onClick = onForgotPasswordClick,
+                    enabled = !uiState.isLoading,
+                ) {
+                    Text("Forgot password?")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             Button(
                 onClick = viewModel::loginWithPassword,

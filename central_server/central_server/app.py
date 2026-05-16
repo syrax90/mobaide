@@ -80,10 +80,26 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             cooldown_seconds=config.email_verification_resend_cooldown_seconds,
             hourly_cap=config.email_verification_resend_hourly_cap,
         )
+        reset_email_limiter = ResendRateLimiter(
+            cooldown_seconds=config.password_reset_email_cooldown_seconds,
+            hourly_cap=config.password_reset_email_hourly_cap,
+        )
+        # Per-IP limiter has no cooldown — only the rolling hourly cap. Same
+        # in-memory caveat as resend_limiter (documented in rate_limit.py).
+        reset_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.password_reset_ip_hourly_cap,
+        )
         app.state.email_sender = email_sender
         app.state.resend_limiter = resend_limiter
+        app.state.reset_email_limiter = reset_email_limiter
+        app.state.reset_ip_limiter = reset_ip_limiter
         app.state.auth_service = AuthService(
-            config, db, email_sender=email_sender, resend_limiter=resend_limiter
+            config,
+            db,
+            email_sender=email_sender,
+            resend_limiter=resend_limiter,
+            reset_email_limiter=reset_email_limiter,
         )
         await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db)

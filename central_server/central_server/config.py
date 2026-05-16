@@ -70,6 +70,17 @@ class CentralServerConfig:
     email_verification_resend_cooldown_seconds: int = 60
     email_verification_resend_hourly_cap: int = 3
 
+    # Password reset (OTP-in-app flow; see docs/password-reset-workflow.md).
+    # TTL chosen at 30 min per NIST SP 800-63-4 guidance (link/OTP ≤60 min).
+    # Per-email cooldown matches verification cooldown for UX consistency.
+    # Per-IP cap is generous (10/hr) because legitimate operators sharing an
+    # office NAT could otherwise stomp each other.
+    password_reset_ttl_minutes: int = 30
+    password_reset_max_attempts: int = 5
+    password_reset_email_cooldown_seconds: int = 60
+    password_reset_email_hourly_cap: int = 3
+    password_reset_ip_hourly_cap: int = 10
+
     # Release / manifest publishing
     release_auth_token: str | None = None
     manifest_signing_public_key_b64: str | None = None
@@ -149,6 +160,21 @@ class CentralServerConfig:
             ),
             email_verification_resend_hourly_cap=int(
                 os.getenv("EMAIL_VERIFICATION_RESEND_HOURLY_CAP", "3"),
+            ),
+            password_reset_ttl_minutes=int(
+                os.getenv("PASSWORD_RESET_TTL_MINUTES", "30"),
+            ),
+            password_reset_max_attempts=int(
+                os.getenv("PASSWORD_RESET_MAX_ATTEMPTS", "5"),
+            ),
+            password_reset_email_cooldown_seconds=int(
+                os.getenv("PASSWORD_RESET_EMAIL_COOLDOWN_SECONDS", "60"),
+            ),
+            password_reset_email_hourly_cap=int(
+                os.getenv("PASSWORD_RESET_EMAIL_HOURLY_CAP", "3"),
+            ),
+            password_reset_ip_hourly_cap=int(
+                os.getenv("PASSWORD_RESET_IP_HOURLY_CAP", "10"),
             ),
             release_auth_token=os.getenv("RELEASE_AUTH_TOKEN") or None,
             manifest_signing_public_key_b64=(

@@ -141,5 +141,6 @@ on for its own fixtures.
 * Raw codes appear only in the rendered email. Nothing in the logs, nothing
   in the database, nothing in error responses.
 * Rate limiting is per normalised email, which prevents an attacker from
-  spamming other users' inboxes via the resend endpoint. Per-IP limiting is a
-  future improvement.
+  spamming other users' inboxes via the resend endpoint. Per-IP limiting is
+  not yet applied to the resend endpoint; it is implemented for the
+  password-reset flow (see `docs/password-reset-workflow.md`).

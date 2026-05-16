@@ -4,6 +4,8 @@ import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
+import com.mobaide.app.data.network.dto.ForgotPasswordRequest
+import com.mobaide.app.data.network.dto.ForgotPasswordResponse
 import com.mobaide.app.data.network.dto.GoogleAuthRequest
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.network.dto.PairingClaimRequest
@@ -11,6 +13,8 @@ import com.mobaide.app.data.network.dto.PairingClaimResponse
 import com.mobaide.app.data.network.dto.ReRegisterAgentResponse
 import com.mobaide.app.data.network.dto.ResendVerificationRequest
 import com.mobaide.app.data.network.dto.ResendVerificationResponse
+import com.mobaide.app.data.network.dto.ResetPasswordRequest
+import com.mobaide.app.data.network.dto.ResetPasswordResponse
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.UpdateTemplateRequest
 import com.mobaide.app.data.network.dto.UserAuthResponse
@@ -97,6 +101,30 @@ class CentralApi(
             .toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/auth/resend-verification")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun forgotPassword(email: String): ForgotPasswordResponse {
+        val body = json.encodeToString(ForgotPasswordRequest(email))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/forgot-password")
+            .post(body)
+            .build()
+        return execute(request)
+    }
+
+    suspend fun resetPassword(
+        email: String,
+        code: String,
+        newPassword: String,
+    ): ResetPasswordResponse {
+        val body = json.encodeToString(ResetPasswordRequest(email, code, newPassword))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/reset-password")
             .post(body)
             .build()
         return execute(request)
