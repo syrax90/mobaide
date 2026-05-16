@@ -265,6 +265,55 @@ class AgentListViewModelTest {
     }
 
     @Test
+    fun showInstallSheet_flipsFlagTrue() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.showInstallSheet)
+
+        vm.showInstallSheet()
+
+        assertTrue(vm.uiState.value.showInstallSheet)
+    }
+
+    @Test
+    fun dismissInstallSheet_flipsFlagFalse() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.showInstallSheet()
+        assertTrue(vm.uiState.value.showInstallSheet)
+
+        vm.dismissInstallSheet()
+
+        assertFalse(vm.uiState.value.showInstallSheet)
+    }
+
+    @Test
+    fun installSheet_isOrthogonalToOtherDialogState() = runTest {
+        // Toggling the install sheet must not interfere with unrelated
+        // dialog state — the field lives alongside addDialogState and
+        // deleteConfirmAgent, and a regression in `copy(...)` could
+        // accidentally reset siblings.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.showAddDialog()
+        vm.showInstallSheet()
+
+        assertTrue(vm.uiState.value.showInstallSheet)
+        assertEquals(AddAgentDialogState.Input, vm.uiState.value.addDialogState)
+
+        vm.dismissInstallSheet()
+
+        assertFalse(vm.uiState.value.showInstallSheet)
+        assertEquals(AddAgentDialogState.Input, vm.uiState.value.addDialogState)
+    }
+
+    @Test
     fun onScanQrClicked_setsIsScannerLaunchingTrue() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()

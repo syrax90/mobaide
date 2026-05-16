@@ -96,6 +96,7 @@ data class AgentListUiState(
      * GMS code-scanner module install does not look like a frozen tap.
      */
     val isScannerLaunching: Boolean = false,
+    val showInstallSheet: Boolean = false,
 )
 
 @HiltViewModel
@@ -168,6 +169,14 @@ class AgentListViewModel @Inject constructor(
 
     fun dismissAddDialog() {
         _uiState.update { it.copy(addDialogState = AddAgentDialogState.Hidden) }
+    }
+
+    fun showInstallSheet() {
+        _uiState.update { it.copy(showInstallSheet = true) }
+    }
+
+    fun dismissInstallSheet() {
+        _uiState.update { it.copy(showInstallSheet = false) }
     }
 
     fun createAgent(name: String) {

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -102,7 +103,10 @@ fun AgentListScreen(
             TopAppBar(
                 title = { Text("My Agents") },
                 actions = {
-                    AgentListOverflowMenu(onAddManually = viewModel::showAddDialog)
+                    AgentListOverflowMenu(
+                        onShowInstall = viewModel::showInstallSheet,
+                        onAddManually = viewModel::showAddDialog,
+                    )
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
@@ -129,6 +133,7 @@ fun AgentListScreen(
             ) {
                 if (uiState.agents.isEmpty() && !uiState.isLoading) {
                     EmptyAgentsState(
+                        onShowInstallClick = viewModel::showInstallSheet,
                         onScanClick = viewModel::onScanQrClicked,
                         onAddManuallyClick = viewModel::showAddDialog,
                     )
@@ -191,6 +196,10 @@ fun AgentListScreen(
         onConfirm = viewModel::confirmQrClaim,
         onDismiss = viewModel::dismissQrPairing,
     )
+
+    if (uiState.showInstallSheet) {
+        InstallCommandsSheet(onDismiss = viewModel::dismissInstallSheet)
+    }
 }
 
 /** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
@@ -205,7 +214,10 @@ internal fun ScanQrFab(onClick: () -> Unit) {
 
 /** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
 @Composable
-internal fun AgentListOverflowMenu(onAddManually: () -> Unit) {
+internal fun AgentListOverflowMenu(
+    onShowInstall: () -> Unit,
+    onAddManually: () -> Unit,
+) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { menuExpanded = true }) {
@@ -215,6 +227,16 @@ internal fun AgentListOverflowMenu(onAddManually: () -> Unit) {
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
         ) {
+            DropdownMenuItem(
+                text = { Text("Show install commands") },
+                onClick = {
+                    menuExpanded = false
+                    onShowInstall()
+                },
+                leadingIcon = {
+                    Icon(Icons.Default.Terminal, contentDescription = null)
+                },
+            )
             DropdownMenuItem(
                 text = { Text("Add manually...") },
                 onClick = {
@@ -232,6 +254,7 @@ internal fun AgentListOverflowMenu(onAddManually: () -> Unit) {
 /** `internal` (vs the screen file's usual `private`) so `AgentListScreenTest` can compose it directly. */
 @Composable
 internal fun EmptyAgentsState(
+    onShowInstallClick: () -> Unit,
     onScanClick: () -> Unit,
     onAddManuallyClick: () -> Unit,
 ) {
@@ -266,12 +289,35 @@ internal fun EmptyAgentsState(
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "Scan the QR code shown by `mobaide-agent show-qr` on your host to add an agent.",
+                text = "Install mobaide-agent on a host machine. The agent will display " +
+                    "a pairing QR after install — scan it here to finish setup.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
+            Text(
+                text = "1. Install on your host",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Button(
+                onClick = onShowInstallClick,
+                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+            ) {
+                Icon(
+                    Icons.Default.Terminal,
+                    contentDescription = null,
+                    modifier = Modifier.size(ButtonDefaults.IconSize),
+                )
+                Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
+                Text("Show install commands")
+            }
+            Text(
+                text = "2. Scan the pairing QR shown after install",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OutlinedButton(
                 onClick = onScanClick,
                 contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
             ) {
