@@ -33,9 +33,8 @@
             and tear down every live session.
         </p>
         <form hx-delete="/dashboard/users/{{ user.id }}"
-              hx-target="#user-row-{{ user.id }}"
-              hx-swap="delete"
-              hx-on::after-request="if(event.detail.successful)document.getElementById('modal-root').innerHTML=''">
+              hx-target="#modal-root"
+              hx-swap="innerHTML">
             <label for="confirm-email-{{ user.id }}">Type <code>{{ user.email }}</code> to confirm:</label>
             <input type="text"
                    id="confirm-email-{{ user.id }}"

@@ -263,7 +263,16 @@ async def delete_user_htmx(
         "user.deleted user_id=%s by_admin=%s agents=%d",
         user_id, user.sub, len(agent_ids),
     )
-    return HTMLResponse("")  # HTMX deletes the user row
+    # OOB delete markers: the form's primary swap empties #modal-root
+    # (closing the modal), and these OOB blocks remove the user row plus
+    # any expanded detail row by id. HTMX matches OOB by id only, so
+    # <div> works for a target rendered as <tr>; and a missing target
+    # (collapsed row case) is a silent no-op. Using <div> also dodges
+    # browser HTML parsing that strips <tr> outside a <table>.
+    return HTMLResponse(
+        f'<div id="user-row-{user_id}" hx-swap-oob="delete"></div>'
+        f'<div id="user-detail-{user_id}" hx-swap-oob="delete"></div>'
+    )
 
 
 @router.delete(
