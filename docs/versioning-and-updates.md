@@ -259,8 +259,9 @@ condition and does not retry on the same binary. On a successful auth the
 server persists `agent_version` and `agent_protocol_version` (the
 `protocol_version` the agent declared) into the `agents` DB row; both fields
 are exposed via `GET /api/agents` (`AgentSummary`) and rendered on the admin
-dashboard — the agent-list page shows a **Version** column and the agent-detail
-page shows a badge ("Up to date" or "latest: X.Y.Z" when behind the manifest).
+dashboard — the users page lists agents in an expandable per-user sub-table
+that includes a **Version** column ("Up to date" or "latest: X.Y.Z" when
+behind the manifest).
 
 ## Agent rollout manifest
 

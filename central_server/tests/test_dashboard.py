@@ -108,7 +108,7 @@ class TestDashboardLogin:
         assert login.status_code == 303
         resp = await client.get("/dashboard", follow_redirects=False)
         assert resp.status_code == 200
-        assert "Agents" in resp.text
+        assert "Users" in resp.text
 
     async def test_login_positive_ttl_sets_max_age(
         self, client_with_dashboard_ttl
@@ -147,7 +147,7 @@ class TestDashboardLogin:
             "/dashboard", follow_redirects=False
         )
         assert resp.status_code == 200
-        assert "Agents" in resp.text
+        assert "Users" in resp.text
 
     async def test_login_failure(self, client):
         resp = await client.post(
@@ -174,12 +174,17 @@ class TestDashboardPages:
     async def test_agents_page(self, client, dashboard_headers):
         resp = await client.get("/dashboard", headers=dashboard_headers)
         assert resp.status_code == 200
-        assert "Agents" in resp.text
+        assert "Users" in resp.text
 
-    async def test_agents_page_shows_owner(self, client, dashboard_headers, registered_agent):
+    async def test_users_page_shows_owner_email(
+        self, client, dashboard_headers, viewer_user, registered_agent
+    ):
+        """The users-centric view lists every user by email and surfaces the
+        per-user owned-agent count in the dedicated column."""
+        del registered_agent  # ensures the agent exists; assertion is on the user row
         resp = await client.get("/dashboard", headers=dashboard_headers)
         assert resp.status_code == 200
-        assert "Owner" in resp.text
+        assert viewer_user["email"] in resp.text
 
     async def test_agent_detail(self, client, dashboard_headers, registered_agent):
         agent_id, _ = registered_agent
@@ -319,26 +324,24 @@ class TestAgentDetailVersion:
         assert "<strong>Protocol:</strong>" in body
         assert "v2" in body
 
-    async def test_agents_list_renders_version_column(
+    async def test_user_agents_fragment_renders_version_column(
         self, client, app, dashboard_headers, registered_agent
     ):
-        """The new ``Version`` column on ``GET /dashboard`` must render
-        the stored version (after a successful handshake) and the
-        em-dash for agents that never reconnected since the migration.
+        """The expanded per-user agent sub-table surfaces the version
+        column for each owned agent (the top-level users table no longer
+        shows versions; admins drill in by clicking the row).
         """
         agent_id, _ = registered_agent
         await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-        # Register a second agent owned by the same viewer that has
-        # never reconnected — its row should show the em-dash placeholder.
         owner_id = await app.state.db.get_agent_owner(agent_id)
         await app.state.db.register_agent("stale-agent", owner_id)
 
-        resp = await client.get("/dashboard", headers=dashboard_headers)
+        resp = await client.get(
+            f"/dashboard/users/{owner_id}/agents", headers=dashboard_headers
+        )
         assert resp.status_code == 200
         body = resp.text
-        # Header column is present.
         assert "<th>Version</th>" in body
-        # The configured agent shows its reported version.
         assert "0.3.0" in body
 
 
@@ -375,3 +378,458 @@ class TestDashboardRoleGate:
             headers=viewer_dashboard_headers,
         )
         assert resp.status_code == 403
+
+
+class TestUserList:
+    """The users-centric ``GET /dashboard`` and its supporting endpoints:
+    the search fragment, the per-user agents expansion, and the OOB
+    status poller.
+    """
+
+    async def test_users_page_lists_seeded_admin(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        assert TEST_ADMIN_EMAIL in resp.text
+
+    async def test_users_page_lists_viewer_with_agent_count(
+        self, client, dashboard_headers, viewer_user, registered_agent
+    ):
+        del registered_agent  # forces agent registration
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        body = resp.text
+        assert viewer_user["email"] in body
+        # The agent-count column for the viewer reads "1".
+        assert f'id="user-row-{viewer_user["id"]}"' in body
+
+    async def test_users_fragment_returns_unfiltered_table(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get(
+            "/dashboard/users", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert 'id="users-table"' in resp.text
+        assert TEST_ADMIN_EMAIL in resp.text
+
+    async def test_user_agents_fragment_returns_detail_row(
+        self, client, dashboard_headers, viewer_user, registered_agent
+    ):
+        del registered_agent
+        resp = await client.get(
+            f"/dashboard/users/{viewer_user['id']}/agents",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'class="detail-row"' in body
+        # The detail row carries a stable id so the client-side toggle
+        # (toggleUserRow) can remove it on the next click — without this
+        # id the re-click would pile up duplicate rows.
+        assert f'id="user-detail-{viewer_user["id"]}"' in body
+        # The agent should appear in the expanded table.
+        assert "test-agent" in body
+
+    async def test_users_table_row_uses_onclick_toggle(
+        self, client, dashboard_headers
+    ):
+        """The user row must be wired to the JS toggle, not an hx-get
+        on the row itself — otherwise re-clicking would not collapse.
+        """
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        body = resp.text
+        assert "toggleUserRow(" in body
+        # The row's hx-get-on-click pattern is gone — the toggle is JS.
+        # Confirm the row markup itself doesn't carry hx-get/hx-target
+        # for the agents fragment (the /agents sub-path specifically;
+        # other hx-get attrs like /delete-modal and the search input
+        # are expected and unrelated).
+        import re
+        assert not re.search(r'hx-get="/dashboard/users/[^"]+/agents"', body)
+
+    async def test_user_agents_fragment_empty_state(
+        self, client, dashboard_headers, viewer_user
+    ):
+        resp = await client.get(
+            f"/dashboard/users/{viewer_user['id']}/agents",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        assert "No agents registered" in resp.text
+
+    async def test_user_agents_fragment_404_for_unknown_user(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get(
+            "/dashboard/users/ghost/agents", headers=dashboard_headers
+        )
+        assert resp.status_code == 404
+
+
+class TestUserSearchFilter:
+    async def test_search_filters_by_email_substring(
+        self, client, dashboard_headers, viewer_user
+    ):
+        del viewer_user  # fixture registers the viewer
+        resp = await client.get(
+            "/dashboard/users?q=viewer", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert TEST_VIEWER_EMAIL in body
+        # The seeded admin should NOT be in the filtered table.
+        assert TEST_ADMIN_EMAIL not in body
+
+    async def test_search_is_case_insensitive(
+        self, client, dashboard_headers, viewer_user
+    ):
+        del viewer_user
+        resp = await client.get(
+            "/dashboard/users?q=VIEWER", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert TEST_VIEWER_EMAIL in resp.text
+
+    async def test_search_empty_result_renders_empty_state(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get(
+            "/dashboard/users?q=does-not-exist", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert "No users matching" in resp.text
+
+
+class TestUserDelete:
+    """``DELETE /dashboard/users/{id}`` — cascade, guardrails, WS teardown."""
+
+    async def test_delete_user_cascades_agents_pairings_and_templates(
+        self, client, app, dashboard_headers, viewer_user, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        user_id = viewer_user["id"]
+        db = app.state.db
+        # Establish dependent rows the cascade must reach.
+        pairing_id = await db.create_pairing(agent_id, "device-1")
+        await db.store_refresh_token(
+            raw_token="refresh-1",
+            mobile_device_id="device-1",
+            agent_id=agent_id,
+            expire_minutes=60,
+        )
+        await db.create_template(user_id, "tpl", "body")
+
+        resp = await client.delete(
+            f"/dashboard/users/{user_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        # Every layer is gone.
+        assert await db.get_user_by_id(user_id) is None
+        assert await db.get_agent(agent_id) is None
+        assert await db.is_mobile_paired_to_agent("device-1", agent_id) is False
+        assert await db.validate_and_consume_refresh("refresh-1") is None
+        assert await db.list_templates_for_user(user_id) == []
+        del pairing_id
+
+    async def test_delete_seed_admin_returns_400(self, client, app):
+        """The seeded admin and the default dashboard-login admin happen
+        to be the same user in this suite, so the self-delete guard
+        would fire first. Provision a second admin and call as them to
+        exercise the seed-admin guard in isolation.
+        """
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        password_hash = await app.state.auth_service._hash_password("p2")
+        await app.state.db.create_user(
+            email="admin2@test.local",
+            password_hash=password_hash,
+            role="admin",
+            email_verified=True,
+        )
+        _uid, _role, token = await app.state.auth_service.login_user(
+            "admin2@test.local", "p2"
+        )
+        headers = {"Cookie": f"dashboard_token={token}"}
+
+        resp = await client.delete(
+            f"/dashboard/users/{admin['id']}", headers=headers
+        )
+        assert resp.status_code == 400
+        assert "seed admin" in resp.text.lower()
+        assert await app.state.db.get_user_by_id(admin["id"]) is not None
+
+    async def test_delete_self_returns_400(
+        self, client, app, dashboard_headers
+    ):
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        resp = await client.delete(
+            f"/dashboard/users/{admin['id']}", headers=dashboard_headers
+        )
+        assert resp.status_code == 400
+        assert "own account" in resp.text.lower()
+        assert await app.state.db.get_user_by_id(admin["id"]) is not None
+
+    async def test_delete_unknown_user_returns_404(
+        self, client, dashboard_headers
+    ):
+        resp = await client.delete(
+            "/dashboard/users/ghost", headers=dashboard_headers
+        )
+        assert resp.status_code == 404
+
+    async def test_delete_user_modal_renders_email_and_agents(
+        self, client, dashboard_headers, viewer_user, registered_agent
+    ):
+        del registered_agent
+        resp = await client.get(
+            f"/dashboard/users/{viewer_user['id']}/delete-modal",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert viewer_user["email"] in body
+        assert "test-agent" in body
+        assert "modal-overlay" in body
+        # Submit button is wired to DELETE the user.
+        assert f'hx-delete="/dashboard/users/{viewer_user["id"]}"' in body
+
+    async def test_delete_user_modal_self_path_is_blocked(self, client, app):
+        """Provision a second admin (not the seed) so the modal renders
+        the self-delete branch instead of the seed-admin branch.
+        """
+        password_hash = await app.state.auth_service._hash_password("p3")
+        second_admin_id = await app.state.db.create_user(
+            email="admin3@test.local",
+            password_hash=password_hash,
+            role="admin",
+            email_verified=True,
+        )
+        _uid, _role, token = await app.state.auth_service.login_user(
+            "admin3@test.local", "p3"
+        )
+        headers = {"Cookie": f"dashboard_token={token}"}
+
+        resp = await client.get(
+            f"/dashboard/users/{second_admin_id}/delete-modal",
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        assert "hx-delete=" not in resp.text
+        assert "cannot delete your own account" in resp.text.lower()
+
+    async def test_delete_user_modal_seed_admin_branch_blocks(
+        self, client, app
+    ):
+        """Independently exercise the seed-admin modal branch.
+
+        A second (non-seed) admin viewing the seeded admin's modal must
+        hit the seed-admin guard — the form is suppressed and the
+        operator sees the seed-admin error copy.
+        """
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        password_hash = await app.state.auth_service._hash_password("p4")
+        await app.state.db.create_user(
+            email="admin4@test.local",
+            password_hash=password_hash,
+            role="admin",
+            email_verified=True,
+        )
+        _uid, _role, token = await app.state.auth_service.login_user(
+            "admin4@test.local", "p4"
+        )
+        headers = {"Cookie": f"dashboard_token={token}"}
+
+        resp = await client.get(
+            f"/dashboard/users/{admin['id']}/delete-modal", headers=headers
+        )
+        assert resp.status_code == 200
+        body = resp.text.lower()
+        assert "hx-delete=" not in body
+        assert "seed admin" in body
+
+    async def test_delete_user_closes_live_user_clients(
+        self, client, app, dashboard_headers, viewer_user
+    ):
+        """The DELETE handler must call routing.disconnect_user to tear
+        down every live mobile-event WS the deleted user has open.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from central_server.relay.routing import UserClient
+
+        ws = MagicMock()
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+        user_client = UserClient(
+            user_id=viewer_user["id"], device_id="dev-1", websocket=ws
+        )
+        app.state.routing.register_user_client(viewer_user["id"], user_client)
+
+        resp = await client.delete(
+            f"/dashboard/users/{viewer_user['id']}",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        ws.close.assert_awaited_once_with(
+            code=4010, reason="admin_revoked"
+        )
+
+    async def test_delete_user_closes_live_agent_sockets(
+        self, client, app, dashboard_headers, viewer_user, registered_agent
+    ):
+        """The DELETE handler must call routing.disconnect_agent for
+        every agent the deleted user owned so that the agent WS and any
+        paired mobile sockets are torn down.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        agent_id, _ = registered_agent
+        agent_ws = MagicMock()
+        agent_ws.send_text = AsyncMock()
+        agent_ws.close = AsyncMock()
+        app.state.routing.register_agent(agent_id, agent_ws)
+
+        resp = await client.delete(
+            f"/dashboard/users/{viewer_user['id']}",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        agent_ws.close.assert_awaited_once_with(
+            code=4010, reason="admin_revoked"
+        )
+        assert app.state.routing.is_agent_online(agent_id) is False
+
+
+class TestAdminDeleteAgent:
+    """``DELETE /dashboard/agents/{id}`` admin path bypasses ownership."""
+
+    async def test_admin_can_delete_any_agent(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        resp = await client.delete(
+            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert await app.state.db.get_agent(agent_id) is None
+
+    async def test_admin_delete_unknown_agent_returns_404(
+        self, client, dashboard_headers
+    ):
+        resp = await client.delete(
+            "/dashboard/agents/ghost", headers=dashboard_headers
+        )
+        assert resp.status_code == 404
+
+    async def test_owner_api_endpoint_still_rejects_admin_token(
+        self, client, admin_api_auth_headers, registered_agent
+    ):
+        """Regression: ``DELETE /api/agents/{id}`` is owner-gated by
+        ``get_non_admin_api_user``. Admin tokens must still be rejected
+        on that endpoint — the new admin path is dashboard-only.
+        """
+        agent_id, _ = registered_agent
+        resp = await client.delete(
+            f"/api/agents/{agent_id}", headers=admin_api_auth_headers
+        )
+        assert resp.status_code == 403
+
+    async def test_admin_delete_closes_live_agent_socket(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        agent_id, _ = registered_agent
+        agent_ws = MagicMock()
+        agent_ws.send_text = AsyncMock()
+        agent_ws.close = AsyncMock()
+        app.state.routing.register_agent(agent_id, agent_ws)
+
+        resp = await client.delete(
+            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        agent_ws.close.assert_awaited_once_with(
+            code=4010, reason="admin_revoked"
+        )
+
+
+class TestForceDisconnect:
+    """Force-disconnect endpoints only tear down live WSs — DB untouched."""
+
+    async def test_force_disconnect_user(
+        self, client, app, dashboard_headers, viewer_user
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from central_server.relay.routing import UserClient
+
+        ws = MagicMock()
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+        app.state.routing.register_user_client(
+            viewer_user["id"],
+            UserClient(
+                user_id=viewer_user["id"], device_id="dev-1", websocket=ws
+            ),
+        )
+
+        resp = await client.post(
+            f"/dashboard/users/{viewer_user['id']}/disconnect",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        ws.close.assert_awaited_once_with(
+            code=4011, reason="admin_force_disconnect"
+        )
+        # User row untouched.
+        assert await app.state.db.get_user_by_id(viewer_user["id"]) is not None
+
+    async def test_force_disconnect_agent(
+        self, client, app, dashboard_headers, registered_agent
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        agent_id, _ = registered_agent
+        agent_ws = MagicMock()
+        agent_ws.send_text = AsyncMock()
+        agent_ws.close = AsyncMock()
+        app.state.routing.register_agent(agent_id, agent_ws)
+
+        resp = await client.post(
+            f"/dashboard/agents/{agent_id}/disconnect",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        agent_ws.close.assert_awaited_once_with(
+            code=4011, reason="admin_force_disconnect"
+        )
+        # Agent DB row untouched.
+        assert await app.state.db.get_agent(agent_id) is not None
+
+
+class TestOOBStatus:
+    """``GET /dashboard/agents-status`` emits hx-swap-oob spans only."""
+
+    async def test_emits_user_online_count_spans(
+        self, client, dashboard_headers, viewer_user
+    ):
+        resp = await client.get(
+            "/dashboard/agents-status", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert f'id="user-online-{viewer_user["id"]}"' in body
+        assert 'hx-swap-oob="true"' in body
+
+    async def test_emits_agent_status_span_per_agent(
+        self, client, dashboard_headers, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        resp = await client.get(
+            "/dashboard/agents-status", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert f'id="agent-status-{agent_id}"' in resp.text

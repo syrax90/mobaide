@@ -1,0 +1,56 @@
+<tr class="detail-row" id="user-detail-{{ user.id }}" hx-preserve="true">
+    <td colspan="8">
+        {% if agents %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Agent ID</th>
+                    <th>Status</th>
+                    <th>Version</th>
+                    <th>Last Seen</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for agent in agents %}
+                <tr id="agent-row-{{ agent.agent_id }}">
+                    <td><a href="/dashboard/agents/{{ agent.agent_id }}">{{ agent.name }}</a></td>
+                    <td><code>{{ agent.agent_id }}</code></td>
+                    <td>
+                        <span id="agent-status-{{ agent.agent_id }}">
+                            {% if agent.online %}
+                            <span class="badge badge-online">Online</span>
+                            {% else %}
+                            <span class="badge badge-offline">Offline</span>
+                            {% endif %}
+                        </span>
+                    </td>
+                    <td>{% if agent.agent_version %}<code>{{ agent.agent_version }}</code>{% else %}—{% endif %}</td>
+                    <td>{{ agent.last_seen_at or "Never" }}</td>
+                    <td>
+                        <button type="button"
+                                class="btn btn-sm"
+                                hx-post="/dashboard/agents/{{ agent.agent_id }}/disconnect"
+                                hx-swap="none"
+                                hx-confirm="Force-disconnect agent {{ agent.name }}?">
+                            Disconnect
+                        </button>
+                        <button type="button"
+                                class="btn btn-sm btn-danger"
+                                hx-delete="/dashboard/agents/{{ agent.agent_id }}"
+                                hx-target="#agent-row-{{ agent.agent_id }}"
+                                hx-swap="delete"
+                                hx-confirm="Delete agent {{ agent.name }}? This cannot be undone.">
+                            Delete
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty">No agents registered for this user.</p>
+        {% endif %}
+    </td>
+</tr>

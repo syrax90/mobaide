@@ -506,6 +506,64 @@ class Database:
         await self.conn.commit()
         return cursor.rowcount == 1
 
+    async def delete_user(self, user_id: str) -> list[str]:
+        """Delete a user and cascade-delete every owned agent + dependent row.
+
+        Mirrors ``delete_agent``'s explicit-cascade pattern because
+        ``PRAGMA foreign_keys=ON`` cascades are per-connection in SQLite
+        and the dashboard needs the deleted agent IDs *before* the rows
+        vanish so it can tear down their WebSocket connections.
+
+        Order (single implicit transaction, one commit at the end):
+          1. Snapshot owned agent IDs.
+          2. Drop ``mobile_refresh_tokens`` / ``pairing_tokens`` /
+             ``pairings`` rows that reference any of those agents.
+          3. Drop the ``agents`` rows themselves.
+          4. Drop ``email_verification_tokens`` and ``prompt_templates``
+             owned by the user.
+          5. Drop the ``users`` row.
+
+        Returns the list of deleted ``agent_id``s (empty list if the user
+        had none). Returns an empty list if ``user_id`` does not exist.
+        """
+        cursor = await self.conn.execute(
+            "SELECT agent_id FROM agents WHERE owner_user_id = ?", (user_id,)
+        )
+        agent_ids = [row["agent_id"] async for row in cursor]
+
+        owned_agents_subquery = (
+            "SELECT agent_id FROM agents WHERE owner_user_id = ?"
+        )
+        await self.conn.execute(
+            f"DELETE FROM mobile_refresh_tokens "
+            f"WHERE agent_id IN ({owned_agents_subquery})",
+            (user_id,),
+        )
+        await self.conn.execute(
+            f"DELETE FROM pairing_tokens "
+            f"WHERE agent_id IN ({owned_agents_subquery}) "
+            f"   OR claimed_agent_id IN ({owned_agents_subquery})",
+            (user_id, user_id),
+        )
+        await self.conn.execute(
+            f"DELETE FROM pairings "
+            f"WHERE agent_id IN ({owned_agents_subquery})",
+            (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM agents WHERE owner_user_id = ?", (user_id,)
+        )
+        await self.conn.execute(
+            "DELETE FROM email_verification_tokens WHERE user_id = ?",
+            (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM prompt_templates WHERE owner_user_id = ?", (user_id,)
+        )
+        await self.conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await self.conn.commit()
+        return agent_ids
+
     _AGENT_COLUMNS = (
         "agent_id, name, owner_user_id, created_at, last_seen_at, "
         "agent_version, agent_protocol_version"
@@ -528,6 +586,66 @@ class Database:
             "ORDER BY a.created_at DESC"
         )
         return [dict(row) async for row in cursor]
+
+    async def list_users_with_agents(self) -> list[dict]:
+        """List all users joined with their owned agents in a single query.
+
+        Returns one dict per user with an ``agents`` key holding the list
+        of agent records (empty list if the user owns none). The list is
+        ordered newest-user-first, and each user's agents are
+        newest-agent-first. One SQL round-trip; grouping done in Python.
+
+        Shape::
+
+            [{
+                "id": str, "email": str, "role": str,
+                "created_at": str,
+                "agents": [{
+                    "agent_id": str, "name": str, "created_at": str,
+                    "last_seen_at": str | None,
+                    "agent_version": str | None,
+                    "agent_protocol_version": int | None,
+                }, ...],
+            }, ...]
+        """
+        cursor = await self.conn.execute(
+            "SELECT u.id AS user_id, u.email, u.role, "
+            "u.created_at AS user_created_at, "
+            "a.agent_id, a.name AS agent_name, "
+            "a.created_at AS agent_created_at, a.last_seen_at, "
+            "a.agent_version, a.agent_protocol_version "
+            "FROM users u LEFT JOIN agents a ON a.owner_user_id = u.id "
+            "ORDER BY u.created_at DESC, a.created_at DESC"
+        )
+        users: list[dict] = []
+        by_id: dict[str, dict] = {}
+        async for row in cursor:
+            uid = row["user_id"]
+            user = by_id.get(uid)
+            if user is None:
+                user = {
+                    "id": uid,
+                    "email": row["email"],
+                    "role": row["role"],
+                    "created_at": row["user_created_at"],
+                    "agents": [],
+                }
+                by_id[uid] = user
+                users.append(user)
+            if row["agent_id"] is not None:
+                user["agents"].append(
+                    {
+                        "agent_id": row["agent_id"],
+                        "name": row["agent_name"],
+                        "created_at": row["agent_created_at"],
+                        "last_seen_at": row["last_seen_at"],
+                        "agent_version": row["agent_version"],
+                        "agent_protocol_version": row[
+                            "agent_protocol_version"
+                        ],
+                    }
+                )
+        return users
 
     async def list_agents_for_user(self, user_id: str) -> list[dict]:
         """List agents owned by a specific user."""

@@ -44,6 +44,19 @@ cadence; they do **not** gate compatibility.
     NOT exposed here — agents receive it on the relay tunnel; install scripts
     fetch ``GET /api/v1/agent/manifest.json`` directly during bootstrap.
 
+## Application-level WebSocket close codes
+
+The following codes are used in the application-private range (4000–4999).
+They are version-independent (not tied to any ``protocol_version`` integer)
+and apply to every current proto-v revision.
+
+| Code | Constant | Direction | Semantics |
+|------|----------|-----------|-----------|
+| 4001 | ``AUTH_FAILED_CLOSE_CODE`` | server → client | JWT missing, expired, or invalid. Android treats this as a session-expiry trigger (force logout). |
+| 4002 | ``PROTOCOL_INCOMPATIBLE_CLOSE_CODE`` | server → agent | Agent's ``protocol_version`` is not in the server's ``SUPPORTED_PROTOCOL_VERSIONS``. Terminal — agent does not retry on the same binary. |
+| 4010 | ``WS_CLOSE_ADMIN_REVOKED`` | server → client/agent | Admin permanently deleted the user or unregistered the agent. All associated sessions are terminated and credentials are invalid. Android should display a user-visible error and prevent auto-reconnect. |
+| 4011 | ``WS_CLOSE_ADMIN_FORCE_DISCONNECT`` | server → client/agent | Admin issued a non-destructive force-disconnect. Credentials remain valid; the client/agent **may** reconnect. Deliberately distinct from 4001 so Android does not treat this as an auth failure. |
+
 ## proto-v1 (superseded by proto-v2)
 
 * Introduced: 2026-04-26; retired: 2026-05-13.

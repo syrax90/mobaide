@@ -127,3 +127,16 @@ code { background: var(--bg); padding: 0.15rem 0.35rem; border-radius: 3px; font
 .text-muted { color: var(--text-muted); font-size: 0.85rem; }
 .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem; margin-bottom: 1rem; }
 section { margin-bottom: 2rem; }
+/* Users dashboard */
+.search-bar { margin-bottom: 1rem; }
+.search-bar input { width: 100%; padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem; }
+.user-row:hover { background: var(--bg); }
+.expand-arrow { display: inline-block; transition: transform 0.15s ease; color: var(--text-muted); }
+.user-row[aria-expanded="true"] .expand-arrow { transform: rotate(90deg); }
+.detail-row > td { background: var(--bg); padding: 1rem 1.5rem; }
+.detail-row table { box-shadow: inset 0 0 0 1px var(--border); }
+/* Modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 1000; }
+.modal-card { background: var(--surface); padding: 1.5rem; border-radius: var(--radius); max-width: 520px; width: 90%; max-height: 90vh; overflow: auto; }
+.modal-card h2 { margin-top: 0; }
+.modal-card code { background: var(--bg); padding: 0.15rem 0.4rem; }

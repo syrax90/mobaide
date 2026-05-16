@@ -1,0 +1,49 @@
+<table id="users-table">
+    <thead>
+        <tr>
+            <th></th>
+            <th>Email</th>
+            <th>Role</th>
+            <th>Registered</th>
+            <th>Agents</th>
+            <th>Online</th>
+            <th>Last Activity</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for u in users %}
+        <tr id="user-row-{{ u.id }}"
+            class="user-row"
+            onclick="toggleUserRow('{{ u.id }}')"
+            style="cursor:pointer">
+            <td><span class="expand-arrow">&#9656;</span></td>
+            <td>{{ u.email }}</td>
+            <td>{{ u.role }}</td>
+            <td>{{ u.created_at }}</td>
+            <td>{{ u.agent_count }}</td>
+            <td><span id="user-online-{{ u.id }}">{{ u.online_count }}</span></td>
+            <td><span id="user-last-activity-{{ u.id }}">{{ u.last_activity or "—" }}</span></td>
+            <td onclick="event.stopPropagation()">
+                <button type="button"
+                        class="btn btn-sm"
+                        hx-post="/dashboard/users/{{ u.id }}/disconnect"
+                        hx-swap="none"
+                        hx-confirm="Force-disconnect all of {{ u.email }}'s live sessions?">
+                    Disconnect
+                </button>
+                <button type="button"
+                        class="btn btn-sm btn-danger"
+                        hx-get="/dashboard/users/{{ u.id }}/delete-modal"
+                        hx-target="#modal-root"
+                        hx-swap="innerHTML">
+                    Unregister
+                </button>
+            </td>
+        </tr>
+        {% endfor %}
+        {% if not users %}
+        <tr><td colspan="8" class="empty">No users{% if query %} matching &ldquo;{{ query }}&rdquo;{% endif %}.</td></tr>
+        {% endif %}
+    </tbody>
+</table>

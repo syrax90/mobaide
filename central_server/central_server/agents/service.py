@@ -52,24 +52,32 @@ class AgentService:
         logger.info("agent.reregistered agent_id=%s by_user=%s", agent_id, user_id)
         return raw_token
 
-    async def delete_agent(self, agent_id: str, user_id: str) -> None:
-        """Delete an agent with full cascade. Only the owner may call this.
+    async def delete_agent(
+        self, agent_id: str, user_id: str, *, as_admin: bool = False
+    ) -> None:
+        """Delete an agent with full cascade and tear down live sockets.
 
-        Disconnects the agent from the routing table if online and
-        closes all connected mobile clients.
-        Raises ValueError if the user is not the owner.
+        Owner path (``as_admin=False``) requires ``user_id`` to own the
+        agent and raises ``ValueError`` otherwise. Admin path
+        (``as_admin=True``) bypasses the ownership check so the dashboard
+        can revoke any agent regardless of owner; ``user_id`` is still
+        recorded in the audit log as the actor.
+
+        Live sockets are torn down via
+        ``RoutingTable.disconnect_agent`` which sends the standard
+        ``{"reason": "admin_revoked"}`` text frame before each
+        ``close(4010)`` (mirrors ``delete_user``).
         """
-        if not await self._db.is_agent_owner(agent_id, user_id):
+        if not as_admin and not await self._db.is_agent_owner(agent_id, user_id):
             raise ValueError("Not the owner of this agent")
 
-        conn = self._routing.get_agent(agent_id)
-        if conn is not None:
-            disconnected = self._routing.unregister_agent(agent_id, conn.conn_id)
-            for client in disconnected:
-                try:
-                    await client.websocket.close(code=4010, reason="Agent deleted")
-                except Exception:
-                    pass
+        from ..relay.routing import WS_CLOSE_ADMIN_REVOKED
 
+        await self._routing.disconnect_agent(
+            agent_id, WS_CLOSE_ADMIN_REVOKED, "admin_revoked"
+        )
         await self._db.delete_agent(agent_id)
-        logger.info("agent.deleted agent_id=%s by_user=%s", agent_id, user_id)
+        logger.info(
+            "agent.deleted agent_id=%s by_user=%s as_admin=%s",
+            agent_id, user_id, as_admin,
+        )
