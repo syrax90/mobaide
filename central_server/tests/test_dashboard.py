@@ -532,7 +532,37 @@ class TestUserDelete:
         assert await db.is_mobile_paired_to_agent("device-1", agent_id) is False
         assert await db.validate_and_consume_refresh("refresh-1") is None
         assert await db.list_templates_for_user(user_id) == []
+        # Response carries OOB delete markers so HTMX closes the modal
+        # (empty primary body → #modal-root.innerHTML="") and removes
+        # the row + any expanded detail row in one round trip.
+        assert f'id="user-row-{user_id}"' in resp.text
+        assert f'id="user-detail-{user_id}"' in resp.text
+        assert 'hx-swap-oob="delete"' in resp.text
         del pairing_id
+
+    async def test_delete_user_response_emits_oob_swap_for_row_and_detail(
+        self, client, app, dashboard_headers
+    ):
+        """Reproduces the user-reported flow: zero-agent user, type-the-email
+        confirm. Response must carry OOB delete markers for both #user-row
+        and #user-detail so the modal closes and the row vanishes.
+        """
+        password_hash = await app.state.auth_service._hash_password("p")
+        zero_agent_user_id = await app.state.db.create_user(
+            email="zero-agents@test.local",
+            password_hash=password_hash,
+            role="viewer",
+            email_verified=True,
+        )
+        resp = await client.delete(
+            f"/dashboard/users/{zero_agent_user_id}",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert f'id="user-row-{zero_agent_user_id}"' in body
+        assert f'id="user-detail-{zero_agent_user_id}"' in body
+        assert body.count('hx-swap-oob="delete"') == 2
 
     async def test_delete_seed_admin_returns_400(self, client, app):
         """The seeded admin and the default dashboard-login admin happen
@@ -594,6 +624,11 @@ class TestUserDelete:
         assert "modal-overlay" in body
         # Submit button is wired to DELETE the user.
         assert f'hx-delete="/dashboard/users/{viewer_user["id"]}"' in body
+        # Modal closes via primary-swap into #modal-root; row deletion
+        # rides on OOB markers in the response (no hx-on::after-request).
+        assert 'hx-target="#modal-root"' in body
+        assert 'hx-swap="innerHTML"' in body
+        assert "hx-on::after-request" not in body
 
     async def test_delete_user_modal_self_path_is_blocked(self, client, app):
         """Provision a second admin (not the seed) so the modal renders
