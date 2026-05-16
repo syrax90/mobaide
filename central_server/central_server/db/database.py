@@ -76,6 +76,15 @@ CREATE TABLE IF NOT EXISTS email_verification_tokens (
     attempts    INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(id),
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    consumed_at TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS prompt_templates (
     template_id   TEXT PRIMARY KEY,
     owner_user_id TEXT NOT NULL REFERENCES users(id),
@@ -103,6 +112,8 @@ CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_email_verification_user
     ON email_verification_tokens(user_id) WHERE consumed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_password_reset_user
+    ON password_reset_tokens(user_id) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_prompt_templates_owner
     ON prompt_templates(owner_user_id) WHERE deleted_at IS NULL;
 """
@@ -326,6 +337,13 @@ class Database:
                     "ADD COLUMN agent_protocol_version INTEGER"
                 )
             await self._conn.execute("PRAGMA user_version = 9")
+
+        if version < 10:
+            # Pure additive migration: creates password_reset_tokens table +
+            # partial index. Safe and idempotent on populated dev DBs (mirrors
+            # the version-6 block above).
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 10")
 
         await self._conn.commit()
 
@@ -979,6 +997,19 @@ class Database:
             "WHERE consumed_at IS NOT NULL AND consumed_at <= ?",
             (retention_cutoff,),
         )
+        # Password-reset tokens follow the same two-sweep policy as
+        # verification tokens (expired-unconsumed dropped immediately, then
+        # consumed rows after the retention window).
+        reset_expired_cursor = await self.conn.execute(
+            "DELETE FROM password_reset_tokens "
+            "WHERE expires_at <= ? AND consumed_at IS NULL",
+            (now,),
+        )
+        reset_consumed_cursor = await self.conn.execute(
+            "DELETE FROM password_reset_tokens "
+            "WHERE consumed_at IS NOT NULL AND consumed_at <= ?",
+            (retention_cutoff,),
+        )
         claimed_clear_cursor = await self.conn.execute(
             "UPDATE pairing_tokens SET claimed_token_raw = NULL "
             "WHERE consumed_at IS NOT NULL "
@@ -991,6 +1022,8 @@ class Database:
             pairing_cursor.rowcount
             + expired_cursor.rowcount
             + consumed_cursor.rowcount
+            + reset_expired_cursor.rowcount
+            + reset_consumed_cursor.rowcount
             + claimed_clear_cursor.rowcount
         )
 
@@ -1090,6 +1123,118 @@ class Database:
             (now, user_id),
         )
         await self.conn.commit()
+
+    async def create_password_reset_token(
+        self,
+        user_id: str,
+        code_hash: str,
+        ttl_seconds: int,
+    ) -> str:
+        """Insert a new password-reset token. Returns ``expires_at`` ISO string.
+
+        Mirrors ``create_verification_token``: any outstanding unconsumed reset
+        tokens for this user are invalidated first so only one live code
+        exists at a time. The caller supplies the already-hashed code
+        (HMAC-SHA256 with the JWT-secret pepper).
+        """
+        now = datetime.now(timezone.utc)
+        expires_at = datetime.fromtimestamp(
+            now.timestamp() + ttl_seconds, tz=timezone.utc
+        )
+        now_iso = now.isoformat()
+        await self.conn.execute(
+            "UPDATE password_reset_tokens "
+            "SET consumed_at = ? "
+            "WHERE user_id = ? AND consumed_at IS NULL",
+            (now_iso, user_id),
+        )
+        await self.conn.execute(
+            "INSERT INTO password_reset_tokens "
+            "(token_hash, user_id, created_at, expires_at, attempts) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (code_hash, user_id, now_iso, expires_at.isoformat()),
+        )
+        await self.conn.commit()
+        return expires_at.isoformat()
+
+    async def consume_password_reset_token(
+        self,
+        user_id: str,
+        code_hash: str,
+        max_attempts: int,
+    ) -> str:
+        """Atomically consume a password-reset token for ``user_id``.
+
+        Returns ``"ok"`` / ``"invalid"`` / ``"expired"`` / ``"exhausted"``
+        with the same semantics as ``consume_verification_token`` — single
+        atomic CAS, attempt counter bumped on miss, no TOCTOU.
+        """
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE password_reset_tokens "
+            "SET consumed_at = ? "
+            "WHERE token_hash = ? AND user_id = ? "
+            "  AND consumed_at IS NULL AND expires_at > ? AND attempts < ?",
+            (now, code_hash, user_id, now, max_attempts),
+        )
+        await self.conn.commit()
+        if cursor.rowcount == 1:
+            return "ok"
+
+        active_cursor = await self.conn.execute(
+            "SELECT expires_at, attempts FROM password_reset_tokens "
+            "WHERE user_id = ? AND consumed_at IS NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+        active = await active_cursor.fetchone()
+        if active is None:
+            return "invalid"
+        if active["expires_at"] <= now:
+            return "expired"
+        if active["attempts"] >= max_attempts:
+            return "exhausted"
+        await self.conn.execute(
+            "UPDATE password_reset_tokens "
+            "SET attempts = attempts + 1 "
+            "WHERE user_id = ? AND consumed_at IS NULL",
+            (user_id,),
+        )
+        await self.conn.commit()
+        return "invalid"
+
+    async def update_user_password(
+        self, user_id: str, password_hash: str
+    ) -> None:
+        """Replace the stored Argon2id hash for a user."""
+        now = _now_iso()
+        await self.conn.execute(
+            "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (password_hash, now, user_id),
+        )
+        await self.conn.commit()
+
+    async def revoke_all_refresh_tokens_for_user(self, user_id: str) -> int:
+        """Logically revoke every active mobile refresh token tied to this user.
+
+        ``mobile_refresh_tokens`` has no direct ``user_id`` column — sessions
+        are scoped to ``(mobile_device_id, agent_id)`` pairs. We join through
+        ``agents.owner_user_id`` (indexed) to find every agent the user owns
+        and revoke any of its outstanding sessions. Returns the rowcount.
+
+        Logical revocation (``revoked_at`` set) rather than DELETE preserves
+        the audit trail and matches the existing ``revoke_mobile_tokens``
+        helper.
+        """
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE mobile_refresh_tokens SET revoked_at = ? "
+            "WHERE revoked_at IS NULL "
+            "  AND agent_id IN (SELECT agent_id FROM agents WHERE owner_user_id = ?)",
+            (now, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
 
     async def create_pairing(
         self,

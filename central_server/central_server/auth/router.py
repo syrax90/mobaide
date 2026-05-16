@@ -3,21 +3,29 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 
 from .models import (
     AuthTokenResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     GoogleAuthRequest,
     ResendVerificationRequest,
     ResendVerificationResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     UserLoginRequest,
     UserRegisterRequest,
     VerifyEmailRequest,
 )
 from .service import (
+    ExpiredResetCodeError,
     ExpiredVerificationCodeError,
+    InvalidResetCodeError,
     InvalidVerificationCodeError,
+    NewPasswordSameAsOldError,
     ResendRateLimitedError,
+    ResetAttemptsExhaustedError,
     VerificationAttemptsExhaustedError,
     VerificationRequiredError,
 )
@@ -154,3 +162,80 @@ async def resend_verification(
             headers={"Retry-After": str(exc.cooldown_seconds_remaining)},
         )
     return ResendVerificationResponse(status="sent", cooldown_seconds_remaining=0)
+
+
+async def _require_reset_ip_quota(request: Request) -> None:
+    """FastAPI dependency: enforce per-IP cap on the password-reset endpoints.
+
+    Reads the shared ``reset_ip_limiter`` from app state. On exhaustion,
+    raises HTTP 429 with a ``Retry-After`` header. Falls open if the limiter
+    isn't wired (e.g. in unit tests that bypass lifespan).
+    """
+    limiter = getattr(request.app.state, "reset_ip_limiter", None)
+    if limiter is None:
+        return
+    ip = request.client.host if request.client else "unknown"
+    wait = await limiter.try_acquire(f"ip:{ip}")
+    if wait is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "error": "reset_ip_rate_limited",
+                "retry_after_seconds": wait,
+            },
+            headers={"Retry-After": str(wait)},
+        )
+
+
+@router.post("/forgot-password", response_model=ForgotPasswordResponse)
+async def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    _ip: None = Depends(_require_reset_ip_quota),
+):
+    """Send a password-reset OTP by email. Always returns 200 to defeat enumeration."""
+    auth_service = request.app.state.auth_service
+    client_ip = request.client.host if request.client else None
+    await auth_service.request_password_reset(
+        body.email,
+        background_tasks=background_tasks,
+        client_ip=client_ip,
+    )
+    return ForgotPasswordResponse()
+
+
+@router.post("/reset-password", response_model=ResetPasswordResponse)
+async def reset_password(
+    request: Request,
+    body: ResetPasswordRequest,
+    background_tasks: BackgroundTasks,
+    _ip: None = Depends(_require_reset_ip_quota),
+):
+    """Consume a reset OTP and replace the user's password."""
+    auth_service = request.app.state.auth_service
+    try:
+        await auth_service.reset_password(
+            body.email, body.code, body.new_password, background_tasks,
+        )
+    except ExpiredResetCodeError:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"error": "reset_code_expired"},
+        )
+    except ResetAttemptsExhaustedError:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"error": "reset_attempts_exhausted"},
+        )
+    except InvalidResetCodeError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "reset_code_invalid"},
+        )
+    except NewPasswordSameAsOldError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "new_password_same_as_old"},
+        )
+    return ResetPasswordResponse()

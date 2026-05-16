@@ -236,7 +236,9 @@ class TestZeroTtlTokens:
     async def test_dashboard_token_with_zero_ttl_has_no_exp(
         self, auth: AuthService
     ):
-        _user_id, token = await auth.register_user("user@example.com", "pass123")
+        result = await auth.register_user("user@example.com", "pass123")
+        token = result.access_token
+        assert token is not None
 
         raw_claims = jwt.decode(token, options={"verify_signature": False})
         assert "exp" not in raw_claims
@@ -272,8 +274,8 @@ class TestZeroTtlTokens:
         when it has no `exp` claim (guarding the type check under the new
         missing-exp path).
         """
-        _user_id, dashboard_token = await auth.register_user(
-            "x@example.com", "pass123"
-        )
+        result = await auth.register_user("x@example.com", "pass123")
+        dashboard_token = result.access_token
+        assert dashboard_token is not None
         with pytest.raises(jwt.InvalidTokenError, match="mobile_access"):
             auth.decode_mobile_token(dashboard_token)

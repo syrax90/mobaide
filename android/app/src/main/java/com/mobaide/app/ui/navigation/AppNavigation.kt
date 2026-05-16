@@ -17,7 +17,9 @@ import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.ui.agents.AgentListScreen
 import com.mobaide.app.ui.autoscan.AutoScanDetailScreen
 import com.mobaide.app.ui.connections.ConnectionsScreen
+import com.mobaide.app.ui.login.ForgotPasswordScreen
 import com.mobaide.app.ui.login.LoginScreen
+import com.mobaide.app.ui.login.ResetPasswordScreen
 import com.mobaide.app.ui.projects.ProjectsScreen
 import com.mobaide.app.ui.projects.git.GitScreen
 import com.mobaide.app.ui.register.RegisterScreen
@@ -92,6 +94,35 @@ fun AppNavigation(
                 onRegisterClick = {
                     navController.navigate(Routes.REGISTER)
                 },
+                onForgotPasswordClick = {
+                    navController.navigate(Routes.FORGOT_PASSWORD)
+                },
+            )
+        }
+
+        composable(Routes.FORGOT_PASSWORD) {
+            ForgotPasswordScreen(
+                viewModel = hiltViewModel(),
+                onCodeSent = { email ->
+                    navController.navigate(Routes.resetPassword(email))
+                },
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(
+            route = Routes.RESET_PASSWORD,
+            arguments = listOf(navArgument("email") { type = NavType.StringType }),
+        ) { entry ->
+            ResetPasswordScreen(
+                email = entry.arguments?.getString("email").orEmpty(),
+                viewModel = hiltViewModel(),
+                onResetSuccess = {
+                    navController.navigate(Routes.LOGIN) {
+                        popUpTo(Routes.LOGIN) { inclusive = true }
+                    }
+                },
+                onBack = { navController.popBackStack() },
             )
         }
 

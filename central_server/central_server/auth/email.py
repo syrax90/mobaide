@@ -1,7 +1,8 @@
 """Outbound email helper.
 
-Thin wrapper around ``aiosmtplib`` + Jinja2 for rendering and sending the
-verification email. Jinja templates live at ``central_server/templates/email/``.
+Thin wrapper around ``aiosmtplib`` + Jinja2 for rendering and sending all
+transactional email (verification, password reset, password-changed
+notification). Jinja templates live at ``central_server/templates/email/``.
 
 Errors from the SMTP transport are logged but never re-raised — this class is
 invoked from within ``fastapi.BackgroundTasks`` where exceptions would
@@ -38,35 +39,29 @@ class EmailSender:
     def __init__(self, config: CentralServerConfig) -> None:
         self._config = config
 
-    async def send_verification_email(
+    async def _send_email(
         self,
+        *,
         to: str,
-        code: str,
-        ttl_minutes: int,
+        subject: str,
+        html_body: str,
+        text_body: str,
+        log_prefix: str,
     ) -> None:
-        """Render and send the email verification OTP.
+        """Build a multipart message and dispatch it via aiosmtplib.
 
-        Never raises — connection and auth errors are logged and swallowed so
-        they don't leak into a FastAPI background task.
+        Caller is responsible for rendering ``html_body`` / ``text_body``
+        (and catching template-render errors with a ``{log_prefix}.render_failed``
+        log entry). This helper only handles message assembly + transport.
+        Never raises — SMTP / TLS / auth errors are logged at WARNING and
+        swallowed so they cannot leak out of a FastAPI BackgroundTask. Never
+        logs message bodies or OTP codes — only the recipient and the SMTP host.
         """
         cfg = self._config
-        context = {
-            "code": code,
-            "ttl_minutes": ttl_minutes,
-            "from_name": cfg.smtp_from_name,
-            "from_domain": cfg.smtp_from_domain,
-        }
-        try:
-            html_body = _env.get_template("email/verify_email.html").render(**context)
-            text_body = _env.get_template("email/verify_email.txt").render(**context)
-        except Exception as exc:
-            logger.exception("email_verification.render_failed: %s", exc)
-            return
-
         message = EmailMessage()
         message["From"] = f"{cfg.smtp_from_name} <{cfg.smtp_from_address}>"
         message["To"] = to
-        message["Subject"] = "Your verification code"
+        message["Subject"] = subject
         message.set_content(text_body)
         message.add_alternative(html_body, subtype="html")
 
@@ -84,10 +79,9 @@ class EmailSender:
                 tls_context=tls_context,
             )
         except Exception as exc:
-            # Structured log so ops can detect SMTP outages. Never include the
-            # plaintext code — only the recipient.
             logger.warning(
-                "email_verification.send_failed to=%s host=%s:%s error=%s",
+                "%s.send_failed to=%s host=%s:%s error=%s",
+                log_prefix,
                 to,
                 cfg.smtp_host,
                 cfg.smtp_port,
@@ -96,8 +90,96 @@ class EmailSender:
             return
 
         logger.info(
-            "email_verification.sent to=%s host=%s:%s",
+            "%s.sent to=%s host=%s:%s",
+            log_prefix,
             to,
             cfg.smtp_host,
             cfg.smtp_port,
+        )
+
+    async def send_verification_email(
+        self,
+        to: str,
+        code: str,
+        ttl_minutes: int,
+    ) -> None:
+        """Render and send the email verification OTP. Never raises."""
+        cfg = self._config
+        context = {
+            "code": code,
+            "ttl_minutes": ttl_minutes,
+            "from_name": cfg.smtp_from_name,
+            "from_domain": cfg.smtp_from_domain,
+        }
+        try:
+            html_body = _env.get_template("email/verify_email.html").render(**context)
+            text_body = _env.get_template("email/verify_email.txt").render(**context)
+        except Exception as exc:
+            logger.exception("email_verification.render_failed: %s", exc)
+            return
+
+        await self._send_email(
+            to=to,
+            subject="Your verification code",
+            html_body=html_body,
+            text_body=text_body,
+            log_prefix="email_verification",
+        )
+
+    async def send_password_reset_email(
+        self,
+        to: str,
+        code: str,
+        ttl_minutes: int,
+        client_ip: str | None = None,
+    ) -> None:
+        """Render and send the password-reset OTP. Never raises."""
+        cfg = self._config
+        context = {
+            "code": code,
+            "ttl_minutes": ttl_minutes,
+            "client_ip": client_ip or "unknown",
+            "from_name": cfg.smtp_from_name,
+            "from_domain": cfg.smtp_from_domain,
+        }
+        try:
+            html_body = _env.get_template("email/reset_password.html").render(**context)
+            text_body = _env.get_template("email/reset_password.txt").render(**context)
+        except Exception as exc:
+            logger.exception("password_reset.render_failed: %s", exc)
+            return
+
+        await self._send_email(
+            to=to,
+            subject=f"Reset your {cfg.smtp_from_name} password",
+            html_body=html_body,
+            text_body=text_body,
+            log_prefix="password_reset",
+        )
+
+    async def send_password_changed_notification(
+        self,
+        to: str,
+        revoked_session_count: int,
+    ) -> None:
+        """Render and send the post-reset notification. Never raises."""
+        cfg = self._config
+        context = {
+            "revoked_session_count": revoked_session_count,
+            "from_name": cfg.smtp_from_name,
+            "from_domain": cfg.smtp_from_domain,
+        }
+        try:
+            html_body = _env.get_template("email/password_changed.html").render(**context)
+            text_body = _env.get_template("email/password_changed.txt").render(**context)
+        except Exception as exc:
+            logger.exception("password_changed.render_failed: %s", exc)
+            return
+
+        await self._send_email(
+            to=to,
+            subject=f"Your {cfg.smtp_from_name} password was changed",
+            html_body=html_body,
+            text_body=text_body,
+            log_prefix="password_changed",
         )

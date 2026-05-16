@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 @dataclass
@@ -114,3 +114,21 @@ class ResendVerificationRequest(BaseModel):
 class ResendVerificationResponse(BaseModel):
     status: str  # "sent" | "rate_limited"
     cooldown_seconds_remaining: int = 0
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ForgotPasswordResponse(BaseModel):
+    status: str = "ok"
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class ResetPasswordResponse(BaseModel):
+    status: str = "ok"

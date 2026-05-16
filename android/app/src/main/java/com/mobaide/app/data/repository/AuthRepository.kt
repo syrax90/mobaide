@@ -8,6 +8,8 @@ import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.dto.ResendRateLimitedErrorBody
+import com.mobaide.app.data.network.dto.ResetErrorBody
+import com.mobaide.app.data.network.dto.ResetIpRateLimitedErrorBody
 import com.mobaide.app.data.network.dto.UserAuthResponse
 import com.mobaide.app.data.network.dto.VerificationRequiredErrorBody
 import kotlinx.serialization.json.Json
@@ -33,6 +35,34 @@ sealed interface ResendOutcome {
     object Sent : ResendOutcome
     data class RateLimited(val cooldownSecondsRemaining: Int) : ResendOutcome
 }
+
+/**
+ * Outcome of a forgot-password request. The server always returns 200 to
+ * defeat enumeration, so [Sent] is the happy path. [RateLimited] surfaces
+ * the per-IP cap (HTTP 429) so the UI can show a cooldown.
+ */
+sealed interface PasswordResetOutcome {
+    data object Sent : PasswordResetOutcome
+    data class RateLimited(val retryAfterSeconds: Int) : PasswordResetOutcome
+}
+
+/**
+ * Discriminated failure type for the /reset-password endpoint. Decoded from
+ * the FastAPI `{"detail":{"error": ...}}` body so the ViewModel can show
+ * a tailored message without parsing strings.
+ */
+sealed interface ResetPasswordError {
+    data object InvalidCode : ResetPasswordError
+    data object ExpiredCode : ResetPasswordError
+    data object AttemptsExhausted : ResetPasswordError
+    data object SameAsOld : ResetPasswordError
+    data class IpRateLimited(val retryAfterSeconds: Int) : ResetPasswordError
+    data class Unknown(val code: Int, val message: String) : ResetPasswordError
+}
+
+class ResetPasswordFailure(val reason: ResetPasswordError) : Exception(
+    "Password reset failed: $reason"
+)
 
 class AuthRepository(
     private val restApi: RestApi,
@@ -91,6 +121,63 @@ class AuthRepository(
                 return ResendOutcome.RateLimited(cooldown)
             }
             throw e
+        }
+    }
+
+    suspend fun requestPasswordReset(email: String): PasswordResetOutcome {
+        return try {
+            centralApi.forgotPassword(email)
+            PasswordResetOutcome.Sent
+        } catch (e: ApiException) {
+            if (e.code == 429) {
+                val wait = parseResetIpRetryAfter(e) ?: 60
+                return PasswordResetOutcome.RateLimited(wait)
+            }
+            throw e
+        }
+    }
+
+    /**
+     * Consume a reset OTP and set a new password. Throws [ResetPasswordFailure]
+     * with a discriminated [ResetPasswordError] reason on any handled error;
+     * other ApiExceptions propagate.
+     */
+    suspend fun resetPassword(email: String, code: String, newPassword: String) {
+        try {
+            centralApi.resetPassword(email, code, newPassword)
+        } catch (e: ApiException) {
+            throw ResetPasswordFailure(mapResetError(e))
+        }
+    }
+
+    private fun mapResetError(e: ApiException): ResetPasswordError {
+        val errorTag = try {
+            errorJson.decodeFromString<ResetErrorBody>(e.errorBody).detail.error
+        } catch (_: Exception) {
+            null
+        }
+        return when {
+            e.code == 410 -> ResetPasswordError.ExpiredCode
+            e.code == 429 && errorTag == "reset_ip_rate_limited" -> {
+                val wait = parseResetIpRetryAfter(e) ?: 60
+                ResetPasswordError.IpRateLimited(wait)
+            }
+            e.code == 429 -> ResetPasswordError.AttemptsExhausted
+            e.code == 400 && errorTag == "new_password_same_as_old" ->
+                ResetPasswordError.SameAsOld
+            e.code == 400 -> ResetPasswordError.InvalidCode
+            else -> ResetPasswordError.Unknown(e.code, e.message ?: "")
+        }
+    }
+
+    private fun parseResetIpRetryAfter(e: ApiException): Int? {
+        return try {
+            errorJson
+                .decodeFromString<ResetIpRateLimitedErrorBody>(e.errorBody)
+                .detail.retry_after_seconds
+                .takeIf { it > 0 }
+        } catch (_: Exception) {
+            null
         }
     }
 

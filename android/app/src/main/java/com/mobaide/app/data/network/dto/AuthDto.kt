@@ -97,3 +97,47 @@ data class ResendRateLimitedDetail(
 data class ResendRateLimitedErrorBody(
     val detail: ResendRateLimitedDetail,
 )
+
+@Serializable
+data class ForgotPasswordRequest(val email: String)
+
+@Serializable
+data class ForgotPasswordResponse(val status: String = "ok")
+
+@Serializable
+data class ResetPasswordRequest(
+    val email: String,
+    val code: String,
+    val new_password: String,
+)
+
+@Serializable
+data class ResetPasswordResponse(val status: String = "ok")
+
+/**
+ * Represents the 429 error body from `/api/auth/forgot-password` or
+ * `/api/auth/reset-password` when the per-IP cap is exhausted.
+ * Wrapped by FastAPI as `{"detail": {"error": ..., "retry_after_seconds": ...}}`.
+ */
+@Serializable
+data class ResetIpRateLimitedDetail(
+    val error: String,
+    val retry_after_seconds: Int = 0,
+)
+
+@Serializable
+data class ResetIpRateLimitedErrorBody(
+    val detail: ResetIpRateLimitedDetail,
+)
+
+/**
+ * Represents the 400 error body for /reset-password when the new password
+ * matches the current one, or the code is invalid. FastAPI wraps as
+ * `{"detail": {"error": ...}}` — the `error` discriminator drives ViewModel
+ * error mapping.
+ */
+@Serializable
+data class ResetErrorDetail(val error: String)
+
+@Serializable
+data class ResetErrorBody(val detail: ResetErrorDetail)
