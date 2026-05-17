@@ -53,16 +53,22 @@ class WebSocketConnection(
      */
     private val isAuthenticated: () -> Boolean = sessionManager::isLoggedIn,
     /**
-     * Invoked exactly once when the server closes the handshake with
-     * code 4001 (authentication failed) or completes the HTTP upgrade
-     * with status 401. Used by user-scoped channels to invalidate the
-     * dashboard JWT — the matching REST interceptor does the same on
-     * 401, and the two paths race on cold start, so this callback must
-     * route through [SessionManager.invalidateUserSession] which is
-     * idempotent. Default is a no-op (agent-scoped channels rely on
-     * the pre-connect refresh in their URL provider instead).
+     * Invoked exactly once when the server closes the handshake in a way
+     * that signals the local credentials are no longer valid:
+     *  * code 4001 (authentication failed) or HTTP-upgrade 401 →
+     *    [SessionManager.InvalidationReason.TokenRejected];
+     *  * code 4010 (admin revoked / user unregistered) →
+     *    [SessionManager.InvalidationReason.AccountRemoved].
+     *
+     * Used by user-scoped channels to invalidate the dashboard JWT — the
+     * matching REST interceptor does the same on 401, and the two paths
+     * race on cold start, so this callback must route through
+     * [SessionManager.invalidateUserSession] which is idempotent and
+     * filters the reason to the right login-screen message. Default is
+     * a no-op (agent-scoped channels rely on the pre-connect refresh
+     * in their URL provider instead).
      */
-    private val onAuthFailure: (() -> Unit)? = null,
+    private val onAuthFailure: ((SessionManager.InvalidationReason) -> Unit)? = null,
     /**
      * Invoked exactly once when the server closes with code 4002
      * (PROTOCOL_INCOMPATIBLE). The receiver is expected to mark the session
@@ -162,7 +168,11 @@ class WebSocketConnection(
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 _events.tryEmit(WsEvent.Disconnected)
                 if (code == AUTH_FAILED_CLOSE_CODE) {
-                    handleAuthFailure()
+                    handleAuthFailure(SessionManager.InvalidationReason.TokenRejected)
+                    return
+                }
+                if (code == ADMIN_REVOKED_CLOSE_CODE) {
+                    handleAuthFailure(SessionManager.InvalidationReason.AccountRemoved)
                     return
                 }
                 if (code == PROTOCOL_INCOMPATIBLE_CLOSE_CODE) {
@@ -180,7 +190,7 @@ class WebSocketConnection(
                 // the server refused the handshake for the same reason a
                 // 4001 `onClosed` would — treat them identically.
                 if (response?.code == 401) {
-                    handleAuthFailure()
+                    handleAuthFailure(SessionManager.InvalidationReason.TokenRejected)
                     return
                 }
                 scheduleReconnect()
@@ -206,12 +216,16 @@ class WebSocketConnection(
      * our credentials. Safe to call multiple times — the `onAuthFailure`
      * callback routes through [SessionManager.invalidateUserSession]
      * which is itself idempotent.
+     *
+     * The [reason] flows through to the login-screen snackbar so the user
+     * can tell "session expired" (TokenRejected) from "account removed"
+     * (AccountRemoved).
      */
-    private fun handleAuthFailure() {
+    private fun handleAuthFailure(reason: SessionManager.InvalidationReason) {
         shouldReconnect = false
         reconnectJob?.cancel()
         reconnectJob = null
-        onAuthFailure?.invoke()
+        onAuthFailure?.invoke(reason)
     }
 
     private fun handleProtocolIncompatible(reason: String) {
@@ -237,6 +251,16 @@ class WebSocketConnection(
          * ``protocol_version`` is outside the server's supported range.
          */
         private const val PROTOCOL_INCOMPATIBLE_CLOSE_CODE = 4002
+
+        /**
+         * Close code emitted by the server when the admin destructively
+         * unregisters the user or the agent. Distinct from
+         * [AUTH_FAILED_CLOSE_CODE] so the login-screen snackbar can say
+         * "your account was removed" instead of the generic "session
+         * expired" — and so reconnection is permanently suppressed
+         * (signed re-issue cannot recover a deleted account).
+         */
+        private const val ADMIN_REVOKED_CLOSE_CODE = 4010
     }
 }
 
@@ -333,13 +357,13 @@ class WebSocketManager(
             sessionManager = sessionManager,
             urlProvider = provider,
             isAuthenticated = { userIdentityStore.isUserLoggedIn() },
-            // 4001/401 on the user-scoped channel means the dashboard JWT
-            // is dead; invalidate the session so navigation returns to
-            // login and the error snackbar fires exactly once.
-            onAuthFailure = {
-                sessionManager.invalidateUserSession(
-                    SessionManager.InvalidationReason.TokenRejected,
-                )
+            // 4001/401 (TokenRejected) or 4010 (AccountRemoved) on the
+            // user-scoped channel both mean the locally-stored credentials
+            // can no longer authenticate. Forward the [reason] so the
+            // login screen can render the right message; SessionManager
+            // is idempotent and dedupes the race with the REST 401 handler.
+            onAuthFailure = { reason ->
+                sessionManager.invalidateUserSession(reason)
             },
             onIncompatibleServer = { reason ->
                 sessionManager.markIncompatibleServer(

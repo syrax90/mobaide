@@ -18,16 +18,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Unit tests for [WebSocketConnection]'s auth-failure handling — the
- * new path where a server-side close with code 4001 (or a failed WS
+ * paths where a server-side close with code 4001 / 4010 (or a failed WS
  * upgrade with HTTP 401) invokes [onAuthFailure] and stops reconnecting.
  *
  * This is the WS-side counterpart to [com.mobaide.app.data.auth.CentralAuthInterceptor]
  * for the user-scoped channel (`ws/user-events`): when the central
- * server rejects the dashboard JWT the client must tear down the
- * session rather than retry-spamming the socket.
+ * server rejects the dashboard JWT or destructively unregisters the
+ * user, the client must tear down the session rather than retry-spamming
+ * the socket.
  *
  * [OkHttpClient] is mocked so that we can capture the real
  * [WebSocketListener] that [WebSocketConnection] installs, then invoke
@@ -85,16 +87,20 @@ class WebSocketConnectionAuthFailureTest {
         }
 
     @Test
-    fun onClosed_withCode4001_invokesOnAuthFailure() {
+    fun onClosed_withCode4001_invokesOnAuthFailure_withTokenRejected() {
         val (client, deferredListener, _) = clientCapturingListener()
         val sm = sessionManager()
         val authFailures = AtomicInteger(0)
+        val lastReason = AtomicReference<SessionManager.InvalidationReason?>(null)
         val conn = WebSocketConnection(
             client = client,
             sessionManager = sm,
             urlProvider = { "wss://central.example.com/ws/user-events?token=stale" },
             isAuthenticated = { true },
-            onAuthFailure = { authFailures.incrementAndGet() },
+            onAuthFailure = { reason ->
+                authFailures.incrementAndGet()
+                lastReason.set(reason)
+            },
         )
 
         conn.connect()
@@ -108,6 +114,49 @@ class WebSocketConnectionAuthFailureTest {
         listener.onClosed(fakeSocket, 4001, "Invalid token")
 
         assertEquals(1, authFailures.get())
+        assertEquals(
+            SessionManager.InvalidationReason.TokenRejected,
+            lastReason.get(),
+        )
+    }
+
+    @Test
+    fun onClosed_withCode4010_invokesOnAuthFailure_withAccountRemoved() {
+        // 4010 is WS_CLOSE_ADMIN_REVOKED — admin destructively unregistered
+        // the user. Distinct from 4001 so the login screen can render a
+        // user-specific "account removed" message; matches PROTOCOL.md.
+        val (client, deferredListener, callCount) = clientCapturingListener()
+        val sm = sessionManager()
+        val authFailures = AtomicInteger(0)
+        val lastReason = AtomicReference<SessionManager.InvalidationReason?>(null)
+        val conn = WebSocketConnection(
+            client = client,
+            sessionManager = sm,
+            urlProvider = { "wss://central.example.com/ws/user-events?token=stale" },
+            isAuthenticated = { true },
+            onAuthFailure = { reason ->
+                authFailures.incrementAndGet()
+                lastReason.set(reason)
+            },
+        )
+
+        conn.connect()
+        val listener = awaitListener(deferredListener)
+        val fakeSocket = mockk<WebSocket>(relaxed = true)
+        listener.onClosed(fakeSocket, 4010, "admin_revoked")
+
+        assertEquals(1, authFailures.get())
+        assertEquals(
+            SessionManager.InvalidationReason.AccountRemoved,
+            lastReason.get(),
+        )
+        // Reconnection MUST be permanently suppressed — re-issuing a fresh
+        // JWT cannot recover a cascade-deleted account.
+        assertEquals(
+            "no reconnection allowed after admin revoke",
+            1,
+            callCount.get(),
+        )
     }
 
     @Test
@@ -115,12 +164,16 @@ class WebSocketConnectionAuthFailureTest {
         val (client, deferredListener, callCount) = clientCapturingListener()
         val sm = sessionManager()
         val authFailures = AtomicInteger(0)
+        val lastReason = AtomicReference<SessionManager.InvalidationReason?>(null)
         val conn = WebSocketConnection(
             client = client,
             sessionManager = sm,
             urlProvider = { "wss://central.example.com/ws/user-events?token=ok" },
             isAuthenticated = { true },
-            onAuthFailure = { authFailures.incrementAndGet() },
+            onAuthFailure = { reason ->
+                authFailures.incrementAndGet()
+                lastReason.set(reason)
+            },
         )
 
         conn.connect()
@@ -138,18 +191,22 @@ class WebSocketConnectionAuthFailureTest {
     }
 
     @Test
-    fun onFailure_withResponse401_invokesOnAuthFailure() {
+    fun onFailure_withResponse401_invokesOnAuthFailure_withTokenRejected() {
         // okhttp surfaces a failed WS upgrade (HTTP 401 instead of 101)
         // via onFailure(response.code == 401). Treat same as 4001 close.
         val (client, deferredListener, _) = clientCapturingListener()
         val sm = sessionManager()
         val authFailures = AtomicInteger(0)
+        val lastReason = AtomicReference<SessionManager.InvalidationReason?>(null)
         val conn = WebSocketConnection(
             client = client,
             sessionManager = sm,
             urlProvider = { "wss://central.example.com/ws/user-events?token=stale" },
             isAuthenticated = { true },
-            onAuthFailure = { authFailures.incrementAndGet() },
+            onAuthFailure = { reason ->
+                authFailures.incrementAndGet()
+                lastReason.set(reason)
+            },
         )
 
         conn.connect()
@@ -159,6 +216,10 @@ class WebSocketConnectionAuthFailureTest {
         listener.onFailure(fakeSocket, IllegalStateException("upgrade failed"), responseFor(req, 401))
 
         assertEquals(1, authFailures.get())
+        assertEquals(
+            SessionManager.InvalidationReason.TokenRejected,
+            lastReason.get(),
+        )
     }
 
     @Test
@@ -169,12 +230,16 @@ class WebSocketConnectionAuthFailureTest {
         val (client, deferredListener, _) = clientCapturingListener()
         val sm = sessionManager()
         val authFailures = AtomicInteger(0)
+        val lastReason = AtomicReference<SessionManager.InvalidationReason?>(null)
         val conn = WebSocketConnection(
             client = client,
             sessionManager = sm,
             urlProvider = { "wss://central.example.com/ws/user-events?token=ok" },
             isAuthenticated = { true },
-            onAuthFailure = { authFailures.incrementAndGet() },
+            onAuthFailure = { reason ->
+                authFailures.incrementAndGet()
+                lastReason.set(reason)
+            },
         )
 
         conn.connect()
@@ -206,5 +271,80 @@ class WebSocketConnectionAuthFailureTest {
         val listener = awaitListener(deferredListener)
         // Must not throw NPE etc.
         listener.onClosed(mockk<WebSocket>(relaxed = true), 4001, "bye")
+    }
+
+    @Test
+    fun onAuthFailure_isOptional_agentScopedChannelSurvivesClose4010_andSuppressesReconnect() {
+        // Same null-callback guard as the 4001 case: an agent-scoped
+        // channel that happens to receive a 4010 (because the central
+        // server cascaded an admin delete down to the agent tunnel) must
+        // not NPE. Additionally, since 4010 means destructive revoke
+        // (per PROTOCOL.md and the matching server-side
+        // routing.disconnect_agent path), reconnection MUST be
+        // permanently suppressed even though no callback was passed —
+        // re-issuing a fresh token cannot recover a deleted agent. The
+        // `callCount == 1` assertion below is the regression guard the
+        // first iteration of this test was missing.
+        val (client, deferredListener, callCount) = clientCapturingListener()
+        val sm = sessionManager()
+        val conn = WebSocketConnection(
+            client = client,
+            sessionManager = sm,
+            urlProvider = { "wss://example.com/ws/events?token=x" },
+            // No onAuthFailure — defaults to null.
+        )
+
+        conn.connect()
+        val listener = awaitListener(deferredListener)
+        listener.onClosed(mockk<WebSocket>(relaxed = true), 4010, "admin_revoked")
+
+        assertEquals(
+            "agent-scoped channel must NOT reconnect after destructive 4010",
+            1,
+            callCount.get(),
+        )
+    }
+
+    @Test
+    fun onClosed_withTransientCloseCode_agentScopedChannel_schedulesReconnect() {
+        // Counterpart to the test above: any close code OTHER than the
+        // documented destructive ones (4001, 4002, 4010) must fall
+        // through to scheduleReconnect() — including the server's
+        // transient-agent-offline code 4012
+        // (WS_CLOSE_AGENT_TRANSIENT_OFFLINE) emitted by
+        // ``central_server/central_server/relay/mobile_ws.py`` when an
+        // agent process is briefly down. This guards against a future
+        // refactor that "tidies up" the close-code switch and
+        // accidentally collapses transient and destructive codes onto
+        // one handler — the mobile would then permanently kill its
+        // per-agent sockets on every agent restart.
+        val (client, deferredListener, callCount) = clientCapturingListener()
+        val sm = sessionManager()
+        val authFailures = AtomicInteger(0)
+        val conn = WebSocketConnection(
+            client = client,
+            sessionManager = sm,
+            urlProvider = { "wss://example.com/ws/events?token=ok" },
+            isAuthenticated = { true },
+            onAuthFailure = { _ -> authFailures.incrementAndGet() },
+        )
+
+        conn.connect()
+        val listener = awaitListener(deferredListener)
+        listener.onClosed(mockk<WebSocket>(relaxed = true), 4012, "Agent is offline")
+
+        assertEquals(
+            "transient 4012 must NOT route through onAuthFailure",
+            0,
+            authFailures.get(),
+        )
+        // Reconnect with backoff may not have fired yet at assertion time
+        // (1s initial delay) — the load-bearing invariant is the negative
+        // assertion above plus the call counter showing at least the
+        // initial newWebSocket call.
+        assertTrue(
+            "first newWebSocket call count must be at least 1",
+            callCount.get() >= 1,
+        )
     }
 }

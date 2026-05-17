@@ -736,6 +736,40 @@ class TestUserDelete:
         )
         assert app.state.routing.is_agent_online(agent_id) is False
 
+    async def test_post_delete_api_call_returns_401_to_mobile_user(
+        self, client, app, dashboard_headers
+    ):
+        """Offline-then-reconnect scenario: a mobile client that missed
+        the 4010 WS close (because it was offline at unregister time)
+        must be logged out the next time it hits the REST API. The
+        JWT signature is still valid — the existence check in
+        ``get_api_user`` is what turns this into a 401 the Android
+        ``CentralAuthInterceptor`` can react to.
+        """
+        # Create a fresh user, capture their dashboard JWT, then have
+        # the admin unregister them. After cascade-delete, the JWT is
+        # still cryptographically valid but the ``users`` row is gone.
+        result = await app.state.auth_service.register_user(
+            "offline-victim@test.local", "p1"
+        )
+        mobile_user_token = result.access_token
+        assert mobile_user_token is not None
+
+        resp = await client.delete(
+            f"/dashboard/users/{result.user_id}",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+
+        # The reconnecting mobile carries its (now stale) JWT.
+        resp = await client.get(
+            "/api/agents",
+            headers={"Authorization": f"Bearer {mobile_user_token}"},
+        )
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Invalid token"
+        assert resp.headers["WWW-Authenticate"] == "Bearer"
+
 
 class TestAdminDeleteAgent:
     """``DELETE /dashboard/agents/{id}`` admin path bypasses ownership."""

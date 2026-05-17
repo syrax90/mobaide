@@ -369,3 +369,28 @@ class TestSafeSendReasonAndClose:
         ws.close = AsyncMock(side_effect=RuntimeError("dead"))
         await safe_send_reason_and_close(ws, 4001, "boot")
         ws.send_text.assert_awaited_once()
+
+
+class TestAgentDisconnectedCodeContract:
+    """Pin the close code emitted to paired mobile clients when an
+    agent's relay tunnel disconnects. Must be 4012
+    (``WS_CLOSE_AGENT_TRANSIENT_OFFLINE``) and NOT 4010
+    (``WS_CLOSE_ADMIN_REVOKED``) — the agent disconnect is transient,
+    the mobile is expected to keep reconnecting. Collapsing the two
+    onto 4010 was a latent bug masked only by Android previously
+    ignoring the code; once the client started honouring 4010 as a
+    destructive admin-revoke, this path would have permanently killed
+    every relay-mode per-agent mobile socket on every agent restart.
+    See ``PROTOCOL.md`` close-codes table for the wire contract.
+    """
+
+    def test_agent_disconnected_code_is_4012(self):
+        from central_server.relay.agent_ws import AGENT_DISCONNECTED_CODE
+        from central_server.relay.routing import (
+            WS_CLOSE_ADMIN_REVOKED,
+            WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
+        )
+
+        assert AGENT_DISCONNECTED_CODE == WS_CLOSE_AGENT_TRANSIENT_OFFLINE
+        assert AGENT_DISCONNECTED_CODE == 4012
+        assert AGENT_DISCONNECTED_CODE != WS_CLOSE_ADMIN_REVOKED

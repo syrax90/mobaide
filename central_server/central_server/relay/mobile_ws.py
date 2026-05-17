@@ -20,7 +20,12 @@ from starlette.websockets import WebSocketDisconnect
 
 from ..auth.dependencies import WebSocketAuthError, ws_authenticate_mobile
 from .envelope import CH_AUTOSCAN, CH_CONTROL, CH_SESSION_IO, encode
-from .routing import MobileClient, RoutingTable, try_enqueue_control
+from .routing import (
+    WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
+    MobileClient,
+    RoutingTable,
+    try_enqueue_control,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +70,9 @@ def _request_events_snapshot(routing: RoutingTable, agent_id: str) -> None:
     envelope now so the fresh mobile seeds its repositories.
 
     Silent drop on offline agent (mobiles are already being closed with
-    code 4010 in that case). Warn on saturated agent queue — the next agent
-    tunnel reconnect will still resend its full snapshot.
+    code 4012 ``WS_CLOSE_AGENT_TRANSIENT_OFFLINE`` in that case). Warn on
+    saturated agent queue — the next agent tunnel reconnect will still
+    resend its full snapshot.
     """
     conn = routing.get_agent(agent_id)
     if conn is None:
@@ -98,7 +104,10 @@ async def _validate_mobile_connection(
 
     routing: RoutingTable = websocket.app.state.routing
     if not routing.is_agent_online(agent_id):
-        await websocket.close(code=4010, reason="Agent is offline")
+        await websocket.close(
+            code=WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
+            reason="Agent is offline",
+        )
         return None
 
     return payload.sub
@@ -208,7 +217,10 @@ async def relay_autoscan(websocket: WebSocket, agent_id: str) -> None:
     agent_conn = routing.get_agent(agent_id)
     if agent_conn is None:
         routing.unregister_mobile(agent_id, channel_key, client)
-        await websocket.close(code=4010, reason="Agent is offline")
+        await websocket.close(
+            code=WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
+            reason="Agent is offline",
+        )
         return
 
     open_msg = json.dumps({

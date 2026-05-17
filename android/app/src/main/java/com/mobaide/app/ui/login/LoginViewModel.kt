@@ -50,16 +50,22 @@ class LoginViewModel @Inject constructor(
     val errorEvents: SharedFlow<String> = _errorEvents.asSharedFlow()
 
     init {
-        // Surface "session expired" when the session was invalidated by
-        // the server rejecting the dashboard JWT (central-server 401 or
-        // user-scoped WS 4001). Manual logouts are silent — the user
-        // pressed logout themselves and doesn't need a toast saying so.
+        // Surface a message tailored to the reason the session was
+        // invalidated. Manual logouts stay silent — the user pressed
+        // logout themselves and doesn't need a toast saying so.
         viewModelScope.launch {
             sessionManager.sessionEvents.collect { reason ->
-                if (reason is SessionManager.InvalidationReason.TokenRejected) {
-                    _errorEvents.tryEmit(
-                        "Your session has expired. Please sign in again.",
-                    )
+                when (reason) {
+                    is SessionManager.InvalidationReason.TokenRejected ->
+                        _errorEvents.tryEmit(
+                            "Your session has expired. Please sign in again.",
+                        )
+                    is SessionManager.InvalidationReason.AccountRemoved ->
+                        _errorEvents.tryEmit(
+                            "Your account was removed by an administrator. " +
+                                "Sign up to start again or contact support.",
+                        )
+                    is SessionManager.InvalidationReason.Manual -> Unit
                 }
             }
         }

@@ -27,6 +27,7 @@ from .envelope import (
     encode,
 )
 from .routing import (
+    WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
     MobileClient,
     RoutingTable,
     broadcast_user_event,
@@ -37,8 +38,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Close code sent to mobile clients when their agent disconnects.
-AGENT_DISCONNECTED_CODE = 4010
+# Close code sent to paired mobile clients when their agent's tunnel
+# disconnects (restart, crash, network blip, deploy). This is a TRANSIENT
+# condition — the agent is expected to reconnect, and the mobile must
+# keep its exponential-backoff reconnect loop alive. 4012, NOT 4010
+# (``WS_CLOSE_ADMIN_REVOKED``): collapsing the two onto 4010 used to be
+# masked by Android ignoring the code, but once the client started
+# treating 4010 as destructive admin-revoke, this path would have
+# permanently killed every per-agent socket on the device on every
+# agent restart. See `routing.WS_CLOSE_AGENT_TRANSIENT_OFFLINE`.
+AGENT_DISCONNECTED_CODE = WS_CLOSE_AGENT_TRANSIENT_OFFLINE
 
 # Close code sent to mobile clients when the agent declines an autoscan
 # subscription (e.g. capacity reached, autoscan manager not configured).

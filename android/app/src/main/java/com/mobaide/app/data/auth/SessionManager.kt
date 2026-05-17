@@ -117,10 +117,18 @@ class SessionManager @Inject constructor(
 
     /** Carry the reason a session was invalidated so consumers can decide
      *  whether to surface a "session expired" notice (server rejected the
-     *  stored credentials) or stay silent (user asked to log out). */
+     *  stored credentials), a "your account was removed" notice (admin
+     *  destructively unregistered the user), or stay silent (user asked
+     *  to log out). */
     sealed interface InvalidationReason {
         /** Server rejected the dashboard JWT (401 on REST, 4001 on WS). */
         object TokenRejected : InvalidationReason
+
+        /** Server closed the user-scoped WS with code 4010
+         *  (``WS_CLOSE_ADMIN_REVOKED``). The admin unregistered this user
+         *  on the central server; the local credentials are now permanently
+         *  invalid and the next login attempt must use a fresh account. */
+        object AccountRemoved : InvalidationReason
 
         /** User explicitly tapped logout. */
         object Manual : InvalidationReason
@@ -242,10 +250,13 @@ class SessionManager @Inject constructor(
     /**
      * Atomically clear the entire session and signal why. Called from:
      *  * [CentralAuthInterceptor] on a 401 from the central server
-     *    (dashboard JWT rejected);
+     *    (dashboard JWT rejected) → [InvalidationReason.TokenRejected];
      *  * [com.mobaide.app.data.network.WebSocketConnection] on a
-     *    4001 close on the user-scoped channel;
-     *  * [userLogout] / [forceLogout] for user-initiated logout.
+     *    4001 close on the user-scoped channel → [InvalidationReason.TokenRejected];
+     *  * [com.mobaide.app.data.network.WebSocketConnection] on a
+     *    4010 close on the user-scoped channel → [InvalidationReason.AccountRemoved];
+     *  * [userLogout] / [forceLogout] for user-initiated logout
+     *    → [InvalidationReason.Manual].
      *
      * Idempotent: subsequent calls while already [AuthState.Unauthenticated]
      * are a no-op and do NOT re-emit on [sessionEvents]. This makes the
@@ -259,8 +270,10 @@ class SessionManager @Inject constructor(
         tokenStore.clear()
         _authState.value = AuthState.Unauthenticated
         inFlight.getAndSet(null)?.cancel()
-        if (reason is InvalidationReason.TokenRejected) {
-            _sessionEvents.tryEmit(reason)
+        when (reason) {
+            is InvalidationReason.TokenRejected,
+            is InvalidationReason.AccountRemoved -> _sessionEvents.tryEmit(reason)
+            is InvalidationReason.Manual -> Unit
         }
     }
 

@@ -82,7 +82,7 @@ class WebSocketConnectionIncompatibleTest {
             sessionManager = sessionManager(),
             urlProvider = { "wss://central.example.com/ws/user-events?token=v0" },
             isAuthenticated = { true },
-            onAuthFailure = { authFailures.incrementAndGet() },
+            onAuthFailure = { _ -> authFailures.incrementAndGet() },
             onIncompatibleServer = { incompatibleInvocations.incrementAndGet() },
         )
 

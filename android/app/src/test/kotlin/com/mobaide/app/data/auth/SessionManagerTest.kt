@@ -455,6 +455,33 @@ class SessionManagerTest {
     }
 
     @Test
+    fun invalidateUserSession_accountRemoved_clearsBothStores_andEmitsOnSessionEvents() = runTest {
+        // 4010 (WS_CLOSE_ADMIN_REVOKED) on the user-scoped channel routes
+        // here. The behaviour mirrors TokenRejected (both stores cleared,
+        // state → Unauthenticated, event observable on sessionEvents) but
+        // the *reason* is distinct so the login screen can render a
+        // user-specific "account removed" message instead of the generic
+        // "session expired" copy.
+        val store = stubTokenStore()
+        val userStore = stubUserIdentityStore(loggedIn = true)
+        val client = mockk<OkHttpClient>()
+        val sm = SessionManager(store, userStore, client)
+
+        sm.sessionEvents.test {
+            sm.invalidateUserSession(SessionManager.InvalidationReason.AccountRemoved)
+            val emitted = awaitItem()
+            assertEquals(
+                SessionManager.InvalidationReason.AccountRemoved,
+                emitted,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        verify(exactly = 1) { store.clear() }
+        verify(exactly = 1) { userStore.clearUserSession() }
+        assertEquals(SessionManager.AuthState.Unauthenticated, sm.authState.value)
+    }
+
+    @Test
     fun invalidateUserSession_manual_doesNotEmitOnSessionEvents() = runTest {
         // Manual logout is user-initiated — no "session expired" toast needed.
         val store = stubTokenStore()
