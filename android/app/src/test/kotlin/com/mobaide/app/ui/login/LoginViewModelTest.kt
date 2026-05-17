@@ -469,6 +469,68 @@ class LoginViewModelTest {
     }
 
     @Test
+    fun sessionEvents_accountRemoved_emitsAccountRemovedSnackbar() = runTest {
+        // The user-scoped WebSocket emits AccountRemoved on
+        // SessionManager.sessionEvents when the server closes with code 4010
+        // (WS_CLOSE_ADMIN_REVOKED) — the admin destructively unregistered
+        // the user. The login ViewModel must distinguish this from the
+        // generic TokenRejected ("session expired") path by surfacing a
+        // dedicated "account was removed" snackbar; if it copy-pasted the
+        // session-expired text or no-op'd like Manual, the user would be
+        // dropped back to the login screen with no idea their account is
+        // gone — they'd just try to sign in again and fail with an
+        // unhelpful "Invalid email or password".
+        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
+            extraBufferCapacity = 1,
+        )
+        val vm = newViewModel(events)
+
+        vm.errorEvents.test {
+            advanceUntilIdle()
+            events.tryEmit(SessionManager.InvalidationReason.AccountRemoved)
+            assertEquals(
+                "Your account was removed by an administrator. " +
+                    "Sign up to start again or contact support.",
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun sessionEvents_accountRemoved_isDistinctFromTokenRejected() = runTest {
+        // Regression guard against the obvious refactor mistake: branching
+        // the AccountRemoved arm onto the TokenRejected message string
+        // (or vice-versa) by accident. The two snackbars must remain
+        // distinguishable to the user so they understand WHY they were
+        // logged out — "session expired" implies "sign in again" but
+        // "account removed" requires the user to register a fresh account
+        // or contact support.
+        val events = MutableSharedFlow<SessionManager.InvalidationReason>(
+            extraBufferCapacity = 1,
+        )
+        val vm = newViewModel(events)
+
+        vm.errorEvents.test {
+            advanceUntilIdle()
+            events.tryEmit(SessionManager.InvalidationReason.AccountRemoved)
+            val accountMessage = awaitItem()
+
+            // Strong-form distinguishability checks: the message must NOT
+            // be the TokenRejected copy, and it must explicitly contain
+            // the "removed" keyword so a future translator can't silently
+            // collapse the two strings.
+            assertEquals(false, accountMessage == "Your session has expired. Please sign in again.")
+            assertTrue(
+                "account-removed message must explicitly mention removal — got: $accountMessage",
+                accountMessage.contains("removed", ignoreCase = true),
+            )
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun sessionEvents_manualLogout_emitsNoSnackbar() = runTest {
         // Manual logout is user-initiated — the user pressed "Log out"
         // in Settings, they don't need a redundant "session expired"

@@ -97,11 +97,21 @@ class TestAutoscanAuthGating:
             ) as ws:
                 ws.receive_text()
 
-    async def test_agent_offline_closes_4010(self, app, registered_agent):
-        """No agent connection registered in routing → handler closes 4010.
+    async def test_agent_offline_closes_4012(self, app, registered_agent):
+        """No agent connection registered in routing → handler closes 4012
+        (``WS_CLOSE_AGENT_TRANSIENT_OFFLINE``).
 
-        ``get_agent`` returns None, the handler unregisters the mobile
-        channel key (which was just created) and closes the socket.
+        4012 — and crucially **not** 4010 (``WS_CLOSE_ADMIN_REVOKED``) —
+        because agent offline is a transient, recoverable state: the
+        agent process may come back any moment and the mobile is
+        expected to keep its exponential-backoff reconnect loop alive.
+        Collapsing this onto 4010 was a latent bug masked only by the
+        Android side previously ignoring the code; once the client
+        started treating 4010 as destructive admin-revoke, the bug
+        would have permanently killed every per-agent socket on the
+        device during an agent restart. ``get_agent`` returns None,
+        the handler unregisters the mobile channel key (which was
+        just created) and closes the socket.
         """
         agent_id, _ = registered_agent
         access = await _mobile_access_token(app, agent_id)

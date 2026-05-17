@@ -74,6 +74,7 @@ class TestAgentTunnel:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
+                "protocol_version": 2,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"
@@ -86,6 +87,7 @@ class TestAgentTunnel:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
+                "protocol_version": 2,
             }))
             ws.receive_text()  # auth_ok
             # Agent should be online
@@ -163,9 +165,10 @@ class TestSessionLifecycleSignals:
         self, app, registered_agent
     ):
         """If the agent is not registered in routing, ``_validate_mobile_connection``
-        closes the socket with 4010 before ``register_mobile`` runs — so
-        no attach is produced. Prevents a queue-overflow/noisy warning
-        storm during agent downtime.
+        closes the socket with 4012 (``WS_CLOSE_AGENT_TRANSIENT_OFFLINE``)
+        before ``register_mobile`` runs — so no attach is produced.
+        Prevents a queue-overflow/noisy warning storm during agent
+        downtime. 4012 (not 4010) so the mobile keeps reconnecting.
         """
         agent_id, _ = registered_agent
         assert app.state.routing.get_agent(agent_id) is None
@@ -208,6 +211,7 @@ class TestSessionLifecycleSignals:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
+                "protocol_version": 2,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"
@@ -235,8 +239,9 @@ class TestSendSessionLifecycleHelper:
     saturated. Both branches are reached through the ``finally`` block of
     ``relay_session_io`` after a mid-session agent crash; neither path is
     directly exercised by the integration-level tests above, because the
-    pre-validation layer closes the socket with 4010 before it can ever
-    call the helper with an offline agent.
+    pre-validation layer closes the socket with 4012
+    (``WS_CLOSE_AGENT_TRANSIENT_OFFLINE``) before it can ever call the
+    helper with an offline agent.
     """
 
     def test_noop_when_agent_offline(self):
@@ -438,8 +443,9 @@ class TestRequestEventsSnapshotHelper:
     """Unit-level guards for ``mobile_ws._request_events_snapshot``.
 
     The helper must drop silently when the agent is offline (mobiles are
-    already closed with 4010 upstream) and must not raise on a saturated
-    agent queue — the next tunnel reconnect will resend the snapshot.
+    already closed with 4012 ``WS_CLOSE_AGENT_TRANSIENT_OFFLINE`` upstream)
+    and must not raise on a saturated agent queue — the next tunnel
+    reconnect will resend the snapshot.
     """
 
     def test_noop_when_agent_offline(self):

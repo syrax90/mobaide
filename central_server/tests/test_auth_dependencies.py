@@ -61,10 +61,19 @@ async def auth_service(auth_config, auth_db) -> AuthService:
 
 
 class _FakeApp:
-    """Minimal app stub whose .state.auth_service is an AuthService."""
+    """Minimal app stub whose ``.state`` carries the ``AuthService`` plus
+    the ``Database`` the dependency layer consults for the
+    user/agent-still-exists check that backs the post-unregister logout
+    flow. Defaulting ``db`` to ``auth_service._db`` keeps the older
+    tests (which pre-date the existence check) calling ``_FakeApp(svc)``
+    without an extra positional arg.
+    """
 
-    def __init__(self, auth_service: AuthService):
-        self.state = SimpleNamespace(auth_service=auth_service)
+    def __init__(self, auth_service: AuthService, db=None):
+        self.state = SimpleNamespace(
+            auth_service=auth_service,
+            db=db if db is not None else auth_service._db,
+        )
 
 
 class _FakeRequest:
@@ -402,3 +411,117 @@ class TestGetMobileUser:
         with pytest.raises(HTTPException) as exc_info:
             await get_mobile_user(request)
         assert exc_info.value.status_code == 401
+
+
+class TestUserExistenceCheck:
+    """The post-unregister-logout flow hinges on JWT validation rejecting
+    tokens whose underlying principal has been cascade-deleted. These
+    tests pin that contract for every dependency that decodes a JWT.
+
+    Without the existence check, a mobile app that was offline when the
+    admin removed its user could reconnect with a still-cryptographically-
+    valid JWT and authenticate against a vanished account — the bug this
+    plan exists to fix.
+    """
+
+    async def test_get_dashboard_user_redirects_when_user_deleted(
+        self, auth_service, auth_db
+    ):
+        """Dashboard cookie auth → 303 to /dashboard/login when user gone."""
+        result = await auth_service.register_user(
+            TEST_USER_EMAIL, TEST_USER_PASSWORD
+        )
+        token = result.access_token
+        await auth_db.delete_user(result.user_id)
+
+        fake_app = _FakeApp(auth_service, db=auth_db)
+        request = _FakeRequest(
+            cookies={"dashboard_token": token}, app=fake_app
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await get_dashboard_user(request)
+        assert exc_info.value.status_code == 303
+        assert exc_info.value.headers["Location"] == "/dashboard/login"
+
+    async def test_get_api_user_401s_when_user_deleted(
+        self, auth_service, auth_db
+    ):
+        """Bearer-token user API → opaque 401 ``"Invalid token"`` (same
+        wire shape as a signature failure) so the Android central-auth
+        interceptor invalidates the session on the next REST call.
+        """
+        result = await auth_service.register_user(
+            TEST_USER_EMAIL, TEST_USER_PASSWORD
+        )
+        token = result.access_token
+        await auth_db.delete_user(result.user_id)
+
+        fake_app = _FakeApp(auth_service, db=auth_db)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {token}"}, app=fake_app
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await get_api_user(request)
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "Invalid token"
+        assert exc_info.value.headers == {"WWW-Authenticate": "Bearer"}
+
+    async def test_get_mobile_user_401s_when_agent_deleted(
+        self, auth_service, auth_db
+    ):
+        """Mobile bearer auth → 401 when the referenced agent is gone.
+
+        Cascade-delete on the owner removes the agent in the same
+        transaction, so checking the agent existence catches both
+        "user unregistered" and "agent deleted by owner" revocations.
+        """
+        owner = await auth_db.create_user(
+            email="mobile-existence@test.local", password_hash="h"
+        )
+        agent_id, _ = await auth_db.register_agent("doomed-agent", owner)
+        access, _ = await auth_service.create_mobile_tokens(
+            "dev-existence", agent_id, owner
+        )
+        await auth_db.delete_user(owner)  # cascades the agent
+
+        fake_app = _FakeApp(auth_service, db=auth_db)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {access}"}, app=fake_app
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await get_mobile_user(request)
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "Invalid token"
+
+    async def test_get_api_user_succeeds_for_present_user(
+        self, auth_service, auth_db
+    ):
+        """Sanity: the existence check is non-disruptive for the happy path."""
+        result = await auth_service.register_user(
+            TEST_USER_EMAIL, TEST_USER_PASSWORD
+        )
+        fake_app = _FakeApp(auth_service, db=auth_db)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {result.access_token}"},
+            app=fake_app,
+        )
+        user = await get_api_user(request)
+        assert user.sub == result.user_id
+
+    async def test_get_mobile_user_succeeds_for_present_agent(
+        self, auth_service, auth_db
+    ):
+        """Sanity counterpart for the mobile-token path."""
+        owner = await auth_db.create_user(
+            email="mobile-ok@test.local", password_hash="h"
+        )
+        agent_id, _ = await auth_db.register_agent("ok-agent", owner)
+        access, _ = await auth_service.create_mobile_tokens(
+            "dev-ok", agent_id, owner
+        )
+        fake_app = _FakeApp(auth_service, db=auth_db)
+        request = _FakeRequest(
+            headers={"Authorization": f"Bearer {access}"}, app=fake_app
+        )
+        payload = await get_mobile_user(request)
+        assert payload.agent_id == agent_id

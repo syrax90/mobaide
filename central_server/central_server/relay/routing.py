@@ -29,6 +29,17 @@ logger = logging.getLogger(__name__)
 WS_CLOSE_ADMIN_FORCE_DISCONNECT = 4011  # non-destructive admin boot
 WS_CLOSE_ADMIN_REVOKED = 4010  # admin unregistered the user/agent
 
+# Transient agent-offline at relay-attach time. Distinct from
+# WS_CLOSE_ADMIN_REVOKED (4010) because the agent may come back online at
+# any moment — the mobile client SHOULD continue its normal exponential-
+# backoff reconnect loop instead of treating the channel as permanently
+# dead. Collapsing the two onto code 4010 used to be a latent bug: the
+# Android side fell through unknown codes to scheduleReconnect(), so the
+# protocol violation was invisible; once the client started honouring
+# 4010 as "admin destructively unregistered", a transient agent restart
+# would have permanently killed every per-agent socket on the device.
+WS_CLOSE_AGENT_TRANSIENT_OFFLINE = 4012
+
 
 async def safe_send_reason_and_close(
     websocket: WebSocket, code: int, reason_code: str
