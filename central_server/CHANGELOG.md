@@ -1,5 +1,25 @@
 # central_server Changelog
 
+## [0.1.7](https://github.com/syrax90/claude_mobile/compare/server-v0.1.6...server-v0.1.7) (2026-05-18)
+
+
+### Features
+
+* **auth:** add password reset for email-registered users (CLA-55) ([04b5075](https://github.com/syrax90/claude_mobile/commit/04b507576171a178597d0cfc9a263d4a05fee65b))
+* **auth:** add password reset for email-registered users (CLA-55) ([b99341c](https://github.com/syrax90/claude_mobile/commit/b99341c8b91220d756a032e434eae2b3bd5a0211))
+* **auth:** log out mobile user after admin unregisters them ([8d2ce7b](https://github.com/syrax90/claude_mobile/commit/8d2ce7bbc371b0344c3dc2aee38e58db55854b3f))
+* **auth:** log out mobile user after admin unregisters them ([27ae8fa](https://github.com/syrax90/claude_mobile/commit/27ae8fab28c1fab4d402926a92cf3396e14f43f9))
+* **central-server:** users-centric admin dashboard refactor (CLA-56) ([9df563b](https://github.com/syrax90/claude_mobile/commit/9df563bd33cfe717b0548c3ae8a6ad7d7b1ca0e2))
+* **central-server:** users-centric admin dashboard refactor (CLA-56) ([8b06345](https://github.com/syrax90/claude_mobile/commit/8b063456841226c5cfc6938de355857499a64df7))
+* persist and surface agent version in admin dashboard (CLA) ([e7dcbb6](https://github.com/syrax90/claude_mobile/commit/e7dcbb63447429146c82664da19bd21bef808e23))
+* persist and surface agent version in admin dashboard (CLA) ([12f909f](https://github.com/syrax90/claude_mobile/commit/12f909facf133cec77cad693f5f87bebf3bbe7f8))
+
+
+### Bug Fixes
+
+* **central-server:** close unregister-user modal via OOB swap ([7c0172c](https://github.com/syrax90/claude_mobile/commit/7c0172cf0dcb075ee2122f54559786c7209df9d8))
+* **central-server:** close unregister-user modal via OOB swap ([e136fc8](https://github.com/syrax90/claude_mobile/commit/e136fc8b293b3a70aff40afd80b112f113db883a))
+
 ## [0.1.6](https://github.com/syrax90/claude_mobile/compare/server-v0.1.5...server-v0.1.6) (2026-05-15)
 
 
