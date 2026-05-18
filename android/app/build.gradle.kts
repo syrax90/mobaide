@@ -70,8 +70,8 @@ android {
         applicationId = "com.mobaide.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.2"
+        versionCode = 3
+        versionName = "1.0.3"
 
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
