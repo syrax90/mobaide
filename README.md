@@ -117,9 +117,8 @@ corresponding workflow:
 | Tag prefix | Triggers workflow | What it produces |
 |------------|--------------------|------------------|
 | `android-vX.Y.Z` | `release-android.yml` | Signed `.aab` uploaded to Play Console internal track. `inAppUpdatePriority` set from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
-| `agent-vX.Y.Z` | `release-agent.yml` | `uv build` wheel + sdist, Ed25519-signed manifest, GitHub Release, manifest POSTed to `central_server`. |
-| `server-vX.Y.Z` | `release-server.yml` | Wheel + Docker image to GHCR, manual-approval-gated deploy step (`environment: production`). |
-| `proto-vN` | `release-protocol.yml` | Re-runs the lockstep envelope-integrity check, then publishes a GitHub Release with the PROTOCOL.md section + diff against the previous proto tag. |
+| `agent-vX.Y.Z` | `release-agent.yml` | `uv build` wheel + sdist, Ed25519-signed manifest, GitHub Release in the public sibling repo `syrax90/mobaide-agent-releases`, manifest POSTed to `central_server`. |
+| `server-vX.Y.Z` | `release-server.yml` | Docker image to GHCR, manual-approval-gated deploy step (`environment: production`). |
 
 See [docs/versioning-and-updates.md](docs/versioning-and-updates.md) for the
 staged-binary auto-updater, signed-manifest format, install one-liners,
