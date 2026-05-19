@@ -1,5 +1,17 @@
 # mobaide_agent Changelog
 
+## [0.2.2](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.1...agent-v0.2.2) (2026-05-19)
+
+
+### Features
+
+* **sessions:** show Claude Code OSC terminal title on Android session list ([95f7ea7](https://github.com/syrax90/claude_mobile/commit/95f7ea738aa62e0151d8385c9d5490da7b61c863))
+
+
+### Bug Fixes
+
+* **agent:** show Claude Code OSC terminal title on Android session list ([969a878](https://github.com/syrax90/claude_mobile/commit/969a878ac2fba99176d3048ab17b61837ae4dcec))
+
 ## [0.2.1](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.0...agent-v0.2.1) (2026-05-15)
 
 
