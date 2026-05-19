@@ -10,6 +10,8 @@ data class SessionResponse(
     val pid: Int? = null,
     val command: List<String> = emptyList(),
     val cwd: String? = null,
+    val title: String? = null,
+    val project_name: String? = null,
 )
 
 @Serializable

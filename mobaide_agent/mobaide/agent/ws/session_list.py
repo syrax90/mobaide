@@ -5,6 +5,8 @@ import logging
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from mobaide.core.models import session_to_wire_dict
+
 from ..auth.dependencies import WebSocketAuthError, ws_authenticate
 from .event_fanout import SessionListBroadcaster
 
@@ -14,17 +16,7 @@ router = APIRouter()
 
 
 def _serialize_sessions(manager) -> list[dict]:
-    return [
-        {
-            "session_id": s.session_id,
-            "state": s.state.value,
-            "created_at": s.created_at.isoformat(),
-            "pid": s.pid,
-            "command": s.command,
-            "cwd": s.cwd,
-        }
-        for s in manager.list_sessions()
-    ]
+    return [session_to_wire_dict(s) for s in manager.list_sessions()]
 
 
 @router.websocket("/ws/sessions")

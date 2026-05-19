@@ -470,6 +470,8 @@ class TestHandleRequestEventsSnapshot:
         sess_info.pid = 9000
         sess_info.command = ["/bin/bash"]
         sess_info.cwd = "/tmp"
+        sess_info.title = None
+        sess_info.project_name = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -492,6 +494,8 @@ class TestHandleRequestEventsSnapshot:
                     "pid": 9000,
                     "command": ["/bin/bash"],
                     "cwd": "/tmp",
+                    "title": None,
+                    "project_name": None,
                 },
             ],
         }
@@ -564,6 +568,10 @@ class TestHandleRequestEventsSnapshot:
         sess_info.pid = None
         sess_info.command = ["/bin/sh"]
         sess_info.cwd = None
+        # Without explicit assignment MagicMock generates non-serializable
+        # objects that cause orjson.dumps to raise, silently dropping the send.
+        sess_info.title = None
+        sess_info.project_name = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -589,6 +597,8 @@ class TestHandleRequestEventsSnapshot:
                 "pid": None,
                 "command": ["/bin/sh"],
                 "cwd": None,
+                "title": None,
+                "project_name": None,
             },
         ]
 
@@ -2008,3 +2018,125 @@ class TestProxyLinearDiscoveryRelayParity:
 
         assert result["status"] == 404
         assert "Unknown proxy route" in result["body"]["detail"]
+
+
+class TestProxySessionsWireShape:
+    """Regression guards for the wire-shape consolidation: both
+    ``GET /api/sessions`` and ``POST /api/sessions`` proxy responses must
+    be built through :func:`session_to_wire_dict` so the 8-field canonical
+    wire shape (including ``title`` and ``project_name``) is present.
+
+    Without these assertions a future developer could revert the call site
+    back to an inline 6-field dict literal, silently dropping the new
+    fields the Android client relies on to render friendly session labels.
+    """
+
+    async def test_get_sessions_body_carries_title_and_project_name(
+        self, client, mock_session_manager,
+    ):
+        """``GET /api/sessions`` must return a list of canonical wire dicts."""
+        from mobaide.core.models import SessionInfo, SessionState
+
+        info_a = SessionInfo(
+            session_id="sid-a",
+            state=SessionState.RUNNING,
+            created_at=datetime(2026, 5, 19, 12, 0, 0, tzinfo=timezone.utc),
+            pid=111,
+            command=["claude"],
+            cwd="/work/a",
+            title="* Refactoring parser",
+            project_name="alpha",
+        )
+        info_b = SessionInfo(
+            session_id="sid-b",
+            state=SessionState.STOPPED,
+            created_at=datetime(2026, 5, 19, 12, 5, 0, tzinfo=timezone.utc),
+            pid=None,
+            command=["claude"],
+            cwd=None,
+            title=None,
+            project_name=None,
+        )
+        mock_session_manager.list_sessions = MagicMock(
+            return_value=[info_a, info_b],
+        )
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "GET", "/api/sessions", None, None, ws,
+        )
+
+        assert result["status"] == 200
+        body = result["body"]
+        assert isinstance(body, list)
+        assert len(body) == 2
+
+        a, b = body
+        # Canonical 8-key shape, in any order — locks down session_to_wire_dict.
+        expected_keys = {
+            "session_id", "state", "created_at", "pid",
+            "command", "cwd", "title", "project_name",
+        }
+        assert set(a.keys()) == expected_keys
+        assert set(b.keys()) == expected_keys
+
+        # The two new fields the Android list UI depends on.
+        assert a["title"] == "* Refactoring parser"
+        assert a["project_name"] == "alpha"
+        # Untitled session: title/project_name carried explicitly as None.
+        assert b["title"] is None
+        assert b["project_name"] is None
+
+        # Spot-check the rest survived the helper round-trip unchanged.
+        assert a["session_id"] == "sid-a"
+        assert a["state"] == "running"
+        assert a["pid"] == 111
+        assert a["command"] == ["claude"]
+        assert a["cwd"] == "/work/a"
+        assert a["created_at"].startswith("2026-05-19T12:00:00")
+
+    async def test_post_sessions_body_carries_title_and_project_name(
+        self, client, mock_session_manager,
+    ):
+        """``POST /api/sessions`` 201 body must be a canonical wire dict."""
+        from mobaide.core.models import SessionInfo, SessionState
+
+        created_info = SessionInfo(
+            session_id="sid-new",
+            state=SessionState.RUNNING,
+            created_at=datetime(2026, 5, 19, 13, 0, 0, tzinfo=timezone.utc),
+            pid=4242,
+            command=["claude"],
+            cwd="/work/new",
+            title=None,  # title arrives later via OSC; the create response can have None
+            project_name="my-proj",
+        )
+        fake_session = MagicMock()
+        fake_session.to_info.return_value = created_info
+        mock_session_manager.create_session = AsyncMock(return_value=fake_session)
+
+        ws = AsyncMock()
+        body_in = {"project_name": "my-proj", "rows": 30, "cols": 120}
+
+        with patch.object(client, "_bridge_session"):
+            result = await client._dispatch_proxy(
+                "POST", "/api/sessions", body_in, None, ws,
+            )
+
+        assert result["status"] == 201
+        body = result["body"]
+        assert isinstance(body, dict)
+
+        # Canonical 8-key shape — the consolidation contract.
+        assert set(body.keys()) == {
+            "session_id", "state", "created_at", "pid",
+            "command", "cwd", "title", "project_name",
+        }
+        # The two new fields are present (even when title is None at create).
+        assert body["title"] is None
+        assert body["project_name"] == "my-proj"
+
+        # Spot-check the surrounding fields wire correctly.
+        assert body["session_id"] == "sid-new"
+        assert body["state"] == "running"
+        assert body["pid"] == 4242

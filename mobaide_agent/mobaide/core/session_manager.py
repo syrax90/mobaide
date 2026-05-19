@@ -14,7 +14,7 @@ except Exception:  # pragma: no cover - logging package optional during isolated
     def audit_event(*args, **kwargs): pass
 
 from .claude_launcher import ClaudeLauncher, ClaudeOptions
-from .models import SessionConfig, SessionInfo, SessionState
+from .models import SessionConfig, SessionInfo, SessionState, session_to_wire_dict
 from .projects_store import ProjectsStore
 from .session import TerminalSession
 
@@ -47,16 +47,7 @@ class SessionManager:
         self._event_bus = event_bus
         self._on_session_created = on_session_created
         self._on_session_removed = on_session_removed
-        self._session_dto_factory = session_dto_factory or (
-            lambda info: {
-                "session_id": info.session_id,
-                "state": info.state.value,
-                "created_at": info.created_at.isoformat(),
-                "pid": info.pid,
-                "command": info.command,
-                "cwd": info.cwd,
-            }
-        )
+        self._session_dto_factory = session_dto_factory or session_to_wire_dict
 
     async def _publish_sessions_changed(self) -> None:
         if self._event_bus is None:

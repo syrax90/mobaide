@@ -4,7 +4,7 @@ import enum
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .claude_launcher import ClaudeOptions  # noqa: F401
@@ -42,12 +42,36 @@ class SessionInfo:
     pid: int | None
     command: list[str]
     cwd: str | None
+    title: str | None = None
+    project_name: str | None = None
 
 
 @dataclass
 class SessionEvent:
-    event_type: str  # "output", "started", "stopped", "error"
+    event_type: str  # "output", "started", "stopped", "error", "title"
     session_id: str
     # Output events carry raw PTY bytes; other event types leave this None.
     data: bytes | None = None
     timestamp: float = field(default_factory=time.time)
+
+
+def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
+    """Canonical wire shape for a single session, shared by every producer.
+
+    Every websocket envelope that contains a session object (``sessions.changed``,
+    ``session.updated``, the ``/ws/sessions`` snapshot, the ``/sessions`` REST
+    list, the SessionManager publish path) MUST build the dict through this
+    helper. Adding or renaming a field here updates every producer in one
+    place, preventing the drift that previously hid behind five duplicated
+    literal dict-comprehensions.
+    """
+    return {
+        "session_id": info.session_id,
+        "state": info.state.value,
+        "created_at": info.created_at.isoformat(),
+        "pid": info.pid,
+        "command": info.command,
+        "cwd": info.cwd,
+        "title": info.title,
+        "project_name": info.project_name,
+    }
