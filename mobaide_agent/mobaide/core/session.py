@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from .da_responder import DaResponder
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
+from .osc_parser import OscTitleExtractor
 from .pty_backend import PtyBackend, create_pty_backend
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,12 @@ RING_MAX_BYTES = 256 * 1024
 # output event is discarded (drop-oldest policy) so the PTY reader never
 # stalls.  The ring buffer retains recent bytes for reconnect replay.
 EVENT_QUEUE_MAXSIZE = 64
+
+# Trailing-edge debounce window for OSC-title updates. Ink/React redraws
+# can flip the title several times per render tick; coalescing to ~2 Hz
+# keeps the WebSocket fanout cheap without lagging human-visible label
+# changes.
+TITLE_COALESCE_SECONDS = 0.5
 
 
 class TerminalSession:
@@ -48,6 +55,14 @@ class TerminalSession:
         # Intercepts DA1/2/3 queries from the child so they don't end up in
         # the ring buffer leaking into the client input field.
         self._da = DaResponder()
+        # Passive OSC 0/1/2 tap. Observes bytes flowing through the reader
+        # loop; never mutates them. The latest committed title is mirrored
+        # to ``_title`` after the coalescer flushes.
+        self._osc = OscTitleExtractor()
+        self._title: str | None = None
+        self._pending_title: str | None = None
+        self._title_event = asyncio.Event()
+        self._title_task: asyncio.Task[None] | None = None
 
     @property
     def state(self) -> SessionState:
@@ -86,6 +101,10 @@ class TerminalSession:
             self._reader_loop(),
             name=f"pty-reader-{self._config.session_id}",
         )
+        self._title_task = asyncio.create_task(
+            self._title_coalescer(),
+            name=f"title-coalescer-{self._config.session_id}",
+        )
         logger.info("Session %s started (pid=%s)", self.session_id, self.pid)
 
     async def _reader_loop(self) -> None:
@@ -110,6 +129,10 @@ class TerminalSession:
                     fut.add_done_callback(self._log_da_write_failure)
                 if not data:
                     continue
+                new_title = self._osc.feed(data)
+                if new_title is not None and new_title != self._pending_title:
+                    self._pending_title = new_title
+                    self._title_event.set()
                 self._scrollback.append(data)
                 self._append_ring(data)
                 # Drop-oldest policy: never stall the PTY reader due to slow
@@ -148,6 +171,44 @@ class TerminalSession:
                 ),
             )
             logger.warning("Session %s crashed", self.session_id)
+
+    async def _title_coalescer(self) -> None:
+        """Trailing-edge debounce loop that publishes title updates.
+
+        Wakes on ``_title_event``, sleeps for ``TITLE_COALESCE_SECONDS`` so
+        intra-window changes collapse to the latest value, then enqueues
+        a ``"title"`` SessionEvent if the value actually changed. The drop-
+        oldest fallback mirrors the output path: title events must never
+        block the coalescer.
+        """
+        try:
+            while True:
+                await self._title_event.wait()
+                await asyncio.sleep(TITLE_COALESCE_SECONDS)
+                self._title_event.clear()
+                snapshot = self._pending_title
+                if snapshot == self._title:
+                    continue
+                self._title = snapshot
+                event = SessionEvent(
+                    "title",
+                    self._config.session_id,
+                    None,
+                    time.time(),
+                )
+                try:
+                    self._event_queue.put_nowait(event)
+                except asyncio.QueueFull:
+                    try:
+                        self._event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        pass
+                    try:
+                        self._event_queue.put_nowait(event)
+                    except asyncio.QueueFull:
+                        pass
+        except asyncio.CancelledError:
+            raise
 
     def _log_da_write_failure(self, fut: asyncio.Future) -> None:
         """Surface exceptions from the fire-and-forget DA reply write."""
@@ -206,6 +267,13 @@ class TerminalSession:
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 
+        if self._title_task is not None and not self._title_task.done():
+            self._title_task.cancel()
+            try:
+                await asyncio.wait_for(self._title_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
         await loop.run_in_executor(None, self._backend.close)
 
         self._state = SessionState.STOPPED
@@ -226,4 +294,6 @@ class TerminalSession:
             pid=self.pid,
             command=self._config.command,
             cwd=self._config.cwd,
+            title=self._title,
+            project_name=self._config.project_name,
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from mobaide.core.claude_launcher import ClaudeOptions
-from mobaide.core.models import SessionInfo
+from mobaide.core.models import SessionInfo, session_to_wire_dict
 
 
 class ClaudeOptionsModel(BaseModel):
@@ -34,23 +34,25 @@ class CreateSessionRequest(BaseModel):
 
 
 class SessionResponse(BaseModel):
+    """REST response for a single session.
+
+    Field set is the canonical wire shape — must stay in lockstep with
+    :func:`mobaide.core.models.session_to_wire_dict` and the Android
+    ``SessionResponse`` DTO. Add or rename a field in one place only.
+    """
+
     session_id: str
     state: str
     created_at: str
     pid: int | None
     command: list[str]
     cwd: str | None
+    title: str | None = None
+    project_name: str | None = None
 
     @classmethod
     def from_info(cls, info: SessionInfo) -> SessionResponse:
-        return cls(
-            session_id=info.session_id,
-            state=info.state.value,
-            created_at=info.created_at.isoformat(),
-            pid=info.pid,
-            command=info.command,
-            cwd=info.cwd,
-        )
+        return cls(**session_to_wire_dict(info))
 
 
 class ScrollbackResponse(BaseModel):

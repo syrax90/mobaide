@@ -8,7 +8,12 @@ from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
-from mobaide.core.models import SessionEvent, SessionInfo, SessionState
+from mobaide.core.models import (
+    SessionEvent,
+    SessionInfo,
+    SessionState,
+    session_to_wire_dict,
+)
 from mobaide.core.session import TerminalSession
 from mobaide.agent.ws.event_fanout import (
     SessionEventFanout,
@@ -35,6 +40,8 @@ def _fake_session(session_id: str = "s1") -> TerminalSession:
 def _session_info(
     session_id: str = "s1",
     state: SessionState = SessionState.RUNNING,
+    title: str | None = None,
+    project_name: str | None = None,
 ) -> SessionInfo:
     return SessionInfo(
         session_id=session_id,
@@ -43,6 +50,8 @@ def _session_info(
         pid=4242,
         command=["cmd.exe"],
         cwd="C:/tmp",
+        title=title,
+        project_name=project_name,
     )
 
 
@@ -268,6 +277,116 @@ class TestSessionEventFanoutPump:
             published_types = [c.args[0] for c in event_bus.publish.call_args_list]
             assert "sessions.changed" in published_types
             assert "session.updated" not in published_types
+        finally:
+            await _stop_and_await(fanout)
+
+    async def test_title_event_publishes_session_updated_only(self):
+        """A ``title`` event must publish exactly one ``session.updated`` and
+        must NOT trigger ``broadcaster.notify_serialized`` or
+        ``sessions.changed`` — title is a per-session delta, not a list
+        membership change.
+        """
+        session = _fake_session("s1")
+        broadcaster = MagicMock()
+        broadcaster.notify_serialized = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = MagicMock()
+
+        info = _session_info("s1", SessionState.RUNNING, title="* New Task")
+
+        def get_sessions():
+            return [info]
+
+        fanout = SessionEventFanout(
+            session,
+            broadcaster=broadcaster,
+            get_sessions=get_sessions,
+            event_bus=event_bus,
+        )
+        try:
+            sub = fanout.subscribe()
+            fanout.start()
+
+            await session.event_queue.put(
+                SessionEvent(event_type="title", session_id="s1", data=None),
+            )
+            received = await _drain_one(sub)
+            assert received.event_type == "title"
+
+            await asyncio.sleep(0)
+            broadcaster.notify_serialized.assert_not_called()
+
+            published = event_bus.publish.call_args_list
+            types_published = [c.args[0] for c in published]
+            assert types_published == ["session.updated"]
+            assert published[0].args[1] == {"session": session_to_wire_dict(info)}
+            # Sanity: the wire dict actually contains the new title.
+            assert published[0].args[1]["session"]["title"] == "* New Task"
+        finally:
+            await _stop_and_await(fanout)
+
+    async def test_title_event_without_get_sessions_is_noop(self):
+        session = _fake_session("s1")
+        broadcaster = MagicMock()
+        broadcaster.notify_serialized = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = MagicMock()
+
+        fanout = SessionEventFanout(
+            session,
+            broadcaster=broadcaster,
+            get_sessions=None,
+            event_bus=event_bus,
+        )
+        try:
+            sub = fanout.subscribe()
+            fanout.start()
+
+            await session.event_queue.put(
+                SessionEvent(event_type="title", session_id="s1", data=None),
+            )
+            received = await _drain_one(sub)
+            assert received.event_type == "title"
+
+            await asyncio.sleep(0)
+            broadcaster.notify_serialized.assert_not_called()
+            event_bus.publish.assert_not_called()
+        finally:
+            await _stop_and_await(fanout)
+
+    async def test_title_event_when_session_missing_from_list_is_noop(self):
+        """If ``get_sessions()`` does not contain the current session — e.g.
+        it was just removed in a race — the title branch must publish
+        nothing rather than crash or fabricate a payload.
+        """
+        session = _fake_session("s1")
+        broadcaster = MagicMock()
+        broadcaster.notify_serialized = AsyncMock()
+        event_bus = MagicMock()
+        event_bus.publish = MagicMock()
+
+        def get_sessions():
+            return [_session_info("other-session", title="other")]
+
+        fanout = SessionEventFanout(
+            session,
+            broadcaster=broadcaster,
+            get_sessions=get_sessions,
+            event_bus=event_bus,
+        )
+        try:
+            sub = fanout.subscribe()
+            fanout.start()
+
+            await session.event_queue.put(
+                SessionEvent(event_type="title", session_id="s1", data=None),
+            )
+            received = await _drain_one(sub)
+            assert received.event_type == "title"
+
+            await asyncio.sleep(0)
+            broadcaster.notify_serialized.assert_not_called()
+            event_bus.publish.assert_not_called()
         finally:
             await _stop_and_await(fanout)
 

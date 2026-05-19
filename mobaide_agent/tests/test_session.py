@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from typing import cast
 
 import pytest
 
 from mobaide.core.models import SessionConfig, SessionEvent, SessionState
+from mobaide.core.pty_backend import PtyBackend
 from mobaide.core.session import TerminalSession
 from tests.conftest import IS_WINDOWS
 
@@ -150,3 +153,143 @@ class TestTerminalSessionLifecycle:
         await session.stop()
         await session.stop()  # Should not raise
         assert session.state == SessionState.STOPPED
+
+
+class _ScriptedPtyBackend:
+    """Test double for :class:`PtyBackend` driven by a scripted byte queue.
+
+    ``script`` holds chunks the reader will receive in order, one per
+    ``read()`` call. After the script is exhausted, ``read()`` blocks on
+    ``_drained`` (released by ``terminate``/``close``) and then returns
+    ``b""`` so :class:`TerminalSession._reader_loop` exits cleanly without
+    racing the title coalescer. This keeps the test deterministic across
+    platforms and lets the real OSC tap + coalescer pipeline run end-to-end.
+    """
+
+    def __init__(self, script: list[bytes]) -> None:
+        self._script = list(script)
+        self._lock = threading.Lock()
+        self._drained = threading.Event()
+        self._closed = False
+        self._writes: list[bytes] = []
+
+    def spawn(self, cmd, cwd, env, rows, cols):  # noqa: D401, ARG002
+        return None
+
+    def read(self, size: int = 4096) -> bytes:
+        with self._lock:
+            if self._script:
+                return self._script.pop(0)
+        # Park the executor thread until the test tears the session down.
+        self._drained.wait(timeout=5.0)
+        return b""
+
+    def write(self, data: bytes) -> None:
+        self._writes.append(data)
+
+    def resize(self, rows: int, cols: int) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return not self._closed
+
+    def get_pid(self) -> int | None:
+        return 12345
+
+    def terminate(self, force: bool = False) -> None:
+        self._drained.set()
+
+    def close(self) -> None:
+        self._closed = True
+        self._drained.set()
+
+
+def _title_config() -> SessionConfig:
+    return SessionConfig(
+        session_id="title-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+    )
+
+
+async def _drain_title_event(
+    session: TerminalSession, timeout: float = 2.0
+) -> SessionEvent:
+    """Pull events off the queue until the first ``title`` event arrives.
+
+    The reader-loop output and the synthetic ``started`` event share the
+    queue; this helper drops them and returns only the coalescer's emission
+    so callers don't have to know the interleaving.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            break
+        event = await asyncio.wait_for(
+            session.event_queue.get(), timeout=remaining,
+        )
+        if event.event_type == "title":
+            return event
+    raise AssertionError("title event was not enqueued within the timeout")
+
+
+@pytest.mark.timeout(15)
+class TestTerminalSessionTitleCoalescer:
+    """Integration tests for the OSC-title tap + trailing-edge coalescer.
+
+    Uses :class:`_ScriptedPtyBackend` so the assertions are deterministic
+    across Windows ConPTY / Linux PTY and do not depend on the host shell
+    interpreting OSC escapes.
+    """
+
+    async def test_single_osc_title_publishes_after_debounce_window(self) -> None:
+        backend = _ScriptedPtyBackend([b"\x1b]0;hello world\x07"])
+        session = TerminalSession(
+            _title_config(),
+            backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            event = await _drain_title_event(session, timeout=2.0)
+
+            assert event.event_type == "title"
+            assert event.session_id == "title-session"
+            assert event.data is None
+            assert session.to_info().title == "hello world"
+        finally:
+            await session.stop()
+
+    async def test_rapid_title_bursts_collapse_to_last_value(self) -> None:
+        # Ten different titles in a single read chunk — well inside the
+        # 500 ms debounce window, regardless of executor latency.
+        chunk = b"".join(
+            f"\x1b]0;title-{i}\x07".encode() for i in range(10)
+        )
+        backend = _ScriptedPtyBackend([chunk])
+        session = TerminalSession(
+            _title_config(),
+            backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            event = await _drain_title_event(session, timeout=2.0)
+
+            assert event.event_type == "title"
+            assert event.session_id == "title-session"
+            assert session.to_info().title == "title-9"
+
+            # Allow one more debounce window to elapse and assert no
+            # further title event is emitted — confirms last-value-wins
+            # collapsing rather than 10 separate publishes.
+            await asyncio.sleep(0.7)
+            extra_titles = 0
+            while not session.event_queue.empty():
+                ev = session.event_queue.get_nowait()
+                if ev.event_type == "title":
+                    extra_titles += 1
+            assert extra_titles == 0
+        finally:
+            await session.stop()

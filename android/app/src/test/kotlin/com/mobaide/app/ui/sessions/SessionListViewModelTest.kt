@@ -433,6 +433,45 @@ class SessionListViewModelTest {
     // ---- clearError ---------------------------------------------------------
 
     @Test
+    fun sessionListUpdate_carryingNewTitle_propagatesToUiState_preservingIdentity() = runTest {
+        val fx = newFixture(
+            initialSessions = listOf(
+                session("s1").copy(title = null, project_name = "demo"),
+            ),
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.uiState.test {
+            // The seeded list (title=null) is the current StateFlow value, so
+            // Turbine emits it as the first item.
+            val initial = awaitItem()
+            assertEquals(1, initial.sessions.size)
+            assertEquals("s1", initial.sessions[0].session_id)
+            assertNull(initial.sessions[0].title)
+
+            // SessionRepository merges an AgentEvent.SessionUpdated by
+            // emitting a fresh list with the same session_id but the new
+            // title — the ViewModel just observes that merged list. Drive
+            // the equivalent emission through the mocked sessions flow.
+            fx.sessionsFlow.value = listOf(
+                session("s1").copy(title = "* Some Task", project_name = "demo"),
+            )
+            advanceUntilIdle()
+
+            val updated = awaitItem()
+            assertEquals(1, updated.sessions.size)
+            // Identity is preserved by session_id, NOT by reference.
+            assertEquals("s1", updated.sessions[0].session_id)
+            assertEquals("* Some Task", updated.sessions[0].title)
+            // Unrelated fields are unchanged.
+            assertEquals("demo", updated.sessions[0].project_name)
+            assertEquals("running", updated.sessions[0].state)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun clearError_resetsErrorFieldToNull_leavingOtherStateIntact() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()

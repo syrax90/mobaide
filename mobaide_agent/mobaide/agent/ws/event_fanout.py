@@ -6,7 +6,7 @@ import logging
 import orjson
 from typing import TYPE_CHECKING
 
-from mobaide.core.models import SessionEvent, SessionInfo
+from mobaide.core.models import SessionEvent, SessionInfo, session_to_wire_dict
 
 if TYPE_CHECKING:
     from mobaide.core.session import TerminalSession
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _STATE_EVENTS = frozenset({"started", "stopped", "error"})
+_TITLE_EVENT = "title"
 
 
 class SessionEventFanout:
@@ -52,20 +53,23 @@ class SessionEventFanout:
                         q.put_nowait(event)
                     except asyncio.QueueFull:
                         pass  # drop for slow consumers
+                if event.event_type == _TITLE_EVENT and self._get_sessions:
+                    if self._event_bus is not None:
+                        sessions_now = self._get_sessions()
+                        changed = next(
+                            (s for s in sessions_now if s.session_id == self._session.session_id),
+                            None,
+                        )
+                        if changed is not None:
+                            self._event_bus.publish(
+                                "session.updated",
+                                {"session": session_to_wire_dict(changed)},
+                            )
+                    continue
                 # Build once; reused by broadcaster and event bus to avoid double serialization.
                 if event.event_type in _STATE_EVENTS and self._get_sessions:
                     sessions_now = self._get_sessions()
-                    session_dicts = [
-                        {
-                            "session_id": s.session_id,
-                            "state": s.state.value,
-                            "created_at": s.created_at.isoformat(),
-                            "pid": s.pid,
-                            "command": s.command,
-                            "cwd": s.cwd,
-                        }
-                        for s in sessions_now
-                    ]
+                    session_dicts = [session_to_wire_dict(s) for s in sessions_now]
                     if self._broadcaster:
                         await self._broadcaster.notify_serialized(session_dicts)
                     if self._event_bus is not None:
@@ -127,15 +131,5 @@ class SessionListBroadcaster:
     async def notify(self, sessions: list[SessionInfo]) -> None:
         """Serialize session list and push to all subscribers."""
         await self.notify_serialized(
-            [
-                {
-                    "session_id": s.session_id,
-                    "state": s.state.value,
-                    "created_at": s.created_at.isoformat(),
-                    "pid": s.pid,
-                    "command": s.command,
-                    "cwd": s.cwd,
-                }
-                for s in sessions
-            ],
+            [session_to_wire_dict(s) for s in sessions],
         )

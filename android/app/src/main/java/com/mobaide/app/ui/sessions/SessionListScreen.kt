@@ -225,13 +225,16 @@ private fun SessionCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = session.session_id,
+                    text = session.title
+                        ?: "Claude Code · ${session.project_name ?: session.session_id.take(8)}",
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = session.command.joinToString(" ").ifEmpty { "shell" },
+                    text = "Claude Code",
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

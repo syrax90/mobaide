@@ -23,7 +23,12 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
-from mobaide.core.models import SessionConfig, SessionEvent, SessionState
+from mobaide.core.models import (
+    SessionConfig,
+    SessionEvent,
+    SessionState,
+    session_to_wire_dict,
+)
 from mobaide.core.projects_store import safe_path_exists
 
 from pydantic import ValidationError
@@ -974,17 +979,7 @@ class RelayClient:
             sessions = self._session_manager.list_sessions()
             return {
                 "status": 200,
-                "body": [
-                    {
-                        "session_id": s.session_id,
-                        "state": s.state.value,
-                        "created_at": s.created_at.isoformat(),
-                        "pid": s.pid,
-                        "command": s.command,
-                        "cwd": s.cwd,
-                    }
-                    for s in sessions
-                ],
+                "body": [session_to_wire_dict(s) for s in sessions],
             }
 
         if method == "POST" and path == "/api/sessions":
@@ -1016,14 +1011,7 @@ class RelayClient:
             info = session.to_info()
             return {
                 "status": 201,
-                "body": {
-                    "session_id": info.session_id,
-                    "state": info.state.value,
-                    "created_at": info.created_at.isoformat(),
-                    "pid": info.pid,
-                    "command": info.command,
-                    "cwd": info.cwd,
-                },
+                "body": session_to_wire_dict(info),
             }
 
         m = _re.match(r"^/api/sessions/([^/]+)$", path)
