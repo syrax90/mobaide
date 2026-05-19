@@ -76,7 +76,7 @@ fun SettingsScreen(
             HorizontalDivider()
             ListItem(
                 headlineContent = { Text("Logged in as") },
-                supportingContent = { Text(uiState.username) },
+                supportingContent = { Text(uiState.userEmail) },
             )
             HorizontalDivider()
 

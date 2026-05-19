@@ -116,7 +116,7 @@ fun CreateSessionScreen(
                         when (state.step) {
                             CreateSessionStep.ProjectSelect -> "New Session"
                             CreateSessionStep.ModePick -> "Select mode"
-                            CreateSessionStep.StandardConfig -> "Standard mode"
+                            CreateSessionStep.StandardConfig -> "Claude code session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                         }
                     )
@@ -317,7 +317,7 @@ private fun ModePickerSection(
         modifier = Modifier.fillMaxWidth(),
     ) {
         ListItem(
-            headlineContent = { Text("Standard mode") },
+            headlineContent = { Text("Claude code session") },
             supportingContent = { Text("Configure and launch a Claude session.") },
             colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
         )

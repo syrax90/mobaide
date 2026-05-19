@@ -19,7 +19,6 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val connectionInfo: String = "",
-    val username: String = "",
     val userEmail: String = "",
     val terminalDisplayMode: TerminalDisplayMode = TerminalDisplayMode.Full,
     val terminalStaticColumns: Int = TERMINAL_STATIC_COLUMNS_DEFAULT,
@@ -35,7 +34,6 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(
         SettingsUiState(
             connectionInfo = buildConnectionInfo(),
-            username = authRepository.getUsername() ?: tokenStore.getDeviceId() ?: "",
             userEmail = authRepository.getUserEmail() ?: "",
         ),
     )
