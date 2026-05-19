@@ -70,8 +70,21 @@ android {
         applicationId = "com.mobaide.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.3"
+
+        // versionName is the single source of truth for the app version and
+        // is bumped automatically by release-please via the `extra-files`
+        // entry in release-please-config.json (the generic updater scans
+        // for `x-release-please-version` on the same line and rewrites the
+        // semver string in-place). versionCode is derived from versionName
+        // so Play Store's monotonic-versionCode requirement is satisfied
+        // without a second manual bump. Formula
+        // `major*10000 + minor*100 + patch` gives 1.0.3 → 10003 — strictly
+        // greater than the previously-shipped versionCode (3), so existing
+        // Play uploads keep ascending.
+        val appVersionName = "1.0.3" // x-release-please-version
+        val appVersionParts = appVersionName.split(".").map { it.toInt() }
+        versionCode = appVersionParts[0] * 10000 + appVersionParts[1] * 100 + appVersionParts[2]
+        versionName = appVersionName
 
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")

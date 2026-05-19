@@ -7,7 +7,6 @@
   "bump-patch-for-minor-pre-major": true,
   "draft": false,
   "prerelease": false,
-  "skip-github-release": true,
   "packages": {
     "mobaide_agent": {
       "release-type": "python",
@@ -24,7 +23,10 @@
     "android": {
       "release-type": "simple",
       "component": "android",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        "app/build.gradle.kts"
+      ]
     }
   }
 }

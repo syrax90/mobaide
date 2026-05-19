@@ -51,13 +51,29 @@ the title doesn't match the grammar above (or uses a stale scope like
 What happens after merge:
 
 1. release-please sees the new conventional commit on `main`.
-2. It opens (or updates) a release-PR for that component — bumps
-   `[project] version` in `pyproject.toml` and the matching entry in
-   `.release-please-manifest.json` in lockstep, and prepends the new
-   `## [vX.Y.Z]` section to the component's `CHANGELOG.md`.
+2. It opens (or updates) a release-PR for that component — bumps the
+   per-component version in lockstep across:
+   - `.release-please-manifest.json` (the manifest of record),
+   - `pyproject.toml` for `mobaide_agent` / `central_server`, or
+     `android/app/build.gradle.kts` for android (the line annotated
+     with `// x-release-please-version`; `versionCode` is derived from
+     `versionName` at gradle build time so it never drifts),
+   - the component's `CHANGELOG.md` (prepends a new `## [vX.Y.Z]`
+     section).
 3. Merging that release-PR pushes the corresponding `agent-vX.Y.Z` /
    `server-vX.Y.Z` / `android-vX.Y.Z` tag, which fires the matching
-   `release-*.yml` workflow.
+   `release-*.yml` workflow. release-please-action v4 also creates an
+   empty GitHub Release object on this repo as a side-effect of the
+   tag push (its `manifest.createReleases()` couples tag and Release
+   into one API call, and `skip-github-release: true` would silently
+   skip both — see release-please-action issue #1034). A follow-up
+   step in `release-please.yml` immediately deletes that Release
+   while preserving the tag, so the Releases tab here stays empty for
+   `agent-v*` / `server-v*` / `android-v*`. The meaningful artifacts
+   live elsewhere: agent in the public `mobaide-agent-releases`
+   sibling repo; server in GHCR; android in Play Console. You may
+   briefly see the Release appear and then vanish while
+   `release-please.yml` runs — that is the cleanup step, not a bug.
 
 ### Manual release path (operator escape hatch)
 
@@ -115,10 +131,16 @@ to tags GHA itself pushes.
 > supported way; editing the open release-PR before merging is the
 > other supported way.
 
-Android note: the `android` component is `release-type: simple`, so
-release-please bumps the version in `.release-please-manifest.json`
-only. `versionName` / `versionCode` in `app/build.gradle.kts` must be
-bumped manually before tagging.
+Android note: the `android` component is `release-type: simple`. Both
+`.release-please-manifest.json` and `android/app/build.gradle.kts` are
+bumped automatically — the `extra-files` entry in
+`release-please-config.json` points the generic updater at
+`build.gradle.kts`, where the `// x-release-please-version` annotation
+identifies the `versionName` line. `versionCode` is computed inside
+`build.gradle.kts` from the new `versionName`
+(`major*10000 + minor*100 + patch`), so Play Store's
+monotonic-versionCode requirement is satisfied without a second
+manual edit.
 
 **Caveat — tag-trigger chaining.** GitHub's default `GITHUB_TOKEN`
 cannot trigger downstream workflows from a tag it pushes. The

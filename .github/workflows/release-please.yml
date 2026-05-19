@@ -15,7 +15,8 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: googleapis/release-please-action@v4
+      - id: release
+        uses: googleapis/release-please-action@v4
         with:
           # RELEASE_PLEASE_TOKEN must be a PAT with `workflow` scope so the tag
           # push it makes triggers the downstream release-agent / release-server
@@ -25,3 +26,44 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Delete empty source-repo Releases (keep tags)
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          PATHS_RELEASED: ${{ steps.release.outputs.paths_released }}
+          ALL_OUTPUTS: ${{ toJSON(steps.release.outputs) }}
+        # release-please-action v4 binds tag-push and GitHub Release creation
+        # into a single API call (`manifest.createReleases()`), so the
+        # `skip-github-release` flag — which we'd otherwise set — also
+        # silently skips the tag push and the downstream release-*.yml
+        # workflows never fire (see docs/versioning-and-updates.md and
+        # release-please-action issue #1034). The supported workaround,
+        # per the release-please docs ("this option should only be used if
+        # you have existing infrastructure to tag these releases"), is to
+        # let release-please tag-and-release normally and then delete the
+        # source-repo Release here. `gh release delete` leaves the tag
+        # untouched by default, so:
+        #   * the tag stays
+        #   * the downstream release-*.yml workflow has already started
+        #     (tag push fired it the moment release-please created it)
+        #   * the empty source-archive-bearing Release is gone
+        # See docs/versioning-and-updates.md ("What happens after merge",
+        # step 3) for why the empty Releases are unwanted (private source
+        # repo + GitHub auto-attaches zipball / tarball to every Release
+        # object + no consumer reads them).
+        run: |
+          echo "Paths released: ${PATHS_RELEASED}"
+          echo "${PATHS_RELEASED}" | jq -r '.[]' | while read -r path; do
+            tag=$(printf '%s' "${ALL_OUTPUTS}" | jq -r --arg p "${path}" '.[$p + "--tag_name"] // empty')
+            if [ -z "${tag}" ]; then
+              echo "::warning::No tag_name output for path ${path}; skipping cleanup."
+              continue
+            fi
+            echo "Deleting source-repo Release for ${tag} (tag preserved)…"
+            if ! gh release delete "${tag}" \
+                  --repo "${{ github.repository }}" \
+                  --yes; then
+              echo "::warning::Failed to delete Release for ${tag}; an empty Release may linger on the source repo. Tag is unaffected."
+            fi
+          done
