@@ -1,14 +1,17 @@
 package com.mobaide.app.ui.terminal
 
+import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
@@ -34,6 +37,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -43,24 +47,16 @@ import androidx.compose.ui.unit.dp
 
 private data class ControlKey(val label: String, val bytes: ByteArray)
 
-private val CONTROL_KEY_ROWS = listOf(
-    // Row 1: navigation & editing
-    listOf(
-        ControlKey("Esc", byteArrayOf(0x1b)),
-        ControlKey("Tab", byteArrayOf(0x09)),
-        ControlKey("S-Tab", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte())),
-        ControlKey("Enter", byteArrayOf(0x0d)),
-        ControlKey("Ctrl+L", byteArrayOf(0x0c)),
-    ),
-    // Row 2: signals & arrows
-    listOf(
-        ControlKey("Ctrl-C", byteArrayOf(0x03)),
-        ControlKey("Ctrl-D", byteArrayOf(0x04)),
-        ControlKey("\u2191", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte())),
-        ControlKey("\u2193", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte())),
-        ControlKey("\u2190", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte())),
-        ControlKey("\u2192", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte())),
-    ),
+private val CONTROL_KEYS = listOf(
+    ControlKey("Esc", byteArrayOf(0x1b)),
+    ControlKey("Tab", byteArrayOf(0x09)),
+    ControlKey("S+Tab", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte())),
+    ControlKey("Enter", byteArrayOf(0x0d)),
+    ControlKey("Ctrl+C", byteArrayOf(0x03)),
+    ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte())),
+    ControlKey("↓", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte())),
+    ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte())),
+    ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte())),
 )
 
 @Composable
@@ -81,6 +77,8 @@ fun InputBar(
     var panelExpanded by remember { mutableStateOf(false) }
     var hasFocus by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+    val isLandscape = LocalConfiguration.current.orientation ==
+        Configuration.ORIENTATION_LANDSCAPE
 
     LaunchedEffect(requestFocus) {
         if (requestFocus) {
@@ -98,125 +96,195 @@ fun InputBar(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        // Input row — always visible
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { onTextChange(it) },
+        if (isLandscape) {
+            // Landscape: text field and action buttons share one row.
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .focusRequester(focusRequester)
-                    .onFocusChanged { focusState ->
-                        // Auto-place cursor at end on focus only when the
-                        // current selection is collapsed (a cursor). When
-                        // upstream code (e.g. the templates picker) has set
-                        // a non-collapsed range like select-all, preserve it.
-                        if (focusState.isFocused && !hasFocus
-                            && text.text.isNotEmpty()
-                            && text.selection.collapsed) {
-                            onTextChange(text.copy(selection = TextRange(text.text.length)))
-                        }
-                        hasFocus = focusState.isFocused
-                    },
-                placeholder = { Text("Type command...") },
-                minLines = 1,
-                maxLines = 10,
-                enabled = enabled,
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-            )
-            IconButton(
-                onClick = onOpenTemplates,
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.LibraryBooks,
-                    contentDescription = "Templates",
+                InputField(
+                    text = text,
+                    onTextChange = onTextChange,
+                    enabled = enabled,
+                    focusRequester = focusRequester,
+                    hasFocus = hasFocus,
+                    onHasFocusChange = { hasFocus = it },
+                    modifier = Modifier.weight(1f),
+                )
+                ActionButtons(
+                    enabled = enabled,
+                    canSend = text.text.isNotEmpty(),
+                    panelExpanded = panelExpanded,
+                    onOpenTemplates = onOpenTemplates,
+                    onSaveAsTemplate = onSaveAsTemplate,
+                    onTogglePanel = { panelExpanded = !panelExpanded },
+                    onExpand = onExpand,
+                    onSend = { send() },
                 )
             }
-            IconButton(
-                onClick = onSaveAsTemplate,
-                enabled = text.text.isNotEmpty(),
+        } else {
+            // Portrait: text field spans full width above the action buttons.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
             ) {
-                Icon(
-                    Icons.Default.BookmarkAdd,
-                    contentDescription = "Save as template",
+                InputField(
+                    text = text,
+                    onTextChange = onTextChange,
+                    enabled = enabled,
+                    focusRequester = focusRequester,
+                    hasFocus = hasFocus,
+                    onHasFocusChange = { hasFocus = it },
+                    modifier = Modifier.fillMaxWidth(),
                 )
-            }
-            IconButton(
-                onClick = { panelExpanded = !panelExpanded },
-                enabled = enabled,
-            ) {
-                Icon(
-                    Icons.Outlined.Keyboard,
-                    contentDescription = if (panelExpanded) "Hide keys" else "Show keys",
-                )
-            }
-            IconButton(
-                onClick = onExpand,
-                enabled = enabled,
-            ) {
-                Icon(
-                    Icons.Default.OpenInFull,
-                    contentDescription = "Expand editor",
-                )
-            }
-            IconButton(
-                onClick = { send() },
-                enabled = enabled && text.text.isNotEmpty(),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send",
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ActionButtons(
+                        enabled = enabled,
+                        canSend = text.text.isNotEmpty(),
+                        panelExpanded = panelExpanded,
+                        onOpenTemplates = onOpenTemplates,
+                        onSaveAsTemplate = onSaveAsTemplate,
+                        onTogglePanel = { panelExpanded = !panelExpanded },
+                        onExpand = onExpand,
+                        onSend = { send() },
+                    )
+                }
             }
         }
 
-        // Control-key panel — toggles via keyboard icon
+        // Control-key panel — single horizontally scrollable row.
         AnimatedVisibility(
             visible = panelExpanded,
             enter = slideInVertically { it },
             exit = slideOutVertically { it },
         ) {
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 8.dp, vertical = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                CONTROL_KEY_ROWS.forEach { row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
+                CONTROL_KEYS.forEach { key ->
+                    FilledTonalButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onSendBytes(key.bytes)
+                        },
+                        enabled = enabled,
+                        contentPadding = PaddingValues(
+                            horizontal = 10.dp, vertical = 4.dp,
+                        ),
                     ) {
-                        row.forEach { key ->
-                            FilledTonalButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onSendBytes(key.bytes)
-                                },
-                                enabled = enabled,
-                                contentPadding = PaddingValues(
-                                    horizontal = 10.dp, vertical = 4.dp,
-                                ),
-                            ) {
-                                Text(
-                                    key.label,
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                    ),
-                                )
-                            }
-                        }
+                        Text(
+                            key.label,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                            ),
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun InputField(
+    text: TextFieldValue,
+    onTextChange: (TextFieldValue) -> Unit,
+    enabled: Boolean,
+    focusRequester: FocusRequester,
+    hasFocus: Boolean,
+    onHasFocusChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedTextField(
+        value = text,
+        onValueChange = { onTextChange(it) },
+        modifier = modifier
+            .focusRequester(focusRequester)
+            .onFocusChanged { focusState ->
+                // Auto-place cursor at end on focus only when the
+                // current selection is collapsed (a cursor). When
+                // upstream code (e.g. the templates picker) has set
+                // a non-collapsed range like select-all, preserve it.
+                if (focusState.isFocused && !hasFocus
+                    && text.text.isNotEmpty()
+                    && text.selection.collapsed) {
+                    onTextChange(text.copy(selection = TextRange(text.text.length)))
+                }
+                onHasFocusChange(focusState.isFocused)
+            },
+        placeholder = { Text("Type command...") },
+        minLines = 1,
+        maxLines = 10,
+        enabled = enabled,
+        textStyle = MaterialTheme.typography.bodyMedium.copy(
+            fontFamily = FontFamily.Monospace,
+        ),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+    )
+}
+
+@Composable
+private fun ActionButtons(
+    enabled: Boolean,
+    canSend: Boolean,
+    panelExpanded: Boolean,
+    onOpenTemplates: () -> Unit,
+    onSaveAsTemplate: () -> Unit,
+    onTogglePanel: () -> Unit,
+    onExpand: () -> Unit,
+    onSend: () -> Unit,
+) {
+    IconButton(onClick = onOpenTemplates) {
+        Icon(
+            Icons.AutoMirrored.Filled.LibraryBooks,
+            contentDescription = "Templates",
+        )
+    }
+    IconButton(
+        onClick = onSaveAsTemplate,
+        enabled = canSend,
+    ) {
+        Icon(
+            Icons.Default.BookmarkAdd,
+            contentDescription = "Save as template",
+        )
+    }
+    IconButton(
+        onClick = onTogglePanel,
+        enabled = enabled,
+    ) {
+        Icon(
+            Icons.Outlined.Keyboard,
+            contentDescription = if (panelExpanded) "Hide keys" else "Show keys",
+        )
+    }
+    IconButton(
+        onClick = onExpand,
+        enabled = enabled,
+    ) {
+        Icon(
+            Icons.Default.OpenInFull,
+            contentDescription = "Expand editor",
+        )
+    }
+    IconButton(
+        onClick = onSend,
+        enabled = enabled && canSend,
+    ) {
+        Icon(
+            Icons.AutoMirrored.Filled.Send,
+            contentDescription = "Send",
+        )
     }
 }
