@@ -1602,6 +1602,300 @@ class TestProxyCreateSessionClaudeOptions:
         mock_session_manager.create_session.assert_not_awaited()
 
 
+class TestValidateAdHocCwdHelper:
+    """The module-level :func:`_validate_adhoc_cwd_or_error` helper
+    mirrors the router's :func:`_validate_adhoc_cwd` so the relay stays
+    independently importable. The "or_error" variant returns the
+    human-readable error string instead of raising — call sites format
+    the response in their own protocol shape.
+    """
+
+    def test_empty_returns_empty_error(self):
+        from mobaide.relay.client import _validate_adhoc_cwd_or_error
+        msg = _validate_adhoc_cwd_or_error("")
+        assert msg is not None
+        assert "empty" in msg.lower()
+
+    def test_relative_path_returns_absolute_error(self):
+        from mobaide.relay.client import _validate_adhoc_cwd_or_error
+        msg = _validate_adhoc_cwd_or_error("relative/path")
+        assert msg is not None
+        assert "absolute" in msg
+        assert "relative/path" in msg
+
+    def test_nonexistent_absolute_returns_does_not_exist(self, tmp_path):
+        from mobaide.relay.client import _validate_adhoc_cwd_or_error
+        ghost = tmp_path / "ghost"
+        msg = _validate_adhoc_cwd_or_error(str(ghost))
+        assert msg is not None
+        assert "does not exist" in msg
+        assert str(ghost) in msg
+
+    def test_file_path_returns_not_a_directory(self, tmp_path):
+        from mobaide.relay.client import _validate_adhoc_cwd_or_error
+        f = tmp_path / "file.txt"
+        f.write_text("x")
+        msg = _validate_adhoc_cwd_or_error(str(f))
+        assert msg is not None
+        assert "not a directory" in msg
+        assert str(f) in msg
+
+    def test_valid_directory_returns_none(self, tmp_path):
+        from mobaide.relay.client import _validate_adhoc_cwd_or_error
+        assert _validate_adhoc_cwd_or_error(str(tmp_path)) is None
+
+
+class TestHandleCreateSessionAdHocPathValidation:
+    """When a control-channel ``create_session`` frame arrives with
+    ``project_name=None`` and a user-supplied ``cwd``, the relay runs
+    the same pre-validation as the FastAPI router. Invalid paths
+    short-circuit with ``session_create_failed`` instead of reaching
+    ``SessionManager.create_session`` (which would otherwise surface a
+    ``FileNotFoundError`` mapped through ``str(exc)`` and leak doubled
+    backslashes onto the wire).
+    """
+
+    async def test_relative_cwd_returns_session_create_failed(
+        self, client, mock_session_manager,
+    ):
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "adhoc-rel",
+            "cwd": "relative/path",
+        }
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        ws.send.assert_called_once()
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "adhoc-rel"
+        assert "absolute" in resp["error"]
+        # Validation runs BEFORE create_session — the session manager
+        # must not have been invoked at all.
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_nonexistent_cwd_returns_session_create_failed(
+        self, client, mock_session_manager, tmp_path,
+    ):
+        missing = tmp_path / "no-such"
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "adhoc-missing",
+            "cwd": str(missing),
+        }
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert "does not exist" in resp["error"]
+        assert str(missing) in resp["error"]
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_file_cwd_returns_session_create_failed(
+        self, client, mock_session_manager, tmp_path,
+    ):
+        a_file = tmp_path / "f.txt"
+        a_file.write_text("x")
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "adhoc-file",
+            "cwd": str(a_file),
+        }
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert "not a directory" in resp["error"]
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_validation_skipped_when_project_name_set(
+        self, client, mock_session_manager,
+    ):
+        """``project_name`` set ⇒ server derives cwd from the project;
+        the ad-hoc validator must not fire. A relative ``cwd`` here must
+        NOT short-circuit — it is simply ignored, and the request flows
+        through to ``create_session`` normally (which the mock accepts)."""
+        mock_session = MagicMock()
+        mock_session.session_id = "ok-sess"
+        mock_session.pid = 1234
+        mock_session_manager.create_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "ok-sess",
+            "project_name": "proj-x",
+            "cwd": "relative/should/be/ignored",
+        }
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        # Validation was skipped — create_session was called.
+        mock_session_manager.create_session.assert_awaited_once()
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+
+    async def test_validation_skipped_when_cwd_is_none(
+        self, client, mock_session_manager,
+    ):
+        """``cwd=None`` ⇒ raw Terminal in default cwd path. The validator
+        must NOT fire on ``None`` (only on a user-supplied path)."""
+        mock_session = MagicMock()
+        mock_session.session_id = "default-cwd"
+        mock_session.pid = 5
+        mock_session_manager.create_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "default-cwd"}
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        mock_session_manager.create_session.assert_awaited_once()
+
+    async def test_valid_adhoc_cwd_creates_session(
+        self, client, mock_session_manager, tmp_path,
+    ):
+        """Sanity: a real absolute directory passes validation and
+        reaches ``create_session`` — Claude mode (with ``claude_options``)
+        in an ad-hoc directory is the happy path."""
+        mock_session = MagicMock()
+        mock_session.session_id = "adhoc-ok"
+        mock_session.pid = 4242
+        mock_session_manager.create_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "adhoc-ok",
+            "cwd": str(tmp_path),
+            "claude_options": {},
+        }
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        mock_session_manager.create_session.assert_awaited_once()
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "adhoc-ok"
+
+
+class TestDispatchProxyAdHocPathValidation:
+    """Same validation applies on the relay's proxy path
+    (``POST /api/sessions``). Mirrors the router's behavior: invalid
+    custom paths surface as ``{"status": 400, "body": {"detail": ...}}``
+    before ``SessionManager.create_session`` is reached.
+    """
+
+    async def test_relative_cwd_returns_400(
+        self, client, mock_session_manager,
+    ):
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/sessions", {"cwd": "relative/path"}, None, ws,
+        )
+        assert result["status"] == 400
+        assert "absolute" in result["body"]["detail"]
+        assert "relative/path" in result["body"]["detail"]
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_nonexistent_cwd_returns_400(
+        self, client, mock_session_manager, tmp_path,
+    ):
+        missing = tmp_path / "missing"
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/sessions", {"cwd": str(missing)}, None, ws,
+        )
+        assert result["status"] == 400
+        assert "does not exist" in result["body"]["detail"]
+        assert str(missing) in result["body"]["detail"]
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_file_cwd_returns_400(
+        self, client, mock_session_manager, tmp_path,
+    ):
+        f = tmp_path / "f.txt"
+        f.write_text("x")
+        mock_session_manager.create_session = AsyncMock()
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/sessions", {"cwd": str(f)}, None, ws,
+        )
+        assert result["status"] == 400
+        assert "not a directory" in result["body"]["detail"]
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_validation_skipped_when_project_name_set(
+        self, client, mock_session_manager,
+    ):
+        """A bad ``cwd`` accompanied by a ``project_name`` must NOT
+        trigger the 400 — the server derives cwd from the project. Pins
+        the same invariant tested on the router side."""
+        from mobaide.core.models import SessionState
+        from datetime import datetime, timezone
+
+        fake_info = MagicMock()
+        fake_info.session_id = "sid"
+        fake_info.state = SessionState.RUNNING
+        fake_info.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fake_info.pid = 7
+        fake_info.command = ["/bin/bash"]
+        fake_info.cwd = "/some/project/path"
+
+        fake_session = MagicMock()
+        fake_session.to_info.return_value = fake_info
+        mock_session_manager.create_session = AsyncMock(return_value=fake_session)
+
+        ws = AsyncMock()
+        body = {
+            "project_name": "proj",
+            "cwd": "should/be/ignored/because/relative",
+        }
+        with patch.object(client, "_bridge_session"):
+            result = await client._dispatch_proxy(
+                "POST", "/api/sessions", body, None, ws,
+            )
+
+        assert result["status"] == 201
+        mock_session_manager.create_session.assert_awaited_once()
+
+    async def test_valid_adhoc_cwd_returns_201(
+        self, client, mock_session_manager, tmp_path,
+    ):
+        """Happy path: ``project_name=None`` + valid absolute cwd +
+        ``claude_options`` → 201 via the ad-hoc Claude launch path."""
+        from mobaide.core.models import SessionState
+        from datetime import datetime, timezone
+
+        fake_info = MagicMock()
+        fake_info.session_id = "adhoc-sid"
+        fake_info.state = SessionState.RUNNING
+        fake_info.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        fake_info.pid = 9
+        fake_info.command = ["claude"]
+        fake_info.cwd = str(tmp_path)
+
+        fake_session = MagicMock()
+        fake_session.to_info.return_value = fake_info
+        mock_session_manager.create_session = AsyncMock(return_value=fake_session)
+
+        ws = AsyncMock()
+        body = {"cwd": str(tmp_path), "claude_options": {}}
+        with patch.object(client, "_bridge_session"):
+            result = await client._dispatch_proxy(
+                "POST", "/api/sessions", body, None, ws,
+            )
+
+        assert result["status"] == 201
+        assert result["body"]["session_id"] == "adhoc-sid"
+        mock_session_manager.create_session.assert_awaited_once()
+
+
 class TestProxyGitItems:
     """Regression guards for the missing relay route bug: the FastAPI git
     router (``/api/projects/{name}/git/items`` GET, ``items:delete`` POST,

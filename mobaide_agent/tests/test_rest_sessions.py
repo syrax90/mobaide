@@ -277,6 +277,167 @@ class TestCreateSessionProjectPathErrors:
         assert "\\\\\\\\" not in resp.text
 
 
+class TestCreateSessionAdHoc:
+    """``POST /api/sessions`` with ``project_name=None`` and a
+    user-supplied ``cwd``: the new ad-hoc (custom-path) launch path.
+
+    The router's :func:`_validate_adhoc_cwd` rejects empty / non-absolute /
+    non-existent / non-directory paths with a clean 400 _before_ the
+    request reaches ``ClaudeLauncher``. Sessions are still creatable when
+    the cwd is a valid absolute directory (both Terminal and Claude
+    modes), and the projects store stays untouched throughout.
+    """
+
+    async def test_terminal_mode_with_valid_cwd_returns_201(
+        self, client, auth_headers, tmp_path,
+    ):
+        """``project_name=None``, ``cwd=<existing dir>``, no
+        ``claude_options`` → raw Terminal session at the chosen cwd.
+        Pre-existing behavior, but worth pinning as a regression guard:
+        the new ad-hoc validation must not break this path."""
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cwd": str(tmp_path)},
+        )
+        assert resp.status_code == 201
+
+    async def test_empty_cwd_returns_400_with_clean_detail(
+        self, client, auth_headers,
+    ):
+        """An empty string ``cwd`` is rejected before the launcher runs
+        — surfaces as 400, not 500, with a human-readable detail."""
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cwd": ""},
+        )
+        assert resp.status_code == 400
+        assert "empty" in resp.json()["detail"].lower()
+
+    async def test_relative_cwd_returns_400_with_clean_detail(
+        self, client, auth_headers,
+    ):
+        """A relative path is rejected — agents have no defined notion
+        of "current working directory" for custom-path launches; the
+        client must send an absolute path."""
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cwd": "relative/path"},
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "absolute" in detail
+        assert "relative/path" in detail
+
+    async def test_nonexistent_cwd_returns_400_with_clean_detail(
+        self, client, auth_headers, tmp_path,
+    ):
+        """An absolute-but-missing path is rejected by the existence
+        check, not by ``ClaudeLauncher._check_exists`` further down —
+        the 400 carries "does not exist" wording, distinguishing it
+        from the "is not a directory" case below."""
+        missing = tmp_path / "ghost"
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cwd": str(missing)},
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "does not exist" in detail
+        assert str(missing) in detail
+
+    async def test_cwd_pointing_to_file_returns_400_with_clean_detail(
+        self, client, auth_headers, tmp_path,
+    ):
+        """An existing-but-not-a-directory path (a file) is rejected —
+        ``PtyBackend.spawn`` would otherwise emit a less readable
+        platform-specific error."""
+        a_file = tmp_path / "file.txt"
+        a_file.write_text("hello")
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cwd": str(a_file)},
+        )
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "not a directory" in detail
+        assert str(a_file) in detail
+
+    async def test_adhoc_validation_skipped_when_project_name_set(
+        self, client, auth_headers, tmp_path,
+    ):
+        """When ``project_name`` is set the server derives ``cwd`` from
+        the project — any supplied ``body.cwd`` is ignored, so the
+        ad-hoc validator must NOT run. Concretely: a relative ``cwd``
+        alongside a valid ``project_name`` must NOT trip the
+        "absolute path" 400."""
+        real_project = tmp_path / "prj"
+        real_project.mkdir()
+        create = await client.post(
+            "/api/projects",
+            headers=auth_headers,
+            json={"name": "good-proj", "path": str(real_project)},
+        )
+        assert create.status_code == 201
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "project_name": "good-proj",
+                # Intentionally a relative path. The validator must be
+                # skipped because ``project_name`` is present; the server
+                # derives cwd from the project record instead.
+                "cwd": "ignored/relative/path",
+            },
+        )
+        assert resp.status_code == 201, (
+            f"adhoc validator must not run when project_name is set; "
+            f"got {resp.status_code}: {resp.text}"
+        )
+
+    async def test_adhoc_launch_does_not_create_project_in_store(
+        self, app, client, auth_headers, tmp_path,
+    ):
+        """Beyond a clean 201, the ad-hoc path must NOT silently create
+        a ``ProjectConfig`` in ``ProjectsStore`` keyed by the custom
+        cwd — the whole point of the ad-hoc path is "run once, don't save"."""
+        before_count = len(app.state.projects_store)
+        before_names = sorted(app.state.projects_store.list_public(), key=lambda p: p["name"])
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cwd": str(tmp_path)},
+        )
+        assert resp.status_code == 201
+        after_count = len(app.state.projects_store)
+        after_names = sorted(app.state.projects_store.list_public(), key=lambda p: p["name"])
+        assert after_count == before_count, (
+            "ad-hoc launches must never mutate ProjectsStore — "
+            f"len changed from {before_count} to {after_count}"
+        )
+        assert after_names == before_names, (
+            "ad-hoc launches must never add an entry to ProjectsStore"
+        )
+
+    async def test_both_project_name_and_cwd_none_still_works(
+        self, client, auth_headers,
+    ):
+        """``project_name=None`` AND ``cwd=None`` is the original Terminal-
+        in-default-cwd path. The new validation must NOT trip on this
+        — only ``cwd is not None`` should trigger _validate_adhoc_cwd."""
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={},  # neither project_name nor cwd
+        )
+        assert resp.status_code == 201
+
+
 class TestListSessions:
     async def test_empty_list(self, client, auth_headers):
         resp = await client.get("/api/sessions", headers=auth_headers)

@@ -202,6 +202,22 @@ class LaunchSpec:
     created_files: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class AdHocLaunch:
+    """Ad-hoc Claude launch target: a bare cwd with no stored project context.
+
+    Used by the custom-path entry on the mobile picker to spawn a one-off
+    Claude session against an arbitrary folder. No Linear key, no conda env,
+    no project files written. The log "source" is recorded as ``<ad-hoc>``
+    rather than synthesising a fake :class:`ProjectConfig`.
+    """
+
+    cwd: str
+
+
+LaunchTarget = ProjectConfig | AdHocLaunch
+
+
 _LINEAR_MCP_TEMPLATE = {
     "mcpServers": {
         "linear": {
@@ -253,7 +269,7 @@ class ClaudeLauncher:
 
     async def build(
         self,
-        project: ProjectConfig,
+        target: LaunchTarget,
         options: ClaudeOptions,
     ) -> LaunchSpec:
         # Resolve the binary FIRST so a ``ClaudeBinaryNotFoundError`` aborts
@@ -261,9 +277,9 @@ class ClaudeLauncher:
         # missing CLI would leak an orphan worktree directory on every
         # scan cycle.
         argv = self._build_argv(options)
-        cwd = await self._resolve_cwd(project, options)
-        env = self._build_env(project, options)
-        created = self._write_project_files(project, cwd)
+        cwd = await self._resolve_cwd(target, options)
+        env = self._build_env(target, options)
+        created = self._write_project_files(target, cwd)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
 
     def _build_argv(self, options: ClaudeOptions) -> list[str]:
@@ -281,18 +297,19 @@ class ClaudeLauncher:
             argv += ["--", options.initial_prompt]
         return argv
 
-    def _build_env(self, project: ProjectConfig, options: ClaudeOptions) -> dict[str, str]:
+    def _build_env(self, target: LaunchTarget, options: ClaudeOptions) -> dict[str, str]:
         env = os.environ.copy()
         env.update(CLAUDE_SESSION_PRESET_ENV)
-        if project.linear_api_key:
-            env["LINEAR_API_KEY"] = project.linear_api_key
+        is_project = isinstance(target, ProjectConfig)
+        if is_project and target.linear_api_key:
+            env["LINEAR_API_KEY"] = target.linear_api_key
         if options.no_memory:
             env["CLAUDE_NO_MEMORY"] = "1"
         env.setdefault("TERM", "xterm-256color")
         env["PYTHONIOENCODING"] = "utf-8"
 
-        if project.conda_env:
-            conda_bin = ClaudeLauncher._conda_env_bin(project.conda_env)
+        if is_project and target.conda_env:
+            conda_bin = ClaudeLauncher._conda_env_bin(target.conda_env)
             if conda_bin:
                 sep = os.pathsep
                 env["PATH"] = f"{conda_bin}{sep}{env.get('PATH', '')}"
@@ -328,18 +345,28 @@ class ClaudeLauncher:
         return str(resolved) if resolved.exists() else str(resolved)
 
     async def _resolve_cwd(
-        self, project: ProjectConfig, options: ClaudeOptions
+        self, target: LaunchTarget, options: ClaudeOptions
     ) -> str:
+        if isinstance(target, AdHocLaunch):
+            # Ad-hoc launches have no git/project context — never create a
+            # worktree. Log if the client still sent worktree=true so the
+            # silent downgrade is auditable.
+            if options.worktree:
+                logger.warning(
+                    "worktree=true requested for ad-hoc launch %r; ignoring",
+                    "<ad-hoc>",
+                )
+            return self._check_exists(target.cwd)
         if not options.worktree:
-            return self._check_exists(project.path)
+            return self._check_exists(target.path)
         # A stale client may still send worktree=true for a non-git project;
         # fall back to the project root.
-        if not safe_path_exists(Path(project.path) / ".git"):
+        if not safe_path_exists(Path(target.path) / ".git"):
             logger.warning(
                 "worktree=true requested for non-git project %r; ignoring",
-                project.name,
+                target.name,
             )
-            return self._check_exists(project.path)
+            return self._check_exists(target.path)
         if self._worktree_mgr is None:
             raise RuntimeError(
                 "worktree=true requested but no WorktreeManager is configured; "
@@ -354,7 +381,7 @@ class ClaudeLauncher:
             slug = convert_to_worktree_slug(
                 options.identifier, options.title or ""
             )
-            result = await self._worktree_mgr.create_worktree(slug, project.path)
+            result = await self._worktree_mgr.create_worktree(slug, target.path)
         else:
             # Standard path: honour the user's entered branch name verbatim.
             # Empty branch_name gets a unique auto-generated default so two
@@ -364,7 +391,7 @@ class ClaudeLauncher:
             )
             slug = convert_to_worktree_slug("", branch)
             result = await self._worktree_mgr.create_worktree(
-                slug, project.path, branch_name=branch,
+                slug, target.path, branch_name=branch,
             )
         return self._check_exists(result.path)
 
@@ -382,9 +409,14 @@ class ClaudeLauncher:
         return cwd
 
     @staticmethod
-    def _write_project_files(project: ProjectConfig, cwd: str) -> list[str]:
-        """Write ``.mcp.json`` and ``.claude/settings.local.json`` when a Linear API key is present."""
-        if not project.linear_api_key:
+    def _write_project_files(target: LaunchTarget, cwd: str) -> list[str]:
+        """Write ``.mcp.json`` and ``.claude/settings.local.json`` when a Linear API key is present.
+
+        Ad-hoc launches skip this entirely — they have no stored project,
+        no Linear key, and writing into an arbitrary user-supplied folder
+        would pollute it with files the user did not opt in to.
+        """
+        if not isinstance(target, ProjectConfig) or not target.linear_api_key:
             return []
         created: list[str] = []
         cwd_path = Path(cwd)
@@ -397,7 +429,7 @@ class ClaudeLauncher:
         mcp_doc = json.loads(json.dumps(_LINEAR_MCP_TEMPLATE))  # deep copy
         mcp_doc["mcpServers"]["linear"]["headers"][
             "Authorization"
-        ] = f"Bearer {project.linear_api_key}"
+        ] = f"Bearer {target.linear_api_key}"
         try:
             mcp_path.write_text(
                 json.dumps(mcp_doc, indent=2), encoding="utf-8"

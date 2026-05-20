@@ -1,6 +1,7 @@
 package com.mobaide.app.ui.sessions
 
 import app.cash.turbine.test
+import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
@@ -59,6 +60,7 @@ class CreateSessionViewModelTest {
         val sessionRepo: SessionRepository,
         val autoScanRepo: AutoScanRepository,
         val prefs: PreferencesStore,
+        val tokenStore: TokenStore,
         val projectsFlow: MutableStateFlow<List<ProjectInfo>>,
     )
 
@@ -69,11 +71,15 @@ class CreateSessionViewModelTest {
         ),
         lastUsedProject: String? = null,
         autoScanPrompt: String? = "default auto scan prompt",
+        agentId: String? = "agent-1",
+        agentUrl: String? = null,
+        recentCustomPaths: List<String> = emptyList(),
     ): Fixture {
         val projectsRepo = mockk<ProjectsRepository>(relaxed = true)
         val sessionRepo = mockk<SessionRepository>(relaxed = true)
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
         val prefs = mockk<PreferencesStore>(relaxed = true)
+        val tokenStore = mockk<TokenStore>(relaxed = true)
         val projectsFlow = MutableStateFlow(initialProjects)
 
         every { projectsRepo.observeProjects() } returns projectsFlow
@@ -81,13 +87,17 @@ class CreateSessionViewModelTest {
         coEvery { prefs.getLastUsedProjectName() } returns lastUsedProject
         coEvery { prefs.setLastUsedProjectName(any()) } just Runs
         coEvery { prefs.setLastUsedSessionId(any()) } just Runs
+        coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
+        coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         every { autoScanRepo.getAutoScanPrompt() } returns autoScanPrompt
+        every { tokenStore.getAgentId() } returns agentId
+        every { tokenStore.getAgentUrl() } returns agentUrl
 
-        return Fixture(projectsRepo, sessionRepo, autoScanRepo, prefs, projectsFlow)
+        return Fixture(projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, projectsFlow)
     }
 
     private fun Fixture.buildVm(): CreateSessionViewModel =
-        CreateSessionViewModel(projectsRepo, sessionRepo, autoScanRepo, prefs)
+        CreateSessionViewModel(projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore)
 
     // ---- Wizard step flow --------------------------------------------------
 
@@ -557,5 +567,399 @@ class CreateSessionViewModelTest {
 
         coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
         assertFalse(vm.uiState.value.submitting)
+    }
+
+    // A path that ``Paths.get(...).isAbsolute`` returns ``true`` for on the
+    // host JVM running these tests. The validator combines
+    // ``Paths.get(input).isAbsolute`` with a Windows-shape regex, so a
+    // POSIX path like ``/usr/local/bin`` only validates as absolute on a
+    // Linux JVM — on a Windows JVM ``Paths.get("/usr/local/bin").isAbsolute``
+    // returns ``false`` and the regex doesn't fire either (no drive letter).
+    // Using a host-appropriate path lets these tests assert the validator's
+    // "valid path" contract regardless of where they run. The Windows-shape
+    // path tests (separate cases below) use the regex branch and therefore
+    // pass on every host.
+    private val hostAbsolutePath: String =
+        if (System.getProperty("os.name").orEmpty().lowercase().contains("win"))
+            "C:/Work/sandbox"
+        else
+            "/srv/work"
+
+    @Test
+    fun selectCustomPath_transitionsSelection_andLoadsRecentsFromPreferences() = runTest {
+        // The "Custom path…" dropdown entry switches the picker into a typed-
+        // path flow. The VM must (a) flip `selection` to `CustomPath("")`,
+        // (b) load the per-agent recents into `recentCustomPaths` so the
+        // chip row renders, and (c) clear any prior draft / error.
+        val fx = newFixture(
+            agentId = "agent-1",
+            recentCustomPaths = listOf("/tmp/foo", "/var/log"),
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(
+            "selection must flip to CustomPath after selectCustomPath()",
+            s.selection is ProjectSelection.CustomPath,
+        )
+        assertEquals("", (s.selection as ProjectSelection.CustomPath).path)
+        assertEquals("", s.customPathDraft)
+        assertNull(s.customPathError)
+        assertEquals(listOf("/tmp/foo", "/var/log"), s.recentCustomPaths)
+        coVerify(exactly = 1) { fx.prefs.getRecentCustomPaths("agent-1") }
+    }
+
+    @Test
+    fun selectCustomPath_usesAgentUrlFallback_whenAgentIdIsNull() = runTest {
+        // Per the plan: DIRECT-mode peers have no `agent_id`; we fall back
+        // to `agent_url` for the recents scope key. Both null ⇒ no key,
+        // and the recents load is skipped (rare; the screen wouldn't load).
+        val fx = newFixture(
+            agentId = null,
+            agentUrl = "https://agent.local:8080",
+            recentCustomPaths = listOf("/home/me"),
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.prefs.getRecentCustomPaths("https://agent.local:8080") }
+        assertEquals(listOf("/home/me"), vm.uiState.value.recentCustomPaths)
+    }
+
+    @Test
+    fun selectCustomPath_noScopeKey_skipsRecentsLoad() = runTest {
+        // No agent_id AND no agent_url ⇒ the VM must not call
+        // `getRecentCustomPaths(null)` — it simply skips the load. The
+        // panel renders without chips and the user can still type a path.
+        val fx = newFixture(agentId = null, agentUrl = null)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.selection is ProjectSelection.CustomPath)
+        coVerify(exactly = 0) { fx.prefs.getRecentCustomPaths(any()) }
+        assertTrue(vm.uiState.value.recentCustomPaths.isEmpty())
+    }
+
+    @Test
+    fun setCustomPathDraft_relativePath_setsError_andClampsSelectionPath() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("relative/foo")
+
+        val s = vm.uiState.value
+        assertEquals("relative/foo", s.customPathDraft)
+        assertNotNull("relative path must produce an inline error", s.customPathError)
+        // When the draft is invalid the selection.path is held at "" so
+        // `submit()` cannot ship an invalid request even if the user
+        // races through the Continue button.
+        assertEquals("", (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_blank_setsError() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("   ")
+
+        assertNotNull(
+            "blank-after-trim path must surface an error",
+            vm.uiState.value.customPathError,
+        )
+    }
+
+    @Test
+    fun setCustomPathDraft_posixAbsolute_clearsError_andUpdatesSelection() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        // First set an invalid path so we can observe the error -> ok transition.
+        vm.setCustomPathDraft("nope")
+        assertNotNull(vm.uiState.value.customPathError)
+
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        val s = vm.uiState.value
+        assertNull(s.customPathError)
+        assertEquals(hostAbsolutePath, s.customPathDraft)
+        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_windowsAbsoluteForwardSlash_isAccepted() = runTest {
+        // The plan calls out that Android's JVM `Paths.get("C:\\foo").isAbsolute`
+        // returns false on Linux — so the VM uses a regex fallback for the
+        // Windows shape. Forward slashes after `<letter>:` count as
+        // Windows-absolute too (mobaide_agent runs on Windows hosts).
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("C:/ML/Projects")
+
+        val s = vm.uiState.value
+        assertNull(
+            "Windows-style absolute path with forward slash must validate as absolute",
+            s.customPathError,
+        )
+        assertEquals("C:/ML/Projects", (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_windowsAbsoluteBackslash_isAccepted() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("D:\\ML\\Projects")
+
+        val s = vm.uiState.value
+        assertNull(s.customPathError)
+        assertEquals("D:\\ML\\Projects", (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun setCustomPathDraft_uncPath_isAccepted() = runTest {
+        // UNC paths (`\\server\share`) start with two backslashes and are
+        // absolute by definition.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.setCustomPathDraft("\\\\server\\share")
+
+        assertNull(vm.uiState.value.customPathError)
+    }
+
+    @Test
+    fun pickRecentCustomPath_delegatesToSetCustomPathDraft() = runTest {
+        // Tapping a recents chip must produce the same state as typing
+        // the path manually — including validation pass-through.
+        val fx = newFixture(recentCustomPaths = listOf(hostAbsolutePath))
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+
+        vm.pickRecentCustomPath(hostAbsolutePath)
+
+        val s = vm.uiState.value
+        assertEquals(hostAbsolutePath, s.customPathDraft)
+        assertNull(s.customPathError)
+        assertEquals(hostAbsolutePath, (s.selection as ProjectSelection.CustomPath).path)
+    }
+
+    @Test
+    fun confirmProject_customPathValid_advancesToModePick() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        vm.confirmProject()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun confirmProject_customPathInvalid_staysOnProjectSelect() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        // No draft set yet — error is null but selection.path is "".
+        vm.confirmProject()
+        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+
+        // With an invalid draft, still must not advance.
+        vm.setCustomPathDraft("nope")
+        vm.confirmProject()
+        assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
+    }
+
+    @Test
+    fun submit_customPath_buildsAdHocRequest_andAddsToRecents_notLastUsedProject() = runTest {
+        // The defining contract of custom-path submit:
+        // (a) send `project_name = null` + `cwd = <path>`,
+        // (b) clamp `worktree=false` + `branch_name=null` so the agent
+        //     doesn't try a worktree dance on a non-project path,
+        // (c) call `addRecentCustomPath(scopeKey, path)`,
+        // (d) NOT call `setLastUsedProjectName` — recents are a separate
+        //     concept; `last_used_project_name` should remain untouched.
+        val fx = newFixture(agentId = "agent-1")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        // Even if the user previously toggled worktree on while a stored
+        // project was active, the CustomPath branch must clamp it off.
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-adhoc", "starting", "2026-05-20T00:00:00Z")
+
+        vm.confirmProject()
+        vm.selectStandardMode()
+        vm.submit()
+        advanceUntilIdle()
+
+        val req = requestSlot.captured
+        assertNull(req.project_name)
+        assertEquals(hostAbsolutePath, req.cwd)
+        val opts = req.claude_options
+        assertNotNull(opts)
+        assertFalse("worktree must be forced false for CustomPath submits", opts!!.worktree)
+        assertNull("branch_name must be null for CustomPath submits", opts.branch_name)
+        coVerify(exactly = 1) { fx.prefs.addRecentCustomPath("agent-1", hostAbsolutePath) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedProjectName(any()) }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-adhoc") }
+    }
+
+    @Test
+    fun submit_customPath_withoutAgentScope_skipsRecentsButStillSucceeds() = runTest {
+        // No agent_id and no agent_url ⇒ recents won't persist. The submit
+        // path must NOT crash — it just skips the `addRecentCustomPath`
+        // call and proceeds to navigation.
+        val fx = newFixture(agentId = null, agentUrl = null)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        coEvery { fx.sessionRepo.createSession(any()) } returns
+            SessionResponse("sess-no-scope", "starting", "2026-05-20T00:00:00Z")
+
+        vm.confirmProject()
+        vm.submit()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { fx.prefs.addRecentCustomPath(any(), any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedProjectName(any()) }
+        coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+    }
+
+    @Test
+    fun submit_customPath_invalidDraft_isNoop() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft("relative/no-good")
+
+        vm.submit()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
+        assertFalse(vm.uiState.value.submitting)
+    }
+
+    @Test
+    fun submit_storedProject_regression_stillCallsLastUsedProjectName() = runTest {
+        // Regression guard for the dispatch matrix: the sealed-interface
+        // refactor must not break the `Stored` branch — `setLastUsedProjectName`
+        // is still called, `addRecentCustomPath` is still NOT.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } returns
+            SessionResponse("sess-stored", "starting", "2026-05-20T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectStandardMode()
+        vm.submit()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 0) { fx.prefs.addRecentCustomPath(any(), any()) }
+    }
+
+    @Test
+    fun submitCustomShell_customPath_buildsAdHocTerminalRequest() = runTest {
+        // Terminal-mode over a CustomPath: same dispatch as the
+        // standard Claude branch, but `claude_options = null` and
+        // `command = null` (server picks _DEFAULT_SHELL). Recents still
+        // get updated.
+        val fx = newFixture(agentId = "agent-1")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-adhoc-shell", "starting", "2026-05-20T00:00:00Z")
+
+        vm.confirmProject()
+        vm.submitCustomShell()
+        advanceUntilIdle()
+
+        val req = requestSlot.captured
+        assertNull(req.project_name)
+        assertEquals(hostAbsolutePath, req.cwd)
+        assertNull("Terminal mode must not send claude_options", req.claude_options)
+        assertNull("Terminal mode must let server pick _DEFAULT_SHELL", req.command)
+        coVerify(exactly = 1) { fx.prefs.addRecentCustomPath("agent-1", hostAbsolutePath) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedProjectName(any()) }
+    }
+
+    @Test
+    fun selectProject_afterCustomPath_clearsDraft_andSwitchesToStored() = runTest {
+        // The dropdown lets the user flip back from "Custom path…" to a
+        // stored project. The CustomPath state (draft, error) must clear
+        // so a subsequent CustomPath re-select starts fresh.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+        assertNull(vm.uiState.value.customPathError)
+
+        vm.selectProject("alpha")
+
+        val s = vm.uiState.value
+        assertTrue(s.selection is ProjectSelection.Stored)
+        assertEquals("alpha", (s.selection as ProjectSelection.Stored).name)
+        assertEquals("", s.customPathDraft)
+        assertNull(s.customPathError)
     }
 }

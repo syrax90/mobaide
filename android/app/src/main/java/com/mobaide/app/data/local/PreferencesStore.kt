@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
 private val Context.dataStore by preferencesDataStore(name = "mobaide_prefs")
@@ -33,6 +34,11 @@ class PreferencesStore(private val context: Context) {
 
     private fun keyLinearStates(projectName: String) =
         stringPreferencesKey("linear_states::$projectName")
+
+    private fun keyRecentCustomPaths(agentKey: String) =
+        stringPreferencesKey("recent_custom_paths::$agentKey")
+
+    private val stringListSerializer = ListSerializer(String.serializer())
 
     val lastUsedProjectName: Flow<String?> =
         context.dataStore.data.map { it[keyLastProject] }
@@ -111,5 +117,30 @@ class PreferencesStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[keyLinearStates(projectName)] = payload
         }
+    }
+
+    suspend fun getRecentCustomPaths(agentKey: String): List<String> {
+        val raw = context.dataStore.data.map { it[keyRecentCustomPaths(agentKey)] }.first()
+            ?: return emptyList()
+        return runCatching {
+            cacheJson.decodeFromString(stringListSerializer, raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun addRecentCustomPath(agentKey: String, path: String) {
+        if (path.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val existing = prefs[keyRecentCustomPaths(agentKey)]?.let { raw ->
+                runCatching {
+                    cacheJson.decodeFromString(stringListSerializer, raw)
+                }.getOrDefault(emptyList())
+            } ?: emptyList()
+            val merged = (listOf(path) + existing.filter { it != path }).take(MAX_RECENT_CUSTOM_PATHS)
+            prefs[keyRecentCustomPaths(agentKey)] = cacheJson.encodeToString(stringListSerializer, merged)
+        }
+    }
+
+    companion object {
+        const val MAX_RECENT_CUSTOM_PATHS: Int = 5
     }
 }

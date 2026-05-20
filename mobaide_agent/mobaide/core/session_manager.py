@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover - logging package optional during isolated
         return deco
     def audit_event(*args, **kwargs): pass
 
-from .claude_launcher import ClaudeLauncher, ClaudeOptions
+from .claude_launcher import AdHocLaunch, ClaudeLauncher, ClaudeOptions
 from .models import SessionConfig, SessionInfo, SessionState, session_to_wire_dict
 from .projects_store import ProjectsStore
 from .session import TerminalSession
@@ -69,17 +69,26 @@ class SessionManager:
     async def create_session(self, config: SessionConfig) -> TerminalSession:
         """Create, start, and register a new terminal session.
 
-        Project-aware resolution splits on ``config.claude_options``: when
-        present, ``ClaudeLauncher`` builds the full argv/cwd/env trio (Claude
-        mode); when absent, only ``cwd`` is resolved from the project so the
-        ``_DEFAULT_SHELL`` argv chosen by the caller (router/relay) remains
-        intact (Terminal mode).
+        Dispatch matrix on (``project_name``, ``claude_options``):
+
+        * stored project + Claude → ``_apply_project_launch`` builds full
+          argv/cwd/env via ``ClaudeLauncher`` against ``ProjectsStore``.
+        * stored project + no Claude → ``_resolve_project_cwd`` only fills
+          ``cwd`` so the caller's ``_DEFAULT_SHELL`` argv stays intact.
+        * no project + Claude → ``_apply_adhoc_launch`` builds a launch
+          against the bare ``config.cwd`` (custom-path Claude mode); never
+          touches ``ProjectsStore``.
+        * no project + no Claude → raw Terminal session in ``config.cwd``
+          (or the default cwd if ``cwd`` is also ``None``); no resolution
+          required.
         """
         if config.project_name is not None:
             if config.claude_options is not None:
                 await self._apply_project_launch(config)
             else:
                 await self._resolve_project_cwd(config)
+        elif config.claude_options is not None:
+            await self._apply_adhoc_launch(config)
         async with self._lock:
             if len(self._sessions) >= self._max_sessions:
                 raise MaxSessionsError(
@@ -128,6 +137,27 @@ class SessionManager:
             raise KeyError(f"Project '{config.project_name}' not found")
         options = config.claude_options or ClaudeOptions()
         spec = await self._launcher.build(project, options)
+        config.command = spec.argv
+        config.cwd = spec.cwd
+        config.env = spec.env
+
+    async def _apply_adhoc_launch(self, config: SessionConfig) -> None:
+        """Build an ad-hoc Claude launch against ``config.cwd`` and overwrite command/cwd/env in place.
+
+        Never touches ``ProjectsStore`` — a custom-path session is not a
+        project. Router/relay layers are expected to pre-validate that
+        ``cwd`` is non-empty, absolute, exists, and is a directory; the
+        ``ValueError`` raised here is defense-in-depth.
+        """
+        if self._launcher is None:
+            raise ValueError(
+                "project_name is null but agent has no Claude launcher",
+            )
+        if config.cwd is None:
+            raise ValueError("cwd is required for ad-hoc Claude launch")
+        options = config.claude_options or ClaudeOptions()
+        target = AdHocLaunch(cwd=config.cwd)
+        spec = await self._launcher.build(target, options)
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env

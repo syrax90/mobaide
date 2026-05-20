@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from mobaide.core.claude_launcher import ClaudeOptions, LaunchSpec
+from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
 from tests.conftest import IS_WINDOWS, default_shell
@@ -231,5 +231,175 @@ class TestProjectAwareLaunchBranching:
             )
             with pytest.raises(KeyError, match="ghost"):
                 await mgr.create_session(config)
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestAdHocClaudeLaunchBranching:
+    """``create_session`` dispatches to ``_apply_adhoc_launch`` when
+    ``project_name is None`` AND ``claude_options is not None``. The
+    launcher receives an :class:`AdHocLaunch` target, and the projects
+    store must never be consulted — a custom-path session is by
+    definition not a project."""
+
+    async def test_adhoc_dispatch_invokes_launcher_with_adhoc_target(
+        self, tmp_path,
+    ) -> None:
+        """Happy path: ``project_name=None`` plus ``claude_options`` routes
+        through ``_apply_adhoc_launch``. The target passed to ``launcher.build``
+        is an :class:`AdHocLaunch` carrying ``config.cwd``; ``config.command``,
+        ``config.cwd``, and ``config.env`` are overwritten by ``LaunchSpec``."""
+        store = MagicMock()
+        store.get = MagicMock()
+
+        launcher = MagicMock()
+        launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=["claude", "--effort", "max"],
+                cwd=str(tmp_path),
+                env={"FOO": "bar"},
+            ),
+        )
+
+        mgr = SessionManager(projects_store=store, launcher=launcher)
+        try:
+            config = SessionConfig(
+                session_id="adhoc-sess",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24,
+                cols=80,
+                scrollback_size=50,
+                project_name=None,
+                claude_options=ClaudeOptions(),
+            )
+            await mgr.create_session(config)
+
+            launcher.build.assert_awaited_once()
+            call = launcher.build.await_args
+            assert call is not None
+            target = call.args[0]
+            assert isinstance(target, AdHocLaunch)
+            assert target.cwd == str(tmp_path)
+
+            assert config.command == ["claude", "--effort", "max"]
+            assert config.cwd == str(tmp_path)
+            assert config.env == {"FOO": "bar"}
+
+            store.get.assert_not_called()
+        finally:
+            await mgr.shutdown()
+
+    async def test_adhoc_dispatch_never_consults_projects_store(
+        self, tmp_path,
+    ) -> None:
+        """Defense-in-depth: even if a ``ProjectsStore`` is wired, the
+        ad-hoc branch must never call ``store.get`` — a custom-path session
+        cannot be silently re-routed to a saved project that happens to
+        share its path."""
+        store = MagicMock()
+        store.get = MagicMock()
+
+        launcher = MagicMock()
+        launcher.build = AsyncMock(
+            return_value=LaunchSpec(
+                argv=["claude"], cwd=str(tmp_path), env={},
+            ),
+        )
+
+        mgr = SessionManager(projects_store=store, launcher=launcher)
+        try:
+            config = SessionConfig(
+                session_id="adhoc-no-store",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                project_name=None,
+                claude_options=ClaudeOptions(),
+            )
+            await mgr.create_session(config)
+            store.get.assert_not_called()
+        finally:
+            await mgr.shutdown()
+
+    async def test_adhoc_dispatch_without_launcher_raises_value_error(
+        self, tmp_path,
+    ) -> None:
+        """When ``project_name is None`` and ``claude_options`` is set but
+        the manager has no launcher (misconfigured deployment), the
+        ``ValueError`` must surface — mirroring ``_apply_project_launch``'s
+        own missing-launcher guard so the router error mapping (400) stays
+        uniform."""
+        mgr = SessionManager(projects_store=None, launcher=None)
+        try:
+            config = SessionConfig(
+                session_id="adhoc-no-launcher",
+                command=default_shell(),
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                project_name=None,
+                claude_options=ClaudeOptions(),
+            )
+            with pytest.raises(ValueError, match="launcher"):
+                await mgr.create_session(config)
+        finally:
+            await mgr.shutdown()
+
+    async def test_adhoc_dispatch_without_cwd_raises_value_error(self) -> None:
+        """Defense-in-depth: router/relay pre-validate ``cwd``, but if a
+        future caller still slips through with ``cwd=None`` and
+        ``claude_options`` set, the manager must reject it with a
+        :class:`ValueError` (mapped to 400) — not crash inside
+        ``AdHocLaunch(cwd=None)``."""
+        launcher = MagicMock()
+        launcher.build = AsyncMock()
+        mgr = SessionManager(launcher=launcher)
+        try:
+            config = SessionConfig(
+                session_id="adhoc-no-cwd",
+                command=default_shell(),
+                cwd=None,
+                rows=24, cols=80, scrollback_size=50,
+                project_name=None,
+                claude_options=ClaudeOptions(),
+            )
+            with pytest.raises(ValueError, match="cwd"):
+                await mgr.create_session(config)
+            launcher.build.assert_not_awaited()
+        finally:
+            await mgr.shutdown()
+
+    async def test_no_project_no_claude_options_skips_both_branches(
+        self, tmp_path,
+    ) -> None:
+        """When both ``project_name`` and ``claude_options`` are ``None``,
+        the dispatch matrix falls through to the raw Terminal path — no
+        launcher build, no project lookup, ``config.command/cwd/env``
+        survive as caller-supplied. Pins the dispatch matrix's else-arm
+        so a future refactor that adds an accidental side-effect on the
+        bare-cwd Terminal path is caught."""
+        store = MagicMock()
+        store.get = MagicMock()
+        launcher = MagicMock()
+        launcher.build = AsyncMock()
+
+        mgr = SessionManager(projects_store=store, launcher=launcher)
+        try:
+            shell_argv = default_shell()
+            config = SessionConfig(
+                session_id="raw-term",
+                command=shell_argv,
+                cwd=str(tmp_path),
+                rows=24, cols=80, scrollback_size=50,
+                project_name=None,
+                claude_options=None,
+                kind=SessionKind.SHELL,
+            )
+            await mgr.create_session(config)
+            launcher.build.assert_not_awaited()
+            store.get.assert_not_called()
+            assert config.command == shell_argv
+            assert config.cwd == str(tmp_path)
         finally:
             await mgr.shutdown()
