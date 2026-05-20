@@ -26,7 +26,9 @@ from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
 from mobaide.core.models import (
     SessionConfig,
     SessionEvent,
+    SessionKind,
     SessionState,
+    resolve_spawn_args,
     session_to_wire_dict,
 )
 from mobaide.core.projects_store import safe_path_exists
@@ -690,7 +692,6 @@ class RelayClient:
     ) -> None:
         """Handle a create_session control message from the relay."""
         session_id = ctrl.get("session_id") or uuid.uuid4().hex[:12]
-        command = ctrl.get("command") or _DEFAULT_SHELL
 
         claude_options = None
         raw_options = ctrl.get("claude_options")
@@ -712,15 +713,19 @@ class RelayClient:
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
 
+        kind, spawn_command, spawn_env = resolve_spawn_args(
+            claude_options, ctrl.get("command"), ctrl.get("env"), _DEFAULT_SHELL,
+        )
         config = SessionConfig(
             session_id=session_id,
-            command=command,
+            command=spawn_command,
             cwd=ctrl.get("cwd"),
-            env=ctrl.get("env"),
+            env=spawn_env,
             rows=ctrl.get("rows", 24),
             cols=ctrl.get("cols", 80),
             project_name=ctrl.get("project_name"),
             claude_options=claude_options,
+            kind=kind,
         )
         try:
             session = await self._session_manager.create_session(config)
@@ -996,15 +1001,19 @@ class RelayClient:
                 if parsed.claude_options is not None
                 else None
             )
+            kind, spawn_command, spawn_env = resolve_spawn_args(
+                claude_options, parsed.command, parsed.env, _DEFAULT_SHELL,
+            )
             config = SessionConfig(
                 session_id=session_id,
-                command=parsed.command or _DEFAULT_SHELL,
+                command=spawn_command,
                 cwd=parsed.cwd,
-                env=parsed.env,
+                env=spawn_env,
                 rows=parsed.rows,
                 cols=parsed.cols,
                 project_name=parsed.project_name,
                 claude_options=claude_options,
+                kind=kind,
             )
             session = await self._session_manager.create_session(config)
             self._bridge_session(session, ws)
@@ -1469,6 +1478,7 @@ class RelayClient:
             command=_DEFAULT_SHELL,
             rows=24,
             cols=80,
+            kind=SessionKind.SHELL,
         )
         try:
             session = await self._session_manager.create_session(config)

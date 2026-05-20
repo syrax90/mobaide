@@ -487,4 +487,75 @@ class CreateSessionViewModelTest {
 
         assertEquals(CreateSessionStep.ProjectSelect, vm.uiState.value.step)
     }
+
+    // ---- CustomShell (Terminal mode, CLA-59) -------------------------------
+
+    @Test
+    fun submitCustomShell_sendsShellRequest_andEmitsNavigateToSession() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse(
+                session_id = "sess-shell",
+                state = "starting",
+                created_at = "2026-05-20T00:00:00Z",
+            )
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+
+        vm.navigateToSession.test {
+            vm.submitCustomShell()
+            advanceUntilIdle()
+
+            assertEquals("sess-shell", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        val req = requestSlot.captured
+        assertEquals("alpha", req.project_name)
+        assertNull("Terminal mode must not send claude_options", req.claude_options)
+        assertNull("Terminal mode must let server pick _DEFAULT_SHELL", req.command)
+        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-shell") }
+    }
+
+    @Test
+    fun pickMode_CustomShell_autoSubmits_withoutAdvancingToConfigStep() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } returns
+            SessionResponse("sess-shell", "starting", "2026-05-20T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+
+        vm.pickMode(CreateSessionMode.CustomShell)
+        advanceUntilIdle()
+
+        // pickMode(CustomShell) auto-submits; the wizard step never advances
+        // to StandardConfig / AutoScanConfig.
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+        assertEquals(CreateSessionMode.CustomShell, vm.uiState.value.selectedMode)
+        coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+    }
+
+    @Test
+    fun submitCustomShell_noSelectedProject_isNoop() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.submitCustomShell()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
+        assertFalse(vm.uiState.value.submitting)
+    }
 }

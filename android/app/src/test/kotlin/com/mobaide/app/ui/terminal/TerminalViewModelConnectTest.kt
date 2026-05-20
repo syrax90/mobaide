@@ -13,6 +13,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
@@ -73,6 +74,7 @@ class TerminalViewModelConnectTest {
     private fun newRepository(conn: WebSocketConnection): SessionRepository =
         mockk {
             every { createSessionIoConnection("test-session") } returns conn
+            every { observeSessionList() } returns MutableStateFlow(emptyList())
         }
 
     private val templatesRepository = mockk<com.mobaide.app.data.repository.TemplatesRepository>(relaxed = true)

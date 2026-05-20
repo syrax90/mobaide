@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.ui.autoscan.AutoScanCard
 import com.mobaide.app.ui.theme.StateCrashed
@@ -234,7 +235,11 @@ private fun SessionCard(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Claude Code",
+                    text = when (session.kind) {
+                        SessionKind.Claude -> "Claude Code"
+                        SessionKind.AutoScan -> "Auto Scan"
+                        SessionKind.Shell -> "Terminal"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

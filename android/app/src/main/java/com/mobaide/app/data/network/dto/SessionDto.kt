@@ -1,6 +1,14 @@
 package com.mobaide.app.data.network.dto
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+
+@Serializable
+enum class SessionKind {
+    @SerialName("claude") Claude,
+    @SerialName("auto_scan") AutoScan,
+    @SerialName("shell") Shell,
+}
 
 @Serializable
 data class SessionResponse(
@@ -12,6 +20,7 @@ data class SessionResponse(
     val cwd: String? = null,
     val title: String? = null,
     val project_name: String? = null,
+    val kind: SessionKind = SessionKind.Claude,
 )
 
 @Serializable

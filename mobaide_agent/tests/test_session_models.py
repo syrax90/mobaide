@@ -128,3 +128,77 @@ class TestToOptions:
 
         assert opts.plan_mode is False
         assert opts.no_memory is False
+
+
+class TestSessionToWireDictKind:
+    """``session_to_wire_dict`` must serialise the ``kind`` field through
+    ``info.kind.value`` so SHELL and AUTO_SCAN sessions don't silently wire
+    as ``"claude"``. The existing ``TestProxySessionsWireShape`` tests only
+    exercise the default (CLAUDE) — a regression that hard-codes the value
+    to ``"claude"`` instead of ``info.kind.value`` would slip past them.
+    """
+
+    @pytest.mark.parametrize(
+        ("kind_enum", "expected_value"),
+        [
+            ("CLAUDE", "claude"),
+            ("AUTO_SCAN", "auto_scan"),
+            ("SHELL", "shell"),
+        ],
+    )
+    def test_kind_round_trips_via_enum_value(self, kind_enum, expected_value):
+        """Every member of ``SessionKind`` must wire as its ``.value`` string,
+        and every value must round-trip cleanly through ``SessionKind(...)``
+        so the Android client can deserialise without an extra mapping table.
+        """
+        from datetime import datetime, timezone
+
+        from mobaide.core.models import (
+            SessionInfo,
+            SessionKind,
+            SessionState,
+            session_to_wire_dict,
+        )
+
+        info = SessionInfo(
+            session_id="sid",
+            state=SessionState.RUNNING,
+            created_at=datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+            pid=42,
+            command=["bash"],
+            cwd="/work",
+            kind=SessionKind[kind_enum],
+        )
+
+        wire = session_to_wire_dict(info)
+
+        assert wire["kind"] == expected_value
+        # Round-trip: the wire value must reconstruct the same enum member,
+        # so a future field rename here doesn't silently desync producer
+        # and consumer.
+        assert SessionKind(wire["kind"]) is SessionKind[kind_enum]
+
+    def test_kind_field_is_always_present(self):
+        """Even when caller omits ``kind`` from ``SessionInfo`` construction,
+        the wire dict must carry the key — the Android DTO declares
+        ``kind`` without an ``Optional`` and would fail to deserialise a
+        missing-field payload.
+        """
+        from datetime import datetime, timezone
+
+        from mobaide.core.models import SessionInfo, SessionState, session_to_wire_dict
+
+        info = SessionInfo(
+            session_id="sid",
+            state=SessionState.STARTING,
+            created_at=datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+            pid=None,
+            command=["claude"],
+            cwd=None,
+            # kind omitted — should default to CLAUDE per the dataclass default.
+        )
+
+        wire = session_to_wire_dict(info)
+
+        assert "kind" in wire
+        assert wire["kind"] == "claude"

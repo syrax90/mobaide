@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -156,6 +157,10 @@ fun CreateSessionScreen(
                         when (state.selectedMode) {
                             CreateSessionMode.Standard -> viewModel.selectStandardMode()
                             CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
+                            // CustomShell auto-submits in pickMode — Continue is disabled
+                            // for it and onCommit never fires; the branch is here for
+                            // exhaustiveness only.
+                            CreateSessionMode.CustomShell -> Unit
                             null -> Unit
                         }
                     },
@@ -338,9 +343,31 @@ private fun ModePickerSection(
         }
     }
 
+    // Terminal mode — third tile, no config step, no Linear-key gate.
+    // ViewModel.pickMode auto-submits on selection.
+    ElevatedCard(
+        onClick = { onPickMode(CreateSessionMode.CustomShell) },
+        colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.elevatedCardColors(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        ListItem(
+            headlineContent = { Text("Terminal") },
+            supportingContent = { Text("Bash / cmd in this project") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Filled.Terminal,
+                    contentDescription = null,
+                )
+            },
+            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+        )
+    }
+
     Button(
         onClick = onCommit,
-        enabled = selectedMode != null,
+        // Terminal tile auto-submits in pickMode, so the Continue button is only
+        // relevant for the Standard / AutoScan tiles that route to a config step.
+        enabled = selectedMode != null && selectedMode != CreateSessionMode.CustomShell,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")

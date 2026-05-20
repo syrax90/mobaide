@@ -22,7 +22,7 @@ import javax.inject.Inject
 
 enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, AutoScanConfig }
 
-enum class CreateSessionMode { Standard, AutoScan }
+enum class CreateSessionMode { Standard, AutoScan, CustomShell }
 
 data class CreateSessionUiState(
     val step: CreateSessionStep = CreateSessionStep.ProjectSelect,
@@ -133,8 +133,13 @@ class CreateSessionViewModel @Inject constructor(
         if (it.selectedProjectName != null) it.copy(step = CreateSessionStep.ModePick) else it
     }
 
-    fun pickMode(mode: CreateSessionMode) = _uiState.update {
-        it.copy(selectedMode = mode)
+    fun pickMode(mode: CreateSessionMode) {
+        _uiState.update { it.copy(selectedMode = mode) }
+        // Terminal mode skips the config step — there's nothing to configure
+        // for a raw shell. The tile-tap submits immediately.
+        if (mode == CreateSessionMode.CustomShell) {
+            submitCustomShell()
+        }
     }
 
     fun selectStandardMode() = _uiState.update {
@@ -210,21 +215,44 @@ class CreateSessionViewModel @Inject constructor(
     fun submit() {
         val state = _uiState.value
         val projectName = state.selectedProjectName ?: return
+        if (state.submitting) return
+        submitSession(
+            projectName = projectName,
+            request = CreateSessionRequest(
+                project_name = projectName,
+                claude_options = ClaudeOptionsModel(
+                    no_memory = state.noMemory,
+                    skip_permissions = state.skipPermissions,
+                    max_effort = state.maxEffort,
+                    worktree = state.worktree,
+                    branch_name = state.branchName.takeIf { it.isNotBlank() },
+                ),
+            ),
+        )
+    }
+
+    fun submitCustomShell() {
+        val state = _uiState.value
+        val projectName = state.selectedProjectName ?: return
+        if (state.submitting) return
+        // `command = null` (defaults to server `_DEFAULT_SHELL`) and
+        // `claude_options = null` (signals raw shell, not Claude) — the server
+        // resolves only cwd from the named project.
+        submitSession(
+            projectName = projectName,
+            request = CreateSessionRequest(
+                project_name = projectName,
+                command = null,
+                claude_options = null,
+            ),
+        )
+    }
+
+    private fun submitSession(projectName: String, request: CreateSessionRequest) {
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true) }
             try {
-                val response = sessionRepository.createSession(
-                    CreateSessionRequest(
-                        project_name = projectName,
-                        claude_options = ClaudeOptionsModel(
-                            no_memory = state.noMemory,
-                            skip_permissions = state.skipPermissions,
-                            max_effort = state.maxEffort,
-                            worktree = state.worktree,
-                            branch_name = state.branchName.takeIf { it.isNotBlank() },
-                        ),
-                    ),
-                )
+                val response = sessionRepository.createSession(request)
                 preferencesStore.setLastUsedProjectName(projectName)
                 preferencesStore.setLastUsedSessionId(response.session_id)
                 _uiState.update { it.copy(submitting = false) }

@@ -34,7 +34,7 @@ from mobaide.relay.envelope import (
     encode,
 )
 from mobaide.core import ClaudeBinaryNotFoundError
-from mobaide.core.models import SessionState
+from mobaide.core.models import SessionKind, SessionState
 
 
 # ``relay_config``, ``mock_session_manager``, ``mock_event_bus``,
@@ -472,6 +472,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.cwd = "/tmp"
         sess_info.title = None
         sess_info.project_name = None
+        sess_info.kind = SessionKind.CLAUDE
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -496,6 +497,7 @@ class TestHandleRequestEventsSnapshot:
                     "cwd": "/tmp",
                     "title": None,
                     "project_name": None,
+                    "kind": "claude",
                 },
             ],
         }
@@ -572,6 +574,7 @@ class TestHandleRequestEventsSnapshot:
         # objects that cause orjson.dumps to raise, silently dropping the send.
         sess_info.title = None
         sess_info.project_name = None
+        sess_info.kind = SessionKind.CLAUDE
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -599,6 +602,7 @@ class TestHandleRequestEventsSnapshot:
                 "cwd": None,
                 "title": None,
                 "project_name": None,
+                "kind": "claude",
             },
         ]
 
@@ -2072,10 +2076,10 @@ class TestProxySessionsWireShape:
         assert len(body) == 2
 
         a, b = body
-        # Canonical 8-key shape, in any order — locks down session_to_wire_dict.
+        # Canonical 9-key shape, in any order — locks down session_to_wire_dict.
         expected_keys = {
             "session_id", "state", "created_at", "pid",
-            "command", "cwd", "title", "project_name",
+            "command", "cwd", "title", "project_name", "kind",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -2086,6 +2090,10 @@ class TestProxySessionsWireShape:
         # Untitled session: title/project_name carried explicitly as None.
         assert b["title"] is None
         assert b["project_name"] is None
+
+        # SessionInfo defaults kind=CLAUDE so existing fixtures (no explicit kind) wire as "claude".
+        assert a["kind"] == "claude"
+        assert b["kind"] == "claude"
 
         # Spot-check the rest survived the helper round-trip unchanged.
         assert a["session_id"] == "sid-a"
@@ -2127,10 +2135,10 @@ class TestProxySessionsWireShape:
         body = result["body"]
         assert isinstance(body, dict)
 
-        # Canonical 8-key shape — the consolidation contract.
+        # Canonical 9-key shape — the consolidation contract.
         assert set(body.keys()) == {
             "session_id", "state", "created_at", "pid",
-            "command", "cwd", "title", "project_name",
+            "command", "cwd", "title", "project_name", "kind",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None
@@ -2140,3 +2148,5 @@ class TestProxySessionsWireShape:
         assert body["session_id"] == "sid-new"
         assert body["state"] == "running"
         assert body["pid"] == 4242
+        # SessionInfo defaults kind=CLAUDE.
+        assert body["kind"] == "claude"

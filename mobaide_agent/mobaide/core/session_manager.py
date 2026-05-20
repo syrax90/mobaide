@@ -69,13 +69,17 @@ class SessionManager:
     async def create_session(self, config: SessionConfig) -> TerminalSession:
         """Create, start, and register a new terminal session.
 
-        When ``config.project_name`` is set, ``ClaudeLauncher`` resolves the
-        project through the ``ProjectsStore`` and rewrites ``config.command``,
-        ``config.cwd`` and ``config.env`` to the launcher output before the
-        PTY is spawned.
+        Project-aware resolution splits on ``config.claude_options``: when
+        present, ``ClaudeLauncher`` builds the full argv/cwd/env trio (Claude
+        mode); when absent, only ``cwd`` is resolved from the project so the
+        ``_DEFAULT_SHELL`` argv chosen by the caller (router/relay) remains
+        intact (Terminal mode).
         """
         if config.project_name is not None:
-            await self._apply_project_launch(config)
+            if config.claude_options is not None:
+                await self._apply_project_launch(config)
+            else:
+                await self._resolve_project_cwd(config)
         async with self._lock:
             if len(self._sessions) >= self._max_sessions:
                 raise MaxSessionsError(
@@ -127,6 +131,24 @@ class SessionManager:
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env
+
+    async def _resolve_project_cwd(self, config: SessionConfig) -> None:
+        """Resolve only the project ``cwd`` without invoking ``ClaudeLauncher``.
+
+        Used by the Terminal mode path: caller has set ``config.command`` to
+        ``_DEFAULT_SHELL`` and we just need the PTY to spawn in the project's
+        working directory. Raises the same ``ValueError`` / ``KeyError``
+        shapes ``_apply_project_launch`` uses so router/relay error mapping
+        stays unchanged.
+        """
+        if self._projects_store is None:
+            raise ValueError(
+                "project_name set but agent has no projects store",
+            )
+        project = self._projects_store.get(config.project_name or "")
+        if project is None:
+            raise KeyError(f"Project '{config.project_name}' not found")
+        config.cwd = project.path
 
     async def get_session(self, session_id: str) -> TerminalSession | None:
         """Look up a session by ID."""
