@@ -1,5 +1,20 @@
 # Android Changelog
 
+## [1.2.0](https://github.com/syrax90/claude_mobile/compare/android-v1.1.0...android-v1.2.0) (2026-05-20)
+
+
+### Features
+
+* **agent:** add Terminal session mode as third create-session tile (CLA-59) ([874171a](https://github.com/syrax90/claude_mobile/commit/874171a4078ecb9e67455af0ace9f46c81847197))
+* **sessions:** add Terminal session mode as third create-session tile (CLA-59) ([5d0b61e](https://github.com/syrax90/claude_mobile/commit/5d0b61e49d195874de8bf6d28b02d0757757fedc))
+* **terminal:** refactor InputBar for orientation-aware layout and tidy control-key panel ([1e81e00](https://github.com/syrax90/claude_mobile/commit/1e81e00701c6ca560b4f2e830054d24a07bf489c))
+* **terminal:** refactor InputBar for orientation-aware layout and tidy control-key panel ([73ed6f2](https://github.com/syrax90/claude_mobile/commit/73ed6f2c03b9caf56e162e67f3a259f50ad82391))
+
+
+### Bug Fixes
+
+* **settings:** display user email in "Logged in as" and rename "Standard mode" to "Claude code session" ([666bf18](https://github.com/syrax90/claude_mobile/commit/666bf18e7fd65a7b3f7d670db9bfec73480513de))
+
 ## [1.1.0](https://github.com/syrax90/claude_mobile/compare/android-v1.0.3...android-v1.1.0) (2026-05-19)
 
 

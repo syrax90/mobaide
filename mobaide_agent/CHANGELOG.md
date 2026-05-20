@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.3](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.2...agent-v0.2.3) (2026-05-20)
+
+
+### Features
+
+* **agent:** add Terminal session mode as third create-session tile (CLA-59) ([874171a](https://github.com/syrax90/claude_mobile/commit/874171a4078ecb9e67455af0ace9f46c81847197))
+* **sessions:** add Terminal session mode as third create-session tile (CLA-59) ([5d0b61e](https://github.com/syrax90/claude_mobile/commit/5d0b61e49d195874de8bf6d28b02d0757757fedc))
+
 ## [0.2.2](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.1...agent-v0.2.2) (2026-05-19)
 
 
