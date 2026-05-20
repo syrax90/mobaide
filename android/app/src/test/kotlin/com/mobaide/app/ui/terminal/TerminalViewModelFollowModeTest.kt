@@ -12,6 +12,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -45,6 +46,7 @@ class TerminalViewModelFollowModeTest {
     }
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
+        every { observeSessionList() } returns MutableStateFlow(emptyList())
     }
     private val templatesRepository = mockk<com.mobaide.app.data.repository.TemplatesRepository>(relaxed = true)
     private val preferencesStore = mockk<PreferencesStore> {

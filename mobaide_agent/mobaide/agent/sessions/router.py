@@ -11,6 +11,7 @@ from mobaide.core import (
     SessionConfig,
     SessionManager,
 )
+from mobaide.core.models import resolve_spawn_args
 from mobaide.linear.worktree import WorktreeCreationError
 
 from ..auth.dependencies import get_current_user
@@ -45,17 +46,19 @@ async def create_session(
         if body.claude_options is not None
         else None
     )
-    # Project-aware launch ignores raw command/cwd/env — they will be
-    # overwritten by ClaudeLauncher inside SessionManager.
+    kind, spawn_command, spawn_env = resolve_spawn_args(
+        claude_options, body.command, body.env, _DEFAULT_SHELL,
+    )
     config = SessionConfig(
         session_id=session_id,
-        command=body.command or _DEFAULT_SHELL,
+        command=spawn_command,
         cwd=body.cwd,
-        env=body.env,
+        env=spawn_env,
         rows=body.rows,
         cols=body.cols,
         project_name=body.project_name,
         claude_options=claude_options,
+        kind=kind,
     )
     try:
         session = await manager.create_session(config)

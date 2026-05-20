@@ -18,6 +18,21 @@ class SessionState(enum.Enum):
     CRASHED = "crashed"
 
 
+class SessionKind(enum.Enum):
+    """Classifies what runs inside a session for UI/icon routing.
+
+    ``CLAUDE`` — Claude CLI launched via ``ClaudeLauncher`` (REST/relay create
+    with ``claude_options`` set). ``AUTO_SCAN`` — sub-sessions spawned by the
+    Linear scanner; argv/cwd/env pre-built by the scanner. ``SHELL`` — raw
+    shell (``_DEFAULT_SHELL``) anchored to a project's cwd; bypasses the
+    Claude launcher entirely.
+    """
+
+    CLAUDE = "claude"
+    AUTO_SCAN = "auto_scan"
+    SHELL = "shell"
+
+
 @dataclass
 class SessionConfig:
     session_id: str
@@ -32,6 +47,7 @@ class SessionConfig:
     # fields above before the PTY is spawned.
     project_name: str | None = None
     claude_options: ClaudeOptions | None = None
+    kind: SessionKind = SessionKind.CLAUDE
 
 
 @dataclass
@@ -44,6 +60,7 @@ class SessionInfo:
     cwd: str | None
     title: str | None = None
     project_name: str | None = None
+    kind: SessionKind = SessionKind.CLAUDE
 
 
 @dataclass
@@ -53,6 +70,27 @@ class SessionEvent:
     # Output events carry raw PTY bytes; other event types leave this None.
     data: bytes | None = None
     timestamp: float = field(default_factory=time.time)
+
+
+def resolve_spawn_args(
+    claude_options: "ClaudeOptions | None",
+    command_hint: list[str] | None,
+    env_hint: dict[str, str] | None,
+    default_shell: list[str],
+) -> tuple[SessionKind, list[str], dict[str, str] | None]:
+    """Resolve ``(kind, command, env)`` for a create-session request.
+
+    The single source of truth for the Terminal-mode security guard: when the
+    caller did not pass ``claude_options``, the spawn always uses
+    ``default_shell`` with a clean env regardless of any client-supplied
+    ``command``/``env`` hints. This prevents an authenticated client from
+    piggybacking arbitrary argv into a project's cwd via the Terminal path.
+    Claude-mode requests still honour the hints (they will be overwritten
+    later by ``ClaudeLauncher`` inside ``SessionManager``).
+    """
+    if claude_options is None:
+        return SessionKind.SHELL, default_shell, None
+    return SessionKind.CLAUDE, command_hint or default_shell, env_hint
 
 
 def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
@@ -74,4 +112,5 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
         "cwd": info.cwd,
         "title": info.title,
         "project_name": info.project_name,
+        "kind": info.kind.value,
     }

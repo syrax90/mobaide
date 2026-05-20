@@ -15,6 +15,7 @@ import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -51,6 +52,7 @@ class TerminalViewModelSendInputTest {
     }
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
+        every { observeSessionList() } returns MutableStateFlow(emptyList())
     }
 
     private val templatesRepository = mockk<TemplatesRepository>(relaxed = true)

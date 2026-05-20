@@ -26,6 +26,7 @@ from mobaide.core import (
     ProjectConfig,
     ProjectsStore,
     SessionConfig,
+    SessionKind,
     SessionManager,
 )
 
@@ -477,6 +478,7 @@ class AutoScanInstance:
                 command=spec.argv,
                 cwd=spec.cwd,
                 env=spec.env,
+                kind=SessionKind.AUTO_SCAN,
             )
             session = await self._session_manager.create_session(config)
             pid = getattr(session, "pid", None)

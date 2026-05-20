@@ -49,6 +49,7 @@ class SessionResponse(BaseModel):
     cwd: str | None
     title: str | None = None
     project_name: str | None = None
+    kind: str = "claude"
 
     @classmethod
     def from_info(cls, info: SessionInfo) -> SessionResponse:

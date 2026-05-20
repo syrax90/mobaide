@@ -4,7 +4,7 @@ from .claude_launcher import (
     ClaudeOptions,
     LaunchSpec,
 )
-from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
+from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .projects_config import AutoScanFilter, ProjectConfig
 from .projects_store import (
     ProjectRecord,
@@ -18,6 +18,7 @@ from .session_manager import MaxSessionsError, SessionManager
 
 __all__ = [
     "SessionState",
+    "SessionKind",
     "SessionConfig",
     "SessionInfo",
     "SessionEvent",

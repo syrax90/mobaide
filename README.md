@@ -19,6 +19,7 @@ Mobaide bridges this gap with a client-agent architecture:
 - **Remote Terminal** — Full bidirectional terminal I/O with Claude Code sessions from your phone
 - **Terminal Display Modes** — Settings toggle between `Full` (auto-fits viewport, recomputes columns on rotation) and `Static` (user-chosen column count 60–240, default 120; surface wider than viewport, pan horizontally)
 - **Multi-Session** — Run and switch between up to 16 concurrent Claude sessions
+- **Terminal Sessions** — Third tile on the create-session screen opens a raw shell (`cmd.exe` on Windows, `/bin/bash` on Linux/Unix) anchored to the selected project's cwd, with no Claude config step; session cards show the `Terminal` kind label
 - **Auto Scan Mode** — Polls Linear for matching issues using a per-project configurable filter (trigger labels, trigger states, active/done state, removal label), auto-creates git worktrees, and launches Claude sessions to work on them
 - **Reconnection** — Scrollback buffer (10K lines) per session ensures seamless reconnect after network drops
 - **Secure Access** — JWT authentication end-to-end between Android, central-server, and agent; agent↔central-server relay is secured with a per-agent bearer token over WSS

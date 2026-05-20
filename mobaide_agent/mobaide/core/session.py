@@ -296,4 +296,5 @@ class TerminalSession:
             cwd=self._config.cwd,
             title=self._title,
             project_name=self._config.project_name,
+            kind=self._config.kind,
         )

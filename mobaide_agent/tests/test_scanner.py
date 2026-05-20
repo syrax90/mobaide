@@ -334,6 +334,54 @@ class TestProcessIssueEmitsPerStepEvents:
         sess_mgr.create_session.assert_not_awaited()
 
 
+class TestProcessIssueSetsSessionKindAutoScan:
+    """Scanner-spawned sub-sessions must carry
+    ``kind=SessionKind.AUTO_SCAN`` on the ``SessionConfig`` handed to
+    ``SessionManager.create_session``. The default ``kind=CLAUDE`` would
+    misclassify scanner sessions as regular Claude sessions in the UI list
+    (Android renders the subtitle by ``session.kind``). This pins the
+    explicit ``kind=`` override at the spawn site so a future refactor that
+    drops it fails loudly here rather than silently in the mobile UI.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_session_called_with_kind_auto_scan(self, tmp_path):
+        from mobaide.core.models import SessionConfig, SessionKind
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+        session_obj = MagicMock()
+        session_obj.pid = 4711
+        sess_mgr.create_session.return_value = session_obj
+
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
+
+        inst = _make_instance(
+            tmp_path,
+            client=client,
+            session_manager=sess_mgr,
+            launcher=launcher,
+        )
+
+        await inst._process_issue(_make_issue())
+
+        # create_session is called exactly once with a SessionConfig whose
+        # kind is AUTO_SCAN — not the CLAUDE default that the dataclass
+        # would silently apply if the explicit assignment regressed.
+        sess_mgr.create_session.assert_awaited_once()
+        call = sess_mgr.create_session.await_args
+        assert call is not None
+        config: SessionConfig = call.args[0] if call.args else call.kwargs["config"]
+        assert isinstance(config, SessionConfig)
+        assert config.kind is SessionKind.AUTO_SCAN
+        # Sanity: the rest of the launch surface still comes from the
+        # launcher spec — kind is the only field this test pins.
+        assert config.command == ["claude"]
+
+
 class TestClaudeBinaryNotFoundHandling:
     """Coverage for the ``ClaudeBinaryNotFoundError`` path added to keep
     journalctl from being flooded when the Claude CLI is missing.
