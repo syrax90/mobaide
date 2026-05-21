@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.4](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.3...agent-v0.2.4) (2026-05-21)
+
+
+### Features
+
+* **agent:** add Custom Path option to project picker for ad-hoc sessions (CLA-60) ([6ec5287](https://github.com/syrax90/claude_mobile/commit/6ec52878013b2ba1790cec88dc4386c24e6a3631))
+* **sessions:** add Custom Path option to project picker for ad-hoc sessions (CLA-60) ([72cb848](https://github.com/syrax90/claude_mobile/commit/72cb848a9552f667d3cf696b58269b2d61bcb0e0))
+
 ## [0.2.3](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.2...agent-v0.2.3) (2026-05-20)
 
 
