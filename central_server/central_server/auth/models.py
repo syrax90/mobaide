@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 @dataclass
@@ -92,6 +93,10 @@ class AuthTokenResponse(BaseModel):
     must call /verify-email with the code from the OTP email to obtain the JWT.
     For all other ``status`` values (currently just ``"ok"``) a valid
     ``access_token`` is always present.
+
+    ``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is
+    in the soft-delete grace window — clients surface a "cancel scheduled
+    deletion" banner so the user can restore the account.
     """
 
     access_token: str | None = None
@@ -100,6 +105,7 @@ class AuthTokenResponse(BaseModel):
     email: str
     role: str
     status: str = "ok"
+    scheduled_deletion_at: str | None = None
 
 
 class VerifyEmailRequest(BaseModel):
@@ -132,3 +138,38 @@ class ResetPasswordRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     status: str = "ok"
+
+
+class DeleteAccountRequest(BaseModel):
+    """Re-auth proof for ``POST /api/auth/me/delete``.
+
+    The client must supply ONE of:
+      * ``method="password"`` with a non-empty ``password`` (password users)
+      * ``method="google"`` with a fresh ``id_token`` + the ``nonce`` the
+        client used when obtaining it (Google-OAuth users)
+
+    Existing session JWT alone is rejected — re-auth is a hard requirement
+    for self-delete (Auth0 / Google Identity guidance).
+    """
+
+    method: Literal["password", "google"]
+    password: str | None = None
+    id_token: str | None = None
+    nonce: str | None = None
+
+    @model_validator(mode="after")
+    def _check_proof_shape(self) -> "DeleteAccountRequest":
+        if self.method == "password":
+            if not self.password:
+                raise ValueError("password is required when method=password")
+        elif self.method == "google":
+            if not self.id_token or not self.nonce:
+                raise ValueError(
+                    "id_token and nonce are required when method=google"
+                )
+        return self
+
+
+class CancelAccountDeletionResponse(BaseModel):
+    status: str = "cancelled"
+    scheduled_deletion_at: str | None = None

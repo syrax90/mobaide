@@ -1,9 +1,11 @@
 package com.mobaide.app.data.network
 
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
+import com.mobaide.app.data.network.dto.CancelAccountDeletionResponse
 import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
+import com.mobaide.app.data.network.dto.DeleteAccountRequest
 import com.mobaide.app.data.network.dto.ForgotPasswordRequest
 import com.mobaide.app.data.network.dto.ForgotPasswordResponse
 import com.mobaide.app.data.network.dto.GoogleAuthRequest
@@ -168,6 +170,33 @@ class CentralApi(
             .header("Authorization", "Bearer $userToken")
             .build()
         executeNoContent(request)
+    }
+
+    /**
+     * Schedule the calling user's account for soft-delete (14-day grace by
+     * default). Server returns 204; subsequent WS-4010 close drives the
+     * `SessionManager.AccountRemoved` cleanup automatically.
+     */
+    suspend fun requestAccountDeletion(
+        userToken: String,
+        body: DeleteAccountRequest,
+    ) {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/me/delete")
+            .post(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
+    }
+
+    suspend fun cancelAccountDeletion(userToken: String): CancelAccountDeletionResponse {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/auth/me/delete/cancel")
+            .post("".toRequestBody(jsonMediaType))
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
     }
 
     suspend fun getMobileTokens(userToken: String, agentId: String): MobileTokenResponse {

@@ -231,7 +231,7 @@ class TestBroadcastStatus:
 
 
 async def _user_token(app, email: str, password: str) -> str:
-    _uid, _role, tok = await app.state.auth_service.login_user(email, password)
+    _uid, _role, tok, _scheduled = await app.state.auth_service.login_user(email, password)
     return tok
 
 
@@ -394,6 +394,7 @@ class TestUserEventsEndpoint:
                             "type": "auth",
                             "agent_id": agent_id,
                             "token": raw_token,
+                            "protocol_version": 2,
                         }
                     )
                 )
@@ -410,6 +411,7 @@ class TestUserEventsEndpoint:
                                 "type": "auth",
                                 "agent_id": agent_id,
                                 "token": raw_token,
+                                "protocol_version": 2,
                             }
                         )
                     )

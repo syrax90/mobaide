@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
+import com.mobaide.app.ui.common.GraceBannerSection
 import com.mobaide.app.ui.theme.StateRunning
 import com.mobaide.app.ui.theme.StateStopped
 
@@ -123,6 +124,7 @@ fun AgentListScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            GraceBannerSection()
             if (uiState.isScannerLaunching) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }

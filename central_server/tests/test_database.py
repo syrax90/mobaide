@@ -765,7 +765,7 @@ class TestUserCRUD:
         """Verify that PRAGMA user_version is set after migration."""
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 9
+        assert row[0] == 11
 
 
 class TestAdminOwnedAgentPurgeMigration:
@@ -807,7 +807,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 9
+        assert row[0] == 11
 
         assert await db.get_agent(admin_agent_id) is None
         assert await db.list_pairings_for_agent(admin_agent_id) == []
@@ -833,12 +833,12 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         await db.close()
 
-        # Reopen — version is already 9, migration is a no-op.
+        # Reopen — version is already at the head, migration is a no-op.
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 9
+        assert row[0] == 11
         await db.close()
 
 
@@ -915,3 +915,326 @@ class TestRefreshTokenNeverExpires:
             "device-1",
             agent_id,
         )
+
+
+class TestScheduledDeletionFields:
+    """``set_scheduled_deletion`` / ``clear_scheduled_deletion`` /
+    ``list_users_due_for_purge`` — the user-row column pair the sweeper
+    reads on every interval."""
+
+    async def test_set_and_clear_round_trip(self, db: Database):
+        user_id = await db.create_user(
+            email="schedule@test.local", password_hash="h",
+        )
+        future = "2099-01-01T00:00:00+00:00"
+        now_iso = "2025-01-01T00:00:00+00:00"
+
+        await db.set_scheduled_deletion(
+            user_id, scheduled_for=future, requested_at=now_iso,
+        )
+        user = await db.get_user_by_id(user_id)
+        assert user is not None
+        assert user["scheduled_deletion_at"] == future
+        assert user["deletion_requested_at"] == now_iso
+
+        await db.clear_scheduled_deletion(user_id)
+        cleared = await db.get_user_by_id(user_id)
+        assert cleared is not None
+        assert cleared["scheduled_deletion_at"] is None
+        assert cleared["deletion_requested_at"] is None
+
+    async def test_clear_is_idempotent_when_never_scheduled(self, db: Database):
+        user_id = await db.create_user(
+            email="noschedule@test.local", password_hash="h",
+        )
+        # Must not raise even though there's nothing to clear.
+        await db.clear_scheduled_deletion(user_id)
+        user = await db.get_user_by_id(user_id)
+        assert user is not None
+        assert user["scheduled_deletion_at"] is None
+
+    async def test_list_users_due_for_purge_returns_only_past_due(
+        self, db: Database
+    ):
+        """Sweeper filter: rows where ``scheduled_deletion_at <= now`` are
+        returned; future-scheduled and never-scheduled rows are not."""
+        u_past = await db.create_user(email="past@test.local", password_hash="h")
+        u_future = await db.create_user(
+            email="future@test.local", password_hash="h",
+        )
+        u_unscheduled = await db.create_user(
+            email="never@test.local", password_hash="h",
+        )
+
+        past_iso = "2020-01-01T00:00:00+00:00"
+        future_iso = "2099-01-01T00:00:00+00:00"
+        await db.set_scheduled_deletion(
+            u_past, scheduled_for=past_iso, requested_at=past_iso,
+        )
+        await db.set_scheduled_deletion(
+            u_future, scheduled_for=future_iso, requested_at=past_iso,
+        )
+
+        # "Now" is between past_iso and future_iso.
+        due = await db.list_users_due_for_purge("2024-06-01T00:00:00+00:00")
+        ids = {row["id"] for row in due}
+        assert u_past in ids
+        assert u_future not in ids
+        assert u_unscheduled not in ids
+
+        # Each returned row carries the columns the sweeper re-checks.
+        for row in due:
+            assert "email" in row and row["email"]
+            assert "scheduled_deletion_at" in row
+
+    async def test_list_users_due_for_purge_excludes_boundary_when_strictly_after(
+        self, db: Database
+    ):
+        """If now < scheduled_deletion_at, the user is NOT due. Boundary
+        check: ``scheduled_deletion_at <= now`` includes exact equality."""
+        user_id = await db.create_user(email="edge@test.local", password_hash="h")
+        scheduled = "2030-06-15T12:00:00+00:00"
+        await db.set_scheduled_deletion(
+            user_id, scheduled_for=scheduled, requested_at=scheduled,
+        )
+        # Now is strictly before the schedule → not due.
+        before = await db.list_users_due_for_purge("2030-06-15T11:59:59+00:00")
+        assert all(r["id"] != user_id for r in before)
+        # Now is exactly equal → due (the SQL uses <=).
+        equal = await db.list_users_due_for_purge(scheduled)
+        assert any(r["id"] == user_id for r in equal)
+
+
+class TestDeletionAuditCrud:
+    """``record_deletion_audit`` / ``update_deletion_audit_status`` /
+    ``find_pending_audit_for_user`` — drives audit row lifecycle from
+    request → terminal state."""
+
+    async def test_record_then_find_pending_returns_row(self, db: Database):
+        user_id = await db.create_user(email="audit@test.local", password_hash="h")
+        audit_id = await db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request="audit@test.local",
+            requested_at="2025-01-01T00:00:00+00:00",
+            scheduled_for="2025-01-15T00:00:00+00:00",
+            source="android",
+        )
+        assert isinstance(audit_id, int)
+        assert audit_id > 0
+
+        row = await db.find_pending_audit_for_user(user_id)
+        assert row is not None
+        assert row["id"] == audit_id
+        assert row["status"] == "pending"
+        assert row["email_at_request"] == "audit@test.local"
+        assert row["source"] == "android"
+
+    async def test_find_pending_returns_none_when_no_pending(self, db: Database):
+        # Brand-new user with no audit history.
+        user_id = await db.create_user(
+            email="clean@test.local", password_hash="h",
+        )
+        assert await db.find_pending_audit_for_user(user_id) is None
+
+    async def test_update_status_to_completed_with_timestamp(self, db: Database):
+        user_id = await db.create_user(email="done@test.local", password_hash="h")
+        audit_id = await db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request="done@test.local",
+            requested_at="2025-01-01T00:00:00+00:00",
+            scheduled_for="2025-01-15T00:00:00+00:00",
+            source="android",
+        )
+        await db.update_deletion_audit_status(
+            audit_id, "completed", completed_at="2025-01-15T01:00:00+00:00",
+        )
+        # No more pending row for this user.
+        assert await db.find_pending_audit_for_user(user_id) is None
+
+        cur = await db.conn.execute(
+            "SELECT status, completed_at FROM deletion_audit WHERE id = ?",
+            (audit_id,),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row["status"] == "completed"
+        assert row["completed_at"] == "2025-01-15T01:00:00+00:00"
+
+    async def test_update_status_to_cancelled_records_reason(self, db: Database):
+        user_id = await db.create_user(
+            email="cancel@test.local", password_hash="h",
+        )
+        audit_id = await db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request="cancel@test.local",
+            requested_at="2025-01-01T00:00:00+00:00",
+            scheduled_for="2025-01-15T00:00:00+00:00",
+            source="portal",
+        )
+        await db.update_deletion_audit_status(
+            audit_id, "cancelled", cancellation_reason="user_initiated",
+        )
+        cur = await db.conn.execute(
+            "SELECT status, cancellation_reason FROM deletion_audit WHERE id = ?",
+            (audit_id,),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row["status"] == "cancelled"
+        assert row["cancellation_reason"] == "user_initiated"
+
+    async def test_find_pending_returns_most_recent_when_multiple(
+        self, db: Database
+    ):
+        """A user could in theory have multiple historical audit rows
+        (one cancelled, one re-requested). ``find_pending_audit_for_user``
+        narrows to ``status = 'pending'`` and orders by requested_at DESC."""
+        user_id = await db.create_user(
+            email="resched@test.local", password_hash="h",
+        )
+        old_id = await db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request="resched@test.local",
+            requested_at="2025-01-01T00:00:00+00:00",
+            scheduled_for="2025-01-15T00:00:00+00:00",
+            source="android",
+        )
+        await db.update_deletion_audit_status(old_id, "cancelled")
+        new_id = await db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request="resched@test.local",
+            requested_at="2025-02-01T00:00:00+00:00",
+            scheduled_for="2025-02-15T00:00:00+00:00",
+            source="portal",
+        )
+
+        pending = await db.find_pending_audit_for_user(user_id)
+        assert pending is not None
+        assert pending["id"] == new_id
+        assert pending["source"] == "portal"
+
+
+class TestDeletionCancelTokens:
+    """``create_deletion_cancel_token`` / ``consume_deletion_cancel_token``
+    — single-use short-TTL tokens for the cancel link emailed to users."""
+
+    async def test_create_then_consume_returns_user_id(self, db: Database):
+        user_id = await db.create_user(email="ct@test.local", password_hash="h")
+        raw = await db.create_deletion_cancel_token(user_id, ttl_seconds=3600)
+        assert isinstance(raw, str)
+        assert len(raw) > 20
+
+        consumed = await db.consume_deletion_cancel_token(raw)
+        assert consumed == user_id
+
+    async def test_consume_is_single_use(self, db: Database):
+        user_id = await db.create_user(email="su@test.local", password_hash="h")
+        raw = await db.create_deletion_cancel_token(user_id, ttl_seconds=3600)
+        first = await db.consume_deletion_cancel_token(raw)
+        assert first == user_id
+
+        # Second consume returns None — token is consumed.
+        again = await db.consume_deletion_cancel_token(raw)
+        assert again is None
+
+    async def test_consume_unknown_token_returns_none(self, db: Database):
+        # No token was ever stored matching this string.
+        result = await db.consume_deletion_cancel_token("not-a-real-token-xyz")
+        assert result is None
+
+    async def test_consume_expired_token_returns_none(self, db: Database):
+        """TTL=0 makes the token expire the instant it's stored — the
+        ``expires_at > now`` predicate in consume keeps it from matching."""
+        user_id = await db.create_user(email="exp@test.local", password_hash="h")
+        raw = await db.create_deletion_cancel_token(user_id, ttl_seconds=0)
+        assert await db.consume_deletion_cancel_token(raw) is None
+
+    async def test_creating_new_token_invalidates_outstanding_one(
+        self, db: Database
+    ):
+        """Mirrors ``create_password_reset_token``: only one live cancel
+        token per user. A second create marks the first consumed (it
+        can no longer be redeemed)."""
+        user_id = await db.create_user(email="inv@test.local", password_hash="h")
+        first = await db.create_deletion_cancel_token(user_id, ttl_seconds=3600)
+        second = await db.create_deletion_cancel_token(user_id, ttl_seconds=3600)
+        assert first != second
+
+        # First token is now invalidated; second still works.
+        assert await db.consume_deletion_cancel_token(first) is None
+        assert await db.consume_deletion_cancel_token(second) == user_id
+
+
+class TestDeleteUserCascadeExtensions:
+    """``delete_user``'s cascade was extended to drop rows in
+    ``password_reset_tokens`` and ``account_deletion_cancel_tokens``.
+    Both tables FK to ``users(id)`` so leaving stragglers would block the
+    final user DELETE."""
+
+    async def test_delete_user_drops_outstanding_password_reset_tokens(
+        self, db: Database
+    ):
+        user_id = await db.create_user(email="pr@test.local", password_hash="h")
+        # An unconsumed reset token must be cleared, or the FK on
+        # password_reset_tokens(user_id) would block the users DELETE.
+        await db.create_password_reset_token(user_id, "hash-1", ttl_seconds=300)
+
+        agent_ids = await db.delete_user(user_id)
+        assert agent_ids == []
+
+        cur = await db.conn.execute(
+            "SELECT COUNT(*) AS n FROM password_reset_tokens WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        assert row["n"] == 0
+        assert await db.get_user_by_id(user_id) is None
+
+    async def test_delete_user_drops_outstanding_cancel_tokens(
+        self, db: Database
+    ):
+        user_id = await db.create_user(email="ct2@test.local", password_hash="h")
+        await db.create_deletion_cancel_token(user_id, ttl_seconds=3600)
+        # Sanity: row exists before the cascade runs.
+        cur = await db.conn.execute(
+            "SELECT COUNT(*) AS n FROM account_deletion_cancel_tokens "
+            "WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        assert row["n"] == 1
+
+        await db.delete_user(user_id)
+
+        cur = await db.conn.execute(
+            "SELECT COUNT(*) AS n FROM account_deletion_cancel_tokens "
+            "WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        assert row["n"] == 0
+
+    async def test_delete_user_preserves_audit_rows(self, db: Database):
+        """Compliance trail: ``deletion_audit`` has no FK on user_id and
+        must outlive the user row (GDPR Art. 17)."""
+        user_id = await db.create_user(email="aud@test.local", password_hash="h")
+        audit_id = await db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request="aud@test.local",
+            requested_at="2025-01-01T00:00:00+00:00",
+            scheduled_for="2025-01-15T00:00:00+00:00",
+            source="android",
+        )
+
+        await db.delete_user(user_id)
+
+        # User is gone; audit row survives.
+        assert await db.get_user_by_id(user_id) is None
+        cur = await db.conn.execute(
+            "SELECT id, user_id, email_at_request FROM deletion_audit WHERE id = ?",
+            (audit_id,),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row["user_id"] == user_id
+        assert row["email_at_request"] == "aud@test.local"

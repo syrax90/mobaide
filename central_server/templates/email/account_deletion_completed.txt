@@ -1,0 +1,10 @@
+Your {{ from_name }} account has been deleted
+
+Your {{ from_name }} account and all associated data — agents, pairings,
+and sessions — have been permanently removed.
+
+Thank you for using {{ from_name }}. If you'd like to come back later, you
+can sign up again with the same email address.
+
+—
+{{ from_name }}  ·  {{ from_domain }}

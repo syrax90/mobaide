@@ -7,6 +7,8 @@ import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.RestApi
+import com.mobaide.app.data.network.dto.DeleteAccountReauthErrorBody
+import com.mobaide.app.data.network.dto.DeleteAccountRequest
 import com.mobaide.app.data.network.dto.ResendRateLimitedErrorBody
 import com.mobaide.app.data.network.dto.ResetErrorBody
 import com.mobaide.app.data.network.dto.ResetIpRateLimitedErrorBody
@@ -18,8 +20,17 @@ import kotlinx.serialization.json.Json
  * Outcome of register / login / verify-email.
  */
 sealed interface AuthResult {
-    /** Tokens have been persisted and the session is active. */
-    data class Success(val email: String) : AuthResult
+    /**
+     * Tokens have been persisted and the session is active.
+     *
+     * [scheduledDeletionAt] is non-null when the account is in the
+     * soft-delete grace window — the UI surfaces a "cancel scheduled
+     * deletion" banner.
+     */
+    data class Success(
+        val email: String,
+        val scheduledDeletionAt: String? = null,
+    ) : AuthResult
 
     /**
      * The server accepted the call but the account is not yet verified.
@@ -64,6 +75,28 @@ class ResetPasswordFailure(val reason: ResetPasswordError) : Exception(
     "Password reset failed: $reason"
 )
 
+/**
+ * Outcome of a request to permanently delete the calling user's account.
+ * The happy path is [Scheduled] — the server queues a 14-day soft-delete
+ * before the final cascade purge. On success, the WebSocket 4010 close
+ * will drive [SessionManager.AccountRemoved] cleanup automatically; no
+ * additional state plumbing is required here.
+ */
+sealed interface DeleteAccountResult {
+    data object Scheduled : DeleteAccountResult
+    data class ReauthFailed(val message: String) : DeleteAccountResult
+    data object Forbidden : DeleteAccountResult
+}
+
+/**
+ * Outcome of a request to cancel a pending account deletion (restore the
+ * account from the grace window).
+ */
+sealed interface CancelDeletionResult {
+    data object Cancelled : CancelDeletionResult
+    data object NotScheduled : CancelDeletionResult
+}
+
 class AuthRepository(
     private val restApi: RestApi,
     private val centralApi: CentralApi,
@@ -106,9 +139,10 @@ class AuthRepository(
             ?: error("verify-email response missing access_token")
         userIdentityStore.saveUserSession(
             token, response.email, response.user_id, response.role,
+            scheduledDeletionAt = response.scheduled_deletion_at,
         )
         sessionManager.markUserLoggedIn()
-        return AuthResult.Success(response.email)
+        return AuthResult.Success(response.email, response.scheduled_deletion_at)
     }
 
     suspend fun resendVerification(email: String): ResendOutcome {
@@ -187,14 +221,14 @@ class AuthRepository(
     ): AuthResult {
         if (response.role == ROLE_ADMIN) throw AdminLoginNotSupportedException()
         if (response.status == STATUS_VERIFICATION_REQUIRED || response.access_token == null) {
-            // Do NOT persist tokens or flip the session state.
             return AuthResult.VerificationRequired(response.email.ifBlank { requestedEmail })
         }
         userIdentityStore.saveUserSession(
             response.access_token, response.email, response.user_id, response.role,
+            scheduledDeletionAt = response.scheduled_deletion_at,
         )
         sessionManager.markUserLoggedIn()
-        return AuthResult.Success(response.email)
+        return AuthResult.Success(response.email, response.scheduled_deletion_at)
     }
 
     private fun parseVerificationRequired(e: ApiException): String? {
@@ -272,4 +306,89 @@ class AuthRepository(
     fun getAgentUrl(): String? = tokenStore.getAgentUrl()
 
     fun getUsername(): String? = tokenStore.getUsername()
+
+    /**
+     * Request soft-delete of the calling user's account with a current
+     * password as re-auth proof. On success the server returns 204 and
+     * the WS-4010 close that follows drives the [SessionManager]
+     * `AccountRemoved` cleanup automatically.
+     */
+    suspend fun deleteAccountWithPassword(password: String): DeleteAccountResult {
+        val token = userIdentityStore.getUserAccessToken()
+            ?: return DeleteAccountResult.ReauthFailed("Not signed in")
+        return submitDelete(
+            token,
+            DeleteAccountRequest(method = "password", password = password),
+        )
+    }
+
+    /**
+     * Request soft-delete using a fresh Google ID token + the nonce the
+     * client used when obtaining it (Auth0-style re-auth — the server
+     * validates iat freshness, nonce match, and that the token's sub
+     * matches the user's stored google_sub).
+     */
+    suspend fun deleteAccountWithGoogle(
+        idToken: String,
+        nonce: String,
+    ): DeleteAccountResult {
+        val token = userIdentityStore.getUserAccessToken()
+            ?: return DeleteAccountResult.ReauthFailed("Not signed in")
+        return submitDelete(
+            token,
+            DeleteAccountRequest(method = "google", id_token = idToken, nonce = nonce),
+        )
+    }
+
+    private suspend fun submitDelete(
+        userToken: String,
+        body: DeleteAccountRequest,
+    ): DeleteAccountResult {
+        return try {
+            centralApi.requestAccountDeletion(userToken, body)
+            DeleteAccountResult.Scheduled
+        } catch (e: ApiException) {
+            when (e.code) {
+                400 -> DeleteAccountResult.Forbidden
+                403 -> DeleteAccountResult.ReauthFailed(parseDeleteReauthMessage(e))
+                else -> throw e
+            }
+        }
+    }
+
+    private fun parseDeleteReauthMessage(e: ApiException): String {
+        return try {
+            errorJson
+                .decodeFromString<DeleteAccountReauthErrorBody>(e.errorBody)
+                .detail.message
+        } catch (_: Exception) {
+            "Re-authentication failed"
+        }
+    }
+
+    /**
+     * Cancel a pending scheduled deletion. Idempotent. Returns
+     * [CancelDeletionResult.NotScheduled] if the server reports the account
+     * had no pending deletion (helpful for de-duplicating the banner when the
+     * user already cancelled elsewhere). On success, the local scheduled-
+     * deletion marker is cleared so the banner disappears immediately.
+     */
+    suspend fun cancelAccountDeletion(): CancelDeletionResult {
+        val token = userIdentityStore.getUserAccessToken()
+            ?: return CancelDeletionResult.NotScheduled
+        val response = centralApi.cancelAccountDeletion(token)
+        userIdentityStore.setScheduledDeletionAt(null)
+        return if (response.scheduled_deletion_at == null) {
+            CancelDeletionResult.NotScheduled
+        } else {
+            CancelDeletionResult.Cancelled
+        }
+    }
+
+    /**
+     * ISO-8601 timestamp the server reports as the scheduled-deletion final
+     * purge date when the account is in the soft-delete grace window, or
+     * `null` if the account is active.
+     */
+    fun getScheduledDeletionAt(): String? = userIdentityStore.getScheduledDeletionAt()
 }

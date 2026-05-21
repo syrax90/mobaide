@@ -1,6 +1,8 @@
 from .dependencies import (
     WebSocketAuthError,
+    get_api_user,
     get_dashboard_user,
+    get_portal_user,
     require_role,
     ws_authenticate_mobile,
 )
@@ -12,7 +14,9 @@ __all__ = [
     "MobileTokenPayload",
     "UserTokenPayload",
     "WebSocketAuthError",
+    "get_api_user",
     "get_dashboard_user",
+    "get_portal_user",
     "require_role",
     "ws_authenticate_mobile",
 ]

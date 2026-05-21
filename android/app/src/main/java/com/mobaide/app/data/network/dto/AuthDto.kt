@@ -50,6 +50,12 @@ data class UserAuthResponse(
      * with the OTP before receiving a JWT.
      */
     val status: String = "ok",
+    /**
+     * ISO-8601 timestamp when the account is currently scheduled for
+     * permanent deletion, or `null` if no deletion is pending. When set,
+     * clients render a "cancel scheduled deletion" banner.
+     */
+    val scheduled_deletion_at: String? = null,
 )
 
 @Serializable
@@ -141,3 +147,37 @@ data class ResetErrorDetail(val error: String)
 
 @Serializable
 data class ResetErrorBody(val detail: ResetErrorDetail)
+
+/**
+ * Re-auth proof for `POST /api/auth/me/delete`. Exactly one of password
+ * (for password users) or (id_token + nonce) (for Google users) must be
+ * populated; `method` discriminates server-side.
+ */
+@Serializable
+data class DeleteAccountRequest(
+    val method: String,
+    val password: String? = null,
+    val id_token: String? = null,
+    val nonce: String? = null,
+)
+
+@Serializable
+data class CancelAccountDeletionResponse(
+    val status: String = "cancelled",
+    val scheduled_deletion_at: String? = null,
+)
+
+/**
+ * 403 error body from `/api/auth/me/delete` when the supplied credential
+ * proof is rejected. FastAPI wraps as `{"detail": {"error": "reauth_required", "message": ...}}`.
+ */
+@Serializable
+data class DeleteAccountReauthDetail(
+    val error: String,
+    val message: String,
+)
+
+@Serializable
+data class DeleteAccountReauthErrorBody(
+    val detail: DeleteAccountReauthDetail,
+)

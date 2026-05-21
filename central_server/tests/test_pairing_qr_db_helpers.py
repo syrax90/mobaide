@@ -98,17 +98,17 @@ class TestSchema:
         await database.conn.commit()
         await database.close()
 
-        # First reopen — runs the v7 -> v8 -> v9 migrations. The column
-        # ALTERs are wrapped in column-existence guards, so each step is
-        # a no-op-or-add depending on whether the column already exists
-        # in the DDL (it does, on a freshly-seeded test DB).
+        # First reopen — runs the v7 -> v8 -> ... -> v11 migrations. The
+        # column ALTERs are wrapped in column-existence guards, so each step
+        # is a no-op-or-add depending on whether the column already exists in
+        # the DDL (it does, on a freshly-seeded test DB).
         database = Database(db_path)
         await database.connect()
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_first_reopen = (await cur.fetchone())[0]
-        assert version_after_first_reopen == 9, (
-            f"after the v7->v8->v9 migrations run, user_version must be 9; "
+        assert version_after_first_reopen == 11, (
+            f"after the v7->v11 migrations run, user_version must be 11; "
             f"got {version_after_first_reopen}"
         )
         # The seeded row must survive the migration. The relay_url
@@ -124,7 +124,7 @@ class TestSchema:
         )
         await database.close()
 
-        # Second reopen — already at version 9, must be a no-op.
+        # Second reopen — already at version 11, must be a no-op.
         # A non-idempotent migration would error here with
         # ``duplicate column name: relay_url`` or ``duplicate column name:
         # agent_version`` from sqlite, exactly the failure mode the
@@ -136,14 +136,14 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_second_reopen = (await cur.fetchone())[0]
-        assert version_after_second_reopen == 9
+        assert version_after_second_reopen == 11
 
         # The seeded row is still there — second reopen is a no-op,
         # not a destructive rebuild.
         meta2 = await database.lookup_pairing_token_metadata(existing_raw)
         assert meta2 is not None, (
             "the seeded pairing_tokens row vanished on the second "
-            "reopen at user_version=9; the migration is not idempotent"
+            "reopen at user_version=11; the migration is not idempotent"
         )
         await database.close()
 

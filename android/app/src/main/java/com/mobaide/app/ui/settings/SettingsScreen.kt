@@ -1,5 +1,6 @@
 package com.mobaide.app.ui.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -132,6 +134,11 @@ fun SettingsScreen(
                 Text("Logout")
             }
 
+            Spacer(modifier = Modifier.height(24.dp))
+
+            HorizontalDivider()
+            DangerZoneSection(onDeleteAccount = viewModel::startDeleteAccount)
+
             Spacer(modifier = Modifier.weight(1f))
 
             Text(
@@ -140,6 +147,43 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(16.dp),
             )
+        }
+
+        if (uiState.deleteDialog !is DeleteAccountDialogState.Hidden) {
+            DeleteAccountDialog(
+                state = uiState.deleteDialog,
+                viewModel = viewModel,
+                onDismiss = viewModel::dismissDeleteDialog,
+                onScheduled = onLogout,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DangerZoneSection(onDeleteAccount: () -> Unit) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text(
+            text = "Danger zone",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Permanently delete your account, all owned agents, and every saved template.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onDeleteAccount,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.outlinedButtonColors(
+                contentColor = MaterialTheme.colorScheme.error,
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+        ) {
+            Text("Delete account")
         }
     }
 }

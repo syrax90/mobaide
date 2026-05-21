@@ -105,10 +105,17 @@ class AgentEventBusTest {
 
     @Test
     fun connection_startsDisconnected_andBecomesConnecting_onStart() = runTest {
-        val (bus, _, conn) = newBus()
+        // Start unauthenticated so the init-block's authState collector does
+        // not trigger auto-start. The bus stays Disconnected. Once we
+        // transition to FullyConnected and call start() manually, it moves to
+        // Connecting, which is what this test verifies.
+        val fixture = newBusWithAuthStateFlow(initiallyLoggedIn = false)
+        val bus = fixture.bus
+        val conn = fixture.conn
 
         bus.connection.test {
             assertEquals(AgentEventBus.ConnState.Disconnected, awaitItem())
+            fixture.authStateFlow.value = SessionManager.AuthState.FullyConnected
             bus.start()
             assertEquals(AgentEventBus.ConnState.Connecting, awaitItem())
             cancelAndIgnoreRemainingEvents()
@@ -499,9 +506,13 @@ class AgentEventBusTest {
             connEvents.emit(
                 WsEvent.Message("""{"type":"totally.unknown","payload":{}}"""),
             )
-            expectNoEvents()
+            // The bus emits an UnknownEnvelopeType sentinel rather than
+            // silently dropping the frame — this is intentional so callers
+            // can log / metric unknown types. The bus must still keep running.
+            val unknown = awaitItem() as AgentEvent.UnknownEnvelopeType
+            assertEquals("totally.unknown", unknown.type)
 
-            // A subsequent valid message still arrives.
+            // A subsequent valid message still arrives — the bus kept running.
             connEvents.emit(
                 WsEvent.Message(
                     """{"type":"sessions.changed","payload":{"sessions":[]}}""",

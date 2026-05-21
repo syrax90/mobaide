@@ -82,7 +82,7 @@ class TestPairingRevokeRoleGate:
         agent_id, _ = registered_agent
         pairing_id = await app.state.db.create_pairing(agent_id, "device-1")
         # Log in as the viewer owner (agent is viewer-owned per conftest).
-        _uid, _role, token = await app.state.auth_service.login_user(
+        _uid, _role, token, _scheduled = await app.state.auth_service.login_user(
             "viewer@test.local", "viewerpass123"
         )
         resp = await client.delete(

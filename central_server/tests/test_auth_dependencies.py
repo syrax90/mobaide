@@ -93,7 +93,7 @@ class _FakeRequest:
 
 class TestGetDashboardUser:
     async def test_valid_cookie(self, auth_service):
-        _user_id, _role, token = await auth_service.login_user(
+        _user_id, _role, token, _scheduled = await auth_service.login_user(
             TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
         )
         fake_app = _FakeApp(auth_service)
@@ -168,7 +168,7 @@ class TestGetDashboardUser:
 
 class TestRequireRole:
     async def test_admin_allowed(self, auth_service):
-        _user_id, _role, token = await auth_service.login_user(
+        _user_id, _role, token, _scheduled = await auth_service.login_user(
             TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
         )
         fake_app = _FakeApp(auth_service)
@@ -211,7 +211,7 @@ class TestRequireRole:
 
 class TestGetApiUser:
     async def test_valid_bearer(self, auth_service):
-        _user_id, _role, token = await auth_service.login_user(
+        _user_id, _role, token, _scheduled = await auth_service.login_user(
             TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
         )
         fake_app = _FakeApp(auth_service)
@@ -304,7 +304,7 @@ class TestGetNonAdminApiUser:
     """Agent-ownership endpoints reject admin tokens with 403."""
 
     async def test_admin_blocked(self, auth_service):
-        _user_id, _role, token = await auth_service.login_user(
+        _user_id, _role, token, _scheduled = await auth_service.login_user(
             TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
         )
         fake_app = _FakeApp(auth_service)
@@ -375,7 +375,7 @@ class TestGetMobileUser:
 
     async def test_dashboard_token_rejected_for_mobile(self, auth_service):
         """A dashboard token should not pass mobile auth (wrong type)."""
-        _user_id, _role, dashboard_token = await auth_service.login_user(
+        _user_id, _role, dashboard_token, _scheduled = await auth_service.login_user(
             TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
         )
         fake_app = _FakeApp(auth_service)

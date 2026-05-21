@@ -85,7 +85,7 @@ class TestUserRegistration:
         assert len(result.user_id) == 12
         assert len(result.access_token) > 20
 
-        login_id, role, login_token = await auth.login_user(
+        login_id, role, login_token, _scheduled = await auth.login_user(
             "user@example.com", "pass123"
         )
         assert login_id == result.user_id
@@ -183,7 +183,7 @@ class TestAdminSeeding:
 
     async def test_seeded_admin_can_login(self, auth: AuthService):
         await auth.seed_admin_user()
-        user_id, role, token = await auth.login_user(
+        user_id, role, token, _scheduled = await auth.login_user(
             TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
         )
         assert role == "admin"

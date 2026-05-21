@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>{% block title %}Mobaide{% endblock %}</title>
+    {% block extra_head %}{% endblock %}
+    <link rel="stylesheet" href="/static/style.css">
+    {# Vendored htmx 2.0.4 — served from same origin (no CDN) so a compromised
+       CDN cannot inject JS into the end-user-facing portal. SRI hash is
+       computed from the bundled bytes; if you upgrade the vendored file,
+       refresh both ``/static/htmx.min.js`` and the integrity attribute. #}
+    <script src="/static/htmx.min.js"
+            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+            crossorigin="anonymous"></script>
+</head>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+    <header>
+        <nav>
+            <a href="/portal/account" class="logo">Mobaide</a>
+            <div class="nav-right">
+                {% block nav_right %}
+                <a href="/portal/login" class="btn btn-sm">Sign in</a>
+                {% endblock %}
+            </div>
+        </nav>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer style="max-width: 960px; margin: 3rem auto 2rem; padding: 1rem 1.5rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.85rem; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <span>&copy; Mobaide</span>
+        <span>
+            <a href="/portal/delete-account-info" style="color: var(--text-muted); text-decoration: none; margin-right: 1rem;">Account deletion</a>
+            {% if privacy_policy_url %}
+            <a href="{{ privacy_policy_url }}" style="color: var(--text-muted); text-decoration: none;" target="_blank" rel="noopener">Privacy policy</a>
+            {% endif %}
+        </span>
+    </footer>
+    <div id="modal-root"></div>
+</body>
+</html>

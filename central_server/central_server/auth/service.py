@@ -15,6 +15,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import jwt
@@ -22,11 +23,13 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import BackgroundTasks
 
-from .models import MobileTokenPayload, UserTokenPayload
+from ..relay.routing import WS_CLOSE_ADMIN_REVOKED
+from .models import DeleteAccountRequest, MobileTokenPayload, UserTokenPayload
 
 if TYPE_CHECKING:
     from ..config import CentralServerConfig
     from ..db.database import Database
+    from ..relay.routing import RoutingTable
     from .email import EmailSender
     from .rate_limit import ResendRateLimiter
 
@@ -86,6 +89,18 @@ class NewPasswordSameAsOldError(Exception):
     """New password matches the current password — reset rejected."""
 
 
+class AccountDeletionAuthError(Exception):
+    """Re-auth proof failed for an account-deletion request.
+
+    Distinct from a generic ``ValueError`` so the router can return 403 (proof
+    rejected) rather than 400 (malformed) or 401 (no session).
+    """
+
+
+class AccountDeletionForbiddenError(Exception):
+    """Account deletion refused for policy reasons (e.g., seed admin)."""
+
+
 @dataclass
 class RegisterResult:
     """Outcome of ``AuthService.register_user``.
@@ -109,12 +124,14 @@ class AuthService:
         email_sender: "EmailSender | None" = None,
         resend_limiter: "ResendRateLimiter | None" = None,
         reset_email_limiter: "ResendRateLimiter | None" = None,
+        routing: "RoutingTable | None" = None,
     ) -> None:
         self._config = config
         self._db = db
         self._email_sender = email_sender
         self._resend_limiter = resend_limiter
         self._reset_email_limiter = reset_email_limiter
+        self._routing = routing
 
     async def _hash_password(self, password: str) -> str:
         loop = asyncio.get_running_loop()
@@ -249,10 +266,14 @@ class AuthService:
             access_token=token,
         )
 
-    async def login_user(self, email: str, password: str) -> tuple[str, str, str]:
+    async def login_user(
+        self, email: str, password: str
+    ) -> tuple[str, str, str, str | None]:
         """Authenticate a user by email+password.
 
-        Returns (user_id, role, jwt_token).
+        Returns (user_id, role, jwt_token, scheduled_deletion_at).
+        ``scheduled_deletion_at`` is the ISO timestamp when the account is
+        scheduled for soft-delete purge, or ``None`` if not scheduled.
         Raises ValueError if credentials are invalid.
         Raises VerificationRequiredError if the user is unverified.
         """
@@ -267,16 +288,24 @@ class AuthService:
             raise VerificationRequiredError(user["email"])
 
         token = self._create_user_token(user["id"], user["email"], user["role"])
-        return user["id"], user["role"], token
+        return (
+            user["id"],
+            user["role"],
+            token,
+            user.get("scheduled_deletion_at"),
+        )
 
     async def verify_email(
         self, email: str, code: str
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str | None]:
         """Consume a verification code and mark the user verified.
 
-        Returns (user_id, role, jwt_token) on success. Raises one of
-        ``InvalidVerificationCodeError`` / ``ExpiredVerificationCodeError`` /
-        ``VerificationAttemptsExhaustedError`` on failure.
+        Returns (user_id, role, jwt_token, scheduled_deletion_at) on success.
+        ``scheduled_deletion_at`` is rarely non-null on this path (the user
+        is registering / just verified email) but threaded for shape parity
+        with :func:`login_user`. Raises one of ``InvalidVerificationCodeError``
+        / ``ExpiredVerificationCodeError`` / ``VerificationAttemptsExhaustedError``
+        on failure.
         """
         user = await self._db.get_user_by_email(email)
         if user is None:
@@ -301,7 +330,12 @@ class AuthService:
                 await self._resend_limiter.reset(email)
             token = self._create_user_token(user["id"], user["email"], user["role"])
             logger.info("email_verification.verified user_id=%s", user["id"])
-            return user["id"], user["role"], token
+            return (
+                user["id"],
+                user["role"],
+                token,
+                user.get("scheduled_deletion_at"),
+            )
         if outcome == "expired":
             raise ExpiredVerificationCodeError()
         if outcome == "exhausted":
@@ -656,6 +690,316 @@ class AuthService:
             user_id=user_id,
             email=email,
             role=role,
+        )
+
+    # Re-auth freshness window for self-delete via Google ID token. Auth0
+    # guidance recommends 5 minutes for high-risk actions.
+    _GOOGLE_REAUTH_FRESHNESS_SECONDS = 5 * 60
+
+    async def _verify_fresh_credentials(
+        self, user: dict, proof: DeleteAccountRequest
+    ) -> None:
+        """Re-verify a user's identity before destructive action.
+
+        Raises ``AccountDeletionAuthError`` on rejection. The session JWT
+        alone is never sufficient — the caller must present either:
+
+          * ``method="password"``: current password, verified via Argon2id.
+          * ``method="google"``: a fresh ID token whose signature, audience,
+            ``iat`` (≤5 min old), ``nonce`` (matches the client-supplied
+            nonce), and ``sub`` (matches the stored ``google_sub``) all
+            validate.
+        """
+        if proof.method == "password":
+            if user["password_hash"] is None:
+                raise AccountDeletionAuthError(
+                    "This account does not use a password — re-authenticate "
+                    "with Google instead."
+                )
+            assert proof.password is not None
+            if not await self._verify_password(user["password_hash"], proof.password):
+                raise AccountDeletionAuthError("Incorrect password")
+            return
+
+        if proof.method == "google":
+            if not self._config.google_client_id:
+                raise AccountDeletionAuthError(
+                    "Google authentication is not configured on this server"
+                )
+            assert proof.id_token is not None
+            assert proof.nonce is not None
+            stored_sub = user.get("google_sub")
+            if stored_sub is None:
+                raise AccountDeletionAuthError(
+                    "This account is not linked to a Google identity"
+                )
+
+            from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token as google_id_token
+
+            loop = asyncio.get_running_loop()
+            try:
+                idinfo = await loop.run_in_executor(
+                    None,
+                    lambda: google_id_token.verify_oauth2_token(
+                        proof.id_token,
+                        google_requests.Request(),
+                        self._config.google_client_id,
+                    ),
+                )
+            except Exception as exc:
+                raise AccountDeletionAuthError(
+                    f"Invalid Google ID token: {exc}"
+                )
+
+            if idinfo.get("sub") != stored_sub:
+                raise AccountDeletionAuthError(
+                    "Google identity does not match this account"
+                )
+            id_nonce = idinfo.get("nonce")
+            if not id_nonce or not secrets.compare_digest(id_nonce, proof.nonce):
+                raise AccountDeletionAuthError("Nonce mismatch")
+            iat = idinfo.get("iat")
+            if not isinstance(iat, int):
+                raise AccountDeletionAuthError("ID token missing iat claim")
+            if int(time.time()) - iat > self._GOOGLE_REAUTH_FRESHNESS_SECONDS:
+                raise AccountDeletionAuthError(
+                    "Google ID token is too old — re-authenticate"
+                )
+            return
+
+        raise AccountDeletionAuthError(f"Unknown re-auth method: {proof.method}")
+
+    async def request_account_deletion(
+        self,
+        user_payload: UserTokenPayload,
+        *,
+        source: str,
+        proof: DeleteAccountRequest,
+        background_tasks: BackgroundTasks | None = None,
+    ) -> str:
+        """Schedule the user's account for soft-delete in 14 days (default).
+
+        Order (mirrors admin ``DELETE /dashboard/users/{user_id}`` for the
+        teardown sequence, but adds the soft-delete state + audit row before
+        the WS close — so a racing reconnect sees the schedule and surfaces
+        the cancel UI):
+
+          1. Reject the seed-admin.
+          2. Verify fresh credential proof.
+          3. Set ``users.scheduled_deletion_at`` + ``deletion_requested_at``.
+          4. Write a ``deletion_audit`` row in ``pending`` state.
+          5. Revoke every active mobile refresh token for the user.
+          6. Close the user's WS connections + each owned-agent's WS with
+             ``4010``. The routing table snapshot is taken before any DB
+             row that invalidates the lookup keys.
+          7. Issue a single-use cancel-deletion token + send the confirmation
+             email (best-effort; failure does not undo the schedule).
+
+        Returns the ISO ``scheduled_deletion_at`` timestamp so the router can
+        echo it back.
+        """
+        user_id = user_payload.sub
+        user = await self._db.get_user_by_id(user_id)
+        if user is None:
+            raise AccountDeletionAuthError("User not found")
+
+        seed_email = self._config.admin_seed_email
+        if seed_email is not None and user["email"] == seed_email:
+            raise AccountDeletionForbiddenError(
+                "The seed admin account cannot be self-deleted"
+            )
+
+        await self._verify_fresh_credentials(user, proof)
+
+        now = datetime.now(timezone.utc)
+        scheduled_for = now + timedelta(
+            days=self._config.account_deletion_grace_days
+        )
+        now_iso = now.isoformat()
+        scheduled_iso = scheduled_for.isoformat()
+
+        await self._db.set_scheduled_deletion(
+            user_id,
+            scheduled_for=scheduled_iso,
+            requested_at=now_iso,
+        )
+        await self._db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request=user["email"],
+            requested_at=now_iso,
+            scheduled_for=scheduled_iso,
+            source=source,
+        )
+        revoked = await self._db.revoke_all_refresh_tokens_for_user(user_id)
+
+        if self._routing is not None:
+            agent_ids = await self._db.list_agents_for_user(user_id)
+            for agent in agent_ids:
+                await self._routing.disconnect_agent(
+                    agent["agent_id"], WS_CLOSE_ADMIN_REVOKED, "user_deleted"
+                )
+            await self._routing.disconnect_user(
+                user_id, WS_CLOSE_ADMIN_REVOKED, "user_deleted"
+            )
+
+        cancel_ttl_seconds = self._config.account_deletion_cancel_token_ttl_hours * 3600
+        cancel_token = await self._db.create_deletion_cancel_token(
+            user_id, cancel_ttl_seconds
+        )
+
+        if self._email_sender is not None:
+            sender = self._email_sender
+            email = user["email"]
+            grace_days = self._config.account_deletion_grace_days
+            cancel_url = self._build_cancel_url(cancel_token)
+            if background_tasks is not None:
+                background_tasks.add_task(
+                    sender.send_account_deletion_requested,
+                    email, scheduled_iso, grace_days, cancel_url,
+                )
+            else:
+                task = asyncio.create_task(
+                    sender.send_account_deletion_requested(
+                        email, scheduled_iso, grace_days, cancel_url,
+                    )
+                )
+                _background_email_tasks.add(task)
+                task.add_done_callback(_background_email_tasks.discard)
+
+        logger.info(
+            "account_deletion.requested user_id=%s source=%s "
+            "scheduled_for=%s revoked_sessions=%d",
+            user_id, source, scheduled_iso, revoked,
+        )
+        return scheduled_iso
+
+    def _build_cancel_url(self, raw_token: str) -> str:
+        """Construct the public URL emailed for one-click deletion cancel."""
+        base = (
+            self._config.portal_base_url
+            or self._config.public_base_url
+            or ""
+        ).rstrip("/")
+        return f"{base}/portal/cancel-deletion?token={raw_token}"
+
+    async def cancel_account_deletion(
+        self,
+        user_id: str,
+        *,
+        cancellation_reason: str = "user_initiated",
+    ) -> str | None:
+        """Restore an account from the soft-delete grace window. Idempotent.
+
+        Returns the previous ``scheduled_deletion_at`` (or None if the user
+        was not scheduled — caller can surface "no-op" UX accordingly).
+        """
+        user = await self._db.get_user_by_id(user_id)
+        if user is None:
+            return None
+        previous = user.get("scheduled_deletion_at")
+        if previous is None:
+            return None
+        await self._db.clear_scheduled_deletion(user_id)
+        audit = await self._db.find_pending_audit_for_user(user_id)
+        if audit is not None:
+            await self._db.update_deletion_audit_status(
+                audit["id"],
+                "cancelled",
+                cancellation_reason=cancellation_reason,
+            )
+        logger.info(
+            "account_deletion.cancelled user_id=%s reason=%s previous=%s",
+            user_id, cancellation_reason, previous,
+        )
+        return previous
+
+    async def cancel_account_deletion_by_token(
+        self, raw_token: str
+    ) -> str | None:
+        """Consume an emailed cancel-deletion token. Returns ``user_id`` on
+        success, ``None`` on invalid / expired / already-consumed token."""
+        user_id = await self._db.consume_deletion_cancel_token(raw_token)
+        if user_id is None:
+            return None
+        await self.cancel_account_deletion(
+            user_id, cancellation_reason="email_link"
+        )
+        return user_id
+
+    async def run_deletion_sweep(self) -> int:
+        """Process every user past their grace window. Returns purge count.
+
+        Safety: each candidate is re-fetched + re-checked inside the loop so
+        a cancel that lands between scan and delete does not race-purge an
+        account that was just restored. Per-user errors are logged + the
+        audit row is stamped ``failed``; the loop never raises.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        candidates = await self._db.list_users_due_for_purge(now_iso)
+        purged = 0
+        for candidate in candidates:
+            user_id = candidate["id"]
+            try:
+                fresh = await self._db.get_user_by_id(user_id)
+                if fresh is None:
+                    continue
+                if fresh.get("scheduled_deletion_at") is None:
+                    continue
+                if fresh["scheduled_deletion_at"] > datetime.now(timezone.utc).isoformat():
+                    continue
+                await self._purge_scheduled_user(fresh)
+                purged += 1
+            except Exception as exc:
+                logger.exception(
+                    "deletion_sweeper.user_failed user_id=%s error=%s",
+                    user_id, exc,
+                )
+                audit = await self._db.find_pending_audit_for_user(user_id)
+                if audit is not None:
+                    await self._db.update_deletion_audit_status(
+                        audit["id"],
+                        "failed",
+                        cancellation_reason=f"sweeper_error: {exc!r}"[:200],
+                    )
+        if purged:
+            logger.info("deletion_sweeper.completed purged=%d", purged)
+        return purged
+
+    async def _purge_scheduled_user(self, user: dict) -> None:
+        """Cascade-delete a user whose grace window has elapsed.
+
+        Closes any live WS sockets first (mirrors the admin path), runs
+        ``delete_user``, stamps the audit row ``completed``, and fires the
+        final-purge confirmation email (best-effort).
+        """
+        user_id = user["id"]
+        email = user["email"]
+        audit = await self._db.find_pending_audit_for_user(user_id)
+        if self._routing is not None:
+            agent_ids = await self._db.list_agents_for_user(user_id)
+            for agent in agent_ids:
+                await self._routing.disconnect_agent(
+                    agent["agent_id"], WS_CLOSE_ADMIN_REVOKED, "user_purged"
+                )
+            await self._routing.disconnect_user(
+                user_id, WS_CLOSE_ADMIN_REVOKED, "user_purged"
+            )
+        await self._db.delete_user(user_id)
+        completed_at = datetime.now(timezone.utc).isoformat()
+        if audit is not None:
+            await self._db.update_deletion_audit_status(
+                audit["id"], "completed", completed_at=completed_at
+            )
+        if self._email_sender is not None:
+            task = asyncio.create_task(
+                self._email_sender.send_account_deletion_completed(email)
+            )
+            _background_email_tasks.add(task)
+            task.add_done_callback(_background_email_tasks.discard)
+        logger.info(
+            "account_deletion.completed user_id=%s email=%s",
+            user_id, email,
         )
 
     def _create_jwt(

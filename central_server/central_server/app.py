@@ -100,6 +100,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             email_sender=email_sender,
             resend_limiter=resend_limiter,
             reset_email_limiter=reset_email_limiter,
+            routing=app.state.routing,
         )
         await app.state.auth_service.seed_admin_user()
         app.state.pairing_service = PairingService(db)
@@ -115,13 +116,22 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         cleanup_task = asyncio.create_task(
             _token_cleanup_loop(db), name="token-cleanup"
         )
+        deletion_sweeper_task = asyncio.create_task(
+            _account_deletion_sweeper_loop(app.state.auth_service, config),
+            name="account-deletion-sweeper",
+        )
 
         yield
 
         logger.info("central_server.shutting_down")
         cleanup_task.cancel()
+        deletion_sweeper_task.cancel()
         try:
             await cleanup_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await deletion_sweeper_task
         except asyncio.CancelledError:
             pass
         await db.close()
@@ -195,6 +205,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .dashboard.router import router as dashboard_router
     from .manifest.router import router as manifest_router
     from .pairing.router import router as pairing_router
+    from .portal.router import router as portal_router
     from .relay.agent_ws import router as agent_ws_router
     from .relay.mobile_proxy import router as mobile_proxy_router
     from .relay.mobile_ws import router as mobile_ws_router
@@ -209,6 +220,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(user_ws_router)
     app.include_router(pairing_router)
     app.include_router(dashboard_router)
+    app.include_router(portal_router)
     app.include_router(manifest_router)
     app.include_router(templates_router)
 
@@ -251,3 +263,24 @@ async def _token_cleanup_loop(db: Database) -> None:
             raise
         except Exception as exc:
             logger.exception("token_cleanup.error: %s", exc)
+
+
+async def _account_deletion_sweeper_loop(
+    auth_service: AuthService, config: CentralServerConfig
+) -> None:
+    """Periodically purge users whose soft-delete grace window has elapsed.
+
+    Interval defaults to 1 h — short enough that final-purge SLA stays in the
+    hours range, long enough that steady-state load is negligible. Per-user
+    safety (refetch + re-check + per-user try/except) lives inside
+    ``AuthService.run_deletion_sweep``; this loop just owns the schedule.
+    """
+    interval = max(60, config.deletion_sweeper_interval_seconds)
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await auth_service.run_deletion_sweep()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("deletion_sweeper.error: %s", exc)

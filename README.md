@@ -28,6 +28,7 @@ Mobaide bridges this gap with a client-agent architecture:
 - **Git Management** — In-app screen (reachable from Edit Project on git-backed projects) lists local branches and worktrees; supports long-press multi-select and batch delete with undo Snackbar and force-delete confirmation
 - **Prompt Templates** — Save frequently used inputs as named templates (with optional favorites). An in-terminal picker bottom-sheet (recents / favorites / all sections, with search) inserts a template into the input bar; a save-as-template dialog captures the current input. Templates are stored server-side per user and sync across sessions via `template.created/updated/deleted` push events on the user-events WebSocket
 - **1-hour Prompt Cache** — Every spawned Claude session runs with `ENABLE_PROMPT_CACHING_1H=1` preset, so the 1-hour prompt-cache TTL ([claude-code ≥ v2.1.108](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)) is always on — lower cost and lower latency on long sessions
+- **Account Self-Deletion** — Users can delete their account from Android Settings → Danger zone (re-auth required) or via the public web portal at `mobaide.com/portal/`. A 14-day soft-delete grace window allows cancellation via in-app banner, portal banner, or one-click email link; after the window, the sweeper permanently purges data. The public URL `mobaide.com/portal/delete-account-info` is registered with Google Play Console Data Safety. See [docs/account-deletion-workflow.md](docs/account-deletion-workflow.md) for the full flow.
 
 ## Architecture
 

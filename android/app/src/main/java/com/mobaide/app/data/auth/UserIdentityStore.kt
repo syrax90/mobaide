@@ -23,13 +23,20 @@ class UserIdentityStore(context: Context) {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
-    fun saveUserSession(accessToken: String, email: String, userId: String, role: String) {
+    fun saveUserSession(
+        accessToken: String,
+        email: String,
+        userId: String,
+        role: String,
+        scheduledDeletionAt: String? = null,
+    ) {
         prefs.edit()
             .putString(KEY_ACCESS_TOKEN, accessToken)
             .putString(KEY_EMAIL, email)
             .putString(KEY_USER_ID, userId)
             .putString(KEY_ROLE, role)
             .apply()
+        setScheduledDeletionAt(scheduledDeletionAt)
     }
 
     fun getUserAccessToken(): String? = prefs.getString(KEY_ACCESS_TOKEN, null)
@@ -39,6 +46,23 @@ class UserIdentityStore(context: Context) {
     fun getUserId(): String? = prefs.getString(KEY_USER_ID, null)
 
     fun getUserRole(): String? = prefs.getString(KEY_ROLE, null)
+
+    /**
+     * ISO-8601 timestamp the server reports as the scheduled-deletion final
+     * purge date when the account is in the soft-delete grace window, or
+     * `null` if the account is active. Persisted so the banner survives an
+     * app restart between sign-in and cancel.
+     */
+    fun getScheduledDeletionAt(): String? = prefs.getString(KEY_SCHEDULED_DELETION_AT, null)
+
+    fun setScheduledDeletionAt(value: String?) {
+        prefs.edit()
+            .apply {
+                if (value.isNullOrEmpty()) remove(KEY_SCHEDULED_DELETION_AT)
+                else putString(KEY_SCHEDULED_DELETION_AT, value)
+            }
+            .apply()
+    }
 
     fun isUserLoggedIn(): Boolean = getUserAccessToken() != null
 
@@ -51,6 +75,7 @@ class UserIdentityStore(context: Context) {
         private const val KEY_EMAIL = "user_email"
         private const val KEY_USER_ID = "user_id"
         private const val KEY_ROLE = "user_role"
+        private const val KEY_SCHEDULED_DELETION_AT = "scheduled_deletion_at"
         // Reserved for future use when the server returns a refresh token
         @Suppress("unused")
         private const val KEY_REFRESH_TOKEN = "user_refresh_token"

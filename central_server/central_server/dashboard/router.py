@@ -38,7 +38,7 @@ async def login_submit(request: Request):
     auth_service = request.app.state.auth_service
 
     try:
-        user_id, role, token = await auth_service.login_user(
+        user_id, role, token, _scheduled = await auth_service.login_user(
             str(email), str(password)
         )
     except VerificationRequiredError:

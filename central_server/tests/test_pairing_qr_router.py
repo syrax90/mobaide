@@ -442,7 +442,7 @@ class TestClaimRepair:
         new_user = await qr_app.state.db.get_user_by_email(
             "transfer@test.local"
         )
-        _uid, _role, new_token = await qr_app.state.auth_service.login_user(
+        _uid, _role, new_token, _scheduled = await qr_app.state.auth_service.login_user(
             "transfer@test.local", "transferpw123"
         )
         new_headers = {"Authorization": f"Bearer {new_token}"}

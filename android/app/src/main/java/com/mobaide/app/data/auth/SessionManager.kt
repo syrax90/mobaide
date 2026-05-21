@@ -125,9 +125,14 @@ class SessionManager @Inject constructor(
         object TokenRejected : InvalidationReason
 
         /** Server closed the user-scoped WS with code 4010
-         *  (``WS_CLOSE_ADMIN_REVOKED``). The admin unregistered this user
-         *  on the central server; the local credentials are now permanently
-         *  invalid and the next login attempt must use a fresh account. */
+         *  (``WS_CLOSE_ADMIN_REVOKED``). Either the admin destructively
+         *  unregistered the user on the central server, or the user
+         *  themselves filed a self-delete request via Settings
+         *  and the server is tearing the live session down. In both cases
+         *  the local credentials are now invalid for any user-scoped
+         *  operation — a self-delete during the 14-day grace window can
+         *  still be cancelled by signing in fresh and tapping
+         *  "Cancel scheduled deletion". */
         object AccountRemoved : InvalidationReason
 
         /** User explicitly tapped logout. */

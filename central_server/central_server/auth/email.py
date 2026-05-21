@@ -183,3 +183,64 @@ class EmailSender:
             text_body=text_body,
             log_prefix="password_changed",
         )
+
+    async def send_account_deletion_requested(
+        self,
+        to: str,
+        scheduled_for_iso: str,
+        grace_days: int,
+        cancel_url: str,
+    ) -> None:
+        """Render and send the account-deletion-scheduled email. Never raises."""
+        cfg = self._config
+        context = {
+            "scheduled_for": scheduled_for_iso,
+            "grace_days": grace_days,
+            "cancel_url": cancel_url,
+            "from_name": cfg.smtp_from_name,
+            "from_domain": cfg.smtp_from_domain,
+        }
+        try:
+            html_body = _env.get_template(
+                "email/account_deletion_requested.html"
+            ).render(**context)
+            text_body = _env.get_template(
+                "email/account_deletion_requested.txt"
+            ).render(**context)
+        except Exception as exc:
+            logger.exception("account_deletion_requested.render_failed: %s", exc)
+            return
+
+        await self._send_email(
+            to=to,
+            subject=f"Your {cfg.smtp_from_name} account is scheduled for deletion",
+            html_body=html_body,
+            text_body=text_body,
+            log_prefix="account_deletion_requested",
+        )
+
+    async def send_account_deletion_completed(self, to: str) -> None:
+        """Render and send the final-purge confirmation email. Never raises."""
+        cfg = self._config
+        context = {
+            "from_name": cfg.smtp_from_name,
+            "from_domain": cfg.smtp_from_domain,
+        }
+        try:
+            html_body = _env.get_template(
+                "email/account_deletion_completed.html"
+            ).render(**context)
+            text_body = _env.get_template(
+                "email/account_deletion_completed.txt"
+            ).render(**context)
+        except Exception as exc:
+            logger.exception("account_deletion_completed.render_failed: %s", exc)
+            return
+
+        await self._send_email(
+            to=to,
+            subject=f"Your {cfg.smtp_from_name} account has been deleted",
+            html_body=html_body,
+            text_body=text_body,
+            log_prefix="account_deletion_completed",
+        )
