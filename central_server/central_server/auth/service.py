@@ -16,7 +16,7 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Mapping
 
 import jwt
 from argon2 import PasswordHasher
@@ -506,13 +506,12 @@ class AuthService:
             _background_email_tasks.add(task)
             task.add_done_callback(_background_email_tasks.discard)
 
-    async def google_authenticate(
-        self, token_str: str
-    ) -> tuple[str, str, str, bool]:
-        """Verify a Google ID token and return/create user.
+    async def _verify_google_id_token(self, token_str: str) -> Mapping[str, Any]:
+        """Verify a Google ID token's signature + audience and return idinfo.
 
-        Returns (user_id, role, jwt_token, is_new_user).
-        Raises ValueError if token is invalid or Google client ID not configured.
+        Raises ``ValueError`` if the configured client ID is missing or the
+        token does not validate. Callers layer additional claim checks
+        (``nonce``, ``iat``, ``sub``) on top via ``_verify_google_token_claims``.
         """
         if not self._config.google_client_id:
             raise ValueError("Google authentication is not configured")
@@ -523,7 +522,7 @@ class AuthService:
 
         loop = asyncio.get_running_loop()
         try:
-            idinfo = await loop.run_in_executor(
+            return await loop.run_in_executor(
                 None,
                 lambda: google_id_token.verify_oauth2_token(
                     token_str,
@@ -533,6 +532,53 @@ class AuthService:
             )
         except Exception as exc:
             raise ValueError(f"Invalid Google ID token: {exc}")
+
+    def _verify_google_token_claims(
+        self,
+        idinfo: Mapping[str, Any],
+        *,
+        expected_nonce: str | None = None,
+        expected_sub: str | None = None,
+    ) -> None:
+        """Apply re-auth/freshness checks to an already-validated idinfo dict.
+
+        Raises ``ValueError`` with a stable message on any failure. Callers
+        translate to their own exception type as needed (the portal Google
+        login path lets ``ValueError`` bubble; the delete re-auth path wraps
+        it in ``AccountDeletionAuthError``).
+        """
+        if expected_sub is not None and idinfo.get("sub") != expected_sub:
+            raise ValueError("Google identity does not match this account")
+        if expected_nonce is not None:
+            id_nonce = idinfo.get("nonce")
+            if not id_nonce or not secrets.compare_digest(id_nonce, expected_nonce):
+                raise ValueError("Nonce mismatch")
+            iat = idinfo.get("iat")
+            if not isinstance(iat, int):
+                raise ValueError("ID token missing iat claim")
+            if int(time.time()) - iat > self._GOOGLE_REAUTH_FRESHNESS_SECONDS:
+                raise ValueError("Google ID token is too old — re-authenticate")
+
+    async def google_authenticate(
+        self,
+        token_str: str,
+        *,
+        expected_nonce: str | None = None,
+    ) -> tuple[str, str, str, bool]:
+        """Verify a Google ID token and return/create user.
+
+        Returns (user_id, role, jwt_token, is_new_user).
+        Raises ValueError if token is invalid or Google client ID not configured.
+
+        When ``expected_nonce`` is non-None, the nonce inside the ID token must
+        match and the token must be fresh (``iat`` within
+        ``_GOOGLE_REAUTH_FRESHNESS_SECONDS``). Portal flows pass a
+        server-generated nonce; mobile Credential Manager sign-in leaves it
+        ``None`` (the mobile nonce is verified at re-auth time, not at initial
+        login).
+        """
+        idinfo = await self._verify_google_id_token(token_str)
+        self._verify_google_token_claims(idinfo, expected_nonce=expected_nonce)
 
         google_sub: str = idinfo["sub"]
         email: str = idinfo["email"]
@@ -722,10 +768,6 @@ class AuthService:
             return
 
         if proof.method == "google":
-            if not self._config.google_client_id:
-                raise AccountDeletionAuthError(
-                    "Google authentication is not configured on this server"
-                )
             assert proof.id_token is not None
             assert proof.nonce is not None
             stored_sub = user.get("google_sub")
@@ -733,39 +775,15 @@ class AuthService:
                 raise AccountDeletionAuthError(
                     "This account is not linked to a Google identity"
                 )
-
-            from google.auth.transport import requests as google_requests
-            from google.oauth2 import id_token as google_id_token
-
-            loop = asyncio.get_running_loop()
             try:
-                idinfo = await loop.run_in_executor(
-                    None,
-                    lambda: google_id_token.verify_oauth2_token(
-                        proof.id_token,
-                        google_requests.Request(),
-                        self._config.google_client_id,
-                    ),
+                idinfo = await self._verify_google_id_token(proof.id_token)
+                self._verify_google_token_claims(
+                    idinfo,
+                    expected_nonce=proof.nonce,
+                    expected_sub=stored_sub,
                 )
-            except Exception as exc:
-                raise AccountDeletionAuthError(
-                    f"Invalid Google ID token: {exc}"
-                )
-
-            if idinfo.get("sub") != stored_sub:
-                raise AccountDeletionAuthError(
-                    "Google identity does not match this account"
-                )
-            id_nonce = idinfo.get("nonce")
-            if not id_nonce or not secrets.compare_digest(id_nonce, proof.nonce):
-                raise AccountDeletionAuthError("Nonce mismatch")
-            iat = idinfo.get("iat")
-            if not isinstance(iat, int):
-                raise AccountDeletionAuthError("ID token missing iat claim")
-            if int(time.time()) - iat > self._GOOGLE_REAUTH_FRESHNESS_SECONDS:
-                raise AccountDeletionAuthError(
-                    "Google ID token is too old — re-authenticate"
-                )
+            except ValueError as exc:
+                raise AccountDeletionAuthError(str(exc)) from exc
             return
 
         raise AccountDeletionAuthError(f"Unknown re-auth method: {proof.method}")
@@ -777,13 +795,20 @@ class AuthService:
         source: str,
         proof: DeleteAccountRequest,
         background_tasks: BackgroundTasks | None = None,
-    ) -> str:
-        """Schedule the user's account for soft-delete in 14 days (default).
+    ) -> str | None:
+        """Process a user-initiated account deletion.
 
-        Order (mirrors admin ``DELETE /dashboard/users/{user_id}`` for the
-        teardown sequence, but adds the soft-delete state + audit row before
-        the WS close — so a racing reconnect sees the schedule and surfaces
-        the cancel UI):
+        ``proof.mode`` controls behavior:
+
+        * ``"scheduled"`` (default): soft-delete with a 14-day grace window.
+          Returns the ISO ``scheduled_deletion_at`` timestamp.
+        * ``"immediate"``: cascade-purge the user immediately. No grace, no
+          cancel token. Returns ``None``.
+
+        Scheduled-path order (mirrors admin ``DELETE /dashboard/users/{user_id}``
+        for the teardown sequence, but adds the soft-delete state + audit row
+        before the WS close — so a racing reconnect sees the schedule and
+        surfaces the cancel UI):
 
           1. Reject the seed-admin.
           2. Verify fresh credential proof.
@@ -796,8 +821,16 @@ class AuthService:
           7. Issue a single-use cancel-deletion token + send the confirmation
              email (best-effort; failure does not undo the schedule).
 
-        Returns the ISO ``scheduled_deletion_at`` timestamp so the router can
-        echo it back.
+        Immediate-path order (no grace, no cancel token):
+
+          1-2. Same seed-admin + credential checks.
+          3. Write a ``deletion_audit`` row in ``pending`` state with
+             ``mode='immediate'`` and ``scheduled_for=now`` (forensic trail
+             before any destructive step).
+          4. Revoke refresh tokens + close WS-4010 (mirrors scheduled order
+             so live sessions cannot race the purge).
+          5. Cascade ``delete_user``.
+          6. Stamp audit ``completed``; email the final-purge confirmation.
         """
         user_id = user_payload.sub
         user = await self._db.get_user_by_id(user_id)
@@ -811,6 +844,10 @@ class AuthService:
             )
 
         await self._verify_fresh_credentials(user, proof)
+
+        if proof.mode == "immediate":
+            await self._execute_immediate_deletion(user, source=source)
+            return None
 
         now = datetime.now(timezone.utc)
         scheduled_for = now + timedelta(
@@ -830,6 +867,7 @@ class AuthService:
             requested_at=now_iso,
             scheduled_for=scheduled_iso,
             source=source,
+            mode="scheduled",
         )
         revoked = await self._db.revoke_all_refresh_tokens_for_user(user_id)
 
@@ -873,6 +911,60 @@ class AuthService:
             user_id, source, scheduled_iso, revoked,
         )
         return scheduled_iso
+
+    async def _execute_immediate_deletion(
+        self,
+        user: dict,
+        *,
+        source: str,
+    ) -> None:
+        """Cascade-purge a user without the soft-delete grace window.
+
+        Pre-flight checks (seed-admin, fresh credentials) must already have
+        passed. Writes the audit row BEFORE any destructive step so a crash
+        mid-purge leaves a forensic trail.
+        """
+        user_id = user["id"]
+        email = user["email"]
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        audit_id = await self._db.record_deletion_audit(
+            user_id=user_id,
+            email_at_request=email,
+            requested_at=now_iso,
+            scheduled_for=now_iso,
+            source=source,
+            mode="immediate",
+        )
+        revoked = await self._db.revoke_all_refresh_tokens_for_user(user_id)
+
+        if self._routing is not None:
+            agent_ids = await self._db.list_agents_for_user(user_id)
+            for agent in agent_ids:
+                await self._routing.disconnect_agent(
+                    agent["agent_id"], WS_CLOSE_ADMIN_REVOKED, "user_deleted"
+                )
+            await self._routing.disconnect_user(
+                user_id, WS_CLOSE_ADMIN_REVOKED, "user_deleted"
+            )
+
+        await self._db.delete_user(user_id)
+        await self._db.update_deletion_audit_status(
+            audit_id, "completed", completed_at=now_iso
+        )
+
+        if self._email_sender is not None:
+            task = asyncio.create_task(
+                self._email_sender.send_account_deletion_completed(email)
+            )
+            _background_email_tasks.add(task)
+            task.add_done_callback(_background_email_tasks.discard)
+
+        logger.info(
+            "account_deletion.immediate user_id=%s source=%s "
+            "revoked_sessions=%d",
+            user_id, source, revoked,
+        )
 
     def _build_cancel_url(self, raw_token: str) -> str:
         """Construct the public URL emailed for one-click deletion cancel."""

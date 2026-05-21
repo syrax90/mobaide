@@ -148,17 +148,29 @@ class DeleteAccountRequest(BaseModel):
       * ``method="google"`` with a fresh ``id_token`` + the ``nonce`` the
         client used when obtaining it (Google-OAuth users)
 
+    ``mode`` chooses between the soft-delete grace window (``scheduled``,
+    default — 14 days, cancellable) and an irreversible cascade purge
+    (``immediate``). Omitting ``mode`` preserves the legacy behavior for
+    older clients.
+
     Existing session JWT alone is rejected — re-auth is a hard requirement
     for self-delete (Auth0 / Google Identity guidance).
     """
 
     method: Literal["password", "google"]
+    # Nullable in the wire schema so older Android builds that omitted the
+    # field — and any future JSON caller that explicitly sends ``null`` —
+    # still parse cleanly. The validator below normalises ``None`` to
+    # ``"scheduled"`` so service code can treat the field as always-present.
+    mode: Literal["scheduled", "immediate"] | None = "scheduled"
     password: str | None = None
     id_token: str | None = None
     nonce: str | None = None
 
     @model_validator(mode="after")
     def _check_proof_shape(self) -> "DeleteAccountRequest":
+        if self.mode is None:
+            self.mode = "scheduled"
         if self.method == "password":
             if not self.password:
                 raise ValueError("password is required when method=password")

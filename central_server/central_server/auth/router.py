@@ -265,13 +265,17 @@ async def request_account_deletion(
     background_tasks: BackgroundTasks,
     user: UserTokenPayload = Depends(get_api_user),
 ):
-    """Schedule the calling user's account for soft-delete in 14 days.
+    """Schedule or immediately purge the calling user's account.
+
+    ``body.mode`` chooses between ``'scheduled'`` (default — 14-day soft-delete
+    with a cancel link) and ``'immediate'`` (irreversible cascade purge now).
+    Older clients that omit ``mode`` get the legacy scheduled behavior.
 
     Requires a fresh credential proof (current password OR fresh Google ID
     token with matching nonce) — the session JWT alone is rejected. On
     success: writes the audit row, revokes refresh tokens, closes any live
-    user/agent WebSockets with code 4010, and emails a single-use cancel
-    link before returning 204.
+    user/agent WebSockets with code 4010, and (scheduled mode only) emails a
+    single-use cancel link before returning 204.
 
     Refuses to act on the seed-admin account (mirrors the admin-path guard).
     """

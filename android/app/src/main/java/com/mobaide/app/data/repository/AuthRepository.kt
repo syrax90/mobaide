@@ -76,14 +76,27 @@ class ResetPasswordFailure(val reason: ResetPasswordError) : Exception(
 )
 
 /**
+ * How the server should process a self-delete request.
+ *
+ * [Scheduled] (default) writes a 14-day soft-delete; the user can cancel
+ * within the grace window by signing back in or clicking the email link.
+ * [Immediate] cascades the purge now — no grace, no recovery.
+ */
+enum class DeletionMode(val wire: String) {
+    Scheduled("scheduled"),
+    Immediate("immediate"),
+}
+
+/**
  * Outcome of a request to permanently delete the calling user's account.
- * The happy path is [Scheduled] — the server queues a 14-day soft-delete
- * before the final cascade purge. On success, the WebSocket 4010 close
- * will drive [SessionManager.AccountRemoved] cleanup automatically; no
- * additional state plumbing is required here.
+ * The happy path is [Submitted] — for [DeletionMode.Scheduled] the server has
+ * queued the 14-day soft-delete; for [DeletionMode.Immediate] the server has
+ * already cascade-purged. In both cases the WebSocket 4010 close drives
+ * [SessionManager.AccountRemoved] cleanup automatically; no extra plumbing
+ * is required here.
  */
 sealed interface DeleteAccountResult {
-    data object Scheduled : DeleteAccountResult
+    data class Submitted(val mode: DeletionMode) : DeleteAccountResult
     data class ReauthFailed(val message: String) : DeleteAccountResult
     data object Forbidden : DeleteAccountResult
 }
@@ -308,45 +321,62 @@ class AuthRepository(
     fun getUsername(): String? = tokenStore.getUsername()
 
     /**
-     * Request soft-delete of the calling user's account with a current
-     * password as re-auth proof. On success the server returns 204 and
-     * the WS-4010 close that follows drives the [SessionManager]
-     * `AccountRemoved` cleanup automatically.
+     * Request account deletion using a current password as re-auth proof.
+     * [mode] picks scheduled (14-day grace) vs immediate (cascade now). On
+     * success the server returns 204; the WS-4010 close that follows drives
+     * [SessionManager] `AccountRemoved` cleanup automatically.
      */
-    suspend fun deleteAccountWithPassword(password: String): DeleteAccountResult {
-        val token = userIdentityStore.getUserAccessToken()
-            ?: return DeleteAccountResult.ReauthFailed("Not signed in")
-        return submitDelete(
-            token,
-            DeleteAccountRequest(method = "password", password = password),
-        )
-    }
-
-    /**
-     * Request soft-delete using a fresh Google ID token + the nonce the
-     * client used when obtaining it (Auth0-style re-auth — the server
-     * validates iat freshness, nonce match, and that the token's sub
-     * matches the user's stored google_sub).
-     */
-    suspend fun deleteAccountWithGoogle(
-        idToken: String,
-        nonce: String,
+    suspend fun deleteAccountWithPassword(
+        password: String,
+        mode: DeletionMode,
     ): DeleteAccountResult {
         val token = userIdentityStore.getUserAccessToken()
             ?: return DeleteAccountResult.ReauthFailed("Not signed in")
         return submitDelete(
             token,
-            DeleteAccountRequest(method = "google", id_token = idToken, nonce = nonce),
+            mode,
+            DeleteAccountRequest(
+                method = "password",
+                mode = mode.wire,
+                password = password,
+            ),
+        )
+    }
+
+    /**
+     * Request account deletion using a fresh Google ID token + the nonce
+     * the client used when obtaining it (Auth0-style re-auth — the server
+     * validates iat freshness, nonce match, and that the token's sub
+     * matches the user's stored google_sub). [mode] picks scheduled vs
+     * immediate cascade purge.
+     */
+    suspend fun deleteAccountWithGoogle(
+        idToken: String,
+        nonce: String,
+        mode: DeletionMode,
+    ): DeleteAccountResult {
+        val token = userIdentityStore.getUserAccessToken()
+            ?: return DeleteAccountResult.ReauthFailed("Not signed in")
+        return submitDelete(
+            token,
+            mode,
+            DeleteAccountRequest(
+                method = "google",
+                mode = mode.wire,
+                id_token = idToken,
+                nonce = nonce,
+            ),
         )
     }
 
     private suspend fun submitDelete(
         userToken: String,
+        mode: DeletionMode,
         body: DeleteAccountRequest,
     ): DeleteAccountResult {
         return try {
             centralApi.requestAccountDeletion(userToken, body)
-            DeleteAccountResult.Scheduled
+            DeleteAccountResult.Submitted(mode)
         } catch (e: ApiException) {
             when (e.code) {
                 400 -> DeleteAccountResult.Forbidden

@@ -14,10 +14,13 @@
             </button>
         </div>
         {% else %}
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
         <p>
-            You are about to schedule <strong>{{ user.email }}</strong> for deletion.
-            Your account will remain active for <strong>{{ grace_days }} days</strong> —
-            sign back in any time before then to cancel.
+            You're about to delete <strong>{{ user.email }}</strong>.
+            Choose how the deletion is processed, re-verify your identity, and
+            confirm by typing your email.
         </p>
         {% if agents %}
         <p>
@@ -29,30 +32,54 @@
         </p>
         {% endif %}
 
-        <form hx-post="/portal/account/delete"
+        <form id="delete-account-form"
+              hx-post="/portal/account/delete"
               hx-target="#modal-root"
               hx-swap="innerHTML">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="credential" value="">
+            {% if not (has_password and has_google) %}
+            <input type="hidden" name="method"
+                   value="{{ 'password' if has_password else 'google' }}">
+            {% endif %}
 
-            {% if is_google %}
-            <p><em>This account is linked to Google. Re-authentication via Google must be completed in the Android app — the web portal currently supports password re-auth only.</em></p>
-            <p>If you'd like to delete via the web portal, please add a password to your account first or use the Android app's Delete-account flow.</p>
-            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem">
-                <button type="button"
-                        class="btn"
-                        onclick="document.getElementById('modal-root').innerHTML=''">
-                    Cancel
-                </button>
+            <fieldset class="choice-set">
+                <legend>How should we process this?</legend>
+                <label class="choice-option">
+                    <input type="radio" name="mode" value="scheduled" checked>
+                    <strong>Schedule for {{ grace_days }} days (recommended)</strong>
+                    <span class="choice-note">Sign in any time before then to cancel. Your data stays put during the grace window.</span>
+                </label>
+                <label class="choice-option danger">
+                    <input type="radio" name="mode" value="immediate">
+                    <strong>Delete immediately</strong>
+                    <span class="choice-note">No grace window, no recovery — all agents, pairings, and templates are purged now.</span>
+                </label>
+            </fieldset>
+
+            {% if has_password and has_google %}
+            <fieldset class="choice-set">
+                <legend>Re-verify with</legend>
+                <label class="choice-option">
+                    <input type="radio" name="method" value="password" checked>
+                    <strong>Your password</strong>
+                </label>
+                <label class="choice-option">
+                    <input type="radio" name="method" value="google">
+                    <strong>Google sign-in</strong>
+                </label>
+            </fieldset>
+            {% endif %}
+
+            {% if has_password %}
+            <div id="reauth-password-panel">
+                <label for="reauth-password">Current password</label>
+                <input type="password"
+                       id="reauth-password"
+                       name="password"
+                       autocomplete="current-password">
             </div>
-            {% else %}
-            <input type="hidden" name="method" value="password">
-
-            <label for="reauth-password">Current password</label>
-            <input type="password"
-                   id="reauth-password"
-                   name="password"
-                   required
-                   autocomplete="current-password">
+            {% endif %}
 
             <label for="confirm-email">
                 Type <code>{{ user.email }}</code> to confirm:
@@ -61,25 +88,125 @@
                    id="confirm-email"
                    name="confirm_email"
                    data-expected="{{ user.email }}"
-                   autocomplete="off"
-                   autofocus
-                   hx-on:input="document.getElementById('confirm-delete-btn').disabled = this.value !== this.dataset.expected">
+                   autocomplete="off">
 
-            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem">
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem; flex-wrap: wrap;">
                 <button type="button"
                         class="btn"
                         onclick="document.getElementById('modal-root').innerHTML=''">
                     Cancel
                 </button>
+                {% if has_password %}
                 <button type="submit"
                         id="confirm-delete-btn"
                         class="btn btn-danger"
+                        data-label-scheduled="Schedule deletion"
+                        data-label-immediate="Delete immediately"
                         disabled>
                     Schedule deletion
                 </button>
+                {% endif %}
+                {% if has_google %}
+                <button type="button"
+                        id="confirm-delete-google-btn"
+                        class="btn btn-primary"
+                        data-label-scheduled="Verify with Google to schedule"
+                        data-label-immediate="Verify with Google to delete now"
+                        disabled>
+                    Verify with Google to schedule
+                </button>
+                {% endif %}
             </div>
-            {% endif %}
         </form>
+
+        <script>
+        (function () {
+            var form = document.getElementById('delete-account-form');
+            if (!form) return;
+            var emailInput = document.getElementById('confirm-email');
+            var pwBtn = document.getElementById('confirm-delete-btn');
+            var gBtn = document.getElementById('confirm-delete-google-btn');
+            var pwPanel = document.getElementById('reauth-password-panel');
+            var hasPassword = {{ 'true' if has_password else 'false' }};
+            var hasGoogle = {{ 'true' if has_google else 'false' }};
+            var hasBoth = hasPassword && hasGoogle;
+            var googleClientId = {{ (google_client_id or '') | tojson }};
+            var googleNonce = {{ (google_nonce or '') | tojson }};
+
+            function selectedMethod() {
+                if (!hasBoth) return hasPassword ? 'password' : 'google';
+                var checked = form.querySelector('input[name="method"]:checked');
+                return checked ? checked.value : 'password';
+            }
+            function selectedMode() {
+                var checked = form.querySelector('input[name="mode"]:checked');
+                return checked ? checked.value : 'scheduled';
+            }
+            function emailMatches() {
+                return emailInput && emailInput.value === emailInput.dataset.expected;
+            }
+            function refreshLabels() {
+                var mode = selectedMode();
+                [pwBtn, gBtn].forEach(function (b) {
+                    if (!b) return;
+                    var lbl = b.getAttribute('data-label-' + mode);
+                    if (lbl) b.textContent = lbl;
+                });
+            }
+            function refreshVisibility() {
+                var method = selectedMethod();
+                if (pwPanel) pwPanel.style.display = (method === 'password' && hasPassword) ? '' : 'none';
+                if (pwBtn) pwBtn.style.display = (method === 'password' && hasPassword) ? '' : 'none';
+                if (gBtn) gBtn.style.display = (method === 'google' && hasGoogle) ? '' : 'none';
+            }
+            function refreshSubmitState() {
+                var match = emailMatches();
+                if (pwBtn) pwBtn.disabled = !match;
+                if (gBtn) gBtn.disabled = !match;
+            }
+
+            if (emailInput) emailInput.addEventListener('input', refreshSubmitState);
+            form.querySelectorAll('input[name="mode"]').forEach(function (r) {
+                r.addEventListener('change', refreshLabels);
+            });
+            form.querySelectorAll('input[name="method"]').forEach(function (r) {
+                r.addEventListener('change', refreshVisibility);
+            });
+            refreshLabels();
+            refreshVisibility();
+            refreshSubmitState();
+
+            if (hasGoogle && googleClientId && gBtn) {
+                function initGis() {
+                    if (!window.google || !window.google.accounts) {
+                        setTimeout(initGis, 50);
+                        return;
+                    }
+                    window.google.accounts.id.initialize({
+                        client_id: googleClientId,
+                        nonce: googleNonce,
+                        ux_mode: 'popup',
+                        callback: function (response) {
+                            form.querySelector('input[name="credential"]').value = response.credential;
+                            // Ensure method=google when this callback fires —
+                            // user may have left the radio on "password" and
+                            // clicked Google by mistake.
+                            if (hasBoth) {
+                                var g = form.querySelector('input[name="method"][value="google"]');
+                                if (g) g.checked = true;
+                            }
+                            window.htmx.trigger(form, 'submit');
+                        },
+                    });
+                    gBtn.addEventListener('click', function () {
+                        if (!emailMatches()) return;
+                        window.google.accounts.id.prompt();
+                    });
+                }
+                initGis();
+            }
+        })();
+        </script>
         {% endif %}
     </div>
 </div>

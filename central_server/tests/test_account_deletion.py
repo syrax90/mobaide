@@ -342,7 +342,12 @@ class TestRequestAccountDeletionFailures:
     ) -> None:
         """When the server isn't configured for Google, the Google re-auth
         path short-circuits with a helpful AccountDeletionAuthError before
-        any external call is made."""
+        any external call is made.
+
+        The user must have a ``google_sub`` so the "not linked" guard
+        passes; the "not configured" error is raised inside
+        ``_verify_google_id_token`` after the sub-presence check.
+        """
         from central_server.auth.models import DeleteAccountRequest
 
         # Config has google_client_id=None by default.
@@ -350,7 +355,15 @@ class TestRequestAccountDeletionFailures:
         svc = AuthService(
             deletion_config, deletion_db, email_sender=fake_email,  # type: ignore[arg-type]
         )
-        user = await _make_password_user(deletion_db, svc, "any@example.com", "pw")
+        # Use a Google-linked user (has google_sub) so that the
+        # stored_sub guard passes and the "not configured" error is reached.
+        user_id = await deletion_db.create_user(
+            email="google-any@example.com",
+            google_sub="google-sub-unconfigured",
+            email_verified=True,
+        )
+        user = await deletion_db.get_user_by_id(user_id)
+        assert user is not None
 
         with pytest.raises(AccountDeletionAuthError) as excinfo:
             await svc.request_account_deletion(

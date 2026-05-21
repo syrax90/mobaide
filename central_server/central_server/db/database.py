@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS deletion_audit (
     scheduled_for       TEXT NOT NULL,
     source              TEXT NOT NULL CHECK(source IN ('android', 'portal', 'email_link')),
     status              TEXT NOT NULL CHECK(status IN ('pending', 'cancelled', 'completed', 'failed')),
+    mode                TEXT NOT NULL DEFAULT 'scheduled' CHECK(mode IN ('scheduled', 'immediate')),
     completed_at        TEXT,
     cancellation_reason TEXT
 );
@@ -396,6 +397,24 @@ class Database:
                 )
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 11")
+
+        if version < 12:
+            # Add deletion_audit.mode so we can distinguish scheduled (14-day
+            # grace) from immediate self-delete. Existing rows backfill to
+            # 'scheduled' via the column default. SQLite ALTER TABLE cannot
+            # attach a CHECK constraint, so the CHECK lives in _SCHEMA only
+            # (fresh DBs); upgrades rely on application-level validation in
+            # record_deletion_audit + DeleteAccountRequest.
+            audit_cursor = await self._conn.execute(
+                "PRAGMA table_info(deletion_audit)"
+            )
+            audit_cols = {r[1] for r in await audit_cursor.fetchall()}
+            if "mode" not in audit_cols:
+                await self._conn.execute(
+                    "ALTER TABLE deletion_audit "
+                    "ADD COLUMN mode TEXT NOT NULL DEFAULT 'scheduled'"
+                )
+            await self._conn.execute("PRAGMA user_version = 12")
 
         await self._conn.commit()
 
@@ -1480,18 +1499,21 @@ class Database:
         requested_at: str,
         scheduled_for: str,
         source: str,
+        mode: str = "scheduled",
     ) -> int:
         """Insert a new ``deletion_audit`` row in ``pending`` state.
 
-        Returns the row's auto-increment ``id`` so the caller can later
-        transition it to ``completed`` / ``cancelled`` / ``failed`` via
-        ``update_deletion_audit_status``.
+        ``mode`` is ``'scheduled'`` (14-day grace) or ``'immediate'`` (cascade
+        purge now). Returns the row's auto-increment ``id`` so the caller can
+        later transition it via ``update_deletion_audit_status``.
         """
+        if mode not in ("scheduled", "immediate"):
+            raise ValueError(f"Invalid deletion mode: {mode!r}")
         cursor = await self.conn.execute(
             "INSERT INTO deletion_audit "
-            "(user_id, email_at_request, requested_at, scheduled_for, source, status) "
-            "VALUES (?, ?, ?, ?, ?, 'pending')",
-            (user_id, email_at_request, requested_at, scheduled_for, source),
+            "(user_id, email_at_request, requested_at, scheduled_for, source, status, mode) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (user_id, email_at_request, requested_at, scheduled_for, source, mode),
         )
         await self.conn.commit()
         assert cursor.lastrowid is not None
@@ -1524,7 +1546,7 @@ class Database:
         """
         cursor = await self.conn.execute(
             "SELECT id, user_id, email_at_request, requested_at, scheduled_for, "
-            "       source, status, completed_at, cancellation_reason "
+            "       source, status, mode, completed_at, cancellation_reason "
             "FROM deletion_audit "
             "WHERE user_id = ? AND status = 'pending' "
             "ORDER BY requested_at DESC LIMIT 1",

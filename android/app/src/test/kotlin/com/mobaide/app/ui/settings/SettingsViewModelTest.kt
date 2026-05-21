@@ -7,6 +7,7 @@ import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.DeleteAccountResult
+import com.mobaide.app.data.repository.DeletionMode
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
 import io.mockk.coVerify
@@ -396,8 +397,8 @@ class SettingsViewModelTest {
         advanceUntilIdle()
 
         // The repository delete must NOT have been called.
-        coVerify(exactly = 0) { authRepository.deleteAccountWithPassword(any()) }
-        coVerify(exactly = 0) { authRepository.deleteAccountWithGoogle(any(), any()) }
+        coVerify(exactly = 0) { authRepository.deleteAccountWithPassword(any(), any()) }
+        coVerify(exactly = 0) { authRepository.deleteAccountWithGoogle(any(), any(), any()) }
         assertFalse(scheduledCallbackInvoked)
         // Error surfaced inline.
         val state = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ConfirmEmail
@@ -410,8 +411,8 @@ class SettingsViewModelTest {
             every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "ida@example.com"
         }
-        coEvery { authRepository.deleteAccountWithPassword("pw") } returns
-            DeleteAccountResult.Scheduled
+        coEvery { authRepository.deleteAccountWithPassword("pw", DeletionMode.Scheduled) } returns
+            DeleteAccountResult.Submitted(DeletionMode.Scheduled)
         val vm = newDeleteVm(authRepository = authRepository)
         vm.startDeleteAccount()
         vm.chooseReAuthMethod(useGoogle = false)
@@ -425,7 +426,7 @@ class SettingsViewModelTest {
 
         assertTrue(scheduledCallbackInvoked)
         assertEquals(DeleteAccountDialogState.Hidden, vm.uiState.value.deleteDialog)
-        coVerify(exactly = 1) { authRepository.deleteAccountWithPassword("pw") }
+        coVerify(exactly = 1) { authRepository.deleteAccountWithPassword("pw", DeletionMode.Scheduled) }
     }
 
     @Test
@@ -435,8 +436,8 @@ class SettingsViewModelTest {
             every { getUserEmail() } returns "jane@example.com"
         }
         coEvery {
-            authRepository.deleteAccountWithGoogle("id-tok", "nonce-1")
-        } returns DeleteAccountResult.Scheduled
+            authRepository.deleteAccountWithGoogle("id-tok", "nonce-1", DeletionMode.Scheduled)
+        } returns DeleteAccountResult.Submitted(DeletionMode.Scheduled)
         val vm = newDeleteVm(authRepository = authRepository)
         vm.startDeleteAccount()
         vm.chooseReAuthMethod(useGoogle = true)
@@ -448,9 +449,11 @@ class SettingsViewModelTest {
         advanceUntilIdle()
 
         assertTrue(scheduledCallbackInvoked)
-        coVerify(exactly = 1) { authRepository.deleteAccountWithGoogle("id-tok", "nonce-1") }
+        coVerify(exactly = 1) {
+            authRepository.deleteAccountWithGoogle("id-tok", "nonce-1", DeletionMode.Scheduled)
+        }
         // Password path is not exercised in the Google branch.
-        coVerify(exactly = 0) { authRepository.deleteAccountWithPassword(any()) }
+        coVerify(exactly = 0) { authRepository.deleteAccountWithPassword(any(), any()) }
     }
 
     @Test
@@ -459,7 +462,7 @@ class SettingsViewModelTest {
             every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "kate@example.com"
         }
-        coEvery { authRepository.deleteAccountWithPassword("pw") } returns
+        coEvery { authRepository.deleteAccountWithPassword("pw", DeletionMode.Scheduled) } returns
             DeleteAccountResult.ReauthFailed("Incorrect password")
         val vm = newDeleteVm(authRepository = authRepository)
         vm.startDeleteAccount()
@@ -486,7 +489,7 @@ class SettingsViewModelTest {
             every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "root@example.com"
         }
-        coEvery { authRepository.deleteAccountWithPassword(any()) } returns
+        coEvery { authRepository.deleteAccountWithPassword(any(), any()) } returns
             DeleteAccountResult.Forbidden
         val vm = newDeleteVm(authRepository = authRepository)
         vm.startDeleteAccount()
@@ -524,5 +527,129 @@ class SettingsViewModelTest {
         vm.dismissDeleteDialog()
 
         assertEquals(DeleteAccountDialogState.Hidden, vm.uiState.value.deleteDialog)
+    }
+
+    @Test
+    fun startDeleteAccount_defaultsToScheduledMode() = runTest {
+        val vm = newDeleteVm(email = "alice@example.com")
+        vm.startDeleteAccount()
+
+        val state = vm.uiState.value.deleteDialog as DeleteAccountDialogState.Explain
+        // Default mode on Explain step is Scheduled (recommended path).
+        assertEquals(DeletionMode.Scheduled, state.mode)
+    }
+
+    @Test
+    fun setDeletionMode_immediate_updatesExplainState() = runTest {
+        val vm = newDeleteVm()
+        vm.startDeleteAccount()
+
+        vm.setDeletionMode(DeletionMode.Immediate)
+
+        val state = vm.uiState.value.deleteDialog as DeleteAccountDialogState.Explain
+        assertEquals(DeletionMode.Immediate, state.mode)
+    }
+
+    @Test
+    fun setDeletionMode_noopWhenNotOnExplainState() = runTest {
+        val vm = newDeleteVm()
+        vm.startDeleteAccount()
+        vm.chooseReAuthMethod(useGoogle = false)
+        // Now on ReAuthPassword — setDeletionMode should not mutate state.
+        val before = vm.uiState.value.deleteDialog
+
+        vm.setDeletionMode(DeletionMode.Immediate)
+
+        assertEquals(before, vm.uiState.value.deleteDialog)
+    }
+
+    @Test
+    fun mode_threadsThroughReAuthPassword_andConfirmEmail() = runTest {
+        val vm = newDeleteVm(email = "bob@example.com")
+        vm.startDeleteAccount()
+        vm.setDeletionMode(DeletionMode.Immediate)
+        vm.chooseReAuthMethod(useGoogle = false)
+
+        val reAuth = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ReAuthPassword
+        assertEquals(DeletionMode.Immediate, reAuth.mode)
+
+        vm.onPasswordChange("pw")
+        vm.confirmPasswordReauth()
+
+        val confirm = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ConfirmEmail
+        assertEquals(DeletionMode.Immediate, confirm.mode)
+    }
+
+    @Test
+    fun mode_threadsThroughReAuthGoogle_andConfirmEmail() = runTest {
+        val vm = newDeleteVm(email = "carol@example.com")
+        vm.startDeleteAccount()
+        vm.setDeletionMode(DeletionMode.Immediate)
+        vm.chooseReAuthMethod(useGoogle = true)
+
+        val google = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ReAuthGoogle
+        assertEquals(DeletionMode.Immediate, google.mode)
+
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("id-tok", "nonce-z"))
+
+        val confirm = vm.uiState.value.deleteDialog as DeleteAccountDialogState.ConfirmEmail
+        assertEquals(DeletionMode.Immediate, confirm.mode)
+    }
+
+    @Test
+    fun submitDelete_immediateMode_passesImmediateToRepository() = runTest {
+        val authRepository = mockk<AuthRepository>(relaxed = true) {
+            every { getAgentUrl() } returns "https://example.com"
+            every { getUserEmail() } returns "dave@example.com"
+        }
+        coEvery {
+            authRepository.deleteAccountWithPassword("pw", DeletionMode.Immediate)
+        } returns DeleteAccountResult.Submitted(DeletionMode.Immediate)
+        val vm = newDeleteVm(authRepository = authRepository)
+        vm.startDeleteAccount()
+        vm.setDeletionMode(DeletionMode.Immediate)
+        vm.chooseReAuthMethod(useGoogle = false)
+        vm.onPasswordChange("pw")
+        vm.confirmPasswordReauth()
+        vm.onTypedEmailChange("dave@example.com")
+
+        var submittedMode: DeletionMode? = null
+        vm.submitDelete { submittedMode = it }
+        advanceUntilIdle()
+
+        assertEquals(DeletionMode.Immediate, submittedMode)
+        coVerify(exactly = 1) {
+            authRepository.deleteAccountWithPassword("pw", DeletionMode.Immediate)
+        }
+        // The scheduled overload must not be touched.
+        coVerify(exactly = 0) {
+            authRepository.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
+        }
+    }
+
+    @Test
+    fun submitDelete_immediateMode_googlePath_passesImmediateToRepository() = runTest {
+        val authRepository = mockk<AuthRepository>(relaxed = true) {
+            every { getAgentUrl() } returns "https://example.com"
+            every { getUserEmail() } returns "eve@example.com"
+        }
+        coEvery {
+            authRepository.deleteAccountWithGoogle("tok", "n", DeletionMode.Immediate)
+        } returns DeleteAccountResult.Submitted(DeletionMode.Immediate)
+        val vm = newDeleteVm(authRepository = authRepository)
+        vm.startDeleteAccount()
+        vm.setDeletionMode(DeletionMode.Immediate)
+        vm.chooseReAuthMethod(useGoogle = true)
+        vm.onGoogleAuthResult(GoogleAuthResult.Success("tok", "n"))
+        vm.onTypedEmailChange("eve@example.com")
+
+        var submittedMode: DeletionMode? = null
+        vm.submitDelete { submittedMode = it }
+        advanceUntilIdle()
+
+        assertEquals(DeletionMode.Immediate, submittedMode)
+        coVerify(exactly = 1) {
+            authRepository.deleteAccountWithGoogle("tok", "n", DeletionMode.Immediate)
+        }
     }
 }

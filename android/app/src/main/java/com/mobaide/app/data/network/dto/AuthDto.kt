@@ -151,11 +151,13 @@ data class ResetErrorBody(val detail: ResetErrorDetail)
 /**
  * Re-auth proof for `POST /api/auth/me/delete`. Exactly one of password
  * (for password users) or (id_token + nonce) (for Google users) must be
- * populated; `method` discriminates server-side.
+ * populated; `method` discriminates server-side. `mode` chooses scheduled
+ * (14-day grace, default when omitted) vs immediate cascade purge.
  */
 @Serializable
 data class DeleteAccountRequest(
     val method: String,
+    val mode: String? = null,
     val password: String? = null,
     val id_token: String? = null,
     val nonce: String? = null,

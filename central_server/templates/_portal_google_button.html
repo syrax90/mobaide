@@ -1,0 +1,55 @@
+{# Google Identity Services button — included on login, signup, and delete modal.
+
+   Required Jinja context:
+   * google_client_id  — required; renders nothing if empty
+   * google_nonce      — required; bound to the GIS init call and verified
+                         server-side against the portal_google_nonce cookie
+   * csrf_token        — required; submitted with the credential POST
+   * post_url          — required; e.g. "/portal/auth/google" or
+                         "/portal/account/delete"
+   * button_id         — required; unique DOM id so multiple buttons on the
+                         same page (login + delete modal) do not clash
+   * button_label      — optional override; defaults to "Continue with Google"
+   * extra_fields      — optional list of {name, value} hidden inputs sent
+                         alongside `credential` (e.g. method/mode for delete)
+#}
+{% if google_client_id %}
+<form id="{{ button_id }}-form" method="post" action="{{ post_url }}" style="margin-top: 1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="credential" value="">
+    {% for field in extra_fields or [] %}
+    <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
+    {% endfor %}
+    <button type="button" id="{{ button_id }}" class="btn btn-primary" style="width: 100%;">
+        {{ button_label or "Continue with Google" }}
+    </button>
+</form>
+<script>
+(function () {
+    // Wait until the GIS library is ready before initialising.
+    function init() {
+        if (!window.google || !window.google.accounts) {
+            setTimeout(init, 50);
+            return;
+        }
+        var formEl = document.getElementById({{ (button_id ~ '-form') | tojson }});
+        var btnEl  = document.getElementById({{ button_id | tojson }});
+        if (!formEl || !btnEl) return;
+
+        window.google.accounts.id.initialize({
+            client_id: {{ google_client_id | tojson }},
+            nonce: {{ google_nonce | tojson }},
+            ux_mode: 'popup',
+            callback: function (response) {
+                formEl.querySelector('input[name="credential"]').value = response.credential;
+                formEl.submit();
+            },
+        });
+        btnEl.addEventListener('click', function () {
+            window.google.accounts.id.prompt();
+        });
+    }
+    init();
+})();
+</script>
+{% endif %}
