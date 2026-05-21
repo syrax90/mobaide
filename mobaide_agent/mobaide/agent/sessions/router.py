@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import platform
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
@@ -29,6 +30,37 @@ router = APIRouter(
 _DEFAULT_SHELL = ["cmd.exe"] if platform.system() == "Windows" else ["/bin/bash"]
 
 
+def _validate_adhoc_cwd(cwd: str) -> None:
+    """Pre-validate a user-supplied custom-path ``cwd``.
+
+    Raises :class:`HTTPException` 400 for empty / non-absolute /
+    non-existent / non-directory inputs so the mobile client surfaces a
+    clean error instead of a 500 from a downstream ``FileNotFoundError``
+    inside ``ClaudeLauncher`` or ``PtyBackend.spawn``.
+    """
+    if not cwd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Custom path cannot be empty",
+        )
+    p = Path(cwd)
+    if not p.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Custom path must be absolute: {cwd}",
+        )
+    if not p.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Custom path does not exist: {cwd}",
+        )
+    if not p.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Custom path is not a directory: {cwd}",
+        )
+
+
 def _get_manager(request: Request) -> SessionManager:
     return request.app.state.session_manager
 
@@ -46,6 +78,12 @@ async def create_session(
         if body.claude_options is not None
         else None
     )
+    # Pre-validate user-supplied custom paths so the error surfaces as a
+    # clean 400 from this layer rather than as a FileNotFoundError-mapped
+    # 400 from ClaudeLauncher or PtyBackend further down. Skipped when a
+    # stored project is named (server derives cwd from the project).
+    if body.project_name is None and body.cwd is not None:
+        _validate_adhoc_cwd(body.cwd)
     kind, spawn_command, spawn_env = resolve_spawn_args(
         claude_options, body.command, body.env, _DEFAULT_SHELL,
     )

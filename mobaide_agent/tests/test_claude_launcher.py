@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from mobaide.core.claude_launcher import ClaudeLauncher, ClaudeOptions
+from mobaide.core.claude_launcher import AdHocLaunch, ClaudeLauncher, ClaudeOptions
 from mobaide.core.projects_config import ProjectConfig
 
 
@@ -451,3 +451,118 @@ async def test_resolve_cwd_worktree_fallback_also_checks_existence(
             _make_project(str(missing)),
             ClaudeOptions(worktree=True),
         )
+
+
+@pytest.mark.asyncio
+async def test_adhoc_launch_resolves_cwd_to_target_directory(tmp_path: Path):
+    """The launcher accepts an :class:`AdHocLaunch` target and resolves
+    ``spec.cwd`` to its ``cwd`` directly — no project lookup, no
+    worktree dance, no slug derivation."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
+    assert spec.cwd == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_adhoc_launch_missing_cwd_raises_file_not_found(tmp_path: Path):
+    """Ad-hoc cwd must exist on disk — same failure shape as the project
+    path branch so the router/relay error mapping stays uniform."""
+    missing = tmp_path / "no" / "such" / "dir"
+    launcher = ClaudeLauncher()
+
+    with pytest.raises(FileNotFoundError) as exc_info:
+        await launcher.build(AdHocLaunch(cwd=str(missing)), ClaudeOptions())
+
+    assert exc_info.value.filename == str(missing)
+    assert exc_info.value.errno == 2
+
+
+@pytest.mark.asyncio
+async def test_adhoc_launch_ignores_worktree_flag(tmp_path: Path):
+    """A stale client may still send ``worktree=True`` for a custom path.
+    Ad-hoc launches must silently downgrade — never call the
+    :class:`WorktreeManager`, never raise — and just spawn in the target
+    cwd. The downgrade is logged for auditability."""
+    # Even with a ``.git`` directory present, ad-hoc must NOT consult the
+    # worktree manager because there is no stored project / branch_prefix
+    # to use.
+    (tmp_path / ".git").mkdir()
+    mgr = _FakeWorktreeMgr()
+    launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
+
+    spec = await launcher.build(
+        AdHocLaunch(cwd=str(tmp_path)),
+        ClaudeOptions(worktree=True, branch_name="feature/x"),
+    )
+
+    assert spec.cwd == str(tmp_path)
+    assert mgr.calls == [], (
+        "WorktreeManager must not be invoked for AdHocLaunch even when "
+        "worktree=True is requested"
+    )
+
+
+@pytest.mark.asyncio
+async def test_adhoc_launch_env_omits_linear_api_key(
+    tmp_path: Path, monkeypatch,
+):
+    """Ad-hoc sessions have no stored project, so no ``LINEAR_API_KEY``
+    can be injected — even if the outer shell happens to export one,
+    the launcher must not surface it (that would leak the operator's
+    key into an arbitrary user-supplied folder context)."""
+    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
+    assert "LINEAR_API_KEY" not in spec.env
+
+
+@pytest.mark.asyncio
+async def test_adhoc_launch_env_carries_session_preset(tmp_path: Path):
+    """The 1-hour prompt-cache preset and PYTHONIOENCODING must still be
+    applied — the ad-hoc branch is not allowed to skip them, only the
+    project-specific overlays (Linear key, conda env)."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
+    assert spec.env["ENABLE_PROMPT_CACHING_1H"] == "1"
+    assert spec.env["PYTHONIOENCODING"] == "utf-8"
+
+
+@pytest.mark.asyncio
+async def test_adhoc_launch_writes_no_project_files(tmp_path: Path):
+    """Polluting an arbitrary user-supplied directory with ``.mcp.json`` /
+    ``.claude/settings.local.json`` would be a surprise — the ad-hoc
+    branch of ``_write_project_files`` must short-circuit and write
+    nothing. ``spec.created_files`` is empty for the same reason."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), ClaudeOptions())
+
+    assert spec.created_files == []
+    assert not (tmp_path / ".mcp.json").exists()
+    assert not (tmp_path / ".claude").exists()
+
+
+@pytest.mark.asyncio
+async def test_adhoc_launch_argv_matches_project_launch(tmp_path: Path):
+    """argv is built independently of the target — switching from a
+    :class:`ProjectConfig` to an :class:`AdHocLaunch` must produce the
+    same flags for the same :class:`ClaudeOptions`. Regression guard:
+    if a future refactor sneaks a project-specific flag into
+    ``_build_argv``, this test catches it."""
+    launcher = ClaudeLauncher()
+    opts = ClaudeOptions(plan_mode=True, initial_prompt="hello")
+
+    project_spec = await launcher.build(_make_project(str(tmp_path)), opts)
+    adhoc_spec = await launcher.build(AdHocLaunch(cwd=str(tmp_path)), opts)
+
+    assert project_spec.argv == adhoc_spec.argv
+
+
+def test_adhoc_launch_target_is_frozen():
+    """:class:`AdHocLaunch` is a ``frozen=True`` dataclass — accidental
+    mutation must fail loudly. Pinning this so a future code change that
+    drops ``frozen=True`` is caught at test time."""
+    from dataclasses import FrozenInstanceError
+
+    target = AdHocLaunch(cwd="/tmp")
+    with pytest.raises(FrozenInstanceError):
+        target.cwd = "/other"  # type: ignore[misc]

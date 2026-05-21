@@ -2,6 +2,7 @@ package com.mobaide.app.ui.sessions
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
@@ -18,17 +19,36 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.nio.file.InvalidPathException
+import java.nio.file.Paths
 import javax.inject.Inject
 
 enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, AutoScanConfig }
 
 enum class CreateSessionMode { Standard, AutoScan, CustomShell }
 
+/**
+ * Active selection on the project picker.
+ *
+ * `None` is the freshly-mounted state; `Stored` references a project from
+ * [CreateSessionUiState.projects] by name; `CustomPath` is an ephemeral
+ * one-off launch directory typed by the user and never persisted to
+ * `projects.json` on the agent.
+ */
+sealed interface ProjectSelection {
+    data object None : ProjectSelection
+    data class Stored(val name: String) : ProjectSelection
+    data class CustomPath(val path: String) : ProjectSelection
+}
+
 data class CreateSessionUiState(
     val step: CreateSessionStep = CreateSessionStep.ProjectSelect,
     val projects: List<ProjectInfo> = emptyList(),
     val isLoadingProjects: Boolean = false,
-    val selectedProjectName: String? = null,
+    val selection: ProjectSelection = ProjectSelection.None,
+    val customPathDraft: String = "",
+    val customPathError: String? = null,
+    val recentCustomPaths: List<String> = emptyList(),
     val selectedMode: CreateSessionMode? = null,
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
@@ -44,12 +64,21 @@ data class CreateSessionUiState(
     val error: String? = null,
 )
 
+/**
+ * Read-only projection: the name of a stored project, or `null` for any
+ * other selection (custom path / none). Lets callers that only care about
+ * stored-project selections stay terse.
+ */
+val CreateSessionUiState.selectedProjectName: String?
+    get() = (selection as? ProjectSelection.Stored)?.name
+
 @HiltViewModel
 class CreateSessionViewModel @Inject constructor(
     private val projectsRepository: ProjectsRepository,
     private val sessionRepository: SessionRepository,
     private val autoScanRepository: AutoScanRepository,
     private val preferencesStore: PreferencesStore,
+    private val tokenStore: TokenStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CreateSessionUiState())
@@ -69,17 +98,18 @@ class CreateSessionViewModel @Inject constructor(
             val last = preferencesStore.getLastUsedProjectName()
             projectsRepository.observeProjects().collect { projects ->
                 _uiState.update { state ->
+                    val resolved = state.selection.takeUnless { it is ProjectSelection.None }
+                        ?: projects.firstOrNull { it.name == last }?.let { ProjectSelection.Stored(it.name) }
+                        ?: ProjectSelection.None
                     state.copy(
                         projects = projects,
                         isLoadingProjects = projects.isEmpty(),
-                        selectedProjectName = state.selectedProjectName
-                            ?: projects.firstOrNull { it.name == last }?.name,
+                        selection = resolved,
                     )
                 }
             }
         }
 
-        // REST seed: populates projects if the bus snapshot hasn't arrived yet.
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingProjects = true) }
             try {
@@ -87,11 +117,13 @@ class CreateSessionViewModel @Inject constructor(
                 val last = preferencesStore.getLastUsedProjectName()
                 _uiState.update { state ->
                     if (state.projects.isEmpty()) {
+                        val resolved = state.selection.takeUnless { it is ProjectSelection.None }
+                            ?: projects.firstOrNull { it.name == last }?.let { ProjectSelection.Stored(it.name) }
+                            ?: ProjectSelection.None
                         state.copy(
                             projects = projects,
                             isLoadingProjects = false,
-                            selectedProjectName = state.selectedProjectName
-                                ?: projects.firstOrNull { it.name == last }?.name,
+                            selection = resolved,
                         )
                     } else {
                         state.copy(isLoadingProjects = false)
@@ -106,10 +138,11 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun selectProject(name: String) = _uiState.update {
-        // Clamp worktree off for non-git projects so the launch payload stays consistent.
         val isGit = it.projects.firstOrNull { p -> p.name == name }?.is_git == true
         it.copy(
-            selectedProjectName = name,
+            selection = ProjectSelection.Stored(name),
+            customPathDraft = "",
+            customPathError = null,
             worktree = if (isGit) it.worktree else false,
             branchName = if (isGit) it.branchName else "",
         )
@@ -123,20 +156,66 @@ class CreateSessionViewModel @Inject constructor(
      */
     fun onProjectCreated(project: ProjectInfo) = _uiState.update {
         it.copy(
-            selectedProjectName = project.name,
+            selection = ProjectSelection.Stored(project.name),
+            customPathDraft = "",
+            customPathError = null,
             worktree = if (project.is_git) it.worktree else false,
             branchName = if (project.is_git) it.branchName else "",
         )
     }
 
-    fun confirmProject() = _uiState.update {
-        if (it.selectedProjectName != null) it.copy(step = CreateSessionStep.ModePick) else it
+    /**
+     * Switches the picker into "Custom path…" mode. Loads any per-agent
+     * recents asynchronously so the chips show up as soon as the panel
+     * renders. Clears any prior draft / error.
+     */
+    fun selectCustomPath() {
+        _uiState.update {
+            it.copy(
+                selection = ProjectSelection.CustomPath(""),
+                customPathDraft = "",
+                customPathError = null,
+                worktree = false,
+                branchName = "",
+            )
+        }
+        val scope = agentScopeKey() ?: return
+        viewModelScope.launch {
+            val recents = preferencesStore.getRecentCustomPaths(scope)
+            _uiState.update { it.copy(recentCustomPaths = recents) }
+        }
+    }
+
+    fun setCustomPathDraft(value: String) = _uiState.update {
+        val error = validateCustomPath(value)
+        it.copy(
+            customPathDraft = value,
+            customPathError = error,
+            selection = if (error == null && value.isNotBlank()) {
+                ProjectSelection.CustomPath(value)
+            } else {
+                ProjectSelection.CustomPath("")
+            },
+        )
+    }
+
+    fun pickRecentCustomPath(path: String) = setCustomPathDraft(path)
+
+    fun confirmProject() = _uiState.update { state ->
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> state.copy(step = CreateSessionStep.ModePick)
+            is ProjectSelection.CustomPath ->
+                if (sel.path.isNotBlank() && state.customPathError == null) {
+                    state.copy(step = CreateSessionStep.ModePick)
+                } else {
+                    state
+                }
+            ProjectSelection.None -> state
+        }
     }
 
     fun pickMode(mode: CreateSessionMode) {
         _uiState.update { it.copy(selectedMode = mode) }
-        // Terminal mode skips the config step — there's nothing to configure
-        // for a raw shell. The tile-tap submits immediately.
         if (mode == CreateSessionMode.CustomShell) {
             submitCustomShell()
         }
@@ -161,7 +240,7 @@ class CreateSessionViewModel @Inject constructor(
 
     fun submitAutoScan() {
         val state = _uiState.value
-        val projectName = state.selectedProjectName ?: return
+        val projectName = (state.selection as? ProjectSelection.Stored)?.name ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(autoScanStarting = true) }
             try {
@@ -209,51 +288,86 @@ class CreateSessionViewModel @Inject constructor(
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
     fun clearError() = _uiState.update { it.copy(error = null) }
 
-    /** Reset the dismiss flag after the screen has consumed it. */
     fun consumeDismiss() = _uiState.update { it.copy(dismiss = false) }
 
     fun submit() {
         val state = _uiState.value
-        val projectName = state.selectedProjectName ?: return
         if (state.submitting) return
-        submitSession(
-            projectName = projectName,
-            request = CreateSessionRequest(
-                project_name = projectName,
-                claude_options = ClaudeOptionsModel(
-                    no_memory = state.noMemory,
-                    skip_permissions = state.skipPermissions,
-                    max_effort = state.maxEffort,
-                    worktree = state.worktree,
-                    branch_name = state.branchName.takeIf { it.isNotBlank() },
-                ),
-            ),
+        val claudeOptions = ClaudeOptionsModel(
+            no_memory = state.noMemory,
+            skip_permissions = state.skipPermissions,
+            max_effort = state.maxEffort,
+            worktree = state.worktree,
+            branch_name = state.branchName.takeIf { it.isNotBlank() },
         )
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = CreateSessionRequest(
+                    project_name = sel.name,
+                    claude_options = claudeOptions,
+                ),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = CreateSessionRequest(
+                        project_name = null,
+                        cwd = sel.path,
+                        claude_options = claudeOptions.copy(worktree = false, branch_name = null),
+                    ),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
     }
 
     fun submitCustomShell() {
         val state = _uiState.value
-        val projectName = state.selectedProjectName ?: return
         if (state.submitting) return
-        // `command = null` (defaults to server `_DEFAULT_SHELL`) and
-        // `claude_options = null` (signals raw shell, not Claude) — the server
-        // resolves only cwd from the named project.
-        submitSession(
-            projectName = projectName,
-            request = CreateSessionRequest(
-                project_name = projectName,
-                command = null,
-                claude_options = null,
-            ),
-        )
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = CreateSessionRequest(
+                    project_name = sel.name,
+                    command = null,
+                    claude_options = null,
+                ),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = CreateSessionRequest(
+                        project_name = null,
+                        cwd = sel.path,
+                        command = null,
+                        claude_options = null,
+                    ),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
     }
 
-    private fun submitSession(projectName: String, request: CreateSessionRequest) {
+    private fun submitSession(selection: ProjectSelection, request: CreateSessionRequest) {
         viewModelScope.launch {
             _uiState.update { it.copy(submitting = true) }
             try {
                 val response = sessionRepository.createSession(request)
-                preferencesStore.setLastUsedProjectName(projectName)
+                when (selection) {
+                    is ProjectSelection.Stored -> {
+                        preferencesStore.setLastUsedProjectName(selection.name)
+                    }
+                    is ProjectSelection.CustomPath -> {
+                        val scope = agentScopeKey()
+                        if (scope != null) {
+                            preferencesStore.addRecentCustomPath(scope, selection.path)
+                        }
+                    }
+                    ProjectSelection.None -> Unit
+                }
                 preferencesStore.setLastUsedSessionId(response.session_id)
                 _uiState.update { it.copy(submitting = false) }
                 _navigateToSession.tryEmit(response.session_id)
@@ -263,5 +377,24 @@ class CreateSessionViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun agentScopeKey(): String? = tokenStore.getAgentId() ?: tokenStore.getAgentUrl()
+
+    private fun validateCustomPath(input: String): String? {
+        if (input.isBlank()) return "Path is required"
+        return try {
+            if (Paths.get(input).isAbsolute || isWindowsAbsolute(input)) null
+            else "Path must be absolute"
+        } catch (_: InvalidPathException) {
+            "Path is invalid"
+        }
+    }
+
+    private fun isWindowsAbsolute(input: String): Boolean =
+        WINDOWS_ABS_REGEX.containsMatchIn(input) || input.startsWith("\\\\")
+
+    companion object {
+        private val WINDOWS_ABS_REGEX = Regex("^[A-Za-z]:[\\\\/]")
     }
 }

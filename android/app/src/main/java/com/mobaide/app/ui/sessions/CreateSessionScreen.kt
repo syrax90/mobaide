@@ -3,6 +3,8 @@ package com.mobaide.app.ui.sessions
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,7 +16,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -139,27 +143,48 @@ fun CreateSessionScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            val selectedProject = state.projects.firstOrNull { it.name == state.selectedProjectName }
+            val storedProject = (state.selection as? ProjectSelection.Stored)?.let { sel ->
+                state.projects.firstOrNull { it.name == sel.name }
+            }
+            val customPathSelected = state.selection as? ProjectSelection.CustomPath
+            val modeHeader = when (val sel = state.selection) {
+                is ProjectSelection.Stored -> ModeHeader(
+                    title = storedProject?.name ?: sel.name,
+                    subtitle = storedProject?.path,
+                    showAutoScan = storedProject?.has_linear_key == true,
+                )
+                is ProjectSelection.CustomPath -> ModeHeader(
+                    title = "Custom path",
+                    subtitle = sel.path,
+                    showAutoScan = false,
+                )
+                ProjectSelection.None -> ModeHeader(
+                    title = "",
+                    subtitle = null,
+                    showAutoScan = false,
+                )
+            }
 
             when (state.step) {
                 CreateSessionStep.ProjectSelect -> ProjectSelectSection(
                     state = state,
-                    selectedProject = selectedProject,
+                    selectedProject = storedProject,
+                    customPathSelected = customPathSelected,
                     onSelect = viewModel::selectProject,
+                    onCustomPathSelected = viewModel::selectCustomPath,
+                    onCustomPathChange = viewModel::setCustomPathDraft,
+                    onPickRecentCustomPath = viewModel::pickRecentCustomPath,
                     onCreateProjectClicked = projectsViewModel::openCreateSheet,
                     onContinue = viewModel::confirmProject,
                 )
                 CreateSessionStep.ModePick -> ModePickerSection(
-                    project = selectedProject,
+                    header = modeHeader,
                     selectedMode = state.selectedMode,
                     onPickMode = viewModel::pickMode,
                     onCommit = {
                         when (state.selectedMode) {
                             CreateSessionMode.Standard -> viewModel.selectStandardMode()
                             CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
-                            // CustomShell auto-submits in pickMode — Continue is disabled
-                            // for it and onCommit never fires; the branch is here for
-                            // exhaustiveness only.
                             CreateSessionMode.CustomShell -> Unit
                             null -> Unit
                         }
@@ -167,6 +192,8 @@ fun CreateSessionScreen(
                 )
                 CreateSessionStep.StandardConfig -> StandardConfigSection(
                     state = state,
+                    showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                        storedProject?.is_git == true,
                     viewModel = viewModel,
                 )
                 CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
@@ -203,22 +230,32 @@ fun CreateSessionScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ProjectSelectSection(
     state: CreateSessionUiState,
     selectedProject: com.mobaide.app.data.network.dto.ProjectInfo?,
+    customPathSelected: ProjectSelection.CustomPath?,
     onSelect: (String) -> Unit,
+    onCustomPathSelected: () -> Unit,
+    onCustomPathChange: (String) -> Unit,
+    onPickRecentCustomPath: (String) -> Unit,
     onCreateProjectClicked: () -> Unit,
     onContinue: () -> Unit,
 ) {
     var dropdownExpanded by remember { mutableStateOf(false) }
+    val displayValue = when (val sel = state.selection) {
+        is ProjectSelection.Stored -> sel.name
+        is ProjectSelection.CustomPath -> "Custom path"
+        ProjectSelection.None ->
+            if (state.isLoadingProjects) "Loading…" else "Select project"
+    }
     ExposedDropdownMenuBox(
         expanded = dropdownExpanded,
         onExpandedChange = { dropdownExpanded = !dropdownExpanded },
     ) {
         OutlinedTextField(
-            value = state.selectedProjectName ?: if (state.isLoadingProjects) "Loading…" else "Select project",
+            value = displayValue,
             onValueChange = {},
             readOnly = true,
             label = { Text("Project") },
@@ -241,6 +278,29 @@ private fun ProjectSelectSection(
             if (state.projects.isNotEmpty()) {
                 HorizontalDivider()
             }
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("Custom path…")
+                        Text(
+                            text = "Run once, don't save",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                leadingIcon = {
+                    Icon(Icons.Default.FolderOpen, contentDescription = null)
+                },
+                modifier = Modifier.semantics {
+                    role = Role.Button
+                    contentDescription = "Custom path"
+                },
+                onClick = {
+                    dropdownExpanded = false
+                    onCustomPathSelected()
+                },
+            )
             DropdownMenuItem(
                 text = { Text("Create new project…") },
                 leadingIcon = {
@@ -284,27 +344,92 @@ private fun ProjectSelectSection(
         }
     }
 
+    if (customPathSelected != null) {
+        CustomPathPanel(
+            state = state,
+            onDraftChange = onCustomPathChange,
+            onPickRecent = onPickRecentCustomPath,
+        )
+    }
+
+    val canContinue = when (val sel = state.selection) {
+        is ProjectSelection.Stored -> true
+        is ProjectSelection.CustomPath ->
+            state.customPathDraft.isNotBlank() && state.customPathError == null
+        ProjectSelection.None -> false
+    }
     Button(
         onClick = onContinue,
-        enabled = state.selectedProjectName != null,
+        enabled = canContinue,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CustomPathPanel(
+    state: CreateSessionUiState,
+    onDraftChange: (String) -> Unit,
+    onPickRecent: (String) -> Unit,
+) {
+    OutlinedTextField(
+        value = state.customPathDraft,
+        onValueChange = onDraftChange,
+        label = { Text("Absolute path on the agent") },
+        singleLine = true,
+        isError = state.customPathError != null,
+        supportingText = {
+            Text(
+                text = state.customPathError
+                    ?: "e.g. /home/user/code or D:\\projects\\demo",
+            )
+        },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (state.recentCustomPaths.isNotEmpty()) {
+        Text(
+            text = "Recent paths",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            state.recentCustomPaths.forEach { path ->
+                AssistChip(
+                    onClick = { onPickRecent(path) },
+                    label = { Text(path) },
+                )
+            }
+        }
+    }
+}
+
+/** Display metadata for the mode picker — derived once at the call site
+ *  so the section composable doesn't have to know about the sealed
+ *  [ProjectSelection]. */
+private data class ModeHeader(
+    val title: String,
+    val subtitle: String?,
+    val showAutoScan: Boolean,
+)
+
 @Composable
 private fun ModePickerSection(
-    project: com.mobaide.app.data.network.dto.ProjectInfo?,
+    header: ModeHeader,
     selectedMode: CreateSessionMode?,
     onPickMode: (CreateSessionMode) -> Unit,
     onCommit: () -> Unit,
 ) {
     Text(
-        text = project?.name ?: "",
+        text = header.title,
         style = MaterialTheme.typography.titleMedium,
     )
-    project?.path?.let {
+    header.subtitle?.let {
         Text(
             text = it,
             style = MaterialTheme.typography.bodySmall,
@@ -328,8 +453,7 @@ private fun ModePickerSection(
         )
     }
 
-    // Hide Auto Scan entirely when no Linear key is configured.
-    if (project?.has_linear_key == true) {
+    if (header.showAutoScan) {
         ElevatedCard(
             onClick = { onPickMode(CreateSessionMode.AutoScan) },
             colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
@@ -343,8 +467,6 @@ private fun ModePickerSection(
         }
     }
 
-    // Terminal mode — third tile, no config step, no Linear-key gate.
-    // ViewModel.pickMode auto-submits on selection.
     ElevatedCard(
         onClick = { onPickMode(CreateSessionMode.CustomShell) },
         colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.elevatedCardColors(),
@@ -352,7 +474,7 @@ private fun ModePickerSection(
     ) {
         ListItem(
             headlineContent = { Text("Terminal") },
-            supportingContent = { Text("Bash / cmd in this project") },
+            supportingContent = { Text("Bash / cmd in the chosen directory") },
             leadingContent = {
                 Icon(
                     imageVector = Icons.Filled.Terminal,
@@ -365,8 +487,6 @@ private fun ModePickerSection(
 
     Button(
         onClick = onCommit,
-        // Terminal tile auto-submits in pickMode, so the Continue button is only
-        // relevant for the Standard / AutoScan tiles that route to a config step.
         enabled = selectedMode != null && selectedMode != CreateSessionMode.CustomShell,
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -377,18 +497,14 @@ private fun ModePickerSection(
 @Composable
 private fun StandardConfigSection(
     state: CreateSessionUiState,
+    showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
 ) {
-    val isGitProject = state.projects
-        .firstOrNull { it.name == state.selectedProjectName }
-        ?.is_git == true
-
     ToggleRow("Max effort", state.maxEffort, viewModel::toggleMaxEffort)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
-    // Worktree requires a git repo — hide the toggle for non-git projects.
-    if (isGitProject) {
+    if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
 
         if (state.worktree) {
@@ -404,7 +520,7 @@ private fun StandardConfigSection(
 
     Button(
         onClick = viewModel::submit,
-        enabled = state.selectedProjectName != null && !state.submitting,
+        enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")

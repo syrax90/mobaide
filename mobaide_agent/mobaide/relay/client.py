@@ -145,6 +145,27 @@ _DEFAULT_SHELL = (
 MAX_AUTOSCAN_STREAMS = 10
 
 
+def _validate_adhoc_cwd_or_error(cwd: str) -> str | None:
+    """Return a human-readable error string if ``cwd`` is unfit for an
+    ad-hoc launch, else ``None``.
+
+    Mirrors :func:`mobaide.agent.sessions.router._validate_adhoc_cwd` —
+    the duplication is intentional (same rationale as the
+    ``FileNotFoundError`` handling at lines 752–766 below): the relay
+    must remain independently importable from the FastAPI app.
+    """
+    if not cwd:
+        return "Custom path cannot be empty"
+    p = Path(cwd)
+    if not p.is_absolute():
+        return f"Custom path must be absolute: {cwd}"
+    if not p.exists():
+        return f"Custom path does not exist: {cwd}"
+    if not p.is_dir():
+        return f"Custom path is not a directory: {cwd}"
+    return None
+
+
 def _state_frame(status: str, pid: int | None = None) -> bytes:
     payload: dict[str, object] = {"status": status}
     if pid is not None:
@@ -713,17 +734,33 @@ class RelayClient:
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
 
+        ctrl_cwd = ctrl.get("cwd")
+        ctrl_project_name = ctrl.get("project_name")
+        if ctrl_project_name is None and ctrl_cwd is not None:
+            err = _validate_adhoc_cwd_or_error(ctrl_cwd)
+            if err is not None:
+                logger.warning(
+                    "relay.create_session_adhoc_path_invalid session_id=%s error=%s",
+                    session_id, err,
+                )
+                resp = {
+                    "type": "session_create_failed",
+                    "session_id": session_id,
+                    "error": err,
+                }
+                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                return
         kind, spawn_command, spawn_env = resolve_spawn_args(
             claude_options, ctrl.get("command"), ctrl.get("env"), _DEFAULT_SHELL,
         )
         config = SessionConfig(
             session_id=session_id,
             command=spawn_command,
-            cwd=ctrl.get("cwd"),
+            cwd=ctrl_cwd,
             env=spawn_env,
             rows=ctrl.get("rows", 24),
             cols=ctrl.get("cols", 80),
-            project_name=ctrl.get("project_name"),
+            project_name=ctrl_project_name,
             claude_options=claude_options,
             kind=kind,
         )
@@ -995,6 +1032,10 @@ class RelayClient:
                     "status": 422,
                     "body": {"detail": _scrub_validation_errors(exc)},
                 }
+            if parsed.project_name is None and parsed.cwd is not None:
+                err = _validate_adhoc_cwd_or_error(parsed.cwd)
+                if err is not None:
+                    return {"status": 400, "body": {"detail": err}}
             session_id = uuid.uuid4().hex[:12]
             claude_options = (
                 parsed.claude_options.to_options()
