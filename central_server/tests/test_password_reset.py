@@ -257,7 +257,7 @@ class TestResetPasswordHappyPath:
         # Old password no longer logs in; new one does.
         with pytest.raises(ValueError):
             await reset_service.login_user("dave@example.com", "oldpass99")
-        new_id, role, token = await reset_service.login_user(
+        new_id, role, token, _scheduled = await reset_service.login_user(
             "dave@example.com", "newpass99",
         )
         assert new_id == user_id

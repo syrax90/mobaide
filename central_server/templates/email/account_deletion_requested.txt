@@ -1,0 +1,18 @@
+Your {{ from_name }} account is scheduled for deletion
+
+We received a request to delete your {{ from_name }} account. Your data
+and all associated agents will be permanently removed on:
+
+    {{ scheduled_for }}
+
+You have {{ grace_days }} days to change your mind. To keep your account
+active, open this link:
+
+    {{ cancel_url }}
+
+If you didn't request this, sign in to your account from the app or web
+portal and choose "Cancel scheduled deletion". We recommend you also
+change your password.
+
+—
+{{ from_name }}  ·  {{ from_domain }}

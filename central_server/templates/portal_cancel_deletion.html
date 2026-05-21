@@ -1,0 +1,40 @@
+{% extends "portal_base.html" %}
+{% block extra_head %}
+{# Strip the Referer so the cancel-link token cannot leak to any same-origin
+   navigation triggered from this page (e.g. clicking footer links).  #}
+<meta name="referrer" content="no-referrer">
+{% endblock %}
+{% block title %}Cancel scheduled deletion — Mobaide{% endblock %}
+{% block nav_right %}<a href="/portal/login" class="btn btn-sm">Sign in</a>{% endblock %}
+{% block content %}
+<div class="card login-card">
+    {% if outcome == "confirm" %}
+    <h2>Cancel scheduled deletion</h2>
+    <p>You're about to cancel the scheduled deletion of your Mobaide account. Continue?</p>
+    <form method="post" action="/portal/cancel-deletion">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="token" value="{{ token }}">
+        <div style="display:flex; gap:0.5rem; margin-top:1rem">
+            <button type="submit" class="btn btn-primary">Yes, cancel deletion</button>
+            <a href="/portal/delete-account-info" class="btn">No, keep the schedule</a>
+        </div>
+    </form>
+    {% elif outcome == "cancelled" %}
+    <h2>Account restored</h2>
+    <div class="alert alert-success">Your scheduled deletion has been cancelled.</div>
+    <p>You can <a href="/portal/login">sign back in</a> at any time.</p>
+    {% elif outcome == "invalid_token" %}
+    <h2>Link expired or already used</h2>
+    <div class="alert alert-error">
+        That cancel link is no longer valid. If your account is still in the grace window,
+        sign back in and choose <strong>Cancel scheduled deletion</strong> from your account page.
+    </div>
+    <p><a href="/portal/login" class="btn btn-primary">Sign in</a></p>
+    {% else %}
+    <h2>Missing token</h2>
+    <div class="alert alert-error">
+        This page requires a cancellation token from your confirmation email.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

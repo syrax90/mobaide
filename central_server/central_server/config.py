@@ -81,6 +81,36 @@ class CentralServerConfig:
     password_reset_email_hourly_cap: int = 3
     password_reset_ip_hourly_cap: int = 10
 
+    # Account self-deletion. Industry-norm soft-delete grace period
+    # (X 30d, Spotify 7d, Pinterest 14d). Sweeper interval is a balance
+    # between purge-latency SLA and steady-state load — 1h is plenty given
+    # the 14-day grace window.
+    account_deletion_grace_days: int = 14
+    deletion_sweeper_interval_seconds: int = 3600
+    # TTL on the single-use cancel-deletion link emailed to the user. Capped
+    # at the grace window — a link is useless past final purge.
+    account_deletion_cancel_token_ttl_hours: int = 24
+
+    # End-user web portal (sibling of the admin dashboard at /portal/*).
+    # Separate cookie name from `dashboard_token` to avoid namespace collision
+    # (non-admin must never gain a cookie in the admin namespace).
+    portal_token_expire_minutes: int = 0
+
+    # CSRF for cookie-authenticated portal endpoints (HTMX). Falls back to
+    # a key derived from `jwt_secret_key` when unset so single-secret
+    # deployments work out of the box; supply CSRF_SECRET_KEY explicitly to
+    # rotate independently.
+    csrf_secret_key: str | None = None
+
+    # Public URL of the privacy policy. Rendered as a footer link in the
+    # portal when set; hidden when empty. Hosted externally (e.g. GitHub
+    # Pages) — this is just the slot.
+    privacy_policy_url: str | None = None
+
+    # Public base URL of the portal — used in outbound emails for the
+    # cancel-deletion link. Falls back to `public_base_url` when unset.
+    portal_base_url: str | None = None
+
     # Release / manifest publishing
     release_auth_token: str | None = None
     manifest_signing_public_key_b64: str | None = None
@@ -176,6 +206,21 @@ class CentralServerConfig:
             password_reset_ip_hourly_cap=int(
                 os.getenv("PASSWORD_RESET_IP_HOURLY_CAP", "10"),
             ),
+            account_deletion_grace_days=int(
+                os.getenv("ACCOUNT_DELETION_GRACE_DAYS", "14"),
+            ),
+            deletion_sweeper_interval_seconds=int(
+                os.getenv("DELETION_SWEEPER_INTERVAL_SECONDS", "3600"),
+            ),
+            account_deletion_cancel_token_ttl_hours=int(
+                os.getenv("ACCOUNT_DELETION_CANCEL_TOKEN_TTL_HOURS", "24"),
+            ),
+            portal_token_expire_minutes=int(
+                os.getenv("PORTAL_TOKEN_EXPIRE_MINUTES", "0"),
+            ),
+            csrf_secret_key=os.getenv("CSRF_SECRET_KEY") or None,
+            privacy_policy_url=os.getenv("PRIVACY_POLICY_URL") or None,
+            portal_base_url=os.getenv("PORTAL_BASE_URL") or None,
             release_auth_token=os.getenv("RELEASE_AUTH_TOKEN") or None,
             manifest_signing_public_key_b64=(
                 os.getenv("MANIFEST_SIGNING_PUBLIC_KEY") or None

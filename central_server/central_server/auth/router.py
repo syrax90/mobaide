@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 
+from .dependencies import get_api_user
 from .models import (
     AuthTokenResponse,
+    CancelAccountDeletionResponse,
+    DeleteAccountRequest,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     GoogleAuthRequest,
@@ -16,9 +19,12 @@ from .models import (
     ResetPasswordResponse,
     UserLoginRequest,
     UserRegisterRequest,
+    UserTokenPayload,
     VerifyEmailRequest,
 )
 from .service import (
+    AccountDeletionAuthError,
+    AccountDeletionForbiddenError,
     ExpiredResetCodeError,
     ExpiredVerificationCodeError,
     InvalidResetCodeError,
@@ -71,7 +77,9 @@ async def login(request: Request, body: UserLoginRequest):
     """Authenticate a user with email + password."""
     auth_service = request.app.state.auth_service
     try:
-        user_id, role, token = await auth_service.login_user(body.email, body.password)
+        user_id, role, token, scheduled_deletion_at = await auth_service.login_user(
+            body.email, body.password
+        )
     except VerificationRequiredError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -87,6 +95,7 @@ async def login(request: Request, body: UserLoginRequest):
         user_id=user_id,
         email=body.email,
         role=role,
+        scheduled_deletion_at=scheduled_deletion_at,
     )
 
 
@@ -110,6 +119,7 @@ async def google_auth(request: Request, body: GoogleAuthRequest):
         user_id=user_id,
         email=user["email"],
         role=role,
+        scheduled_deletion_at=user.get("scheduled_deletion_at"),
     )
 
 
@@ -118,7 +128,9 @@ async def verify_email(request: Request, body: VerifyEmailRequest):
     """Consume a verification code and return the JWT."""
     auth_service = request.app.state.auth_service
     try:
-        user_id, role, token = await auth_service.verify_email(body.email, body.code)
+        user_id, role, token, scheduled_deletion_at = await auth_service.verify_email(
+            body.email, body.code
+        )
     except ExpiredVerificationCodeError:
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
@@ -139,6 +151,7 @@ async def verify_email(request: Request, body: VerifyEmailRequest):
         user_id=user_id,
         email=body.email,
         role=role,
+        scheduled_deletion_at=scheduled_deletion_at,
     )
 
 
@@ -239,3 +252,67 @@ async def reset_password(
             detail={"error": "new_password_same_as_old"},
         )
     return ResetPasswordResponse()
+
+
+@router.post(
+    "/me/delete",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+async def request_account_deletion(
+    request: Request,
+    body: DeleteAccountRequest,
+    background_tasks: BackgroundTasks,
+    user: UserTokenPayload = Depends(get_api_user),
+):
+    """Schedule the calling user's account for soft-delete in 14 days.
+
+    Requires a fresh credential proof (current password OR fresh Google ID
+    token with matching nonce) — the session JWT alone is rejected. On
+    success: writes the audit row, revokes refresh tokens, closes any live
+    user/agent WebSockets with code 4010, and emails a single-use cancel
+    link before returning 204.
+
+    Refuses to act on the seed-admin account (mirrors the admin-path guard).
+    """
+    auth_service = request.app.state.auth_service
+    try:
+        await auth_service.request_account_deletion(
+            user,
+            source="android",
+            proof=body,
+            background_tasks=background_tasks,
+        )
+    except AccountDeletionForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except AccountDeletionAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "reauth_required", "message": str(exc)},
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/me/delete/cancel",
+    response_model=CancelAccountDeletionResponse,
+)
+async def cancel_account_deletion(
+    request: Request,
+    user: UserTokenPayload = Depends(get_api_user),
+):
+    """Restore an account that is currently in the soft-delete grace window.
+
+    Idempotent: succeeds even if no deletion was scheduled. The previous
+    ``scheduled_deletion_at`` (or None) is echoed back so the client can
+    confirm what was cancelled.
+    """
+    auth_service = request.app.state.auth_service
+    previous = await auth_service.cancel_account_deletion(user.sub)
+    if previous is None:
+        return CancelAccountDeletionResponse(
+            status="not_scheduled", scheduled_deletion_at=None
+        )
+    return CancelAccountDeletionResponse(
+        status="cancelled", scheduled_deletion_at=previous
+    )

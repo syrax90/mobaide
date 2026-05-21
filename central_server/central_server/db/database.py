@@ -14,15 +14,17 @@ import aiosqlite
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    id             TEXT PRIMARY KEY,
-    email          TEXT NOT NULL UNIQUE,
-    password_hash  TEXT,
-    google_sub     TEXT UNIQUE,
-    role           TEXT NOT NULL DEFAULT 'viewer',
-    email_verified INTEGER NOT NULL DEFAULT 0,
-    verified_at    TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
+    id                      TEXT PRIMARY KEY,
+    email                   TEXT NOT NULL UNIQUE,
+    password_hash           TEXT,
+    google_sub              TEXT UNIQUE,
+    role                    TEXT NOT NULL DEFAULT 'viewer',
+    email_verified          INTEGER NOT NULL DEFAULT 0,
+    verified_at             TEXT,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    scheduled_deletion_at   TEXT,
+    deletion_requested_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -85,6 +87,29 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
     attempts    INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS account_deletion_cancel_tokens (
+    token_hash  TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL REFERENCES users(id),
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    consumed_at TEXT
+);
+
+-- No FK on user_id: audit rows must outlive the user row they reference
+-- (GDPR Art. 17 compliance trail). email_at_request is captured at request
+-- time so the row remains meaningful after the user cascade-purge.
+CREATE TABLE IF NOT EXISTS deletion_audit (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             TEXT NOT NULL,
+    email_at_request    TEXT NOT NULL,
+    requested_at        TEXT NOT NULL,
+    scheduled_for       TEXT NOT NULL,
+    source              TEXT NOT NULL CHECK(source IN ('android', 'portal', 'email_link')),
+    status              TEXT NOT NULL CHECK(status IN ('pending', 'cancelled', 'completed', 'failed')),
+    completed_at        TEXT,
+    cancellation_reason TEXT
+);
+
 CREATE TABLE IF NOT EXISTS prompt_templates (
     template_id   TEXT PRIMARY KEY,
     owner_user_id TEXT NOT NULL REFERENCES users(id),
@@ -114,6 +139,14 @@ CREATE INDEX IF NOT EXISTS idx_email_verification_user
     ON email_verification_tokens(user_id) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_password_reset_user
     ON password_reset_tokens(user_id) WHERE consumed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_account_deletion_cancel_user
+    ON account_deletion_cancel_tokens(user_id) WHERE consumed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_users_scheduled_deletion
+    ON users(scheduled_deletion_at) WHERE scheduled_deletion_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_deletion_audit_user
+    ON deletion_audit(user_id);
+CREATE INDEX IF NOT EXISTS idx_deletion_audit_pending
+    ON deletion_audit(status, scheduled_for) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_prompt_templates_owner
     ON prompt_templates(owner_user_id) WHERE deleted_at IS NULL;
 """
@@ -345,6 +378,25 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 10")
 
+        if version < 11:
+            # Account self-deletion: adds scheduled_deletion_at +
+            # deletion_requested_at to users, plus the deletion_audit and
+            # account_deletion_cancel_tokens tables. The audit table has no FK
+            # on user_id because rows must outlive cascade-purge of the user
+            # they reference.
+            col_cursor = await self._conn.execute("PRAGMA table_info(users)")
+            user_cols = {r[1] for r in await col_cursor.fetchall()}
+            if "scheduled_deletion_at" not in user_cols:
+                await self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN scheduled_deletion_at TEXT"
+                )
+            if "deletion_requested_at" not in user_cols:
+                await self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN deletion_requested_at TEXT"
+                )
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 11")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -359,7 +411,8 @@ class Database:
 
     _USER_COLUMNS = (
         "id, email, password_hash, google_sub, role, "
-        "email_verified, verified_at, created_at, updated_at"
+        "email_verified, verified_at, created_at, updated_at, "
+        "scheduled_deletion_at, deletion_requested_at"
     )
 
     async def create_user(
@@ -519,9 +572,13 @@ class Database:
           2. Drop ``mobile_refresh_tokens`` / ``pairing_tokens`` /
              ``pairings`` rows that reference any of those agents.
           3. Drop the ``agents`` rows themselves.
-          4. Drop ``email_verification_tokens`` and ``prompt_templates``
+          4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
+             ``account_deletion_cancel_tokens``, and ``prompt_templates``
              owned by the user.
           5. Drop the ``users`` row.
+
+        ``deletion_audit`` rows are intentionally NOT cascaded — they have no
+        FK on ``user_id`` and must outlive the user (Art. 17 audit trail).
 
         Returns the list of deleted ``agent_id``s (empty list if the user
         had none). Returns an empty list if ``user_id`` does not exist.
@@ -555,6 +612,14 @@ class Database:
         )
         await self.conn.execute(
             "DELETE FROM email_verification_tokens WHERE user_id = ?",
+            (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM password_reset_tokens WHERE user_id = ?",
+            (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM account_deletion_cancel_tokens WHERE user_id = ?",
             (user_id,),
         )
         await self.conn.execute(
@@ -1353,6 +1418,174 @@ class Database:
         )
         await self.conn.commit()
         return cursor.rowcount
+
+    async def set_scheduled_deletion(
+        self,
+        user_id: str,
+        *,
+        scheduled_for: str,
+        requested_at: str,
+    ) -> None:
+        """Mark a user for soft-delete on the given ISO timestamp.
+
+        Idempotent — re-running with a later ``scheduled_for`` extends the
+        window. The caller is responsible for writing a fresh
+        ``deletion_audit`` row alongside this update.
+        """
+        now = _now_iso()
+        await self.conn.execute(
+            "UPDATE users "
+            "SET scheduled_deletion_at = ?, "
+            "    deletion_requested_at = ?, "
+            "    updated_at = ? "
+            "WHERE id = ?",
+            (scheduled_for, requested_at, now, user_id),
+        )
+        await self.conn.commit()
+
+    async def clear_scheduled_deletion(self, user_id: str) -> None:
+        """Cancel a pending soft-delete. Idempotent."""
+        now = _now_iso()
+        await self.conn.execute(
+            "UPDATE users "
+            "SET scheduled_deletion_at = NULL, "
+            "    deletion_requested_at = NULL, "
+            "    updated_at = ? "
+            "WHERE id = ?",
+            (now, user_id),
+        )
+        await self.conn.commit()
+
+    async def list_users_due_for_purge(self, now_iso: str) -> list[dict]:
+        """Return users whose scheduled deletion has elapsed.
+
+        Each row carries ``id``, ``email``, and ``scheduled_deletion_at`` so
+        the sweeper can re-check the timestamp atomically per row (race-safe
+        against a concurrent cancel that lands between scan and delete).
+        """
+        cursor = await self.conn.execute(
+            "SELECT id, email, scheduled_deletion_at "
+            "FROM users "
+            "WHERE scheduled_deletion_at IS NOT NULL "
+            "  AND scheduled_deletion_at <= ?",
+            (now_iso,),
+        )
+        return [dict(row) async for row in cursor]
+
+    async def record_deletion_audit(
+        self,
+        *,
+        user_id: str,
+        email_at_request: str,
+        requested_at: str,
+        scheduled_for: str,
+        source: str,
+    ) -> int:
+        """Insert a new ``deletion_audit`` row in ``pending`` state.
+
+        Returns the row's auto-increment ``id`` so the caller can later
+        transition it to ``completed`` / ``cancelled`` / ``failed`` via
+        ``update_deletion_audit_status``.
+        """
+        cursor = await self.conn.execute(
+            "INSERT INTO deletion_audit "
+            "(user_id, email_at_request, requested_at, scheduled_for, source, status) "
+            "VALUES (?, ?, ?, ?, ?, 'pending')",
+            (user_id, email_at_request, requested_at, scheduled_for, source),
+        )
+        await self.conn.commit()
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid
+
+    async def update_deletion_audit_status(
+        self,
+        audit_id: int,
+        status: str,
+        *,
+        completed_at: str | None = None,
+        cancellation_reason: str | None = None,
+    ) -> None:
+        """Transition a deletion audit row to a terminal state."""
+        await self.conn.execute(
+            "UPDATE deletion_audit "
+            "SET status = ?, "
+            "    completed_at = COALESCE(?, completed_at), "
+            "    cancellation_reason = COALESCE(?, cancellation_reason) "
+            "WHERE id = ?",
+            (status, completed_at, cancellation_reason, audit_id),
+        )
+        await self.conn.commit()
+
+    async def find_pending_audit_for_user(self, user_id: str) -> dict | None:
+        """Return the most-recent ``pending`` audit row for the user, if any.
+
+        Used by ``cancel_account_deletion`` to stamp ``cancelled`` and by the
+        sweeper to look up the audit row before purge.
+        """
+        cursor = await self.conn.execute(
+            "SELECT id, user_id, email_at_request, requested_at, scheduled_for, "
+            "       source, status, completed_at, cancellation_reason "
+            "FROM deletion_audit "
+            "WHERE user_id = ? AND status = 'pending' "
+            "ORDER BY requested_at DESC LIMIT 1",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def create_deletion_cancel_token(
+        self, user_id: str, ttl_seconds: int
+    ) -> str:
+        """Issue a single-use cancel-deletion token for the email link.
+
+        Returns the raw token; only its SHA-256 hash is persisted. Mirrors
+        ``create_password_reset_token``'s "invalidate active tokens, then
+        insert" pattern so only one live cancel token exists per user.
+        """
+        raw = secrets.token_urlsafe(32)
+        token_hash = _hash_token(raw)
+        now = datetime.now(timezone.utc)
+        expires_at = datetime.fromtimestamp(
+            now.timestamp() + ttl_seconds, tz=timezone.utc
+        )
+        now_iso = now.isoformat()
+        await self.conn.execute(
+            "UPDATE account_deletion_cancel_tokens "
+            "SET consumed_at = ? "
+            "WHERE user_id = ? AND consumed_at IS NULL",
+            (now_iso, user_id),
+        )
+        await self.conn.execute(
+            "INSERT INTO account_deletion_cancel_tokens "
+            "(token_hash, user_id, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token_hash, user_id, now_iso, expires_at.isoformat()),
+        )
+        await self.conn.commit()
+        return raw
+
+    async def consume_deletion_cancel_token(self, raw_token: str) -> str | None:
+        """Atomically consume a cancel-deletion token. Returns the user_id on
+        success, ``None`` on invalid / expired / already-consumed."""
+        token_hash = _hash_token(raw_token)
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE account_deletion_cancel_tokens "
+            "SET consumed_at = ? "
+            "WHERE token_hash = ? "
+            "  AND consumed_at IS NULL "
+            "  AND expires_at > ?",
+            (now, token_hash, now),
+        )
+        await self.conn.commit()
+        if cursor.rowcount != 1:
+            return None
+        lookup = await self.conn.execute(
+            "SELECT user_id FROM account_deletion_cancel_tokens WHERE token_hash = ?",
+            (token_hash,),
+        )
+        row = await lookup.fetchone()
+        return row["user_id"] if row else None
 
     async def create_pairing(
         self,

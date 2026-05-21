@@ -125,7 +125,7 @@ class TestRegisterAndVerify:
         await asyncio.sleep(0)
         _, code, _ = fake_sender.messages[-1]
 
-        user_id, role, token = await verify_service.verify_email(
+        user_id, role, token, _scheduled = await verify_service.verify_email(
             "bob@example.com", code
         )
         assert role == "viewer"
@@ -172,7 +172,7 @@ class TestRegisterAndVerify:
         _, code, _ = fake_sender.messages[-1]
         await verify_service.verify_email("dave@example.com", code)
 
-        user_id, role, token = await verify_service.login_user(
+        user_id, role, token, _scheduled = await verify_service.login_user(
             "dave@example.com", "hunter22"
         )
         assert role == "viewer"

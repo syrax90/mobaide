@@ -112,6 +112,28 @@ MOBILE_REFRESH_EXPIRE_MINUTES=10080   # mobile refresh token (e.g. 7 days)
 DASHBOARD_TOKEN_EXPIRE_MINUTES=480    # dashboard token      (e.g. 8 h)
 ```
 
+For the end-user web portal and account self-deletion (CLA-61), the defaults are sane but you may want to tune:
+
+```
+# Portal session token TTL (minutes); 0 = never-expires (default, same as other tokens above)
+PORTAL_TOKEN_EXPIRE_MINUTES=480
+
+# CSRF secret for cookie-authenticated portal endpoints; falls back to JWT_SECRET_KEY when unset
+CSRF_SECRET_KEY=<random>
+
+# Grace period before a scheduled deletion is permanently purged (days, default 14)
+ACCOUNT_DELETION_GRACE_DAYS=14
+
+# How often the purge sweeper runs (seconds, default 3600)
+DELETION_SWEEPER_INTERVAL_SECONDS=3600
+
+# Public base URL for cancel-deletion email links; falls back to PUBLIC_BASE_URL when unset
+PORTAL_BASE_URL=https://mobaide.com
+
+# URL of your hosted privacy policy; rendered as a footer link in the portal when set
+PRIVACY_POLICY_URL=https://mobaide.com/privacy
+```
+
 ```bash
 nano /opt/mobaide/.env
 chmod 600 /opt/mobaide/.env

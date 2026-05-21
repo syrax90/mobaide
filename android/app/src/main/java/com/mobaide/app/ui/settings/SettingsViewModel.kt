@@ -2,6 +2,7 @@ package com.mobaide.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobaide.app.data.auth.GoogleAuthResult
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
@@ -9,6 +10,7 @@ import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MAX
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MIN
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.repository.AuthRepository
+import com.mobaide.app.data.repository.DeleteAccountResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,7 +24,42 @@ data class SettingsUiState(
     val userEmail: String = "",
     val terminalDisplayMode: TerminalDisplayMode = TerminalDisplayMode.Full,
     val terminalStaticColumns: Int = TERMINAL_STATIC_COLUMNS_DEFAULT,
+    val deleteDialog: DeleteAccountDialogState = DeleteAccountDialogState.Hidden,
 )
+
+/**
+ * Multi-step state machine for the Danger-zone "Delete account" flow.
+ *
+ * Hidden → Explain (user confirms intent) → ReAuth (current password OR
+ * fresh Google ID token) → ConfirmEmail (must type exact email) → Submitting
+ * → server returns 204 → SessionManager receives WS-4010 → app routes to
+ * login automatically. Errors at any step set [errorMessage] and stay on
+ * the current step.
+ */
+sealed interface DeleteAccountDialogState {
+    data object Hidden : DeleteAccountDialogState
+    data class Explain(val email: String) : DeleteAccountDialogState
+    data class ReAuthPassword(
+        val email: String,
+        val password: String = "",
+        val errorMessage: String? = null,
+        val submitting: Boolean = false,
+    ) : DeleteAccountDialogState
+    data class ReAuthGoogle(
+        val email: String,
+        val errorMessage: String? = null,
+        val submitting: Boolean = false,
+    ) : DeleteAccountDialogState
+    data class ConfirmEmail(
+        val email: String,
+        val typedEmail: String = "",
+        val idToken: String? = null,
+        val nonce: String? = null,
+        val password: String? = null,
+        val errorMessage: String? = null,
+        val submitting: Boolean = false,
+    ) : DeleteAccountDialogState
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
@@ -63,6 +100,207 @@ class SettingsViewModel @Inject constructor(
 
     fun logout() {
         authRepository.userLogout()
+    }
+
+    fun startDeleteAccount() {
+        val email = authRepository.getUserEmail() ?: return
+        _uiState.update { it.copy(deleteDialog = DeleteAccountDialogState.Explain(email)) }
+    }
+
+    fun dismissDeleteDialog() {
+        _uiState.update { it.copy(deleteDialog = DeleteAccountDialogState.Hidden) }
+    }
+
+    /**
+     * Advance from Explain → ReAuth*. We don't know at this point whether the
+     * account is password or Google — we let the user choose by tapping one of
+     * the two ReAuth buttons. (Both buttons are shown; the unsupported one
+     * shows an inline error on submission rather than being grayed out
+     * client-side, since the server is the source of truth.)
+     */
+    fun chooseReAuthMethod(useGoogle: Boolean) {
+        val email = currentEmail() ?: return
+        _uiState.update {
+            it.copy(
+                deleteDialog = if (useGoogle) {
+                    DeleteAccountDialogState.ReAuthGoogle(email)
+                } else {
+                    DeleteAccountDialogState.ReAuthPassword(email)
+                },
+            )
+        }
+    }
+
+    fun onPasswordChange(password: String) {
+        val state = _uiState.value.deleteDialog
+        if (state is DeleteAccountDialogState.ReAuthPassword) {
+            _uiState.update { it.copy(deleteDialog = state.copy(password = password)) }
+        }
+    }
+
+    fun confirmPasswordReauth() {
+        val state = _uiState.value.deleteDialog
+        if (state !is DeleteAccountDialogState.ReAuthPassword) return
+        if (state.password.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    deleteDialog = state.copy(errorMessage = "Enter your password."),
+                )
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(
+                deleteDialog = DeleteAccountDialogState.ConfirmEmail(
+                    email = state.email,
+                    password = state.password,
+                ),
+            )
+        }
+    }
+
+    fun onGoogleAuthResult(result: GoogleAuthResult) {
+        val state = _uiState.value.deleteDialog
+        if (state !is DeleteAccountDialogState.ReAuthGoogle) return
+        when (result) {
+            is GoogleAuthResult.Success -> _uiState.update {
+                it.copy(
+                    deleteDialog = DeleteAccountDialogState.ConfirmEmail(
+                        email = state.email,
+                        idToken = result.idToken,
+                        nonce = result.nonce,
+                    ),
+                )
+            }
+            is GoogleAuthResult.Cancelled -> _uiState.update {
+                it.copy(
+                    deleteDialog = state.copy(
+                        submitting = false,
+                        errorMessage = "Sign-in cancelled.",
+                    ),
+                )
+            }
+            is GoogleAuthResult.NotConfigured -> _uiState.update {
+                it.copy(
+                    deleteDialog = state.copy(
+                        submitting = false,
+                        errorMessage = "Google Sign-In is not configured in this build.",
+                    ),
+                )
+            }
+            is GoogleAuthResult.NoAccounts -> _uiState.update {
+                it.copy(
+                    deleteDialog = state.copy(
+                        submitting = false,
+                        errorMessage = result.message,
+                    ),
+                )
+            }
+            is GoogleAuthResult.PlayServicesUnavailable -> _uiState.update {
+                it.copy(
+                    deleteDialog = state.copy(
+                        submitting = false,
+                        errorMessage = "Google Play services is missing or out of date.",
+                    ),
+                )
+            }
+            is GoogleAuthResult.Failed -> _uiState.update {
+                it.copy(
+                    deleteDialog = state.copy(
+                        submitting = false,
+                        errorMessage = result.message,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun markGoogleReauthSubmitting() {
+        val state = _uiState.value.deleteDialog
+        if (state is DeleteAccountDialogState.ReAuthGoogle) {
+            _uiState.update {
+                it.copy(deleteDialog = state.copy(submitting = true, errorMessage = null))
+            }
+        }
+    }
+
+    fun onTypedEmailChange(typedEmail: String) {
+        val state = _uiState.value.deleteDialog
+        if (state is DeleteAccountDialogState.ConfirmEmail) {
+            _uiState.update { it.copy(deleteDialog = state.copy(typedEmail = typedEmail)) }
+        }
+    }
+
+    fun submitDelete(onScheduled: () -> Unit) {
+        val state = _uiState.value.deleteDialog
+        if (state !is DeleteAccountDialogState.ConfirmEmail) return
+        if (state.typedEmail != state.email) {
+            _uiState.update {
+                it.copy(
+                    deleteDialog = state.copy(
+                        errorMessage = "Type your email exactly to confirm.",
+                    ),
+                )
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(deleteDialog = state.copy(submitting = true, errorMessage = null))
+        }
+        viewModelScope.launch {
+            val outcome = try {
+                if (state.idToken != null && state.nonce != null) {
+                    authRepository.deleteAccountWithGoogle(state.idToken, state.nonce)
+                } else if (state.password != null) {
+                    authRepository.deleteAccountWithPassword(state.password)
+                } else {
+                    DeleteAccountResult.ReauthFailed("Re-authentication required.")
+                }
+            } catch (e: Exception) {
+                DeleteAccountResult.ReauthFailed(e.message ?: "Network error")
+            }
+            when (outcome) {
+                DeleteAccountResult.Scheduled -> {
+                    // Server returns 204 and follows up with a best-effort
+                    // WS-4010 close that would normally drive
+                    // SessionManager.AccountRemoved. Don't rely on that frame
+                    // alone: a backgrounded app or a network blip can drop it
+                    // and leave the local session looking authenticated with
+                    // a JWT the server has already revoked. Clear local state
+                    // explicitly; SessionManager.invalidateUserSession is
+                    // idempotent so a delayed 4010 is a harmless no-op.
+                    authRepository.userLogout()
+                    onScheduled()
+                    _uiState.update { it.copy(deleteDialog = DeleteAccountDialogState.Hidden) }
+                }
+                DeleteAccountResult.Forbidden -> _uiState.update {
+                    it.copy(
+                        deleteDialog = state.copy(
+                            submitting = false,
+                            errorMessage = "This account cannot be self-deleted (seed admin).",
+                        ),
+                    )
+                }
+                is DeleteAccountResult.ReauthFailed -> _uiState.update {
+                    it.copy(
+                        deleteDialog = state.copy(
+                            submitting = false,
+                            errorMessage = outcome.message,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun currentEmail(): String? {
+        return when (val state = _uiState.value.deleteDialog) {
+            is DeleteAccountDialogState.Explain -> state.email
+            is DeleteAccountDialogState.ReAuthPassword -> state.email
+            is DeleteAccountDialogState.ReAuthGoogle -> state.email
+            is DeleteAccountDialogState.ConfirmEmail -> state.email
+            DeleteAccountDialogState.Hidden -> null
+        }
     }
 
     private fun buildConnectionInfo(): String = when (tokenStore.getConnectionMode()) {

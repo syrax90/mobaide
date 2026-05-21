@@ -1,0 +1,28 @@
+{% extends "portal_base.html" %}
+{% block title %}Sign in — Mobaide{% endblock %}
+{% block nav_right %}<a href="/portal/signup" class="btn btn-sm">Create account</a>{% endblock %}
+{% block content %}
+<div class="card login-card">
+    <h2>Sign in to your account</h2>
+    {% if notice %}
+    <div class="alert alert-success">{{ notice }}</div>
+    {% endif %}
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/portal/login">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required autofocus>
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required>
+        <button type="submit" class="btn btn-primary">Sign in</button>
+    </form>
+    <p style="margin-top: 1rem; font-size: 0.9rem;">
+        <a href="/portal/forgot-password">Forgot your password?</a>
+    </p>
+    <p style="margin-top: 0.5rem; font-size: 0.9rem;">
+        Don't have an account? <a href="/portal/signup">Create one</a>.
+    </p>
+</div>
+{% endblock %}

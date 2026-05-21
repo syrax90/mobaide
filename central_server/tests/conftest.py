@@ -62,7 +62,13 @@ async def app(config, db):
     application.state.db = db
     application.state.routing = RoutingTable()
     application.state.manifest_store = ManifestStore(config.manifest_store_path)
-    application.state.auth_service = AuthService(config, db)
+    # ``routing`` is wired so endpoint tests of ``/api/auth/me/delete`` exercise
+    # the WS-disconnect block in ``request_account_deletion``; without it the
+    # service silently skips that branch and the wiring would not be exercised
+    # end-to-end.
+    application.state.auth_service = AuthService(
+        config, db, routing=application.state.routing
+    )
     application.state.pairing_service = PairingService(db)
     application.state.agent_service = AgentService(db, application.state.routing)
     application.state.template_service = TemplateService(
@@ -90,7 +96,7 @@ async def client(app):
 async def dashboard_headers(app) -> dict[str, str]:
     """Return dashboard auth cookie for the admin user (web dashboard)."""
     auth_service = app.state.auth_service
-    _user_id, _role, token = await auth_service.login_user(
+    _user_id, _role, token, _scheduled = await auth_service.login_user(
         TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
     )
     return {"Cookie": f"dashboard_token={token}"}
@@ -119,7 +125,7 @@ async def api_auth_headers(app, viewer_user) -> dict[str, str]:
     ``admin_api_auth_headers`` to verify the admin-blocking behaviour.
     """
     auth_service = app.state.auth_service
-    _user_id, _role, token = await auth_service.login_user(
+    _user_id, _role, token, _scheduled = await auth_service.login_user(
         TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD
     )
     return {"Authorization": f"Bearer {token}"}
@@ -129,7 +135,7 @@ async def api_auth_headers(app, viewer_user) -> dict[str, str]:
 async def admin_api_auth_headers(app) -> dict[str, str]:
     """Bearer header for the seeded admin user (for admin-blocked tests)."""
     auth_service = app.state.auth_service
-    _user_id, _role, token = await auth_service.login_user(
+    _user_id, _role, token, _scheduled = await auth_service.login_user(
         TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD
     )
     return {"Authorization": f"Bearer {token}"}

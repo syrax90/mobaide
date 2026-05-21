@@ -1,0 +1,56 @@
+{% extends "portal_base.html" %}
+{% block title %}Account deletion — Mobaide{% endblock %}
+{% block nav_right %}<a href="/portal/login" class="btn btn-sm">Sign in</a>{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 720px; margin: 0 auto;">
+    <h1 style="margin-top: 0;">How to delete your Mobaide account</h1>
+
+    <p>You have two ways to permanently remove your Mobaide account and all the data associated with it:</p>
+
+    <h2>1. From the Mobaide Android app</h2>
+    <ol>
+        <li>Open the Mobaide app and sign in.</li>
+        <li>Open <strong>Settings</strong>.</li>
+        <li>Scroll to the <strong>Danger zone</strong>.</li>
+        <li>Tap <strong>Delete account</strong>, re-enter your password (or re-authenticate with Google), and confirm by typing your email.</li>
+    </ol>
+
+    <h2>2. From this web portal</h2>
+    <ol>
+        <li><a href="/portal/login">Sign in to the portal</a> at <code>/portal/login</code>.</li>
+        <li>Open the <strong>Account</strong> page.</li>
+        <li>Scroll to the <strong>Danger zone</strong> and choose <strong>Delete my account</strong>.</li>
+        <li>Re-enter your password and confirm by typing your email.</li>
+    </ol>
+
+    <h2>What gets deleted</h2>
+    <ul>
+        <li>Your user profile (email, password hash, linked Google account).</li>
+        <li>Every agent you own, and every active session running on those agents.</li>
+        <li>Every device pairing, refresh token, and saved prompt template tied to your account.</li>
+    </ul>
+
+    <h2>{{ grace_days }}-day grace period</h2>
+    <p>
+        When you confirm deletion, your account is immediately signed out everywhere
+        and scheduled for permanent removal in <strong>{{ grace_days }} days</strong>.
+        Within that window you can restore your account by signing back in (either in
+        the app or this portal) and choosing <strong>Cancel scheduled deletion</strong>,
+        or by clicking the cancel link in the confirmation email.
+    </p>
+    <p>After {{ grace_days }} days, the deletion is final and cannot be reversed.</p>
+
+    <h2>Audit log</h2>
+    <p>
+        We retain a minimal deletion-audit record (timestamp, source, and the email
+        as it was at request time) so we can answer compliance questions about
+        deleted accounts. This record never contains your password, agents, or
+        session data.
+    </p>
+
+    <p style="margin-top: 2rem; color: var(--text-muted); font-size: 0.9rem;">
+        Need help? Reach out from a signed-in session in the portal or the app and
+        we'll walk you through it.
+    </p>
+</div>
+{% endblock %}

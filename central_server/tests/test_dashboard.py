@@ -16,7 +16,7 @@ async def viewer_dashboard_headers(app, viewer_user) -> dict[str, str]:
     """Dashboard cookie for a viewer — dashboard must reject with 403."""
     del viewer_user  # fixture ordering: ensures viewer exists before login
     auth_service = app.state.auth_service
-    _uid, _role, token = await auth_service.login_user(
+    _uid, _role, token, _scheduled = await auth_service.login_user(
         TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD
     )
     return {"Cookie": f"dashboard_token={token}"}
@@ -578,7 +578,7 @@ class TestUserDelete:
             role="admin",
             email_verified=True,
         )
-        _uid, _role, token = await app.state.auth_service.login_user(
+        _uid, _role, token, _scheduled = await app.state.auth_service.login_user(
             "admin2@test.local", "p2"
         )
         headers = {"Cookie": f"dashboard_token={token}"}
@@ -641,7 +641,7 @@ class TestUserDelete:
             role="admin",
             email_verified=True,
         )
-        _uid, _role, token = await app.state.auth_service.login_user(
+        _uid, _role, token, _scheduled = await app.state.auth_service.login_user(
             "admin3@test.local", "p3"
         )
         headers = {"Cookie": f"dashboard_token={token}"}
@@ -671,7 +671,7 @@ class TestUserDelete:
             role="admin",
             email_verified=True,
         )
-        _uid, _role, token = await app.state.auth_service.login_user(
+        _uid, _role, token, _scheduled = await app.state.auth_service.login_user(
             "admin4@test.local", "p4"
         )
         headers = {"Cookie": f"dashboard_token={token}"}

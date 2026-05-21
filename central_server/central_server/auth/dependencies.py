@@ -122,33 +122,62 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     return payload
 
 
-async def get_dashboard_user(request: Request) -> UserTokenPayload:
-    """Validate the dashboard JWT from the session cookie.
+async def _get_session_user(
+    request: Request, *, cookie_name: str, login_url: str
+) -> UserTokenPayload:
+    """Validate a dashboard-style JWT from the given cookie. Redirects
+    via 303 to ``login_url`` on missing cookie, decode failure, or
+    cascade-deleted user.
 
-    Redirects to ``/dashboard/login`` on signature failure **or** when the
-    user no longer exists (cascade-deleted by another admin) — the dashboard
-    UI handles both by re-prompting for credentials.
+    Shared core for :func:`get_dashboard_user` and :func:`get_portal_user` —
+    both are dashboard-type tokens, both should redirect to a login form
+    on any validation failure, and both must anchor authentication to a
+    still-existing user row.
     """
     auth_service = _get_auth_service(request)
-    token = request.cookies.get("dashboard_token")
+    token = request.cookies.get(cookie_name)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER,
-            headers={"Location": "/dashboard/login"},
+            headers={"Location": login_url},
         )
     try:
         user_payload = auth_service.decode_dashboard_token(token)
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER,
-            headers={"Location": "/dashboard/login"},
+            headers={"Location": login_url},
         )
     if not await _user_still_exists(request, user_payload.sub):
         raise HTTPException(
             status_code=status.HTTP_303_SEE_OTHER,
-            headers={"Location": "/dashboard/login"},
+            headers={"Location": login_url},
         )
     return user_payload
+
+
+async def get_dashboard_user(request: Request) -> UserTokenPayload:
+    """Validate the dashboard JWT from the ``dashboard_token`` session cookie.
+
+    Redirects to ``/dashboard/login`` on signature failure **or** when the
+    user no longer exists (cascade-deleted by another admin).
+    """
+    return await _get_session_user(
+        request, cookie_name="dashboard_token", login_url="/dashboard/login"
+    )
+
+
+async def get_portal_user(request: Request) -> UserTokenPayload:
+    """Validate the portal JWT from the ``portal_token`` session cookie.
+
+    Distinct cookie namespace from the admin dashboard — a non-admin must
+    never gain a cookie at ``dashboard_token`` and vice versa. The role
+    check (admin vs viewer) lives in the routes that need it, not here.
+    Redirects to ``/portal/login`` on any validation failure.
+    """
+    return await _get_session_user(
+        request, cookie_name="portal_token", login_url="/portal/login"
+    )
 
 
 def require_role(*allowed_roles: str) -> Callable:

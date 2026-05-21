@@ -253,12 +253,16 @@ class WebSocketConnection(
         private const val PROTOCOL_INCOMPATIBLE_CLOSE_CODE = 4002
 
         /**
-         * Close code emitted by the server when the admin destructively
-         * unregisters the user or the agent. Distinct from
-         * [AUTH_FAILED_CLOSE_CODE] so the login-screen snackbar can say
-         * "your account was removed" instead of the generic "session
-         * expired" — and so reconnection is permanently suppressed
-         * (signed re-issue cannot recover a deleted account).
+         * Close code emitted by the server when the user's credentials
+         * are no longer valid for a user-scoped operation — either the
+         * admin destructively unregistered the user/agent, the user
+         * filed a self-delete via Settings and the server is
+         * tearing the live session down before committing the schedule,
+         * or the deletion-sweeper finalised a 14-day-expired schedule.
+         * Distinct from [AUTH_FAILED_CLOSE_CODE] so the login-screen
+         * snackbar can say "your account was removed" instead of the
+         * generic "session expired" — and so reconnection is permanently
+         * suppressed (signed re-issue cannot recover a deleted account).
          */
         private const val ADMIN_REVOKED_CLOSE_CODE = 4010
     }
