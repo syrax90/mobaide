@@ -15,6 +15,12 @@
         <input type="password" id="password" name="password" required minlength="8">
         <button type="submit" class="btn btn-primary">Create account</button>
     </form>
+    {% if google_client_id %}
+    <div class="auth-divider"><span>or</span></div>
+    {% with button_id="portal-signup-google", post_url="/portal/auth/google", button_label="Sign up with Google", extra_fields=[] %}
+    {% include "_portal_google_button.html" with context %}
+    {% endwith %}
+    {% endif %}
     <p style="margin-top: 1rem; font-size: 0.9rem;">
         Already have an account? <a href="/portal/login">Sign in</a>.
     </p>

@@ -12,12 +12,14 @@
 <div class="alert alert-error" style="margin-bottom: 1.5rem;">
     <strong>Account scheduled for deletion on {{ user.scheduled_deletion_at }}.</strong>
     <p style="margin: 0.5rem 0 0;">Changed your mind? You can restore your account any time before the grace window expires.</p>
-    <form hx-post="/portal/account/cancel-deletion"
-          hx-swap="none"
-          style="margin-top: 0.75rem;">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="btn btn-primary">Cancel scheduled deletion</button>
-    </form>
+    <button type="button"
+            class="btn btn-primary"
+            style="margin-top: 0.75rem;"
+            hx-get="/portal/account/cancel-deletion-modal"
+            hx-target="#modal-root"
+            hx-swap="innerHTML">
+        Cancel scheduled deletion
+    </button>
 </div>
 {% endif %}
 

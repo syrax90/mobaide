@@ -11,6 +11,7 @@ import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MIN
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.DeleteAccountResult
+import com.mobaide.app.data.repository.DeletionMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,28 +31,38 @@ data class SettingsUiState(
 /**
  * Multi-step state machine for the Danger-zone "Delete account" flow.
  *
- * Hidden → Explain (user confirms intent) → ReAuth (current password OR
- * fresh Google ID token) → ConfirmEmail (must type exact email) → Submitting
- * → server returns 204 → SessionManager receives WS-4010 → app routes to
- * login automatically. Errors at any step set [errorMessage] and stay on
- * the current step.
+ * Hidden → Explain (user picks mode + re-auth method) → ReAuth* (current
+ * password OR fresh Google ID token) → ConfirmEmail (must type exact email)
+ * → submit → server returns 204 → SessionManager receives WS-4010 → app
+ * routes to login automatically. Errors at any step set [errorMessage] and
+ * stay on the current step.
+ *
+ * The [mode] field (Scheduled vs Immediate) is chosen on the Explain step
+ * and threaded through every later state so the submit-button label can
+ * adapt and the final API call carries the right value.
  */
 sealed interface DeleteAccountDialogState {
     data object Hidden : DeleteAccountDialogState
-    data class Explain(val email: String) : DeleteAccountDialogState
+    data class Explain(
+        val email: String,
+        val mode: DeletionMode = DeletionMode.Scheduled,
+    ) : DeleteAccountDialogState
     data class ReAuthPassword(
         val email: String,
+        val mode: DeletionMode,
         val password: String = "",
         val errorMessage: String? = null,
         val submitting: Boolean = false,
     ) : DeleteAccountDialogState
     data class ReAuthGoogle(
         val email: String,
+        val mode: DeletionMode,
         val errorMessage: String? = null,
         val submitting: Boolean = false,
     ) : DeleteAccountDialogState
     data class ConfirmEmail(
         val email: String,
+        val mode: DeletionMode,
         val typedEmail: String = "",
         val idToken: String? = null,
         val nonce: String? = null,
@@ -112,20 +123,33 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
-     * Advance from Explain → ReAuth*. We don't know at this point whether the
-     * account is password or Google — we let the user choose by tapping one of
-     * the two ReAuth buttons. (Both buttons are shown; the unsupported one
-     * shows an inline error on submission rather than being grayed out
-     * client-side, since the server is the source of truth.)
+     * Update the chosen deletion mode on the Explain step. Selection is
+     * threaded into every subsequent state via [chooseReAuthMethod].
+     */
+    fun setDeletionMode(mode: DeletionMode) {
+        val state = _uiState.value.deleteDialog
+        if (state is DeleteAccountDialogState.Explain) {
+            _uiState.update { it.copy(deleteDialog = state.copy(mode = mode)) }
+        }
+    }
+
+    /**
+     * Advance from Explain → ReAuth*. The user already picked the deletion
+     * mode on the Explain step; we carry it through every subsequent state.
+     * Both re-auth options are shown — the unsupported one (e.g. Google for
+     * a password-only account) surfaces an inline error on submission rather
+     * than being grayed out client-side, since the server is the source of
+     * truth on which methods are actually available.
      */
     fun chooseReAuthMethod(useGoogle: Boolean) {
-        val email = currentEmail() ?: return
+        val state = _uiState.value.deleteDialog as? DeleteAccountDialogState.Explain
+            ?: return
         _uiState.update {
             it.copy(
                 deleteDialog = if (useGoogle) {
-                    DeleteAccountDialogState.ReAuthGoogle(email)
+                    DeleteAccountDialogState.ReAuthGoogle(state.email, state.mode)
                 } else {
-                    DeleteAccountDialogState.ReAuthPassword(email)
+                    DeleteAccountDialogState.ReAuthPassword(state.email, state.mode)
                 },
             )
         }
@@ -153,6 +177,7 @@ class SettingsViewModel @Inject constructor(
             it.copy(
                 deleteDialog = DeleteAccountDialogState.ConfirmEmail(
                     email = state.email,
+                    mode = state.mode,
                     password = state.password,
                 ),
             )
@@ -167,6 +192,7 @@ class SettingsViewModel @Inject constructor(
                 it.copy(
                     deleteDialog = DeleteAccountDialogState.ConfirmEmail(
                         email = state.email,
+                        mode = state.mode,
                         idToken = result.idToken,
                         nonce = result.nonce,
                     ),
@@ -231,7 +257,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun submitDelete(onScheduled: () -> Unit) {
+    fun submitDelete(onSubmitted: (DeletionMode) -> Unit) {
         val state = _uiState.value.deleteDialog
         if (state !is DeleteAccountDialogState.ConfirmEmail) return
         if (state.typedEmail != state.email) {
@@ -250,9 +276,11 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             val outcome = try {
                 if (state.idToken != null && state.nonce != null) {
-                    authRepository.deleteAccountWithGoogle(state.idToken, state.nonce)
+                    authRepository.deleteAccountWithGoogle(
+                        state.idToken, state.nonce, state.mode,
+                    )
                 } else if (state.password != null) {
-                    authRepository.deleteAccountWithPassword(state.password)
+                    authRepository.deleteAccountWithPassword(state.password, state.mode)
                 } else {
                     DeleteAccountResult.ReauthFailed("Re-authentication required.")
                 }
@@ -260,7 +288,7 @@ class SettingsViewModel @Inject constructor(
                 DeleteAccountResult.ReauthFailed(e.message ?: "Network error")
             }
             when (outcome) {
-                DeleteAccountResult.Scheduled -> {
+                is DeleteAccountResult.Submitted -> {
                     // Server returns 204 and follows up with a best-effort
                     // WS-4010 close that would normally drive
                     // SessionManager.AccountRemoved. Don't rely on that frame
@@ -270,7 +298,7 @@ class SettingsViewModel @Inject constructor(
                     // explicitly; SessionManager.invalidateUserSession is
                     // idempotent so a delayed 4010 is a harmless no-op.
                     authRepository.userLogout()
-                    onScheduled()
+                    onSubmitted(outcome.mode)
                     _uiState.update { it.copy(deleteDialog = DeleteAccountDialogState.Hidden) }
                 }
                 DeleteAccountResult.Forbidden -> _uiState.update {
@@ -290,16 +318,6 @@ class SettingsViewModel @Inject constructor(
                     )
                 }
             }
-        }
-    }
-
-    private fun currentEmail(): String? {
-        return when (val state = _uiState.value.deleteDialog) {
-            is DeleteAccountDialogState.Explain -> state.email
-            is DeleteAccountDialogState.ReAuthPassword -> state.email
-            is DeleteAccountDialogState.ReAuthGoogle -> state.email
-            is DeleteAccountDialogState.ConfirmEmail -> state.email
-            DeleteAccountDialogState.Hidden -> null
         }
     }
 

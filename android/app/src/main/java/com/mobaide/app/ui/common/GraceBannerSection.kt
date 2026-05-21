@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -43,12 +46,15 @@ import javax.inject.Inject
  *
  * [scheduledFor] is the ISO timestamp the server reported on login; when
  * non-null, the banner is visible. [errorMessage] surfaces a failed cancel
- * attempt (e.g., network blip).
+ * attempt (e.g., network blip). [showConfirm] flips true when the user has
+ * tapped "Cancel scheduled deletion" — the host composable shows an
+ * AlertDialog so an accidental tap does not silently restore the account.
  */
 data class GraceBannerState(
     val scheduledFor: String? = null,
     val cancelling: Boolean = false,
     val errorMessage: String? = null,
+    val showConfirm: Boolean = false,
 )
 
 @HiltViewModel
@@ -61,8 +67,19 @@ class GraceBannerViewModel @Inject constructor(
     )
     val state: StateFlow<GraceBannerState> = _state.asStateFlow()
 
-    fun cancel() {
-        _state.update { it.copy(cancelling = true, errorMessage = null) }
+    /** Show the confirmation dialog (does not yet hit the API). */
+    fun requestCancel() {
+        _state.update { it.copy(showConfirm = true, errorMessage = null) }
+    }
+
+    /** Dismiss the confirmation dialog without cancelling. */
+    fun dismissConfirm() {
+        _state.update { it.copy(showConfirm = false) }
+    }
+
+    /** User confirmed in the dialog → actually cancel the deletion. */
+    fun confirmCancel() {
+        _state.update { it.copy(cancelling = true, errorMessage = null, showConfirm = false) }
         viewModelScope.launch {
             try {
                 val outcome = authRepository.cancelAccountDeletion()
@@ -123,7 +140,6 @@ fun GraceBannerSection(
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.error,
             )
-            Spacer(modifier = Modifier.height(0.dp))
             Text(
                 text = " Account scheduled for deletion",
                 style = MaterialTheme.typography.titleSmall,
@@ -149,7 +165,7 @@ fun GraceBannerSection(
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
             OutlinedButton(
-                onClick = viewModel::cancel,
+                onClick = viewModel::requestCancel,
                 enabled = !state.cancelling,
             ) {
                 if (state.cancelling) {
@@ -162,5 +178,33 @@ fun GraceBannerSection(
                 }
             }
         }
+    }
+
+    if (state.showConfirm) {
+        AlertDialog(
+            onDismissRequest = viewModel::dismissConfirm,
+            title = {
+                Text(
+                    text = "Keep your account active?",
+                    fontWeight = FontWeight.SemiBold,
+                )
+            },
+            text = {
+                Text(
+                    text = "Cancelling the scheduled deletion restores full access — your data, " +
+                        "agents, and prompt templates stay exactly as they are. " +
+                        "You can re-schedule from settings any time.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            },
+            confirmButton = {
+                Button(onClick = viewModel::confirmCancel) {
+                    Text("Keep account active")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissConfirm) { Text("Dismiss") }
+            },
+        )
     }
 }

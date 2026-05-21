@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import html
 import logging
+import secrets
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -50,12 +51,36 @@ def _set_portal_cookie(response, token: str, ttl_minutes: int) -> None:
     )
 
 
+_GOOGLE_NONCE_COOKIE = "portal_google_nonce"
+_GOOGLE_NONCE_TTL_SECONDS = 10 * 60
+
+
+def _issue_google_nonce(response: Response) -> str:
+    """Generate a fresh Google nonce and set the matching httponly cookie.
+
+    The portal inlines the nonce into the GIS ``initialize`` config; Google
+    echoes it back inside the ID token's ``nonce`` claim. On callback we
+    compare cookie nonce vs ID-token nonce to defeat replay.
+    """
+    nonce = secrets.token_urlsafe(32)
+    response.set_cookie(
+        key=_GOOGLE_NONCE_COOKIE,
+        value=nonce,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=_GOOGLE_NONCE_TTL_SECONDS,
+    )
+    return nonce
+
+
 def _portal_context(request: Request, **extra) -> dict:
     """Build a base Jinja context with CSRF + privacy-policy URL prefilled."""
     config = request.app.state.config
     return {
         "csrf_token": getattr(request.state, "csrf_token", ""),
         "privacy_policy_url": config.privacy_policy_url,
+        "google_client_id": config.google_client_id,
         **extra,
     }
 
@@ -76,7 +101,11 @@ async def login_page(
             "grace window to cancel."
         )
     return _render_with_csrf(
-        request, "portal_login.html", error=error, notice=notice
+        request,
+        "portal_login.html",
+        error=error,
+        notice=notice,
+        issue_google_nonce=True,
     )
 
 
@@ -130,8 +159,62 @@ async def logout(_csrf: None = Depends(require_csrf)):
 @router.get("/signup", response_class=HTMLResponse)
 async def signup_page(request: Request, error: str | None = None):
     return _render_with_csrf(
-        request, "portal_signup.html", error=error
+        request,
+        "portal_signup.html",
+        error=error,
+        issue_google_nonce=True,
     )
+
+
+@router.post("/auth/google", response_class=HTMLResponse)
+async def google_auth_submit(
+    request: Request,
+    _csrf: None = Depends(require_csrf),
+):
+    """Exchange a Google ID token (from GIS callback) for a portal session.
+
+    The portal renders ``portal_login.html`` / ``portal_signup.html`` with
+    GIS initialised against a server-generated nonce stored in the
+    ``portal_google_nonce`` cookie. On callback we verify the cookie nonce
+    matches the ID-token claim. ``google_authenticate`` then creates-or-links
+    the user (same logic as the mobile path); we set the portal session
+    cookie and 303 to ``/portal/account``.
+    """
+    form = await request.form()
+    credential = str(form.get("credential", ""))
+    expected_nonce = request.cookies.get(_GOOGLE_NONCE_COOKIE)
+    if not credential or not expected_nonce:
+        return _render_with_csrf(
+            request,
+            "portal_login.html",
+            error="Google sign-in failed — please try again.",
+            issue_google_nonce=True,
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    auth_service = request.app.state.auth_service
+    try:
+        _user_id, _role, token, _is_new = await auth_service.google_authenticate(
+            credential,
+            expected_nonce=expected_nonce,
+        )
+    except ValueError as exc:
+        logger.warning("portal_google_auth.failed reason=%s", exc)
+        return _render_with_csrf(
+            request,
+            "portal_login.html",
+            error="Google sign-in failed — please try again.",
+            issue_google_nonce=True,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    ttl = request.app.state.config.portal_token_expire_minutes
+    response = RedirectResponse(
+        url="/portal/account", status_code=status.HTTP_303_SEE_OTHER
+    )
+    _set_portal_cookie(response, token, ttl)
+    response.delete_cookie(_GOOGLE_NONCE_COOKIE)
+    return response
 
 
 @router.post("/signup")
@@ -328,6 +411,23 @@ async def account_page(
     )
 
 
+def _delete_modal_context(user_row: dict, config) -> dict:
+    """Compute the shared context used by both delete-modal GET and POST-error."""
+    has_password = user_row.get("password_hash") is not None
+    has_google = user_row.get("google_sub") is not None
+    is_seed_admin = (
+        config.admin_seed_email is not None
+        and user_row["email"] == config.admin_seed_email
+    )
+    return {
+        "user": user_row,
+        "is_seed_admin": is_seed_admin,
+        "has_password": has_password,
+        "has_google": has_google,
+        "grace_days": config.account_deletion_grace_days,
+    }
+
+
 @router.get("/account/delete-modal", response_class=HTMLResponse)
 async def delete_modal(
     request: Request,
@@ -339,19 +439,12 @@ async def delete_modal(
     if user_row is None:
         raise HTTPException(status_code=404, detail="User not found")
     agents = await db.list_agents_for_user(user.sub)
-    is_seed_admin = (
-        config.admin_seed_email is not None
-        and user_row["email"] == config.admin_seed_email
-    )
-    is_google = user_row.get("google_sub") is not None and user_row.get("password_hash") is None
     return _render_with_csrf(
         request,
         "_portal_delete_modal.html",
-        user=user_row,
         agents=agents,
-        is_seed_admin=is_seed_admin,
-        is_google=is_google,
-        grace_days=config.account_deletion_grace_days,
+        issue_google_nonce=True,
+        **_delete_modal_context(user_row, config),
     )
 
 
@@ -366,12 +459,38 @@ async def delete_submit(
 
     form = await request.form()
     method = str(form.get("method", "password"))
-    proof = DeleteAccountRequest(
-        method=method,  # type: ignore[arg-type]
-        password=str(form.get("password")) if form.get("password") else None,
-        id_token=str(form.get("id_token")) if form.get("id_token") else None,
-        nonce=str(form.get("nonce")) if form.get("nonce") else None,
-    )
+    mode = str(form.get("mode", "scheduled"))
+    db = request.app.state.db
+    config = request.app.state.config
+    user_row = await db.get_user_by_id(user.sub)
+    if user_row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    def _rerender(message: str, status_code: int) -> HTMLResponse:
+        return _render_with_csrf(
+            request,
+            "_portal_delete_modal.html",
+            agents=[],
+            error=message,
+            issue_google_nonce=True,
+            status_code=status_code,
+            **_delete_modal_context(user_row, config),
+        )
+
+    try:
+        proof = DeleteAccountRequest(
+            method=method,  # type: ignore[arg-type]
+            mode=mode,  # type: ignore[arg-type]
+            password=str(form.get("password")) if form.get("password") else None,
+            id_token=str(form.get("credential")) if form.get("credential") else None,
+            nonce=request.cookies.get(_GOOGLE_NONCE_COOKIE),
+        )
+    except ValueError as exc:
+        return _rerender(
+            f"Invalid deletion request: {html.escape(str(exc))}",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
     auth_service = request.app.state.auth_service
     try:
         await auth_service.request_account_deletion(
@@ -381,25 +500,40 @@ async def delete_submit(
             background_tasks=background_tasks,
         )
     except AccountDeletionForbiddenError as exc:
-        # html.escape — the exception message can include attacker-influenced
-        # bytes (e.g., AccountDeletionAuthError wraps google-auth's
-        # ``Invalid Google ID token: …``), and this HTMLResponse is swapped
-        # straight into the DOM by HTMX with no Jinja autoescape between.
-        return HTMLResponse(
-            f'<div class="alert alert-error">{html.escape(str(exc))}</div>',
-            status_code=status.HTTP_400_BAD_REQUEST,
-        )
+        return _rerender(html.escape(str(exc)), status.HTTP_400_BAD_REQUEST)
     except AccountDeletionAuthError as exc:
-        return HTMLResponse(
-            f'<div class="alert alert-error">Re-authentication failed: '
-            f'{html.escape(str(exc))}</div>',
-            status_code=status.HTTP_403_FORBIDDEN,
+        return _rerender(
+            f"Re-authentication failed: {html.escape(str(exc))}",
+            status.HTTP_403_FORBIDDEN,
         )
-    # HX-Redirect tells HTMX to do a full-page navigation rather than swap.
+    # Clear the Google nonce cookie regardless of method, then redirect.
     response = HTMLResponse("")
     response.headers["HX-Redirect"] = "/portal/login?deleted=1"
     response.delete_cookie("portal_token")
+    response.delete_cookie(_GOOGLE_NONCE_COOKIE)
     return response
+
+
+@router.get("/account/cancel-deletion-modal", response_class=HTMLResponse)
+async def cancel_deletion_modal(
+    request: Request,
+    user: UserTokenPayload = Depends(get_portal_user),
+):
+    """Confirmation modal shown before the user cancels a scheduled deletion.
+
+    The grace banner's "Cancel scheduled deletion" button used to POST directly,
+    which made it easy to undo the deletion by mistake. We now route through
+    this modal so the user explicitly confirms.
+    """
+    db = request.app.state.db
+    user_row = await db.get_user_by_id(user.sub)
+    if user_row is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _render_with_csrf(
+        request,
+        "_portal_cancel_modal.html",
+        user=user_row,
+    )
 
 
 @router.post("/account/cancel-deletion", response_class=HTMLResponse)
@@ -482,9 +616,17 @@ def _render_with_csrf(
     template_name: str,
     *,
     status_code: int = 200,
+    issue_google_nonce: bool = False,
     **context,
 ) -> HTMLResponse:
-    """Render a Jinja template with the CSRF cookie + token threaded in."""
+    """Render a Jinja template with CSRF (always) and an optional Google
+    sign-in nonce threaded in.
+
+    Set ``issue_google_nonce=True`` on any page that mounts a GIS button.
+    The fresh nonce is exposed to the template as ``google_nonce`` and stored
+    in a short-TTL httponly cookie; the matching POST handler verifies the
+    cookie against the ID-token claim.
+    """
     config = request.app.state.config
     # Issue (or reuse) the CSRF cookie via a throwaway response we then
     # adopt the headers from. We render the actual response with the same
@@ -492,6 +634,8 @@ def _render_with_csrf(
     probe = HTMLResponse("")
     token = ensure_csrf_cookie(request, probe, config)
     request.state.csrf_token = token
+    if issue_google_nonce:
+        context["google_nonce"] = _issue_google_nonce(probe)
     rendered = templates.TemplateResponse(
         request,
         template_name,

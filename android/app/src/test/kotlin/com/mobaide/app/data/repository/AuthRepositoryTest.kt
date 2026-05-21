@@ -456,9 +456,9 @@ class AuthRepositoryTest {
         coEvery { centralApi.requestAccountDeletion(any(), any()) } returns Unit
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithPassword("hunter22")
+        val result = repo.deleteAccountWithPassword("hunter22", DeletionMode.Scheduled)
 
-        assertEquals(DeleteAccountResult.Scheduled, result)
+        assertEquals(DeleteAccountResult.Submitted(DeletionMode.Scheduled), result)
         coVerify(exactly = 1) {
             centralApi.requestAccountDeletion(
                 "user-jwt",
@@ -475,7 +475,7 @@ class AuthRepositoryTest {
         coEvery { centralApi.requestAccountDeletion(any(), any()) } returns Unit
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        repo.deleteAccountWithPassword("pw")
+        repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
 
         coVerify {
             centralApi.requestAccountDeletion("specific-token", any())
@@ -491,7 +491,7 @@ class AuthRepositoryTest {
         coEvery { centralApi.requestAccountDeletion(any(), any()) } throws ApiException(403, body)
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithPassword("wrong")
+        val result = repo.deleteAccountWithPassword("wrong", DeletionMode.Scheduled)
 
         assertTrue(result is DeleteAccountResult.ReauthFailed)
         assertEquals("Incorrect password", (result as DeleteAccountResult.ReauthFailed).message)
@@ -506,7 +506,7 @@ class AuthRepositoryTest {
             ApiException(403, "<<not json>>")
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithPassword("pw")
+        val result = repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
 
         assertTrue(result is DeleteAccountResult.ReauthFailed)
         // Fallback message — must be non-empty so the UI can show *something*.
@@ -522,7 +522,7 @@ class AuthRepositoryTest {
             ApiException(400, "The seed admin account cannot be self-deleted")
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithPassword("pw")
+        val result = repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
 
         assertEquals(DeleteAccountResult.Forbidden, result)
     }
@@ -537,7 +537,7 @@ class AuthRepositoryTest {
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
         try {
-            repo.deleteAccountWithPassword("pw")
+            repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
             fail("expected ApiException to propagate on 500")
         } catch (e: ApiException) {
             assertEquals(500, e.code)
@@ -551,7 +551,7 @@ class AuthRepositoryTest {
         every { userStore.getUserAccessToken() } returns null
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithPassword("pw")
+        val result = repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
 
         assertTrue(result is DeleteAccountResult.ReauthFailed)
         // No bearer token → network call never attempted.
@@ -569,9 +569,13 @@ class AuthRepositoryTest {
         } returns Unit
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithGoogle(idToken = "id-tok-1", nonce = "nonce-1")
+        val result = repo.deleteAccountWithGoogle(
+            idToken = "id-tok-1",
+            nonce = "nonce-1",
+            mode = DeletionMode.Scheduled,
+        )
 
-        assertEquals(DeleteAccountResult.Scheduled, result)
+        assertEquals(DeleteAccountResult.Submitted(DeletionMode.Scheduled), result)
         assertEquals(1, captured.size)
         val body = captured.single()
         assertEquals("google", body.method)
@@ -587,7 +591,7 @@ class AuthRepositoryTest {
         every { userStore.getUserAccessToken() } returns null
 
         val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
-        val result = repo.deleteAccountWithGoogle("id-tok", "nonce")
+        val result = repo.deleteAccountWithGoogle("id-tok", "nonce", DeletionMode.Scheduled)
 
         assertTrue(result is DeleteAccountResult.ReauthFailed)
         coVerify(exactly = 0) { centralApi.requestAccountDeletion(any(), any()) }
@@ -642,5 +646,107 @@ class AuthRepositoryTest {
 
         assertEquals(CancelDeletionResult.NotScheduled, result)
         coVerify(exactly = 0) { centralApi.cancelAccountDeletion(any()) }
+    }
+
+    @Test
+    fun deletionMode_scheduled_wireValueIsLowercaseString() {
+        assertEquals("scheduled", DeletionMode.Scheduled.wire)
+    }
+
+    @Test
+    fun deletionMode_immediate_wireValueIsLowercaseString() {
+        assertEquals("immediate", DeletionMode.Immediate.wire)
+    }
+
+    @Test
+    fun deleteAccountWithPassword_immediateMode_sendsModeImmediateOnWire() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        every { userStore.getUserAccessToken() } returns "user-jwt"
+        val captured = mutableListOf<DeleteAccountRequest>()
+        coEvery {
+            centralApi.requestAccountDeletion(any(), capture(captured))
+        } returns Unit
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
+        val result = repo.deleteAccountWithPassword("pw", DeletionMode.Immediate)
+
+        assertEquals(DeleteAccountResult.Submitted(DeletionMode.Immediate), result)
+        assertEquals(1, captured.size)
+        // The wire format MUST be the lowercase string — older mobile builds
+        // omit the field; matching that contract is the whole point of
+        // ``mode: String? = null`` on the DTO.
+        assertEquals("immediate", captured.single().mode)
+    }
+
+    @Test
+    fun deleteAccountWithPassword_scheduledMode_sendsModeScheduledOnWire() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        every { userStore.getUserAccessToken() } returns "user-jwt"
+        val captured = mutableListOf<DeleteAccountRequest>()
+        coEvery {
+            centralApi.requestAccountDeletion(any(), capture(captured))
+        } returns Unit
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
+        repo.deleteAccountWithPassword("pw", DeletionMode.Scheduled)
+
+        assertEquals("scheduled", captured.single().mode)
+    }
+
+    @Test
+    fun deleteAccountWithGoogle_immediateMode_threadsModeIntoRequestBody() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        every { userStore.getUserAccessToken() } returns "user-jwt"
+        val captured = mutableListOf<DeleteAccountRequest>()
+        coEvery {
+            centralApi.requestAccountDeletion(any(), capture(captured))
+        } returns Unit
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
+        val result = repo.deleteAccountWithGoogle(
+            idToken = "id-tok-2",
+            nonce = "nonce-2",
+            mode = DeletionMode.Immediate,
+        )
+
+        assertEquals(DeleteAccountResult.Submitted(DeletionMode.Immediate), result)
+        val body = captured.single()
+        assertEquals("google", body.method)
+        assertEquals("immediate", body.mode)
+        assertEquals("id-tok-2", body.id_token)
+        assertEquals("nonce-2", body.nonce)
+        assertNull(body.password)
+    }
+
+    @Test
+    fun deleteAccountResult_submittedPreservesModeForCaller() = runTest {
+        val centralApi = newCentralApi()
+        val userStore = newUserIdentityStore()
+        every { userStore.getUserAccessToken() } returns "user-jwt"
+        coEvery { centralApi.requestAccountDeletion(any(), any()) } returns Unit
+
+        val repo = newRepo(centralApi = centralApi, userIdentityStore = userStore)
+
+        val scheduledResult = repo.deleteAccountWithPassword(
+            "pw", DeletionMode.Scheduled,
+        )
+        val immediateResult = repo.deleteAccountWithPassword(
+            "pw", DeletionMode.Immediate,
+        )
+
+        // The mode the user picked round-trips through Submitted so the
+        // caller can branch on it (e.g. immediate path skips the
+        // "scheduled in 14 days" toast).
+        assertEquals(
+            DeleteAccountResult.Submitted(DeletionMode.Scheduled),
+            scheduledResult,
+        )
+        assertEquals(
+            DeleteAccountResult.Submitted(DeletionMode.Immediate),
+            immediateResult,
+        )
     }
 }

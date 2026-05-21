@@ -15,14 +15,18 @@ web portal.
 │   → Danger zone)   │                  │  /portal/account   │
 └─────────┬──────────┘                  └─────────┬──────────┘
           │ POST /api/auth/me/delete             │  POST /portal/account/delete
-          │   {method, password|id_token,nonce}  │
+          │   {method, password|id_token,nonce,  │
+          │    mode:"scheduled"|"immediate"}      │
           ▼                                       ▼
        ┌─────────────────────────────────────────┐
        │ AuthService.request_account_deletion    │
        │                                          │
        │  1. verify fresh credential proof        │
-       │  2. set users.scheduled_deletion_at      │
-       │  3. write deletion_audit (status=pending)│
+       │  2a. mode=scheduled: set                 │
+       │      users.scheduled_deletion_at (+14d)  │
+       │  2b. mode=immediate: cascade purge now   │
+       │  3. write deletion_audit (status=pending │
+       │     or completed, mode column set)       │
        │  4. revoke all refresh tokens            │
        │  5. WS-4010 close (user + each agent)    │
        │  6. issue cancel-link token + email      │
@@ -57,6 +61,27 @@ accepts a fresh credential proof, validated by `AuthService._verify_fresh_creden
 
 This mirrors the Auth0 recommended pattern for destructive-action re-auth.
 
+### Portal authentication
+
+The portal also gains Google Sign-In support. `POST /portal/auth/google` accepts
+a GIS credential callback and logs in (or creates) an account via
+`AuthService.google_authenticate` — the same path used by the Android app. The
+delete modal in the portal re-renders with a Google re-auth button for accounts
+that have no password (`google_sub` set, `password_hash` NULL), so Google-only
+users can now self-delete via the portal for the first time.
+
+### Deletion mode (`DeleteAccountRequest.mode`)
+
+Both clients now send a `mode` field on the delete request:
+
+| Value | Behaviour |
+|---|---|
+| `"scheduled"` (default) | 14-day soft-delete grace window; cancellable via in-app banner, portal, or email link. |
+| `"immediate"` | Irreversible cascade purge executed synchronously; no grace window, no cancel. |
+
+Older clients that omit `mode` (or send `null`) are normalised to `"scheduled"`,
+preserving backwards compatibility.
+
 ## Cancellation paths
 
 A user can restore their account at any time within the grace window:
@@ -65,8 +90,11 @@ A user can restore their account at any time within the grace window:
    authenticated landing screen whenever `UserIdentityStore.getScheduledDeletionAt()`
    returns non-null. Tapping "Cancel scheduled deletion" calls
    `AuthRepository.cancelAccountDeletion` → `POST /api/auth/me/delete/cancel`.
-2. **Portal banner** — Same flow via the cookie-authenticated portal,
-   posting to `/portal/account/cancel-deletion`.
+2. **Portal banner** — The grace banner's "Cancel scheduled deletion" button
+   first fetches `GET /portal/account/cancel-deletion-modal` (a confirmation
+   modal rendered server-side), then the confirmed submit posts to
+   `/portal/account/cancel-deletion`. This two-step replaces the old
+   direct-POST to prevent accidental cancellations.
 3. **One-click email link** — The confirmation email carries a single-use
    token (`account_deletion_cancel_tokens` table; 24h TTL by default). Visiting
    `/portal/cancel-deletion?token=…` consumes the token and clears the
@@ -79,8 +107,9 @@ records the cancellation source (`user_initiated` for in-session cancels,
 
 ## Schema
 
-Migration `0009_account_deletion.py` (Alembic) + the runtime
-`PRAGMA user_version=11` block in `central_server/db/database.py`:
+Migrations `0009_account_deletion.py` + `0010_deletion_mode.py` (Alembic) and
+the runtime `PRAGMA user_version=11` / `user_version=12` blocks in
+`central_server/db/database.py`:
 
 * `users.scheduled_deletion_at TEXT NULL` — ISO-8601 timestamp when the
   sweeper is expected to run the cascade purge. Indexed via partial index
@@ -89,9 +118,10 @@ Migration `0009_account_deletion.py` (Alembic) + the runtime
 * `account_deletion_cancel_tokens(token_hash, user_id, created_at, expires_at, consumed_at)`
   — single-use cancel-link tokens, mirrors `password_reset_tokens`.
 * `deletion_audit(id, user_id, email_at_request, requested_at, scheduled_for,
-  source, status, completed_at, cancellation_reason)` — **no FK** on
+  source, status, mode, completed_at, cancellation_reason)` — **no FK** on
   `user_id` so audit rows survive the final cascade purge (GDPR Art. 17 trail).
-  `source ∈ {android, portal, email_link}`, `status ∈ {pending, cancelled, completed, failed}`.
+  `source ∈ {android, portal, email_link}`, `status ∈ {pending, cancelled, completed, failed}`,
+  `mode ∈ {scheduled, immediate}` (migration `0010`; runtime guard `user_version < 12`).
 
 `Database.delete_user` was also extended (latent-bug fix discovered during
 CLA-61 planning): it now cascades `password_reset_tokens` and

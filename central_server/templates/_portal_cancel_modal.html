@@ -1,0 +1,29 @@
+<div class="modal-overlay"
+     onclick="if(event.target===this)document.getElementById('modal-root').innerHTML=''">
+    <div class="modal-card">
+        <h2>Keep your account active?</h2>
+        <p>
+            You scheduled <strong>{{ user.email }}</strong> for deletion on
+            <strong>{{ user.scheduled_deletion_at }}</strong>. Cancelling
+            restores full access — your data, agents, and prompt templates
+            stay exactly as they are.
+        </p>
+        <p class="text-muted">
+            You can always re-schedule later from the danger zone.
+        </p>
+        <form hx-post="/portal/account/cancel-deletion"
+              hx-swap="none">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem">
+                <button type="button"
+                        class="btn"
+                        onclick="document.getElementById('modal-root').innerHTML=''">
+                    Dismiss
+                </button>
+                <button type="submit" class="btn btn-primary">
+                    Keep account active
+                </button>
+            </div>
+        </form>
+    </div>
+</div>

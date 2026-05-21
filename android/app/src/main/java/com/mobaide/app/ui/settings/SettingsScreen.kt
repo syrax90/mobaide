@@ -154,7 +154,7 @@ fun SettingsScreen(
                 state = uiState.deleteDialog,
                 viewModel = viewModel,
                 onDismiss = viewModel::dismissDeleteDialog,
-                onScheduled = onLogout,
+                onSubmitted = { _ -> onLogout() },
             )
         }
     }
