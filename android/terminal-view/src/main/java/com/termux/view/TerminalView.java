@@ -188,6 +188,17 @@ public final class TerminalView extends View {
                     // which we do not do for touch input, only mouse in onTouchEvent().
                     sendMouseEventCode(e, TerminalEmulator.MOUSE_LEFT_BUTTON_MOVED, true);
                 } else {
+                    // scrolling-fix: on the first onScroll of a finger gesture, if motion is
+                    // vertically dominant, ask parent ViewGroups to stop intercepting. A wrapping
+                    // HorizontalScrollView (used by the Static display mode for horizontal panning)
+                    // would otherwise steal the gesture once the finger drifts horizontally past
+                    // its touch slop, killing the vertical scroll mid-flight. See
+                    // docs/terminal-view-fork-changes.md.
+                    if (!scrolledWithFinger
+                            && Math.abs(distanceY) >= Math.abs(distanceX)
+                            && getParent() != null) {
+                        getParent().requestDisallowInterceptTouchEvent(true);
+                    }
                     scrolledWithFinger = true;
                     distanceY += mScrollRemainder;
                     int deltaRows = (int) (distanceY / mRenderer.mFontLineSpacing);

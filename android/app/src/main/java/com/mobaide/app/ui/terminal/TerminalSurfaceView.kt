@@ -3,11 +3,7 @@ package com.mobaide.app.ui.terminal
 import android.graphics.Typeface
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
@@ -21,15 +17,18 @@ import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 
 /**
- * Compose wrapper around the vendored Termux [TerminalView]. The [session]'s [com.termux.terminal.TerminalEmulator]
- * is owned by the host [TerminalViewModel] so it survives recomposition; this composable is a
- * thin glue layer that creates the View, attaches the session, and forwards layout-driven
- * resize callbacks back to the caller.
+ * Compose wrapper around the vendored Termux [TerminalView]. The [session]'s emulator is owned
+ * by the host [TerminalViewModel] so it survives recomposition; this composable is a thin glue
+ * layer that creates the View, attaches the session, and forwards layout-driven resize callbacks
+ * back to the caller.
  *
- * In [TerminalDisplayMode.Static] mode an outer scrollable [Box] hosts the [TerminalView] at a
- * fixed pixel width of `staticColumns * mFontWidth`; the user pans horizontally to see columns
- * beyond the viewport. The [TerminalView] fork's `setForcedColumns` keeps `updateSize()` from
- * recomputing column count from viewport width.
+ * The native [TerminalView] is always hosted inside a [TerminalHorizontalScrollView]. In
+ * [TerminalDisplayMode.Static], the inner view is laid out wider than the viewport
+ * (`staticColumns * mFontWidth`) and the HSV provides horizontal panning. In
+ * [TerminalDisplayMode.Full] the inner view fills the viewport and the HSV is a transparent
+ * passthrough. Using a native HSV (instead of Compose `Modifier.horizontalScroll`) lets
+ * [TerminalView]'s `requestDisallowInterceptTouchEvent` call cooperate properly so vertical
+ * scrolling is not stolen by horizontal finger drift.
  */
 @Composable
 fun TerminalSurfaceView(
@@ -61,48 +60,48 @@ fun TerminalSurfaceView(
 
     val isStatic = displayConfig.mode == TerminalDisplayMode.Static
     val staticCols = displayConfig.staticColumns
-    val scrollState = rememberScrollState()
 
-    val outerModifier = if (isStatic) {
-        modifier.fillMaxSize().horizontalScroll(scrollState)
-    } else {
-        modifier.fillMaxSize()
-    }
-
-    Box(modifier = outerModifier) {
-        AndroidView(
-            modifier = if (isStatic) Modifier.fillMaxHeight() else Modifier.fillMaxSize(),
-            factory = { ctx ->
-                TerminalView(ctx, null).apply {
-                    layoutParams = ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                    setTextSize(36)
-                    setTypeface(Typeface.MONOSPACE)
-                    setTerminalViewClient(client)
-                    attachSession(session)
-                    sessionCallback.onInvalidate = { onScreenUpdated() }
-                    applyDisplayConfig(isStatic, staticCols)
-                    viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
-                }
-            },
-            update = { view ->
-                if (view.mTermSession !== session) {
-                    view.attachSession(session)
-                    sessionCallback.onInvalidate = { view.onScreenUpdated() }
-                }
-                view.applyDisplayConfig(isStatic, staticCols)
-                if (followMode && view.topRow != 0) {
-                    view.topRow = 0
-                    view.invalidate()
-                }
-            },
-            onRelease = { view ->
-                view.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
-            },
-        )
-    }
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = { ctx ->
+            val terminalView = TerminalView(ctx, null).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                setTextSize(36)
+                setTypeface(Typeface.MONOSPACE)
+                setTerminalViewClient(client)
+                attachSession(session)
+                sessionCallback.onInvalidate = { onScreenUpdated() }
+                applyDisplayConfig(isStatic, staticCols)
+                viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
+            }
+            TerminalHorizontalScrollView(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                addView(terminalView)
+            }
+        },
+        update = { hsv ->
+            val view = hsv.getChildAt(0) as TerminalView
+            if (view.mTermSession !== session) {
+                view.attachSession(session)
+                sessionCallback.onInvalidate = { view.onScreenUpdated() }
+            }
+            view.applyDisplayConfig(isStatic, staticCols)
+            if (followMode && view.topRow != 0) {
+                view.topRow = 0
+                view.invalidate()
+            }
+        },
+        onRelease = { hsv ->
+            val view = hsv.getChildAt(0) as TerminalView
+            view.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
+        },
+    )
 }
 
 /** Push the requested display mode into the [TerminalView] without churning when nothing changed. */
