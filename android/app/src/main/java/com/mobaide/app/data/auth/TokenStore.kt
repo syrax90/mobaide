@@ -121,18 +121,6 @@ class TokenStore(context: Context) {
         }
     }
 
-    fun getUsername(): String? {
-        val token = getAccessToken() ?: return null
-        return try {
-            val payload = token.split(".")[1]
-            val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_PADDING)
-            val json = Json.parseToJsonElement(String(decoded)).jsonObject
-            json["sub"]?.jsonPrimitive?.content
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     companion object {
         private const val KEY_ACCESS_TOKEN = "access_token"
         private const val KEY_REFRESH_TOKEN = "refresh_token"

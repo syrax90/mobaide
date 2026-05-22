@@ -2,6 +2,7 @@ package com.mobaide.app.di
 
 import android.content.Context
 import com.mobaide.app.data.auth.ConnectionStore
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.auth.UserIdentityStore
 import dagger.Module
@@ -31,5 +32,11 @@ object AuthModule {
     @Singleton
     fun provideUserIdentityStore(@ApplicationContext context: Context): UserIdentityStore {
         return UserIdentityStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideDeviceIdentityStore(@ApplicationContext context: Context): DeviceIdentityStore {
+        return DeviceIdentityStore(context)
     }
 }

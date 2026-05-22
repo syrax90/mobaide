@@ -29,6 +29,9 @@ from central_server.config import CentralServerConfig
 from central_server.pairing.qr_signer import compute_trust_key_fp
 from central_server.pairing.ws_handlers import PairingWsRegistry
 
+_CLAIM_DEV_UUID = "11111111-1111-4111-8111-111111111111"
+_NEW_DEV_UUID = "22222222-2222-4222-8222-222222222222"
+
 
 def _ed25519_keypair_b64() -> tuple[str, str]:
     private = Ed25519PrivateKey.generate()
@@ -204,7 +207,7 @@ class TestClaim:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
                 "friendly_name": "lab-host",
             },
             headers=api_auth_headers,
@@ -227,7 +230,7 @@ class TestClaim:
         body = {
             "nonce": nonce,
             "trust_key_fp": fp,
-            "mobile_device_id": "dev-1",
+            "mobile_device_id": _CLAIM_DEV_UUID,
         }
         first = await client.post(
             "/api/pairing/claim", json=body, headers=api_auth_headers,
@@ -250,7 +253,7 @@ class TestClaim:
             json={
                 "nonce": "totally-unknown-nonce",
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -279,7 +282,7 @@ class TestClaim:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -296,7 +299,7 @@ class TestClaim:
             json={
                 "nonce": nonce,
                 "trust_key_fp": "0" * 64,  # well-formed but wrong
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -316,7 +319,7 @@ class TestClaim:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -337,7 +340,7 @@ class TestClaim:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -364,7 +367,7 @@ class TestClaim:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -400,7 +403,7 @@ class TestClaimRepair:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -418,15 +421,15 @@ class TestClaimRepair:
     ):
         # registered_agent is owned by viewer@test.local. Re-pair scan is
         # done by a *different* user; the agent must transfer ownership
-        # AND drop the prior owner's mobile_refresh_tokens / pairings.
+        # AND drop the prior owner's mobile_refresh_tokens for this agent.
         agent_id, _ = registered_agent
 
-        # Arrange: prior owner has a pairing + refresh token tied to this agent.
+        # Arrange: prior owner has a device + refresh token tied to this agent.
         prior_owner = await qr_app.state.db.get_user_by_email(
             "viewer@test.local"
         )
-        await qr_app.state.db.create_pairing(
-            agent_id, mobile_device_id="prior-dev", device_name="OldPhone",
+        await qr_app.state.db.upsert_mobile_device(
+            device_id="prior-dev", user_id=prior_owner["id"], name="OldPhone",
         )
         await qr_app.state.db.store_refresh_token(
             raw_token="prior-refresh-raw",
@@ -460,7 +463,7 @@ class TestClaimRepair:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "new-dev",
+                "mobile_device_id": _NEW_DEV_UUID,
             },
             headers=new_headers,
         )
@@ -470,16 +473,16 @@ class TestClaimRepair:
         assert (
             await qr_app.state.db.get_agent_owner(agent_id) == new_user["id"]
         )
-        # Cascade: prior owner's pairings dropped.
-        pairings = await qr_app.state.db.list_pairings_for_agent(agent_id)
-        assert pairings == []
-        # Cascade: prior refresh token cannot be consumed any more.
+        # Cascade: prior owner's refresh tokens for this agent are gone.
         assert (
             await qr_app.state.db.validate_and_consume_refresh(
                 "prior-refresh-raw"
             )
             is None
         )
+        # The prior owner's device stays registered (device is user-scoped).
+        prior_devices = await qr_app.state.db.list_user_devices(prior_owner["id"])
+        assert any(d["device_id"] == "prior-dev" for d in prior_devices)
         # Sanity: prior_owner is the old viewer
         assert prior_owner["id"] != new_user["id"]
 
@@ -499,7 +502,7 @@ class TestClaimWsDispatch:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -542,7 +545,7 @@ class TestClaimWsDispatch:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -572,7 +575,7 @@ class TestClaimWsDispatch:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )
@@ -605,7 +608,7 @@ class TestClaimWsDispatch:
             json={
                 "nonce": nonce,
                 "trust_key_fp": fp,
-                "mobile_device_id": "dev-1",
+                "mobile_device_id": _CLAIM_DEV_UUID,
             },
             headers=api_auth_headers,
         )

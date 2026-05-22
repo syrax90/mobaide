@@ -1,9 +1,9 @@
 package com.mobaide.app.ui.agents
 
 import com.mobaide.app.data.auth.ConnectionStore
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
-import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
@@ -77,7 +77,7 @@ class AgentListViewModelQrPairingTest {
         val tokenStore: TokenStore,
         val sessionManager: SessionManager,
         val agentEventBus: AgentEventBus,
-        val userIdentityStore: UserIdentityStore,
+        val deviceIdentityStore: DeviceIdentityStore,
         val trustKeyPinning: TrustKeyPinning,
         val agentsFlow: MutableStateFlow<List<AgentSummaryResponse>>,
     )
@@ -88,7 +88,7 @@ class AgentListViewModelQrPairingTest {
         val tokenStore = mockk<TokenStore>(relaxed = true)
         val sessionManager = mockk<SessionManager>(relaxed = true)
         val agentEventBus = mockk<AgentEventBus>(relaxed = true)
-        val userIdentityStore = mockk<UserIdentityStore>(relaxed = true)
+        val deviceIdentityStore = mockk<DeviceIdentityStore>(relaxed = true)
         val trustKeyPinning = mockk<TrustKeyPinning>(relaxed = true)
 
         val agentsFlow = MutableStateFlow<List<AgentSummaryResponse>>(emptyList())
@@ -98,18 +98,25 @@ class AgentListViewModelQrPairingTest {
         every { agentEventBus.stop() } just Runs
         every { sessionManager.markAgentConnected() } just Runs
         coEvery { agentRepository.refreshAgents() } just Runs
+        coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID
+        every { deviceIdentityStore.getDeviceName() } returns TEST_DEVICE_NAME
 
         return Fixture(
             agentRepository, connectionStore, tokenStore,
-            sessionManager, agentEventBus, userIdentityStore,
+            sessionManager, agentEventBus, deviceIdentityStore,
             trustKeyPinning, agentsFlow,
         )
     }
 
     private fun Fixture.buildVm(): AgentListViewModel = AgentListViewModel(
         agentRepository, connectionStore, tokenStore,
-        sessionManager, agentEventBus, userIdentityStore, trustKeyPinning,
+        sessionManager, agentEventBus, deviceIdentityStore, trustKeyPinning,
     )
+
+    companion object {
+        private const val TEST_DEVICE_ID = "dev-uuid-42"
+        private const val TEST_DEVICE_NAME = "Test Device"
+    }
 
     @Test
     fun onScanQrClicked_resetsToIdle_andEmitsScanRequest() = runTest {
@@ -251,12 +258,12 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
             fx.agentRepository.claimAgentByPairing(
                 nonce = payload.nonce,
                 trustKeyFp = payload.trustKeyFp,
-                mobileDeviceId = "user-42",
+                mobileDeviceId = TEST_DEVICE_ID,
+                mobileDeviceName = TEST_DEVICE_NAME,
                 hostnameHint = null,
                 friendlyName = null,
             )
@@ -332,9 +339,8 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any())
+            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
         } returns PairingClaimResponse(
             agent_id = "agent-99",
             agent_friendly_name = "lab-host",
@@ -367,9 +373,8 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any())
+            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
         } returns PairingClaimResponse(
             agent_id = "agent-99",
             agent_friendly_name = "lab-host",
@@ -426,9 +431,8 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any())
+            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
         } returns PairingClaimResponse(
             agent_id = "agent-99",
             agent_friendly_name = "lab-host",
@@ -465,9 +469,8 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any())
+            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
         } returns PairingClaimResponse(
             agent_id = "agent-99",
             agent_friendly_name = "lab-host",
@@ -502,9 +505,8 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any())
+            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
         } returns PairingClaimResponse(
             agent_id = "agent-99",
             agent_friendly_name = "lab-host",
@@ -537,10 +539,9 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
             fx.agentRepository.claimAgentByPairing(
-                any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(),
             )
         } throws ApiException(code = 410, errorBody = "{\"detail\":\"consumed\"}")
 
@@ -567,10 +568,9 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
             fx.agentRepository.claimAgentByPairing(
-                any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(),
             )
         } throws ApiException(code = 503, errorBody = "service down")
 
@@ -593,10 +593,9 @@ class AgentListViewModelQrPairingTest {
         coEvery {
             fx.trustKeyPinning.verifyOrPin(any(), any())
         } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
         coEvery {
             fx.agentRepository.claimAgentByPairing(
-                any(), any(), any(), any(), any(),
+                any(), any(), any(), any(), any(), any(),
             )
         } throws RuntimeException("network blip")
 
@@ -625,52 +624,9 @@ class AgentListViewModelQrPairingTest {
         advanceUntilIdle()
 
         coVerify(exactly = 0) {
-            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any())
+            fx.agentRepository.claimAgentByPairing(any(), any(), any(), any(), any(), any())
         }
         assertEquals(QrPairingState.Idle, vm.uiState.value.qrPairing)
-    }
-
-    @Test
-    fun confirmQrClaim_fallsBackToNonceWhenUserIdMissing() = runTest {
-        // Pinned production behaviour: when the user id is unavailable
-        // (rare but possible in a half-logged-out state), we use the
-        // nonce as a unique-but-non-empty mobile_device_id rather than
-        // failing the claim.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val payload = freshPayload()
-        coEvery {
-            fx.trustKeyPinning.verifyOrPin(any(), any())
-        } returns TrustKeyPinning.VerifyResult.Pinned
-        every { fx.userIdentityStore.getUserId() } returns null
-        coEvery {
-            fx.agentRepository.claimAgentByPairing(
-                nonce = payload.nonce,
-                trustKeyFp = payload.trustKeyFp,
-                mobileDeviceId = payload.nonce, // fallback
-                hostnameHint = null,
-                friendlyName = null,
-            )
-        } returns PairingClaimResponse(
-            agent_id = "a", agent_friendly_name = "x", ws_delivered = true,
-        )
-
-        vm.onScanResult(Result.success(payload))
-        advanceUntilIdle()
-        vm.confirmQrClaim()
-        advanceUntilIdle()
-
-        coVerify(exactly = 1) {
-            fx.agentRepository.claimAgentByPairing(
-                nonce = payload.nonce,
-                trustKeyFp = payload.trustKeyFp,
-                mobileDeviceId = payload.nonce,
-                hostnameHint = null,
-                friendlyName = null,
-            )
-        }
     }
 
     @Test

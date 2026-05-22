@@ -391,7 +391,6 @@ async def agent_detail_page(
 ):
     db = request.app.state.db
     routing = request.app.state.routing
-    pairing_service = request.app.state.pairing_service
 
     agent = await db.get_agent(agent_id)
     if agent is None:
@@ -405,9 +404,6 @@ async def agent_detail_page(
         if owner:
             owner_email = owner["email"]
 
-    pairings = await pairing_service.list_pairings(agent_id)
-    active_pairings = [p for p in pairings if p.get("revoked_at") is None]
-
     manifest_store = getattr(request.app.state, "manifest_store", None)
     manifest_record = manifest_store.read() if manifest_store is not None else None
     latest_agent_version = (
@@ -420,20 +416,7 @@ async def agent_detail_page(
         {
             "agent": agent,
             "owner_email": owner_email,
-            "pairings": active_pairings,
             "latest_agent_version": latest_agent_version,
             "username": user.email,
         },
     )
-
-
-@router.delete("/pairings/{pairing_id}", response_class=HTMLResponse)
-async def revoke_pairing_htmx(
-    request: Request,
-    pairing_id: str,
-    user: UserTokenPayload = Depends(_require_admin),
-):
-    del user  # suppress unused-variable warning; Depends() enforces the role
-    pairing_service = request.app.state.pairing_service
-    await pairing_service.revoke_pairing(pairing_id)
-    return HTMLResponse("")  # HTMX removes the row

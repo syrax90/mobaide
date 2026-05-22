@@ -264,14 +264,6 @@ class AuthRepositoryTest {
     }
 
     @Test
-    fun getUsername_delegatesToTokenStore_andForwardsNull() {
-        val tokenStore = mockk<TokenStore>()
-        every { tokenStore.getUsername() } returns null
-
-        assertNull(newRepo(tokenStore = tokenStore).getUsername())
-    }
-
-    @Test
     fun getUserEmail_delegatesToUserIdentityStore() {
         val userStore = newUserIdentityStore()
         every { userStore.getUserEmail() } returns "user@test.com"

@@ -17,6 +17,7 @@ import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.ui.agents.AgentListScreen
 import com.mobaide.app.ui.autoscan.AutoScanDetailScreen
 import com.mobaide.app.ui.connections.ConnectionsScreen
+import com.mobaide.app.ui.devices.DevicesScreen
 import com.mobaide.app.ui.login.ForgotPasswordScreen
 import com.mobaide.app.ui.login.LoginScreen
 import com.mobaide.app.ui.login.ResetPasswordScreen
@@ -272,11 +273,21 @@ fun AppNavigation(
                 onManageTemplates = {
                     navController.navigate(Routes.TEMPLATES)
                 },
+                onManageDevices = {
+                    navController.navigate(Routes.DEVICES)
+                },
             )
         }
 
         composable(Routes.TEMPLATES) {
             TemplatesScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(Routes.DEVICES) {
+            DevicesScreen(
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
             )

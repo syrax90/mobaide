@@ -146,7 +146,11 @@ class TestDeleteAgent:
         assert resp.status_code == 403
 
     async def test_delete_cascade(self, client, app, api_auth_headers):
-        """Deleting an agent should cascade to pairings and tokens."""
+        """Deleting an agent should cascade to pairing-tokens and refresh-tokens.
+
+        ``mobile_devices`` is user-scoped and intentionally NOT touched by
+        ``delete_agent`` — a device outlives any one agent.
+        """
         create_resp = await client.post(
             "/api/agents",
             json={"name": "cascade-test"},
@@ -154,9 +158,7 @@ class TestDeleteAgent:
         )
         agent_id = create_resp.json()["agent_id"]
 
-        # Create related records
         db = app.state.db
-        await db.create_pairing(agent_id, "device-1")
         await db.create_pairing_token(agent_id, 300)
         await db.store_refresh_token("r1", "device-1", agent_id, 60)
 
@@ -165,8 +167,6 @@ class TestDeleteAgent:
         )
         assert resp.status_code == 204
 
-        # All related data should be gone
-        assert await db.list_pairings_for_agent(agent_id) == []
         assert await db.get_pending_pairing_tokens(agent_id) == []
 
     async def test_delete_qr_paired_agent_returns_204(
@@ -212,7 +212,6 @@ class TestDeleteAgent:
 
 class TestGetMobileTokens:
     async def test_get_mobile_tokens(self, client, api_auth_headers):
-        # Create agent
         create_resp = await client.post(
             "/api/agents",
             json={"name": "agent"},
@@ -220,9 +219,12 @@ class TestGetMobileTokens:
         )
         agent_id = create_resp.json()["agent_id"]
 
-        # Get mobile tokens
         resp = await client.post(
             f"/api/agents/{agent_id}/token",
+            json={
+                "mobile_device_id": "11111111-1111-4111-8111-111111111111",
+                "mobile_device_name": "Pixel 8",
+            },
             headers=api_auth_headers,
         )
         assert resp.status_code == 200
@@ -239,6 +241,10 @@ class TestGetMobileTokens:
 
         resp = await client.post(
             f"/api/agents/{agent_id}/token",
+            json={
+                "mobile_device_id": "11111111-1111-4111-8111-111111111111",
+                "mobile_device_name": "Pixel 8",
+            },
             headers=api_auth_headers,
         )
         assert resp.status_code == 403
@@ -291,6 +297,10 @@ class TestAdminBlocked:
         agent_id, _ = registered_agent
         resp = await client.post(
             f"/api/agents/{agent_id}/token",
+            json={
+                "mobile_device_id": "11111111-1111-4111-8111-111111111111",
+                "mobile_device_name": "Pixel 8",
+            },
             headers=admin_api_auth_headers,
         )
         assert resp.status_code == 403

@@ -1,4 +1,9 @@
-"""Pairing service — device binding and management."""
+"""Pairing service — credential push registry only.
+
+Device management (list / revoke) lives in
+``central_server.devices.router``; this service is kept for the QR-pairing
+flow's WS registry wiring.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -14,9 +19,3 @@ class PairingError(Exception):
 class PairingService:
     def __init__(self, db: Database) -> None:
         self._db = db
-
-    async def list_pairings(self, agent_id: str) -> list[dict]:
-        return await self._db.list_pairings_for_agent(agent_id)
-
-    async def revoke_pairing(self, pairing_id: str) -> bool:
-        return await self._db.revoke_pairing(pairing_id)

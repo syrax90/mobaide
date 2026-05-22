@@ -34,40 +34,5 @@
     </div>
 </div>
 
-<section>
-    <h2>Paired Devices</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>Device ID</th>
-                <th>Name</th>
-                <th>Paired At</th>
-                <th>Actions</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for p in pairings %}
-            <tr id="pairing-{{ p.pairing_id }}">
-                <td><code>{{ p.mobile_device_id }}</code></td>
-                <td>{{ p.device_name or "—" }}</td>
-                <td>{{ p.created_at }}</td>
-                <td>
-                    <button class="btn btn-sm btn-danger"
-                            hx-delete="/dashboard/pairings/{{ p.pairing_id }}"
-                            hx-target="#pairing-{{ p.pairing_id }}"
-                            hx-swap="outerHTML"
-                            hx-confirm="Revoke pairing for this device?">
-                        Revoke
-                    </button>
-                </td>
-            </tr>
-            {% endfor %}
-            {% if not pairings %}
-            <tr><td colspan="4" class="empty">No paired devices.</td></tr>
-            {% endif %}
-        </tbody>
-    </table>
-</section>
-
 <p><a href="/dashboard">&larr; Back to agents</a></p>
 {% endblock %}

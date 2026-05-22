@@ -37,3 +37,15 @@ data class MobileTokenResponse(
     val refresh_token: String,
     val token_type: String = "bearer",
 )
+
+/**
+ * Body for `POST /api/agents/{agent_id}/token`. Tells the server which
+ * per-install device is requesting tokens so the issued JWT's `sub`
+ * claim and the refresh-token row are scoped to this device, not the
+ * user account.
+ */
+@Serializable
+data class MobileTokenRequest(
+    val mobile_device_id: String,
+    val mobile_device_name: String? = null,
+)

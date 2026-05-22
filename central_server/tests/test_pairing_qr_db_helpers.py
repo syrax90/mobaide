@@ -107,8 +107,8 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_first_reopen = (await cur.fetchone())[0]
-        assert version_after_first_reopen == 11, (
-            f"after the v7->v11 migrations run, user_version must be 11; "
+        assert version_after_first_reopen == 13, (
+            f"after the v7->v13 migrations run, user_version must be 13; "
             f"got {version_after_first_reopen}"
         )
         # The seeded row must survive the migration. The relay_url
@@ -124,7 +124,7 @@ class TestSchema:
         )
         await database.close()
 
-        # Second reopen — already at version 11, must be a no-op.
+        # Second reopen — already at version 13, must be a no-op.
         # A non-idempotent migration would error here with
         # ``duplicate column name: relay_url`` or ``duplicate column name:
         # agent_version`` from sqlite, exactly the failure mode the
@@ -136,14 +136,14 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_second_reopen = (await cur.fetchone())[0]
-        assert version_after_second_reopen == 11
+        assert version_after_second_reopen == 13
 
         # The seeded row is still there — second reopen is a no-op,
         # not a destructive rebuild.
         meta2 = await database.lookup_pairing_token_metadata(existing_raw)
         assert meta2 is not None, (
             "the seeded pairing_tokens row vanished on the second "
-            "reopen at user_version=11; the migration is not idempotent"
+            "reopen at user_version=13; the migration is not idempotent"
         )
         await database.close()
 
@@ -406,15 +406,17 @@ class TestTransferAgentOwner:
 
         assert ok is False
 
-    async def test_cascades_into_mobile_refresh_tokens_and_pairings(
+    async def test_cascades_into_mobile_refresh_tokens(
         self, db: Database, owner_id: str
     ):
-        # Pre-existing pairing + refresh token for the prior owner; the
-        # transfer must cascade-delete both so the prior owner's mobile
-        # cannot continue calling the agent's refresh endpoint.
+        # Pre-existing device + refresh token for the prior owner. The
+        # transfer must cascade-delete the refresh token so the prior
+        # owner's mobile cannot continue calling the agent's refresh
+        # endpoint. The device itself is user-scoped — it stays registered
+        # to the prior owner for use with any agents they still own.
         agent_id, _ = await db.register_agent("agent-1", owner_id)
-        await db.create_pairing(
-            agent_id, mobile_device_id="prior-dev", device_name="Phone",
+        await db.upsert_mobile_device(
+            device_id="prior-dev", user_id=owner_id, name="Phone",
         )
         await db.store_refresh_token(
             raw_token="prior-refresh-raw",
@@ -428,9 +430,8 @@ class TestTransferAgentOwner:
 
         await db.transfer_agent_owner(agent_id, new_owner)
 
-        pairings = await db.list_pairings_for_agent(agent_id)
-        assert pairings == []
-        # Refresh token must be gone — validate_and_consume_refresh
-        # returns None on absent rows.
         consumed = await db.validate_and_consume_refresh("prior-refresh-raw")
         assert consumed is None
+        # The prior owner still owns the device.
+        prior_devices = await db.list_user_devices(owner_id)
+        assert [d["device_id"] for d in prior_devices] == ["prior-dev"]

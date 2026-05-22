@@ -318,8 +318,6 @@ class AuthRepository(
 
     fun getAgentUrl(): String? = tokenStore.getAgentUrl()
 
-    fun getUsername(): String? = tokenStore.getUsername()
-
     /**
      * Request account deletion using a current password as re-auth proof.
      * [mode] picks scheduled (14-day grace) vs immediate (cascade now). On

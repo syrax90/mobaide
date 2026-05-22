@@ -6,9 +6,11 @@ import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
 import com.mobaide.app.data.network.dto.DeleteAccountRequest
+import com.mobaide.app.data.network.dto.DeviceResponse
 import com.mobaide.app.data.network.dto.ForgotPasswordRequest
 import com.mobaide.app.data.network.dto.ForgotPasswordResponse
 import com.mobaide.app.data.network.dto.GoogleAuthRequest
+import com.mobaide.app.data.network.dto.MobileTokenRequest
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.network.dto.PairingClaimRequest
 import com.mobaide.app.data.network.dto.PairingClaimResponse
@@ -199,13 +201,36 @@ class CentralApi(
         return execute(request)
     }
 
-    suspend fun getMobileTokens(userToken: String, agentId: String): MobileTokenResponse {
+    suspend fun getMobileTokens(
+        userToken: String,
+        agentId: String,
+        body: MobileTokenRequest,
+    ): MobileTokenResponse {
+        val payload = json.encodeToString(body).toRequestBody(jsonMediaType)
         val request = Request.Builder()
             .url("${baseUrl()}/api/agents/$agentId/token")
-            .post("".toRequestBody(jsonMediaType))
+            .post(payload)
             .header("Authorization", "Bearer $userToken")
             .build()
         return execute(request)
+    }
+
+    suspend fun listDevices(userToken: String): List<DeviceResponse> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/devices")
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun revokeDevice(userToken: String, deviceId: String) {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/devices/$deviceId")
+            .delete()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
     }
 
     /**

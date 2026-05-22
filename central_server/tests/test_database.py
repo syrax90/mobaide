@@ -98,14 +98,13 @@ class TestAgentCRUD:
     async def test_delete_agent(self, db: Database):
         owner = await _create_test_user(db)
         agent_id, _ = await db.register_agent("test", owner)
-        await db.create_pairing(agent_id, "device-1")
         await db.create_pairing_token(agent_id, 300)
         await db.store_refresh_token("r1", "device-1", agent_id, 60)
 
         assert await db.delete_agent(agent_id) is True
         assert await db.get_agent(agent_id) is None
-        # Cascade: pairings, tokens, refresh tokens are gone
-        assert await db.list_pairings_for_agent(agent_id) == []
+        # Cascade: pairing tokens and refresh tokens are gone. Mobile
+        # devices are user-scoped and outlive any one agent.
         assert await db.get_pending_pairing_tokens(agent_id) == []
         assert await db.validate_and_consume_refresh("r1") is None
 
@@ -527,18 +526,18 @@ class TestDeleteUser:
         self, db: Database
     ):
         """End-to-end cascade across every table the docstring enumerates:
-        ``mobile_refresh_tokens``, ``pairing_tokens``,
-        ``pairings``, ``agents``, ``email_verification_tokens``,
-        ``prompt_templates``, ``users``. Establish at least one row in
-        each (across two agents to exercise the IN-subquery shape) and
-        assert each table is empty for the deleted user afterward.
+        ``mobile_refresh_tokens``, ``pairing_tokens``, ``mobile_devices``,
+        ``agents``, ``email_verification_tokens``, ``prompt_templates``,
+        ``users``. Establish at least one row in each (across two agents to
+        exercise the IN-subquery shape) and assert each table is empty for
+        the deleted user afterward.
         """
         owner = await db.create_user(email="o@test.local", password_hash="h")
         a1, _ = await db.register_agent("a1", owner)
         a2, _ = await db.register_agent("a2", owner)
 
-        await db.create_pairing(a1, "dev-1")
-        await db.create_pairing(a2, "dev-2")
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        await db.upsert_mobile_device(device_id="dev-2", user_id=owner, name="B")
         await db.create_pairing_token(a1, 300)
         await db.create_pairing_token(a2, 300)
         await db.store_refresh_token("r-1", "dev-1", a1, 60)
@@ -550,12 +549,10 @@ class TestDeleteUser:
         agent_ids = await db.delete_user(owner)
         assert set(agent_ids) == {a1, a2}
 
-        # Every table is empty for the deleted user.
         assert await db.get_user_by_id(owner) is None
         assert await db.get_agent(a1) is None
         assert await db.get_agent(a2) is None
-        assert await db.list_pairings_for_agent(a1) == []
-        assert await db.list_pairings_for_agent(a2) == []
+        assert await db.list_user_devices(owner) == []
         assert await db.get_pending_pairing_tokens(a1) == []
         assert await db.get_pending_pairing_tokens(a2) == []
         assert await db.validate_and_consume_refresh("r-1") is None
@@ -572,7 +569,7 @@ class TestDeleteUser:
 
     async def test_delete_user_preserves_other_users_data(self, db: Database):
         """The IN-subquery cascade must scope strictly to the deleted user.
-        A second user's agents, pairings, refresh tokens, and templates
+        A second user's agents, devices, refresh tokens, and templates
         must be untouched.
         """
         victim = await db.create_user(email="victim@test.local", password_hash="h")
@@ -580,8 +577,12 @@ class TestDeleteUser:
         v_agent, _ = await db.register_agent("v-agent", victim)
         s_agent, _ = await db.register_agent("s-agent", survivor)
 
-        await db.create_pairing(v_agent, "v-dev")
-        await db.create_pairing(s_agent, "s-dev")
+        await db.upsert_mobile_device(
+            device_id="v-dev", user_id=victim, name="Victim phone"
+        )
+        await db.upsert_mobile_device(
+            device_id="s-dev", user_id=survivor, name="Survivor phone"
+        )
         await db.store_refresh_token("v-r", "v-dev", v_agent, 60)
         await db.store_refresh_token("s-r", "s-dev", s_agent, 60)
         await db.create_template(victim, "v-tpl", "v")
@@ -590,10 +591,10 @@ class TestDeleteUser:
         agent_ids = await db.delete_user(victim)
         assert agent_ids == [v_agent]
 
-        # Survivor's rows are intact.
         assert await db.get_user_by_id(survivor) is not None
         assert await db.get_agent(s_agent) is not None
-        assert await db.is_mobile_paired_to_agent("s-dev", s_agent) is True
+        survivor_devices = await db.list_user_devices(survivor)
+        assert [d["device_id"] for d in survivor_devices] == ["s-dev"]
         assert await db.validate_and_consume_refresh("s-r") == ("s-dev", s_agent)
         templates = await db.list_templates_for_user(survivor)
         assert len(templates) == 1
@@ -680,32 +681,100 @@ class TestPairingTokens:
         assert len(pending) == 2
 
 
-class TestPairings:
-    async def test_create_and_list(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        pairing_id = await db.create_pairing(agent_id, "device-1", "Pixel 7")
-        assert len(pairing_id) == 12
+class TestMobileDevices:
+    """Coverage for the user-scoped ``mobile_devices`` registry.
 
-        pairings = await db.list_pairings_for_agent(agent_id)
-        assert len(pairings) == 1
-        assert pairings[0]["mobile_device_id"] == "device-1"
-        assert pairings[0]["device_name"] == "Pixel 7"
+    Devices are keyed by a client-generated UUID and are independent of any
+    one agent. Upsert is idempotent and re-activates a previously revoked
+    device on fresh pairing (Bitwarden semantics).
+    """
 
-    async def test_is_paired(self, db: Database):
+    async def test_upsert_and_list(self, db: Database):
         owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        assert await db.is_mobile_paired_to_agent("device-1", agent_id) is False
-        await db.create_pairing(agent_id, "device-1")
-        assert await db.is_mobile_paired_to_agent("device-1", agent_id) is True
+        accepted = await db.upsert_mobile_device(
+            device_id="dev-1", user_id=owner, name="Pixel 7"
+        )
+        assert accepted is True
+        devices = await db.list_user_devices(owner)
+        assert len(devices) == 1
+        assert devices[0]["device_id"] == "dev-1"
+        assert devices[0]["name"] == "Pixel 7"
 
-    async def test_revoke(self, db: Database):
+    async def test_upsert_is_idempotent(self, db: Database):
         owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("test", owner)
-        pairing_id = await db.create_pairing(agent_id, "device-1")
-        assert await db.revoke_pairing(pairing_id) is True
-        assert await db.is_mobile_paired_to_agent("device-1", agent_id) is False
-        assert await db.revoke_pairing(pairing_id) is False
+        assert await db.upsert_mobile_device(
+            device_id="dev-1", user_id=owner, name="A"
+        ) is True
+        assert await db.upsert_mobile_device(
+            device_id="dev-1", user_id=owner, name="A"
+        ) is True
+        devices = await db.list_user_devices(owner)
+        assert len(devices) == 1
+
+    async def test_upsert_rejects_cross_tenant_collision(self, db: Database):
+        """User B submitting user A's ``device_id`` must not mutate or
+        resurrect A's row. ``upsert_mobile_device`` returns ``False`` and
+        leaves the row untouched."""
+        u_a = await db.create_user(email="a@test.local", password_hash="h")
+        u_b = await db.create_user(email="b@test.local", password_hash="h")
+        assert await db.upsert_mobile_device(
+            device_id="dev-x", user_id=u_a, name="A's device"
+        ) is True
+        # User B tries to overwrite the name.
+        assert await db.upsert_mobile_device(
+            device_id="dev-x", user_id=u_b, name="hijacked"
+        ) is False
+        # A's row is intact.
+        a_devices = await db.list_user_devices(u_a)
+        assert [d["name"] for d in a_devices] == ["A's device"]
+        assert await db.list_user_devices(u_b) == []
+
+    async def test_upsert_cannot_resurrect_other_users_revoked_device(
+        self, db: Database
+    ):
+        """Cross-tenant variant of the resurrection path: user A revokes
+        their device, user B cannot un-revoke it by submitting the id."""
+        u_a = await db.create_user(email="a@test.local", password_hash="h")
+        u_b = await db.create_user(email="b@test.local", password_hash="h")
+        await db.upsert_mobile_device(device_id="dev-x", user_id=u_a, name="A")
+        await db.revoke_mobile_device("dev-x", u_a)
+        assert await db.upsert_mobile_device(
+            device_id="dev-x", user_id=u_b, name="resurrected"
+        ) is False
+        # Still revoked, still A's.
+        assert await db.list_user_devices(u_a) == []
+        assert await db.list_user_devices(u_b) == []
+
+    async def test_revoke_removes_from_list(self, db: Database):
+        owner = await _create_test_user(db)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        assert await db.revoke_mobile_device("dev-1", owner) is True
+        assert await db.list_user_devices(owner) == []
+        assert await db.revoke_mobile_device("dev-1", owner) is False
+
+    async def test_revoke_scoped_to_owner(self, db: Database):
+        u1 = await db.create_user(email="u1@test.local", password_hash="h")
+        u2 = await db.create_user(email="u2@test.local", password_hash="h")
+        await db.upsert_mobile_device(device_id="dev-x", user_id=u1, name="X")
+        assert await db.revoke_mobile_device("dev-x", u2) is False
+        assert len(await db.list_user_devices(u1)) == 1
+
+    async def test_upsert_reactivates_revoked_device(self, db: Database):
+        owner = await _create_test_user(db)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        await db.revoke_mobile_device("dev-1", owner)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name=None)
+        devices = await db.list_user_devices(owner)
+        assert [d["device_id"] for d in devices] == ["dev-1"]
+
+    async def test_revoke_refresh_tokens_for_device(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("a", owner)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        await db.store_refresh_token("r-1", "dev-1", agent_id, 60)
+        count = await db.revoke_all_refresh_tokens_for_device("dev-1")
+        assert count == 1
+        assert await db.validate_and_consume_refresh("r-1") is None
 
 
 class TestUserCRUD:
@@ -765,7 +834,7 @@ class TestUserCRUD:
         """Verify that PRAGMA user_version is set after migration."""
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 11
+        assert row[0] == 13
 
 
 class TestAdminOwnedAgentPurgeMigration:
@@ -790,8 +859,30 @@ class TestAdminOwnedAgentPurgeMigration:
         )
         admin_agent_id, _ = await db.register_agent("admin-owned", admin_id)
         viewer_agent_id, _ = await db.register_agent("viewer-owned", viewer_id)
-        admin_pairing_id = await db.create_pairing(admin_agent_id, "dev-a")
-        viewer_pairing_id = await db.create_pairing(viewer_agent_id, "dev-v")
+        # Seed legacy `pairings` rows via raw SQL — both the helper and the
+        # table itself are gone from _SCHEMA in current code. Re-create the
+        # table here to faithfully simulate the v3 on-disk state that
+        # migration v13 is expected to DROP.
+        await db.conn.execute(
+            "CREATE TABLE IF NOT EXISTS pairings ("
+            "    pairing_id       TEXT PRIMARY KEY,"
+            "    agent_id         TEXT NOT NULL REFERENCES agents(agent_id),"
+            "    mobile_device_id TEXT NOT NULL,"
+            "    device_name      TEXT,"
+            "    created_at       TEXT NOT NULL,"
+            "    revoked_at       TEXT"
+            ")"
+        )
+        for agent_id, dev in (
+            (admin_agent_id, "dev-a"),
+            (viewer_agent_id, "dev-v"),
+        ):
+            await db.conn.execute(
+                "INSERT INTO pairings "
+                "(pairing_id, agent_id, mobile_device_id, created_at) "
+                "VALUES (?, ?, ?, datetime('now'))",
+                (f"p-{dev}", agent_id, dev),
+            )
         await db.create_pairing_token(admin_agent_id, 300)
         await db.create_pairing_token(viewer_agent_id, 300)
         await db.store_refresh_token("r-admin", "dev-a", admin_agent_id, 60)
@@ -801,29 +892,28 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.conn.commit()
         await db.close()
 
-        # Reopen — should run the v4 migration.
+        # Reopen — should run the v4 migration through to head (v13).
         db = Database(db_path)
         await db.connect()
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 11
+        assert row[0] == 13
 
+        # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
-        assert await db.list_pairings_for_agent(admin_agent_id) == []
         assert await db.get_pending_pairing_tokens(admin_agent_id) == []
         assert await db.validate_and_consume_refresh("r-admin") is None
 
-        # Viewer-owned data must be untouched.
+        # Viewer agent survives the v4 cascade.
         viewer_agent = await db.get_agent(viewer_agent_id)
         assert viewer_agent is not None
         assert viewer_agent["name"] == "viewer-owned"
-        assert await db.validate_and_consume_refresh("r-viewer") == (
-            "dev-v",
-            viewer_agent_id,
-        )
-        # Pairing IDs are still meaningful references to the pre-purge data.
-        del admin_pairing_id, viewer_pairing_id
+
+        # v13 unconditionally clears mobile_refresh_tokens so every paired
+        # device re-pairs after the rename. The viewer's token therefore
+        # also fails to validate after the upgrade — documented behaviour.
+        assert await db.validate_and_consume_refresh("r-viewer") is None
 
         await db.close()
 
@@ -838,7 +928,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 11
+        assert row[0] == 13
         await db.close()
 
 

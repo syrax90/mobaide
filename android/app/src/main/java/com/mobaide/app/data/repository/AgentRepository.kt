@@ -1,9 +1,11 @@
 package com.mobaide.app.data.repository
 
 import com.mobaide.app.data.auth.UserIdentityStore
+import com.mobaide.app.data.auth.requireAccessToken
 import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CreateAgentResponse
+import com.mobaide.app.data.network.dto.MobileTokenRequest
 import com.mobaide.app.data.network.dto.MobileTokenResponse
 import com.mobaide.app.data.network.dto.PairingClaimRequest
 import com.mobaide.app.data.network.dto.PairingClaimResponse
@@ -26,7 +28,7 @@ class AgentRepository(
     fun observeAgents(): StateFlow<List<AgentSummaryResponse>> = _agents.asStateFlow()
 
     suspend fun refreshAgents() {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         _agents.value = centralApi.listAgents(token)
     }
 
@@ -50,26 +52,37 @@ class AgentRepository(
     }
 
     suspend fun createAgent(name: String): CreateAgentResponse {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         val result = centralApi.createAgent(token, name)
         refreshAgents()
         return result
     }
 
     suspend fun reregisterAgent(agentId: String): ReRegisterAgentResponse {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         return centralApi.reregisterAgent(token, agentId)
     }
 
     suspend fun deleteAgent(agentId: String) {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         centralApi.deleteAgent(token, agentId)
         refreshAgents()
     }
 
-    suspend fun getMobileTokensForAgent(agentId: String): MobileTokenResponse {
-        val token = requireUserToken()
-        return centralApi.getMobileTokens(token, agentId)
+    suspend fun getMobileTokensForAgent(
+        agentId: String,
+        mobileDeviceId: String,
+        mobileDeviceName: String?,
+    ): MobileTokenResponse {
+        val token = userIdentityStore.requireAccessToken()
+        return centralApi.getMobileTokens(
+            token,
+            agentId,
+            MobileTokenRequest(
+                mobile_device_id = mobileDeviceId,
+                mobile_device_name = mobileDeviceName,
+            ),
+        )
     }
 
     /**
@@ -82,16 +95,18 @@ class AgentRepository(
         nonce: String,
         trustKeyFp: String,
         mobileDeviceId: String,
+        mobileDeviceName: String?,
         hostnameHint: String?,
         friendlyName: String?,
     ): PairingClaimResponse {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         val response = centralApi.claimAgentByPairing(
             token,
             PairingClaimRequest(
                 nonce = nonce,
                 trust_key_fp = trustKeyFp,
                 mobile_device_id = mobileDeviceId,
+                mobile_device_name = mobileDeviceName,
                 hostname_hint = hostnameHint,
                 friendly_name = friendlyName,
             ),
@@ -100,7 +115,4 @@ class AgentRepository(
         return response
     }
 
-    private fun requireUserToken(): String =
-        userIdentityStore.getUserAccessToken()
-            ?: throw IllegalStateException("User not logged in")
 }

@@ -31,6 +31,10 @@ class TestNonexistentAgentEndpoints:
     async def test_get_token_nonexistent_agent(self, client, api_auth_headers):
         resp = await client.post(
             "/api/agents/nonexistent-id/token",
+            json={
+                "mobile_device_id": "11111111-1111-4111-8111-111111111111",
+                "mobile_device_name": "Pixel 8",
+            },
             headers=api_auth_headers,
         )
         assert resp.status_code == 403
@@ -51,6 +55,10 @@ class TestRefreshAfterAgentDeleted:
         # Get mobile tokens for the agent
         token_resp = await client.post(
             f"/api/agents/{agent_id}/token",
+            json={
+                "mobile_device_id": "11111111-1111-4111-8111-111111111111",
+                "mobile_device_name": "Pixel 8",
+            },
             headers=api_auth_headers,
         )
         refresh_token = token_resp.json()["refresh_token"]

@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ..auth.models import MOBILE_DEVICE_ID_PATTERN
+
 
 class PairingInitiateRequest(BaseModel):
     """Optional metadata the agent reports at initiate time.
@@ -46,11 +48,16 @@ class PairingInitiateResponse(BaseModel):
 
 
 class PairingClaimRequest(BaseModel):
-    """Mobile's claim request (authenticated)."""
+    """Mobile's claim request (authenticated).
+
+    ``mobile_device_id`` is constrained to a canonical 36-char UUID
+    string — same defence-in-depth check as ``MobileTokenRequest``.
+    """
 
     nonce: str = Field(min_length=1, max_length=64)
     trust_key_fp: str = Field(min_length=1, max_length=128)
-    mobile_device_id: str = Field(min_length=1, max_length=128)
+    mobile_device_id: str = Field(pattern=MOBILE_DEVICE_ID_PATTERN)
+    mobile_device_name: str | None = Field(default=None, max_length=255)
     hostname_hint: str | None = Field(default=None, max_length=255)
     friendly_name: str | None = Field(default=None, max_length=128)
 
