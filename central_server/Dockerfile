@@ -36,9 +36,11 @@ COPY --from=builder /install /usr/local
 WORKDIR /app
 RUN mkdir -p /app/data && chown app:app /app/data
 
-# Copy templates and static files
+# Copy templates, static files, and legal documents (privacy policy is
+# rendered from legal/privacy.md at app startup).
 COPY templates/ templates/
 COPY static/ static/
+COPY legal/ legal/
 
 # Environment defaults
 ENV HOST=0.0.0.0 \

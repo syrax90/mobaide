@@ -41,7 +41,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.BuildConfig
 import com.mobaide.app.data.auth.GoogleAuthClient
+import com.mobaide.app.ui.util.openUrlInCustomTab
 import kotlinx.coroutines.launch
 
 @Composable
@@ -208,6 +210,15 @@ fun LoginScreen(
 
             TextButton(onClick = onRegisterClick) {
                 Text("Don't have an account? Create one")
+            }
+
+            TextButton(
+                onClick = { openUrlInCustomTab(context, BuildConfig.PRIVACY_POLICY_URL) },
+            ) {
+                Text(
+                    text = "Privacy policy",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }

@@ -129,10 +129,11 @@ DELETION_SWEEPER_INTERVAL_SECONDS=3600
 
 # Public base URL for cancel-deletion email links; falls back to PUBLIC_BASE_URL when unset
 PORTAL_BASE_URL=https://mobaide.com
-
-# URL of your hosted privacy policy; rendered as a footer link in the portal when set
-PRIVACY_POLICY_URL=https://mobaide.com/privacy
 ```
+
+The privacy policy is now served by the central server itself at
+`/privacy.html` (rendered from `central_server/legal/privacy.md` at startup),
+so there is no separate URL to configure.
 
 ```bash
 nano /opt/mobaide/.env
