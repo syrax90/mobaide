@@ -154,3 +154,22 @@ section { margin-bottom: 2rem; }
 .choice-option:has(input:checked) { border-color: var(--primary); background: rgba(13, 110, 253, 0.05); }
 .choice-option.danger:has(input:checked) { border-color: var(--danger); background: rgba(220, 53, 69, 0.07); color: var(--danger); }
 .choice-option.danger:has(input:checked) .choice-note { color: var(--danger); }
+/* Password + confirm pair with inline show/hide toggle (signup, reset). */
+.password-field { position: relative; }
+.password-field input { padding-right: 4rem; }
+.password-field .reveal-btn {
+    position: absolute;
+    right: 0.5rem;
+    top: 50%;
+    transform: translateY(-50%);
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+}
+.password-field .reveal-btn:hover { color: var(--text); }
+.password-match { font-size: 0.85rem; margin-top: 0.25rem; min-height: 1.1em; }
+.password-match.ok { color: var(--success); }
+.password-match.bad { color: var(--danger); }
