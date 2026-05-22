@@ -73,11 +73,12 @@
 
             {% if has_password %}
             <div id="reauth-password-panel">
-                <label for="reauth-password">Current password</label>
-                <input type="password"
-                       id="reauth-password"
-                       name="password"
-                       autocomplete="current-password">
+                {% with input_id="reauth-password",
+                        input_name="password",
+                        label_text="Current password",
+                        autocomplete="current-password" %}
+                {% include "_portal_password_input.html" %}
+                {% endwith %}
             </div>
             {% endif %}
 
@@ -89,6 +90,17 @@
                    name="confirm_email"
                    data-expected="{{ user.email }}"
                    autocomplete="off">
+
+            {% if has_google %}
+            <div id="reauth-google-panel" style="margin-top: 1rem;">
+                <p id="confirm-delete-google-hint" class="delete-mode-hint"></p>
+                <div id="confirm-delete-google-wrapper"
+                     class="google-verify-wrapper"
+                     aria-disabled="true">
+                    <div id="confirm-delete-google-btn"></div>
+                </div>
+            </div>
+            {% endif %}
 
             <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem; flex-wrap: wrap;">
                 <button type="button"
@@ -106,16 +118,6 @@
                     Schedule deletion
                 </button>
                 {% endif %}
-                {% if has_google %}
-                <button type="button"
-                        id="confirm-delete-google-btn"
-                        class="btn btn-primary"
-                        data-label-scheduled="Verify with Google to schedule"
-                        data-label-immediate="Verify with Google to delete now"
-                        disabled>
-                    Verify with Google to schedule
-                </button>
-                {% endif %}
             </div>
         </form>
 
@@ -125,11 +127,15 @@
             if (!form) return;
             var emailInput = document.getElementById('confirm-email');
             var pwBtn = document.getElementById('confirm-delete-btn');
-            var gBtn = document.getElementById('confirm-delete-google-btn');
             var pwPanel = document.getElementById('reauth-password-panel');
+            var gPanel = document.getElementById('reauth-google-panel');
+            var gWrapper = document.getElementById('confirm-delete-google-wrapper');
+            var gBtnContainer = document.getElementById('confirm-delete-google-btn');
+            var gHint = document.getElementById('confirm-delete-google-hint');
             var hasPassword = {{ 'true' if has_password else 'false' }};
             var hasGoogle = {{ 'true' if has_google else 'false' }};
             var hasBoth = hasPassword && hasGoogle;
+            var graceDays = {{ grace_days | tojson }};
             var googleClientId = {{ (google_client_id or '') | tojson }};
             var googleNonce = {{ (google_nonce or '') | tojson }};
 
@@ -145,41 +151,73 @@
             function emailMatches() {
                 return emailInput && emailInput.value === emailInput.dataset.expected;
             }
-            function refreshLabels() {
-                var mode = selectedMode();
-                [pwBtn, gBtn].forEach(function (b) {
-                    if (!b) return;
-                    var lbl = b.getAttribute('data-label-' + mode);
-                    if (lbl) b.textContent = lbl;
-                });
+            function refreshPwLabel() {
+                if (!pwBtn) return;
+                var lbl = pwBtn.getAttribute('data-label-' + selectedMode());
+                if (lbl) pwBtn.textContent = lbl;
+            }
+            function refreshGoogleHint() {
+                if (!gHint) return;
+                if (selectedMode() === 'immediate') {
+                    gHint.textContent =
+                        'Click below to verify with Google to delete your account ' +
+                        'immediately. This cannot be undone.';
+                    gHint.classList.add('danger');
+                } else {
+                    gHint.textContent =
+                        'Click below to verify with Google to schedule deletion ' +
+                        'in ' + graceDays + ' days. You can cancel any time ' +
+                        'before then.';
+                    gHint.classList.remove('danger');
+                }
             }
             function refreshVisibility() {
                 var method = selectedMethod();
-                if (pwPanel) pwPanel.style.display = (method === 'password' && hasPassword) ? '' : 'none';
-                if (pwBtn) pwBtn.style.display = (method === 'password' && hasPassword) ? '' : 'none';
-                if (gBtn) gBtn.style.display = (method === 'google' && hasGoogle) ? '' : 'none';
+                var usePw = method === 'password' && hasPassword;
+                var useG = method === 'google' && hasGoogle;
+                if (pwPanel) pwPanel.style.display = usePw ? '' : 'none';
+                if (pwBtn) pwBtn.style.display = usePw ? '' : 'none';
+                if (gPanel) gPanel.style.display = useG ? '' : 'none';
             }
             function refreshSubmitState() {
                 var match = emailMatches();
                 if (pwBtn) pwBtn.disabled = !match;
-                if (gBtn) gBtn.disabled = !match;
+                if (gWrapper) {
+                    gWrapper.setAttribute('aria-disabled', match ? 'false' : 'true');
+                }
             }
 
             if (emailInput) emailInput.addEventListener('input', refreshSubmitState);
             form.querySelectorAll('input[name="mode"]').forEach(function (r) {
-                r.addEventListener('change', refreshLabels);
+                r.addEventListener('change', function () {
+                    refreshPwLabel();
+                    refreshGoogleHint();
+                });
             });
             form.querySelectorAll('input[name="method"]').forEach(function (r) {
                 r.addEventListener('change', refreshVisibility);
             });
-            refreshLabels();
+            refreshPwLabel();
+            refreshGoogleHint();
             refreshVisibility();
             refreshSubmitState();
 
-            if (hasGoogle && googleClientId && gBtn) {
+            if (hasGoogle && googleClientId && gBtnContainer) {
+                var gisRetryTimer = null;
+                var gisRetriesLeft = 200;
+                function cancelGisRetry() {
+                    if (gisRetryTimer !== null) {
+                        clearTimeout(gisRetryTimer);
+                        gisRetryTimer = null;
+                    }
+                    gisRetriesLeft = 0;
+                }
                 function initGis() {
+                    gisRetryTimer = null;
                     if (!window.google || !window.google.accounts) {
-                        setTimeout(initGis, 50);
+                        if (gisRetriesLeft-- > 0) {
+                            gisRetryTimer = setTimeout(initGis, 50);
+                        }
                         return;
                     }
                     window.google.accounts.id.initialize({
@@ -187,10 +225,8 @@
                         nonce: googleNonce,
                         ux_mode: 'popup',
                         callback: function (response) {
+                            if (!emailMatches()) return;
                             form.querySelector('input[name="credential"]').value = response.credential;
-                            // Ensure method=google when this callback fires —
-                            // user may have left the radio on "password" and
-                            // clicked Google by mistake.
                             if (hasBoth) {
                                 var g = form.querySelector('input[name="method"][value="google"]');
                                 if (g) g.checked = true;
@@ -198,12 +234,22 @@
                             window.htmx.trigger(form, 'submit');
                         },
                     });
-                    gBtn.addEventListener('click', function () {
-                        if (!emailMatches()) return;
-                        window.google.accounts.id.prompt();
+                    window.google.accounts.id.renderButton(gBtnContainer, {
+                        type: 'standard',
+                        theme: 'outline',
+                        size: 'large',
+                        shape: 'rectangular',
+                        text: 'continue_with',
+                        width: 320,
+                        logo_alignment: 'left',
                     });
                 }
                 initGis();
+                form.querySelectorAll('[onclick*="modal-root"]').forEach(function (el) {
+                    el.addEventListener('click', cancelGisRetry);
+                });
+                var overlay = form.closest('.modal-overlay');
+                if (overlay) overlay.addEventListener('click', cancelGisRetry);
             }
         })();
         </script>

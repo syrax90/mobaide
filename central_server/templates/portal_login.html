@@ -14,8 +14,13 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label for="email">Email</label>
         <input type="email" id="email" name="email" required autofocus>
-        <label for="password">Password</label>
-        <input type="password" id="password" name="password" required>
+        {% with input_id="password",
+                input_name="password",
+                label_text="Password",
+                autocomplete="current-password",
+                required=True %}
+        {% include "_portal_password_input.html" %}
+        {% endwith %}
         <button type="submit" class="btn btn-primary">Sign in</button>
     </form>
     {% if google_client_id %}
