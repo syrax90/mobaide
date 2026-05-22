@@ -1,6 +1,6 @@
 """SQLite database layer via aiosqlite.
 
-Manages persistent state: agent registry (user-owned), pairings,
+Manages persistent state: agent registry (user-owned), mobile devices,
 pairing tokens, mobile refresh tokens, and user accounts.
 """
 from __future__ import annotations
@@ -38,13 +38,13 @@ CREATE TABLE IF NOT EXISTS agents (
     agent_protocol_version INTEGER
 );
 
-CREATE TABLE IF NOT EXISTS pairings (
-    pairing_id       TEXT PRIMARY KEY,
-    agent_id         TEXT NOT NULL REFERENCES agents(agent_id),
-    mobile_device_id TEXT NOT NULL,
-    device_name      TEXT,
-    created_at       TEXT NOT NULL,
-    revoked_at       TEXT
+CREATE TABLE IF NOT EXISTS mobile_devices (
+    device_id    TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name         TEXT,
+    created_at   TEXT NOT NULL,
+    last_seen_at TEXT,
+    revoked_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pairing_tokens (
@@ -128,14 +128,16 @@ CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub
     ON users(google_sub) WHERE google_sub IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_user_id);
-CREATE INDEX IF NOT EXISTS idx_pairings_agent
-    ON pairings(agent_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_mobile_devices_user
+    ON mobile_devices(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_pairing_tokens_agent
     ON pairing_tokens(agent_id) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_pairing_tokens_claimed_agent
     ON pairing_tokens(claimed_agent_id) WHERE claimed_agent_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_refresh_mobile_device
+    ON mobile_refresh_tokens(mobile_device_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_email_verification_user
     ON email_verification_tokens(user_id) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_password_reset_user
@@ -225,9 +227,17 @@ class Database:
             await self._conn.execute(
                 f"DELETE FROM pairing_tokens WHERE agent_id IN ({admin_agent_ids_sql})"
             )
-            await self._conn.execute(
-                f"DELETE FROM pairings WHERE agent_id IN ({admin_agent_ids_sql})"
+            # Legacy `pairings` cleanup. The table is dropped entirely by
+            # migration 13, so guard against its absence here — fresh DBs
+            # only see migration 13 and the table never existed.
+            pairings_exists = await self._conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='pairings'"
             )
+            if await pairings_exists.fetchone() is not None:
+                await self._conn.execute(
+                    f"DELETE FROM pairings WHERE agent_id IN ({admin_agent_ids_sql})"
+                )
             await self._conn.execute(
                 "DELETE FROM agents WHERE owner_user_id IN "
                 "(SELECT id FROM users WHERE role = 'admin')"
@@ -416,6 +426,20 @@ class Database:
                 )
             await self._conn.execute("PRAGMA user_version = 12")
 
+        if version < 13:
+            # The old `pairings` table conflated user-id with device-id and
+            # was only ever populated by tests. Drop it and replace with
+            # `mobile_devices`, keyed by a client-generated UUID per Android
+            # install. Pre-production, so `mobile_refresh_tokens` rows are
+            # dropped too — every paired device gets signed out on next
+            # refresh, then re-pairs and populates a fresh row with the
+            # correct device id.
+            await self._conn.execute("DROP INDEX IF EXISTS idx_pairings_agent")
+            await self._conn.execute("DROP TABLE IF EXISTS pairings")
+            await self._conn.execute("DELETE FROM mobile_refresh_tokens")
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 13")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -553,13 +577,16 @@ class Database:
         return raw_token
 
     async def delete_agent(self, agent_id: str) -> bool:
-        """Delete an agent and cascade to pairings, tokens, refresh tokens.
+        """Delete an agent and cascade to pairing tokens and refresh tokens.
 
         ``pairing_tokens`` is referenced from ``agents`` via two FK columns
         (``agent_id`` for the legacy flow and ``claimed_agent_id`` for the
         QR-pairing post-claim row that survives cleanup for forensics).
         Both must be cleared before the ``agents`` DELETE, otherwise SQLite
         raises an FK constraint violation under ``PRAGMA foreign_keys=ON``.
+
+        ``mobile_devices`` is user-scoped — devices outlive any specific
+        agent — so it is intentionally not touched here.
         """
         await self.conn.execute(
             "DELETE FROM mobile_refresh_tokens WHERE agent_id = ?", (agent_id,)
@@ -568,9 +595,6 @@ class Database:
             "DELETE FROM pairing_tokens "
             "WHERE agent_id = ? OR claimed_agent_id = ?",
             (agent_id, agent_id),
-        )
-        await self.conn.execute(
-            "DELETE FROM pairings WHERE agent_id = ?", (agent_id,)
         )
         cursor = await self.conn.execute(
             "DELETE FROM agents WHERE agent_id = ?", (agent_id,)
@@ -588,12 +612,12 @@ class Database:
 
         Order (single implicit transaction, one commit at the end):
           1. Snapshot owned agent IDs.
-          2. Drop ``mobile_refresh_tokens`` / ``pairing_tokens`` /
-             ``pairings`` rows that reference any of those agents.
+          2. Drop ``mobile_refresh_tokens`` / ``pairing_tokens`` rows that
+             reference any of those agents.
           3. Drop the ``agents`` rows themselves.
           4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
-             ``account_deletion_cancel_tokens``, and ``prompt_templates``
-             owned by the user.
+             ``account_deletion_cancel_tokens``, ``mobile_devices``, and
+             ``prompt_templates`` owned by the user.
           5. Drop the ``users`` row.
 
         ``deletion_audit`` rows are intentionally NOT cascaded — they have no
@@ -622,11 +646,6 @@ class Database:
             (user_id, user_id),
         )
         await self.conn.execute(
-            f"DELETE FROM pairings "
-            f"WHERE agent_id IN ({owned_agents_subquery})",
-            (user_id,),
-        )
-        await self.conn.execute(
             "DELETE FROM agents WHERE owner_user_id = ?", (user_id,)
         )
         await self.conn.execute(
@@ -640,6 +659,9 @@ class Database:
         await self.conn.execute(
             "DELETE FROM account_deletion_cancel_tokens WHERE user_id = ?",
             (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM mobile_devices WHERE user_id = ?", (user_id,)
         )
         await self.conn.execute(
             "DELETE FROM prompt_templates WHERE owner_user_id = ?", (user_id,)
@@ -1108,20 +1130,21 @@ class Database:
     async def transfer_agent_owner(
         self, agent_id: str, new_owner_user_id: str
     ) -> bool:
-        """Transfer agent ownership; cascade-invalidate prior owner's links.
+        """Transfer agent ownership; cascade-invalidate prior owner's tokens.
 
         Used by the QR re-pair flow when a different user account scans the
-        agent's QR. Mirrors ``delete_agent``'s cascade: deletes
-        ``mobile_refresh_tokens`` and ``pairings`` rows that belong to the
-        prior owner-device pairings, then updates ``agents.owner_user_id``.
+        agent's QR. Deletes ``mobile_refresh_tokens`` rows for this agent
+        (the prior owner's devices lose their refresh path; the new owner
+        will mint fresh tokens), then updates ``agents.owner_user_id``.
+
+        ``mobile_devices`` is user-scoped, so a transfer does not touch
+        device rows: the prior owner's devices remain registered to them
+        and can pair with their other agents.
+
         Returns True if the agent row was updated, False if not found.
         """
         await self.conn.execute(
             "DELETE FROM mobile_refresh_tokens WHERE agent_id = ?",
-            (agent_id,),
-        )
-        await self.conn.execute(
-            "DELETE FROM pairings WHERE agent_id = ?",
             (agent_id,),
         )
         cursor = await self.conn.execute(
@@ -1609,48 +1632,97 @@ class Database:
         row = await lookup.fetchone()
         return row["user_id"] if row else None
 
-    async def create_pairing(
+    async def upsert_mobile_device(
         self,
-        agent_id: str,
-        mobile_device_id: str,
-        device_name: str | None = None,
-    ) -> str:
-        """Create a pairing record. Returns pairing_id."""
-        pairing_id = uuid.uuid4().hex[:12]
-        await self.conn.execute(
-            "INSERT INTO pairings (pairing_id, agent_id, mobile_device_id, device_name, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (pairing_id, agent_id, mobile_device_id, device_name, _now_iso()),
+        device_id: str,
+        user_id: str,
+        name: str | None = None,
+    ) -> bool:
+        """Register a device on first sight, or refresh its metadata.
+
+        Returns ``True`` when the row was inserted or updated, ``False``
+        when ``device_id`` is already owned by a different user (the
+        caller should map this to an HTTP 409). The cross-tenant guard
+        prevents one user from silently mutating, renaming, or resurrecting
+        another user's device row by submitting that user's device id.
+
+        Re-pairing a previously revoked device under the same owner clears
+        ``revoked_at`` — possession of a valid user JWT proves account
+        control, and the next refresh token will be bound to the same
+        device-id anyway (Bitwarden semantics).
+        """
+        now = _now_iso()
+        # The WHERE clause on the ON CONFLICT branch is the cross-tenant
+        # guard: an existing row owned by a different user causes the
+        # UPDATE to be skipped, the INSERT is abandoned (PK conflict
+        # already triggered the ON CONFLICT path), and rowcount stays 0.
+        # See SQLite UPSERT spec — https://sqlite.org/lang_upsert.html.
+        cursor = await self.conn.execute(
+            "INSERT INTO mobile_devices "
+            "(device_id, user_id, name, created_at, last_seen_at, revoked_at) "
+            "VALUES (?, ?, ?, ?, ?, NULL) "
+            "ON CONFLICT(device_id) DO UPDATE SET "
+            "    name = COALESCE(excluded.name, mobile_devices.name), "
+            "    last_seen_at = excluded.last_seen_at, "
+            "    revoked_at = NULL "
+            "WHERE mobile_devices.user_id = excluded.user_id",
+            (device_id, user_id, name, now, now),
         )
         await self.conn.commit()
-        return pairing_id
+        if cursor.rowcount == 1:
+            return True
+        # Disambiguate "WHERE blocked the update" (cross-tenant) from
+        # "row already matched our state perfectly" (idempotent no-op).
+        check = await self.conn.execute(
+            "SELECT user_id FROM mobile_devices WHERE device_id = ?",
+            (device_id,),
+        )
+        row = await check.fetchone()
+        return row is None or row["user_id"] == user_id
 
-    async def list_pairings_for_agent(self, agent_id: str) -> list[dict]:
+    async def list_user_devices(self, user_id: str) -> list[dict]:
+        """Active devices for a user, most-recently-seen first."""
         cursor = await self.conn.execute(
-            "SELECT pairing_id, mobile_device_id, device_name, created_at, revoked_at "
-            "FROM pairings WHERE agent_id = ? ORDER BY created_at DESC",
-            (agent_id,),
+            "SELECT device_id, name, created_at, last_seen_at "
+            "FROM mobile_devices "
+            "WHERE user_id = ? AND revoked_at IS NULL "
+            "ORDER BY COALESCE(last_seen_at, created_at) DESC",
+            (user_id,),
         )
         return [dict(row) async for row in cursor]
 
-    async def revoke_pairing(self, pairing_id: str) -> bool:
+    async def revoke_mobile_device(
+        self, device_id: str, user_id: str
+    ) -> bool:
+        """Revoke a device. Returns True iff the device belonged to the user
+        and was previously active."""
         cursor = await self.conn.execute(
-            "UPDATE pairings SET revoked_at = ? WHERE pairing_id = ? AND revoked_at IS NULL",
-            (_now_iso(), pairing_id),
+            "UPDATE mobile_devices SET revoked_at = ? "
+            "WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL",
+            (_now_iso(), device_id, user_id),
         )
         await self.conn.commit()
         return cursor.rowcount == 1
 
-    async def is_mobile_paired_to_agent(
-        self, mobile_device_id: str, agent_id: str
-    ) -> bool:
-        cursor = await self.conn.execute(
-            "SELECT 1 FROM pairings "
-            "WHERE mobile_device_id = ? AND agent_id = ? AND revoked_at IS NULL "
-            "LIMIT 1",
-            (mobile_device_id, agent_id),
+    async def touch_mobile_device_last_seen(self, device_id: str) -> None:
+        """Bump ``last_seen_at`` on every token mint (best-effort)."""
+        await self.conn.execute(
+            "UPDATE mobile_devices SET last_seen_at = ? "
+            "WHERE device_id = ? AND revoked_at IS NULL",
+            (_now_iso(), device_id),
         )
-        return await cursor.fetchone() is not None
+        await self.conn.commit()
+
+    async def revoke_all_refresh_tokens_for_device(self, device_id: str) -> int:
+        """Revoke every active refresh token for the given device across all
+        agents. Returns rowcount."""
+        cursor = await self.conn.execute(
+            "UPDATE mobile_refresh_tokens SET revoked_at = ? "
+            "WHERE mobile_device_id = ? AND revoked_at IS NULL",
+            (_now_iso(), device_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount
 
     async def store_refresh_token(
         self,

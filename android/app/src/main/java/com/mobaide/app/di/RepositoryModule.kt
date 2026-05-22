@@ -17,6 +17,7 @@ import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.DeviceRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.ProjectsRepository
@@ -141,6 +142,15 @@ object RepositoryModule {
         userIdentityStore: UserIdentityStore,
     ): AgentRepository {
         return AgentRepository(centralApi, userIdentityStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideDeviceRepository(
+        centralApi: CentralApi,
+        userIdentityStore: UserIdentityStore,
+    ): DeviceRepository {
+        return DeviceRepository(centralApi, userIdentityStore)
     }
 
     @Provides

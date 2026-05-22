@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy `android:fullBackupContent` rules (Android 11 and below).
+  See `data_extraction_rules.xml` for the Android 12+ counterpart.
+
+  `device_identity.preferences_pb` is excluded so a backup restored onto
+  a fresh device does NOT inherit the source device's UUID — without
+  this exclusion two physical devices could share `mobile_device_id`,
+  defeating CLA-62's per-device identity guarantee.
+-->
 <full-backup-content>
     <exclude domain="sharedpref" path="mobaide_auth.xml" />
+    <exclude domain="file" path="datastore/device_identity.preferences_pb" />
 </full-backup-content>

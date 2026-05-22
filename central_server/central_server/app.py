@@ -203,6 +203,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .agents.router import router as agents_router
     from .auth.router import router as auth_router
     from .dashboard.router import router as dashboard_router
+    from .devices.router import router as devices_router
     from .manifest.router import router as manifest_router
     from .pairing.router import router as pairing_router
     from .portal.router import router as portal_router
@@ -219,6 +220,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(mobile_proxy_router)
     app.include_router(user_ws_router)
     app.include_router(pairing_router)
+    app.include_router(devices_router)
     app.include_router(dashboard_router)
     app.include_router(portal_router)
     app.include_router(manifest_router)

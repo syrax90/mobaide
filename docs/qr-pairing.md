@@ -161,7 +161,7 @@ handler then chooses one of two paths:
   with a fresh credential.
 * **Different owner** — the server calls
   `db.transfer_agent_owner(current_agent_id, claimer)`, which deletes
-  the prior owner's `mobile_refresh_tokens` and `pairings` rows and
+  the prior owner's `mobile_refresh_tokens` and `mobile_devices` rows and
   updates `agents.owner_user_id`. Then `reregister_agent` rotates the
   token. The prior owner's mobile clients are evicted on their next
   refresh; live WebSocket connections are not torn down server-side

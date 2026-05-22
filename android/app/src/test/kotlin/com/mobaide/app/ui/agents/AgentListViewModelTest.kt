@@ -4,7 +4,7 @@ import app.cash.turbine.test
 import com.mobaide.app.data.auth.ConnectionStore
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
-import com.mobaide.app.data.auth.UserIdentityStore
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.MobileTokenResponse
@@ -68,7 +68,7 @@ class AgentListViewModelTest {
         val tokenStore: TokenStore,
         val sessionManager: SessionManager,
         val agentEventBus: AgentEventBus,
-        val userIdentityStore: UserIdentityStore,
+        val deviceIdentityStore: DeviceIdentityStore,
         val trustKeyPinning: TrustKeyPinning,
         val agentsFlow: MutableStateFlow<List<AgentSummaryResponse>>,
     )
@@ -82,7 +82,7 @@ class AgentListViewModelTest {
         val tokenStore = mockk<TokenStore>(relaxed = true)
         val sessionManager = mockk<SessionManager>(relaxed = true)
         val agentEventBus = mockk<AgentEventBus>(relaxed = true)
-        val userIdentityStore = mockk<UserIdentityStore>(relaxed = true)
+        val deviceIdentityStore = mockk<DeviceIdentityStore>(relaxed = true)
         val trustKeyPinning = mockk<TrustKeyPinning>(relaxed = true)
 
         val agentsFlow = MutableStateFlow(initialAgents)
@@ -94,10 +94,12 @@ class AgentListViewModelTest {
         every { sessionManager.markAgentConnected() } just Runs
         every { sessionManager.isLoggedIn() } returns (connectedAgentId != null)
         coEvery { agentRepository.refreshAgents() } just Runs
+        coEvery { deviceIdentityStore.getOrCreateDeviceId() } returns TEST_DEVICE_ID
+        every { deviceIdentityStore.getDeviceName() } returns TEST_DEVICE_NAME
 
         return Fixture(
             agentRepository, connectionStore, tokenStore,
-            sessionManager, agentEventBus, userIdentityStore,
+            sessionManager, agentEventBus, deviceIdentityStore,
             trustKeyPinning, agentsFlow,
         )
     }
@@ -105,9 +107,14 @@ class AgentListViewModelTest {
     private fun Fixture.buildVm(): AgentListViewModel =
         AgentListViewModel(
             agentRepository, connectionStore, tokenStore,
-            sessionManager, agentEventBus, userIdentityStore,
+            sessionManager, agentEventBus, deviceIdentityStore,
             trustKeyPinning,
         )
+
+    companion object {
+        private const val TEST_DEVICE_ID = "dev-uuid-vm"
+        private const val TEST_DEVICE_NAME = "Test Device"
+    }
 
     // ---- init() side-effects ---------------------------------------------------
 
@@ -579,8 +586,7 @@ class AgentListViewModelTest {
         advanceUntilIdle()
 
         val tokens = MobileTokenResponse("access-tok", "refresh-tok", "bearer")
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1") } returns tokens
-        every { fx.userIdentityStore.getUserId() } returns "user-42"
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } returns tokens
         every { fx.connectionStore.listProfiles() } returns emptyList()
 
         vm.navigateToSessions.test {
@@ -592,8 +598,8 @@ class AgentListViewModelTest {
                 fx.tokenStore.saveRelayCredentials(
                     serverUrl = any(),
                     agentId = "a-1",
-                    pairingId = "user-42",
-                    deviceId = "user-42",
+                    pairingId = "a-1",
+                    deviceId = TEST_DEVICE_ID,
                     accessToken = "access-tok",
                     refreshToken = "refresh-tok",
                 )
@@ -627,7 +633,7 @@ class AgentListViewModelTest {
         }
 
         // Should NOT call getMobileTokensForAgent when already connected
-        coVerify(exactly = 0) { fx.agentRepository.getMobileTokensForAgent(any()) }
+        coVerify(exactly = 0) { fx.agentRepository.getMobileTokensForAgent(any(), any(), any()) }
     }
 
     @Test
@@ -636,7 +642,7 @@ class AgentListViewModelTest {
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1") } throws
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } throws
             RuntimeException("token minting failed")
 
         vm.connectToAgent(agent("a-1"))
@@ -653,7 +659,7 @@ class AgentListViewModelTest {
         advanceUntilIdle()
 
         // Simulate a slow connect by not resolving the coEvery
-        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1") } coAnswers {
+        coEvery { fx.agentRepository.getMobileTokensForAgent("a-1", TEST_DEVICE_ID, TEST_DEVICE_NAME) } coAnswers {
             delay(10_000)
             MobileTokenResponse("at", "rt", "bearer")
         }
@@ -670,6 +676,6 @@ class AgentListViewModelTest {
         runCurrent()
 
         // Only one call to getMobileTokensForAgent should be made
-        coVerify(exactly = 1) { fx.agentRepository.getMobileTokensForAgent(any()) }
+        coVerify(exactly = 1) { fx.agentRepository.getMobileTokensForAgent(any(), any(), any()) }
     }
 }

@@ -17,6 +17,7 @@ object Routes {
     const val GIT_MANAGEMENT = "git/{projectName}"
     const val INCOMPATIBLE_SERVER = "incompatible_server"
     const val TEMPLATES = "templates"
+    const val DEVICES = "devices"
 
     const val FORGOT_PASSWORD = "forgot_password"
     const val RESET_PASSWORD = "reset_password/{email}"

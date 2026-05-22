@@ -14,6 +14,7 @@ data class PairingClaimRequest(
     val nonce: String,
     val trust_key_fp: String,
     val mobile_device_id: String,
+    val mobile_device_name: String? = null,
     val hostname_hint: String? = null,
     val friendly_name: String? = null,
 )

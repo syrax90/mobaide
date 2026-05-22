@@ -10,6 +10,7 @@ from ..auth.models import (
     AgentSummary,
     CreateAgentRequest,
     CreateAgentResponse,
+    MobileTokenRequest,
     MobileTokenResponse,
     ReregisterAgentResponse,
     UserTokenPayload,
@@ -85,18 +86,34 @@ async def delete_agent(
 async def get_mobile_tokens(
     request: Request,
     agent_id: str,
+    body: MobileTokenRequest,
     user: UserTokenPayload = Depends(get_non_admin_api_user),
 ):
-    """Get mobile access + refresh tokens for an agent the user owns."""
+    """Get mobile access + refresh tokens for an agent the user owns.
+
+    The mobile client supplies its per-install ``mobile_device_id`` so the
+    issued JWT's ``sub`` claim and the refresh-token row are scoped to
+    that specific device, not to the user account.
+    """
     db = request.app.state.db
     if not await db.is_agent_owner(agent_id, user.sub):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not the owner of this agent",
         )
+    accepted = await db.upsert_mobile_device(
+        device_id=body.mobile_device_id,
+        user_id=user.sub,
+        name=body.mobile_device_name,
+    )
+    if not accepted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="mobile_device_id is already registered to a different user",
+        )
     auth_service = request.app.state.auth_service
     access, refresh = await auth_service.create_mobile_tokens(
-        mobile_device_id=user.sub,
+        mobile_device_id=body.mobile_device_id,
         agent_id=agent_id,
         user_id=user.sub,
     )

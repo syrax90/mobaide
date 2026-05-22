@@ -4,9 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.BuildConfig
 import com.mobaide.app.data.auth.ConnectionStore
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.auth.TokenStore
-import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.ApiException
@@ -106,7 +106,7 @@ class AgentListViewModel @Inject constructor(
     private val tokenStore: TokenStore,
     private val sessionManager: SessionManager,
     private val agentEventBus: AgentEventBus,
-    private val userIdentityStore: UserIdentityStore,
+    private val deviceIdentityStore: DeviceIdentityStore,
     private val trustKeyPinning: TrustKeyPinning,
 ) : ViewModel() {
 
@@ -360,12 +360,13 @@ class AgentListViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(qrPairing = QrPairingState.Claiming(state.payload)) }
             try {
-                val mobileDeviceId = userIdentityStore.getUserId()
-                    ?: state.payload.nonce  // Fallback: never empty.
+                val mobileDeviceId = deviceIdentityStore.getOrCreateDeviceId()
+                val mobileDeviceName = deviceIdentityStore.getDeviceName()
                 val response = agentRepository.claimAgentByPairing(
                     nonce = state.payload.nonce,
                     trustKeyFp = state.payload.trustKeyFp,
                     mobileDeviceId = mobileDeviceId,
+                    mobileDeviceName = mobileDeviceName,
                     hostnameHint = null,
                     friendlyName = null,
                 )
@@ -536,14 +537,19 @@ class AgentListViewModel @Inject constructor(
                     sessionManager.agentDisconnect()
                 }
 
-                val tokens = agentRepository.getMobileTokensForAgent(agent.agent_id)
-                val userId = userIdentityStore.getUserId() ?: agent.agent_id
+                val deviceId = deviceIdentityStore.getOrCreateDeviceId()
+                val deviceName = deviceIdentityStore.getDeviceName()
+                val tokens = agentRepository.getMobileTokensForAgent(
+                    agent.agent_id,
+                    mobileDeviceId = deviceId,
+                    mobileDeviceName = deviceName,
+                )
 
                 tokenStore.saveRelayCredentials(
                     serverUrl = BuildConfig.CENTRAL_SERVER_URL,
                     agentId = agent.agent_id,
-                    pairingId = userId,
-                    deviceId = userId,
+                    pairingId = agent.agent_id,
+                    deviceId = deviceId,
                     accessToken = tokens.access_token,
                     refreshToken = tokens.refresh_token,
                 )

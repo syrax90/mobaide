@@ -22,7 +22,7 @@ from fastapi import (
 )
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from ..auth.dependencies import get_non_admin_api_user, require_role
+from ..auth.dependencies import get_non_admin_api_user
 from ..auth.models import (
     MobileRefreshRequest,
     MobileTokenResponse,
@@ -39,8 +39,6 @@ from .qr_signer import (
     compute_trust_key_fp,
     sign_pairing_payload,
 )
-
-_require_admin = require_role("admin")
 
 logger = logging.getLogger(__name__)
 
@@ -59,21 +57,6 @@ async def refresh_mobile_token(request: Request, body: MobileRefreshRequest):
         )
     access, refresh = result
     return MobileTokenResponse(access_token=access, refresh_token=refresh)
-
-
-@router.delete(
-    "/api/pairings/{pairing_id}",
-    dependencies=[Depends(_require_admin)],
-)
-async def revoke_pairing(request: Request, pairing_id: str):
-    """Revoke a pairing between a mobile device and an agent."""
-    pairing_service = request.app.state.pairing_service
-    if not await pairing_service.revoke_pairing(pairing_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pairing not found or already revoked",
-        )
-    return {"status": "revoked"}
 
 
 def _resolve_public_base_url(request: Request) -> str:
@@ -218,6 +201,23 @@ async def claim_pairing(
     metadata: dict = json.loads(pre["agent_metadata"]) if pre["agent_metadata"] else {}
     current_agent_id = metadata.get("current_agent_id")
     hostname_meta = metadata.get("hostname")
+
+    # Validate cross-tenant device ownership before any agent-row
+    # mutation or nonce consumption. Without this fail-fast, a cross-
+    # tenant collision would 409 only AFTER the nonce was burned and
+    # (in the re-pair branch) ownership of the agent had been
+    # transferred — neither side-effect is reversible from inside the
+    # request handler.
+    accepted = await db.upsert_mobile_device(
+        device_id=body.mobile_device_id,
+        user_id=user.sub,
+        name=body.mobile_device_name,
+    )
+    if not accepted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="mobile_device_id is already registered to a different user",
+        )
 
     if current_agent_id:
         existing_owner = await db.get_agent_owner(current_agent_id)

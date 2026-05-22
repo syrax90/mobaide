@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ data extraction rules (replacement for `fullBackupContent`).
+
+  Auto Backup (cloud-backup) and device-to-device transfer both exclude
+  `device_identity.preferences_pb` so the per-install device UUID does
+  NOT survive onto a different physical device. See
+  `DeviceIdentityStore` and CLA-62 for the rationale.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="mobaide_auth.xml" />
+        <exclude domain="file" path="datastore/device_identity.preferences_pb" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="mobaide_auth.xml" />
+        <exclude domain="file" path="datastore/device_identity.preferences_pb" />
+    </device-transfer>
+</data-extraction-rules>

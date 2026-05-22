@@ -63,7 +63,7 @@ class AgentRepositoryClaimTest {
         try {
             repo.claimAgentByPairing(
                 nonce = "n", trustKeyFp = "fp", mobileDeviceId = "dev",
-                hostnameHint = null, friendlyName = null,
+                mobileDeviceName = null, hostnameHint = null, friendlyName = null,
             )
             fail("expected IllegalStateException")
         } catch (e: IllegalStateException) {
@@ -85,6 +85,7 @@ class AgentRepositoryClaimTest {
             nonce = "n1",
             trustKeyFp = "fp1",
             mobileDeviceId = "dev-1",
+            mobileDeviceName = "Test Pixel",
             hostnameHint = "host-hint",
             friendlyName = "lab-host",
         )
@@ -93,6 +94,7 @@ class AgentRepositoryClaimTest {
         assertEquals("n1", captured.captured.nonce)
         assertEquals("fp1", captured.captured.trust_key_fp)
         assertEquals("dev-1", captured.captured.mobile_device_id)
+        assertEquals("Test Pixel", captured.captured.mobile_device_name)
         assertEquals("host-hint", captured.captured.hostname_hint)
         assertEquals("lab-host", captured.captured.friendly_name)
     }
@@ -112,7 +114,7 @@ class AgentRepositoryClaimTest {
 
         repo.claimAgentByPairing(
             nonce = "n", trustKeyFp = "fp", mobileDeviceId = "dev",
-            hostnameHint = null, friendlyName = null,
+            mobileDeviceName = null, hostnameHint = null, friendlyName = null,
         )
 
         coVerifyOrder {
@@ -132,7 +134,7 @@ class AgentRepositoryClaimTest {
 
         repo.claimAgentByPairing(
             nonce = "n", trustKeyFp = "fp", mobileDeviceId = "dev",
-            hostnameHint = null, friendlyName = null,
+            mobileDeviceName = null, hostnameHint = null, friendlyName = null,
         )
 
         assertEquals(null, captured.captured.hostname_hint)
@@ -154,7 +156,7 @@ class AgentRepositoryClaimTest {
         try {
             repo.claimAgentByPairing(
                 nonce = "n", trustKeyFp = "fp", mobileDeviceId = "dev",
-                hostnameHint = null, friendlyName = null,
+                mobileDeviceName = null, hostnameHint = null, friendlyName = null,
             )
             fail("expected exception")
         } catch (e: RuntimeException) {

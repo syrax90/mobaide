@@ -368,18 +368,6 @@ class TestDashboardRoleGate:
         )
         assert resp.status_code == 403
 
-    async def test_viewer_cannot_revoke_pairing(
-        self, client, app, viewer_dashboard_headers, registered_agent
-    ):
-        agent_id, _ = registered_agent
-        pairing_id = await app.state.db.create_pairing(agent_id, "device-1")
-        resp = await client.delete(
-            f"/dashboard/pairings/{pairing_id}",
-            headers=viewer_dashboard_headers,
-        )
-        assert resp.status_code == 403
-
-
 class TestUserList:
     """The users-centric ``GET /dashboard`` and its supporting endpoints:
     the search fragment, the per-user agents expansion, and the OOB
@@ -506,14 +494,15 @@ class TestUserSearchFilter:
 class TestUserDelete:
     """``DELETE /dashboard/users/{id}`` — cascade, guardrails, WS teardown."""
 
-    async def test_delete_user_cascades_agents_pairings_and_templates(
+    async def test_delete_user_cascades_agents_devices_and_templates(
         self, client, app, dashboard_headers, viewer_user, registered_agent
     ):
         agent_id, _ = registered_agent
         user_id = viewer_user["id"]
         db = app.state.db
-        # Establish dependent rows the cascade must reach.
-        pairing_id = await db.create_pairing(agent_id, "device-1")
+        await db.upsert_mobile_device(
+            device_id="device-1", user_id=user_id, name="Test Pixel"
+        )
         await db.store_refresh_token(
             raw_token="refresh-1",
             mobile_device_id="device-1",
@@ -526,10 +515,9 @@ class TestUserDelete:
             f"/dashboard/users/{user_id}", headers=dashboard_headers
         )
         assert resp.status_code == 200
-        # Every layer is gone.
         assert await db.get_user_by_id(user_id) is None
         assert await db.get_agent(agent_id) is None
-        assert await db.is_mobile_paired_to_agent("device-1", agent_id) is False
+        assert await db.list_user_devices(user_id) == []
         assert await db.validate_and_consume_refresh("refresh-1") is None
         assert await db.list_templates_for_user(user_id) == []
         # Response carries OOB delete markers so HTMX closes the modal
@@ -538,7 +526,6 @@ class TestUserDelete:
         assert f'id="user-row-{user_id}"' in resp.text
         assert f'id="user-detail-{user_id}"' in resp.text
         assert 'hx-swap-oob="delete"' in resp.text
-        del pairing_id
 
     async def test_delete_user_response_emits_oob_swap_for_row_and_detail(
         self, client, app, dashboard_headers

@@ -299,11 +299,26 @@ class AgentRepositoryTest {
         val response = MobileTokenResponse(
             access_token = "at-1", refresh_token = "rt-1", token_type = "bearer",
         )
-        coEvery { api.getMobileTokens("tok-user-123", "a-1") } returns response
+        coEvery {
+            api.getMobileTokens("tok-user-123", "a-1", any())
+        } returns response
 
-        val returned = repo.getMobileTokensForAgent("a-1")
+        val returned = repo.getMobileTokensForAgent(
+            agentId = "a-1",
+            mobileDeviceId = "dev-1",
+            mobileDeviceName = "Test Pixel",
+        )
 
         assertSame(response, returned)
-        coVerify(exactly = 1) { api.getMobileTokens("tok-user-123", "a-1") }
+        coVerify(exactly = 1) {
+            api.getMobileTokens(
+                "tok-user-123",
+                "a-1",
+                match {
+                    it.mobile_device_id == "dev-1" &&
+                        it.mobile_device_name == "Test Pixel"
+                },
+            )
+        }
     }
 }

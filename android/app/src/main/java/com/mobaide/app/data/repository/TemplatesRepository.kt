@@ -1,6 +1,7 @@
 package com.mobaide.app.data.repository
 
 import com.mobaide.app.data.auth.UserIdentityStore
+import com.mobaide.app.data.auth.requireAccessToken
 import com.mobaide.app.data.network.CentralApi
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.UpdateTemplateRequest
@@ -26,12 +27,12 @@ class TemplatesRepository(
     fun observeTemplates(): StateFlow<List<TemplateDto>> = _templates.asStateFlow()
 
     suspend fun refreshTemplates() {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         _templates.value = centralApi.listTemplates(token)
     }
 
     suspend fun createTemplate(name: String, body: String): TemplateDto {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         val created = centralApi.createTemplate(token, name, body)
         applyUpserted(created)
         return created
@@ -43,7 +44,7 @@ class TemplatesRepository(
         body: String? = null,
         isFavorite: Boolean? = null,
     ): TemplateDto {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         val updated = centralApi.updateTemplate(
             token,
             templateId,
@@ -54,13 +55,13 @@ class TemplatesRepository(
     }
 
     suspend fun deleteTemplate(templateId: String) {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         centralApi.deleteTemplate(token, templateId)
         applyDeleted(templateId)
     }
 
     suspend fun touchTemplate(templateId: String): TemplateDto {
-        val token = requireUserToken()
+        val token = userIdentityStore.requireAccessToken()
         val touched = centralApi.touchTemplate(token, templateId)
         applyUpserted(touched)
         return touched
@@ -88,7 +89,4 @@ class TemplatesRepository(
         _templates.value = emptyList()
     }
 
-    private fun requireUserToken(): String =
-        userIdentityStore.getUserAccessToken()
-            ?: throw IllegalStateException("User not logged in")
 }

@@ -8,9 +8,15 @@ from pydantic import BaseModel, Field, model_validator
 
 @dataclass
 class MobileTokenPayload:
-    """Decoded JWT payload for mobile session tokens."""
+    """Decoded JWT payload for mobile session tokens.
 
-    sub: str  # mobile_device_id
+    ``sub`` is the per-install device UUID (client-generated, stable for
+    the lifetime of the app install). ``user_id`` is the owning account.
+    Refresh tokens are scoped to ``(sub, agent_id)`` so revoking one
+    device leaves the user's other devices intact.
+    """
+
+    sub: str  # per-install device UUID
     agent_id: str
     user_id: str  # owner user_id
     token_type: str  # "mobile_access"
@@ -32,6 +38,32 @@ class UserTokenPayload:
 
 class MobileRefreshRequest(BaseModel):
     refresh_token: str
+
+
+MOBILE_DEVICE_ID_PATTERN = (
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+"""Canonical 36-char UUID regex shared between wire schemas that carry a
+mobile device id (see ``MobileTokenRequest``, ``PairingClaimRequest``)."""
+
+
+class MobileTokenRequest(BaseModel):
+    """Body for ``POST /api/agents/{agent_id}/token``.
+
+    The mobile client identifies the *device* asking for tokens. The
+    ``user_id`` is taken from the dashboard JWT in the Authorization
+    header. ``mobile_device_name`` is an auto-generated label like
+    ``"Google Pixel 8"`` that the user sees on the "Your devices" screen.
+
+    ``mobile_device_id`` is constrained to a canonical 36-char UUID
+    string (defence in depth: narrows the attack surface for
+    cross-tenant collisions and prevents convenient short literals like
+    ``"admin"``).
+    """
+
+    mobile_device_id: str = Field(pattern=MOBILE_DEVICE_ID_PATTERN)
+    mobile_device_name: str | None = Field(default=None, max_length=255)
 
 
 class MobileTokenResponse(BaseModel):
