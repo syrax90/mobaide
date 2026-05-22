@@ -155,24 +155,34 @@ section { margin-bottom: 2rem; }
 .choice-option.danger:has(input:checked) { border-color: var(--danger); background: rgba(220, 53, 69, 0.07); color: var(--danger); }
 .choice-option.danger:has(input:checked) .choice-note { color: var(--danger); }
 /* Password fields ship an eye-icon reveal button anchored inside the input's
-   right padding — used on login, signup, reset, and the delete modal. */
-.password-field { position: relative; }
+   right padding — used on login, signup, reset, and the delete modal. The
+   button has explicit width/height and an appearance-none reset so UA button
+   chrome can't inflate the box and push the icon off the input's row. */
+.password-field { position: relative; display: block; }
 .password-field input { padding-right: 2.75rem; }
 .password-field .reveal-btn {
     position: absolute;
-    right: 0.35rem;
     top: 50%;
+    right: 0.35rem;
     transform: translateY(-50%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    background: none;
+    width: 1.9rem;
+    height: 1.9rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
     color: var(--text-muted);
     cursor: pointer;
-    padding: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border-radius: var(--radius);
-    line-height: 0;
+    line-height: 1;
+    font: inherit;
+    -webkit-appearance: none;
+    appearance: none;
+    z-index: 1;
+    pointer-events: auto;
 }
 .password-field .reveal-btn:hover { color: var(--text); background: var(--bg); }
 .password-field .reveal-btn:focus-visible {
@@ -180,7 +190,7 @@ section { margin-bottom: 2rem; }
     outline-offset: 1px;
     color: var(--text);
 }
-.password-field .reveal-icon { display: block; }
+.password-field .reveal-icon { display: block; width: 20px; height: 20px; }
 .password-match { font-size: 0.85rem; margin-top: 0.25rem; min-height: 1.1em; }
 .password-match.ok { color: var(--success); }
 .password-match.bad { color: var(--danger); }
