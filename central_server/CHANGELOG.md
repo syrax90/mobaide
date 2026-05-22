@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.9](https://github.com/syrax90/claude_mobile/compare/server-v0.1.8...server-v0.1.9) (2026-05-22)
+
+
+### Features
+
+* self-host privacy policy at /privacy.html and surface links in Android UI ([9eb0b90](https://github.com/syrax90/claude_mobile/commit/9eb0b90c184b13617810b52d08faa9c25b6834dd))
+* self-host privacy policy at /privacy.html and surface links in Android UI ([882251b](https://github.com/syrax90/claude_mobile/commit/882251b75e5f32777dfa356ae8906f7f48ed18ca))
+
 ## [0.1.8](https://github.com/syrax90/claude_mobile/compare/server-v0.1.7...server-v0.1.8) (2026-05-22)
 
 

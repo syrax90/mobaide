@@ -1,5 +1,19 @@
 # Android Changelog
 
+## [1.5.0](https://github.com/syrax90/claude_mobile/compare/android-v1.4.0...android-v1.5.0) (2026-05-22)
+
+
+### Features
+
+* self-host privacy policy at /privacy.html and surface links in Android UI ([9eb0b90](https://github.com/syrax90/claude_mobile/commit/9eb0b90c184b13617810b52d08faa9c25b6834dd))
+* self-host privacy policy at /privacy.html and surface links in Android UI ([882251b](https://github.com/syrax90/claude_mobile/commit/882251b75e5f32777dfa356ae8906f7f48ed18ca))
+
+
+### Bug Fixes
+
+* **android:** replace Compose horizontalScroll with native HorizontalScrollView for terminal gesture handling ([4d5168d](https://github.com/syrax90/claude_mobile/commit/4d5168d3c977fe4690b42fe9d6e5a0a3f9492b28))
+* **terminal:** replace Compose horizontalScroll with native HorizontalScrollView for terminal gesture handling ([b7edd46](https://github.com/syrax90/claude_mobile/commit/b7edd46b239c8c632949b426937b508772332846))
+
 ## [1.4.0](https://github.com/syrax90/claude_mobile/compare/android-v1.3.0...android-v1.4.0) (2026-05-22)
 
 
