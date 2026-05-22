@@ -47,5 +47,24 @@
         </span>
     </footer>
     <div id="modal-root"></div>
+    <script>
+    (function () {
+        document.addEventListener('click', function (event) {
+            var btn = event.target.closest('.reveal-btn');
+            if (!btn) return;
+            var targetId = btn.getAttribute('data-target');
+            var input = targetId ? document.getElementById(targetId) : null;
+            if (!input) return;
+            var revealed = input.type === 'text';
+            input.type = revealed ? 'password' : 'text';
+            btn.setAttribute('aria-pressed', revealed ? 'false' : 'true');
+            btn.setAttribute('aria-label', revealed ? 'Show password' : 'Hide password');
+            var showIcon = btn.querySelector('.reveal-icon-show');
+            var hideIcon = btn.querySelector('.reveal-icon-hide');
+            if (showIcon) showIcon.style.display = revealed ? '' : 'none';
+            if (hideIcon) hideIcon.style.display = revealed ? 'none' : '';
+        });
+    })();
+    </script>
 </body>
 </html>

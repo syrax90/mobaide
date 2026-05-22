@@ -586,3 +586,260 @@ class TestCancelDeletionModalEndpoint:
         )
         assert resp.status_code == 303
         assert resp.headers["location"].startswith("/portal/login")
+
+
+class TestPasswordRevealPartialAcrossPortal:
+    """The shared ``_portal_password_input.html`` partial replaces every
+    portal password input with one labeled field that ships an eye-icon
+    reveal toggle inside the field. Plan goal: a single reusable partial
+    drives login, signup, reset-password, and the delete-modal current
+    password — all four surfaces now share the same markup contract.
+
+    These tests assert the structural markers the partial produces and the
+    ``data-target`` wiring that the global event-delegated toggle handler
+    (in ``portal_base.html``) keys on. A regression in any one surface
+    would break the reveal behavior without 500-ing the route, so the
+    contract has to be exercised at the response-body level.
+    """
+
+    async def test_login_page_renders_reveal_button_targeting_password(
+        self, client,
+    ) -> None:
+        """The login template now includes the shared partial for its
+        single password field. The reveal button must be present and its
+        ``data-target`` must point at the input id ``password`` so the
+        global delegate can find the right input."""
+        resp = await client.get("/portal/login")
+        assert resp.status_code == 200
+        body = resp.text
+        # Partial-rendered structure.
+        assert 'class="password-field"' in body
+        assert 'class="reveal-btn"' in body
+        assert 'data-target="password"' in body
+        # aria-pressed starts false (password is hidden by default).
+        assert 'aria-pressed="false"' in body
+        # Both SVG icons must ship; the hide variant is style="display:none"
+        # until the user toggles. We just need the classes to be there so
+        # the delegate can flip them.
+        assert "reveal-icon-show" in body
+        assert "reveal-icon-hide" in body
+
+    async def test_signup_page_renders_reveal_buttons_for_both_password_fields(
+        self, client,
+    ) -> None:
+        """Signup uses ``_portal_password_with_confirm.html`` which now
+        includes the shared partial TWICE — once per field. Both reveal
+        buttons must be present and must target distinct inputs so each
+        field toggles independently."""
+        resp = await client.get("/portal/signup")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-target="password"' in body
+        assert 'data-target="confirm_password"' in body
+        # Two reveal buttons → two .reveal-btn occurrences in markup.
+        assert body.count('class="reveal-btn"') == 2
+
+    async def test_reset_password_page_renders_reveal_buttons_for_both_fields(
+        self, client,
+    ) -> None:
+        """The reset-password flow reuses the password-with-confirm
+        partial under different field names (``new_password`` /
+        ``confirm_new_password``). Both reveal buttons must target the
+        new-password id namespace; if the partial leaked the signup
+        ``password``/``confirm_password`` ids here, the delegate would
+        toggle the wrong field on touch."""
+        resp = await client.get("/portal/reset-password")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'data-target="new_password"' in body
+        assert 'data-target="confirm_new_password"' in body
+        assert body.count('class="reveal-btn"') == 2
+        # Negative: the signup field ids must NOT bleed into the reset
+        # template (would happen if the partial hardcoded the names).
+        assert 'data-target="confirm_password"' not in body
+
+    async def test_delete_modal_password_panel_renders_reveal_button(
+        self, client, app, viewer_user,
+    ) -> None:
+        """The delete-modal current-password field also flows through the
+        shared partial now (previously it was the only portal password
+        input WITHOUT a reveal toggle). The button must target the
+        ``reauth-password`` id — that id is preserved exactly per the
+        plan because ``test_portal.py`` substring assertions key on it."""
+        del viewer_user
+        token = await _portal_login_cookie(
+            app, TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD,
+        )
+        resp = await client.get(
+            "/portal/account/delete-modal",
+            headers={"Cookie": f"portal_token={token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        # Existing contract preserved.
+        assert 'id="reauth-password"' in body
+        # New: reveal button is wired to the same id.
+        assert 'data-target="reauth-password"' in body
+        assert 'class="reveal-btn"' in body
+
+    async def test_base_template_ships_global_reveal_toggle_handler(
+        self, client,
+    ) -> None:
+        """The toggle handler lives in ``portal_base.html`` so it can
+        also serve content that HTMX injects later (the delete modal).
+        Any public portal GET inherits the base template — assert the
+        delegated handler is present on a known-public page so we don't
+        regress to per-template inline scripts."""
+        resp = await client.get("/portal/login")
+        assert resp.status_code == 200
+        body = resp.text
+        # The delegate finds the button via closest('.reveal-btn') and routes
+        # to the correct input via data-target + getElementById — both must
+        # be present in the script shipped by the base template.
+        assert ".reveal-btn" in body
+        assert "data-target" in body
+        # The toggle flips input.type between 'password' and 'text';
+        # that line is the heart of the script and would be the first
+        # casualty of an accidental rewrite.
+        assert "input.type" in body
+
+
+class TestDeleteModalGoogleRenderButtonRegression:
+    """The "Verify with Google to delete" button used to call
+    ``window.google.accounts.id.prompt()`` (FedCM / One Tap), which
+    Chrome M125+ silently suppresses once the per-origin FedCM state
+    cools down — the button looked clickable but did nothing. The fix
+    switches to ``id.renderButton()`` (matching the proven sign-in
+    flow) and adds a mode-aware hint paragraph plus an ``aria-disabled``
+    wrapper that gates pointer events until the email confirmation
+    matches.
+
+    These tests assert the new markup contract AND that the broken
+    ``prompt()`` call is gone — a future refactor must not slip back
+    into the FedCM-only path without first replacing the rendered
+    button.
+    """
+
+    @staticmethod
+    async def _google_only_portal_token(app) -> str:
+        """Issue a portal JWT for a fresh Google-only user.
+
+        Mirrors the pattern at the top of
+        ``test_google_only_user_modal_shows_google_button_no_password_input``
+        — the modal under test only cares about the rendered HTML, not
+        the login mechanic, so we go through the lower-level token
+        helper rather than the full Google sign-in plumbing.
+        """
+        await app.state.db.create_user(
+            email="renderbtn@test.local",
+            google_sub="render-btn-sub",
+            email_verified=True,
+            password_hash=None,
+        )
+        user = await app.state.db.get_user_by_email("renderbtn@test.local")
+        assert user is not None
+        return app.state.auth_service._create_user_token(  # noqa: SLF001
+            user["id"], user["email"], user["role"],
+        )
+
+    async def test_google_only_modal_renders_new_wrapper_and_hint_scaffold(
+        self, client, app,
+    ) -> None:
+        """The rewritten Google verify section must ship:
+
+        * ``#confirm-delete-google-hint`` — the placeholder ``<p>`` the
+          script populates with mode-aware copy.
+        * ``#confirm-delete-google-wrapper`` — the wrapper div that
+          owns ``aria-disabled``; ``pointer-events:none`` lives in CSS
+          on this class and is what blocks clicks until the email
+          confirmation matches.
+        * ``#confirm-delete-google-btn`` — the inner div the GIS
+          ``renderButton`` paints into. The id is preserved per the
+          plan so the existing modal-routing tests still pass.
+        """
+        token = await self._google_only_portal_token(app)
+        resp = await client.get(
+            "/portal/account/delete-modal",
+            headers={"Cookie": f"portal_token={token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        # New scaffold elements.
+        assert 'id="confirm-delete-google-hint"' in body
+        assert 'id="confirm-delete-google-wrapper"' in body
+        assert 'class="google-verify-wrapper"' in body
+        assert 'class="delete-mode-hint"' in body
+        # Wrapper starts disabled — script flips it to ``"false"`` once
+        # the email confirmation matches.
+        assert 'aria-disabled="true"' in body
+        # The renderButton target id is preserved.
+        assert 'id="confirm-delete-google-btn"' in body
+
+    async def test_google_only_modal_does_not_use_broken_prompt_call(
+        self, client, app,
+    ) -> None:
+        """Regression guard for the actual bug: the old script called
+        ``window.google.accounts.id.prompt()``. The new script must use
+        ``id.renderButton(...)`` instead. If both ever appear in the
+        same script that's a sign the fix was partially reverted.
+        """
+        token = await self._google_only_portal_token(app)
+        resp = await client.get(
+            "/portal/account/delete-modal",
+            headers={"Cookie": f"portal_token={token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        # New, working path.
+        assert "renderButton" in body
+        # Old, broken path. The exact call name is the only reliable
+        # marker — Google.accounts.id is also referenced by
+        # ``initialize(...)`` which we DO want to keep.
+        assert "id.prompt(" not in body
+
+    async def test_google_only_modal_drops_dead_data_label_attrs_on_google_btn(
+        self, client, app,
+    ) -> None:
+        """The old design tried to swap the Google button's visible
+        label between "Verify with Google to schedule" and "...delete
+        now" via ``data-label-scheduled-google`` / ``data-label-
+        immediate-google`` attributes. With ``renderButton`` the label
+        is owned by Google ("Continue with Google") and the mode
+        message moved to the new hint paragraph. The dead data attrs
+        must NOT appear on the new ``#confirm-delete-google-btn`` div —
+        leaving them around would invite future refactors to wire them
+        back into a no-op label-swap function.
+        """
+        token = await self._google_only_portal_token(app)
+        resp = await client.get(
+            "/portal/account/delete-modal",
+            headers={"Cookie": f"portal_token={token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert "data-label-scheduled-google" not in body
+        assert "data-label-immediate-google" not in body
+
+    async def test_password_only_modal_omits_google_verify_scaffold(
+        self, client, app, viewer_user,
+    ) -> None:
+        """A password-only user never sees the Google verify section.
+        The new scaffold elements (hint paragraph + wrapper div) live
+        inside the same ``{% if has_google %}`` guard as the button
+        itself, so a missing google_sub must omit all three at once."""
+        del viewer_user
+        token = await _portal_login_cookie(
+            app, TEST_VIEWER_EMAIL, TEST_VIEWER_PASSWORD,
+        )
+        resp = await client.get(
+            "/portal/account/delete-modal",
+            headers={"Cookie": f"portal_token={token}"},
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        # Existing contract preserved.
+        assert 'id="reauth-password"' in body
+        # Whole Google scaffold gated behind ``has_google``.
+        assert 'id="confirm-delete-google-hint"' not in body
+        assert 'id="confirm-delete-google-wrapper"' not in body
+        assert 'id="confirm-delete-google-btn"' not in body
