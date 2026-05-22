@@ -1,17 +1,25 @@
-{# Google Identity Services button — included on login, signup, and delete modal.
+{# Google Identity Services button — included on login and signup.
+
+   Renders via google.accounts.id.renderButton (popup OAuth flow). The
+   earlier custom-button + id.prompt() pattern was abandoned because
+   id.prompt() routes through FedCM on Chrome M125+, which silently
+   suppresses the UI when Chrome's per-origin FedCM state is cooled-down
+   or marked disabled — with no recoverable path for the end user.
 
    Required Jinja context:
    * google_client_id  — required; renders nothing if empty
    * google_nonce      — required; bound to the GIS init call and verified
                          server-side against the portal_google_nonce cookie
    * csrf_token        — required; submitted with the credential POST
-   * post_url          — required; e.g. "/portal/auth/google" or
-                         "/portal/account/delete"
+   * post_url          — required; e.g. "/portal/auth/google"
    * button_id         — required; unique DOM id so multiple buttons on the
-                         same page (login + delete modal) do not clash
-   * button_label      — optional override; defaults to "Continue with Google"
+                         same page do not clash
+   * gis_text          — optional; one of "signin_with" / "signup_with" /
+                         "continue_with" / "signup". Defaults to
+                         "continue_with". Google manages the visible label
+                         per their branding rules.
    * extra_fields      — optional list of {name, value} hidden inputs sent
-                         alongside `credential` (e.g. method/mode for delete)
+                         alongside `credential`
 #}
 {% if google_client_id %}
 <form id="{{ button_id }}-form" method="post" action="{{ post_url }}" style="margin-top: 1rem;">
@@ -20,13 +28,10 @@
     {% for field in extra_fields or [] %}
     <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
     {% endfor %}
-    <button type="button" id="{{ button_id }}" class="btn btn-primary" style="width: 100%;">
-        {{ button_label or "Continue with Google" }}
-    </button>
+    <div id="{{ button_id }}" style="display:flex; justify-content:center;"></div>
 </form>
 <script>
 (function () {
-    // Wait until the GIS library is ready before initialising.
     function init() {
         if (!window.google || !window.google.accounts) {
             setTimeout(init, 50);
@@ -45,8 +50,14 @@
                 formEl.submit();
             },
         });
-        btnEl.addEventListener('click', function () {
-            window.google.accounts.id.prompt();
+        window.google.accounts.id.renderButton(btnEl, {
+            type: 'standard',
+            theme: 'outline',
+            size: 'large',
+            shape: 'rectangular',
+            logo_alignment: 'left',
+            text: {{ (gis_text or 'continue_with') | tojson }},
+            width: 320,
         });
     }
     init();
