@@ -20,7 +20,7 @@
     </form>
     {% if google_client_id %}
     <div class="auth-divider"><span>or</span></div>
-    {% with button_id="portal-login-google", post_url="/portal/auth/google", button_label="Continue with Google", extra_fields=[] %}
+    {% with button_id="portal-login-google", post_url="/portal/auth/google", gis_text="continue_with", extra_fields=[] %}
     {% include "_portal_google_button.html" with context %}
     {% endwith %}
     {% endif %}
