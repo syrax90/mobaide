@@ -154,8 +154,10 @@ loop never raises — the next sweep tick will retry.
 | `ACCOUNT_DELETION_CANCEL_TOKEN_TTL_HOURS` | `24` | Capped at the grace window — a link is useless past final purge. |
 | `PORTAL_TOKEN_EXPIRE_MINUTES` | `0` (session) | Portal cookie TTL; matches `dashboard_token` convention. |
 | `CSRF_SECRET_KEY` | derived from `JWT_SECRET_KEY` | Override only if you need to rotate CSRF independently of the JWT secret. |
-| `PRIVACY_POLICY_URL` | unset | When set, portal footer renders the link. Hosted externally (e.g., GitHub Pages). |
 | `PORTAL_BASE_URL` | falls back to `PUBLIC_BASE_URL` | Used to construct absolute URLs in the cancel-link email. |
+
+The portal footer always links to `/privacy.html`, which the central server
+renders from `central_server/legal/privacy.md`.
 
 ## Public delete-info page
 

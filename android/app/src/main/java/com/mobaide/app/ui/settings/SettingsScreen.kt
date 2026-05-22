@@ -32,13 +32,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.BuildConfig
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MAX
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MIN
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_STEP
 import com.mobaide.app.data.local.TerminalDisplayMode
+import com.mobaide.app.ui.util.openUrlInCustomTab
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,6 +54,7 @@ fun SettingsScreen(
     onManageDevices: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
@@ -114,6 +118,17 @@ fun SettingsScreen(
                     .padding(horizontal = 16.dp),
             ) {
                 Text("Your devices")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = { openUrlInCustomTab(context, BuildConfig.PRIVACY_POLICY_URL) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            ) {
+                Text("Privacy policy")
             }
 
             Spacer(modifier = Modifier.height(16.dp))

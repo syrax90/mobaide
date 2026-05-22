@@ -75,11 +75,10 @@ def _issue_google_nonce(response: Response) -> str:
 
 
 def _portal_context(request: Request, **extra) -> dict:
-    """Build a base Jinja context with CSRF + privacy-policy URL prefilled."""
+    """Build a base Jinja context with CSRF and Google client ID prefilled."""
     config = request.app.state.config
     return {
         "csrf_token": getattr(request.state, "csrf_token", ""),
-        "privacy_policy_url": config.privacy_policy_url,
         "google_client_id": config.google_client_id,
         **extra,
     }

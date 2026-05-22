@@ -24,6 +24,7 @@ dependencies = [
     "requests",
     "aiosmtplib>=3.0",
     "cryptography>=43.0",
+    "markdown>=3.6",
 ]
 
 [project.scripts]

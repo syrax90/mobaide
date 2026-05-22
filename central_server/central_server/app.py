@@ -20,6 +20,7 @@ from .auth.rate_limit import ResendRateLimiter
 from .auth.service import AuthService
 from .config import CentralServerConfig
 from .db.database import Database
+from .legal.loader import render_privacy_html, resolve_legal_dir
 from .templates.service import TemplateService
 from .logging_setup import (
     bind_request_context,
@@ -196,6 +197,9 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     )
 
     app.state.config = config
+    # Render the privacy policy once at startup; the route handler then
+    # returns the cached HTML via the Jinja shell template.
+    app.state.privacy_html = render_privacy_html(resolve_legal_dir())
 
     if _STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -204,6 +208,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .auth.router import router as auth_router
     from .dashboard.router import router as dashboard_router
     from .devices.router import router as devices_router
+    from .legal.router import router as legal_router
     from .manifest.router import router as manifest_router
     from .pairing.router import router as pairing_router
     from .portal.router import router as portal_router
@@ -223,6 +228,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(devices_router)
     app.include_router(dashboard_router)
     app.include_router(portal_router)
+    app.include_router(legal_router)
     app.include_router(manifest_router)
     app.include_router(templates_router)
 

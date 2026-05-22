@@ -42,6 +42,22 @@ val centralServerUrl: String = run {
     "https://api.mobaide.com"
 }
 
+// Privacy policy URL surfaced from RegisterScreen / LoginScreen / SettingsScreen
+// via Custom Tabs. Resolved at build time in the same priority order as
+// CENTRAL_SERVER_URL. Defaults to the canonical public URL declared in
+// central_server/legal/privacy.md §13.
+val privacyPolicyUrl: String = run {
+    val fromEnv = System.getenv("PRIVACY_POLICY_URL")
+    if (!fromEnv.isNullOrBlank()) return@run fromEnv
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        val props = Properties().apply { localPropsFile.inputStream().use { load(it) } }
+        val fromProps = props.getProperty("PRIVACY_POLICY_URL", "").orEmpty()
+        if (fromProps.isNotBlank()) return@run fromProps
+    }
+    "https://mobaide.com/privacy.html"
+}
+
 // Release signing config is resolved at build time from (in priority order):
 //   1. Environment variables (CI / release builds)
 //   2. android/signing.properties (developer machines; git-ignored)
@@ -88,6 +104,7 @@ android {
 
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
+        buildConfigField("String", "PRIVACY_POLICY_URL", "\"$privacyPolicyUrl\"")
         buildConfigField("int", "APP_PROTOCOL_VERSION", "2")
         buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "2")
     }
@@ -202,6 +219,10 @@ dependencies {
     // permission required — the GMS module hosts the camera in a
     // separate process and only returns the scanned barcode value.
     implementation(libs.play.services.code.scanner)
+
+    // Chrome Custom Tabs — used to open the privacy policy from the
+    // login/register/settings screens with a native in-app browser tab.
+    implementation(libs.androidx.browser)
 
     // Unit testing
     testImplementation(libs.junit)

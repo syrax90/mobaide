@@ -102,11 +102,6 @@ class CentralServerConfig:
     # rotate independently.
     csrf_secret_key: str | None = None
 
-    # Public URL of the privacy policy. Rendered as a footer link in the
-    # portal when set; hidden when empty. Hosted externally (e.g. GitHub
-    # Pages) — this is just the slot.
-    privacy_policy_url: str | None = None
-
     # Public base URL of the portal — used in outbound emails for the
     # cancel-deletion link. Falls back to `public_base_url` when unset.
     portal_base_url: str | None = None
@@ -219,7 +214,6 @@ class CentralServerConfig:
                 os.getenv("PORTAL_TOKEN_EXPIRE_MINUTES", "0"),
             ),
             csrf_secret_key=os.getenv("CSRF_SECRET_KEY") or None,
-            privacy_policy_url=os.getenv("PRIVACY_POLICY_URL") or None,
             portal_base_url=os.getenv("PORTAL_BASE_URL") or None,
             release_auth_token=os.getenv("RELEASE_AUTH_TOKEN") or None,
             manifest_signing_public_key_b64=(

@@ -41,7 +41,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.BuildConfig
 import com.mobaide.app.data.auth.GoogleAuthClient
+import com.mobaide.app.ui.util.openUrlInCustomTab
 import kotlinx.coroutines.launch
 
 @Composable
@@ -221,7 +223,23 @@ fun RegisterScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "By creating an account, you agree to our",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(
+                onClick = { openUrlInCustomTab(context, BuildConfig.PRIVACY_POLICY_URL) },
+            ) {
+                Text(
+                    text = "Privacy policy",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
 
             TextButton(onClick = onLoginClick) {
                 Text("Already have an account? Sign in")
