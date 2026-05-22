@@ -467,6 +467,92 @@ class TestDeleteModalErrorRerender:
         assert resp.status_code in (400, 200)
 
 
+class TestPortalSignup:
+    """Form-level tests for ``POST /portal/signup``. Covers the new
+    ``confirm_password`` field: happy path, mismatch error, and the
+    template carrying both fields so the JS can wire up the live
+    indicator.
+
+    The conftest config sets ``email_verification_required=False`` so the
+    happy path redirects straight to ``/portal/account`` with a JWT cookie
+    issued — no OTP loop to traverse here.
+    """
+
+    async def test_signup_template_renders_confirm_password_field(
+        self, client,
+    ) -> None:
+        resp = await client.get("/portal/signup")
+        assert resp.status_code == 200
+        body = resp.text
+        assert 'name="password"' in body
+        assert 'name="confirm_password"' in body
+        assert 'id="signup-submit"' in body
+        assert 'autocomplete="new-password"' in body
+
+    async def test_signup_with_matching_passwords_succeeds(
+        self, client,
+    ) -> None:
+        csrf_token, _ = await _grab_csrf(client)
+        resp = await client.post(
+            "/portal/signup",
+            data={
+                "csrf_token": csrf_token,
+                "email": "newuser@test.local",
+                "password": "matchpass123",
+                "confirm_password": "matchpass123",
+            },
+            headers={"X-CSRF-Token": csrf_token},
+            follow_redirects=False,
+        )
+        # Verification disabled in test config → straight to /portal/account.
+        assert resp.status_code == 303
+        assert resp.headers["location"].startswith("/portal/account")
+
+    async def test_signup_with_mismatched_passwords_rerenders_with_error(
+        self, client, app,
+    ) -> None:
+        csrf_token, _ = await _grab_csrf(client)
+        resp = await client.post(
+            "/portal/signup",
+            data={
+                "csrf_token": csrf_token,
+                "email": "mismatch@test.local",
+                "password": "matchpass123",
+                "confirm_password": "DIFFERENT-pass",
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert resp.status_code == 400
+        assert "Passwords don&#39;t match." in resp.text or \
+               "Passwords don't match." in resp.text
+        # Form re-rendered, not just a bare alert.
+        assert 'name="confirm_password"' in resp.text
+        # User must NOT have been created.
+        user = await app.state.db.get_user_by_email("mismatch@test.local")
+        assert user is None
+
+    async def test_signup_with_missing_confirm_field_rejected(
+        self, client, app,
+    ) -> None:
+        csrf_token, _ = await _grab_csrf(client)
+        resp = await client.post(
+            "/portal/signup",
+            data={
+                "csrf_token": csrf_token,
+                "email": "missing-confirm@test.local",
+                "password": "matchpass123",
+                # confirm_password intentionally omitted.
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        # Empty string != "matchpass123" → mismatch error path.
+        assert resp.status_code == 400
+        user = await app.state.db.get_user_by_email(
+            "missing-confirm@test.local"
+        )
+        assert user is None
+
+
 class TestCancelDeletionModalEndpoint:
     """The ``Cancel scheduled deletion`` button used to POST directly. It
     now opens a confirmation modal (GET ``/portal/account/cancel-deletion-modal``)

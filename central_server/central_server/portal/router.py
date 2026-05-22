@@ -226,11 +226,19 @@ async def signup_submit(
     form = await request.form()
     email = str(form.get("email", "")).strip()
     password = str(form.get("password", ""))
+    confirm_password = str(form.get("confirm_password", ""))
     if not email or not password:
         return _render_with_csrf(
             request,
             "portal_signup.html",
             error="Email and password are required.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    if password != confirm_password:
+        return _render_with_csrf(
+            request,
+            "portal_signup.html",
+            error="Passwords don't match.",
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -357,6 +365,15 @@ async def reset_password_submit(
     email = str(form.get("email", "")).strip()
     code = str(form.get("code", "")).strip()
     new_password = str(form.get("new_password", ""))
+    confirm_new_password = str(form.get("confirm_new_password", ""))
+    if new_password != confirm_new_password:
+        return _render_with_csrf(
+            request,
+            "portal_reset_password.html",
+            email=email,
+            error="Passwords don't match.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
     auth_service = request.app.state.auth_service
     try:
         await auth_service.reset_password(email, code, new_password, background_tasks)
