@@ -1,5 +1,29 @@
 # central_server Changelog
 
+## [0.1.8](https://github.com/syrax90/claude_mobile/compare/server-v0.1.7...server-v0.1.8) (2026-05-22)
+
+
+### Features
+
+* **account-deletion:** user self-service deletion + portal + 14-day grace (CLA-61) ([8fb14dd](https://github.com/syrax90/claude_mobile/commit/8fb14ddb3d18c83dd2c9cae4451ddabeda4bcee1))
+* **android:** user self-service deletion + portal + 14-day grace (CLA-61) ([c8ea9cb](https://github.com/syrax90/claude_mobile/commit/c8ea9cb97c4dcf86dfc3967be84611230dfd4c90))
+* **devices:** per-install device UUID + user-scoped devices API + "Your devices" screen (CLA-62) ([354fb68](https://github.com/syrax90/claude_mobile/commit/354fb6890ed16de899a1952db81f6fce8d630891))
+* **devices:** per-install device UUID + user-scoped devices API + "Your devices" screen (CLA-62) ([60bc57a](https://github.com/syrax90/claude_mobile/commit/60bc57a38aa91f5be0aa14143c70a300205ec93e))
+* **portal:** add confirm-password field to signup and reset flows ([e34495a](https://github.com/syrax90/claude_mobile/commit/e34495aceca8b52e53008d2a822ccc5d400eb434))
+* **portal:** add confirm-password field to signup and reset flows ([a644626](https://github.com/syrax90/claude_mobile/commit/a644626913bdcc5c17bac272f2b60432b8a531f9))
+
+
+### Bug Fixes
+
+* **account-deletion:** resolve 5 reported issues end-to-end ([0775b9d](https://github.com/syrax90/claude_mobile/commit/0775b9d544ea1165d1d4c0c3523c841faf87ba7e))
+* **android:** resolve 5 reported issues end-to-end ([1a43c9b](https://github.com/syrax90/claude_mobile/commit/1a43c9becff506141f30eef1fac930a512b0bba7))
+* **portal:** keep password eye button on the same row as the input ([5a7f764](https://github.com/syrax90/claude_mobile/commit/5a7f76449873367fd067a62334ca2cfca3d90ca7))
+* **portal:** keep password eye button on the same row as the input ([26a5b4a](https://github.com/syrax90/claude_mobile/commit/26a5b4a7b4a538805749d2800cff8ba11f1f3aa1))
+* **portal:** restore delete-account Google button and replace password show/hide text with SVG icons ([265f361](https://github.com/syrax90/claude_mobile/commit/265f36117a2da90e8d962b29e886354cf012513b))
+* **portal:** restore delete-account Google button and replace password show/hide text with SVG icons ([1b58968](https://github.com/syrax90/claude_mobile/commit/1b58968bb2a601599bcfc2e583d2ffc04213bc5c))
+* **portal:** use Google renderButton instead of One Tap for sign-in ([a51a0dc](https://github.com/syrax90/claude_mobile/commit/a51a0dcafa2d3fd55516d166e0ec343f345c0032))
+* **portal:** use Google renderButton instead of One Tap for sign-in ([14ba0bc](https://github.com/syrax90/claude_mobile/commit/14ba0bc8ea148f34e4ddecce70fb572996eb0cd4))
+
 ## [0.1.7](https://github.com/syrax90/claude_mobile/compare/server-v0.1.6...server-v0.1.7) (2026-05-18)
 
 
