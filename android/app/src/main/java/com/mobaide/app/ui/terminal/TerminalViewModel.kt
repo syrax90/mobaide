@@ -227,6 +227,16 @@ class TerminalViewModel @Inject constructor(
                 _sessionState.value = parseStatus(decoded.json)
             }
             TerminalFrame.ReplayMarker -> {
+                // The server replays `state + REPLAY marker + full ring buffer`
+                // on EVERY reconnect, not just the first. Without clearing the
+                // emulator first, the ring bytes are appended on top of whatever
+                // the local emulator already shows from before the drop —
+                // visually duplicating the recent history. Emit the standard
+                // xterm sequence (cursor-home + erase-display + erase-scrollback)
+                // so the replay reconstructs the screen cleanly. A fresh
+                // emulator is unaffected since the operations are no-ops on
+                // empty buffers.
+                session.emitOutput(CLEAR_BEFORE_REPLAY, CLEAR_BEFORE_REPLAY.size)
                 inReplay = true
                 setFollowMode(true)
                 _connectionState.value = ConnectionState.ReplayingBuffer
@@ -389,6 +399,23 @@ class TerminalViewModel @Inject constructor(
         promptDetector.dismiss()
     }
 
+    /**
+     * Wake the session WebSocket up when the terminal screen becomes
+     * visible again — typically after the device screen turned back on or
+     * the app returned from background. While the screen was off the WS may
+     * have dropped (Doze restricts network) and the exponential backoff
+     * inside [WebSocketConnection.scheduleReconnect] can be sitting at the
+     * 30 s ceiling, so without this nudge the user can stare at the
+     * "Reconnecting…" overlay for up to half a minute. No-op when the
+     * connection is already [ConnectionState.Live]: forcing a reconnect on
+     * a healthy socket would burn a server replay round-trip for nothing
+     * and flash the overlay unnecessarily.
+     */
+    fun onScreenVisible() {
+        if (_connectionState.value == ConnectionState.Live) return
+        connection?.forceReconnect()
+    }
+
     fun resize(rows: Int, cols: Int) {
         if (rows == lastResizeRows && cols == lastResizeCols) return
         lastResizeRows = rows
@@ -411,5 +438,19 @@ class TerminalViewModel @Inject constructor(
 
     private companion object {
         const val MAX_UNREAD_DISPLAY = 9999
+
+        /**
+         * `ESC [ H` (cursor home) + `ESC [ 2 J` (erase entire display) +
+         * `ESC [ 3 J` (erase saved/scrollback lines — xterm extension,
+         * handled by Termux's [com.termux.terminal.TerminalEmulator] CSI 'J'
+         * branch which calls `mMainBuffer.clearTranscript()`). Emitted to
+         * the emulator on every replay-marker frame to drop any stale local
+         * content before the server's ring buffer is replayed.
+         */
+        val CLEAR_BEFORE_REPLAY: ByteArray = byteArrayOf(
+            0x1b, '['.code.toByte(), 'H'.code.toByte(),
+            0x1b, '['.code.toByte(), '2'.code.toByte(), 'J'.code.toByte(),
+            0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),
+        )
     }
 }

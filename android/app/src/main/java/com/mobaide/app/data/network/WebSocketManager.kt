@@ -95,6 +95,25 @@ class WebSocketConnection(
     private var shouldReconnect = true
     private var backoffMs = INITIAL_BACKOFF_MS
 
+    /**
+     * Monotonic id incremented every time [doConnect] (or [forceReconnect])
+     * spins up a new OkHttp [WebSocket]. Each listener instance captures the
+     * id when it is created and short-circuits its callbacks once the id no
+     * longer matches — so a stale `onClosed`/`onFailure` from the previous
+     * socket cannot inject a phantom `Disconnected` after we have already
+     * built its replacement.
+     *
+     * `@Volatile` is load-bearing: the increment runs under [mutex] on a
+     * coroutine thread, but the reads happen inside OkHttp's
+     * [WebSocketListener] callbacks on OkHttp's internal dispatcher,
+     * **without** acquiring the mutex. Without `@Volatile` the JMM permits
+     * the reader thread to cache the old value indefinitely — which would
+     * silently re-introduce the phantom-`Disconnected` race the guard is
+     * here to prevent.
+     */
+    @Volatile
+    private var generation: Int = 0
+
     private val _events = MutableSharedFlow<WsEvent>(replay = 1, extraBufferCapacity = 100)
     val events: SharedFlow<WsEvent> = _events.asSharedFlow()
 
@@ -132,6 +151,40 @@ class WebSocketConnection(
         scope.cancel()
     }
 
+    /**
+     * Tear the live socket down and rebuild immediately with the backoff
+     * reset to [INITIAL_BACKOFF_MS]. The lifecycle layer calls this on
+     * screen-on so the user does not sit through a 30 s Doze-accumulated
+     * backoff before the next reconnect attempt fires.
+     *
+     * Bumps [generation] so the previous listener's `onClosed`/`onFailure`
+     * (which OkHttp delivers asynchronously after `webSocket.close`) cannot
+     * push a phantom `Disconnected` after the new socket is already up.
+     *
+     * Respects `shouldReconnect = false` — set by [disconnect] and by the
+     * auth-failure / protocol-incompatible paths — so a force-reconnect
+     * never hammers a session the server has permanently rejected.
+     */
+    fun forceReconnect() {
+        if (!shouldReconnect || !isAuthenticated()) return
+        scope.launch {
+            mutex.withLock {
+                generation++
+                reconnectJob?.cancel()
+                reconnectJob = null
+                backoffMs = INITIAL_BACKOFF_MS
+                try {
+                    webSocket?.close(1000, "Force reconnect")
+                } catch (_: Throwable) {
+                    // OkHttp throws on a socket already in CLOSED state;
+                    // either way it's gone — proceed with the rebuild.
+                }
+                webSocket = null
+                if (shouldReconnect && isAuthenticated()) doConnect()
+            }
+        }
+    }
+
     private fun doConnect() {
         // Catch URL provider throws so they don't escape the coroutine scope.
         val url = try {
@@ -146,18 +199,22 @@ class WebSocketConnection(
             return
         }
 
+        val myGeneration = generation
         val request = Request.Builder().url(url).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (myGeneration != generation) return
                 backoffMs = INITIAL_BACKOFF_MS
                 _events.tryEmit(WsEvent.Connected)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (myGeneration != generation) return
                 _events.tryEmit(WsEvent.Message(text))
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                if (myGeneration != generation) return
                 _events.tryEmit(WsEvent.Binary(bytes))
             }
 
@@ -166,6 +223,7 @@ class WebSocketConnection(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (myGeneration != generation) return
                 _events.tryEmit(WsEvent.Disconnected)
                 if (code == AUTH_FAILED_CLOSE_CODE) {
                     handleAuthFailure(SessionManager.InvalidationReason.TokenRejected)
@@ -183,6 +241,7 @@ class WebSocketConnection(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (myGeneration != generation) return
                 _events.tryEmit(WsEvent.Error(t))
                 _events.tryEmit(WsEvent.Disconnected)
                 // okhttp surfaces a rejected WebSocket upgrade with the

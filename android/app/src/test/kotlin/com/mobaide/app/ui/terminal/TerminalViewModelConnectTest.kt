@@ -11,6 +11,7 @@ import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -251,5 +252,111 @@ class TerminalViewModelConnectTest {
 
             assertEquals(ConnectionState.Live, vm.connectionState.value)
             assertEquals(true, vm.isConnected.value)
+        }
+
+    @Test
+    fun onScreenVisible_whenLive_doesNotForceReconnect() =
+        runTest(testDispatcher) {
+            // STOPPED→STARTED edge with a healthy WS: forcing a reconnect
+            // would cost a needless server replay round-trip and flash the
+            // overlay.  The ViewModel must short-circuit on Live.
+            val eventsFlow = newEventsFlow()
+            val conn = newConnection(eventsFlow)
+            every { conn.connect() } answers {
+                eventsFlow.tryEmit(WsEvent.Connected)
+            }
+
+            val vm = newViewModel(newRepository(conn))
+            runCurrent()
+            assertEquals(ConnectionState.Live, vm.connectionState.value)
+
+            vm.onScreenVisible()
+            runCurrent()
+
+            verify(exactly = 0) { conn.forceReconnect() }
+        }
+
+    @Test
+    fun onScreenVisible_whenReconnecting_callsForceReconnect() =
+        runTest(testDispatcher) {
+            // The bug being fixed: WS dropped while screen was off, backoff
+            // sitting at 30 s ceiling.  When the screen comes back the
+            // ViewModel must nudge the connection so the user doesn't sit
+            // on "Reconnecting…" for up to half a minute.
+            val eventsFlow = newEventsFlow()
+            val conn = newConnection(eventsFlow)
+            every { conn.connect() } returns Unit
+
+            val vm = newViewModel(newRepository(conn))
+            runCurrent()
+            assertEquals(
+                "pre-condition: VM starts in Reconnecting without a Connected event",
+                ConnectionState.Reconnecting,
+                vm.connectionState.value,
+            )
+
+            vm.onScreenVisible()
+            runCurrent()
+
+            verify(exactly = 1) { conn.forceReconnect() }
+        }
+
+    @Test
+    fun onScreenVisible_whenReplayingBuffer_callsForceReconnect() =
+        runTest(testDispatcher) {
+            // ReplayingBuffer means the WS just reopened and is mid-replay.
+            // A screen-on edge during this transient window should still
+            // nudge, because the previous Reconnecting backoff context is
+            // what we want to reset — we keep the no-op rule narrow to
+            // Live, the only state that guarantees a healthy socket.
+            val eventsFlow = newEventsFlow()
+            val conn = newConnection(eventsFlow)
+            every { conn.connect() } answers {
+                eventsFlow.tryEmit(WsEvent.Connected)
+                eventsFlow.tryEmit(WsEvent.Binary(replayMarkerFrame))
+            }
+
+            val vm = newViewModel(newRepository(conn))
+            runCurrent()
+            assertEquals(
+                "pre-condition: replay marker puts VM in ReplayingBuffer",
+                ConnectionState.ReplayingBuffer,
+                vm.connectionState.value,
+            )
+
+            vm.onScreenVisible()
+            runCurrent()
+
+            verify(exactly = 1) { conn.forceReconnect() }
+        }
+
+    @Test
+    fun replayMarker_transitionsTo_replayingBuffer_andEnablesFollowMode() =
+        runTest(testDispatcher) {
+            // Verifies the state-machine half of the clear-before-replay
+            // fix.  The byte-level emulator effect (cursor home, screen
+            // wipe, scrollback drop) requires a real `Looper` because
+            // `TerminalSession.emitOutput` posts the append through
+            // `mMainThreadHandler` — covered separately by
+            // `TerminalViewModelReplayClearTest` under Robolectric.
+            val eventsFlow = newEventsFlow()
+            val conn = newConnection(eventsFlow)
+            every { conn.connect() } answers {
+                eventsFlow.tryEmit(WsEvent.Connected)
+            }
+
+            val vm = newViewModel(newRepository(conn))
+            runCurrent()
+            assertEquals(ConnectionState.Live, vm.connectionState.value)
+
+            eventsFlow.tryEmit(WsEvent.Binary(replayMarkerFrame))
+            runCurrent()
+
+            assertEquals(ConnectionState.ReplayingBuffer, vm.connectionState.value)
+            assertEquals(
+                "marker re-enables follow mode so the user lands at the bottom",
+                true,
+                vm.followMode.value,
+            )
         }
 }
