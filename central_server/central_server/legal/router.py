@@ -20,10 +20,11 @@ _CACHE_CONTROL = "public, max-age=300"
 @router.get("/privacy.html", response_class=HTMLResponse)
 async def privacy_page(request: Request) -> HTMLResponse:
     policy_html = request.app.state.privacy_html
+    policy_toc_html = request.app.state.privacy_toc_html
     response = templates.TemplateResponse(
         request,
         "privacy.html",
-        {"policy_html": policy_html},
+        {"policy_html": policy_html, "policy_toc_html": policy_toc_html},
     )
     response.headers["Cache-Control"] = _CACHE_CONTROL
     return response

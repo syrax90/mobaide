@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from central_server.legal.loader import render_privacy_html
+from central_server.legal.loader import render_privacy
 
 
 class TestPrivacyEndpoint:
@@ -50,12 +50,16 @@ class TestPrivacyEndpoint:
         self, client,
     ) -> None:
         """The H1 from ``privacy.md`` must round-trip through markdown ->
-        Jinja shell template to the response body."""
+        Jinja shell template to the response body. The ``toc`` extension
+        stamps an ``id`` attribute onto every heading, so the rendered tag
+        looks like ``<h1 id="…">Privacy Policy for Mobaide</h1>`` — assert
+        the open tag and visible text separately to stay robust to the
+        slug format."""
         resp = await client.get("/privacy.html")
         assert resp.status_code == 200
         body = resp.text
-        # ``# Privacy Policy for Mobaide`` -> ``<h1>Privacy Policy for Mobaide</h1>``
-        assert "<h1>Privacy Policy for Mobaide</h1>" in body
+        assert "<h1" in body
+        assert "Privacy Policy for Mobaide</h1>" in body
 
     async def test_privacy_html_body_contains_section_specific_phrases(
         self, client,
@@ -103,15 +107,50 @@ class TestPrivacyEndpoint:
         assert isinstance(cached, str)
         assert len(cached) > 0
         # It is HTML, not raw markdown — the H1 must be a real tag, not
-        # ``# Privacy Policy ...``.
-        assert "<h1>" in cached
-        assert "Privacy Policy for Mobaide" in cached
+        # ``# Privacy Policy ...``. The ``toc`` extension adds an ``id``
+        # attribute to every heading, so the tag opens as ``<h1 id="…">``.
+        assert "<h1" in cached
+        assert "Privacy Policy for Mobaide</h1>" in cached
+
+    async def test_app_state_privacy_toc_html_populated_at_startup(
+        self, app,
+    ) -> None:
+        """The sticky-sidebar TOC is rendered alongside the policy body and
+        cached on ``app.state.privacy_toc_html``. It must contain a ``<ul>``
+        — proves the ``toc`` markdown extension is wired and the H2 list
+        survived through to the response."""
+        cached_toc = app.state.privacy_toc_html
+        assert isinstance(cached_toc, str)
+        assert len(cached_toc) > 0
+        assert "<ul>" in cached_toc
+
+    async def test_privacy_html_body_includes_section_anchor_id(
+        self, client,
+    ) -> None:
+        """The ``toc`` extension stamps an ``id="…"`` on every heading from
+        the slugified text. ``## 1. Who is the data controller?`` becomes
+        ``id="1-who-is-the-data-controller"`` — without it, sidebar anchor
+        links (``href="#…"``) would 404 within the page."""
+        resp = await client.get("/privacy.html")
+        assert resp.status_code == 200
+        assert 'id="1-who-is-the-data-controller"' in resp.text
+
+    async def test_privacy_html_body_includes_toc_anchor_link(
+        self, client,
+    ) -> None:
+        """The sticky-sidebar TOC must reach the response body and contain
+        in-page anchor links (``href="#…"``). Without them users on a long
+        14-section policy would have to scroll the whole document."""
+        resp = await client.get("/privacy.html")
+        assert resp.status_code == 200
+        assert 'href="#1-who-is-the-data-controller"' in resp.text
 
 
-class TestRenderPrivacyHtmlLoader:
-    """Unit-level coverage for ``render_privacy_html`` — verifies the
-    GFM-table extension is wired and the loader honors an explicit
-    ``legal_dir`` override (the path resolution the app uses at startup).
+class TestRenderPrivacyLoader:
+    """Unit-level coverage for ``render_privacy`` — verifies the GFM-table
+    and TOC extensions are wired, the loader honors an explicit
+    ``legal_dir`` override (the path resolution the app uses at startup),
+    and the return shape carries both body HTML and the sidebar TOC.
     """
 
     def test_renders_tables_via_extra_extension(self, tmp_path: Path) -> None:
@@ -125,23 +164,45 @@ class TestRenderPrivacyHtmlLoader:
             "| cell1 | cell2 |\n",
             encoding="utf-8",
         )
-        html = render_privacy_html(tmp_path)
+        result = render_privacy(tmp_path)
+        html = result["html"]
         assert "<table>" in html
         assert "<th>Col A</th>" in html
         assert "<td>cell1</td>" in html
 
     def test_renders_h1_from_markdown_header(self, tmp_path: Path) -> None:
-        """``# Heading`` -> ``<h1>Heading</h1>``. Sanity check that the
-        loader returns an HTML fragment, not the raw markdown."""
+        """``# Heading`` -> ``<h1 id="…">Heading</h1>``. Sanity check that
+        the loader returns an HTML fragment, not the raw markdown. The
+        ``toc`` extension also stamps an ``id`` attribute on every heading
+        — assert just the visible text + tag so the test stays robust to
+        the slug format."""
         (tmp_path / "privacy.md").write_text(
             "# My Heading\n\nsome body text.\n", encoding="utf-8",
         )
-        html = render_privacy_html(tmp_path)
-        assert "<h1>My Heading</h1>" in html
+        result = render_privacy(tmp_path)
+        html = result["html"]
+        assert "<h1" in html
+        assert "My Heading</h1>" in html
         assert "<p>some body text.</p>" in html
+
+    def test_returns_toc_html_with_only_h2_entries(self, tmp_path: Path) -> None:
+        """``toc_depth='2-2'`` restricts the sidebar to top-level sections.
+        A document with an H1, two H2s, and an H3 must produce a TOC that
+        lists the two H2 anchor links and excludes the H3 — otherwise a
+        14-section policy would balloon to ~30 sidebar entries."""
+        (tmp_path / "privacy.md").write_text(
+            "# Title\n\n## First section\n\nbody\n\n"
+            "### Sub of first\n\nsub body\n\n## Second section\n\nmore body\n",
+            encoding="utf-8",
+        )
+        result = render_privacy(tmp_path)
+        toc = result["toc"]
+        assert 'href="#first-section"' in toc
+        assert 'href="#second-section"' in toc
+        assert 'href="#sub-of-first"' not in toc
 
     def test_raises_when_privacy_md_missing(self, tmp_path: Path) -> None:
         """An empty ``legal_dir`` must raise — fail-loud at startup is
         better than serving an empty privacy page."""
         with pytest.raises(FileNotFoundError):
-            render_privacy_html(tmp_path)
+            render_privacy(tmp_path)
