@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [1.5.1](https://github.com/syrax90/claude_mobile/compare/android-v1.5.0...android-v1.5.1) (2026-05-23)
+
+
+### Bug Fixes
+
+* **android:** respect lp.width in TerminalView.onMeasure + direction-aware HSV intercept to restore horizontal pan in Static display mode ([9162b23](https://github.com/syrax90/claude_mobile/commit/9162b23d66e70f858ddc607c3ed9d3da21d0e992))
+* **terminal:** respect lp.width in TerminalView.onMeasure + direction-aware HSV intercept to restore horizontal pan in Static display mode ([4e2a6c6](https://github.com/syrax90/claude_mobile/commit/4e2a6c66176082fde34deb575b3f55a5f4574e06))
+
 ## [1.5.0](https://github.com/syrax90/claude_mobile/compare/android-v1.4.0...android-v1.5.0) (2026-05-22)
 
 
