@@ -47,6 +47,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.ui.theme.StateCrashed
 import com.mobaide.app.ui.theme.StateRunning
@@ -78,6 +80,16 @@ fun TerminalScreen(
 
     LaunchedEffect(Unit) {
         viewModel.userMessages.collect { snackbarHostState.showSnackbar(it) }
+    }
+
+    // STOPPED→STARTED edge: screen turned back on, or the user navigated
+    // back to this terminal from another screen. If the WS dropped while
+    // the activity was stopped (Doze restricts network on screen-off), the
+    // session-WS backoff may sit at the 30 s ceiling — without this nudge
+    // the user stares at the "Reconnecting…" overlay for up to half a
+    // minute. The ViewModel skips when already Live.
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        viewModel.onScreenVisible()
     }
 
     val stateColor = when (sessionState) {
