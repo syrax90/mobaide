@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [1.5.2](https://github.com/syrax90/claude_mobile/compare/android-v1.5.1...android-v1.5.2) (2026-05-23)
+
+
+### Bug Fixes
+
+* **android:** force-reconnect on screen-on + clear emulator before server replay to unstick "Reconnecting" overlay ([c1aea71](https://github.com/syrax90/claude_mobile/commit/c1aea7117000373a5179677d4176c5156a5712b9))
+* **terminal:** force-reconnect on screen-on + clear emulator before server replay to unstick "Reconnecting" overlay ([51ebff2](https://github.com/syrax90/claude_mobile/commit/51ebff2ef958b03aca9adc8a007437a7a2e942a4))
+
 ## [1.5.1](https://github.com/syrax90/claude_mobile/compare/android-v1.5.0...android-v1.5.1) (2026-05-23)
 
 
