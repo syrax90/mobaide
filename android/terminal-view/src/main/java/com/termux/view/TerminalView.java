@@ -734,6 +734,29 @@ public final class TerminalView extends View {
         }
     }
 
+    /**
+     * Scrolling-fix v2: respect {@code layoutParams.width} when the parent gives us an
+     * {@code UNSPECIFIED} width spec. {@link android.widget.HorizontalScrollView} passes
+     * UNSPECIFIED to let children declare their own intrinsic width; the default
+     * {@link View#onMeasure} returns {@link #getSuggestedMinimumWidth()} for UNSPECIFIED,
+     * which is 0 here (no background drawable, no {@code minimumWidth}). Combined with
+     * {@code HorizontalScrollView.fillViewport = true}, that collapses the Static-column
+     * surface to viewport width and defeats horizontal panning. Other spec modes preserve
+     * the default behavior so Compose's AndroidView measurement path is unaffected.
+     */
+    @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int width;
+        if (MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.UNSPECIFIED) {
+            ViewGroup.LayoutParams lp = getLayoutParams();
+            width = (lp != null && lp.width > 0) ? lp.width : getSuggestedMinimumWidth();
+        } else {
+            width = getDefaultSize(getSuggestedMinimumWidth(), widthMeasureSpec);
+        }
+        int height = getDefaultSize(getSuggestedMinimumHeight(), heightMeasureSpec);
+        setMeasuredDimension(width, height);
+    }
+
     @Override
     public boolean onCheckIsTextEditor() {
         return true;
