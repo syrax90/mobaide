@@ -14,6 +14,8 @@
     --radius: 6px;
 }
 *, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body {
     font-family: system-ui, -apple-system, sans-serif;
     background: var(--bg);
@@ -201,3 +203,116 @@ section { margin-bottom: 2rem; }
 .google-verify-wrapper[aria-disabled="true"] { opacity: 0.5; pointer-events: none; }
 .delete-mode-hint { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--text-muted); }
 .delete-mode-hint.danger { color: var(--danger); font-weight: 600; }
+/* Legal pages (privacy, future ToS) — article layout with a sticky
+   table-of-contents sidebar on desktop. The document is rendered from
+   markdown by central_server.legal.loader; the ``toc`` extension wraps
+   the auto-generated TOC in ``<div class="toc"><ul>…</ul></div>``. */
+.legal-doc { display: block; }
+.legal-body { max-width: 780px; }
+.legal-body > :first-child { margin-top: 0; }
+.legal-body h1 { font-size: 2rem; margin: 0 0 0.5rem; line-height: 1.25; }
+.legal-body h1 + p {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    padding-bottom: 1rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+}
+.legal-body h2 {
+    font-size: 1.4rem;
+    margin: 2.5rem 0 0.75rem;
+    line-height: 1.3;
+    scroll-margin-top: 1.5rem;
+}
+.legal-body h3 {
+    font-size: 1.1rem;
+    margin: 1.75rem 0 0.5rem;
+    line-height: 1.35;
+    scroll-margin-top: 1.5rem;
+}
+.legal-body p, .legal-body li { line-height: 1.65; }
+.legal-body ol, .legal-body ul { padding-left: 1.5rem; }
+.legal-body li + li { margin-top: 0.35rem; }
+.legal-body hr { border: 0; border-top: 1px solid var(--border); margin: 2.5rem 0; }
+.legal-body a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.legal-body a:hover { color: var(--primary-hover); }
+.legal-body code { word-break: break-word; }
+/* The three-column data-schedule tables would otherwise overflow the
+   reading column on narrow viewports — let them scroll horizontally
+   instead of wrapping into an unreadable ladder. */
+.legal-body table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: 0;
+}
+.legal-toc { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem; }
+.legal-toc-details {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.5rem 1rem;
+}
+.legal-toc-details > summary {
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    padding: 0.25rem 0;
+    list-style: none;
+}
+.legal-toc-details > summary::-webkit-details-marker { display: none; }
+.legal-toc-details > summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 0.5rem;
+    transition: transform 0.15s ease;
+    color: var(--text-muted);
+}
+.legal-toc-details[open] > summary::before { transform: rotate(90deg); }
+.legal-toc .toc { padding: 0; }
+.legal-toc .toc > ul,
+.legal-toc .toc ul ul { list-style: none; padding-left: 0; margin: 0.5rem 0 0; }
+.legal-toc .toc li { margin: 0.4rem 0; line-height: 1.4; }
+.legal-toc .toc a {
+    color: var(--text-muted);
+    text-decoration: none;
+    display: block;
+    padding: 0.15rem 0;
+    border-left: 2px solid transparent;
+    padding-left: 0.5rem;
+    margin-left: -0.5rem;
+}
+.legal-toc .toc a:hover { color: var(--primary); border-left-color: var(--primary); }
+@media (min-width: 900px) {
+    .legal-doc {
+        display: grid;
+        grid-template-columns: minmax(0, 780px) 220px;
+        column-gap: 3rem;
+        align-items: start;
+    }
+    .legal-body { grid-column: 1; grid-row: 1; max-width: none; }
+    .legal-toc {
+        grid-column: 2;
+        grid-row: 1;
+        position: sticky;
+        top: 1.5rem;
+        align-self: start;
+        max-height: calc(100vh - 3rem);
+        overflow-y: auto;
+        margin-bottom: 0;
+    }
+    .legal-toc-details {
+        border: 0;
+        background: transparent;
+        padding: 0;
+    }
+    .legal-toc-details > summary {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+        cursor: default;
+        padding: 0 0 0.5rem;
+    }
+    .legal-toc-details > summary::before { content: none; }
+}

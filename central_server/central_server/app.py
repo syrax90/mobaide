@@ -20,7 +20,7 @@ from .auth.rate_limit import ResendRateLimiter
 from .auth.service import AuthService
 from .config import CentralServerConfig
 from .db.database import Database
-from .legal.loader import render_privacy_html, resolve_legal_dir
+from .legal.loader import render_privacy, resolve_legal_dir
 from .templates.service import TemplateService
 from .logging_setup import (
     bind_request_context,
@@ -198,8 +198,12 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
     app.state.config = config
     # Render the privacy policy once at startup; the route handler then
-    # returns the cached HTML via the Jinja shell template.
-    app.state.privacy_html = render_privacy_html(resolve_legal_dir())
+    # returns the cached HTML via the Jinja shell template. Both the body
+    # HTML and a separate H2-only TOC are cached so the sticky-sidebar
+    # template doesn't need to re-parse the document per request.
+    _rendered_privacy = render_privacy(resolve_legal_dir())
+    app.state.privacy_html = _rendered_privacy["html"]
+    app.state.privacy_toc_html = _rendered_privacy["toc"]
 
     if _STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
