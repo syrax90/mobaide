@@ -117,7 +117,7 @@ fun SettingsScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
             ) {
-                Text("Your devices")
+                Text("My devices")
             }
 
             Spacer(modifier = Modifier.height(8.dp))

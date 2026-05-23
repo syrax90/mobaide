@@ -12,7 +12,7 @@ These tests pin:
 * Two distinct device ids for the same agent produce two distinct
   refresh-token rows (each can independently be revoked).
 * First-mint upserts a row into ``mobile_devices`` with the provided
-  name so the device appears on the user's "Your devices" screen.
+  name so the device appears on the user's "My devices" screen.
 * Cross-tenant collision: user B reusing user A's device id is
   rejected with HTTP 409.
 """
