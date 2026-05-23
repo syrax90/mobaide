@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.5](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.4...agent-v0.2.5) (2026-05-23)
+
+
+### Bug Fixes
+
+* **android:** replace 256 KB single-frame replay with 4 MB chunked ring buffer (proto v3) ([b1740e9](https://github.com/syrax90/claude_mobile/commit/b1740e92bbe3fcc77edcf620490ae9000985217b))
+* **replay:** replace 256 KB single-frame replay with 4 MB chunked ring buffer (proto v3) ([bd8bb63](https://github.com/syrax90/claude_mobile/commit/bd8bb633f83e7a6552b0db15f00291b71ec53504))
+
 ## [0.2.4](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.3...agent-v0.2.4) (2026-05-21)
 
 
