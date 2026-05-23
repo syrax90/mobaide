@@ -122,7 +122,10 @@ class TerminalViewModel @Inject constructor(
     val session: TerminalSession
 
     init {
-        session = TerminalSession(sessionCallback).also {
+        // 10k transcript rows holds the server's 4 MB ring even after wrap
+        // expansion through ANSI/redraws; the Termux emulator clamps to its
+        // own [100, 50000] range, so 10000 stays comfortably below the cap.
+        session = TerminalSession(TRANSCRIPT_ROWS, sessionCallback).also {
             // 80x24 default until the View measures itself and calls resize().
             it.updateSize(80, 24, 12, 24)
             it.setOnInputListener { data, offset, count ->
@@ -215,19 +218,19 @@ class TerminalViewModel @Inject constructor(
 
         when (val decoded = TerminalProtocol.decode(frame)) {
             is TerminalFrame.Output -> {
+                // During replay the chunks are appended without flipping the
+                // state — that only happens on REPLAY_END below. The handshake
+                // contract is `'b' → 'o'(chunk)…'o'(chunk) → 'e'`, so a stray
+                // `'o'` outside replay is live data and is also just appended.
                 if (decoded.bytes.isNotEmpty()) {
                     session.emitOutput(decoded.bytes, decoded.bytes.size)
-                }
-                if (inReplay) {
-                    inReplay = false
-                    _connectionState.value = ConnectionState.Live
                 }
             }
             is TerminalFrame.State -> {
                 _sessionState.value = parseStatus(decoded.json)
             }
             TerminalFrame.ReplayMarker -> {
-                // The server replays `state + REPLAY marker + full ring buffer`
+                // The server replays `state + REPLAY marker + chunked ring + REPLAY_END`
                 // on EVERY reconnect, not just the first. Without clearing the
                 // emulator first, the ring bytes are appended on top of whatever
                 // the local emulator already shows from before the drop —
@@ -240,6 +243,18 @@ class TerminalViewModel @Inject constructor(
                 inReplay = true
                 setFollowMode(true)
                 _connectionState.value = ConnectionState.ReplayingBuffer
+            }
+            TerminalFrame.ReplayEndMarker -> {
+                // Server has finished sending the replay chunks; live frames
+                // resume after this. Without this explicit terminator the
+                // client cannot tell "next chunk of replay" from "live byte"
+                // and would either drop the overlay too early (single-frame
+                // protocol v2 behaviour) or never drop it at all (chunked v3
+                // before this case existed).
+                if (inReplay) {
+                    inReplay = false
+                    _connectionState.value = ConnectionState.Live
+                }
             }
             null -> { /* unknown frame type, ignore */ }
         }
@@ -438,6 +453,16 @@ class TerminalViewModel @Inject constructor(
 
     private companion object {
         const val MAX_UNREAD_DISPLAY = 9999
+
+        /**
+         * Local emulator transcript size in rows. Sized to comfortably hold
+         * the server's full ring-buffer replay (~4 MB raw PTY bytes, which
+         * unwrap to a few thousand effective rows even with dense ANSI/redraw
+         * overhead). Stays well below Termux's TERMINAL_TRANSCRIPT_ROWS_MAX
+         * of 50_000 — lifting this further is cheap (rows are allocated
+         * lazily) if very long sessions become common.
+         */
+        const val TRANSCRIPT_ROWS = 10_000
 
         /**
          * `ESC [ H` (cursor home) + `ESC [ 2 J` (erase entire display) +

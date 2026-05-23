@@ -34,8 +34,8 @@ class AgentVersionMonitorTest {
     ) = VersionInfoResponse(
         name = "mobaide_agent",
         server_version = serverVersion,
-        protocol_versions = listOf(2),
-        min_client_version = 2,
+        protocol_versions = listOf(3),
+        min_client_version = 3,
         capabilities = JsonObject(emptyMap()),
         latest_agent_version = latestAgent,
     )

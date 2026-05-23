@@ -9,7 +9,7 @@ import time
 import pytest
 from starlette.testclient import TestClient
 
-from tests.conftest import TEST_USERNAME
+from tests.conftest import TEST_USERNAME, drain_text_preamble
 
 
 @pytest.fixture
@@ -45,7 +45,8 @@ class TestWsAuth:
         with test_client.websocket_connect(
             f"/ws/session/{session_id_sync}?token={auth_token}",
         ) as ws:
-            # First frame must be a state frame.
+            drain_text_preamble(ws)
+            # First binary frame must be a state frame.
             frame = ws.receive_bytes()
             payload = _state(frame)
             assert payload is not None
@@ -86,22 +87,31 @@ class TestWsBinaryFrames:
     def test_initial_handshake_sequence(
         self, test_client, auth_token, session_id_sync,
     ):
-        """On connect we expect: state frame, then replay marker."""
+        """Protocol v3 handshake: state → 'b' → 'o' (empty for a fresh
+        session) → 'e'."""
         with test_client.websocket_connect(
             f"/ws/session/{session_id_sync}?token={auth_token}",
         ) as ws:
+            drain_text_preamble(ws)
             first = ws.receive_bytes()
             assert first[:1] == b"s"
             second = ws.receive_bytes()
-            assert second[:1] == b"b"
             assert second == b"b"  # marker has empty payload
+            third = ws.receive_bytes()
+            assert third[:1] == b"o"
+            fourth = ws.receive_bytes()
+            assert fourth == b"e"  # end marker has empty payload
 
     def test_send_resize_binary(self, test_client, auth_token, session_id_sync):
         with test_client.websocket_connect(
             f"/ws/session/{session_id_sync}?token={auth_token}",
         ) as ws:
+            drain_text_preamble(ws)
+            # state → 'b' → 'o' (replay chunk) → 'e' for a fresh session.
             ws.receive_bytes()  # state
-            ws.receive_bytes()  # replay marker
+            ws.receive_bytes()  # replay-start marker
+            ws.receive_bytes()  # replay output (empty for fresh ring)
+            ws.receive_bytes()  # replay-end marker
             ws.send_bytes(b"r" + struct.pack(">HH", 40, 120))
             time.sleep(0.3)
 
@@ -110,8 +120,11 @@ class TestWsBinaryFrames:
         with test_client.websocket_connect(
             f"/ws/session/{session_id_sync}?token={auth_token}",
         ) as ws:
+            drain_text_preamble(ws)
             ws.receive_bytes()  # state
-            ws.receive_bytes()  # replay marker
+            ws.receive_bytes()  # replay-start marker
+            ws.receive_bytes()  # replay output (empty for fresh ring)
+            ws.receive_bytes()  # replay-end marker
             text = b"echo test\r\n" if sys.platform == "win32" else b"echo test\r"
             ws.send_bytes(b"i" + text)
             time.sleep(0.3)

@@ -53,6 +53,37 @@ def default_shell() -> list[str]:
     return ["/bin/bash"]
 
 
+def drain_text_preamble(ws) -> None:
+    """Consume the ``server_info`` text frame that ``/ws/session/<id>``
+    sends before any binary handshake frame.
+
+    ``WebSocketTestSession.receive_bytes()`` does NOT skip text envelopes —
+    it raises ``KeyError: 'bytes'`` if the next queued message is text. The
+    binary-protocol tests in this package therefore need to drain the
+    leading text frame first.
+
+    Falls back to pushing the bytes through to the next ``receive_bytes()``
+    call if the server somehow sent a binary frame first (would be a
+    server-contract regression, but the helper stays robust).
+    """
+    first = ws.receive()
+    if first.get("text") is not None:
+        return
+    deferred = first.get("bytes")
+    if deferred is None:
+        pytest.fail(f"Unexpected frame in preamble: {first!r}")
+    original_receive_bytes = ws.receive_bytes
+    pending = {"bytes": deferred}
+
+    def _receive_bytes_with_pending() -> bytes:
+        b = pending.pop("bytes", None)
+        if b is not None:
+            return b
+        return original_receive_bytes()
+
+    ws.receive_bytes = _receive_bytes_with_pending  # type: ignore[assignment]
+
+
 @pytest.fixture
 def session_config() -> SessionConfig:
     return SessionConfig(

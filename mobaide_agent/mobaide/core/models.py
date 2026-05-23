@@ -42,6 +42,11 @@ class SessionConfig:
     rows: int = 24
     cols: int = 80
     scrollback_size: int = 10_000
+    # Sliding-window cap (bytes) on the raw PTY ring buffer replayed to
+    # clients on WS (re)connect. The default ~4 MB covers tens of minutes
+    # of dense Ink/React TUI output; tests override this with a small cap
+    # to exercise the overflow path without producing megabytes of bytes.
+    ring_buffer_bytes: int = 4 * 1024 * 1024
     # When set, ``SessionManager`` resolves the project and uses
     # ``ClaudeLauncher`` to build argv/cwd/env, overwriting the raw
     # fields above before the PTY is spawned.
