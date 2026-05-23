@@ -24,11 +24,13 @@ import com.termux.view.TerminalViewClient
  *
  * The native [TerminalView] is always hosted inside a [TerminalHorizontalScrollView]. In
  * [TerminalDisplayMode.Static], the inner view is laid out wider than the viewport
- * (`staticColumns * mFontWidth`) and the HSV provides horizontal panning. In
+ * (`staticColumns * mFontWidth`) — the [TerminalView] reports that width to the HSV via its
+ * `onMeasure` override — and the HSV provides horizontal panning. In
  * [TerminalDisplayMode.Full] the inner view fills the viewport and the HSV is a transparent
- * passthrough. Using a native HSV (instead of Compose `Modifier.horizontalScroll`) lets
- * [TerminalView]'s `requestDisallowInterceptTouchEvent` call cooperate properly so vertical
- * scrolling is not stolen by horizontal finger drift.
+ * passthrough. The HSV's intercept is direction-aware (dominance check `dx > dy`) which,
+ * combined with [TerminalView]'s symmetric `requestDisallowInterceptTouchEvent(true)` on
+ * vertically-dominant scrolls, keeps vertical scrollback and horizontal panning cleanly
+ * independent on any device.
  */
 @Composable
 fun TerminalSurfaceView(
