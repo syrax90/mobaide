@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.11](https://github.com/syrax90/claude_mobile/compare/server-v0.1.10...server-v0.1.11) (2026-05-23)
+
+
+### Features
+
+* **agent:** self-heal protocol-version mismatch via HTTPS-bootstrap update ([174cd93](https://github.com/syrax90/claude_mobile/commit/174cd936307c53228d8b457e66d910426e9893d7))
+* **agent:** self-heal protocol-version mismatch via HTTPS-bootstrap update ([2243d31](https://github.com/syrax90/claude_mobile/commit/2243d31040091f57908092556fb03e36883c5a8d))
+
 ## [0.1.10](https://github.com/syrax90/claude_mobile/compare/server-v0.1.9...server-v0.1.10) (2026-05-23)
 
 
