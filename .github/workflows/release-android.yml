@@ -9,6 +9,12 @@ concurrency:
   group: release-android-${{ github.ref }}
   cancel-in-progress: false
 
+# contents:read is sufficient — the signed .aab is uploaded to the Play
+# Console internal track via the google-play-action, not back to this
+# repo. Same explicit-permissions mitigation as protocol-integrity.yml.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest

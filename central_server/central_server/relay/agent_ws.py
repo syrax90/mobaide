@@ -108,6 +108,14 @@ async def agent_tunnel(websocket: WebSocket) -> None:
                 ),
                 "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
                 "server_protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
+                # Relative path, resolved by the agent against the relay's
+                # HTTPS origin. The agent's HTTPS-bootstrap path fetches
+                # the signed manifest from this endpoint when the in-band
+                # relay update channel is blocked by a protocol-version
+                # mismatch (this rejection itself). The signature is the
+                # trust anchor — server-controlled URL substitution can
+                # at worst force a fail-closed signature_failed outcome.
+                "manifest_url": "/api/v1/agent/manifest.json",
             }))
         except Exception:
             pass

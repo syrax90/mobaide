@@ -10,6 +10,18 @@ concurrency:
   group: protocol-integrity-${{ github.ref }}
   cancel-in-progress: true
 
+# Without an explicit permissions block, the workflow inherits the repo
+# default, which can leave actions/checkout's GITHUB_TOKEN without the
+# contents:read scope it needs to embed a usable Basic-auth header into
+# the cloned remote's URL — surfacing as
+#   fatal: could not read Username for 'https://github.com': terminal prompts disabled
+# on the very first fetch. Declaring contents:read explicitly is the
+# documented mitigation and is also the least-privilege envelope this job
+# needs (it diffs the PR's two SHAs and runs pytest; no writes).
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   protocol-integrity:
     runs-on: ubuntu-latest

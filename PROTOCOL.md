@@ -34,6 +34,44 @@ cadence; they do **not** gate compatibility.
   * Mobile clients now hold *ReplayingBuffer* state until ``'e'`` is
     received; chunked ``'o'`` frames in between are appended without state
     transitions.
+  * ``incompatible`` rejection frame (server → agent, text, immediately
+    before the ``4002`` close) now carries an additional ``manifest_url``
+    field: ``{type:"incompatible", reason, min_client_version,
+    server_protocol_versions, manifest_url}``. The value is a relative
+    path (``/api/v1/agent/manifest.json``) the agent resolves against the
+    relay's HTTPS origin. The agent's HTTPS-bootstrap path uses it to
+    fetch the signed manifest out-of-band, breaking the chicken-and-egg
+    in which the rejected protocol version is also the channel that
+    would deliver the manifest pointer the agent needs to update past
+    it. The signature remains the trust anchor — a misleading
+    ``manifest_url`` can at worst force a fail-closed
+    ``signature_failed`` outcome.
+
+### HTTPS-bootstrap auto-update path (proto-v3+)
+
+In addition to the in-band manifest delivery (``auth_ok`` and
+``agent_manifest_update`` control frames), the agent reaches the same
+signed manifest over plain HTTPS at
+``GET /api/v1/agent/manifest.json`` on the central server. The bootstrap
+fetch is wired on three triggers:
+
+* **Startup pre-flight** — the lifespan calls
+  ``run_https_update_check`` before the first relay connect, so an
+  outdated agent self-heals during cold boot.
+* **Protocol-incompatible recovery** — on close-code ``4002`` the
+  relay's connect loop fires a callback that runs
+  ``run_https_update_check(force=True)`` against the
+  ``manifest_url`` hint from the rejection payload (falling back to
+  the URL derived from ``RELAY_SERVER_URL``).
+* **Periodic poll** — a 60-minute background task reconciles any
+  manifest the relay channel missed (queue saturation, missed
+  rebroadcast, etc.).
+
+The HTTPS bootstrap is the floor below the relay-driven path. As long
+as a deployed agent has shipped with the bootstrap and a pinned trust
+key (``<prefix>/trust/central_server.pub``), any future
+``PROTOCOL_VERSION`` bump is recoverable without operator
+intervention.
 
 ## proto-v2 (superseded by proto-v3)
 
@@ -82,7 +120,7 @@ and apply to every current proto-v revision.
 | Code | Constant | Direction | Semantics |
 |------|----------|-----------|-----------|
 | 4001 | ``AUTH_FAILED_CLOSE_CODE`` | server → client | JWT missing, expired, or invalid. Android treats this as a session-expiry trigger (force logout). |
-| 4002 | ``PROTOCOL_INCOMPATIBLE_CLOSE_CODE`` | server → agent | Agent's ``protocol_version`` is not in the server's ``SUPPORTED_PROTOCOL_VERSIONS``. Terminal — agent does not retry on the same binary. |
+| 4002 | ``PROTOCOL_INCOMPATIBLE_CLOSE_CODE`` | server → agent | Agent's ``protocol_version`` is not in the server's ``SUPPORTED_PROTOCOL_VERSIONS``. The relay never authenticates — but the agent's HTTPS-bootstrap path (see "HTTPS-bootstrap auto-update path" in the proto-v3 section) fetches the signed manifest from ``/api/v1/agent/manifest.json``, stages the new release, and the supervisor respawns the agent on the upgraded binary. The relay's reconnect-backoff jumps to ``reconnect_max_delay`` on this code so the per-60s log churn stops while the binary swap is in flight. |
 | 4010 | ``WS_CLOSE_ADMIN_REVOKED`` | server → client/agent | Admin permanently deleted the user or unregistered the agent, **or** the user self-scheduled deletion via ``POST /api/auth/me/delete`` (CLA-61) and the server is tearing the live session down before committing the schedule. **Also** emitted by the auth dependencies (`ws_authenticate_user`, `ws_authenticate_mobile`) when a still-cryptographically-valid JWT references a user/agent that has been cascade-deleted — so the offline-then-reconnect logout path renders the same "account removed" message as the synchronous teardown. The CLA-61 sweeper also fires this code at final-purge time so any reconnected client on a stale token is forced out. All associated sessions are terminated and credentials are invalid. Android displays a user-visible "account removed" snackbar and permanently suppresses auto-reconnect. |
 | 4011 | ``WS_CLOSE_ADMIN_FORCE_DISCONNECT`` | server → client/agent | Admin issued a non-destructive force-disconnect. Credentials remain valid; the client/agent **may** reconnect. Deliberately distinct from 4001 so Android does not treat this as an auth failure. |
 | 4012 | ``WS_CLOSE_AGENT_TRANSIENT_OFFLINE`` | server → mobile client | The mobile client tried to attach to a per-agent relay endpoint while the agent's tunnel was not currently connected (transient: agent restart, crash, network blip, deploy). Also emitted to paired mobile clients when an agent's tunnel disconnects mid-session. Credentials remain valid; the client **must** continue its exponential-backoff reconnect loop. Deliberately distinct from 4010 so Android does not treat a transient agent restart as a destructive admin-revoke. |
@@ -108,3 +146,16 @@ and apply to every current proto-v revision.
    must update the golden file or CI fails.
 4. Add a new section to this file documenting the change.
 5. Tag the protocol commit ``proto-v<N>``.
+
+### HTTPS-bootstrap pre-requisite
+
+Before bumping ``PROTOCOL_VERSION``, confirm that **every deployed agent
+release in the support window already speaks the HTTPS-bootstrap path**
+(this means every release at or after ``agent-v0.2.5``). The bootstrap is
+the only channel that can deliver a manifest pointer to an agent whose
+``protocol_version`` is below ``MIN_CLIENT_PROTOCOL_VERSION``; an agent
+that pre-dates the bootstrap is stranded by any incompatible bump and
+must be reinstalled by hand. The release pipeline does not enforce this
+gate yet — it is a release-checklist item until the
+``test_e2e_autoupdate`` suite grows coverage for the bootstrap path
+itself.

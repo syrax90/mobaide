@@ -32,12 +32,21 @@ from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .config import AgentConfig
 from .git.router import router as git_router
-from .install_paths import default_prefix, read_trust_public_key
+from .install_paths import (
+    default_prefix,
+    manifest_url_from_relay_server_url,
+    read_trust_public_key,
+)
 from .logging import bind_request_context, clear_request_context, get_logger
 from .logging_setup import configure_logging, shutdown_logging
 from .projects.router import router as projects_router
 from .sessions.router import router as sessions_router
 from .events import EventBus
+from .update_check import (
+    PERIODIC_POLL_INTERVAL_SECONDS,
+    run_https_update_check,
+    run_periodic_check_loop,
+)
 from .updater_router import router as updater_router
 from .ws.event_fanout import SessionListBroadcaster
 from .ws.events import router as ws_events_router
@@ -86,6 +95,69 @@ def _build_updater(app: FastAPI):
     )
 
 
+def _resolve_manifest_url(relay_cfg: RelayConfig) -> str | None:
+    """Derive the HTTPS manifest URL from the relay's server URL.
+
+    Returns ``None`` (and logs at INFO) when derivation fails — for
+    example a developer-mode ``ws://localhost`` config without the
+    insecure-bootstrap escape hatch enabled. The HTTPS bootstrap path
+    is then silently disabled; the relay path remains the sole update
+    channel for that install.
+    """
+    try:
+        return manifest_url_from_relay_server_url(relay_cfg.server_url)
+    except ValueError as exc:
+        logger.info(
+            "update_check.disabled reason=%s relay_url=%s",
+            exc, relay_cfg.server_url,
+        )
+        return None
+
+
+def _resolve_manifest_url_with_hint(
+    relay_cfg: RelayConfig, hint: str | None,
+) -> str | None:
+    """Combine the server-provided hint with the env-derived URL.
+
+    The server's ``incompatible`` frame may include a ``manifest_url``
+    hint — accepted only as a path beginning with a single ``/`` and
+    resolved against the relay's HTTPS origin. Absolute URLs, protocol-
+    relative (``//host/...``) hints, and any hint containing ASCII
+    whitespace or NUL are rejected so a misbehaving server cannot
+    redirect the bootstrap fetch to an arbitrary host. The whitespace
+    guard matters because ``urljoin`` strips leading ASCII whitespace
+    per the WHATWG URL spec before parsing — a hint like
+    ``"/\\t/evil.example/path"`` would otherwise pass a naive
+    ``startswith("/")`` + ``not startswith("//")`` check yet still
+    resolve to ``https://evil.example/path``. The signature remains
+    the trust anchor either way, so a rejected hint at worst falls
+    through to the env-derived URL.
+    """
+    derived = _resolve_manifest_url(relay_cfg)
+    if not hint:
+        return derived
+    if any(c.isspace() for c in hint) or "\x00" in hint:
+        logger.warning(
+            "relay.manifest_url_hint_rejected hint=%r (whitespace or NUL "
+            "would be stripped by urljoin and could smuggle a protocol-"
+            "relative URL past the path-only guard)",
+            hint,
+        )
+        return derived
+    if not hint.startswith("/") or hint.startswith("//"):
+        logger.warning(
+            "relay.manifest_url_hint_rejected hint=%r (must be path-only, "
+            "starting with a single '/')",
+            hint,
+        )
+        return derived
+    if derived is None:
+        return None
+    from urllib.parse import urljoin
+
+    return urljoin(derived, hint)
+
+
 async def _start_relay_in_process(
     app: FastAPI, relay_cfg: RelayConfig,
 ) -> None:
@@ -100,13 +172,44 @@ async def _start_relay_in_process(
     configured — no "lifespan started the relay this way, post-pair
     started it that way" drift.
 
-    Assignment order matters: ``relay_client.start()`` runs first, then
-    the updater is built and wired, and only after that do the
-    ``app.state.*`` writes happen. A failure mid-startup leaves
-    ``app.state.relay_client`` ``None`` and ``pairing_pending`` unchanged
-    so a caller falling back to ``sys.exit(75)`` sees consistent state.
+    Startup ordering:
+
+    1. Build the staged-binary updater (returns ``None`` for
+       developer-checkout installs that lack a pinned trust key — the
+       auto-updater stays disabled, fail-closed).
+    2. **Pre-connect HTTPS bootstrap** — when the updater exists and a
+       manifest URL can be derived from ``RELAY_SERVER_URL``, fetch the
+       signed manifest over HTTPS and apply it if newer than the
+       running version. If an update is staged, the updater invokes
+       ``sys.exit(EXIT_RESTART_REQUESTED)`` from within
+       ``consider_manifest`` and the supervisor respawns into the
+       fresh release; the relay client is never started on this run.
+       This is the side-channel that breaks the chicken-and-egg loop
+       when a protocol bump strands an older agent.
+    3. Wire the relay-side manifest callback (in-band push from the
+       running tunnel) and the protocol-incompatible callback (HTTPS
+       fallback triggered by close-code-4002 rejection) onto the
+       relay client, then ``start()`` it.
+    4. Atomic ``app.state.*`` assignment + clear ``pairing_pending``.
+    5. Spawn the 60-minute background HTTPS poll so the agent
+       reconciles any manifest the relay missed.
     """
     from mobaide.relay.client import RelayClient
+
+    updater = _build_updater(app)
+    manifest_url = _resolve_manifest_url(relay_cfg) if updater is not None else None
+
+    if updater is not None and manifest_url is not None:
+        outcome = await run_https_update_check(updater, manifest_url)
+        # Outcome "staged" means consider_manifest has already invoked
+        # sys.exit(75); under test injection sys.exit is monkeypatched so
+        # we fall through and continue startup. Any other outcome
+        # (no_change, deferred, signature_failed, unreachable) keeps the
+        # cold-boot path going.
+        logger.info(
+            "agent.pre_connect_update_check outcome=%s url=%s",
+            outcome, manifest_url,
+        )
 
     relay_client = RelayClient(
         config=relay_cfg,
@@ -115,13 +218,44 @@ async def _start_relay_in_process(
         broadcaster=app.state.broadcaster,
         app_state=app.state,
     )
-    await relay_client.start()
-    updater = _build_updater(app)
     if updater is not None:
         relay_client.set_manifest_update_callback(updater.consider_manifest)
+
+        async def _on_protocol_incompatible(hint: str | None) -> None:
+            url = _resolve_manifest_url_with_hint(relay_cfg, hint)
+            if url is None:
+                logger.warning(
+                    "relay.protocol_incompatible_no_manifest_url hint=%r",
+                    hint,
+                )
+                return
+            await run_https_update_check(updater, url, force=True)
+
+        relay_client.set_protocol_incompatible_callback(_on_protocol_incompatible)
+
+    await relay_client.start()
     app.state.relay_client = relay_client
     app.state.updater = updater
     app.state.pairing_pending = False
+
+    poll_task = getattr(app.state, "https_poll_task", None)
+    if poll_task is not None and not poll_task.done():
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("agent.https_poll_task_cancel_failed: %s", exc)
+    app.state.https_poll_task = None
+    if updater is not None and manifest_url is not None:
+        app.state.https_poll_task = asyncio.create_task(
+            run_periodic_check_loop(
+                updater, manifest_url,
+                interval_seconds=PERIODIC_POLL_INTERVAL_SECONDS,
+            ),
+            name="https-update-poll",
+        )
 
 
 def _resolve_env_file() -> Path | None:
@@ -177,6 +311,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         elif relay_cfg is not None and pairing_pending:
             app.state.relay_client = None
             app.state.updater = None
+            app.state.https_poll_task = None
             from mobaide.agent.pairing_monitor import (
                 default_layout,
                 run_pairing_monitor,
@@ -302,6 +437,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         else:
             app.state.relay_client = None
             app.state.updater = None
+            app.state.https_poll_task = None
         yield
         logger.info("agent.shutting_down")
         pairing_task = getattr(app.state, "pairing_task", None)
@@ -313,6 +449,15 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 pass
             except Exception as exc:
                 logger.warning("agent.pairing_task_failed: %s", exc)
+        https_poll_task = getattr(app.state, "https_poll_task", None)
+        if https_poll_task is not None and not https_poll_task.done():
+            https_poll_task.cancel()
+            try:
+                await https_poll_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("agent.https_poll_task_failed: %s", exc)
         # Relay client must stop first so it unsubscribes from fanouts/buses before they are torn down.
         relay_client = getattr(app.state, "relay_client", None)
         if relay_client is not None:

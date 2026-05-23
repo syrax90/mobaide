@@ -275,9 +275,16 @@ The Android client (`VersionGateRepository`) compares
 `{type:"auth", protocol_version, agent_version, capabilities}`. If
 `protocol_version` is not in the server's `SUPPORTED_PROTOCOL_VERSIONS`, the
 server emits `{type:"incompatible", reason, min_client_version,
-server_protocol_versions}` and closes with WebSocket code **4002**
-(`PROTOCOL_INCOMPATIBLE_CLOSE_CODE`). The agent treats 4002 as a terminal
-condition and does not retry on the same binary. On a successful auth the
+server_protocol_versions, manifest_url}` and closes with WebSocket code **4002**
+(`PROTOCOL_INCOMPATIBLE_CLOSE_CODE`). On 4002 the relay's reconnect-backoff
+jumps to `reconnect_max_delay` and the agent's HTTPS-bootstrap path (see below)
+fetches the signed manifest from the `manifest_url` hint (or the env-derived
+URL when the hint is absent), stages the new release, and the supervisor
+respawns into the upgraded binary. The agent self-heals without operator
+intervention; the only "terminal" case is an agent that pre-dates the
+HTTPS-bootstrap release and was stranded before it could pick up the new path.
+
+On a successful auth the
 server persists `agent_version` and `agent_protocol_version` (the
 `protocol_version` the agent declared) into the `agents` DB row; both fields
 are exposed via `GET /api/agents` (`AgentSummary`) and rendered on the admin
@@ -470,6 +477,56 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 * **Supervisor restart** — the updater calls `sys.exit(75)`. `RestartForceExitStatus=75` (systemd), the Windows `mobaide_launcher.py` supervisor's exit-code-75 respawn loop, and Task Scheduler's outer `-RestartCount` / `-RestartInterval` all interpret this as "please bring me back up", and the launcher boots into the freshly-pinned release.
 * **Rollback target** — the previous release directory is retained for one
   cycle; a future successful boot of the new release garbage-collects it.
+
+### HTTPS bootstrap (side-channel update path)
+
+The in-band manifest delivery (`auth_ok` + `agent_manifest_update`) is the
+fast path during steady-state operation. It cannot, however, deliver a
+manifest pointer to an agent whose `protocol_version` is below the server's
+`SUPPORTED_PROTOCOL_VERSIONS` — the relay closes with code 4002 before the
+pointer is sent, and the in-band update channel becomes circular (the
+binary that would lift the agent into the new protocol is exactly what
+needs to be delivered).
+
+The HTTPS bootstrap breaks that loop. The signed manifest is also served
+unauthenticated over plain HTTPS at `GET /api/v1/agent/manifest.json`
+(`central_server/central_server/manifest/router.py`). The agent reaches it
+via `mobaide.agent.update_check.run_https_update_check`, which fetches and
+verifies the manifest through the **same** `StagedBinaryUpdater` the relay
+path uses — no second crypto stack, no skip-signature branch. The
+manifest URL is derived from `RELAY_SERVER_URL` in the agent's `.env`
+via the shared `endpoint_url_from_relay_server_url` helper (same hardening
+guards as the trust-key fetch: no user-info, no cleartext by default).
+
+The bootstrap fires on three triggers:
+
+1. **Pre-connect** — the agent's lifespan runs the HTTPS check **before**
+   the first relay connect. An outdated agent self-heals during cold
+   boot; the relay client is never started on this run, and the
+   supervisor respawns into the freshly-staged release on the same
+   exit-75 path the in-band updater uses.
+2. **Protocol-incompatible recovery (close-code 4002)** — the relay
+   client's connect loop fires a `protocol_incompatible` callback that
+   re-runs the HTTPS check with `force=True`. The callback prefers the
+   `manifest_url` hint from the rejection payload over the env-derived
+   URL but treats it as informational only — the signature is the
+   trust anchor either way.
+3. **Periodic poll** — a 60-minute background task
+   (`run_periodic_check_loop`) runs against the env-derived URL. Catches
+   manifests the relay broadcast missed (queue saturation, restart races,
+   etc.). Failures are logged and the loop continues; a single bad
+   iteration cannot tear down the poll for the lifetime of the process.
+
+The bootstrap is gated by the same trust key as the relay path — an
+install without `<prefix>/trust/central_server.pub` runs with the
+auto-updater disabled, and both channels stay silent (fail-closed).
+
+**Policy.** When bumping `PROTOCOL_VERSION`, confirm that every deployed
+agent in the support window already speaks the HTTPS bootstrap (every
+release at or after `agent-v0.2.5`). An agent that pre-dates the bootstrap
+is stranded by any incompatible bump — its only recovery is a manual
+re-install. See [PROTOCOL.md → How to bump](../PROTOCOL.md) for the
+release-checklist item.
 
 ### Forced update (operator escape hatch)
 

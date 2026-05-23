@@ -53,15 +53,14 @@ logger = logging.getLogger(__name__)
 _INITIATE_PATH = "/api/pairing/initiate"
 _BACKOFF_FLOOR_S = 2.0
 _BACKOFF_CEIL_S = 60.0
-_ALLOW_INSECURE_FETCH_ENV = "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
+from .install_paths import ALLOW_INSECURE_HTTPS_BOOTSTRAP_ENV as _ALLOW_INSECURE_FETCH_ENV
 
 
 def _initiate_url(relay_server_url: str) -> str:
     """Translate ``RELAY_SERVER_URL`` into the HTTP initiate URL."""
-    from mobaide.__main__ import _trust_key_url_from_relay_server_url
+    from .install_paths import endpoint_url_from_relay_server_url
 
-    base = _trust_key_url_from_relay_server_url(relay_server_url)
-    return base.removesuffix("/api/v1/agent/trust_key") + _INITIATE_PATH
+    return endpoint_url_from_relay_server_url(relay_server_url, _INITIATE_PATH)
 
 
 def _pairing_ws_url(relay_server_url: str, nonce: str) -> str:
@@ -82,7 +81,7 @@ def _pairing_ws_url(relay_server_url: str, nonce: str) -> str:
     Cleartext (``ws://`` / ``http://``) is refused unless
     ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1`` is set, mirroring
     the trust-key fetch's same loopback-only escape hatch (see
-    ``_trust_key_url_from_relay_server_url`` in ``mobaide.__main__``).
+    ``endpoint_url_from_relay_server_url`` in ``mobaide.agent.install_paths``).
 
     Any path/query/fragment on the relay URL is intentionally discarded
     — the WS endpoint is pinned at ``/ws/pairing/{nonce}`` regardless of
