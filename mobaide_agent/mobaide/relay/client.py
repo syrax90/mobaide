@@ -100,6 +100,7 @@ FRAME_RESIZE = b"r"
 FRAME_EXECUTE = b"x"
 FRAME_STATE = b"s"
 FRAME_REPLAY = b"b"
+FRAME_REPLAY_END = b"e"
 
 _EVENT_TO_STATUS = {
     "started": "running",
@@ -131,11 +132,6 @@ _STATE_MAP = {
     SessionState.STOPPED: "stopped",
     SessionState.CRASHED: "crashed",
 }
-
-# Strip DA capability-query replies before forwarding ring buffer content.
-_DA_REPLY_STRIP = re.compile(
-    rb"\x1b\[\?[\d;]*c|\x1b\[>[\d;]*c|\x1bP![|][^\x1b]*\x1b\\",
-)
 
 # Platform default shell for auto-created sessions.
 _DEFAULT_SHELL = (
@@ -1545,18 +1541,35 @@ class RelayClient:
         session: Any,
         ws: ClientConnection,
     ) -> None:
-        """Send state + replay marker + ring buffer for a session."""
+        """Send state + replay marker + chunked ring + replay-end marker.
+
+        Mirrors ``mobaide.agent.ws.session_io.session_io`` — the chunked
+        sequence keeps individual envelope payloads small enough for the
+        relay tunnel and for the mobile emulator to process each chunk
+        within a UI frame on append.
+        """
         try:
             status = _STATE_MAP.get(session.state, "running")
             state = _state_frame(status, session.pid)
             await ws.send(encode(CH_SESSION_IO, session_id, state))
 
-            # Replay marker signals end-of-history to the client.
             await ws.send(encode(CH_SESSION_IO, session_id, FRAME_REPLAY))
 
-            ring = _DA_REPLY_STRIP.sub(b"", session.get_ring())
+            # The ring is DA-stripped at write time inside ``_append_ring``;
+            # ``iter_ring_chunks`` takes a single snapshot of the (already
+            # clean) ring and yields chunks of ``REPLAY_CHUNK_BYTES`` each.
+            emitted_any = False
+            for chunk in session.iter_ring_chunks():
+                await ws.send(
+                    encode(CH_SESSION_IO, session_id, FRAME_OUTPUT + chunk),
+                )
+                emitted_any = True
+            if not emitted_any:
+                await ws.send(
+                    encode(CH_SESSION_IO, session_id, FRAME_OUTPUT),
+                )
             await ws.send(
-                encode(CH_SESSION_IO, session_id, FRAME_OUTPUT + ring)
+                encode(CH_SESSION_IO, session_id, FRAME_REPLAY_END),
             )
         except Exception as exc:
             logger.debug(

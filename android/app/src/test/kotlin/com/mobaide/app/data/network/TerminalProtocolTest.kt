@@ -159,6 +159,16 @@ class TerminalProtocolTest {
     }
 
     @Test
+    fun decode_replayEndMarker_returnsSingletonObject() {
+        // Proto-v3 terminator for the chunked-replay handshake. Must decode
+        // distinctly from ReplayMarker; the ViewModel uses it to flip out of
+        // ReplayingBuffer back to Live.
+        val wire = byteArrayOf('e'.code.toByte()).toByteString()
+        val decoded = TerminalProtocol.decode(wire)
+        assertEquals(TerminalFrame.ReplayEndMarker, decoded)
+    }
+
+    @Test
     fun decode_inputFrame_returnsNull_becauseDecodeIsServerToClientOnly() {
         // 'i' is a client->server type; server never sends it, decode must not
         // accept it. Same for 'r' (resize).

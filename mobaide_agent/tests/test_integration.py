@@ -9,7 +9,7 @@ import time
 import pytest
 from starlette.testclient import TestClient
 
-from tests.conftest import TEST_PASSWORD, TEST_USERNAME
+from tests.conftest import TEST_PASSWORD, TEST_USERNAME, drain_text_preamble
 
 
 @pytest.fixture
@@ -37,19 +37,30 @@ def test_full_flow(test_client):
     session_id = resp.json()["session_id"]
     assert resp.json()["state"] == "running"
 
-    # 3. Connect WebSocket (binary protocol) and verify I/O channel works
+    # 3. Connect WebSocket (binary protocol) and verify I/O channel works.
+    # Proto-v3 handshake: server_info (text) → state → 'b' → 'o' chunk(s)
+    # → 'e' before live frames begin.
     with test_client.websocket_connect(
         f"/ws/session/{session_id}?token={access_token}",
     ) as ws:
-        # First frame: state
+        drain_text_preamble(ws)
+
         first = ws.receive_bytes()
         assert first[:1] == b"s"
         state_payload = json.loads(first[1:].decode("utf-8"))
         assert state_payload["status"] in ("starting", "running")
 
-        # Second frame: replay marker
         marker = ws.receive_bytes()
         assert marker == b"b"
+
+        # Replay output chunk(s) for a fresh session — ring is empty so the
+        # server still emits exactly one empty FRAME_OUTPUT between the
+        # markers (handshake invariant).
+        replay_output = ws.receive_bytes()
+        assert replay_output[:1] == b"o"
+
+        replay_end = ws.receive_bytes()
+        assert replay_end == b"e"
 
         # Send input (CR-terminated) and resize as binary frames.
         text = b"echo ok\r\n" if sys.platform == "win32" else b"echo ok\r"

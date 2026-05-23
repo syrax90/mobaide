@@ -249,8 +249,8 @@ range is rejected up front.
 {
   "name": "central_server",
   "server_version": "0.1.0",
-  "protocol_versions": [2],
-  "min_client_version": 2,
+  "protocol_versions": [3],
+  "min_client_version": 3,
   "capabilities": {},
   "latest_agent_version": "0.1.0"
 }

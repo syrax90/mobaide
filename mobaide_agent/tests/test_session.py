@@ -293,3 +293,138 @@ class TestTerminalSessionTitleCoalescer:
             assert extra_titles == 0
         finally:
             await session.stop()
+
+
+def _ring_config(ring_buffer_bytes: int) -> SessionConfig:
+    return SessionConfig(
+        session_id="ring-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+        ring_buffer_bytes=ring_buffer_bytes,
+    )
+
+
+class TestRingBufferCap:
+    """``SessionConfig.ring_buffer_bytes`` is the per-session override the
+    protocol-v3 chunked replay relies on: the field's default supplies the
+    4 MB production cap, and tests use a small value here to exercise the
+    overflow trim without producing megabytes of data.
+    """
+
+    def test_append_ring_below_cap_keeps_full_payload(self) -> None:
+        # The session is never started — we drive ``_append_ring`` directly
+        # the same way ``test_ws_binary_protocol::TestRingBufferReplay``
+        # seeds the ring without depending on a real PTY.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"abc")
+        session._append_ring(b"def")
+        assert session.get_ring() == b"abcdef"
+
+    def test_append_ring_overflow_trims_from_head(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=8))
+        session._append_ring(b"AAAA")
+        session._append_ring(b"BBBB")
+        session._append_ring(b"CCCC")
+        ring = session.get_ring()
+        # 12 bytes pushed, 8 bytes cap → only the last 8 survive,
+        # head-trimmed, never tail-trimmed.
+        assert len(ring) == 8
+        assert ring == b"AAAABBBBCCCC"[-8:]
+        assert ring == b"BBBBCCCC"
+
+    def test_append_ring_single_oversized_write_truncates_to_cap(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=4))
+        session._append_ring(b"abcdefgh")
+        ring = session.get_ring()
+        assert len(ring) == 4
+        assert ring == b"efgh"
+
+    def test_ring_cap_is_per_session_not_module_global(self) -> None:
+        # Two sessions with different caps must not share state — the field
+        # has to be read off the config, not the module-level constant.
+        small = TerminalSession(_ring_config(ring_buffer_bytes=4))
+        large = TerminalSession(_ring_config(ring_buffer_bytes=64))
+        small._append_ring(b"abcdefgh")
+        large._append_ring(b"abcdefgh")
+        assert len(small.get_ring()) == 4
+        assert large.get_ring() == b"abcdefgh"
+
+
+class TestIterRingChunks:
+    """``iter_ring_chunks`` is the replay-sender's allocation-bounded path:
+    the WS handshake in ``session_io.py`` and the relay mirror in
+    ``relay/client.py`` both lean on it to keep individual WS frames small
+    while never holding two copies of a multi-MB ring.
+    """
+
+    def test_empty_ring_yields_nothing(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        assert list(session.iter_ring_chunks(chunk_size=64)) == []
+
+    def test_chunks_concatenate_to_original_ring(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        payload = bytes(range(256)) + bytes(range(256))
+        session._append_ring(payload)
+        chunks = list(session.iter_ring_chunks(chunk_size=64))
+        assert b"".join(chunks) == payload
+        assert b"".join(chunks) == session.get_ring()
+
+    def test_ring_smaller_than_chunk_yields_single_chunk(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"hello")
+        chunks = list(session.iter_ring_chunks(chunk_size=64))
+        assert chunks == [b"hello"]
+
+    def test_ring_aligned_to_chunk_boundary(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"A" * 128)
+        chunks = list(session.iter_ring_chunks(chunk_size=64))
+        # Exact multiple → exactly two full chunks, no empty trailing chunk.
+        assert len(chunks) == 2
+        assert all(len(c) == 64 for c in chunks)
+        assert chunks[0] == b"A" * 64
+        assert chunks[1] == b"A" * 64
+
+    def test_ring_one_byte_over_chunk_boundary(self) -> None:
+        # The N=2 case the change_summary calls out — 64 KB + 1 produces
+        # one full chunk plus a one-byte tail chunk.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=128 * 1024))
+        session._append_ring(b"A" * 64 + b"B")
+        chunks = list(session.iter_ring_chunks(chunk_size=64))
+        assert len(chunks) == 2
+        assert chunks[0] == b"A" * 64
+        assert chunks[1] == b"B"
+
+    def test_chunks_are_bytes_not_bytearray_or_memoryview(self) -> None:
+        # WS framing concatenates ``FRAME_OUTPUT + chunk`` — a bytearray
+        # would coerce silently but a memoryview slice would raise. Pin the
+        # contract explicitly so a refactor can't quietly change the type.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=64))
+        session._append_ring(b"abc")
+        for chunk in session.iter_ring_chunks(chunk_size=2):
+            assert isinstance(chunk, bytes)
+
+    def test_zero_chunk_size_raises_value_error(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=64))
+        session._append_ring(b"abc")
+        with pytest.raises(ValueError):
+            list(session.iter_ring_chunks(chunk_size=0))
+
+    def test_negative_chunk_size_raises_value_error(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=64))
+        with pytest.raises(ValueError):
+            list(session.iter_ring_chunks(chunk_size=-1))
+
+    def test_default_chunk_size_is_replay_chunk_bytes(self) -> None:
+        # Don't depend on the literal 64 KiB — import the module constant
+        # so the test breaks loudly if the production value moves.
+        from mobaide.core.session import REPLAY_CHUNK_BYTES
+
+        session = TerminalSession(_ring_config(ring_buffer_bytes=4 * 1024 * 1024))
+        session._append_ring(b"X" * (REPLAY_CHUNK_BYTES + 10))
+        chunks = list(session.iter_ring_chunks())
+        assert len(chunks) == 2
+        assert len(chunks[0]) == REPLAY_CHUNK_BYTES
+        assert len(chunks[1]) == 10

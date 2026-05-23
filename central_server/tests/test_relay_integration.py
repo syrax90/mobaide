@@ -74,7 +74,7 @@ class TestAgentTunnel:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 2,
+                "protocol_version": 3,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"
@@ -87,7 +87,7 @@ class TestAgentTunnel:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 2,
+                "protocol_version": 3,
             }))
             ws.receive_text()  # auth_ok
             # Agent should be online
@@ -211,7 +211,7 @@ class TestSessionLifecycleSignals:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 2,
+                "protocol_version": 3,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"

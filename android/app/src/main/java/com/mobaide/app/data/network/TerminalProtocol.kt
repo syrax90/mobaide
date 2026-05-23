@@ -9,14 +9,20 @@ import okio.ByteString.Companion.toByteString
  * Every frame is a binary message whose first byte identifies the frame
  * type and whose remaining bytes carry the payload.
  *
- * | Byte | Char | Direction | Payload                                       |
- * |------|------|-----------|-----------------------------------------------|
- * | 0x6f | 'o'  | S->C      | raw PTY output bytes                          |
- * | 0x69 | 'i'  | C->S      | raw input bytes (CR / Ctrl / Esc / UTF-8)     |
- * | 0x78 | 'x'  | C->S      | execute: server Ctrl+C clears, then writes     |
- * | 0x72 | 'r'  | C->S      | resize: u16 rows + u16 cols (big-endian)      |
- * | 0x73 | 's'  | S->C      | state: UTF-8 JSON {status, pid?, exit_code?}  |
- * | 0x62 | 'b'  | S->C      | replay-buffer marker (empty payload)          |
+ * | Byte | Char | Direction | Payload                                                |
+ * |------|------|-----------|--------------------------------------------------------|
+ * | 0x6f | 'o'  | S->C      | raw PTY output bytes (replay chunk or live)            |
+ * | 0x69 | 'i'  | C->S      | raw input bytes (CR / Ctrl / Esc / UTF-8)              |
+ * | 0x78 | 'x'  | C->S      | execute: server Ctrl+C clears, then writes             |
+ * | 0x72 | 'r'  | C->S      | resize: u16 rows + u16 cols (big-endian)               |
+ * | 0x73 | 's'  | S->C      | state: UTF-8 JSON {status, pid?, exit_code?}           |
+ * | 0x62 | 'b'  | S->C      | replay-buffer start marker (empty payload)             |
+ * | 0x65 | 'e'  | S->C      | replay-buffer end marker — live frames follow (empty)  |
+ *
+ * Reconnect handshake (protocol v3): the server emits a fixed sequence of
+ * ``state → 'b' → 'o'(chunk)…'o'(chunk) → 'e'`` after every WS open. The
+ * client clears its local emulator on ``'b'``, appends every ``'o'``
+ * payload, and transitions out of *ReplayingBuffer* only on ``'e'``.
  */
 object TerminalProtocol {
 
@@ -26,6 +32,7 @@ object TerminalProtocol {
     const val TYPE_RESIZE: Byte = 'r'.code.toByte()
     const val TYPE_STATE: Byte = 's'.code.toByte()
     const val TYPE_REPLAY: Byte = 'b'.code.toByte()
+    const val TYPE_REPLAY_END: Byte = 'e'.code.toByte()
 
     /** Wrap raw input bytes in an `'i'` frame. */
     fun encodeInput(bytes: ByteArray): ByteString {
@@ -60,6 +67,7 @@ object TerminalProtocol {
             TYPE_OUTPUT -> TerminalFrame.Output(frame.substring(1).toByteArray())
             TYPE_STATE -> TerminalFrame.State(frame.substring(1).utf8())
             TYPE_REPLAY -> TerminalFrame.ReplayMarker
+            TYPE_REPLAY_END -> TerminalFrame.ReplayEndMarker
             else -> null
         }
     }
@@ -73,4 +81,5 @@ sealed class TerminalFrame {
     }
     data class State(val json: String) : TerminalFrame()
     data object ReplayMarker : TerminalFrame()
+    data object ReplayEndMarker : TerminalFrame()
 }

@@ -6,9 +6,38 @@ and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own
 cadence; they do **not** gate compatibility.
 
-## proto-v2 (current)
+## proto-v3 (current)
 
-* Introduced: 2026-05-13
+* Introduced: 2026-05-23
+* App support: ``APP_PROTOCOL_VERSION = 3`` (Android), ``PROTOCOL_VERSION = 3``
+  (Python — both ``mobaide_agent`` and ``central_server``).
+* Breaking change vs proto-v2: the reconnect replay handshake is now
+  **chunked** and explicitly terminated. Before v3 the handshake was
+  ``state → 'b' → 'o'(entire-ring)`` and the client treated the first
+  ``'o'`` after the ``'b'`` marker as both the only replay frame and the
+  trigger to flip back to *Live*. That made it impossible to replay more
+  than one frame worth of history without the client dropping the
+  *ReplayingBuffer* overlay prematurely, which in turn forced the server
+  ring buffer to stay tiny (``256 KB``) and caused visible truncation of
+  long sessions on reconnect. proto-v3 introduces a new frame type
+  ``FRAME_REPLAY_END`` (byte ``0x65`` / ``'e'``) and changes the handshake
+  to ``state → 'b' → 'o'(chunk_0) → 'o'(chunk_1) → … → 'e'``. The server
+  ring buffer default is also bumped to ``4 MB`` (configurable per session
+  via ``SessionConfig.ring_buffer_bytes``); chunk size is ``64 KB``.
+* Wire shape (delta from proto-v2):
+  * Reconnect handshake on ``/ws/session/<id>`` and on the
+    ``CH_SESSION_IO`` envelope channel through ``central_server``:
+    ``state-frame → FRAME_REPLAY → N × FRAME_OUTPUT(chunk) → FRAME_REPLAY_END
+    → (live frames…)``. ``N >= 1`` always; an empty ring still emits one
+    empty ``FRAME_OUTPUT`` between the markers so clients can rely on at
+    least one output frame inside the replay span.
+  * Mobile clients now hold *ReplayingBuffer* state until ``'e'`` is
+    received; chunked ``'o'`` frames in between are appended without state
+    transitions.
+
+## proto-v2 (superseded by proto-v3)
+
+* Introduced: 2026-05-13; retired: 2026-05-23.
 * App support: ``APP_PROTOCOL_VERSION = 2`` (Android), ``PROTOCOL_VERSION = 2``
   (Python — both ``mobaide_agent`` and ``central_server``).
 * Breaking change vs proto-v1: the signed manifest **body** is now delivered

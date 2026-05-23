@@ -101,18 +101,22 @@ class TerminalViewModelConnectTest {
     private val replayMarkerFrame: ByteString =
         byteArrayOf(TerminalProtocol.TYPE_REPLAY).toByteString()
 
+    private val replayEndFrame: ByteString =
+        byteArrayOf(TerminalProtocol.TYPE_REPLAY_END).toByteString()
+
     private fun outputFrame(payload: ByteArray): ByteString =
         byteArrayOf(TerminalProtocol.TYPE_OUTPUT).plus(payload).toByteString()
 
     @Test
     fun connect_collectorSeesEventsFired_synchronouslyFromConnectionConnect() =
         runTest(testDispatcher) {
-            // Arrange: make the mock connection fire the full handshake burst
-            // (Connected + state + replay + output) **synchronously** from inside
-            // connect().  This is the exact race pattern the UNDISPATCHED fix
-            // targets — without it, replay=1 on the SharedFlow would leave the
-            // late subscriber with only the last frame (output) and the state
-            // + replay transitions would be silently lost.
+            // Arrange: make the mock connection fire the full proto-v3 handshake
+            // burst (Connected + state + replay-start + output(chunk) +
+            // replay-end) **synchronously** from inside connect(). This is the
+            // exact race pattern the UNDISPATCHED fix targets — without it,
+            // replay=1 on the SharedFlow would leave the late subscriber with
+            // only the last frame (replay-end) and the state + replay-start +
+            // output transitions would be silently lost.
             val eventsFlow = newEventsFlow()
             val conn = newConnection(eventsFlow)
             every { conn.connect() } answers {
@@ -120,6 +124,7 @@ class TerminalViewModelConnectTest {
                 eventsFlow.tryEmit(WsEvent.Binary(stateRunningFrame))
                 eventsFlow.tryEmit(WsEvent.Binary(replayMarkerFrame))
                 eventsFlow.tryEmit(WsEvent.Binary(outputFrame("hello".toByteArray())))
+                eventsFlow.tryEmit(WsEvent.Binary(replayEndFrame))
             }
 
             val vm = newViewModel(newRepository(conn))
@@ -128,8 +133,9 @@ class TerminalViewModelConnectTest {
             // Assert: every frame in the burst reached the ViewModel.
             // - Connected → ConnectionState.Live (via WsEvent.Connected handler).
             // - Binary(state) → handleBinary ran (isConnected flipped true).
-            // - Binary(replay) then Binary(output) → inReplay transition, then
-            //   connectionState stays Live after replay ends.
+            // - Binary(replay-start) → ReplayingBuffer.
+            // - Binary(output) → stays in ReplayingBuffer (chunk appended).
+            // - Binary(replay-end) → back to Live.
             //
             // We deliberately do NOT assert on `sessionState` here: its value
             // comes from `parseStatus` which calls `org.json.JSONObject`, a
@@ -201,8 +207,8 @@ class TerminalViewModelConnectTest {
             // Safety-net specificity: the upgrade must only fire when the
             // current state is Reconnecting.  A stray output byte during a
             // legitimate ReplayingBuffer phase must not pre-emptively flip
-            // the state to Live — the `inReplay` end-of-replay logic below
-            // is what decides when playback finishes.  This pins the
+            // the state to Live — the explicit REPLAY_END marker is what
+            // decides when playback finishes.  This pins the
             // `if (_connectionState.value == ConnectionState.Reconnecting)`
             // guard; removing it would let output frames sneak the UI into
             // Live mid-replay and drop the "Replaying buffer" overlay early.
@@ -221,11 +227,18 @@ class TerminalViewModelConnectTest {
                 vm.connectionState.value,
             )
 
-            // A subsequent output frame ends replay and transitions to Live
-            // through the replay-end branch — not through the
-            // Reconnecting→Live safety upgrade (which would ignore the
-            // `inReplay=true` state machine).
+            // Chunked replay: output frames mid-replay must NOT transition
+            // to Live. Only the explicit REPLAY_END frame ends the replay
+            // overlay.
             eventsFlow.tryEmit(WsEvent.Binary(outputFrame("x".toByteArray())))
+            runCurrent()
+            assertEquals(
+                "output frame mid-replay must keep VM in ReplayingBuffer",
+                ConnectionState.ReplayingBuffer,
+                vm.connectionState.value,
+            )
+
+            eventsFlow.tryEmit(WsEvent.Binary(replayEndFrame))
             runCurrent()
             assertEquals(ConnectionState.Live, vm.connectionState.value)
         }

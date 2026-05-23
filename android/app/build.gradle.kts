@@ -105,8 +105,8 @@ android {
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
         buildConfigField("String", "PRIVACY_POLICY_URL", "\"$privacyPolicyUrl\"")
-        buildConfigField("int", "APP_PROTOCOL_VERSION", "2")
-        buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "2")
+        buildConfigField("int", "APP_PROTOCOL_VERSION", "3")
+        buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "3")
     }
 
     signingConfigs {

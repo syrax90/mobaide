@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import struct
 
 from fastapi import APIRouter, WebSocket
@@ -30,12 +29,13 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 # Binary frame protocol: first byte = type, remainder = payload; all frames sent as binary WebSocket messages.
-FRAME_OUTPUT = b"o"  # 0x6f  S->C  raw PTY bytes
-FRAME_INPUT = b"i"   # 0x69  C->S  raw input bytes
-FRAME_RESIZE = b"r"  # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
-FRAME_EXECUTE = b"x" # 0x78  C->S  clear-then-write: Ctrl+C + pause + payload
-FRAME_STATE = b"s"   # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
-FRAME_REPLAY = b"b"  # 0x62  S->C  marker: ring-buffer replay starts next frame
+FRAME_OUTPUT = b"o"      # 0x6f  S->C  raw PTY bytes
+FRAME_INPUT = b"i"       # 0x69  C->S  raw input bytes
+FRAME_RESIZE = b"r"      # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
+FRAME_EXECUTE = b"x"     # 0x78  C->S  clear-then-write: Ctrl+C + pause + payload
+FRAME_STATE = b"s"       # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
+FRAME_REPLAY = b"b"      # 0x62  S->C  marker: ring-buffer replay starts next frame
+FRAME_REPLAY_END = b"e"  # 0x65  S->C  marker: ring-buffer replay finished; live frames follow
 
 _STATE_MAP = {
     SessionState.STARTING: "starting",
@@ -44,15 +44,6 @@ _STATE_MAP = {
     SessionState.STOPPED: "stopped",
     SessionState.CRASHED: "crashed",
 }
-
-# Belt-and-braces strip for any DA reply bytes that may already be sitting
-# in a session's ring buffer (e.g. from sessions started before the
-# agent-side DaResponder was deployed). Matches DA1/DA2 (CSI ? ... c /
-# CSI > ... c) and DA3 (DCS ! | ... ST). The PTY-side responder in
-# core/da_responder.py is the primary fix; this is a safety net on replay.
-_DA_REPLY_STRIP = re.compile(
-    rb"\x1b\[\?[\d;]*c|\x1b\[>[\d;]*c|\x1bP![|][^\x1b]*\x1b\\",
-)
 
 _EVENT_TO_STATUS = {
     "started": "running",
@@ -138,12 +129,22 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
 
     await websocket.send_bytes(_state_frame(_STATE_MAP[session.state], session.pid))
 
-    ring = _DA_REPLY_STRIP.sub(b"", session.get_ring())
+    # Chunked replay handshake (protocol v3+):
+    #   FRAME_REPLAY → N × FRAME_OUTPUT(chunk) → FRAME_REPLAY_END
+    # Chunking serves two purposes — bounded per-frame size on the wire,
+    # and bounded per-call cost on the client's emulator main-thread append.
+    # An empty ring still emits one empty FRAME_OUTPUT so clients can rely
+    # on at least one output frame between the start and end markers.
+    # The ring is already DA-stripped at write time (``session._append_ring``)
+    # so the snapshot inside ``iter_ring_chunks`` is the only allocation here.
     await websocket.send_bytes(FRAME_REPLAY)
-    # Always emit one output frame after the replay marker — even when empty —
-    # so clients can rely on a fixed handshake shape (state, marker, output)
-    # before live frames begin.
-    await websocket.send_bytes(FRAME_OUTPUT + ring)
+    emitted_any = False
+    for chunk in session.iter_ring_chunks():
+        await websocket.send_bytes(FRAME_OUTPUT + chunk)
+        emitted_any = True
+    if not emitted_any:
+        await websocket.send_bytes(FRAME_OUTPUT)
+    await websocket.send_bytes(FRAME_REPLAY_END)
 
     fanout = ensure_fanout(websocket.app.state, session)
     consumer_queue = fanout.subscribe()

@@ -19,6 +19,7 @@ from mobaide.relay.client import (
     FRAME_INPUT,
     FRAME_OUTPUT,
     FRAME_REPLAY,
+    FRAME_REPLAY_END,
     FRAME_RESIZE,
     FRAME_STATE,
     RelayClient,
@@ -58,6 +59,22 @@ def client(
         broadcaster=mock_broadcaster,
         app_state=mock_app_state,
     )
+
+
+def _mock_iter_ring_chunks(ring: bytes, chunk_size: int | None = None):
+    """Build a ``side_effect`` callable for mocked ``iter_ring_chunks``.
+
+    Returns a fresh iterator on every call so tests that exercise multiple
+    handshakes (e.g. ``test_attach_is_repeatable_no_idempotency_cache``)
+    aren't held back by an exhausted generator from the previous call.
+    """
+    from mobaide.core.session import REPLAY_CHUNK_BYTES
+
+    def factory(*_args, **_kwargs):
+        cs = chunk_size or REPLAY_CHUNK_BYTES
+        return iter(ring[i : i + cs] for i in range(0, len(ring), cs))
+
+    return factory
 
 
 # -- _state_frame helper -------------------------------------------------------
@@ -318,7 +335,9 @@ class TestHandleMobileAttach:
         mock_session.session_id = "s1"
         mock_session.state = SessionState.RUNNING
         mock_session.pid = 42
-        mock_session.get_ring = MagicMock(return_value=b"hello world")
+        mock_session.iter_ring_chunks = MagicMock(
+            side_effect=_mock_iter_ring_chunks(b"hello world"),
+        )
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
@@ -327,8 +346,11 @@ class TestHandleMobileAttach:
         ).encode()
         await client._handle_control(payload, ws)
 
-        assert ws.send.await_count == 3
-        sent = [ws.send.call_args_list[i][0][0] for i in range(3)]
+        # Chunked replay handshake (protocol v3+):
+        # state → replay → output(chunk_0)…output(chunk_N) → replay_end
+        # The 11-byte ring fits in a single 64 KB chunk, so N=1.
+        assert ws.send.await_count == 4
+        sent = [ws.send.call_args_list[i][0][0] for i in range(4)]
         decoded = [decode(b) for b in sent]
 
         for ch, sid, _ in decoded:
@@ -344,6 +366,65 @@ class TestHandleMobileAttach:
 
         assert decoded[2][2][:1] == FRAME_OUTPUT
         assert decoded[2][2][1:] == b"hello world"
+
+        assert decoded[3][2] == FRAME_REPLAY_END
+
+    async def test_attach_sends_multi_chunk_handshake_when_ring_exceeds_chunk_size(
+        self, client, mock_session_manager,
+    ):
+        """Relay-mirror chunking parity with the direct WS handshake: when
+        the session's ring exceeds ``REPLAY_CHUNK_BYTES`` the attach handler
+        must emit **two or more** ``FRAME_OUTPUT`` envelopes between the
+        ``FRAME_REPLAY`` marker and the ``FRAME_REPLAY_END`` terminator, and
+        their concatenation must be byte-equal to the original ring.
+
+        The single-chunk path is already covered by
+        ``test_attach_sends_full_handshake_in_order``; this guards the
+        relay-tunnel mirror against drifting from
+        ``mobaide.agent.ws.session_io`` when the chunk count is > 1.
+        """
+        from mobaide.core.session import REPLAY_CHUNK_BYTES
+
+        # 64 KiB + 1 — boundary case from the plan; unique bytes modulo 256
+        # so a misorder or head-trim would not pass the byte-equal check.
+        ring = bytes((i & 0xFF) for i in range(REPLAY_CHUNK_BYTES + 1))
+
+        mock_session = AsyncMock()
+        mock_session.session_id = "s-multi"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 99
+        mock_session.iter_ring_chunks = MagicMock(
+            side_effect=_mock_iter_ring_chunks(ring),
+        )
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        payload = json.dumps(
+            {"type": "mobile_session_attach", "session_id": "s-multi"}
+        ).encode()
+        await client._handle_control(payload, ws)
+
+        sent = [ws.send.call_args_list[i][0][0] for i in range(ws.send.await_count)]
+        decoded = [decode(b) for b in sent]
+        for ch, sid, _ in decoded:
+            assert ch == CH_SESSION_IO
+            assert sid == "s-multi"
+
+        # Wire sequence: STATE → REPLAY → N × OUTPUT → REPLAY_END, N ≥ 2.
+        assert decoded[0][2][:1] == FRAME_STATE
+        assert decoded[1][2] == FRAME_REPLAY
+        assert decoded[-1][2] == FRAME_REPLAY_END
+
+        output_payloads = [d[2][1:] for d in decoded[2:-1]]
+        assert all(d[2][:1] == FRAME_OUTPUT for d in decoded[2:-1])
+        assert len(output_payloads) >= 2, (
+            f"ring of size REPLAY_CHUNK_BYTES + 1 must emit ≥ 2 output "
+            f"chunks; got {len(output_payloads)}"
+        )
+        for chunk in output_payloads[:-1]:
+            assert len(chunk) == REPLAY_CHUNK_BYTES
+        assert len(output_payloads[-1]) <= REPLAY_CHUNK_BYTES
+        assert b"".join(output_payloads) == ring
 
     async def test_attach_for_unknown_session_sends_stopped_state_frame(
         self, client, mock_session_manager
@@ -415,7 +496,9 @@ class TestHandleMobileAttach:
         mock_session.session_id = "s1"
         mock_session.state = SessionState.RUNNING
         mock_session.pid = 42
-        mock_session.get_ring = MagicMock(return_value=b"")
+        mock_session.iter_ring_chunks = MagicMock(
+            side_effect=_mock_iter_ring_chunks(b""),
+        )
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
@@ -427,7 +510,10 @@ class TestHandleMobileAttach:
         await client._handle_control(payload, ws)
         await client._handle_control(payload, ws)
 
-        assert ws.send.await_count == 9
+        # 3 attaches × 4 handshake sends each (state + replay + output(chunk)
+        # + replay_end). Empty ring still emits one output frame between the
+        # markers, so the per-attach count is fixed.
+        assert ws.send.await_count == 12
 
     async def test_detach_is_silent_noop(self, client, mock_session_manager):
         ws = AsyncMock()
@@ -1040,7 +1126,9 @@ class TestHandleSessionInput:
         mock_new_session.session_id = "unknown-1"
         mock_new_session.state = SessionState.RUNNING
         mock_new_session.pid = 200
-        mock_new_session.get_ring = MagicMock(return_value=b"")
+        mock_new_session.iter_ring_chunks = MagicMock(
+            side_effect=_mock_iter_ring_chunks(b""),
+        )
 
         mock_session_manager.get_session = AsyncMock(return_value=None)
         mock_session_manager.create_session = AsyncMock(
@@ -1070,7 +1158,9 @@ class TestHandleSessionInput:
         mock_new_session.session_id = "unknown-1"
         mock_new_session.state = SessionState.RUNNING
         mock_new_session.pid = 200
-        mock_new_session.get_ring = MagicMock(return_value=b"cached-output")
+        mock_new_session.iter_ring_chunks = MagicMock(
+            side_effect=_mock_iter_ring_chunks(b"cached-output"),
+        )
 
         mock_session_manager.get_session = AsyncMock(return_value=None)
         mock_session_manager.create_session = AsyncMock(
@@ -1090,25 +1180,29 @@ class TestHandleSessionInput:
         ]
         decoded = [decode(b) for b in handshake_sends]
         sid_frames = [d for d in decoded if d[0] == CH_SESSION_IO]
-        assert len(sid_frames) >= 3, (
-            f"expected state + replay + ring after auto-create, "
-            f"got {len(sid_frames)} session-io frames"
+        # Chunked handshake (protocol v3): state + replay-start + N×output
+        # + replay-end. The 13-byte "cached-output" fits one chunk, so N=1.
+        assert len(sid_frames) >= 4, (
+            f"expected state + replay + chunked ring + replay_end after "
+            f"auto-create, got {len(sid_frames)} session-io frames"
         )
 
-        first_three = sid_frames[:3]
-        for ch, sid, _ in first_three:
+        first_four = sid_frames[:4]
+        for ch, sid, _ in first_four:
             assert ch == CH_SESSION_IO
             assert sid == "unknown-1"
 
-        assert first_three[0][2][:1] == FRAME_STATE
-        state_payload = json.loads(first_three[0][2][1:])
+        assert first_four[0][2][:1] == FRAME_STATE
+        state_payload = json.loads(first_four[0][2][1:])
         assert state_payload["status"] == "running"
         assert state_payload["pid"] == 200
 
-        assert first_three[1][2] == FRAME_REPLAY
+        assert first_four[1][2] == FRAME_REPLAY
 
-        assert first_three[2][2][:1] == FRAME_OUTPUT
-        assert first_three[2][2][1:] == b"cached-output"
+        assert first_four[2][2][:1] == FRAME_OUTPUT
+        assert first_four[2][2][1:] == b"cached-output"
+
+        assert first_four[3][2] == FRAME_REPLAY_END
 
 
 # -- _send_heartbeat ------------------------------------------------------------
