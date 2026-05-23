@@ -1,5 +1,21 @@
 # central_server Changelog
 
+## [0.1.10](https://github.com/syrax90/claude_mobile/compare/server-v0.1.9...server-v0.1.10) (2026-05-23)
+
+
+### Features
+
+* **ui:** rename "Your devices" to "My devices" and add Google logo to sign-in buttons ([657fd92](https://github.com/syrax90/claude_mobile/commit/657fd924ddf2d6e5bc8d39a3b70775922d98a086))
+
+
+### Bug Fixes
+
+* **android:** rename "Your devices" to "My devices" and add Google logo to sign-in buttons ([bbc4eab](https://github.com/syrax90/claude_mobile/commit/bbc4eab6c4617c47b35e5729b093eab55a200905))
+* **android:** replace 256 KB single-frame replay with 4 MB chunked ring buffer (proto v3) ([b1740e9](https://github.com/syrax90/claude_mobile/commit/b1740e92bbe3fcc77edcf620490ae9000985217b))
+* **privacy:** replace narrow 420 px card with article + sticky TOC layout ([9728dc6](https://github.com/syrax90/claude_mobile/commit/9728dc6c61d59a65f88c94e7ddceea434b90d7cd))
+* **privacy:** replace narrow 420 px card with article + sticky TOC layout ([a518040](https://github.com/syrax90/claude_mobile/commit/a5180402e6773789903639eeaf98c0ae57a85bf5))
+* **replay:** replace 256 KB single-frame replay with 4 MB chunked ring buffer (proto v3) ([bd8bb63](https://github.com/syrax90/claude_mobile/commit/bd8bb633f83e7a6552b0db15f00291b71ec53504))
+
 ## [0.1.9](https://github.com/syrax90/claude_mobile/compare/server-v0.1.8...server-v0.1.9) (2026-05-22)
 
 
