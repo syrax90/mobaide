@@ -10,6 +10,12 @@ concurrency:
   group: e2e-update-${{ github.ref }}
   cancel-in-progress: true
 
+# Declare contents:read so actions/checkout's GITHUB_TOKEN reliably has
+# the scope it needs to fetch the repo, regardless of the repo's default
+# token policy. Same mitigation as protocol-integrity.yml.
+permissions:
+  contents: read
+
 jobs:
   e2e:
     runs-on: ubuntu-latest

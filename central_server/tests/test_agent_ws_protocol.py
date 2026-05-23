@@ -90,6 +90,34 @@ class TestAgentTunnelProtocolHandshake:
         # close happens *before* register_agent in the production code.
         assert app.state.routing.is_agent_online(agent_id) is False
 
+    def test_incompatible_payload_carries_manifest_url_hint(
+        self, app, registered_agent,
+    ):
+        """The 4002 rejection JSON must include a relative ``manifest_url``
+        pointing at the HTTPS-bootstrap endpoint so a wire-incompatible
+        agent can self-heal without operator intervention.
+
+        The path stays relative — the agent resolves it against the
+        relay's own HTTPS origin (the trust anchor is the manifest
+        signature). Future relocations of the endpoint only need a
+        server-side change.
+        """
+        agent_id, raw_token = registered_agent
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": 99,
+            }))
+            incompat = json.loads(ws.receive_text())
+            assert incompat["type"] == "incompatible"
+            # Exact path — this is the contract the agent's
+            # ``_resolve_manifest_url_with_hint`` validates against
+            # ``hint.startswith("/")``.
+            assert incompat["manifest_url"] == "/api/v1/agent/manifest.json"
+
     def test_compatible_protocol_version_emits_auth_ok_with_version_fields(
         self, app, registered_agent,
     ):

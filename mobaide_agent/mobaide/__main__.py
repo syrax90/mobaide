@@ -41,6 +41,10 @@ from pathlib import Path
 import uvicorn
 
 from mobaide import __version__
+from mobaide.agent.install_paths import (
+    TRUST_KEY_ENDPOINT_PATH as _TRUST_KEY_ENDPOINT_PATH,
+    trust_key_url_from_relay_server_url as _trust_key_url_from_relay_server_url,
+)
 
 
 _AGENT_RESTART_TIMEOUT_S = 15
@@ -347,73 +351,6 @@ def _outcome_exit_code(outcome: str) -> int:
     if outcome == "deferred":
         return 4
     return 1
-
-
-_TRUST_KEY_ENDPOINT_PATH = "/api/v1/agent/trust_key"
-_ALLOW_INSECURE_TRUST_KEY_FETCH_ENV = "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
-
-
-def _trust_key_url_from_relay_server_url(relay_server_url: str) -> str:
-    """Translate a ``RELAY_SERVER_URL`` into the trust-key fetch URL.
-
-    ``wss://host[/path]`` becomes ``https://host`` + the trust-key endpoint;
-    ``ws://host[/path]`` becomes ``http://...``. Any path component on the
-    relay URL is intentionally dropped — the relay tunnel and the HTTP
-    REST API live at the root of the same origin (see central_server's
-    routing in ``central_server/app.py``), so the path on the relay URL
-    is a relay-tunnel path, not an API base.
-
-    Two security guards on top of basic URL parsing:
-
-    * **User-info rejected** — ``urlparse('wss://api.mobaide.com@evil.example')``
-      yields a ``netloc`` of ``api.mobaide.com@evil.example``, which DNS-resolves
-      to ``evil.example``. A ``RELAY_SERVER_URL`` with user-info would silently
-      retarget the trust-key fetch to an attacker-controlled host. Reject up
-      front rather than relying on the post-fetch Ed25519 round-trip to
-      catch the substituted key.
-    * **Cleartext refused by default** — ``ws://`` / ``http://`` would let a
-      passive on-path attacker substitute the public key without breaking
-      TLS. Refused unless ``MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH=1``
-      is set (self-host loopback / local testing escape hatch).
-    """
-    from urllib.parse import urlparse
-
-    parsed = urlparse(relay_server_url)
-    if not parsed.scheme or not parsed.hostname:
-        raise ValueError(
-            f"RELAY_SERVER_URL is not a valid URL: {relay_server_url!r}"
-        )
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError(
-            f"RELAY_SERVER_URL must not contain user-info (user@/user:pass@): "
-            f"{relay_server_url!r}"
-        )
-    scheme_map = {"wss": "https", "ws": "http", "https": "https", "http": "http"}
-    scheme = scheme_map.get(parsed.scheme.lower())
-    if scheme is None:
-        raise ValueError(
-            f"RELAY_SERVER_URL has unsupported scheme {parsed.scheme!r}: "
-            f"{relay_server_url!r}"
-        )
-    if scheme == "http" and os.environ.get(
-        _ALLOW_INSECURE_TRUST_KEY_FETCH_ENV
-    ) != "1":
-        raise ValueError(
-            f"Trust-key fetch over cleartext {parsed.scheme!r} is refused by "
-            f"default (RELAY_SERVER_URL={relay_server_url!r}). Set "
-            f"{_ALLOW_INSECURE_TRUST_KEY_FETCH_ENV}=1 to override (only safe "
-            f"on a trusted local network, e.g. self-host loopback)."
-        )
-    # Rebuild from hostname + optional :port — never from raw netloc — so
-    # user-info or other smuggled netloc components can't survive into the
-    # outbound URL even if a future refactor drops the explicit guard above.
-    if ":" in parsed.hostname and not parsed.hostname.startswith("["):
-        host = f"[{parsed.hostname}]"  # IPv6 literal
-    else:
-        host = parsed.hostname
-    if parsed.port is not None:
-        host = f"{host}:{parsed.port}"
-    return f"{scheme}://{host}{_TRUST_KEY_ENDPOINT_PATH}"
 
 
 def _run_fetch_trust_key(args: argparse.Namespace) -> int:

@@ -141,6 +141,22 @@ _DEFAULT_SHELL = (
 MAX_AUTOSCAN_STREAMS = 10
 
 
+class ProtocolIncompatibleError(ConnectionError):
+    """Raised when the relay rejects the agent's ``protocol_version``.
+
+    Carries the server-provided ``manifest_url`` hint (when present in
+    the ``incompatible`` payload) so the connect loop's recovery
+    callback can prefer it over the agent-side derived URL. The hint
+    is a relative path (e.g. ``/api/v1/agent/manifest.json``) — callers
+    must resolve it against the relay's HTTPS origin.
+    """
+
+    def __init__(self, reason: str, *, manifest_url_hint: str | None = None) -> None:
+        super().__init__(f"Relay rejected protocol version: {reason}")
+        self.reason = reason
+        self.manifest_url_hint = manifest_url_hint
+
+
 def _validate_adhoc_cwd_or_error(cwd: str) -> str | None:
     """Return a human-readable error string if ``cwd`` is unfit for an
     ad-hoc launch, else ``None``.
@@ -221,6 +237,14 @@ class RelayClient:
         # the staged-binary auto-updater. Never raises on absence.
         self._latest_manifest: dict[str, object] | None = None
         self._on_manifest_update: Any | None = None
+        # Callback fired when the relay rejects on protocol-incompatible
+        # (close code 4002). Receives the optional ``manifest_url_hint``
+        # the server may have placed in the ``incompatible`` payload.
+        # Wired by the agent's lifespan to ``run_https_update_check``
+        # against the env-derived manifest URL; the hint, when present,
+        # takes priority. Exceptions are logged and never propagated
+        # back into the reconnect loop.
+        self._on_protocol_incompatible: Any | None = None
         self._unknown_control_type_total = 0
 
     async def start(self) -> None:
@@ -255,7 +279,17 @@ class RelayClient:
         logger.info("relay.stopped")
 
     async def _connect_loop(self) -> None:
-        """Reconnect loop with exponential backoff."""
+        """Reconnect loop with exponential backoff.
+
+        On :class:`ProtocolIncompatibleError` the loop fires
+        ``self._on_protocol_incompatible`` (if wired) so the HTTPS
+        bootstrap can stage an updated release, then clamps the next
+        delay to ``reconnect_max_delay`` instead of doubling the base
+        delay. Hammering the relay at 60s intervals when the agent is
+        provably wire-incompatible only generates log noise and never
+        succeeds; the recovery path is an HTTPS-driven binary swap,
+        not a relay reconnect.
+        """
         delay = self._config.reconnect_base_delay
         while not self._stopping:
             try:
@@ -264,6 +298,20 @@ class RelayClient:
                 delay = self._config.reconnect_base_delay
             except asyncio.CancelledError:
                 raise
+            except ProtocolIncompatibleError as exc:
+                logger.warning("relay.connection_failed: %s", exc)
+                if self._on_protocol_incompatible is not None:
+                    try:
+                        await self._on_protocol_incompatible(exc.manifest_url_hint)
+                    except Exception as cb_exc:
+                        logger.warning(
+                            "relay.protocol_incompatible_callback_failed: %s",
+                            cb_exc,
+                        )
+                # If the callback staged a release the updater has
+                # already exited; otherwise back off to the max delay
+                # to stop the 60s-warning churn the user sees in logs.
+                delay = self._config.reconnect_max_delay
             except Exception as exc:
                 logger.warning("relay.connection_failed: %s", exc)
 
@@ -322,6 +370,18 @@ class RelayClient:
         reader loop."""
         self._on_manifest_update = callback
 
+    def set_protocol_incompatible_callback(self, callback: Any) -> None:
+        """Register an async callback fired when the relay rejects with the
+        ``incompatible`` frame (close code 4002).
+
+        Receives one argument — the server-provided ``manifest_url`` hint
+        from the rejection payload (or ``None`` if absent). The agent's
+        lifespan wires this to the HTTPS-bootstrap update path so a
+        protocol-version mismatch self-heals into a binary swap rather
+        than looping at the relay layer forever.
+        """
+        self._on_protocol_incompatible = callback
+
     @property
     def latest_manifest(self) -> dict[str, object] | None:
         return self._latest_manifest
@@ -344,7 +404,12 @@ class RelayClient:
         msg_type = resp.get("type")
         if msg_type == "incompatible":
             reason = resp.get("reason", "protocol incompatible")
-            raise ConnectionError(f"Relay rejected protocol version: {reason}")
+            manifest_url_hint = resp.get("manifest_url")
+            if not isinstance(manifest_url_hint, str) or not manifest_url_hint:
+                manifest_url_hint = None
+            raise ProtocolIncompatibleError(
+                reason, manifest_url_hint=manifest_url_hint,
+            )
         if msg_type != "auth_ok":
             raise ConnectionError(f"Relay auth failed: {resp}")
         self._latest_manifest = {
