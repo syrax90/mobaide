@@ -63,7 +63,7 @@ fun DevicesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Your devices") },
+                title = { Text("My devices") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(

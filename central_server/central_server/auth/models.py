@@ -54,7 +54,7 @@ class MobileTokenRequest(BaseModel):
     The mobile client identifies the *device* asking for tokens. The
     ``user_id`` is taken from the dashboard JWT in the Authorization
     header. ``mobile_device_name`` is an auto-generated label like
-    ``"Google Pixel 8"`` that the user sees on the "Your devices" screen.
+    ``"Google Pixel 8"`` that the user sees on the "My devices" screen.
 
     ``mobile_device_id`` is constrained to a canonical 36-char UUID
     string (defence in depth: narrows the attack surface for
