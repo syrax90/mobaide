@@ -55,6 +55,19 @@ public interface TerminalViewClient {
     default void onTerminalRowCopyToInput(String text, boolean isCurrentInput) {}
 
     /**
+     * Called when the user selects arbitrary terminal text via long-press and taps
+     * "Send to Input" in the selection {@link android.view.ActionMode} toolbar. Signals
+     * the host to copy the free-form selection into the editable input field (cursor at
+     * the end, field focused) for editing before resend. Unlike
+     * {@link #onTerminalRowCopyToInput}, the source is an arbitrary selection rather than a
+     * resolved prompt row; like it, the text is <em>not</em> submitted and is <em>not</em>
+     * written to the system clipboard — the separate "Copy" item owns the clipboard.
+     *
+     * @param text the currently selected terminal text
+     */
+    default void onCopySelectionToInput(String text) {}
+
+    /**
      * Called after a manual drag or fling has settled to a new {@code mTopRow} value
      * (0 = pinned to bottom, negative = scrolled up by N rows). Not called for
      * programmatic {@link TerminalView#setTopRow(int)} writes — those would create

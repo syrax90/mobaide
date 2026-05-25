@@ -155,6 +155,9 @@ fun TerminalScreen(
                         onRowCopyToInput = { text, _ ->
                             viewModel.copyTextToInput(text)
                         },
+                        onSelectionCopyToInput = { text ->
+                            viewModel.copyTextToInput(text)
+                        },
                         onScrollSettled = viewModel::onUserScrollSettled,
                         followMode = followMode,
                         modifier = Modifier.fillMaxSize(),

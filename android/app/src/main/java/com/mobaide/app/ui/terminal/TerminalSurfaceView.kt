@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mobaide.app.data.local.TerminalDisplayConfig
 import com.mobaide.app.data.local.TerminalDisplayMode
+import com.mobaide.app.ui.common.copyToClipboard
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
@@ -40,6 +41,7 @@ fun TerminalSurfaceView(
     onResize: (rows: Int, cols: Int) -> Unit,
     onRowTapped: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
     onRowCopyToInput: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
+    onSelectionCopyToInput: (text: String) -> Unit = {},
     onScrollSettled: (topRow: Int) -> Unit = {},
     followMode: Boolean = true,
     modifier: Modifier = Modifier,
@@ -47,10 +49,14 @@ fun TerminalSurfaceView(
     val client = remember { TerminalViewClientImpl() }
     client.onRowTapped = onRowTapped
     client.onRowCopyToInput = onRowCopyToInput
+    client.onSelectionCopyToInput = onSelectionCopyToInput
     client.onScrollSettled = onScrollSettled
 
     DisposableEffect(sessionCallback) {
-        onDispose { sessionCallback.onInvalidate = null }
+        onDispose {
+            sessionCallback.onInvalidate = null
+            sessionCallback.onCopyToClipboard = null
+        }
     }
 
     val layoutListener = remember(session) {
@@ -66,6 +72,7 @@ fun TerminalSurfaceView(
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
+            val appCtx = ctx.applicationContext
             val terminalView = TerminalView(ctx, null).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -76,6 +83,7 @@ fun TerminalSurfaceView(
                 setTerminalViewClient(client)
                 attachSession(session)
                 sessionCallback.onInvalidate = { onScreenUpdated() }
+                sessionCallback.onCopyToClipboard = { text -> appCtx.copyToClipboard("Terminal output", text, isSensitive = true) }
                 applyDisplayConfig(isStatic, staticCols)
                 viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
             }
@@ -137,13 +145,26 @@ class TerminalSessionCallback(
     /** Set by the View layer to trigger [TerminalView.onScreenUpdated] → [invalidate]. */
     var onInvalidate: (() -> Unit)? = null
 
+    /**
+     * Set by the View layer (which owns a [android.content.Context]) so the terminal can
+     * write text to the system clipboard. Reached by two callers: the ActionMode "Copy"
+     * item (an explicit user gesture) and the OSC 52 escape sequence emitted by programs in
+     * the PTY (e.g. vim/tmux yank) — so enabling this sink also lets remote PTY output set
+     * the clipboard without a user gesture. The wiring marks the clip sensitive
+     * ([android.content.ClipDescription.EXTRA_IS_SENSITIVE]) because terminal text may
+     * contain secrets, which suppresses the clipboard preview on API 33+.
+     */
+    var onCopyToClipboard: ((String) -> Unit)? = null
+
     override fun onTextChanged(changedSession: TerminalSession) {
         onScreenUpdated()
         onInvalidate?.invoke()
     }
     override fun onTitleChanged(changedSession: TerminalSession) {}
     override fun onSessionFinished(finishedSession: TerminalSession) {}
-    override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {}
+    override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
+        if (!text.isNullOrEmpty()) onCopyToClipboard?.invoke(text)
+    }
     override fun onPasteTextFromClipboard(session: TerminalSession?) {}
     override fun onBell(session: TerminalSession) {}
     override fun onColorsChanged(session: TerminalSession) {}
@@ -171,12 +192,14 @@ private class TerminalViewClientImpl : TerminalViewClient {
     var fnDown = false
     var onRowTapped: (String, Boolean) -> Unit = { _, _ -> }
     var onRowCopyToInput: (String, Boolean) -> Unit = { _, _ -> }
+    var onSelectionCopyToInput: (String) -> Unit = {}
     var onScrollSettled: (Int) -> Unit = {}
 
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: android.view.MotionEvent?) {}
     override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) { onRowTapped(text, isCurrentInput) }
     override fun onTerminalRowCopyToInput(text: String, isCurrentInput: Boolean) { onRowCopyToInput(text, isCurrentInput) }
+    override fun onCopySelectionToInput(text: String) { onSelectionCopyToInput(text) }
     override fun onScrollPositionChanged(topRow: Int) { onScrollSettled(topRow) }
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = true
