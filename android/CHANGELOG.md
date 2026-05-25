@@ -1,5 +1,18 @@
 # Android Changelog
 
+## [1.7.0](https://github.com/syrax90/claude_mobile/compare/android-v1.6.0...android-v1.7.0) (2026-05-25)
+
+
+### Features
+
+* **auth:** replace hardcoded OTP placeholder with segmented CodeInputField ([d351ac3](https://github.com/syrax90/claude_mobile/commit/d351ac32488a09905ba6689d7ed25ebe1630355a))
+
+
+### Bug Fixes
+
+* **android:** update network security config to disallow cleartext traffic ([b5cc408](https://github.com/syrax90/claude_mobile/commit/b5cc40896f61cb8ba0815e9a963a6498e026289f))
+* **android:** update network security config to disallow cleartext traffic ([6a7e1a1](https://github.com/syrax90/claude_mobile/commit/6a7e1a1630958a56dbd08b85cfdc75f6d321db65))
+
 ## [1.6.0](https://github.com/syrax90/claude_mobile/compare/android-v1.5.2...android-v1.6.0) (2026-05-23)
 
 
