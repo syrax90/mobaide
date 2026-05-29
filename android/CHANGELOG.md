@@ -1,5 +1,19 @@
 # Android Changelog
 
+## [1.8.0](https://github.com/syrax90/claude_mobile/compare/android-v1.7.1...android-v1.8.0) (2026-05-29)
+
+
+### Features
+
+* **android:** add Mobaide adaptive launcher icon ([3030f87](https://github.com/syrax90/claude_mobile/commit/3030f87e8a1456819be8cfa285685bb9875f464c))
+
+
+### Bug Fixes
+
+* **android:** add Mobaide adaptive launcher icon ([441f0bc](https://github.com/syrax90/claude_mobile/commit/441f0bc5148068e125d8bac99e7eeea2afea3811))
+* **android:** remove Paste and More from long-press selection toolbar ([6f9208e](https://github.com/syrax90/claude_mobile/commit/6f9208e04389f971f7f2119987da022dba064ff8))
+* **terminal:** remove Paste and More from long-press selection toolbar ([979f0a9](https://github.com/syrax90/claude_mobile/commit/979f0a994ea241107593a8402a9b4014f81d794d))
+
 ## [1.7.1](https://github.com/syrax90/claude_mobile/compare/android-v1.7.0...android-v1.7.1) (2026-05-29)
 
 
