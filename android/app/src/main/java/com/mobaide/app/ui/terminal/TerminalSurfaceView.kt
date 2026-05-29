@@ -78,6 +78,15 @@ fun TerminalSurfaceView(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 )
+                // Long-press text selection needs View focus: startTextSelectionMode() aborts
+                // when requestFocus() fails, and a View is not focusable in touch mode by
+                // default. Upstream Termux sets these in activity_termux.xml; this view is built
+                // in code, so without them the selection toolbar (Send to Input / Copy) never
+                // appears. defaultFocusHighlight off (also matching upstream) avoids a focus ring
+                // under D-pad/keyboard navigation; never drawn in touch mode anyway.
+                isFocusable = true
+                isFocusableInTouchMode = true
+                setDefaultFocusHighlightEnabled(false)
                 setTextSize(36)
                 setTypeface(Typeface.MONOSPACE)
                 setTerminalViewClient(client)
