@@ -104,13 +104,11 @@ For transparency, the app does **not** collect or use:
 
 ## 4. Permissions used by the app
 
-The app declares the following Android permissions, all used strictly for its core functionality:
+The app declares the following Android permission, used strictly for its core functionality:
 
 | Permission | Why it is needed |
 |---|---|
 | `INTERNET` | Connect to the central server over WSS/HTTPS. |
-| `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_DATA_SYNC` | Keep the agent WebSocket alive while a Claude session is running so terminal output is not dropped when the screen turns off. The foreground service is of type `dataSync`. |
-| `POST_NOTIFICATIONS` | Show the persistent notification required by Android for the foreground service, and surface in-app status notifications. |
 
 The app does **not** declare `CAMERA`, `RECORD_AUDIO`, `ACCESS_FINE_LOCATION`, `ACCESS_COARSE_LOCATION`, `READ_CONTACTS`, `READ_SMS`, `READ_PHONE_STATE`, `READ_EXTERNAL_STORAGE`, or any other sensitive permission.
 
