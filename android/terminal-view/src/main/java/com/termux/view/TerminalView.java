@@ -21,7 +21,6 @@ import android.view.HapticFeedbackConstants;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
-import android.view.Menu;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -35,7 +34,6 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.Scroller;
 
-import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
 import com.termux.terminal.KeyHandler;
@@ -666,14 +664,6 @@ public final class TerminalView extends View {
 
         invalidate();
         if (mAccessibilityEnabled) setContentDescription(getText());
-    }
-
-    /** This must be called by the hosting activity in {@link Activity#onContextMenuClosed(Menu)}
-     * when context menu for the {@link TerminalView} is started by
-     * {@link TextSelectionCursorController#ACTION_MORE} is closed. */
-    public void onContextMenuClosed(Menu menu) {
-        // Unset the stored text since it shouldn't be used anymore and should be cleared from memory
-        unsetStoredSelectedText();
     }
 
     /**
@@ -1628,17 +1618,6 @@ public final class TerminalView extends View {
             return mTextSelectionCursorController.getSelectedText();
         else
             return null;
-    }
-
-    /** Get the selected text stored before "MORE" button was pressed on the context menu. */
-    @Nullable
-    public String getStoredSelectedText() {
-        return mTextSelectionCursorController != null ? mTextSelectionCursorController.getStoredSelectedText() : null;
-    }
-
-    /** Unset the selected text stored before "MORE" button was pressed on the context menu. */
-    public void unsetStoredSelectedText() {
-        if (mTextSelectionCursorController != null) mTextSelectionCursorController.unsetStoredSelectedText();
     }
 
     private ActionMode getTextSelectionActionMode() {
