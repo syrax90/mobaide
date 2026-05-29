@@ -1,5 +1,16 @@
 # Android Changelog
 
+## [1.7.1](https://github.com/syrax90/claude_mobile/compare/android-v1.7.0...android-v1.7.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* **android:** add long-press Send-to-Input action and fix silent Copy no-op (CLA-63) ([299a7e8](https://github.com/syrax90/claude_mobile/commit/299a7e8c78e4dbb5b14530f7633dcf84eec8a5f4))
+* **android:** make TerminalView focusable so long-press selection toolbar appears (CLA-63) ([79384b6](https://github.com/syrax90/claude_mobile/commit/79384b6fc3c50e9934453e6705fcfe24fea37d25))
+* **android:** remove dead foreground service and its artifacts ([1475656](https://github.com/syrax90/claude_mobile/commit/1475656689a68bdc942fd8f2a3feabd3fd4f2052))
+* **android:** remove dead foreground service and its artifacts ([d6d98b3](https://github.com/syrax90/claude_mobile/commit/d6d98b3677f74edfc6ad3fb27216c1e8aecedf85))
+* **terminal:** make TerminalView focusable so long-press selection toolbar appears (CLA-63) ([1c61af7](https://github.com/syrax90/claude_mobile/commit/1c61af735e7b20d072ab404f1abb98a542d483e6))
+
 ## [1.7.0](https://github.com/syrax90/claude_mobile/compare/android-v1.6.0...android-v1.7.0) (2026-05-25)
 
 
