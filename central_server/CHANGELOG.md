@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.12](https://github.com/syrax90/claude_mobile/compare/server-v0.1.11...server-v0.1.12) (2026-05-29)
+
+
+### Bug Fixes
+
+* **android:** remove dead foreground service and its artifacts ([1475656](https://github.com/syrax90/claude_mobile/commit/1475656689a68bdc942fd8f2a3feabd3fd4f2052))
+* **android:** remove dead foreground service and its artifacts ([d6d98b3](https://github.com/syrax90/claude_mobile/commit/d6d98b3677f74edfc6ad3fb27216c1e8aecedf85))
+
 ## [0.1.11](https://github.com/syrax90/claude_mobile/compare/server-v0.1.10...server-v0.1.11) (2026-05-23)
 
 
