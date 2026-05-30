@@ -108,9 +108,12 @@ signal between them.
 **To cut a release, the PR title is the trigger.** Use `feat(agent): …` /
 `fix(agent): …` for `mobaide_agent`, `feat(server): …` / `fix(server): …`
 for `central_server`, and `feat(android): …` / `fix(android): …` for the
-Android app. The repo is configured to squash-merge with the PR title as
-the commit message, so the PR title becomes the commit release-please
-reads on `main`. `pr-title-lint.yml` blocks merge if the title doesn't
+Android app. The repo enforces **squash-only merging** (merge and rebase
+merges are disabled) with the squash title = PR title and a blank squash
+body, so each PR lands as exactly one commit on `main` carrying the PR
+title — the single source release-please reads; branch commit messages are
+discarded at merge time. Breaking changes use `!` in the title
+(`feat(agent)!: …`). `pr-title-lint.yml` blocks merge if the title doesn't
 match. Anything else (`chore:`, `docs:`, `refactor:`) merges normally and
 produces no release.
 
@@ -120,7 +123,7 @@ corresponding workflow:
 
 | Tag prefix | Triggers workflow | What it produces |
 |------------|--------------------|------------------|
-| `android-vX.Y.Z` | `release-android.yml` | Signed `.aab` uploaded to Play Console internal track. `inAppUpdatePriority` set from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
+| `android-vX.Y.Z` | `release-android.yml` | Signed `.aab` uploaded to Play Console internal track. `inAppUpdatePriority` derived from the `CHANGELOG.md` section generated for the tag (breaking → 5, bug fix → 3, else → 1). |
 | `agent-vX.Y.Z` | `release-agent.yml` | `uv build` wheel + sdist, Ed25519-signed manifest, GitHub Release in the public sibling repo `syrax90/mobaide-agent-releases`, manifest POSTed to `central_server`. |
 | `server-vX.Y.Z` | `release-server.yml` | Docker image to GHCR, manual-approval-gated deploy step (`environment: production`). |
 

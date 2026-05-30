@@ -29,25 +29,32 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Determine in-app update priority from commit message
+      - name: Determine in-app update priority from changelog
         id: priority
         run: |
-          subject=$(git log -1 --pretty=%s)
-          body=$(git log -1 --pretty=%b)
-          # bash 5.x's [[ ]] pre-tokenizer mis-counts parens when ')' appears
-          # inside [^)] within (...). Hold the patterns in shell variables so
-          # bash sees only the variable reference at parse time.
-          re_breaking='^[a-z]+(\([^)]+\))?!:'
-          re_fix='^fix(\([^)]+\))?:'
-          if [[ "$subject" =~ $re_breaking ]] || printf '%s\n' "$body" | grep -qE '^BREAKING[- ]CHANGE:'; then
+          # The tag sits on release-please's "chore: release main" commit, whose
+          # subject is never a feat/fix, so reading the tagged commit message
+          # always yielded priority=1. Derive urgency from the CHANGELOG section
+          # release-please generated for THIS exact version instead: any breaking
+          # change -> 5, else any bug fix -> 3, else -> 1.
+          ver="${GITHUB_REF_NAME#android-v}"
+          section=$(awk -v ver="$ver" '
+            index($0, "## [" ver "]") == 1 {found=1; print; next}
+            found && /^## \[/ {exit}
+            found {print}
+          ' android/CHANGELOG.md)
+          if [ -z "$section" ]; then
+            echo "WARNING: no CHANGELOG section for ${ver}; defaulting priority=1"
+            priority=1
+          elif printf '%s\n' "$section" | grep -qiE '^### .*BREAKING'; then
             priority=5
-          elif [[ "$subject" =~ $re_fix ]]; then
+          elif printf '%s\n' "$section" | grep -qE '^### Bug Fixes'; then
             priority=3
           else
             priority=1
           fi
           echo "priority=${priority}" >> "$GITHUB_OUTPUT"
-          echo "Computed inAppUpdatePriority=${priority} from subject='${subject}'"
+          echo "Computed inAppUpdatePriority=${priority} for android-v${ver}"
 
       - name: Decode upload keystore (if provided)
         id: decode_keystore

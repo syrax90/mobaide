@@ -1,0 +1,23 @@
+# Managed by the Probot "Settings" app (repository-settings/app). If installed,
+# this is the source of truth for the keys below, applied on every push to the
+# default branch. If NOT installed, this file is documentation only -- the
+# authoritative apply is:
+#   gh api -X PATCH repos/syrax90/claude_mobile \
+#     -F allow_squash_merge=true -F allow_merge_commit=false \
+#     -F allow_rebase_merge=false -f squash_merge_commit_title=PR_TITLE \
+#     -f squash_merge_commit_message=BLANK
+#
+# Why squash-only: release-please reads conventional commits from `main`. Merge
+# commits leak BOTH the PR title (merge body) AND the branch's original commit
+# subjects onto `main`, so release-please double-counts every change and can
+# disagree with itself on feat-vs-fix (one change landing under both Features
+# and Bug Fixes). Squash-only collapses each PR to a single commit whose subject
+# is the linted PR title -- the one source of truth release-please reads.
+repository:
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+  delete_branch_on_merge: true
+  # Applied out-of-band by `gh api` (the Settings app may reject these two keys):
+  # squash_merge_commit_title: PR_TITLE   # squash subject = PR title
+  # squash_merge_commit_message: BLANK    # blank body -- no bullets to re-parse
