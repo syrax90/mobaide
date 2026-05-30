@@ -30,8 +30,9 @@ State machine
                                   +-----------------+
 
 * ``current_version`` swap is atomic via ``os.replace``.
-* The previous release dir is retained for one cycle as a rollback target
-  (gc'd by the launcher on the next successful boot of a new release).
+* The previous release dir is retained as a rollback target; the launcher
+  GCs releases older than the retained set (current + rollback target) on
+  its next boot (``mobaide.launcher._prune_old_releases``).
 * Activity-awareness: the updater queries ``SessionManager.list_sessions()``
   and defers when any session is non-stopped.
 * Signature verification is fail-closed: a malformed or invalid signature

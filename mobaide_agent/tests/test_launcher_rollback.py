@@ -19,19 +19,7 @@ from pathlib import Path
 import pytest
 
 from mobaide.launcher import __main__ as launcher
-
-
-def _make_release(prefix: Path, version: str) -> Path:
-    release = prefix / "releases" / version
-    if sys.platform == "win32":
-        bin_dir = release / "venv" / "Scripts"
-        python = bin_dir / "python.exe"
-    else:
-        bin_dir = release / "venv" / "bin"
-        python = bin_dir / "python"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    python.write_text("#!/bin/sh\nexec /bin/true\n", encoding="utf-8")
-    return release
+from tests.conftest import make_release, release_names
 
 
 def _set_current_version(prefix: Path, version: str) -> None:
@@ -60,16 +48,16 @@ def test_crash_count_only_counts_matching_version_in_window():
 
 def test_find_rollback_target_picks_highest_sibling(tmp_path):
     prefix = tmp_path
-    _make_release(prefix, "0.1.0")
-    _make_release(prefix, "0.1.5")
-    _make_release(prefix, "0.2.0")  # the failing one
+    make_release(prefix, "0.1.0")
+    make_release(prefix, "0.1.5")
+    make_release(prefix, "0.2.0")  # the failing one
     target = launcher._find_rollback_target(prefix, "0.2.0")
     assert target == "0.1.5"
 
 
 def test_find_rollback_target_skips_release_without_python(tmp_path):
     prefix = tmp_path
-    _make_release(prefix, "0.1.0")
+    make_release(prefix, "0.1.0")
     # 0.1.5 directory exists but has no python — must be skipped.
     (prefix / "releases" / "0.1.5").mkdir(parents=True)
     target = launcher._find_rollback_target(prefix, "0.2.0")
@@ -78,7 +66,7 @@ def test_find_rollback_target_skips_release_without_python(tmp_path):
 
 def test_find_rollback_target_returns_none_when_alone(tmp_path):
     prefix = tmp_path
-    _make_release(prefix, "0.2.0")
+    make_release(prefix, "0.2.0")
     assert launcher._find_rollback_target(prefix, "0.2.0") is None
 
 
@@ -87,9 +75,9 @@ def test_find_rollback_target_skips_candidate_in_crash_loop(tmp_path):
     in the same window must NOT be picked as a rollback target — that
     is the anti-oscillation guard."""
     prefix = tmp_path
-    _make_release(prefix, "0.1.0")
-    _make_release(prefix, "0.1.5")
-    _make_release(prefix, "0.2.0")
+    make_release(prefix, "0.1.0")
+    make_release(prefix, "0.1.5")
+    make_release(prefix, "0.2.0")
     now = 1000.0
     # 0.1.5 is also crash-looping in the window — must be excluded even
     # though it is the highest sibling. Falls through to 0.1.0.
@@ -104,8 +92,8 @@ def test_find_rollback_target_skips_candidate_in_crash_loop(tmp_path):
 
 def test_find_rollback_target_returns_none_when_all_candidates_loop(tmp_path):
     prefix = tmp_path
-    _make_release(prefix, "0.1.0")
-    _make_release(prefix, "0.2.0")
+    make_release(prefix, "0.1.0")
+    make_release(prefix, "0.2.0")
     now = 1000.0
     # Both sibling releases are crash-looping — no viable rollback exists.
     entries = [
@@ -135,8 +123,8 @@ def _install_fake_run_release(monkeypatch, captured: dict[str, list]) -> None:
 
 def test_main_rolls_back_after_three_crashes(tmp_path, monkeypatch):
     prefix = tmp_path
-    _make_release(prefix, "0.1.0")
-    failing_release = _make_release(prefix, "0.2.0")
+    make_release(prefix, "0.1.0")
+    failing_release = make_release(prefix, "0.2.0")
     _set_current_version(prefix, "0.2.0")
     # Two stale journal entries — main() will write the third and trip
     # the threshold.
@@ -163,8 +151,8 @@ def test_main_rolls_back_after_three_crashes(tmp_path, monkeypatch):
 
 def test_main_passes_through_when_no_crash_loop(tmp_path, monkeypatch):
     prefix = tmp_path
-    _make_release(prefix, "0.1.0")
-    _make_release(prefix, "0.2.0")
+    make_release(prefix, "0.1.0")
+    make_release(prefix, "0.2.0")
     _set_current_version(prefix, "0.2.0")
 
     monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
@@ -180,12 +168,64 @@ def test_main_passes_through_when_no_crash_loop(tmp_path, monkeypatch):
     assert "0.2.0" in exec_path
 
 
+def test_main_prunes_old_releases_on_normal_boot(tmp_path, monkeypatch):
+    """A normal boot execs the current release AND garbage-collects releases
+    older than the retained set (current + rollback target)."""
+    prefix = tmp_path
+    make_release(prefix, "0.1.0")
+    make_release(prefix, "0.1.5")
+    make_release(prefix, "0.2.0")
+    _set_current_version(prefix, "0.2.0")
+
+    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
+    captured: dict[str, list] = {"argv": []}
+    _install_fake_run_release(monkeypatch, captured)
+    monkeypatch.setattr(sys, "argv", ["launcher"])
+
+    with pytest.raises(SystemExit):
+        launcher.main()
+
+    exec_path, _ = captured["argv"][-1]
+    assert "0.2.0" in exec_path
+    names = release_names(prefix)
+    assert names == {"0.2.0", "0.1.5"}
+
+
+def test_main_prune_keeps_rolled_back_release(tmp_path, monkeypatch):
+    """After a crash-loop rollback, prune runs against the post-rollback
+    version: it must keep the release just rolled back to (now current) plus
+    the rollback target, and drop only the stale older release."""
+    prefix = tmp_path
+    make_release(prefix, "0.1.0")
+    make_release(prefix, "0.1.5")
+    make_release(prefix, "0.2.0")
+    _set_current_version(prefix, "0.2.0")
+    import time as _time
+
+    now = _time.time()
+    _seed_journal(prefix, [(now - 30, "0.2.0"), (now - 10, "0.2.0")])
+
+    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
+    captured: dict[str, list] = {"argv": []}
+    _install_fake_run_release(monkeypatch, captured)
+    monkeypatch.setattr(sys, "argv", ["launcher"])
+
+    with pytest.raises(SystemExit):
+        launcher.main()
+
+    assert (prefix / "current_version").read_text(encoding="utf-8").strip() == "0.1.5"
+    exec_path, _ = captured["argv"][-1]
+    assert "0.1.5" in exec_path
+    names = release_names(prefix)
+    assert names == {"0.1.5", "0.2.0"}
+
+
 def test_main_no_rollback_target_falls_through(tmp_path, monkeypatch):
     """Only one release exists; rollback is impossible — main() still
     execs the failing release and lets the supervisor's hard limit take
     over."""
     prefix = tmp_path
-    failing_release = _make_release(prefix, "0.2.0")
+    failing_release = make_release(prefix, "0.2.0")
     _set_current_version(prefix, "0.2.0")
     import time as _time
 

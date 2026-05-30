@@ -436,7 +436,12 @@ The platform-specific service unit (`systemd`, `launchd`, Windows Scheduled Task
    target, and logs `ERROR — version <X> crashed N+ times…; rolling back to
    <Y>`. With no eligible sibling, it logs the rollback miss and continues
    into the failing release; the supervisor's hard cap finally stops the loop.
-4. `os.execv`s into `<prefix>/releases/<version>/venv/bin/python -m mobaide run`.
+4. Garbage-collects superseded release directories under `<prefix>/releases/`,
+   keeping the current version plus the highest-versioned eligible sibling (the
+   rollback target). Retention is configurable via `MOBAIDE_AGENT_KEEP_RELEASES`
+   (default `2`; floor `2`). Cleanup is best-effort — a failed deletion is
+   logged and retried on the next boot, and never blocks startup.
+5. `os.execv`s into `<prefix>/releases/<version>/venv/bin/python -m mobaide run`.
 
 This means a swap of `current_version` followed by a process restart is the
 only thing required to roll forward (or back). The launcher's rollback
@@ -493,8 +498,11 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 * **Atomic pointer swap** — `os.replace` of `current_version.tmp` →
   `current_version`.
 * **Supervisor restart** — the updater calls `sys.exit(75)`. `RestartForceExitStatus=75` (systemd), the Windows `mobaide_launcher.py` supervisor's exit-code-75 respawn loop, and Task Scheduler's outer `-RestartCount` / `-RestartInterval` all interpret this as "please bring me back up", and the launcher boots into the freshly-pinned release.
-* **Rollback target** — the previous release directory is retained for one
-  cycle; a future successful boot of the new release garbage-collects it.
+* **Rollback target** — on every boot, `_prune_old_releases` keeps the current
+  version plus up to `MOBAIDE_AGENT_KEEP_RELEASES - 1` highest-versioned
+  eligible siblings (default: one previous release). Dirs that lack a usable
+  venv, or whose name is not a parseable version, are never deleted. Set
+  `MOBAIDE_AGENT_KEEP_RELEASES=<n>` (floor `2`) to retain more rollback targets.
 
 ### HTTPS bootstrap (side-channel update path)
 
