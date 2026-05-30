@@ -22,7 +22,7 @@ dedicated workflow under `.github/workflows/`:
 
 | Tag prefix | Component | Workflow | What it produces |
 |------------|-----------|----------|------------------|
-| `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is computed from the tag commit's conventional-commit prefix (`feat!:` / `BREAKING CHANGE:` → 5, `fix:` → 3, else → 1). |
+| `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is derived from the `android/CHANGELOG.md` section release-please just generated for this tag (any breaking change → 5, else any `### Bug Fixes` → 3, else → 1). It is **not** read from the tagged commit subject — the tag sits on release-please's `chore: release main` commit, which is never a `feat`/`fix`. |
 | `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release **published into the public sibling repo `$RELEASES_REPO`** (the source repo is private, so anonymous installs cannot reach release URLs there), an anonymous reachability gate (1-byte ranged GET, with retries to absorb CDN-propagation lag) over every URL in the manifest, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. |
 | `server-vX.Y.Z` | `central_server` | `release-server.yml` | Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). No GitHub Release object is created on this repo — the GHCR image is the only artifact. A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy-central.ps1` or `docker compose pull && up -d` against the prod compose file). |
 | `proto-vN` | Wire contract | _(none)_ | Hand-pushed by a developer alongside the lockstep `PROTOCOL.md` + `envelope.py` bump. Serves as a changelog/anchor tag — no workflow fires on tag push and no Release object is created. Lockstep enforcement that **both** `mobaide_agent/.../envelope.py` AND `central_server/.../envelope.py` move together lives in `protocol-integrity.yml`, which runs on every PR and every push to `main`. |
@@ -38,10 +38,23 @@ The rule is one line: **the PR title is the release trigger.**
 | Android app | `feat(android): …` or `fix(android): …` |
 | Anything else (CI, docs, refactor) | `chore: …`, `docs: …`, `refactor: …` — no release fires |
 
-The repo is configured to **squash-merge with the PR title as the commit
-message**, so the PR title literally becomes the commit on `main` that
-release-please reads. There is no longer any "but the title was right
-and nothing happened" failure mode tied to merge-commit style.
+The repo enforces **squash-only merging** (merge commits and rebase merges
+are disabled at the GitHub repo level): the squash commit **title is the PR
+title** and the squash commit **body is blank**. So the PR title literally
+becomes the *single* commit on `main` that release-please reads, and the
+feature branch's own commit messages are **discarded at merge time** — they
+never reach `main` and have no effect on the version bump or the changelog.
+Breaking changes are signalled with `!` in the PR title (e.g.
+`feat(agent)!: …`), which release-please bumps as a major.
+
+This is enforced two ways: the repo merge settings (the source of truth is a
+`gh api -X PATCH repos/<owner>/<repo> -f squash_merge_commit_title=PR_TITLE
+-f squash_merge_commit_message=BLANK -F allow_merge_commit=false
+-F allow_rebase_merge=false`, mirrored as policy-as-code in
+`.github/settings.yml`), plus `pr-title-lint.yml`. There is no longer any
+"but the title was right and nothing happened" failure mode tied to
+merge-commit style, and no "the branch said feat but the merge said fix"
+double-entry: exactly one commit per PR, one source of truth.
 
 `pr-title-lint.yml` runs on every pull request and fails the check if
 the title doesn't match the grammar above (or uses a stale scope like
@@ -78,11 +91,15 @@ What happens after merge:
 ### Manual release path (operator escape hatch)
 
 Use this when the conventional-commits flow is the wrong tool:
-release-please opened no release-PR (no actionable conventional
-commit reached `main` — typical when squash was bypassed and the
-merge commit on `main` is just `Merge pull request #N…`); you want
-to ship a hotfix release-please can't represent; or you've already
-hand-bumped the version files and want to ship those exact bytes.
+release-please opened no release-PR (the merged PR's title was a
+non-release type such as `chore:` / `docs:` / `refactor:`, so no
+version-bearing commit reached `main`); you want to ship a hotfix
+release-please can't represent; or you've already hand-bumped the
+version files and want to ship those exact bytes. (With squash-only
+merging now enforced, the old "squash was bypassed and the commit on
+`main` is just `Merge pull request #N…`" failure mode can no longer
+occur for normal PRs — every PR lands as a single squash commit
+carrying the linted PR title.)
 
 Currently wired for `mobaide_agent` only via
 `.github/workflows/release-agent-manual.yml`. The same shape clones
@@ -95,8 +112,9 @@ to `central_server` / `android` when needed.
    - `mobaide_agent/CHANGELOG.md` — replace `## [Unreleased]` with
      `## [X.Y.Z] - YYYY-MM-DD` and fill in the entries.
 2. **Open and merge a PR** to `main`. Commit grammar does not matter
-   on this path — the workflow trigger replaces release-please here,
-   so a plain `Merge pull request #N…` commit is fine.
+   for *this* path — the manual workflow trigger replaces release-please
+   here. The squash commit carries the PR title regardless; on the
+   manual path release-please simply isn't the actor that tags.
 3. **Run the manual workflow:** Actions → **Release agent (manual)**
    → Run workflow → enter the version (e.g. `0.1.2`). The workflow
    validates that `pyproject.toml`, the manifest, and the tag state
