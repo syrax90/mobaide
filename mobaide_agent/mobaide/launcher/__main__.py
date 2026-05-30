@@ -8,6 +8,10 @@ the persistent entry point that observes the loop and breaks it by
 rewriting ``current_version`` to a sibling release. The next supervisor
 restart then boots the rolled-back version.
 
+It also garbage-collects superseded release dirs on each boot, keeping
+the current version plus the rollback target (see ``_prune_old_releases``),
+so updates don't leak a full venv per version forever.
+
 Self-contained on purpose — this module runs across release directories
 (it's installed at ``<prefix>/bin/mobaide-agent-launcher``, not inside
 any ``releases/<v>/venv``) and must not import ``mobaide`` so it
@@ -34,6 +38,7 @@ the launcher itself is terminated.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -47,6 +52,13 @@ ROLLBACK_THRESHOLD = 3
 ROLLBACK_WINDOW_SECONDS = 60.0
 JOURNAL_KEEP_LINES = 100
 JOURNAL_NAME = ".boot_journal"
+
+# Superseded releases are GC'd on boot, keeping the current version plus the
+# rollback target. The floor of 2 keeps the crash-loop rollback heuristic
+# (_find_rollback_target) viable; operators can retain more via the env var.
+DEFAULT_KEEP_RELEASES = 2
+MIN_KEEP_RELEASES = 2
+KEEP_RELEASES_ENV = "MOBAIDE_AGENT_KEEP_RELEASES"
 
 
 def _default_prefix() -> Path:
@@ -175,6 +187,81 @@ def _find_rollback_target(
         return None
     eligible.sort(reverse=True)
     return eligible[0][1]
+
+
+def _resolve_keep_releases() -> int:
+    raw = os.environ.get(KEEP_RELEASES_ENV)
+    if not raw:
+        return DEFAULT_KEEP_RELEASES
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_KEEP_RELEASES
+    return max(value, MIN_KEEP_RELEASES)
+
+
+def _prune_old_releases(
+    prefix: Path, current_version: str, keep: int | None = None
+) -> tuple[list[str], list[str]]:
+    """GC superseded release dirs, returning ``(kept, pruned)``.
+
+    Retains ``current_version`` plus the highest-versioned other releases
+    with a usable venv — the same eligibility gate ``_find_rollback_target``
+    applies — up to ``keep`` dirs total, deleting the rest. A dir whose name
+    is not a parseable version, or that lacks a venv interpreter (a foreign
+    dir, or a half-staged release the updater is still building), is never a
+    deletion candidate.
+
+    Best-effort: a failed ``rmtree`` (e.g. a Windows file lock on a stale
+    interpreter) is logged and retried on the next boot. Cleanup must never
+    block startup, so this never raises.
+    """
+    if keep is None:
+        keep = _resolve_keep_releases()
+    releases_dir = prefix / "releases"
+    try:
+        entries = [p for p in releases_dir.iterdir() if p.is_dir()]
+    except OSError:
+        return ([], [])
+
+    valid: list[tuple[tuple[int, ...], str]] = []
+    for entry in entries:
+        parsed = _parse_version(entry.name)
+        if parsed == ():
+            continue
+        if not _resolve_python(entry).exists():
+            continue
+        valid.append((parsed, entry.name))
+
+    valid.sort(reverse=True)
+    keep_names: set[str] = {current_version}
+    for _, version in valid:
+        if len(keep_names) >= keep:
+            break
+        keep_names.add(version)
+
+    kept: list[str] = []
+    pruned: list[str] = []
+    for _, version in valid:
+        if version in keep_names:
+            kept.append(version)
+            continue
+        try:
+            shutil.rmtree(releases_dir / version)
+        except OSError as exc:
+            sys.stderr.write(
+                f"mobaide-agent-launcher: could not prune release {version}: {exc}\n"
+            )
+            kept.append(version)
+        else:
+            pruned.append(version)
+
+    if pruned:
+        sys.stderr.write(
+            f"mobaide-agent-launcher: pruned old releases {pruned}; "
+            f"kept {sorted(keep_names)}\n"
+        )
+    return (kept, pruned)
 
 
 def _exec_release(prefix: Path, version: str) -> None:
@@ -356,6 +443,7 @@ def main() -> None:
                 )
                 version = rollback
 
+    _prune_old_releases(prefix, version)
     _exec_release(prefix, version)
 
 

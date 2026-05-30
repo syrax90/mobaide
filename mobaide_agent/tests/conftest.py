@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -82,6 +83,30 @@ def drain_text_preamble(ws) -> None:
         return original_receive_bytes()
 
     ws.receive_bytes = _receive_bytes_with_pending  # type: ignore[assignment]
+
+
+def make_release(prefix: Path, version: str) -> Path:
+    """Create a fake ``<prefix>/releases/<version>/`` with a venv interpreter.
+
+    Shared by the launcher rollback and prune tests, which build the same
+    on-disk release layout ``_resolve_python`` probes (``Scripts`` on Windows,
+    ``bin`` elsewhere).
+    """
+    release = prefix / "releases" / version
+    if IS_WINDOWS:
+        bin_dir = release / "venv" / "Scripts"
+        python = bin_dir / "python.exe"
+    else:
+        bin_dir = release / "venv" / "bin"
+        python = bin_dir / "python"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    python.write_text("#!/bin/sh\nexec /bin/true\n", encoding="utf-8")
+    return release
+
+
+def release_names(prefix: Path) -> set[str]:
+    """Return the directory names under ``<prefix>/releases/``."""
+    return {p.name for p in (prefix / "releases").iterdir()}
 
 
 @pytest.fixture
