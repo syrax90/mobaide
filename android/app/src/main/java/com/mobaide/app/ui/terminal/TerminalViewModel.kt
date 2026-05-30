@@ -44,6 +44,12 @@ import javax.inject.Inject
 /** Live, reconnecting, replaying — what the UI overlay should show on top of the terminal. */
 enum class ConnectionState { Live, Reconnecting, ReplayingBuffer }
 
+/** Ctrl+A (0x01) + Ctrl+K (0x0B) — clears the PTY's current input line via
+ *  readline line-edit keys (no SIGINT, unlike Ctrl+C), so a composer send never
+ *  concatenates onto stale prompt text and a running task is never interrupted.
+ *  Holds the two raw control bytes; [TerminalViewModelSendInputTest] asserts them. */
+private const val CLEAR_INPUT_LINE = ""
+
 @HiltViewModel
 class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -279,11 +285,14 @@ class TerminalViewModel @Inject constructor(
         // carry raw ESC bytes; the user owns both ends of the session so no privilege
         // boundary is crossed. Strip ESC[201~ from `text` here if a shared-session
         // feature is ever added that lets one user paste into another's session.
-        val payload = if ('\n' in text) {
+        val body = if ('\n' in text) {
             "[200~$text[201~\r"
         } else {
             text + "\r"
         }
+        // Prepend the line clear so this message replaces — never concatenates onto —
+        // any stale text already on the PTY's prompt line (e.g. from a double-tap copy).
+        val payload = CLEAR_INPUT_LINE + body
         sendChannel.trySend(
             TerminalProtocol.encodeInput(payload.toByteArray(Charsets.UTF_8))
         )
