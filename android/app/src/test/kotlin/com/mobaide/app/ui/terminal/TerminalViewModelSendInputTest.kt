@@ -1,5 +1,6 @@
 package com.mobaide.app.ui.terminal
 
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.SavedStateHandle
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
@@ -29,8 +30,12 @@ import org.junit.Test
 /**
  * Unit tests for [TerminalViewModel]'s send paths.
  *
- * [TerminalViewModel.sendInput] always encodes the fresh typed text + CR as a single
- * 'i' (input) frame. [TerminalViewModel.sendTappedRow] is the "tap `❯` row = Enter"
+ * [TerminalViewModel.sendInput] prepends a Ctrl+A + Ctrl+K line clear (0x01, 0x0B) to
+ * the fresh typed text + CR, then encodes the whole buffer as a single 'i' (input)
+ * frame — the clear wipes stale prompt text so the message replaces (never concatenates
+ * onto) it, with no SIGINT so a running task is never interrupted.
+ *
+ * [TerminalViewModel.sendTappedRow] is the "tap `❯` row = Enter"
  * entrypoint; it dispatches on its `isCurrentInput` flag:
  *
  * - `isCurrentInput = true`  → bare CR via 'i' frame (PTY already holds the text).
@@ -85,6 +90,10 @@ class TerminalViewModelSendInputTest {
 
     private fun frameTypeOf(frame: ByteString): Byte = frame.toByteArray()[0]
 
+    /** The Ctrl+A (0x01) + Ctrl+K (0x0B) line-clear bytes [TerminalViewModel.sendInput]
+     *  prepends to every composer send (see CLEAR_INPUT_LINE). */
+    private val clearPrefix = byteArrayOf(0x01, 0x0B)
+
     @Test
     fun sendInput_freshText_sendsTextPlusCR() {
         val vm = createViewModel()
@@ -94,7 +103,7 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "hello\r".toByteArray(Charsets.UTF_8),
+            clearPrefix + "hello\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
@@ -115,7 +124,7 @@ class TerminalViewModelSendInputTest {
     }
 
     @Test
-    fun sendInput_freshText_emptyString_sendsBareCR() {
+    fun sendInput_freshText_emptyString_sendsClearThenCR() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
@@ -123,7 +132,8 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "\r".toByteArray(Charsets.UTF_8),
+            "empty composer send still clears the line, then submits a bare CR",
+            clearPrefix + "\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
@@ -137,7 +147,7 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "é\r".toByteArray(Charsets.UTF_8),
+            clearPrefix + "é\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
@@ -152,7 +162,7 @@ class TerminalViewModelSendInputTest {
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
             "multi-line input must be wrapped with xterm bracketed-paste markers",
-            "[200~line1\nline2[201~\r".toByteArray(Charsets.UTF_8),
+            clearPrefix + "[200~line1\nline2[201~\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
@@ -192,7 +202,8 @@ class TerminalViewModelSendInputTest {
         assertArrayEquals(
             "start marker must be ESC [ 2 0 0 ~  (0x1B 0x5B 0x32 0x30 0x30 0x7E)",
             startMarker,
-            payload.copyOfRange(0, 6),
+            // Offset 2, not 0: the 2-byte Ctrl+A/Ctrl+K line clear precedes the marker.
+            payload.copyOfRange(2, 8),
         )
         assertArrayEquals(
             "end marker must be ESC [ 2 0 1 ~  (0x1B 0x5B 0x32 0x30 0x31 0x7E)",
@@ -216,8 +227,49 @@ class TerminalViewModelSendInputTest {
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
             "single-line input (no LF) must NOT be wrapped — markers would surface on non-Claude shells",
-            "single line\r".toByteArray(Charsets.UTF_8),
+            clearPrefix + "single line\r".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
+        )
+    }
+
+    @Test
+    fun sendInput_prependsLineClear_ctrlA_thenCtrlK() {
+        val vm = createViewModel()
+        val captured = slot<ByteString>()
+
+        vm.sendInput("ls")
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        val payload = payloadOf(captured.captured)
+        // Typo guard: assert the literal clear bytes regardless of how CLEAR_INPUT_LINE
+        // is spelled in source. Ctrl+A = 0x01 (move to start), Ctrl+K = 0x0B (kill to end).
+        assertEquals(
+            "composer send must start with Ctrl+A (0x01) to clear the line",
+            0x01.toByte(),
+            payload[0],
+        )
+        assertEquals(
+            "Ctrl+A must be immediately followed by Ctrl+K (0x0B)",
+            0x0B.toByte(),
+            payload[1],
+        )
+    }
+
+    @Test
+    fun sendInput_clearsComposerAfterSend() = runTest {
+        val vm = createViewModel()
+        vm.updateInputText(TextFieldValue("stale composer text"))
+
+        vm.sendInput("hello")
+        advanceUntilIdle()
+
+        // The composer must be emptied once the message is queued: the line clear
+        // wipes the PTY's prompt line, and leaving the sent text in the input bar
+        // would invite an accidental duplicate send of the same message.
+        assertEquals(
+            "sendInput must reset the composer to empty after dispatching the frame",
+            "",
+            vm.inputText.value.text,
         )
     }
 
