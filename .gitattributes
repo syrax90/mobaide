@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings so they execute on Linux hosts after
+# checkout/scp from Windows. With core.autocrlf=true a CRLF working-tree copy
+# gets scp'd to the VPS, where bash reads `set -euo pipefail\r` and aborts with
+# "set: pipefail: invalid option name". eol=lf overrides core.autocrlf.
+*.sh text eol=lf
