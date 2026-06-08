@@ -1,5 +1,12 @@
 # Android Changelog
 
+## [1.8.1](https://github.com/syrax90/claude_mobile/compare/android-v1.8.0...android-v1.8.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* **terminal:** prepend Ctrl+A/Ctrl+K line clear before every composer send ([8739eb4](https://github.com/syrax90/claude_mobile/commit/8739eb41f80ac5003e217920e67607fa452a11c0))
+
 ## [1.8.0](https://github.com/syrax90/claude_mobile/compare/android-v1.7.1...android-v1.8.0) (2026-05-29)
 
 
