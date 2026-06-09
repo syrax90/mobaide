@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.8](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.7...agent-v0.2.8) (2026-06-09)
+
+
+### Bug Fixes
+
+* **pairing:** release stale device lock and forbid cross-user agent takeover ([01b940c](https://github.com/syrax90/claude_mobile/commit/01b940cf0c9218eedfb63ab3706e72a68cb5672e))
+* **pairing:** release stale device lock and forbid cross-user agent takeover ([40392b4](https://github.com/syrax90/claude_mobile/commit/40392b41d02ff780b512aa9de73ef1bbb0b0e6b8))
+
 ## [0.2.7](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.6...agent-v0.2.7) (2026-06-08)
 
 
