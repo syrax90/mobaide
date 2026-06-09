@@ -33,6 +33,10 @@ data class CreateSessionRequest(
     // When set, command/cwd/env are ignored; the server derives them from the named project.
     val project_name: String? = null,
     val claude_options: ClaudeOptionsModel? = null,
+    // Terminal-mode worktree: create a git worktree for a shell session (claude_options null)
+    // on a stored git project and spawn the shell inside it.
+    val worktree: Boolean = false,
+    val branch_name: String? = null,
 )
 
 @Serializable

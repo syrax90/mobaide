@@ -335,7 +335,7 @@ class TestCreateSessionAdHoc:
         self, client, auth_headers, tmp_path,
     ):
         """An absolute-but-missing path is rejected by the existence
-        check, not by ``ClaudeLauncher._check_exists`` further down —
+        check, not by ``check_cwd_exists`` further down —
         the 400 carries "does not exist" wording, distinguishing it
         from the "is not a directory" case below."""
         missing = tmp_path / "ghost"

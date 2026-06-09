@@ -23,7 +23,7 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, AutoScanConfig }
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, AutoScanConfig, TerminalConfig }
 
 enum class CreateSessionMode { Standard, AutoScan, CustomShell }
 
@@ -216,13 +216,28 @@ class CreateSessionViewModel @Inject constructor(
 
     fun pickMode(mode: CreateSessionMode) {
         _uiState.update { it.copy(selectedMode = mode) }
-        if (mode == CreateSessionMode.CustomShell) {
-            submitCustomShell()
-        }
     }
 
     fun selectStandardMode() = _uiState.update {
         it.copy(step = CreateSessionStep.StandardConfig)
+    }
+
+    /**
+     * Continue from the mode picker for Terminal mode. A stored git project
+     * opens the Terminal session page (worktree toggle); anything else
+     * (non-git project, custom path) has nothing to configure, so the shell
+     * session is created immediately rather than showing an empty sheet.
+     */
+    fun selectTerminalMode() {
+        val state = _uiState.value
+        val storedGit = (state.selection as? ProjectSelection.Stored)?.let { sel ->
+            state.projects.firstOrNull { it.name == sel.name }?.is_git == true
+        } ?: false
+        if (storedGit) {
+            _uiState.update { it.copy(step = CreateSessionStep.TerminalConfig) }
+        } else {
+            submitCustomShell()
+        }
     }
 
     fun selectAutoScanMode() = _uiState.update {
@@ -271,6 +286,7 @@ class CreateSessionViewModel @Inject constructor(
         when (it.step) {
             CreateSessionStep.StandardConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.TerminalConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.ModePick -> it.copy(
                 step = CreateSessionStep.ProjectSelect,
                 selectedMode = null,
@@ -333,6 +349,8 @@ class CreateSessionViewModel @Inject constructor(
                     project_name = sel.name,
                     command = null,
                     claude_options = null,
+                    worktree = state.worktree,
+                    branch_name = state.branchName.takeIf { it.isNotBlank() },
                 ),
             )
             is ProjectSelection.CustomPath -> {
@@ -344,6 +362,8 @@ class CreateSessionViewModel @Inject constructor(
                         cwd = sel.path,
                         command = null,
                         claude_options = null,
+                        worktree = false,
+                        branch_name = null,
                     ),
                 )
             }

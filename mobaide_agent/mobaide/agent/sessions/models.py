@@ -31,6 +31,11 @@ class CreateSessionRequest(BaseModel):
     # ``ClaudeLauncher`` builds them from the project + ``claude_options``.
     project_name: str | None = None
     claude_options: ClaudeOptionsModel | None = None
+    # Terminal-mode worktree: create a git worktree for a SHELL session
+    # (no ``claude_options``) anchored to a stored git project and spawn the
+    # shell inside it. Claude sessions use ``claude_options.worktree`` instead.
+    worktree: bool = False
+    branch_name: str | None = None
 
 
 class SessionResponse(BaseModel):

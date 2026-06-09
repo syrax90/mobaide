@@ -96,6 +96,8 @@ async def create_session(
         cols=body.cols,
         project_name=body.project_name,
         claude_options=claude_options,
+        worktree=body.worktree,
+        branch_name=body.branch_name,
         kind=kind,
     )
     try:

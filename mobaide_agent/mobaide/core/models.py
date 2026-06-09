@@ -53,6 +53,12 @@ class SessionConfig:
     project_name: str | None = None
     claude_options: ClaudeOptions | None = None
     kind: SessionKind = SessionKind.CLAUDE
+    # Terminal-mode worktree request. Consumed only on the SHELL+project path
+    # (``SessionManager._resolve_project_cwd``); kept separate from
+    # ``claude_options`` so a Terminal session can create a worktree while
+    # staying ``SessionKind.SHELL`` (Claude sessions use claude_options.worktree).
+    worktree: bool = False
+    branch_name: str | None = None
 
 
 @dataclass

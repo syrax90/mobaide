@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 try:
     from mobaide.agent.logging import audit_event, get_logger, log_call
@@ -13,10 +14,18 @@ except Exception:  # pragma: no cover - logging package optional during isolated
         return deco
     def audit_event(*args, **kwargs): pass
 
-from .claude_launcher import AdHocLaunch, ClaudeLauncher, ClaudeOptions
+from .claude_launcher import (
+    AdHocLaunch,
+    ClaudeLauncher,
+    ClaudeOptions,
+    check_cwd_exists,
+)
 from .models import SessionConfig, SessionInfo, SessionState, session_to_wire_dict
-from .projects_store import ProjectsStore
+from .projects_store import ProjectsStore, safe_path_exists
 from .session import TerminalSession
+
+if TYPE_CHECKING:
+    from mobaide.linear.worktree import WorktreeManager
 
 logger = get_logger(__name__)
 
@@ -33,6 +42,7 @@ class SessionManager:
         max_sessions: int = 16,
         projects_store: ProjectsStore | None = None,
         launcher: ClaudeLauncher | None = None,
+        worktree_mgr: WorktreeManager | None = None,
         event_bus: Any | None = None,
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
         on_session_removed: Callable[[str], Awaitable[None] | None] | None = None,
@@ -44,6 +54,7 @@ class SessionManager:
         self._liveness_task: asyncio.Task[None] | None = None
         self._projects_store = projects_store
         self._launcher = launcher
+        self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
         self._on_session_created = on_session_created
         self._on_session_removed = on_session_removed
@@ -163,13 +174,14 @@ class SessionManager:
         config.env = spec.env
 
     async def _resolve_project_cwd(self, config: SessionConfig) -> None:
-        """Resolve only the project ``cwd`` without invoking ``ClaudeLauncher``.
+        """Resolve the project ``cwd`` (optionally a worktree) without invoking ``ClaudeLauncher``.
 
         Used by the Terminal mode path: caller has set ``config.command`` to
         ``_DEFAULT_SHELL`` and we just need the PTY to spawn in the project's
-        working directory. Raises the same ``ValueError`` / ``KeyError``
-        shapes ``_apply_project_launch`` uses so router/relay error mapping
-        stays unchanged.
+        working directory — or, when ``config.worktree`` is set, in a freshly
+        created git worktree of that project. Raises the same ``ValueError`` /
+        ``KeyError`` shapes ``_apply_project_launch`` uses so router/relay
+        error mapping stays unchanged.
         """
         if self._projects_store is None:
             raise ValueError(
@@ -178,7 +190,44 @@ class SessionManager:
         project = self._projects_store.get(config.project_name or "")
         if project is None:
             raise KeyError(f"Project '{config.project_name}' not found")
-        config.cwd = project.path
+        if config.worktree:
+            config.cwd = await self._resolve_worktree_cwd(
+                project.path, config.branch_name,
+            )
+        else:
+            config.cwd = project.path
+
+    async def _resolve_worktree_cwd(
+        self, project_path: str, branch_name: str | None
+    ) -> str:
+        """Create a git worktree for a Terminal (SHELL) session and return its path.
+
+        Mirrors ``ClaudeLauncher._resolve_cwd``'s Standard-mode guards: a stale
+        client requesting a worktree for a non-git project is downgraded to the
+        project root (logged), and a missing ``WorktreeManager`` is a server
+        misconfiguration. ``WorktreeCreationError`` propagates for the
+        router/relay to map to a clean HTTP 400.
+        """
+        if not safe_path_exists(Path(project_path) / ".git"):
+            logger.warning(
+                "worktree=true requested for non-git project %r; ignoring",
+                project_path,
+            )
+            return project_path
+        if self._worktree_mgr is None:
+            raise RuntimeError(
+                "worktree=true requested but no WorktreeManager is configured; "
+                "this is a server misconfiguration"
+            )
+        from mobaide.linear.worktree import create_standard_worktree
+
+        result = await create_standard_worktree(
+            self._worktree_mgr,
+            project_path,
+            branch_name,
+            fallback_prefix="terminal-session",
+        )
+        return check_cwd_exists(result.path)
 
     async def get_session(self, session_id: str) -> TerminalSession | None:
         """Look up a session by ID."""

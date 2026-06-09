@@ -823,6 +823,8 @@ class RelayClient:
             cols=ctrl.get("cols", 80),
             project_name=ctrl_project_name,
             claude_options=claude_options,
+            worktree=bool(ctrl.get("worktree", False)),
+            branch_name=ctrl.get("branch_name"),
             kind=kind,
         )
         try:
@@ -1115,6 +1117,8 @@ class RelayClient:
                 cols=parsed.cols,
                 project_name=parsed.project_name,
                 claude_options=claude_options,
+                worktree=parsed.worktree,
+                branch_name=parsed.branch_name,
                 kind=kind,
             )
             session = await self._session_manager.create_session(config)
