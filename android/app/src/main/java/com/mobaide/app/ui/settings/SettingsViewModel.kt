@@ -327,8 +327,7 @@ class SettingsViewModel @Inject constructor(
         }
         TokenStore.ConnectionMode.RELAY -> {
             val server = tokenStore.getRelayServerUrl() ?: "unknown"
-            val agentId = tokenStore.getAgentId() ?: "unknown"
-            "Relay: $server (agent $agentId)"
+            "Relay: $server"
         }
     }
 }

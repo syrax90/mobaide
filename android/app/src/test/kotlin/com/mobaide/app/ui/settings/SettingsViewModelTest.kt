@@ -104,23 +104,22 @@ class SettingsViewModelTest {
         val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
 
         val state = vm.uiState.value
-        assertEquals("Relay: https://relay.example.com (agent agent-abc)", state.connectionInfo)
+        assertEquals("Relay: https://relay.example.com", state.connectionInfo)
         assertEquals("bob@example.com", state.userEmail)
     }
 
     @Test
-    fun initialState_relayMode_nullServerUrlAndAgentId_showsUnknown() = runTest {
+    fun initialState_relayMode_nullServerUrl_showsUnknown() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true)
         every { authRepository.getUserEmail() } returns null
         val tokenStore = stubTokenStore(
             mode = TokenStore.ConnectionMode.RELAY,
             relayServerUrl = null,
-            agentId = null,
         )
 
         val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
 
-        assertEquals("Relay: unknown (agent unknown)", vm.uiState.value.connectionInfo)
+        assertEquals("Relay: unknown", vm.uiState.value.connectionInfo)
     }
 
     @Test
