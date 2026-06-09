@@ -45,7 +45,7 @@ agent (mobaide-agent)        central_server                 mobile (Mobaide app)
         │                          │      {nonce, fp, mobile_device_id}
         │                          │ CAS-consume nonce               │
         │                          │ if metadata.current_agent_id:   │
-        │                          │   re-pair (rotate or transfer)  │
+        │                          │   re-pair (rotate or 409)       │
         │                          │ else:                           │
         │                          │   register_agent()              │
         │                          │ sign payload (Ed25519)          │
@@ -153,24 +153,25 @@ this without a full app-data wipe.)
 
 The agent's CLI captures its current `RELAY_AGENT_ID` (if any) into the
 initiate request's `agent_metadata.current_agent_id` field. The claim
-handler then chooses one of two paths:
+handler then chooses one of three paths:
 
+* **No current agent** (`current_agent_id` absent or unknown/deleted) —
+  the server calls `db.register_agent()` to create a new agent row and
+  returns 404 for an unknown ID.
 * **Same owner** — `db.is_agent_owner(current_agent_id, claimer)`
   returns true. The server calls `db.reregister_agent(current_agent_id)`
   to rotate the token. The mobile UI sees the same agent row reappear
   with a fresh credential.
-* **Different owner** — the server calls
-  `db.transfer_agent_owner(current_agent_id, claimer)`, which deletes
-  the prior owner's `mobile_refresh_tokens` and `mobile_devices` rows and
-  updates `agents.owner_user_id`. Then `reregister_agent` rotates the
-  token. The prior owner's mobile clients are evicted on their next
-  refresh; live WebSocket connections are not torn down server-side
-  in this flow (they rely on token rotation to take effect on the
-  next reauth).
+* **Different owner** — `POST /api/pairing/claim` returns **HTTP 409**.
+  Cross-account agent transfer is not permitted via QR re-pair. To move
+  a host to a different account, the current owner must remove the agent
+  through the app first; the agent host then first-pairs as a new agent
+  under the new account.
 
-Authorization model: shell access on the agent host is sufficient. The
-operator who controls the host implicitly authorises any account
-transfer by triggering `mobaide-agent re-pair` on that host.
+Authorization model: possession of shell access on the agent host alone
+is no longer sufficient to claim ownership from another account. The
+current owning account must explicitly release the agent before a
+different account can acquire it.
 
 ## Operator runbook
 
@@ -203,13 +204,25 @@ simultaneously.
 
 ### Re-pair to a different account
 
-```bash
-mobaide-agent re-pair
-```
+Direct cross-account transfer via QR is no longer permitted; the claim
+returns HTTP 409 if the scanned agent is already owned by a different
+account.
 
-Blanks `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` in `.env`, restarts the
-supervisor, and surfaces a fresh QR via the boot autorun. Scan from the
-new account's mobile app to complete the transfer.
+To move a host to a different account:
+
+1. **Remove the agent** from the current owner's account (app → agent
+   settings → Remove agent).
+2. On the agent host, run:
+
+   ```bash
+   mobaide-agent re-pair
+   ```
+
+   This blanks `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` in `.env` and
+   restarts the supervisor, surfacing a fresh QR via the boot autorun.
+3. Scan the QR from the new account's mobile app. Because no agent ID is
+   carried in the initiate request, the server registers a fresh agent
+   row under the new owner.
 
 ### Skip the install-time QR
 

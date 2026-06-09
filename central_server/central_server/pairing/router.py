@@ -165,7 +165,7 @@ async def claim_pairing(
     body: PairingClaimRequest,
     user: UserTokenPayload = Depends(get_non_admin_api_user),
 ) -> PairingClaimResponse:
-    """Consume a pairing nonce; create or transfer the agent; push to the WS.
+    """Consume a pairing nonce; create or re-register the agent for its owner; push to the WS.
 
     Authenticated as a non-admin user. The successful CAS-consume of the
     nonce is the single-flight authority: replays return 410 Gone.
@@ -202,23 +202,14 @@ async def claim_pairing(
     current_agent_id = metadata.get("current_agent_id")
     hostname_meta = metadata.get("hostname")
 
-    # Validate cross-tenant device ownership before any agent-row
-    # mutation or nonce consumption. Without this fail-fast, a cross-
-    # tenant collision would 409 only AFTER the nonce was burned and
-    # (in the re-pair branch) ownership of the agent had been
-    # transferred — neither side-effect is reversible from inside the
-    # request handler.
-    accepted = await db.upsert_mobile_device(
-        device_id=body.mobile_device_id,
-        user_id=user.sub,
-        name=body.mobile_device_name,
-    )
-    if not accepted:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="mobile_device_id is already registered to a different user",
-        )
-
+    # Agent-ownership guard, fail-fast before any row mutation or the nonce
+    # CAS. An agent that is already paired to an account can only be
+    # re-paired by that same account — knowing an ``agent_id`` is not
+    # authority to take the agent over. ``initiate`` is anonymous and the
+    # ``current_agent_id`` it stamps into the nonce metadata is
+    # attacker-controllable, so the authenticated claim is the only place
+    # ownership can be enforced. A different account must have the current
+    # owner remove the agent first, after which the agent first-pairs anew.
     if current_agent_id:
         existing_owner = await db.get_agent_owner(current_agent_id)
         if existing_owner is None:
@@ -231,7 +222,33 @@ async def claim_pairing(
                 ),
             )
         if existing_owner != user.sub:
-            await db.transfer_agent_owner(current_agent_id, user.sub)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This agent is already paired to a different account; "
+                    "its current owner must remove it before it can be "
+                    "paired to another account."
+                ),
+            )
+
+    # Cross-tenant device guard, also fail-fast: an idle device is silently
+    # reassigned to this user, an in-use one is rejected — either way the
+    # decision lands before the nonce is consumed so a rejected claim leaves
+    # the nonce replayable.
+    accepted = await db.upsert_mobile_device(
+        device_id=body.mobile_device_id,
+        user_id=user.sub,
+        name=body.mobile_device_name,
+    )
+    if not accepted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="mobile_device_id is already registered to a different user",
+        )
+
+    if current_agent_id:
+        # Guarded above: the caller owns ``current_agent_id``. Rotate its
+        # token in place (same-owner re-pair).
         new_token = await db.reregister_agent(current_agent_id)
         agent_id = current_agent_id
         agent_row = await db.get_agent(agent_id)

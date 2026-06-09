@@ -19,8 +19,10 @@ class PairingInitiateRequest(BaseModel):
 
     All fields are advisory: the mobile UI uses ``hostname`` / ``os`` to
     let the operator confirm they're claiming the right host;
-    ``current_agent_id`` distinguishes a re-pair (token rotation, possible
-    owner transfer) from a first-pair (new ``agents`` row at claim).
+    ``current_agent_id`` distinguishes a re-pair (token rotation for the
+    same owner) from a first-pair (new ``agents`` row at claim). A claim by
+    a different account is rejected — ownership is not transferable by
+    pairing.
     """
 
     hostname: str | None = Field(default=None, max_length=255)
