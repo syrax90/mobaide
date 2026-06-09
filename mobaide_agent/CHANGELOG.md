@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.10](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.9...agent-v0.2.10) (2026-06-09)
+
+
+### Features
+
+* **agent:** add Terminal session worktree config page ([755a94b](https://github.com/syrax90/claude_mobile/commit/755a94bc314162c358159a5b29cf7bd0269c5f87))
+* **sessions:** add Terminal session worktree config page ([0a65eee](https://github.com/syrax90/claude_mobile/commit/0a65eee9343c8a52dc066ba337acd30001c9d253))
+
 ## [0.2.9](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.8...agent-v0.2.9) (2026-06-09)
 
 
