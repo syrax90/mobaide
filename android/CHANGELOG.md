@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [1.10.0](https://github.com/syrax90/claude_mobile/compare/android-v1.9.0...android-v1.10.0) (2026-06-09)
+
+
+### Features
+
+* **agent:** add Terminal session worktree config page ([755a94b](https://github.com/syrax90/claude_mobile/commit/755a94bc314162c358159a5b29cf7bd0269c5f87))
+* **sessions:** add Terminal session worktree config page ([0a65eee](https://github.com/syrax90/claude_mobile/commit/0a65eee9343c8a52dc066ba337acd30001c9d253))
+
 ## [1.9.0](https://github.com/syrax90/claude_mobile/compare/android-v1.8.2...android-v1.9.0) (2026-06-09)
 
 
