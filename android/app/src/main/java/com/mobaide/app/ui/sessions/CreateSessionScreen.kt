@@ -123,6 +123,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.ModePick -> "Select mode"
                             CreateSessionStep.StandardConfig -> "Claude code session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
+                            CreateSessionStep.TerminalConfig -> "Terminal session"
                         }
                     )
                 },
@@ -185,7 +186,7 @@ fun CreateSessionScreen(
                         when (state.selectedMode) {
                             CreateSessionMode.Standard -> viewModel.selectStandardMode()
                             CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
-                            CreateSessionMode.CustomShell -> Unit
+                            CreateSessionMode.CustomShell -> viewModel.selectTerminalMode()
                             null -> Unit
                         }
                     },
@@ -197,6 +198,10 @@ fun CreateSessionScreen(
                     viewModel = viewModel,
                 )
                 CreateSessionStep.AutoScanConfig -> AutoScanConfigSection(
+                    state = state,
+                    viewModel = viewModel,
+                )
+                CreateSessionStep.TerminalConfig -> TerminalConfigSection(
                     state = state,
                     viewModel = viewModel,
                 )
@@ -487,7 +492,7 @@ private fun ModePickerSection(
 
     Button(
         onClick = onCommit,
-        enabled = selectedMode != null && selectedMode != CreateSessionMode.CustomShell,
+        enabled = selectedMode != null,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")
@@ -520,6 +525,32 @@ private fun StandardConfigSection(
 
     Button(
         onClick = viewModel::submit,
+        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@Composable
+private fun TerminalConfigSection(
+    state: CreateSessionUiState,
+    viewModel: CreateSessionViewModel,
+) {
+    ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+    if (state.worktree) {
+        OutlinedTextField(
+            value = state.branchName,
+            onValueChange = viewModel::setBranchName,
+            label = { Text("Branch name (optional)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    Button(
+        onClick = viewModel::submitCustomShell,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from mobaide.linear.worktree import (
     WorktreeCreationError,
     WorktreeManager,
+    WorktreeResult,
     convert_to_worktree_slug,
+    create_standard_worktree,
 )
 
 
@@ -63,6 +65,75 @@ class TestConvertToWorktreeSlug:
         slug = convert_to_worktree_slug("X-1", title)
         assert slug == "x-1-a-b-c-d-e-f-g-h"
         assert len(slug.split("-")) == 10
+
+
+# -- create_standard_worktree --
+
+
+class TestCreateStandardWorktree:
+    """The helper both ``ClaudeLauncher`` (Standard) and ``SessionManager``
+    (Terminal) reuse: derive a slug + default a blank branch, then delegate to
+    ``mgr.create_worktree(slug, project_root, branch_name=branch)``. The manager
+    is mocked so no real ``git`` runs."""
+
+    @staticmethod
+    def _mock_mgr(result_path: str = "/repo/wt") -> AsyncMock:
+        mgr = AsyncMock()
+        mgr.create_worktree.return_value = WorktreeResult(
+            path=result_path, is_new=True, branch="b",
+        )
+        return mgr
+
+    async def test_explicit_branch_used_verbatim_and_slugged(self):
+        mgr = self._mock_mgr()
+
+        result = await create_standard_worktree(mgr, "/repo", "feature/x")
+
+        mgr.create_worktree.assert_awaited_once()
+        call = mgr.create_worktree.await_args
+        assert call.args[0] == "feature-x"  # convert_to_worktree_slug("", "feature/x")
+        assert call.args[1] == "/repo"
+        assert call.kwargs["branch_name"] == "feature/x"
+        assert result.path == "/repo/wt"
+
+    async def test_blank_branch_defaults_to_prefixed_unique_branch(self):
+        mgr = self._mock_mgr()
+
+        await create_standard_worktree(mgr, "/repo", "", fallback_prefix="terminal-session")
+
+        branch = mgr.create_worktree.await_args.kwargs["branch_name"]
+        assert branch.startswith("terminal-session-")
+        assert len(branch) > len("terminal-session-")  # a hex suffix was appended
+
+    async def test_none_branch_defaults_using_default_prefix(self):
+        mgr = self._mock_mgr()
+
+        await create_standard_worktree(mgr, "/repo", None)
+
+        branch = mgr.create_worktree.await_args.kwargs["branch_name"]
+        assert branch.startswith("claude-session-")
+
+    async def test_default_branch_slug_matches_branch(self):
+        """The slug is derived from the *defaulted* branch, so the worktree dir
+        and branch stay correlated when no name was supplied."""
+        mgr = self._mock_mgr()
+
+        await create_standard_worktree(mgr, "/repo", None, fallback_prefix="terminal-session")
+
+        call = mgr.create_worktree.await_args
+        branch = call.kwargs["branch_name"]
+        assert call.args[0] == convert_to_worktree_slug("", branch)
+
+    async def test_two_blank_branch_calls_get_distinct_branches(self):
+        """Two worktree-on sessions with blank branches must not collide on the
+        same branch/dir — the hex suffix is unique per call."""
+        mgr = self._mock_mgr()
+
+        await create_standard_worktree(mgr, "/repo", None)
+        await create_standard_worktree(mgr, "/repo", None)
+
+        branches = [c.kwargs["branch_name"] for c in mgr.create_worktree.await_args_list]
+        assert branches[0] != branches[1]
 
 
 # -- WorktreeManager --
@@ -135,6 +206,25 @@ class TestWorktreeManager:
         assert "feature/user-typed" in worktree_add_call.args
         # The prefix must NOT be applied when branch_name is given explicitly.
         assert "feature/claude/my-dir" not in worktree_add_call.args
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_create_worktree_rejects_dash_prefixed_branch(
+        self, mock_git, manager, tmp_path,
+    ):
+        """A branch name starting with '-' is rejected before any git runs.
+
+        Git refs cannot begin with '-'; the early guard stops a client-supplied
+        name from being parsed as a ``git worktree add`` option (argument
+        injection), surfacing as ``WorktreeCreationError`` (mapped to HTTP 400).
+        """
+        project_root = str(tmp_path / "project")
+        os.makedirs(project_root)
+
+        with pytest.raises(WorktreeCreationError):
+            await manager.create_worktree(
+                "my-dir", project_root, branch_name="--upload-pack=evil",
+            )
+        mock_git.assert_not_awaited()
 
     @patch("mobaide.linear.worktree._run_git")
     async def test_create_worktree_falls_back_to_local_main_when_no_origin(

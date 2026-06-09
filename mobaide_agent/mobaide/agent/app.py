@@ -600,6 +600,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         max_sessions=config.max_sessions,
         projects_store=projects_store,
         launcher=app.state.claude_launcher,
+        worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,
         on_session_removed=_on_session_removed,

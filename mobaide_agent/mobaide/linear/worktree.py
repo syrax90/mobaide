@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 
@@ -123,6 +124,25 @@ def convert_to_worktree_slug(identifier: str, title: str) -> str:
         slug = re.sub(r"[^a-z0-9-]", "-", identifier.lower())
 
     return slug
+
+
+async def create_standard_worktree(
+    mgr: WorktreeManager,
+    project_root: str,
+    branch_name: str | None,
+    *,
+    fallback_prefix: str = "claude-session",
+) -> WorktreeResult:
+    """Create a user-named worktree for Standard (Claude) or Terminal mode.
+
+    Shared by ``ClaudeLauncher`` (Claude Standard mode) and ``SessionManager``
+    (Terminal mode). A blank/``None`` ``branch_name`` gets a unique
+    ``{fallback_prefix}-<hex>`` branch so two worktree-on sessions never
+    collide on the same worktree directory; a supplied name is used verbatim.
+    """
+    branch = branch_name or f"{fallback_prefix}-{uuid.uuid4().hex[:8]}"
+    slug = convert_to_worktree_slug("", branch)
+    return await mgr.create_worktree(slug, project_root, branch_name=branch)
 
 
 async def _run_git(
@@ -365,6 +385,16 @@ class WorktreeManager:
         resolved_base = os.path.join(project_root, self._worktree_base)
         wt_dir = os.path.join(resolved_base, slug)
 
+        # Git refs cannot begin with '-'; reject early so a client-supplied
+        # branch name can never be parsed as an option by ``git worktree add``
+        # (defense-in-depth against argument injection).
+        if branch_name.startswith("-"):
+            raise WorktreeCreationError(
+                branch=branch_name,
+                path=wt_dir,
+                stderr="branch name must not start with '-'",
+            )
+
         os.makedirs(resolved_base, exist_ok=True)
 
         if os.path.exists(wt_dir):
@@ -398,7 +428,7 @@ class WorktreeManager:
         first_err = stderr.strip()
         logger.warning("Branch may already exist, retrying without -b: %s", first_err)
         rc, _, stderr = await _run_git(
-            "worktree", "add", wt_dir, branch_name,
+            "worktree", "add", "--", wt_dir, branch_name,
             cwd=project_root,
         )
         if rc == 0:

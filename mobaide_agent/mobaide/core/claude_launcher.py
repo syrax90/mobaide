@@ -7,7 +7,6 @@ import os
 import platform
 import shutil
 import sys
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -249,6 +248,20 @@ CLAUDE_SESSION_PRESET_ENV: dict[str, str] = {
 }
 
 
+def check_cwd_exists(cwd: str) -> str:
+    """Raise ``FileNotFoundError`` with a clean ``filename`` if ``cwd`` is missing.
+
+    Pre-empts ``pywinpty.PtyProcess.spawn`` / ``subprocess.Popen`` on bad paths
+    so the session router/relay can map the error to a 400 with a readable,
+    unescaped path — rather than letting Starlette's default 500 handler
+    surface a ``repr``-escaped filename. Shared by ``ClaudeLauncher`` cwd
+    resolution and ``SessionManager`` Terminal-mode worktree resolution.
+    """
+    if not Path(cwd).exists():
+        raise FileNotFoundError(2, "No such file or directory", cwd)
+    return cwd
+
+
 class ClaudeLauncher:
     """Build a ``claude`` invocation (argv / env / cwd) from a project config and options."""
 
@@ -407,9 +420,9 @@ class ClaudeLauncher:
                     "worktree=true requested for ad-hoc launch %r; ignoring",
                     "<ad-hoc>",
                 )
-            return self._check_exists(target.cwd)
+            return check_cwd_exists(target.cwd)
         if not options.worktree:
-            return self._check_exists(target.path)
+            return check_cwd_exists(target.path)
         # A stale client may still send worktree=true for a non-git project;
         # fall back to the project root.
         if not safe_path_exists(Path(target.path) / ".git"):
@@ -417,13 +430,16 @@ class ClaudeLauncher:
                 "worktree=true requested for non-git project %r; ignoring",
                 target.name,
             )
-            return self._check_exists(target.path)
+            return check_cwd_exists(target.path)
         if self._worktree_mgr is None:
             raise RuntimeError(
                 "worktree=true requested but no WorktreeManager is configured; "
                 "this is a server misconfiguration"
             )
-        from mobaide.linear.worktree import convert_to_worktree_slug
+        from mobaide.linear.worktree import (
+            convert_to_worktree_slug,
+            create_standard_worktree,
+        )
 
         if options.identifier:
             # Auto Scan path: derive slug + prefixed branch from the Linear
@@ -434,30 +450,12 @@ class ClaudeLauncher:
             )
             result = await self._worktree_mgr.create_worktree(slug, target.path)
         else:
-            # Standard path: honour the user's entered branch name verbatim.
-            # Empty branch_name gets a unique auto-generated default so two
-            # worktree-on Standard sessions never collide on the same dir.
-            branch = options.branch_name or (
-                f"claude-session-{uuid.uuid4().hex[:8]}"
+            # Standard path: honour the user's entered branch name verbatim,
+            # falling back to a unique ``claude-session-<hex>`` default.
+            result = await create_standard_worktree(
+                self._worktree_mgr, target.path, options.branch_name,
             )
-            slug = convert_to_worktree_slug("", branch)
-            result = await self._worktree_mgr.create_worktree(
-                slug, target.path, branch_name=branch,
-            )
-        return self._check_exists(result.path)
-
-    @staticmethod
-    def _check_exists(cwd: str) -> str:
-        """Raise ``FileNotFoundError`` with a clean ``filename`` if ``cwd`` is missing.
-
-        This pre-empts ``pywinpty.PtyProcess.spawn`` / ``subprocess.Popen`` on
-        bad paths so the session router can map the error to a 400 with a
-        readable, unescaped path — rather than letting Starlette's default
-        500 handler surface a ``repr``-escaped filename.
-        """
-        if not Path(cwd).exists():
-            raise FileNotFoundError(2, "No such file or directory", cwd)
-        return cwd
+        return check_cwd_exists(result.path)
 
     @staticmethod
     def _write_project_files(target: LaunchTarget, cwd: str) -> list[str]:

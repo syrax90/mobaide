@@ -8,6 +8,7 @@ import pytest
 from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
+from mobaide.linear.worktree import WorktreeResult
 from tests.conftest import IS_WINDOWS, default_shell
 
 
@@ -400,6 +401,179 @@ class TestAdHocClaudeLaunchBranching:
             launcher.build.assert_not_awaited()
             store.get.assert_not_called()
             assert config.command == shell_argv
+            assert config.cwd == str(tmp_path)
+        finally:
+            await mgr.shutdown()
+
+
+@pytest.mark.timeout(20)
+class TestTerminalWorktreeResolution:
+    """Terminal mode (``claude_options=None`` + ``project_name`` set) creates a
+    real git worktree when ``config.worktree`` is requested, mirroring
+    ``ClaudeLauncher``'s Standard-mode guards while keeping the session
+    ``SessionKind.SHELL``. ``safe_path_exists`` runs the real ``Path.exists``,
+    so the git-project cases materialise a ``.git`` entry under ``tmp_path``;
+    the ``WorktreeManager`` is an ``AsyncMock`` so no real ``git`` runs.
+    """
+
+    @staticmethod
+    def _store_for(project_name: str, project_path: str) -> MagicMock:
+        project = MagicMock()
+        project.name = project_name
+        project.path = project_path
+        store = MagicMock()
+        store.get = MagicMock(return_value=project)
+        return store
+
+    @staticmethod
+    def _shell_config(session_id: str, project_name: str, **kwargs) -> SessionConfig:
+        return SessionConfig(
+            session_id=session_id,
+            command=default_shell(),
+            rows=24,
+            cols=80,
+            scrollback_size=50,
+            project_name=project_name,
+            claude_options=None,
+            kind=SessionKind.SHELL,
+            **kwargs,
+        )
+
+    async def test_worktree_on_git_project_resolves_cwd_to_worktree(
+        self, tmp_path,
+    ) -> None:
+        """``worktree=True`` over a git project resolves ``config.cwd`` to the
+        worktree path the manager returns — not the project root — and the
+        session stays ``SHELL``. The launcher is never consulted."""
+        (tmp_path / ".git").mkdir()
+        store = self._store_for("proj", str(tmp_path))
+
+        # The resolved cwd must be a real directory: create_session spawns a
+        # PTY into config.cwd, so a non-existent worktree path would fail in
+        # the backend rather than at cwd resolution.
+        worktree_dir = tmp_path / "wt" / "feature-x"
+        worktree_dir.mkdir(parents=True)
+        worktree_path = str(worktree_dir)
+        worktree_mgr = AsyncMock()
+        worktree_mgr.create_worktree.return_value = WorktreeResult(
+            path=worktree_path, is_new=True, branch="feature/x",
+        )
+
+        launcher = MagicMock()
+        launcher.build = AsyncMock()
+
+        mgr = SessionManager(
+            projects_store=store, launcher=launcher, worktree_mgr=worktree_mgr,
+        )
+        try:
+            config = self._shell_config(
+                "wt-on", "proj", worktree=True, branch_name="feature/x",
+            )
+            await mgr.create_session(config)
+
+            worktree_mgr.create_worktree.assert_awaited_once()
+            call = worktree_mgr.create_worktree.await_args
+            # create_standard_worktree(mgr, project_root, branch) ->
+            # mgr.create_worktree(slug, project_root, branch_name=branch)
+            assert call.args[0] == "feature-x"  # convert_to_worktree_slug("", "feature/x")
+            assert call.args[1] == str(tmp_path)
+            assert call.kwargs["branch_name"] == "feature/x"
+
+            launcher.build.assert_not_awaited()
+            assert config.cwd == worktree_path
+            assert mgr.list_sessions()[0].kind == SessionKind.SHELL
+        finally:
+            await mgr.shutdown()
+
+    async def test_worktree_on_git_project_blank_branch_uses_terminal_prefix(
+        self, tmp_path,
+    ) -> None:
+        """A blank/``None`` ``branch_name`` falls back to a unique
+        ``terminal-session-<hex>`` branch (the SHELL path passes
+        ``fallback_prefix="terminal-session"``), never the Claude default."""
+        (tmp_path / ".git").mkdir()
+        store = self._store_for("proj", str(tmp_path))
+
+        worktree_dir = tmp_path / "wt"
+        worktree_dir.mkdir()
+        worktree_mgr = AsyncMock()
+        worktree_mgr.create_worktree.return_value = WorktreeResult(
+            path=str(worktree_dir), is_new=True, branch="terminal-session-abc",
+        )
+
+        mgr = SessionManager(
+            projects_store=store, launcher=MagicMock(), worktree_mgr=worktree_mgr,
+        )
+        try:
+            config = self._shell_config(
+                "wt-blank", "proj", worktree=True, branch_name=None,
+            )
+            await mgr.create_session(config)
+
+            call = worktree_mgr.create_worktree.await_args
+            branch = call.kwargs["branch_name"]
+            assert branch.startswith("terminal-session-")
+            assert branch != "terminal-session-"  # a hex suffix was appended
+            assert config.cwd == str(worktree_dir)
+        finally:
+            await mgr.shutdown()
+
+    async def test_worktree_on_non_git_project_falls_back_to_project_root(
+        self, tmp_path,
+    ) -> None:
+        """``worktree=True`` for a project with no ``.git`` is downgraded to the
+        project root (stale-client guard) and the ``WorktreeManager`` is never
+        invoked."""
+        # No ``.git`` is created under tmp_path -> safe_path_exists is False.
+        store = self._store_for("proj", str(tmp_path))
+
+        worktree_mgr = AsyncMock()
+
+        mgr = SessionManager(
+            projects_store=store, launcher=MagicMock(), worktree_mgr=worktree_mgr,
+        )
+        try:
+            config = self._shell_config("wt-nongit", "proj", worktree=True)
+            await mgr.create_session(config)
+
+            assert config.cwd == str(tmp_path)
+            worktree_mgr.create_worktree.assert_not_awaited()
+        finally:
+            await mgr.shutdown()
+
+    async def test_worktree_on_git_project_without_manager_raises_runtimeerror(
+        self, tmp_path,
+    ) -> None:
+        """``worktree=True`` over a git project with no ``WorktreeManager`` wired
+        is a server misconfiguration -> ``RuntimeError``."""
+        (tmp_path / ".git").mkdir()
+        store = self._store_for("proj", str(tmp_path))
+
+        mgr = SessionManager(
+            projects_store=store, launcher=MagicMock(), worktree_mgr=None,
+        )
+        try:
+            config = self._shell_config("wt-no-mgr", "proj", worktree=True)
+            with pytest.raises(RuntimeError, match="WorktreeManager"):
+                await mgr.create_session(config)
+        finally:
+            await mgr.shutdown()
+
+    async def test_worktree_false_resolves_project_root_without_manager(
+        self, tmp_path,
+    ) -> None:
+        """Regression companion to ``test_no_claude_options_only_resolves_cwd``:
+        with ``worktree`` defaulted ``False``, even a git project resolves to
+        the project root and never touches the (here ``None``) manager."""
+        (tmp_path / ".git").mkdir()
+        store = self._store_for("proj", str(tmp_path))
+
+        mgr = SessionManager(
+            projects_store=store, launcher=MagicMock(), worktree_mgr=None,
+        )
+        try:
+            config = self._shell_config("wt-off", "proj")  # worktree defaults False
+            await mgr.create_session(config)
             assert config.cwd == str(tmp_path)
         finally:
             await mgr.shutdown()

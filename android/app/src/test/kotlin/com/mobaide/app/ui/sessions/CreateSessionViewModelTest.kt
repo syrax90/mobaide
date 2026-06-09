@@ -534,13 +534,10 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun pickMode_CustomShell_autoSubmits_withoutAdvancingToConfigStep() = runTest {
+    fun pickMode_CustomShell_onlySelectsMode_doesNotSubmit() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.createSession(any()) } returns
-            SessionResponse("sess-shell", "starting", "2026-05-20T00:00:00Z")
 
         vm.selectProject("alpha")
         vm.confirmProject()
@@ -549,11 +546,87 @@ class CreateSessionViewModelTest {
         vm.pickMode(CreateSessionMode.CustomShell)
         advanceUntilIdle()
 
-        // pickMode(CustomShell) auto-submits; the wizard step never advances
-        // to StandardConfig / AutoScanConfig.
+        // pickMode no longer auto-submits Terminal mode — Continue
+        // (selectTerminalMode) drives the next step now. Picking only records
+        // the selected mode; the wizard stays on ModePick and no session is
+        // created.
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
         assertEquals(CreateSessionMode.CustomShell, vm.uiState.value.selectedMode)
+        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
+    }
+
+    @Test
+    fun selectTerminalMode_gitStoredProject_advancesToTerminalConfig_noSubmit() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha") // is_git = true
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.CustomShell)
+
+        vm.selectTerminalMode()
+        advanceUntilIdle()
+
+        // A git stored project opens the Terminal session page (worktree
+        // toggle) rather than creating the shell immediately.
+        assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
+        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
+    }
+
+    @Test
+    fun selectTerminalMode_nonGitStoredProject_submitsShellImmediately_noStepChange() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-nongit", "starting", "2026-05-20T00:00:00Z")
+
+        vm.selectProject("beta") // is_git = false
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.CustomShell)
+
+        vm.selectTerminalMode()
+        advanceUntilIdle()
+
+        // Non-git stored project has nothing to configure -> shell session is
+        // created immediately, no empty TerminalConfig sheet.
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
         coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+        val req = requestSlot.captured
+        assertNull("Terminal mode must keep claude_options null", req.claude_options)
+        assertFalse("Non-git project must never request a worktree", req.worktree)
+    }
+
+    @Test
+    fun terminalConfig_worktreeOn_submitsShellRequest_withWorktreeAndBranch() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-wt", "starting", "2026-05-20T00:00:00Z")
+
+        vm.selectProject("alpha") // git
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.CustomShell)
+        vm.selectTerminalMode()
+        assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
+
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.submitCustomShell()
+        advanceUntilIdle()
+
+        val req = requestSlot.captured
+        assertEquals("alpha", req.project_name)
+        assertNull("Terminal worktree must travel outside claude_options", req.claude_options)
+        assertNull("Terminal mode must let server pick _DEFAULT_SHELL", req.command)
+        assertTrue("worktree toggle must propagate to the request", req.worktree)
+        assertEquals("feature/x", req.branch_name)
     }
 
     @Test
