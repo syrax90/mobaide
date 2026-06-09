@@ -13,10 +13,10 @@ import com.mobaide.app.data.network.TerminalFrame
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
-import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
+import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
@@ -32,8 +32,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -55,6 +53,7 @@ class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
     private val templatesRepository: TemplatesRepository,
+    private val foregroundSessionTracker: ForegroundSessionTracker,
     preferencesStore: PreferencesStore,
 ) : ViewModel() {
 
@@ -81,38 +80,9 @@ class TerminalViewModel @Inject constructor(
      *  keep sends off the main thread while preserving FIFO ordering. */
     private val sendChannel = Channel<ByteString>(capacity = Channel.BUFFERED)
 
-    private val promptDetector = PromptDetector()
-
-    /** Observable prompt state for the UI to render bottom-sheet overlays. */
-    val promptState: StateFlow<PromptState> = promptDetector.promptState
-
-    /** Live ``kind`` of the session backing this terminal, derived from the
-     *  app-scoped session list. Shell sessions skip prompt detection because
-     *  the checkbox/radio/question-mark heuristics aren't meaningful for a
-     *  raw shell — only Claude-shaped output should drive the prompt sheet.
-     *
-     *  ``distinctUntilChanged`` collapses the high-frequency title-change
-     *  emissions (kind is immutable post-creation) down to at most one
-     *  downstream transition. */
-    private val sessionKind: StateFlow<SessionKind> = sessionRepository.observeSessionList()
-        .map { sessions ->
-            sessions.firstOrNull { it.session_id == sessionId }?.kind
-                ?: SessionKind.Claude
-        }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
-
     /** Exposed so the View layer can attach an invalidation hook. */
     val sessionCallback = TerminalSessionCallback(
         onScreenUpdated = {
-            // Skip prompt detection during replay (false positives) and for raw
-            // shells — checkbox/radio/Enter-key heuristics aren't meaningful
-            // for `PS C:\>` / `$ ` prompts.
-            if (_connectionState.value != ConnectionState.ReplayingBuffer &&
-                sessionKind.value != SessionKind.Shell
-            ) {
-                promptDetector.onScreenChanged(viewModelScope, session)
-            }
             // Runs on main BEFORE the View's onScreenUpdated() (which calls clearScrollCounter),
             // so emulator.scrollCounter still holds the un-cleared row delta for this update.
             if (!_followMode.value) {
@@ -418,9 +388,15 @@ class TerminalViewModel @Inject constructor(
         setFollowMode(true)
     }
 
-    /** Manually dismiss the currently detected prompt (e.g. user swiped the sheet away). */
-    fun dismissPrompt() {
-        promptDetector.dismiss()
+    /** Called while this session's terminal is on screen so the foreground
+     *  service suppresses a redundant attention notification for the session
+     *  the user is already looking at. Alerts for other sessions still fire. */
+    fun markScreenVisible() {
+        foregroundSessionTracker.setVisible(sessionId)
+    }
+
+    fun markScreenHidden() {
+        foregroundSessionTracker.clearVisible(sessionId)
     }
 
     /**

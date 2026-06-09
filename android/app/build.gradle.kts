@@ -105,8 +105,8 @@ android {
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
         buildConfigField("String", "PRIVACY_POLICY_URL", "\"$privacyPolicyUrl\"")
-        buildConfigField("int", "APP_PROTOCOL_VERSION", "3")
-        buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "3")
+        buildConfigField("int", "APP_PROTOCOL_VERSION", "4")
+        buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "4")
     }
 
     signingConfigs {
@@ -172,6 +172,7 @@ dependencies {
     // Lifecycle
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.process)
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

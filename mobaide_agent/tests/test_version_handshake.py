@@ -29,9 +29,8 @@ async def test_get_version(client) -> None:
 
 
 def test_protocol_version_constants() -> None:
-    # proto-v3: agent and central_server advertise exactly v3 after the
-    # chunked-replay wire-format change (adds FRAME_REPLAY_END terminator,
-    # see ``mobaide.agent.ws.session_io``).
-    assert PROTOCOL_VERSION == 3
-    assert MIN_CLIENT_PROTOCOL_VERSION == 3
-    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (3,)
+    # proto-v4: additive bump adding the session.attention event and
+    # the attention/exit_reason session wire fields (see PROTOCOL.md).
+    assert PROTOCOL_VERSION == 4
+    assert MIN_CLIENT_PROTOCOL_VERSION == 4
+    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (4,)

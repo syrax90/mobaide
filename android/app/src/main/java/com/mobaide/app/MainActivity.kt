@@ -1,19 +1,29 @@
 package com.mobaide.app
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.mobaide.app.data.auth.SessionManager
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.events.UserEventBus
 import com.mobaide.app.data.repository.ServerCompatibility
 import com.mobaide.app.data.repository.VersionGateRepository
+import com.mobaide.app.notifications.SessionEventService
 import com.mobaide.app.ui.navigation.AppNavigation
 import com.mobaide.app.ui.theme.MobaideTheme
 import com.mobaide.app.ui.update.InAppUpdateManager
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -35,11 +45,37 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var inAppUpdateManager: InAppUpdateManager
 
+    /** Session id from a tapped notification; consumed by [AppNavigation]. */
+    private val deepLinkSessionId = MutableStateFlow<String?>(null)
+
+    private val requestNotificationPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            // Result intentionally ignored: every post site re-checks the
+            // permission, so a denial just means alerts stay silent (no crash).
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         agentEventBus.start()
         userEventBus.start()
+        maybeRequestNotificationPermission()
+        consumeSessionExtra(intent)
+
+        // Start the notification foreground service only while this activity is
+        // at least STARTED (foreground), so the start is never a background FGS
+        // start (disallowed on Android 12+). The service stops itself when
+        // auth drops below FullyConnected.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                sessionManager.authState.collect { state ->
+                    if (state == SessionManager.AuthState.FullyConnected) {
+                        SessionEventService.start(this@MainActivity)
+                    }
+                }
+            }
+        }
+
         lifecycleScope.launch {
             val outcome = versionGate.probe()
             if (outcome is ServerCompatibility.Incompatible) {
@@ -57,6 +93,8 @@ class MainActivity : ComponentActivity() {
             MobaideTheme {
                 AppNavigation(
                     sessionManager = sessionManager,
+                    deepLinkSessionId = deepLinkSessionId,
+                    onDeepLinkConsumed = { deepLinkSessionId.value = null },
                     onImmediateUpdate = {
                         lifecycleScope.launch {
                             inAppUpdateManager.requestImmediateUpdate(this@MainActivity)
@@ -67,10 +105,40 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeSessionExtra(intent)
+    }
+
     override fun onResume() {
         super.onResume()
         lifecycleScope.launch {
             inAppUpdateManager.checkForUpdate(this@MainActivity)
         }
+    }
+
+    private fun consumeSessionExtra(intent: Intent?) {
+        val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID)?.takeIf { it.isNotBlank() }
+        if (sessionId != null) {
+            deepLinkSessionId.value = sessionId
+            // Clear so a config-change / re-create doesn't re-navigate.
+            intent.removeExtra(EXTRA_SESSION_ID)
+        }
+    }
+
+    private fun maybeRequestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    companion object {
+        const val EXTRA_SESSION_ID = "com.mobaide.app.EXTRA_SESSION_ID"
     }
 }

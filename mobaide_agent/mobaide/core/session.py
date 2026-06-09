@@ -86,6 +86,12 @@ class TerminalSession:
         self._pending_title: str | None = None
         self._title_event = asyncio.Event()
         self._title_task: asyncio.Task[None] | None = None
+        # Hook-driven attention state (set by the agent's /internal/hook
+        # endpoint from Claude Code hooks). Mirrored onto the wire DTO via
+        # ``to_info`` so a reconnecting client resyncs the "awaiting you"
+        # badge even if it missed the one-shot ``session.attention`` event.
+        self._attention: str | None = None
+        self._exit_reason: str | None = None
 
     @property
     def state(self) -> SessionState:
@@ -162,17 +168,7 @@ class TerminalSession:
                 # consumers.  Stale output frames are acceptable to lose —
                 # the ring buffer holds recent bytes for reconnect replay.
                 event = SessionEvent("output", self._config.session_id, data, time.time())
-                try:
-                    self._event_queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    try:
-                        self._event_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                    try:
-                        self._event_queue.put_nowait(event)
-                    except asyncio.QueueFull:
-                        pass
+                self._enqueue_drop_oldest(event)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -219,17 +215,7 @@ class TerminalSession:
                     None,
                     time.time(),
                 )
-                try:
-                    self._event_queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    try:
-                        self._event_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        pass
-                    try:
-                        self._event_queue.put_nowait(event)
-                    except asyncio.QueueFull:
-                        pass
+                self._enqueue_drop_oldest(event)
         except asyncio.CancelledError:
             raise
 
@@ -283,8 +269,65 @@ class TerminalSession:
         for start in range(0, len(snapshot), chunk_size):
             yield snapshot[start : start + chunk_size]
 
+    def set_attention(self, attention: str, exit_reason: str | None = None) -> None:
+        """Record a hook-driven attention trigger and emit an attention event.
+
+        ``attention`` is one of ``awaiting_permission`` | ``turn_finished`` |
+        ``ended``; ``exit_reason`` is supplied only for ``ended``. Called from
+        the agent's ``/internal/hook`` endpoint on the event loop, so the
+        ``put_nowait`` enqueue is safe.
+        """
+        self._attention = attention
+        if exit_reason is not None:
+            self._exit_reason = exit_reason
+        self._emit_attention(attention)
+
+    def clear_attention(self) -> None:
+        """Clear attention once the user has responded.
+
+        No-op when nothing is pending, so ordinary keystrokes don't spam the
+        fanout. Emits an attention event carrying ``None`` so connected clients
+        drop the "awaiting you" badge via the ``session.updated`` snapshot.
+        """
+        if self._attention is None:
+            return
+        self._attention = None
+        self._emit_attention(None)
+
+    def _emit_attention(self, attention: str | None) -> None:
+        """Enqueue an ``attention`` SessionEvent (drop-oldest, never blocks)."""
+        self._enqueue_drop_oldest(
+            SessionEvent(
+                "attention",
+                self._config.session_id,
+                None,
+                time.time(),
+                attention=attention,
+            )
+        )
+
+    def _enqueue_drop_oldest(self, event: SessionEvent) -> None:
+        """Put ``event`` on the bounded event queue, evicting the oldest entry
+        if it is full so the producer never blocks. Shared by every queue
+        producer in this class (PTY reader, title coalescer, attention hooks)."""
+        try:
+            self._event_queue.put_nowait(event)
+        except asyncio.QueueFull:
+            try:
+                self._event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._event_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
     async def write(self, data: bytes) -> None:
         """Write raw bytes to the PTY stdin."""
+        # User input means the user responded — drop any pending attention so
+        # the badge clears for both "typed next instruction" and "approved a
+        # permission prompt".
+        self.clear_attention()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
 
@@ -350,4 +393,6 @@ class TerminalSession:
             title=self._title,
             project_name=self._config.project_name,
             kind=self._config.kind,
+            attention=self._attention,
+            exit_reason=self._exit_reason,
         )
