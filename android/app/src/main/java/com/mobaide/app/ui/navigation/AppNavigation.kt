@@ -14,6 +14,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mobaide.app.data.auth.SessionManager
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import com.mobaide.app.ui.agents.AgentListScreen
 import com.mobaide.app.ui.autoscan.AutoScanDetailScreen
 import com.mobaide.app.ui.connections.ConnectionsScreen
@@ -35,10 +37,13 @@ import com.mobaide.app.ui.update.IncompatibleServerScreen
 @Composable
 fun AppNavigation(
     sessionManager: SessionManager,
+    deepLinkSessionId: StateFlow<String?> = MutableStateFlow<String?>(null),
+    onDeepLinkConsumed: () -> Unit = {},
     onImmediateUpdate: () -> Unit = {},
 ) {
     val navController = rememberNavController()
     val authState by sessionManager.authState.collectAsStateWithLifecycle()
+    val deepLink by deepLinkSessionId.collectAsStateWithLifecycle()
 
     // IncompatibleServer collapses the entire navigation graph onto the
     // upgrade screen. The user must update the app (via the Play Store deep
@@ -78,6 +83,19 @@ fun AppNavigation(
             }
         }
         previousState = current
+    }
+
+    // A tapped attention notification deep-links to its session's terminal.
+    // Wait until FullyConnected so the SESSION_DETAIL route is reachable, then
+    // consume so a recomposition / config-change doesn't re-navigate.
+    LaunchedEffect(deepLink, authState) {
+        val sessionId = deepLink ?: return@LaunchedEffect
+        if (authState == SessionManager.AuthState.FullyConnected) {
+            navController.navigate(Routes.sessionDetail(sessionId)) {
+                launchSingleTop = true
+            }
+            onDeepLinkConsumed()
+        }
     }
 
     NavHost(navController = navController, startDestination = startDestination) {

@@ -66,15 +66,26 @@ class SessionInfo:
     title: str | None = None
     project_name: str | None = None
     kind: SessionKind = SessionKind.CLAUDE
+    # Hook-driven attention state: ``awaiting_permission`` | ``turn_finished``
+    # | ``ended`` | ``None``. Stamped on the wire DTO so a client that missed
+    # the one-shot ``session.attention`` event still resyncs from any
+    # full-state snapshot. ``exit_reason`` carries the human-readable end
+    # cause (Claude Code ``SessionEnd`` reason, or ``process_exited`` on crash).
+    attention: str | None = None
+    exit_reason: str | None = None
 
 
 @dataclass
 class SessionEvent:
-    event_type: str  # "output", "started", "stopped", "error", "title"
+    event_type: str  # "output", "started", "stopped", "error", "title", "attention"
     session_id: str
     # Output events carry raw PTY bytes; other event types leave this None.
     data: bytes | None = None
     timestamp: float = field(default_factory=time.time)
+    # For ``attention`` events: the trigger reason (``awaiting_permission`` |
+    # ``turn_finished`` | ``ended``). ``None`` marks a *clear* (user responded),
+    # which refreshes the snapshot but is not a notification trigger.
+    attention: str | None = None
 
 
 def resolve_spawn_args(
@@ -118,4 +129,6 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
         "title": info.title,
         "project_name": info.project_name,
         "kind": info.kind.value,
+        "attention": info.attention,
+        "exit_reason": info.exit_reason,
     }

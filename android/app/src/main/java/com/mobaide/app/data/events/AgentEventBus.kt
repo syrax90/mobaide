@@ -149,6 +149,9 @@ class AgentEventBus @Inject constructor(
                 "session.updated" -> AgentEvent.SessionUpdated(
                     json.decodeFromJsonElement(SessionUpdatedPayload.serializer(), payload).session
                 )
+                "session.attention" -> AgentEvent.SessionAttention(
+                    json.decodeFromJsonElement(SessionUpdatedPayload.serializer(), payload).session
+                )
                 "projects.changed" -> AgentEvent.ProjectsChanged(
                     json.decodeFromJsonElement(ProjectsChangedPayload.serializer(), payload).projects
                 )

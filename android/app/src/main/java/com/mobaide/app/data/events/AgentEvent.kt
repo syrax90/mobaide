@@ -57,6 +57,13 @@ sealed class ScanProgressPayload {
 sealed class AgentEvent {
     data class SessionsChanged(val sessions: List<SessionResponse>) : AgentEvent()
     data class SessionUpdated(val session: SessionResponse) : AgentEvent()
+
+    /** One-shot trigger (proto-v4): the session needs the user. The reason is
+     *  in [SessionResponse.attention] (awaiting_permission | turn_finished |
+     *  ended); ended also carries [SessionResponse.exit_reason]. The
+     *  foreground service turns this into a system notification. State is also
+     *  mirrored on [SessionUpdated]/snapshots for clients that miss it. */
+    data class SessionAttention(val session: SessionResponse) : AgentEvent()
     data class ProjectsChanged(val projects: List<ProjectInfo>) : AgentEvent()
     data class AutoScanStatus(val instance: AutoScanInstanceDto) : AgentEvent()
     data class AutoScanListChanged(val list: AutoScanListResponse) : AgentEvent()

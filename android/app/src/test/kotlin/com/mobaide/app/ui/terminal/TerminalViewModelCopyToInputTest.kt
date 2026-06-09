@@ -8,6 +8,7 @@ import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
+import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.every
 import io.mockk.mockk
@@ -63,6 +64,7 @@ class TerminalViewModelCopyToInputTest {
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = sessionRepository,
             templatesRepository = templatesRepository,
+            foregroundSessionTracker = ForegroundSessionTracker(),
             preferencesStore = preferencesStore,
         )
 

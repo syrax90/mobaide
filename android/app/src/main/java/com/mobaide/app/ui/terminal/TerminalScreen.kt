@@ -36,6 +36,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,7 +67,6 @@ fun TerminalScreen(
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
-    val promptState by viewModel.promptState.collectAsStateWithLifecycle()
     val followMode by viewModel.followMode.collectAsStateWithLifecycle()
     val unreadRows by viewModel.unreadRows.collectAsStateWithLifecycle()
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
@@ -90,6 +90,14 @@ fun TerminalScreen(
     // minute. The ViewModel skips when already Live.
     LifecycleEventEffect(Lifecycle.Event.ON_START) {
         viewModel.onScreenVisible()
+    }
+
+    // Tell the notification service which session is on screen so it suppresses
+    // a redundant alert for the session the user is already viewing (alerts for
+    // other sessions still fire). Cleared when this screen leaves composition.
+    DisposableEffect(Unit) {
+        viewModel.markScreenVisible()
+        onDispose { viewModel.markScreenHidden() }
     }
 
     val stateColor = when (sessionState) {
@@ -225,23 +233,6 @@ fun TerminalScreen(
             },
             onDismiss = { showSaveTemplateDialog = false },
         )
-    }
-
-    when (val prompt = promptState) {
-        is PromptState.Checkbox -> CheckboxPromptSheet(
-            state = prompt,
-            onMoveUp = { viewModel.sendBytes(InkSequenceBuilder.arrowUp()) },
-            onMoveDown = { viewModel.sendBytes(InkSequenceBuilder.arrowDown()) },
-            onToggle = { viewModel.sendBytes(InkSequenceBuilder.checkboxToggle()) },
-            onSubmit = { viewModel.sendBytes(InkSequenceBuilder.checkboxSubmit()) },
-            onDismiss = { viewModel.dismissPrompt() },
-        )
-        is PromptState.TextInput -> TextInputPromptSheet(
-            state = prompt,
-            onSubmit = { text -> viewModel.sendBytes(InkSequenceBuilder.textInput(text)) },
-            onDismiss = { viewModel.dismissPrompt() },
-        )
-        PromptState.None -> { /* no sheet */ }
     }
 }
 

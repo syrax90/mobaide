@@ -394,7 +394,7 @@ class TestUserEventsEndpoint:
                             "type": "auth",
                             "agent_id": agent_id,
                             "token": raw_token,
-                            "protocol_version": 3,
+                            "protocol_version": 4,
                         }
                     )
                 )
@@ -411,7 +411,7 @@ class TestUserEventsEndpoint:
                                 "type": "auth",
                                 "agent_id": agent_id,
                                 "token": raw_token,
-                                "protocol_version": 3,
+                                "protocol_version": 4,
                             }
                         )
                     )

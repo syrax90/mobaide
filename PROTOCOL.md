@@ -6,7 +6,38 @@ and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own
 cadence; they do **not** gate compatibility.
 
-## proto-v3 (current)
+## proto-v4 (current)
+
+* Introduced: 2026-06-09
+* App support: ``APP_PROTOCOL_VERSION = 4`` (Android), ``PROTOCOL_VERSION = 4``
+  (Python — both ``mobaide_agent`` and ``central_server``).
+* Change vs proto-v3: **additive** (no frame-layout or existing-shape break).
+  Adds hook-driven session-attention notifications (CLA-64). The version is
+  bumped so the three artifacts stay in lockstep and ``protocol-integrity``
+  has a single authoritative integer to assert against.
+* Wire shape (delta from proto-v3), all on ``CH_EVENTS`` (forwarded verbatim
+  by ``central_server``):
+  * New event type ``session.attention`` — payload ``{"session": <session dict>}``.
+    Emitted when a Claude Code hook reports the session needs the user:
+    ``attention`` field is one of ``awaiting_permission`` (permission prompt),
+    ``turn_finished`` (Stop — your move), or ``ended`` (SessionEnd). It is a
+    one-shot notification trigger; clients that miss it (the in-process
+    ``EventBus`` drops on a full queue) still recover from the snapshot field
+    below. Older clients ignore the unknown type (forward-compatible).
+  * The single-session wire dict (``session_to_wire_dict`` — used by
+    ``sessions.changed``, ``session.updated``, the ``/ws/sessions`` snapshot and
+    the ``/sessions`` REST list) gains two nullable fields:
+    ``attention`` (``awaiting_permission`` | ``turn_finished`` | ``ended`` |
+    ``null``) and ``exit_reason`` (human-readable end cause from the Claude Code
+    ``SessionEnd`` ``reason``, or ``process_exited`` on an unexpected death).
+    These let a reconnecting/foregrounding client resync the "awaiting you"
+    state after a missed one-shot event.
+  * Detection source: the agent spawns interactive Claude sessions with a
+    per-session ``--settings`` file wiring ``http`` hooks to a local
+    ``POST /internal/hook`` endpoint (loopback + per-agent token guarded); the
+    old terminal-buffer ``PromptDetector`` heuristic is retired.
+
+## proto-v3 (superseded by proto-v4)
 
 * Introduced: 2026-05-23
 * App support: ``APP_PROTOCOL_VERSION = 3`` (Android), ``PROTOCOL_VERSION = 3``

@@ -21,6 +21,13 @@ data class SessionResponse(
     val title: String? = null,
     val project_name: String? = null,
     val kind: SessionKind = SessionKind.Claude,
+    // Hook-driven attention state (proto-v4): "awaiting_permission" |
+    // "turn_finished" | "ended" | null. Stamped on every session snapshot so a
+    // reconnecting client recovers the "awaiting you" state after a missed
+    // one-shot session.attention event. exit_reason is the human-readable end
+    // cause, set when a session ends.
+    val attention: String? = null,
+    val exit_reason: String? = null,
 )
 
 @Serializable

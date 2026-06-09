@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 from typing import TYPE_CHECKING
 
+from .hook_settings import write_session_hooks
 from .projects_config import ProjectConfig
 from .projects_store import safe_path_exists
 
@@ -255,10 +256,17 @@ class ClaudeLauncher:
         self,
         worktree_mgr: WorktreeManager | None = None,
         claude_bin_override: str | None = None,
+        hook_port: int | None = None,
+        hook_token: str | None = None,
     ) -> None:
         self._worktree_mgr: WorktreeManager | None = worktree_mgr
         self._claude_bin_override = claude_bin_override
         self._resolved_binary: str | None = None
+        # When both are set, interactive sessions (those built with a
+        # ``session_id``) get a per-session ``--settings`` file wiring Claude
+        # Code attention hooks back to the agent's ``/internal/hook`` endpoint.
+        self._hook_port = hook_port
+        self._hook_token = hook_token
 
     def _resolve_binary(self) -> str:
         if self._resolved_binary is None:
@@ -271,19 +279,50 @@ class ClaudeLauncher:
         self,
         target: LaunchTarget,
         options: ClaudeOptions,
+        session_id: str | None = None,
     ) -> LaunchSpec:
         # Resolve the binary FIRST so a ``ClaudeBinaryNotFoundError`` aborts
         # before ``_resolve_cwd`` runs ``git worktree add`` — otherwise a
         # missing CLI would leak an orphan worktree directory on every
         # scan cycle.
-        argv = self._build_argv(options)
+        #
+        # ``session_id`` is supplied only by the interactive/ad-hoc create path
+        # (``SessionManager``); the Auto Scan scanner omits it, so autonomous
+        # sessions never get attention hooks and never raise notifications.
+        hooks_path = self._maybe_write_hooks(session_id)
+        argv = self._build_argv(options, hooks_path)
         cwd = await self._resolve_cwd(target, options)
-        env = self._build_env(target, options)
+        env = self._build_env(target, options, session_id)
         created = self._write_project_files(target, cwd)
+        if hooks_path is not None:
+            created.append(str(hooks_path))
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
 
-    def _build_argv(self, options: ClaudeOptions) -> list[str]:
+    def _maybe_write_hooks(self, session_id: str | None) -> Path | None:
+        """Write the per-session attention-hook settings file, if configured.
+
+        Returns the file path, or ``None`` when hooks are not configured
+        (no ``session_id``, or the launcher was built without a hook port/token
+        — e.g. the scanner) or the write failed (a hookless session still runs).
+        """
+        if not session_id or self._hook_port is None or not self._hook_token:
+            return None
+        try:
+            return write_session_hooks(session_id, self._hook_port, self._hook_token)
+        except OSError:
+            logger.warning(
+                "claude_launcher.hook_settings_write_failed session=%s",
+                session_id,
+                exc_info=True,
+            )
+            return None
+
+    def _build_argv(
+        self, options: ClaudeOptions, hooks_path: Path | None = None,
+    ) -> list[str]:
         argv: list[str] = [self._resolve_binary(), "--debug"]
+        if hooks_path is not None:
+            argv += ["--settings", str(hooks_path)]
         if options.plan_mode and options.skip_permissions:
             argv += ["--permission-mode", "plan",
                      "--allow-dangerously-skip-permissions"]
@@ -297,9 +336,21 @@ class ClaudeLauncher:
             argv += ["--", options.initial_prompt]
         return argv
 
-    def _build_env(self, target: LaunchTarget, options: ClaudeOptions) -> dict[str, str]:
+    def _build_env(
+        self,
+        target: LaunchTarget,
+        options: ClaudeOptions,
+        session_id: str | None = None,
+    ) -> dict[str, str]:
         env = os.environ.copy()
         env.update(CLAUDE_SESSION_PRESET_ENV)
+        # Belt-and-suspenders: the hook URLs already bake in session_id+token,
+        # so correlation never depends on these. They aid debugging and keep a
+        # ``command``-hook fallback trivial if ever needed.
+        if session_id and self._hook_port is not None and self._hook_token:
+            env["MOBAIDE_SESSION_ID"] = session_id
+            env["MOBAIDE_HOOK_URL"] = f"http://127.0.0.1:{self._hook_port}/internal/hook"
+            env["MOBAIDE_HOOK_TOKEN"] = self._hook_token
         is_project = isinstance(target, ProjectConfig)
         if is_project and target.linear_api_key:
             env["LINEAR_API_KEY"] = target.linear_api_key
