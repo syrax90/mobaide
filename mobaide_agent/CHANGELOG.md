@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.9](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.8...agent-v0.2.9) (2026-06-09)
+
+
+### Features
+
+* **agent:** pop-up notifications when a Claude session awaits input or ends(CLA-64) ([6410cdb](https://github.com/syrax90/claude_mobile/commit/6410cdb50d471709d1aa560a62b8040e516d1d40))
+* pop-up notifications when a Claude session awaits input or ends (CLA-64) ([848af44](https://github.com/syrax90/claude_mobile/commit/848af446a8cb6db7c699c34bbfa0a8093ede7271))
+
 ## [0.2.8](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.7...agent-v0.2.8) (2026-06-09)
 
 
