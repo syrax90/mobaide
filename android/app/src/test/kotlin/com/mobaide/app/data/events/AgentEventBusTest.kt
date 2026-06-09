@@ -327,6 +327,87 @@ class AgentEventBusTest {
     }
 
     @Test
+    fun message_sessionAttention_parsesAndEmitsTypedEvent_withAttentionFields() = runTest {
+        // proto-v4 (CLA-64): a session.attention envelope reuses the
+        // {"session": ...} payload and must surface as SessionAttention
+        // carrying the attention + exit_reason fields off the session.
+        val (bus, connEvents, _) = newBus()
+        bus.start()
+
+        bus.events.test {
+            connEvents.emit(
+                WsEvent.Message(
+                    """
+                    {
+                      "type": "session.attention",
+                      "payload": {
+                        "session": {
+                          "session_id": "s3",
+                          "state": "crashed",
+                          "created_at": "2026-04-11T10:00:00Z",
+                          "attention": "ended",
+                          "exit_reason": "process_exited"
+                        }
+                      }
+                    }
+                    """.trimIndent(),
+                ),
+            )
+            val evt = awaitItem() as AgentEvent.SessionAttention
+            assertEquals("s3", evt.session.session_id)
+            assertEquals("ended", evt.session.attention)
+            assertEquals("process_exited", evt.session.exit_reason)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun stream_sessionAttention_filtersFromOtherEvents() = runTest {
+        // The foreground service subscribes via stream<SessionAttention>();
+        // a session.updated must NOT surface on that typed stream, but the
+        // following session.attention must.
+        val (bus, connEvents, _) = newBus()
+        bus.start()
+
+        bus.stream<AgentEvent.SessionAttention>().test {
+            connEvents.emit(
+                WsEvent.Message(
+                    """
+                    {
+                      "type": "session.updated",
+                      "payload": {
+                        "session": {"session_id":"s1","state":"running","created_at":"2026-04-11T10:00:00Z"}
+                      }
+                    }
+                    """.trimIndent(),
+                ),
+            )
+            expectNoEvents()
+
+            connEvents.emit(
+                WsEvent.Message(
+                    """
+                    {
+                      "type": "session.attention",
+                      "payload": {
+                        "session": {"session_id":"s1","state":"running","created_at":"2026-04-11T10:00:00Z","attention":"turn_finished"}
+                      }
+                    }
+                    """.trimIndent(),
+                ),
+            )
+            val evt = awaitItem()
+            assertEquals("s1", evt.session.session_id)
+            assertEquals("turn_finished", evt.session.attention)
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        bus.stop()
+    }
+
+    @Test
     fun message_projectsChanged_parsesAndEmitsTypedEvent() = runTest {
         val (bus, connEvents, _) = newBus()
         bus.start()

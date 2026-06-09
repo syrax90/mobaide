@@ -267,8 +267,8 @@ range is rejected up front.
 {
   "name": "central_server",
   "server_version": "0.1.0",
-  "protocol_versions": [3],
-  "min_client_version": 3,
+  "protocol_versions": [4],
+  "min_client_version": 4,
   "capabilities": {},
   "latest_agent_version": "0.1.0"
 }

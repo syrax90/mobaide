@@ -711,16 +711,21 @@ class TestMobileDevices:
         devices = await db.list_user_devices(owner)
         assert len(devices) == 1
 
-    async def test_upsert_rejects_cross_tenant_collision(self, db: Database):
-        """User B submitting user A's ``device_id`` must not mutate or
-        resurrect A's row. ``upsert_mobile_device`` returns ``False`` and
-        leaves the row untouched."""
+    async def test_upsert_rejects_cross_tenant_when_device_in_use(
+        self, db: Database
+    ):
+        """A device with a live refresh token cannot be seized by another
+        user. ``upsert_mobile_device`` returns ``False`` and leaves the
+        owning row untouched."""
         u_a = await db.create_user(email="a@test.local", password_hash="h")
         u_b = await db.create_user(email="b@test.local", password_hash="h")
+        agent_a, _ = await db.register_agent("a-agent", u_a)
         assert await db.upsert_mobile_device(
             device_id="dev-x", user_id=u_a, name="A's device"
         ) is True
-        # User B tries to overwrite the name.
+        # A live session pins the device to A.
+        await db.store_refresh_token("a-refresh", "dev-x", agent_a, 60)
+        # User B tries to seize the in-use device.
         assert await db.upsert_mobile_device(
             device_id="dev-x", user_id=u_b, name="hijacked"
         ) is False
@@ -729,21 +734,42 @@ class TestMobileDevices:
         assert [d["name"] for d in a_devices] == ["A's device"]
         assert await db.list_user_devices(u_b) == []
 
-    async def test_upsert_cannot_resurrect_other_users_revoked_device(
+    async def test_upsert_reassigns_idle_device_cross_tenant(
         self, db: Database
     ):
-        """Cross-tenant variant of the resurrection path: user A revokes
-        their device, user B cannot un-revoke it by submitting the id."""
+        """An idle device (no live refresh token) re-pairs under a new
+        account — the same physical phone signing into a different user.
+        The device moves to B and leaves A's list."""
         u_a = await db.create_user(email="a@test.local", password_hash="h")
         u_b = await db.create_user(email="b@test.local", password_hash="h")
         await db.upsert_mobile_device(device_id="dev-x", user_id=u_a, name="A")
+        # Revoking leaves the device idle (no live token).
         await db.revoke_mobile_device("dev-x", u_a)
         assert await db.upsert_mobile_device(
-            device_id="dev-x", user_id=u_b, name="resurrected"
-        ) is False
-        # Still revoked, still A's.
+            device_id="dev-x", user_id=u_b, name="B's phone"
+        ) is True
+        # The device is now B's, active, and gone from A's list.
         assert await db.list_user_devices(u_a) == []
-        assert await db.list_user_devices(u_b) == []
+        b_devices = await db.list_user_devices(u_b)
+        assert [d["name"] for d in b_devices] == ["B's phone"]
+
+    async def test_upsert_reassigns_after_agent_delete(self, db: Database):
+        """Repro of the reported 409: A pairs a device to an agent, the
+        agent is deleted (hard-deleting the device's refresh tokens), then
+        the same device pairs under B and succeeds — the stale lock is
+        released because the device has no live session."""
+        u_a = await db.create_user(email="a@test.local", password_hash="h")
+        u_b = await db.create_user(email="b@test.local", password_hash="h")
+        agent_a, _ = await db.register_agent("a-agent", u_a)
+        await db.upsert_mobile_device(device_id="dev-x", user_id=u_a, name="A")
+        await db.store_refresh_token("a-refresh", "dev-x", agent_a, 60)
+        # Deleting the agent removes the device's only live session.
+        await db.delete_agent(agent_a)
+        assert await db.upsert_mobile_device(
+            device_id="dev-x", user_id=u_b, name="B's phone"
+        ) is True
+        b_devices = await db.list_user_devices(u_b)
+        assert [d["device_id"] for d in b_devices] == ["dev-x"]
 
     async def test_revoke_removes_from_list(self, db: Database):
         owner = await _create_test_user(db)

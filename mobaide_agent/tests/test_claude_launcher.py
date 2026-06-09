@@ -566,3 +566,105 @@ def test_adhoc_launch_target_is_frozen():
     target = AdHocLaunch(cwd="/tmp")
     with pytest.raises(FrozenInstanceError):
         target.cwd = "/other"  # type: ignore[misc]
+
+
+# When (and only when) a ``session_id`` is supplied AND the launcher was built
+# with both ``hook_port`` and ``hook_token``, ``build`` writes a per-session
+# ``--settings`` file and injects MOBAIDE_* env vars. The Auto Scan scanner
+# builds without a session_id, so autonomous sessions get no hooks.
+
+
+@pytest.fixture
+def _isolated_hooks_tempdir(monkeypatch, tmp_path):
+    """Redirect ``hook_settings``' temp-dir lookup into ``tmp_path``."""
+    from mobaide.core import hook_settings
+
+    monkeypatch.setattr(
+        hook_settings.tempfile, "gettempdir", lambda: str(tmp_path),
+    )
+    return tmp_path
+
+
+@pytest.mark.asyncio
+async def test_hooks_injected_when_session_and_config_present(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    spec = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-1",
+    )
+
+    assert "--settings" in spec.argv
+    settings_path = spec.argv[spec.argv.index("--settings") + 1]
+    assert Path(settings_path).exists()
+    assert settings_path in spec.created_files
+    # env belt-and-suspenders also present.
+    assert spec.env["MOBAIDE_SESSION_ID"] == "sid-1"
+    assert spec.env["MOBAIDE_HOOK_TOKEN"] == "tok-1"
+    assert spec.env["MOBAIDE_HOOK_URL"] == "http://127.0.0.1:9001/internal/hook"
+
+
+@pytest.mark.asyncio
+async def test_settings_flag_precedes_prompt_separator(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    # --settings must land in the flag section, before the ``--`` prompt
+    # passthrough, or the path would be swallowed as a prompt argument.
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(initial_prompt="go"),
+        session_id="sid-1",
+    )
+    assert spec.argv.index("--settings") < spec.argv.index("--")
+
+
+@pytest.mark.asyncio
+async def test_no_hooks_without_session_id(tmp_path: Path, _isolated_hooks_tempdir):
+    # The Auto Scan scanner builds without a session_id → no hooks, no env.
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+
+    assert "--settings" not in spec.argv
+    assert "MOBAIDE_SESSION_ID" not in spec.env
+    assert "MOBAIDE_HOOK_URL" not in spec.env
+    assert "MOBAIDE_HOOK_TOKEN" not in spec.env
+
+
+@pytest.mark.asyncio
+async def test_no_hooks_without_hook_port(tmp_path: Path, _isolated_hooks_tempdir):
+    # A launcher built without hook config (port/token) must never inject
+    # hooks even when a session_id is supplied.
+    launcher = ClaudeLauncher(hook_token="tok-1")  # no hook_port
+    spec = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-1",
+    )
+    assert "--settings" not in spec.argv
+    assert "MOBAIDE_SESSION_ID" not in spec.env
+
+
+@pytest.mark.asyncio
+async def test_no_hooks_without_hook_token(tmp_path: Path, _isolated_hooks_tempdir):
+    launcher = ClaudeLauncher(hook_port=9001)  # no hook_token
+    spec = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-1",
+    )
+    assert "--settings" not in spec.argv
+    assert "MOBAIDE_HOOK_TOKEN" not in spec.env
+
+
+@pytest.mark.asyncio
+async def test_hooks_file_url_bakes_session_id(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    # The settings file the launcher writes must carry this session's id in
+    # the hook URLs — the correlation mechanism the multi-session test relies
+    # on end-to-end.
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    spec = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-unique",
+    )
+    settings_path = spec.argv[spec.argv.index("--settings") + 1]
+    doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+    url = doc["hooks"]["Stop"][0]["hooks"][0]["url"]
+    assert "session_id=sid-unique" in url

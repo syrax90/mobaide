@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.every
 import io.mockk.mockk
@@ -89,6 +90,7 @@ class TerminalViewModelReplayClearTest {
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = repo,
             templatesRepository = templatesRepository,
+            foregroundSessionTracker = ForegroundSessionTracker(),
             preferencesStore = preferencesStore,
         )
 

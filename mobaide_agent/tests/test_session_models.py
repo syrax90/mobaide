@@ -202,3 +202,97 @@ class TestSessionToWireDictKind:
 
         assert "kind" in wire
         assert wire["kind"] == "claude"
+
+
+def _attention_info(attention=None, exit_reason=None):
+    from datetime import datetime, timezone
+
+    from mobaide.core.models import SessionInfo, SessionState
+
+    return SessionInfo(
+        session_id="sid",
+        state=SessionState.RUNNING,
+        created_at=datetime(2026, 5, 20, 0, 0, 0, tzinfo=timezone.utc),
+        pid=42,
+        command=["claude"],
+        cwd="/work",
+        attention=attention,
+        exit_reason=exit_reason,
+    )
+
+
+class TestAttentionWireFields:
+    """``attention`` / ``exit_reason`` must round-trip through the
+    single wire-shape builder, the Pydantic ``SessionResponse``, and default
+    to ``None`` so a producer that omits them still serialises cleanly.
+    """
+
+    def test_defaults_are_none_on_session_info(self):
+        info = _attention_info()
+        assert info.attention is None
+        assert info.exit_reason is None
+
+    def test_wire_dict_always_carries_both_keys(self):
+        from mobaide.core.models import session_to_wire_dict
+
+        wire = session_to_wire_dict(_attention_info())
+        assert "attention" in wire
+        assert "exit_reason" in wire
+        assert wire["attention"] is None
+        assert wire["exit_reason"] is None
+
+    def test_wire_dict_propagates_set_values(self):
+        from mobaide.core.models import session_to_wire_dict
+
+        wire = session_to_wire_dict(
+            _attention_info(attention="ended", exit_reason="clear"),
+        )
+        assert wire["attention"] == "ended"
+        assert wire["exit_reason"] == "clear"
+
+    def test_session_response_round_trips_from_info(self):
+        from mobaide.agent.sessions.models import SessionResponse
+
+        resp = SessionResponse.from_info(
+            _attention_info(attention="awaiting_permission"),
+        )
+        assert resp.attention == "awaiting_permission"
+        assert resp.exit_reason is None
+
+    def test_session_response_defaults_when_absent_from_payload(self):
+        # The Android DTO and a back-compat producer may omit the fields
+        # entirely; the model must still validate with the None defaults.
+        from mobaide.agent.sessions.models import SessionResponse
+
+        resp = SessionResponse.model_validate(
+            {
+                "session_id": "sid",
+                "state": "running",
+                "created_at": "2026-05-20T00:00:00+00:00",
+                "pid": 42,
+                "command": ["claude"],
+                "cwd": "/work",
+            },
+        )
+        assert resp.attention is None
+        assert resp.exit_reason is None
+
+
+class TestSessionEventAttentionField:
+    """``SessionEvent`` gained an optional ``attention`` carrying the trigger
+    reason; ``None`` marks a clear, not a notify trigger.
+    """
+
+    def test_attention_defaults_to_none(self):
+        from mobaide.core.models import SessionEvent
+
+        ev = SessionEvent(event_type="output", session_id="s1")
+        assert ev.attention is None
+
+    def test_attention_carries_reason_when_set(self):
+        from mobaide.core.models import SessionEvent
+
+        ev = SessionEvent(
+            event_type="attention", session_id="s1", attention="turn_finished",
+        )
+        assert ev.attention == "turn_finished"

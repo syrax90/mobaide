@@ -8,8 +8,6 @@ Targets:
 * ``claim_pairing_nonce`` is a CAS — exactly one of two concurrent
   claims wins.
 * ``read_and_clear_claimed_credentials`` is single-flight.
-* ``transfer_agent_owner`` cascades into ``mobile_refresh_tokens`` and
-  ``pairings``.
 * The schema migration left ``pairing_tokens.agent_id`` nullable and
   added the three new columns.
 """
@@ -383,55 +381,3 @@ class TestReadAndClearClaimedCredentials:
 
         assert first is not None
         assert second is None
-
-
-class TestTransferAgentOwner:
-    async def test_updates_owner_and_returns_true(
-        self, db: Database, owner_id: str
-    ):
-        agent_id, _ = await db.register_agent("agent-1", owner_id)
-        new_owner = await db.create_user(
-            email="new@test.local", password_hash="h",
-        )
-
-        ok = await db.transfer_agent_owner(agent_id, new_owner)
-
-        assert ok is True
-        assert await db.get_agent_owner(agent_id) == new_owner
-
-    async def test_returns_false_for_unknown_agent(
-        self, db: Database, owner_id: str
-    ):
-        ok = await db.transfer_agent_owner("no-such-agent", owner_id)
-
-        assert ok is False
-
-    async def test_cascades_into_mobile_refresh_tokens(
-        self, db: Database, owner_id: str
-    ):
-        # Pre-existing device + refresh token for the prior owner. The
-        # transfer must cascade-delete the refresh token so the prior
-        # owner's mobile cannot continue calling the agent's refresh
-        # endpoint. The device itself is user-scoped — it stays registered
-        # to the prior owner for use with any agents they still own.
-        agent_id, _ = await db.register_agent("agent-1", owner_id)
-        await db.upsert_mobile_device(
-            device_id="prior-dev", user_id=owner_id, name="Phone",
-        )
-        await db.store_refresh_token(
-            raw_token="prior-refresh-raw",
-            mobile_device_id="prior-dev",
-            agent_id=agent_id,
-            expire_minutes=60,
-        )
-        new_owner = await db.create_user(
-            email="new@test.local", password_hash="h",
-        )
-
-        await db.transfer_agent_owner(agent_id, new_owner)
-
-        consumed = await db.validate_and_consume_refresh("prior-refresh-raw")
-        assert consumed is None
-        # The prior owner still owns the device.
-        prior_devices = await db.list_user_devices(owner_id)
-        assert [d["device_id"] for d in prior_devices] == ["prior-dev"]

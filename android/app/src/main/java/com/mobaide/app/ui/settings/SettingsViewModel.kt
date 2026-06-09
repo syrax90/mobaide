@@ -3,7 +3,6 @@ package com.mobaide.app.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.GoogleAuthResult
-import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_MAX
@@ -21,7 +20,6 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class SettingsUiState(
-    val connectionInfo: String = "",
     val userEmail: String = "",
     val terminalDisplayMode: TerminalDisplayMode = TerminalDisplayMode.Full,
     val terminalStaticColumns: Int = TERMINAL_STATIC_COLUMNS_DEFAULT,
@@ -75,13 +73,11 @@ sealed interface DeleteAccountDialogState {
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val authRepository: AuthRepository,
-    private val tokenStore: TokenStore,
     private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(
         SettingsUiState(
-            connectionInfo = buildConnectionInfo(),
             userEmail = authRepository.getUserEmail() ?: "",
         ),
     )
@@ -318,16 +314,6 @@ class SettingsViewModel @Inject constructor(
                     )
                 }
             }
-        }
-    }
-
-    private fun buildConnectionInfo(): String = when (tokenStore.getConnectionMode()) {
-        TokenStore.ConnectionMode.DIRECT -> {
-            "Direct: ${authRepository.getAgentUrl() ?: "unknown"}"
-        }
-        TokenStore.ConnectionMode.RELAY -> {
-            val server = tokenStore.getRelayServerUrl() ?: "unknown"
-            "Relay: $server"
         }
     }
 }

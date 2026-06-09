@@ -577,3 +577,56 @@ class TestTerminalWorktreeResolution:
             assert config.cwd == str(tmp_path)
         finally:
             await mgr.shutdown()
+
+
+class _DeadBackend:
+    """Minimal :class:`PtyBackend` stub reporting a dead process.
+
+    ``_check_liveness`` only consults ``is_alive()`` and ``get_pid()`` on the
+    backend, so this stub is enough to drive the RUNNING → CRASHED transition
+    without spawning a real process.
+    """
+
+    def is_alive(self) -> bool:
+        return False
+
+    def get_pid(self) -> int | None:
+        return 4242
+
+
+def _crashable_session(session_id: str) -> TerminalSession:
+    from mobaide.core.session import TerminalSession
+
+    session = TerminalSession(_make_config(session_id), backend=_DeadBackend())
+    session._state = SessionState.RUNNING
+    return session
+
+
+class TestLivenessExitReason:
+    """When ``_check_liveness`` flips a dead session to CRASHED it must
+    stamp ``_exit_reason`` so the wire snapshot for an unexpected death is
+    non-null — without clobbering a reason a SessionEnd hook already set.
+    """
+
+    async def test_crash_sets_process_exited_reason(self) -> None:
+        mgr = SessionManager()
+        session = _crashable_session("s1")
+        mgr._sessions["s1"] = session
+        try:
+            await mgr._check_liveness()
+            assert session.state == SessionState.CRASHED
+            assert session._exit_reason == "process_exited"
+        finally:
+            await mgr.shutdown()
+
+    async def test_crash_does_not_overwrite_hook_supplied_reason(self) -> None:
+        mgr = SessionManager()
+        session = _crashable_session("s1")
+        session._exit_reason = "clear"  # e.g. a SessionEnd hook landed first
+        mgr._sessions["s1"] = session
+        try:
+            await mgr._check_liveness()
+            assert session.state == SessionState.CRASHED
+            assert session._exit_reason == "clear"
+        finally:
+            await mgr.shutdown()

@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from mobaide import __version__
 from mobaide.core import ClaudeLauncher, ProjectsStore, SessionManager
+from mobaide.core.hook_settings import sweep_hooks_dir
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.rate_limiter import LinearRateLimiter
 from mobaide.linear.scanner import AutoScanSessionManager
@@ -32,6 +33,7 @@ from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
 from .config import AgentConfig
 from .git.router import router as git_router
+from .hooks.router import router as hooks_router
 from .install_paths import (
     default_prefix,
     manifest_url_from_relay_server_url,
@@ -304,6 +306,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
+        # Clear hook settings files orphaned by a prior run (crashed sessions
+        # never reach the SessionEnd delete). Scoped to this agent's port.
+        sweep_hooks_dir(config.port)
         await app.state.session_manager.start_liveness_monitor()
         app.state.pairing_task = None
         if relay_cfg is not None and not pairing_pending:
@@ -567,9 +572,14 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         main_branch=auto_scan_cfg.main_branch,
     )
     app.state.worktree_manager = worktree_mgr
+    # Per-agent secret baked into each session's hook URLs and re-checked by
+    # /internal/hook so a stray local process can't spoof attention events.
+    app.state.hook_token = secrets.token_urlsafe(32)
     app.state.claude_launcher = ClaudeLauncher(
         worktree_mgr=worktree_mgr,
         claude_bin_override=config.claude_bin,
+        hook_port=config.port,
+        hook_token=app.state.hook_token,
     )
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
@@ -621,6 +631,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(sessions_router)
+    app.include_router(hooks_router)
     app.include_router(projects_router)
     app.include_router(git_router)
     app.include_router(ws_session_io_router)

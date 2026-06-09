@@ -1,5 +1,21 @@
 # central_server Changelog
 
+## [0.1.14](https://github.com/syrax90/claude_mobile/compare/server-v0.1.13...server-v0.1.14) (2026-06-09)
+
+
+### Features
+
+* **agent:** pop-up notifications when a Claude session awaits input or ends(CLA-64) ([6410cdb](https://github.com/syrax90/claude_mobile/commit/6410cdb50d471709d1aa560a62b8040e516d1d40))
+* pop-up notifications when a Claude session awaits input or ends (CLA-64) ([848af44](https://github.com/syrax90/claude_mobile/commit/848af446a8cb6db7c699c34bbfa0a8093ede7271))
+
+## [0.1.13](https://github.com/syrax90/claude_mobile/compare/server-v0.1.12...server-v0.1.13) (2026-06-09)
+
+
+### Bug Fixes
+
+* **pairing:** release stale device lock and forbid cross-user agent takeover ([01b940c](https://github.com/syrax90/claude_mobile/commit/01b940cf0c9218eedfb63ab3706e72a68cb5672e))
+* **pairing:** release stale device lock and forbid cross-user agent takeover ([40392b4](https://github.com/syrax90/claude_mobile/commit/40392b41d02ff780b512aa9de73ef1bbb0b0e6b8))
+
 ## [0.1.12](https://github.com/syrax90/claude_mobile/compare/server-v0.1.11...server-v0.1.12) (2026-05-29)
 
 

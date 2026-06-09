@@ -97,7 +97,7 @@ android {
         // `major*10000 + minor*100 + patch` gives 1.0.3 → 10003 — strictly
         // greater than the previously-shipped versionCode (3), so existing
         // Play uploads keep ascending.
-        val appVersionName = "1.8.1" // x-release-please-version
+        val appVersionName = "1.9.0" // x-release-please-version
         val appVersionParts = appVersionName.split(".").map { it.toInt() }
         versionCode = appVersionParts[0] * 10000 + appVersionParts[1] * 100 + appVersionParts[2]
         versionName = appVersionName
@@ -105,8 +105,8 @@ android {
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
         buildConfigField("String", "PRIVACY_POLICY_URL", "\"$privacyPolicyUrl\"")
-        buildConfigField("int", "APP_PROTOCOL_VERSION", "3")
-        buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "3")
+        buildConfigField("int", "APP_PROTOCOL_VERSION", "4")
+        buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "4")
     }
 
     signingConfigs {
@@ -172,6 +172,7 @@ dependencies {
     // Lifecycle
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.process)
 
     // Compose
     implementation(platform(libs.androidx.compose.bom))

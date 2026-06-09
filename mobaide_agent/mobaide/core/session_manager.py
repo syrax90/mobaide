@@ -147,7 +147,7 @@ class SessionManager:
         if project is None:
             raise KeyError(f"Project '{config.project_name}' not found")
         options = config.claude_options or ClaudeOptions()
-        spec = await self._launcher.build(project, options)
+        spec = await self._launcher.build(project, options, session_id=config.session_id)
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env
@@ -168,7 +168,7 @@ class SessionManager:
             raise ValueError("cwd is required for ad-hoc Claude launch")
         options = config.claude_options or ClaudeOptions()
         target = AdHocLaunch(cwd=config.cwd)
-        spec = await self._launcher.build(target, options)
+        spec = await self._launcher.build(target, options, session_id=config.session_id)
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env
@@ -317,6 +317,10 @@ class SessionManager:
                     runtime_seconds=runtime_seconds,
                 )
                 session._state = SessionState.CRASHED
+                # Record a reason for the snapshot when the process died without
+                # a Claude Code SessionEnd hook (real crash / kill). Never
+                # overwrite a hook-supplied reason that may already be set.
+                session._exit_reason = session._exit_reason or "process_exited"
                 dead_ids.append(sid)
 
         # Clean up STOPPED/CRASHED sessions

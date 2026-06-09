@@ -1,5 +1,25 @@
 # Android Changelog
 
+## [1.9.0](https://github.com/syrax90/claude_mobile/compare/android-v1.8.2...android-v1.9.0) (2026-06-09)
+
+
+### Features
+
+* **agent:** pop-up notifications when a Claude session awaits input or ends(CLA-64) ([6410cdb](https://github.com/syrax90/claude_mobile/commit/6410cdb50d471709d1aa560a62b8040e516d1d40))
+* pop-up notifications when a Claude session awaits input or ends (CLA-64) ([848af44](https://github.com/syrax90/claude_mobile/commit/848af446a8cb6db7c699c34bbfa0a8093ede7271))
+
+## [1.8.2](https://github.com/syrax90/claude_mobile/compare/android-v1.8.1...android-v1.8.2) (2026-06-09)
+
+
+### Bug Fixes
+
+* **android:** make Settings screen scrollable so the Logout button isn't clipped ([3aed327](https://github.com/syrax90/claude_mobile/commit/3aed327a65d38d6fdf693fd311524ee3fabd6737))
+* **android:** remove agent id from connection label ([15c08f5](https://github.com/syrax90/claude_mobile/commit/15c08f52217f49e0d687714efc2370f301edfbb1))
+* **android:** source app version from BuildConfig instead of hardcoded v1.0.0 ([8ef3f5e](https://github.com/syrax90/claude_mobile/commit/8ef3f5e80a1978e886ad21f106d23ca1d49735aa))
+* **settings:** make Settings screen scrollable so the Logout button isn't clipped ([947d020](https://github.com/syrax90/claude_mobile/commit/947d020ab1de4895ebc84dfe39acd9e9418343e8))
+* **settings:** remove agent id from connection label ([84e005d](https://github.com/syrax90/claude_mobile/commit/84e005d3a857c44c4d1fdc22c9aa91bb2b8b999e))
+* **settings:** source app version from BuildConfig instead of hardcoded v1.0.0 ([0030184](https://github.com/syrax90/claude_mobile/commit/00301845d8b6cb00901b0ba4f2ee174d7fd01685))
+
 ## [1.8.1](https://github.com/syrax90/claude_mobile/compare/android-v1.8.0...android-v1.8.1) (2026-06-08)
 
 

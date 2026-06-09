@@ -1127,33 +1127,6 @@ class Database:
             "relay_url": relay_url,
         }
 
-    async def transfer_agent_owner(
-        self, agent_id: str, new_owner_user_id: str
-    ) -> bool:
-        """Transfer agent ownership; cascade-invalidate prior owner's tokens.
-
-        Used by the QR re-pair flow when a different user account scans the
-        agent's QR. Deletes ``mobile_refresh_tokens`` rows for this agent
-        (the prior owner's devices lose their refresh path; the new owner
-        will mint fresh tokens), then updates ``agents.owner_user_id``.
-
-        ``mobile_devices`` is user-scoped, so a transfer does not touch
-        device rows: the prior owner's devices remain registered to them
-        and can pair with their other agents.
-
-        Returns True if the agent row was updated, False if not found.
-        """
-        await self.conn.execute(
-            "DELETE FROM mobile_refresh_tokens WHERE agent_id = ?",
-            (agent_id,),
-        )
-        cursor = await self.conn.execute(
-            "UPDATE agents SET owner_user_id = ? WHERE agent_id = ?",
-            (new_owner_user_id, agent_id),
-        )
-        await self.conn.commit()
-        return cursor.rowcount == 1
-
     async def get_pending_pairing_tokens(self, agent_id: str) -> list[dict]:
         now = _now_iso()
         cursor = await self.conn.execute(
@@ -1638,18 +1611,25 @@ class Database:
         user_id: str,
         name: str | None = None,
     ) -> bool:
-        """Register a device on first sight, or refresh its metadata.
+        """Register a device on first sight, or refresh/reassign its row.
 
-        Returns ``True`` when the row was inserted or updated, ``False``
-        when ``device_id`` is already owned by a different user (the
-        caller should map this to an HTTP 409). The cross-tenant guard
-        prevents one user from silently mutating, renaming, or resurrecting
-        another user's device row by submitting that user's device id.
+        Returns ``True`` when the row was inserted, updated, or reassigned
+        to ``user_id``; ``False`` only when ``device_id`` is held by a
+        different user *and still has a live session* (a non-revoked,
+        non-expired refresh token) — the caller maps that to HTTP 409.
+
+        ``mobile_device_id`` is a stable per-install UUID that survives
+        sign-out, so the same phone legitimately re-pairs under a new
+        account once the prior account stops using it (its agent is
+        deleted, the device is revoked, or all its sessions expire). Such
+        an idle device is reassigned to the new owner; a device with a live
+        refresh token stays protected so one user cannot seize another's
+        actively-paired device by submitting its id. The release test is
+        "no live token anywhere on the device" — fail-closed.
 
         Re-pairing a previously revoked device under the same owner clears
         ``revoked_at`` — possession of a valid user JWT proves account
-        control, and the next refresh token will be bound to the same
-        device-id anyway (Bitwarden semantics).
+        control (Bitwarden semantics).
         """
         now = _now_iso()
         # The WHERE clause on the ON CONFLICT branch is the cross-tenant
@@ -1671,14 +1651,33 @@ class Database:
         await self.conn.commit()
         if cursor.rowcount == 1:
             return True
-        # Disambiguate "WHERE blocked the update" (cross-tenant) from
-        # "row already matched our state perfectly" (idempotent no-op).
-        check = await self.conn.execute(
+        # rowcount 0: the ON CONFLICT update was skipped because the row
+        # belongs to a different user (cross-tenant guard), or the row
+        # already matched our state. Disambiguate.
+        cursor = await self.conn.execute(
             "SELECT user_id FROM mobile_devices WHERE device_id = ?",
             (device_id,),
         )
-        row = await check.fetchone()
-        return row is None or row["user_id"] == user_id
+        row = await cursor.fetchone()
+        if row is None or row["user_id"] == user_id:
+            return True
+        # Different user: reassign only while the device holds no live
+        # refresh token (idle ⇒ the prior account no longer uses it). One
+        # conditional UPDATE keeps the liveness check and the write atomic;
+        # an in-use device is left untouched and the caller gets a 409.
+        reassigned = await self.conn.execute(
+            "UPDATE mobile_devices SET "
+            "    user_id = ?, name = ?, created_at = ?, last_seen_at = ?, "
+            "    revoked_at = NULL "
+            "WHERE device_id = ? AND NOT EXISTS ("
+            "    SELECT 1 FROM mobile_refresh_tokens "
+            "    WHERE mobile_device_id = ? "
+            "      AND revoked_at IS NULL AND expires_at > ?"
+            ")",
+            (user_id, name, now, now, device_id, device_id, now),
+        )
+        await self.conn.commit()
+        return reassigned.rowcount == 1
 
     async def list_user_devices(self, user_id: str) -> list[dict]:
         """Active devices for a user, most-recently-seen first."""

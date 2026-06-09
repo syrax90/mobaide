@@ -428,3 +428,121 @@ class TestIterRingChunks:
         assert len(chunks) == 2
         assert len(chunks[0]) == REPLAY_CHUNK_BYTES
         assert len(chunks[1]) == 10
+
+
+def _attention_config() -> SessionConfig:
+    return SessionConfig(
+        session_id="attn-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+    )
+
+
+def _drain_attention_events(session: TerminalSession) -> list[SessionEvent]:
+    """Pull every queued ``attention`` event without blocking.
+
+    ``set_attention``/``clear_attention`` enqueue synchronously via
+    ``put_nowait``; the session is never started, so the queue holds only what
+    the call under test enqueued.
+    """
+    events: list[SessionEvent] = []
+    while not session.event_queue.empty():
+        ev = session.event_queue.get_nowait()
+        if ev.event_type == "attention":
+            events.append(ev)
+    return events
+
+
+class TestTerminalSessionAttention:
+    """``set_attention`` / ``clear_attention`` are the hook-driven attention
+    state the ``/internal/hook`` endpoint mutates; the enqueued ``attention``
+    event is what the fanout turns into ``session.attention`` /
+    ``session.updated``. The session is never started here — these methods
+    only touch in-memory state and the bounded event queue.
+    """
+
+    async def test_set_attention_stamps_field_and_to_info(self) -> None:
+        session = TerminalSession(_attention_config())
+        session.set_attention("awaiting_permission")
+        assert session.to_info().attention == "awaiting_permission"
+
+    async def test_set_attention_enqueues_event_with_reason(self) -> None:
+        session = TerminalSession(_attention_config())
+        session.set_attention("turn_finished")
+        events = _drain_attention_events(session)
+        assert len(events) == 1
+        assert events[0].event_type == "attention"
+        assert events[0].session_id == "attn-session"
+        assert events[0].attention == "turn_finished"
+
+    async def test_set_attention_ended_records_exit_reason(self) -> None:
+        session = TerminalSession(_attention_config())
+        session.set_attention("ended", exit_reason="clear")
+        info = session.to_info()
+        assert info.attention == "ended"
+        assert info.exit_reason == "clear"
+
+    async def test_set_attention_without_exit_reason_leaves_it_none(self) -> None:
+        session = TerminalSession(_attention_config())
+        session.set_attention("turn_finished")
+        assert session.to_info().exit_reason is None
+
+    async def test_clear_attention_when_set_emits_none_event(self) -> None:
+        session = TerminalSession(_attention_config())
+        session.set_attention("awaiting_permission")
+        _drain_attention_events(session)  # discard the set event
+
+        session.clear_attention()
+
+        assert session.to_info().attention is None
+        events = _drain_attention_events(session)
+        assert len(events) == 1
+        assert events[0].attention is None
+
+    async def test_clear_attention_when_unset_is_noop(self) -> None:
+        # No attention pending → no event, so ordinary keystrokes don't spam
+        # the fanout with redundant clears.
+        session = TerminalSession(_attention_config())
+        session.clear_attention()
+        assert _drain_attention_events(session) == []
+
+    async def test_clear_attention_preserves_exit_reason(self) -> None:
+        # exit_reason is the human-readable end cause; clearing the live
+        # attention badge must not wipe it from the snapshot.
+        session = TerminalSession(_attention_config())
+        session.set_attention("ended", exit_reason="other")
+        _drain_attention_events(session)
+        session.clear_attention()
+        assert session.to_info().exit_reason == "other"
+
+    async def test_write_clears_pending_attention(self) -> None:
+        # User input means the user responded — write() must drop the badge
+        # for both "typed next instruction" and "approved permission".
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _attention_config(), backend=cast(PtyBackend, backend),
+        )
+        session.set_attention("awaiting_permission")
+        _drain_attention_events(session)
+
+        await session.write(b"y\n")
+
+        assert session.to_info().attention is None
+        events = _drain_attention_events(session)
+        assert len(events) == 1
+        assert events[0].attention is None
+        # The keystroke still reached the backend.
+        assert backend._writes == [b"y\n"]
+
+    async def test_write_without_pending_attention_emits_no_attention_event(
+        self,
+    ) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _attention_config(), backend=cast(PtyBackend, backend),
+        )
+        await session.write(b"ls\n")
+        assert _drain_attention_events(session) == []
+        assert backend._writes == [b"ls\n"]

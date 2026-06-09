@@ -90,7 +90,7 @@ def test_broadcast_and_auth_ok_emit_identical_body_bytes(
             "type": "auth",
             "agent_id": agent_id,
             "token": raw_token,
-            "protocol_version": 3,
+            "protocol_version": 4,
         }))
         resp = json.loads(ws.receive_text())
     auth_ok_body = resp["manifest_body"]

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _STATE_EVENTS = frozenset({"started", "stopped", "error"})
 _TITLE_EVENT = "title"
+_ATTENTION_EVENT = "attention"
 
 
 class SessionEventFanout:
@@ -65,6 +66,29 @@ class SessionEventFanout:
                                 "session.updated",
                                 {"session": session_to_wire_dict(changed)},
                             )
+                    continue
+                if (
+                    event.event_type == _ATTENTION_EVENT
+                    and self._get_sessions
+                    and self._event_bus is not None
+                ):
+                    changed = next(
+                        (s for s in self._get_sessions()
+                         if s.session_id == self._session.session_id),
+                        None,
+                    )
+                    if changed is not None:
+                        wire = session_to_wire_dict(changed)
+                        # A set reason is a one-shot notification trigger; a
+                        # clear (attention=None) only refreshes the snapshot so
+                        # connected clients drop the badge.
+                        if event.attention is not None:
+                            self._event_bus.publish(
+                                "session.attention", {"session": wire},
+                            )
+                        self._event_bus.publish(
+                            "session.updated", {"session": wire},
+                        )
                     continue
                 # Build once; reused by broadcaster and event bus to avoid double serialization.
                 if event.event_type in _STATE_EVENTS and self._get_sessions:

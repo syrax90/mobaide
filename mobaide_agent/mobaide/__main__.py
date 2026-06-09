@@ -245,6 +245,12 @@ def _run_agent() -> None:
         app,
         host=app.state.config.host,
         port=app.state.config.port,
+        # The /internal/hook request line carries the per-agent hook token as a
+        # query param; uvicorn's access log records the full target including
+        # the query string, so disable it to keep the token out of operational
+        # logs (mirrors central_server/__main__.py). The in-app structured
+        # middleware logs method/path/status without the query string.
+        access_log=False,
     )
     server = uvicorn.Server(config)
     if sys.platform == "win32":
@@ -273,6 +279,8 @@ def _run_agent() -> None:
             app,
             host=app.state.config.host,
             port=app.state.config.port,
+            # Keep the /internal/hook token query param out of access logs.
+            access_log=False,
         )
 
 
