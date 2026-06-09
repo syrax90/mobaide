@@ -1,5 +1,5 @@
 {
-  "mobaide_agent": "0.2.6",
+  "mobaide_agent": "0.2.7",
   "central_server": "0.1.12",
-  "android": "1.8.0"
+  "android": "1.8.1"
 }

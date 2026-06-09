@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.2.7](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.6...agent-v0.2.7) (2026-06-08)
+
+
+### Features
+
+* **launcher:** prune superseded release dirs on every boot ([3f6ea8e](https://github.com/syrax90/claude_mobile/commit/3f6ea8e4e6f9b4b3e09e6719f0d95158c1056f84))
+
 ## [0.2.6](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.5...agent-v0.2.6) (2026-05-23)
 
 
