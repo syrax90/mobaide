@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [1.9.0](https://github.com/syrax90/claude_mobile/compare/android-v1.8.2...android-v1.9.0) (2026-06-09)
+
+
+### Features
+
+* **agent:** pop-up notifications when a Claude session awaits input or ends(CLA-64) ([6410cdb](https://github.com/syrax90/claude_mobile/commit/6410cdb50d471709d1aa560a62b8040e516d1d40))
+* pop-up notifications when a Claude session awaits input or ends (CLA-64) ([848af44](https://github.com/syrax90/claude_mobile/commit/848af446a8cb6db7c699c34bbfa0a8093ede7271))
+
 ## [1.8.2](https://github.com/syrax90/claude_mobile/compare/android-v1.8.1...android-v1.8.2) (2026-06-09)
 
 
