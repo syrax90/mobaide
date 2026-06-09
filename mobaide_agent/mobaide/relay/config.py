@@ -12,9 +12,11 @@ Loaded via ``pydantic-settings``. Four runtime states:
 * **re-pair pending** — ``RELAY_SERVER_URL`` set, ``RELAY_AGENT_ID`` set,
   ``RELAY_AGENT_TOKEN`` empty. Both ``pairing_pending`` and
   ``re_pair_pending`` are True; the boot autorun carries the prior
-  ``agent_id`` into the next claim so the server takes the
-  ``transfer_agent_owner`` / ``reregister_agent`` branch instead of
-  registering a fresh agent. Written by ``mobaide-agent re-pair``.
+  ``agent_id`` into the next claim so the server re-registers (rotates the
+  token for) the existing agent for its current owner instead of
+  registering a fresh one. A claim by a different account is refused —
+  agent ownership is not transferable by pairing. Written by
+  ``mobaide-agent re-pair``.
 * **configured** — all three set. ``pairing_pending`` is False; the agent
   starts a relay client normally.
 
@@ -71,10 +73,12 @@ class RelayConfig(BaseSettings):
 
         Set by ``mobaide-agent re-pair``: only the
         token is cleared so the boot autorun can carry ``current_agent_id``
-        into the next initiate request and trigger the server's
-        ``transfer_agent_owner`` / ``reregister_agent`` branch instead of
-        registering a fresh agent. The fresh-install pairing-pending case
-        has both fields blank and ``re_pair_pending`` is False.
+        into the next initiate request and trigger the server's same-owner
+        ``reregister_agent`` (token rotation) instead of registering a fresh
+        agent. A claim by a different account is refused server-side — agent
+        ownership is not transferable by pairing. The fresh-install
+        pairing-pending case has both fields blank and ``re_pair_pending``
+        is False.
         """
         return (
             self.configured
@@ -87,9 +91,9 @@ class RelayConfig(BaseSettings):
         if not self.configured:
             return self
         # The id-set / token-blank state is intentional during re-pair:
-        # blanking the token alone signals the boot autorun that the
-        # existing agent should rotate-or-transfer. The reverse — token
-        # set without id — is still nonsensical and refused.
+        # blanking the token alone signals the boot autorun to re-register
+        # (rotate the token for) the existing agent under its owner. The
+        # reverse — token set without id — is still nonsensical and refused.
         only_token = bool(self.agent_token) and not self.agent_id
         if only_token:
             raise RuntimeError(
