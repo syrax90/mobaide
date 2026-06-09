@@ -77,11 +77,6 @@ fun SettingsScreen(
                 .padding(padding),
         ) {
             ListItem(
-                headlineContent = { Text("Connection") },
-                supportingContent = { Text(uiState.connectionInfo) },
-            )
-            HorizontalDivider()
-            ListItem(
                 headlineContent = { Text("Logged in as") },
                 supportingContent = { Text(uiState.userEmail) },
             )

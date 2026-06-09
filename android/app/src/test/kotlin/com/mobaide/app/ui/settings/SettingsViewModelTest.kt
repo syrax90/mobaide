@@ -1,7 +1,6 @@
 package com.mobaide.app.ui.settings
 
 import com.mobaide.app.data.auth.GoogleAuthResult
-import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
@@ -29,12 +28,11 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * Unit tests for [SettingsViewModel] — the ViewModel reads connection info
- * and the user's email synchronously from [AuthRepository] / [TokenStore]
- * inside its constructor, then exposes an immutable [SettingsUiState] and
- * delegates `logout()` to the repository.
+ * Unit tests for [SettingsViewModel] — the ViewModel reads the user's email
+ * synchronously from [AuthRepository] inside its constructor, then exposes an
+ * immutable [SettingsUiState] and delegates `logout()` to the repository.
  *
- * "Logged in as" now sources from [AuthRepository.getUserEmail] (i.e. the
+ * "Logged in as" sources from [AuthRepository.getUserEmail] (i.e. the
  * `UserIdentityStore` populated by the central-server login flows) rather
  * than the agent JWT `sub` claim, so the value is the same regardless of
  * whether the user signed in with email/password or Google.
@@ -45,18 +43,6 @@ class SettingsViewModelTest {
     @get:Rule
     val mainDispatcherRule = MainDispatcherRule()
 
-    private fun stubTokenStore(
-        mode: TokenStore.ConnectionMode = TokenStore.ConnectionMode.DIRECT,
-        relayServerUrl: String? = null,
-        agentId: String? = null,
-    ): TokenStore {
-        val store = mockk<TokenStore>()
-        every { store.getConnectionMode() } returns mode
-        every { store.getRelayServerUrl() } returns relayServerUrl
-        every { store.getAgentId() } returns agentId
-        return store
-    }
-
     private fun stubPreferencesStore(
         mode: TerminalDisplayMode = TerminalDisplayMode.Full,
         staticColumns: Int = TERMINAL_STATIC_COLUMNS_DEFAULT,
@@ -66,70 +52,11 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun initialState_directMode_showsDirectConnectionInfo() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns "https://example.com"
-        every { authRepository.getUserEmail() } returns "alice@example.com"
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
-
-        val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
-
-        val state = vm.uiState.value
-        assertEquals("Direct: https://example.com", state.connectionInfo)
-        assertEquals("alice@example.com", state.userEmail)
-    }
-
-    @Test
-    fun initialState_directMode_nullAgentUrl_showsUnknown() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns null
-        every { authRepository.getUserEmail() } returns "alice@example.com"
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
-
-        val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
-
-        assertEquals("Direct: unknown", vm.uiState.value.connectionInfo)
-    }
-
-    @Test
-    fun initialState_relayMode_showsRelayConnectionInfo() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getUserEmail() } returns "bob@example.com"
-        val tokenStore = stubTokenStore(
-            mode = TokenStore.ConnectionMode.RELAY,
-            relayServerUrl = "https://relay.example.com",
-            agentId = "agent-abc",
-        )
-
-        val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
-
-        val state = vm.uiState.value
-        assertEquals("Relay: https://relay.example.com", state.connectionInfo)
-        assertEquals("bob@example.com", state.userEmail)
-    }
-
-    @Test
-    fun initialState_relayMode_nullServerUrl_showsUnknown() = runTest {
-        val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getUserEmail() } returns null
-        val tokenStore = stubTokenStore(
-            mode = TokenStore.ConnectionMode.RELAY,
-            relayServerUrl = null,
-        )
-
-        val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
-
-        assertEquals("Relay: unknown", vm.uiState.value.connectionInfo)
-    }
-
-    @Test
     fun initialState_userEmail_sourcedFromAuthRepository() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUserEmail() } returns "carol@example.com"
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
 
-        val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
+        val vm = SettingsViewModel(authRepository, stubPreferencesStore())
 
         assertEquals("carol@example.com", vm.uiState.value.userEmail)
     }
@@ -137,11 +64,9 @@ class SettingsViewModelTest {
     @Test
     fun initialState_userEmailNull_fallsBackToEmptyString() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUserEmail() } returns null
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
 
-        val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
+        val vm = SettingsViewModel(authRepository, stubPreferencesStore())
 
         assertEquals("", vm.uiState.value.userEmail)
     }
@@ -149,12 +74,10 @@ class SettingsViewModelTest {
     @Test
     fun logout_delegatesToAuthRepository_withoutMutatingUiState() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUserEmail() } returns "alice@example.com"
         every { authRepository.userLogout() } just Runs
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
 
-        val vm = SettingsViewModel(authRepository, tokenStore, stubPreferencesStore())
+        val vm = SettingsViewModel(authRepository, stubPreferencesStore())
         val before = vm.uiState.value
 
         vm.logout()
@@ -166,15 +89,13 @@ class SettingsViewModelTest {
     @Test
     fun initialState_loadsTerminalDisplayPreferences() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUserEmail() } returns "alice@example.com"
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
         val prefs = stubPreferencesStore(
             mode = TerminalDisplayMode.Static,
             staticColumns = 100,
         )
 
-        val vm = SettingsViewModel(authRepository, tokenStore, prefs)
+        val vm = SettingsViewModel(authRepository, prefs)
         advanceUntilIdle()
 
         assertEquals(TerminalDisplayMode.Static, vm.uiState.value.terminalDisplayMode)
@@ -184,13 +105,11 @@ class SettingsViewModelTest {
     @Test
     fun setTerminalDisplayMode_writesThroughToPreferencesStore() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUserEmail() } returns "alice@example.com"
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
         val prefs = stubPreferencesStore()
         coEvery { prefs.setTerminalDisplayMode(any()) } just Runs
 
-        val vm = SettingsViewModel(authRepository, tokenStore, prefs)
+        val vm = SettingsViewModel(authRepository, prefs)
         vm.setTerminalDisplayMode(TerminalDisplayMode.Static)
         advanceUntilIdle()
 
@@ -200,13 +119,11 @@ class SettingsViewModelTest {
     @Test
     fun setTerminalStaticColumns_clampsToValidRangeBeforeWrite() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true)
-        every { authRepository.getAgentUrl() } returns "https://example.com"
         every { authRepository.getUserEmail() } returns "alice@example.com"
-        val tokenStore = stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT)
         val prefs = stubPreferencesStore()
         coEvery { prefs.setTerminalStaticColumns(any()) } just Runs
 
-        val vm = SettingsViewModel(authRepository, tokenStore, prefs)
+        val vm = SettingsViewModel(authRepository, prefs)
         vm.setTerminalStaticColumns(40)
         vm.setTerminalStaticColumns(300)
         vm.setTerminalStaticColumns(150)
@@ -220,12 +137,10 @@ class SettingsViewModelTest {
     private fun newDeleteVm(
         email: String = "user@example.com",
         authRepository: AuthRepository = mockk(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns email
         },
     ): SettingsViewModel = SettingsViewModel(
         authRepository,
-        stubTokenStore(mode = TokenStore.ConnectionMode.DIRECT),
         stubPreferencesStore(),
     )
 
@@ -247,7 +162,6 @@ class SettingsViewModelTest {
     @Test
     fun startDeleteAccount_isNoopWhenUserEmailMissing() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns null
         }
         val vm = newDeleteVm(authRepository = authRepository)
@@ -381,7 +295,6 @@ class SettingsViewModelTest {
     @Test
     fun submitDelete_blockedWhenTypedEmailMismatch() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "henry@example.com"
         }
         val vm = newDeleteVm(authRepository = authRepository)
@@ -407,7 +320,6 @@ class SettingsViewModelTest {
     @Test
     fun submitDelete_passwordPath_success_invokesOnScheduledAndHidesDialog() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "ida@example.com"
         }
         coEvery { authRepository.deleteAccountWithPassword("pw", DeletionMode.Scheduled) } returns
@@ -431,7 +343,6 @@ class SettingsViewModelTest {
     @Test
     fun submitDelete_googlePath_threadsIdTokenAndNonceIntoRepository() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "jane@example.com"
         }
         coEvery {
@@ -458,7 +369,6 @@ class SettingsViewModelTest {
     @Test
     fun submitDelete_reauthFailed_surfacesServerMessageAndKeepsConfirmEmail() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "kate@example.com"
         }
         coEvery { authRepository.deleteAccountWithPassword("pw", DeletionMode.Scheduled) } returns
@@ -485,7 +395,6 @@ class SettingsViewModelTest {
     @Test
     fun submitDelete_forbidden_surfacesFriendlySeedAdminError() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "root@example.com"
         }
         coEvery { authRepository.deleteAccountWithPassword(any(), any()) } returns
@@ -598,7 +507,6 @@ class SettingsViewModelTest {
     @Test
     fun submitDelete_immediateMode_passesImmediateToRepository() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "dave@example.com"
         }
         coEvery {
@@ -629,7 +537,6 @@ class SettingsViewModelTest {
     @Test
     fun submitDelete_immediateMode_googlePath_passesImmediateToRepository() = runTest {
         val authRepository = mockk<AuthRepository>(relaxed = true) {
-            every { getAgentUrl() } returns "https://example.com"
             every { getUserEmail() } returns "eve@example.com"
         }
         coEvery {
