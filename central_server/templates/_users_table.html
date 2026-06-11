@@ -4,6 +4,7 @@
             <th></th>
             <th>Email</th>
             <th>Role</th>
+            <th>Verified</th>
             <th>Registered</th>
             <th>Agents</th>
             <th>Online</th>
@@ -20,6 +21,13 @@
             <td><span class="expand-arrow">&#9656;</span></td>
             <td>{{ u.email }}</td>
             <td>{{ u.role }}</td>
+            <td>
+                {% if u.email_verified %}
+                <span class="badge badge-verified"{% if u.verified_at %} title="Verified at {{ u.verified_at }}"{% endif %}>Verified</span>
+                {% else %}
+                <span class="badge badge-unverified" title="Email not verified yet">Unverified</span>
+                {% endif %}
+            </td>
             <td>{{ u.created_at }}</td>
             <td>{{ u.agent_count }}</td>
             <td><span id="user-online-{{ u.id }}">{{ u.online_count }}</span></td>
@@ -43,7 +51,7 @@
         </tr>
         {% endfor %}
         {% if not users %}
-        <tr><td colspan="8" class="empty">No users{% if query %} matching &ldquo;{{ query }}&rdquo;{% endif %}.</td></tr>
+        <tr><td colspan="9" class="empty">No {% if verified == "verified" %}verified {% elif verified == "unverified" %}unverified {% endif %}users{% if query %} matching &ldquo;{{ query }}&rdquo;{% endif %}.</td></tr>
         {% endif %}
     </tbody>
 </table>

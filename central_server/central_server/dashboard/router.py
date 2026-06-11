@@ -115,7 +115,7 @@ async def users_page(
     return templates.TemplateResponse(
         request,
         "users.html",
-        {"users": users, "username": user.email, "query": ""},
+        {"users": users, "username": user.email, "query": "", "verified": "all"},
     )
 
 
@@ -123,14 +123,19 @@ async def users_page(
 async def users_table_fragment(
     request: Request,
     q: str = "",
+    verified: str = "all",
     user: UserTokenPayload = Depends(_require_admin),
 ):
-    """Return the users-table fragment, optionally filtered by email substring.
+    """Return the users-table fragment, filtered by email and/or verification.
 
-    Wired to the search input via ``hx-get`` + ``hx-trigger="keyup changed
-    delay:300ms"`` so admins can narrow the list to a single email as they
-    type. The filter is case-insensitive substring match, applied in Python
-    on the already-loaded list (admin dashboards have small populations).
+    The search ``<form>`` in ``users.html`` is the requesting element, so
+    every trigger (typed search, filter-select change, Enter) serializes
+    both ``q`` and ``verified`` into the request. Both filters are applied
+    in Python on the already-loaded list (admin dashboards have small
+    populations): ``q`` is a case-insensitive email substring match;
+    ``verified`` accepts ``"verified"`` / ``"unverified"``, while ``"all"``
+    or any unknown value means no filter (lenient on purpose — a tampered
+    URL should degrade to the unfiltered table, not a 422 swapped into it).
     """
     del user  # Depends() enforces the role; the variable is otherwise unused.
     db = request.app.state.db
@@ -139,11 +144,15 @@ async def users_table_fragment(
     needle = q.strip().lower()
     if needle:
         users = [u for u in users if needle in u["email"].lower()]
+    if verified == "verified":
+        users = [u for u in users if u["email_verified"]]
+    elif verified == "unverified":
+        users = [u for u in users if not u["email_verified"]]
     _enrich_users(users, routing)
     return templates.TemplateResponse(
         request,
         "_users_table.html",
-        {"users": users, "query": q},
+        {"users": users, "query": q, "verified": verified},
     )
 
 
