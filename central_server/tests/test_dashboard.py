@@ -491,6 +491,116 @@ class TestUserSearchFilter:
         assert "No users matching" in resp.text
 
 
+class TestUserVerifiedBadgeAndFilter:
+    """The Verified column badges and the ``verified=`` fragment filter.
+
+    Test config runs with ``email_verification_required=False``, so the
+    seeded admin and the ``viewer_user`` fixture are both *verified*;
+    unverified users are seeded via ``db.create_user`` directly (defaults
+    ``email_verified=False``). Assertions use the badge CSS class names:
+    the label "Verified" is a substring of "Unverified", but
+    ``badge-verified`` is not a substring of ``badge-unverified``.
+    """
+
+    UNVERIFIED_EMAIL = "unverified@test.local"
+
+    async def _seed_unverified(self, app) -> str:
+        return await app.state.db.create_user(
+            email=self.UNVERIFIED_EMAIL, password_hash="h"
+        )
+
+    async def test_users_page_shows_verified_column_and_badge(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        body = resp.text
+        assert "<th>Verified</th>" in body
+        # The seeded admin is verified under test config.
+        assert "badge-verified" in body
+
+    async def test_users_page_shows_unverified_badge(
+        self, client, app, dashboard_headers
+    ):
+        await self._seed_unverified(app)
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        assert "badge-unverified" in resp.text
+
+    async def test_verified_badge_carries_verified_at_tooltip(
+        self, client, dashboard_headers
+    ):
+        resp = await client.get("/dashboard", headers=dashboard_headers)
+        assert resp.status_code == 200
+        # The tooltip plumbs verified_at through to the badge title.
+        assert 'title="Verified at ' in resp.text
+
+    async def test_filter_unverified_shows_only_unverified(
+        self, client, app, dashboard_headers
+    ):
+        await self._seed_unverified(app)
+        resp = await client.get(
+            "/dashboard/users?verified=unverified", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert self.UNVERIFIED_EMAIL in body
+        assert TEST_ADMIN_EMAIL not in body
+
+    async def test_filter_verified_shows_only_verified(
+        self, client, app, dashboard_headers
+    ):
+        await self._seed_unverified(app)
+        resp = await client.get(
+            "/dashboard/users?verified=verified", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        body = resp.text
+        assert TEST_ADMIN_EMAIL in body
+        assert self.UNVERIFIED_EMAIL not in body
+
+    async def test_filter_all_omitted_and_unknown_are_lenient(
+        self, client, app, dashboard_headers
+    ):
+        """``all``, an omitted param, and an unknown value all mean "no
+        filter" — a tampered URL degrades to the unfiltered table rather
+        than a 422 swapped into it.
+        """
+        await self._seed_unverified(app)
+        for query in ("?verified=all", "", "?verified=bogus"):
+            resp = await client.get(
+                f"/dashboard/users{query}", headers=dashboard_headers
+            )
+            assert resp.status_code == 200
+            body = resp.text
+            assert TEST_ADMIN_EMAIL in body
+            assert self.UNVERIFIED_EMAIL in body
+
+    async def test_search_and_filter_combine(
+        self, client, app, dashboard_headers
+    ):
+        """q matches only the unverified user; the verified filter then
+        removes it — the empty state names the active filter.
+        """
+        await self._seed_unverified(app)
+        resp = await client.get(
+            "/dashboard/users?q=unverified&verified=verified",
+            headers=dashboard_headers,
+        )
+        assert resp.status_code == 200
+        assert "No verified users matching" in resp.text
+
+    async def test_filter_unverified_empty_state(
+        self, client, dashboard_headers
+    ):
+        # No unverified users seeded — admin and viewer are verified.
+        resp = await client.get(
+            "/dashboard/users?verified=unverified", headers=dashboard_headers
+        )
+        assert resp.status_code == 200
+        assert "No unverified users." in resp.text
+
+
 class TestUserDelete:
     """``DELETE /dashboard/users/{id}`` — cascade, guardrails, WS teardown."""
 

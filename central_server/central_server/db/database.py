@@ -705,6 +705,7 @@ class Database:
 
             [{
                 "id": str, "email": str, "role": str,
+                "email_verified": int (0|1), "verified_at": str | None,
                 "created_at": str,
                 "agents": [{
                     "agent_id": str, "name": str, "created_at": str,
@@ -716,6 +717,7 @@ class Database:
         """
         cursor = await self.conn.execute(
             "SELECT u.id AS user_id, u.email, u.role, "
+            "u.email_verified, u.verified_at, "
             "u.created_at AS user_created_at, "
             "a.agent_id, a.name AS agent_name, "
             "a.created_at AS agent_created_at, a.last_seen_at, "
@@ -733,6 +735,8 @@ class Database:
                     "id": uid,
                     "email": row["email"],
                     "role": row["role"],
+                    "email_verified": row["email_verified"],
+                    "verified_at": row["verified_at"],
                     "created_at": row["user_created_at"],
                     "agents": [],
                 }

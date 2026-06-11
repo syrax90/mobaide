@@ -391,8 +391,9 @@ class TestListUsersWithAgents:
 
     async def test_projects_all_documented_user_fields(self, db: Database):
         """The dashboard template reads ``id``, ``email``, ``role``,
-        ``created_at`` off each user dict. The function's docstring locks
-        these keys in — guard against an accidental SELECT-list trim.
+        ``email_verified``, ``verified_at``, ``created_at`` off each user
+        dict. The function's docstring locks these keys in — guard against
+        an accidental SELECT-list trim.
         """
         owner = await db.create_user(
             email="who@test.local", password_hash="h", role="viewer"
@@ -404,10 +405,44 @@ class TestListUsersWithAgents:
         assert u["id"] == owner
         assert u["email"] == "who@test.local"
         assert u["role"] == "viewer"
+        # create_user defaults to unverified: flag 0, no timestamp.
+        assert u["email_verified"] == 0
+        assert u["verified_at"] is None
         assert isinstance(u["created_at"], str)
         # Trailing UTC offset confirms _now_iso() shape, not a stray
         # naive datetime from a future regression.
         assert u["created_at"].endswith("+00:00")
+
+    async def test_verified_user_projects_verified_fields(self, db: Database):
+        """A user created verified (admin seeder / Google path) surfaces
+        ``email_verified == 1`` and a ``verified_at`` timestamp in the
+        listing — the dashboard's Verified badge and tooltip read these.
+        """
+        await db.create_user(
+            email="vouched@test.local", password_hash="h", email_verified=True
+        )
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 1
+        u = users[0]
+        assert u["email_verified"] == 1
+        assert isinstance(u["verified_at"], str)
+        assert u["verified_at"].endswith("+00:00")
+
+    async def test_mark_user_verified_reflected_in_listing(self, db: Database):
+        """Completing the OTP flow (``mark_user_verified``) flips the
+        listing from unverified to verified with a timestamp.
+        """
+        user_id = await db.create_user(
+            email="otp@test.local", password_hash="h"
+        )
+        await db.mark_user_verified(user_id)
+
+        users = await db.list_users_with_agents()
+        assert len(users) == 1
+        u = users[0]
+        assert u["email_verified"] == 1
+        assert u["verified_at"] is not None
 
     async def test_projects_all_documented_agent_fields(self, db: Database):
         """The expanded per-user detail row reads ``agent_id``, ``name``,

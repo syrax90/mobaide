@@ -5,17 +5,30 @@
     <h1>Users</h1>
 </div>
 
-<div class="search-bar">
+{# The form (not the input) carries hx-get: an HTMX GET issued from a bare
+   input would serialize only that input, dropping the sibling select —
+   form-as-requesting-element serializes all named controls. The "submit"
+   trigger makes htmx intercept Enter (preventDefault) instead of letting
+   the browser do a full-page navigation. "from:find …" scopes the
+   listeners to descendants; bare "from:input" would be document-wide.
+   Both controls live outside the swapped #users-table fragment so their
+   state survives swaps. #}
+<form class="search-bar" role="search"
+      hx-get="/dashboard/users"
+      hx-target="#users-table"
+      hx-swap="outerHTML"
+      hx-trigger="keyup changed delay:300ms from:find input, search from:find input, change from:find select, submit">
     <input type="search"
            name="q"
            placeholder="Filter by email…"
            autocomplete="off"
-           hx-get="/dashboard/users"
-           hx-trigger="keyup changed delay:300ms, search"
-           hx-target="#users-table"
-           hx-swap="outerHTML"
            value="{{ query }}">
-</div>
+    <select name="verified" aria-label="Filter by verification status">
+        <option value="all" {% if verified == "all" %}selected{% endif %}>All accounts</option>
+        <option value="verified" {% if verified == "verified" %}selected{% endif %}>Verified</option>
+        <option value="unverified" {% if verified == "unverified" %}selected{% endif %}>Unverified</option>
+    </select>
+</form>
 
 {% include "_users_table.html" %}
 
