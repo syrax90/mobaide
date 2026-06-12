@@ -36,6 +36,23 @@ cadence; they do **not** gate compatibility.
     per-session ``--settings`` file wiring ``http`` hooks to a local
     ``POST /internal/hook`` endpoint (loopback + per-agent token guarded); the
     old terminal-buffer ``PromptDetector`` heuristic is retired.
+* Additive delta within proto-v4 (2026-06-12, Send-button submit fix): the
+  PTY frame set on ``/ws/session/<id>`` and the ``CH_SESSION_IO`` channel
+  gains one C->S type and one semantic change. No version bump: the frame
+  *layout* (1 type byte + payload) is unchanged, the new type is purely
+  additive, ``central_server`` forwards ``CH_SESSION_IO`` payloads opaquely,
+  and the app + agent ship together pre-production.
+  * New C->S frame ``0x6d`` / ``'m'`` (**submit**): the agent writes the
+    payload to the PTY, pauses ``SUBMIT_CR_DELAY_SECONDS`` (0.2 s), then
+    writes CR as a **separate** PTY write. Ink TUIs (Claude CLI) treat a CR
+    embedded in the same stdin chunk as pasted content; only a CR arriving
+    as its own later read registers as the Enter key. Frames with an empty
+    payload are dropped — a bare Enter could submit stale composer text.
+  * Changed ``0x78`` / ``'x'`` (**execute**) semantics: the agent now ends
+    the sequence with the same delayed CR (Ctrl+C → 0.1 s pause → payload →
+    0.2 s pause → CR). Clients no longer append a trailing ``\r`` to submit
+    or execute payloads; an old client that still sends ``text\r`` gets a
+    harmless extra Enter on an empty composer.
 
 ## proto-v3 (superseded by proto-v4)
 

@@ -22,6 +22,8 @@ from mobaide.relay.client import (
     FRAME_REPLAY_END,
     FRAME_RESIZE,
     FRAME_STATE,
+    FRAME_SUBMIT,
+    INPUT_QUEUE_MAXSIZE,
     RelayClient,
     _EVENT_TO_STATUS,
     _STATE_MAP,
@@ -34,6 +36,7 @@ from mobaide.relay.envelope import (
     decode,
     encode,
 )
+from mobaide.agent.events.bus import AgentEvent
 from mobaide.core import ClaudeBinaryNotFoundError
 from mobaide.core.models import SessionKind, SessionState
 
@@ -559,6 +562,8 @@ class TestHandleRequestEventsSnapshot:
         sess_info.title = None
         sess_info.project_name = None
         sess_info.kind = SessionKind.CLAUDE
+        sess_info.attention = None
+        sess_info.exit_reason = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -584,6 +589,8 @@ class TestHandleRequestEventsSnapshot:
                     "title": None,
                     "project_name": None,
                     "kind": "claude",
+                    "attention": None,
+                    "exit_reason": None,
                 },
             ],
         }
@@ -661,6 +668,8 @@ class TestHandleRequestEventsSnapshot:
         sess_info.title = None
         sess_info.project_name = None
         sess_info.kind = SessionKind.CLAUDE
+        sess_info.attention = None
+        sess_info.exit_reason = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
 
         ws = AsyncMock()
@@ -689,6 +698,8 @@ class TestHandleRequestEventsSnapshot:
                 "title": None,
                 "project_name": None,
                 "kind": "claude",
+                "attention": None,
+                "exit_reason": None,
             },
         ]
 
@@ -1083,7 +1094,7 @@ class TestHandleSessionInput:
 
         mock_session.resize.assert_awaited_once_with(50, 132)
 
-    async def test_execute_frame_sends_ctrl_c_then_data(
+    async def test_execute_frame_calls_write_execute(
         self, client, mock_session_manager
     ):
         mock_session = AsyncMock()
@@ -1094,15 +1105,60 @@ class TestHandleSessionInput:
         mock_session_manager.get_session = AsyncMock(return_value=mock_session)
 
         ws = AsyncMock()
-        payload = FRAME_EXECUTE + b"ls -la\r"
+        payload = FRAME_EXECUTE + b"ls -la"
 
-        with patch("mobaide.relay.client.asyncio.sleep", new_callable=AsyncMock):
-            await client._handle_session_input("s1", payload, ws)
+        await client._handle_session_input("s1", payload, ws)
 
-        calls = mock_session.write.call_args_list
-        assert len(calls) == 2
-        assert calls[0][0][0] == b"\x03"
-        assert calls[1][0][0] == b"ls -la\r"
+        mock_session.write_execute.assert_awaited_once_with(b"ls -la")
+
+    async def test_execute_frame_empty_payload_ignored(
+        self, client, mock_session_manager
+    ):
+        mock_session = AsyncMock()
+        mock_session.session_id = "s1"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 100
+        mock_session.get_ring = MagicMock(return_value=b"")
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        await client._handle_session_input("s1", FRAME_EXECUTE, ws)
+
+        mock_session.write_execute.assert_not_awaited()
+        mock_session.write.assert_not_awaited()
+
+    async def test_submit_frame_calls_write_submit(
+        self, client, mock_session_manager
+    ):
+        mock_session = AsyncMock()
+        mock_session.session_id = "s1"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 100
+        mock_session.get_ring = MagicMock(return_value=b"")
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        payload = FRAME_SUBMIT + b"echo hi"
+
+        await client._handle_session_input("s1", payload, ws)
+
+        mock_session.write_submit.assert_awaited_once_with(b"echo hi")
+
+    async def test_submit_frame_empty_payload_ignored(
+        self, client, mock_session_manager
+    ):
+        mock_session = AsyncMock()
+        mock_session.session_id = "s1"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 100
+        mock_session.get_ring = MagicMock(return_value=b"")
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        await client._handle_session_input("s1", FRAME_SUBMIT, ws)
+
+        mock_session.write_submit.assert_not_awaited()
+        mock_session.write.assert_not_awaited()
 
     async def test_empty_payload_is_noop(self, client, mock_session_manager):
         mock_session = AsyncMock()
@@ -1205,6 +1261,274 @@ class TestHandleSessionInput:
         assert first_four[3][2] == FRAME_REPLAY_END
 
 
+async def _wait_until(predicate, timeout: float = 2.0) -> None:
+    """Poll ``predicate`` until truthy; fail the test on timeout."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition not met within timeout")
+
+
+class TestSessionInputQueues:
+    """The tunnel reader must never block on PTY write delays: CH_SESSION_IO
+    frames go through a per-session queue + pump, preserving per-session
+    ordering while other sessions and control traffic keep flowing."""
+
+    def _make_session(self, mock_session_manager):
+        mock_session = AsyncMock()
+        mock_session.session_id = "s1"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 100
+        mock_session.get_ring = MagicMock(return_value=b"")
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+        return mock_session
+
+    async def test_frames_dispatch_in_order_per_session(
+        self, client, mock_session_manager
+    ):
+        mock_session = self._make_session(mock_session_manager)
+        ws = AsyncMock()
+
+        client._enqueue_session_input("s1", FRAME_SUBMIT + b"echo hi", ws)
+        client._enqueue_session_input("s1", FRAME_INPUT + b"\r", ws)
+
+        await _wait_until(lambda: mock_session.write.await_count >= 1)
+        ordered = [
+            name
+            for name, _args, _kwargs in mock_session.mock_calls
+            if name in ("write", "write_submit")
+        ]
+        assert ordered == ["write_submit", "write"], (
+            "raw input must not overtake a queued submit"
+        )
+        mock_session.write_submit.assert_awaited_once_with(b"echo hi")
+        mock_session.write.assert_awaited_once_with(b"\r")
+
+        pump = client._input_pumps["s1"]
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+
+    async def test_slow_submit_does_not_block_other_sessions(
+        self, client, mock_session_manager
+    ):
+        release = asyncio.Event()
+        slow_session = AsyncMock()
+        slow_session.session_id = "slow"
+        slow_session.state = SessionState.RUNNING
+        slow_session.pid = 100
+        slow_session.get_ring = MagicMock(return_value=b"")
+
+        async def _blocked_submit(_data):
+            await release.wait()
+
+        slow_session.write_submit = AsyncMock(side_effect=_blocked_submit)
+
+        fast_session = AsyncMock()
+        fast_session.session_id = "fast"
+        fast_session.state = SessionState.RUNNING
+        fast_session.pid = 101
+        fast_session.get_ring = MagicMock(return_value=b"")
+
+        sessions = {"slow": slow_session, "fast": fast_session}
+        mock_session_manager.get_session = AsyncMock(
+            side_effect=lambda sid: sessions.get(sid)
+        )
+
+        ws = AsyncMock()
+        client._enqueue_session_input("slow", FRAME_SUBMIT + b"sleepy", ws)
+        await _wait_until(lambda: slow_session.write_submit.await_count == 1)
+
+        # While the slow session's pump is parked inside write_submit, a
+        # frame for another session must still be dispatched.
+        client._enqueue_session_input("fast", FRAME_INPUT + b"ls", ws)
+        await _wait_until(lambda: fast_session.write.await_count == 1)
+        assert not release.is_set()
+
+        release.set()
+        for pump in list(client._input_pumps.values()):
+            pump.cancel()
+        await asyncio.gather(
+            *client._input_pumps.values(), return_exceptions=True
+        )
+
+    async def test_full_queue_drops_frame(self, client, mock_session_manager):
+        self._make_session(mock_session_manager)
+        ws = AsyncMock()
+
+        # Pre-seed a full queue with a parked pump so put_nowait overflows.
+        client._input_queues["s1"] = asyncio.Queue(maxsize=1)
+        parked = asyncio.create_task(asyncio.sleep(999))
+        client._input_pumps["s1"] = parked
+        client._input_queues["s1"].put_nowait(FRAME_INPUT + b"a")
+
+        client._enqueue_session_input("s1", FRAME_INPUT + b"b", ws)
+
+        assert client._input_queues["s1"].qsize() == 1, (
+            "overflow frame must be dropped, not block the tunnel reader"
+        )
+        parked.cancel()
+        await asyncio.gather(parked, return_exceptions=True)
+
+    async def test_pump_survives_handler_exception(
+        self, client, mock_session_manager
+    ):
+        mock_session = self._make_session(mock_session_manager)
+        mock_session.write = AsyncMock(
+            side_effect=[RuntimeError("pty died"), None]
+        )
+        ws = AsyncMock()
+
+        client._enqueue_session_input("s1", FRAME_INPUT + b"boom", ws)
+        client._enqueue_session_input("s1", FRAME_INPUT + b"ok", ws)
+
+        await _wait_until(lambda: mock_session.write.await_count == 2)
+        pump = client._input_pumps["s1"]
+        assert not pump.done(), (
+            "a failing frame must not kill the session's input pump"
+        )
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+
+    async def test_cancelled_pump_self_cleans_registries(
+        self, client, mock_session_manager
+    ):
+        self._make_session(mock_session_manager)
+        ws = AsyncMock()
+
+        client._enqueue_session_input("s1", FRAME_INPUT + b"hi", ws)
+        pump = client._input_pumps["s1"]
+        # Yield to the event loop so the pump task starts and enters its
+        # ``try/while`` body before we cancel it — a task cancelled before
+        # it has ever been scheduled does not execute its coroutine at all
+        # (including ``finally``), so the self-clean assertion would be
+        # vacuously wrong without this yield.
+        await asyncio.sleep(0)
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+
+        assert "s1" not in client._input_pumps
+        assert "s1" not in client._input_queues
+
+    async def test_cancelled_pump_does_not_evict_successor_registration(
+        self, client, mock_session_manager
+    ):
+        """Sweep race: a late frame can recreate the pump between the
+        removed-session sweep's cancel+pop and the old pump's unwind; the
+        old pump's finally must not deregister the successor."""
+        self._make_session(mock_session_manager)
+        ws = AsyncMock()
+
+        client._enqueue_session_input("s1", FRAME_INPUT + b"hi", ws)
+        old_pump = client._input_pumps["s1"]
+        await asyncio.sleep(0)  # let the pump start so its finally will run
+
+        # Mirror the _watch_session_changes sweep: cancel + eager pop...
+        old_pump.cancel()
+        client._input_pumps.pop("s1", None)
+        client._input_queues.pop("s1", None)
+        # ...then a late frame recreates queue+pump before the unwind runs
+        # (enqueue is synchronous, so this happens before any loop turn).
+        client._enqueue_session_input("s1", FRAME_INPUT + b"late", ws)
+        successor = client._input_pumps["s1"]
+        successor_queue = client._input_queues["s1"]
+
+        await asyncio.gather(old_pump, return_exceptions=True)
+
+        assert client._input_pumps.get("s1") is successor, (
+            "old pump's unwind must not evict the successor pump"
+        )
+        assert client._input_queues.get("s1") is successor_queue, (
+            "old pump's unwind must not evict the successor queue"
+        )
+        successor.cancel()
+        await asyncio.gather(successor, return_exceptions=True)
+
+    async def test_handle_binary_routes_session_io_through_queue(
+        self, client, mock_session_manager
+    ):
+        mock_session = self._make_session(mock_session_manager)
+        ws = AsyncMock()
+
+        envelope = encode(CH_SESSION_IO, "s1", FRAME_INPUT + b"hi")
+        await client._handle_binary(envelope, ws)
+
+        assert "s1" in client._input_pumps, (
+            "CH_SESSION_IO must be dispatched via the per-session queue"
+        )
+        assert client._input_queues["s1"].maxsize == INPUT_QUEUE_MAXSIZE
+
+        await _wait_until(lambda: mock_session.write.await_count == 1)
+        mock_session.write.assert_awaited_once_with(b"hi")
+
+        pump = client._input_pumps["s1"]
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+
+    async def test_handle_binary_returns_while_submit_still_pending(
+        self, client, mock_session_manager
+    ):
+        release = asyncio.Event()
+        mock_session = self._make_session(mock_session_manager)
+
+        async def _blocked_submit(_data):
+            await release.wait()
+
+        mock_session.write_submit = AsyncMock(side_effect=_blocked_submit)
+        ws = AsyncMock()
+
+        envelope = encode(CH_SESSION_IO, "s1", FRAME_SUBMIT + b"echo hi")
+        # An inline await of the parked submit would hang here and trip
+        # the timeout: the tunnel reader must hand off to the pump.
+        await asyncio.wait_for(client._handle_binary(envelope, ws), timeout=1.0)
+
+        await _wait_until(lambda: mock_session.write_submit.await_count == 1)
+        assert not release.is_set()
+
+        release.set()
+        pump = client._input_pumps["s1"]
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+
+
+class TestWatchSessionChangesInputPumps:
+    async def test_removed_session_sweep_cancels_pump_and_clears_registries(
+        self, client, mock_event_bus
+    ):
+        ws = AsyncMock()
+        # Parked stand-in tasks: their finally blocks never run, so the
+        # registry pops asserted below can only come from the sweep itself.
+        gone_pump = asyncio.create_task(asyncio.sleep(999))
+        kept_pump = asyncio.create_task(asyncio.sleep(999))
+        client._input_pumps.update({"gone": gone_pump, "kept": kept_pump})
+        client._input_queues.update(
+            {"gone": asyncio.Queue(), "kept": asyncio.Queue()}
+        )
+
+        watcher = asyncio.create_task(client._watch_session_changes(ws))
+        events = mock_event_bus.subscribe.return_value
+        events.put_nowait(
+            AgentEvent(
+                type="sessions.changed",
+                payload={"sessions": [{"session_id": "kept"}]},
+            )
+        )
+
+        await _wait_until(lambda: "gone" not in client._input_pumps)
+        assert "gone" not in client._input_queues
+        await asyncio.gather(gone_pump, return_exceptions=True)
+        assert gone_pump.cancelled()
+
+        assert client._input_pumps.get("kept") is kept_pump
+        assert "kept" in client._input_queues
+        assert not kept_pump.cancelled()
+
+        for task in (watcher, kept_pump):
+            task.cancel()
+        await asyncio.gather(watcher, kept_pump, return_exceptions=True)
+
+
 # -- _send_heartbeat ------------------------------------------------------------
 
 
@@ -1239,17 +1563,24 @@ class TestCancelAllSubtasks:
         bridge_task = asyncio.create_task(_forever())
         client._bridges["sess-1"] = bridge_task
 
+        pump_task = asyncio.create_task(_forever())
+        client._input_pumps["sess-1"] = pump_task
+        client._input_queues["sess-1"] = asyncio.Queue()
+
         all_tasks = [
             client._heartbeat_task,
             client._event_fwd_task,
             client._sesslist_fwd_task,
             client._session_watch_task,
             bridge_task,
+            pump_task,
         ]
 
         client._cancel_all_subtasks()
 
         assert len(client._bridges) == 0
+        assert len(client._input_pumps) == 0
+        assert len(client._input_queues) == 0
 
         for t in all_tasks:
             with pytest.raises(asyncio.CancelledError):
@@ -2464,10 +2795,11 @@ class TestProxySessionsWireShape:
         assert len(body) == 2
 
         a, b = body
-        # Canonical 9-key shape, in any order — locks down session_to_wire_dict.
+        # Canonical 11-key shape, in any order — locks down session_to_wire_dict.
         expected_keys = {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
+            "attention", "exit_reason",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -2523,10 +2855,11 @@ class TestProxySessionsWireShape:
         body = result["body"]
         assert isinstance(body, dict)
 
-        # Canonical 9-key shape — the consolidation contract.
+        # Canonical 11-key shape — the consolidation contract.
         assert set(body.keys()) == {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
+            "attention", "exit_reason",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None

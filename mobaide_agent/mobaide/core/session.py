@@ -51,6 +51,17 @@ EVENT_QUEUE_MAXSIZE = 64
 # changes.
 TITLE_COALESCE_SECONDS = 0.5
 
+# Pause between writing submitted text and the CR that executes it. Ink TUIs
+# (Claude CLI) batch stdin per render tick and treat a CR arriving in the
+# same chunk as pasted content — only a CR landing as its own later read is
+# interpreted as the Enter key. 0.2s is 2x the proven post-Ctrl+C redraw
+# pause, with margin for ConPTY input coalescing on Windows hosts.
+SUBMIT_CR_DELAY_SECONDS = 0.2
+
+# Pause after Ctrl+C so the TUI cancels stale input and redraws a fresh
+# prompt before replacement text arrives.
+EXECUTE_CLEAR_DELAY_SECONDS = 0.1
+
 
 class TerminalSession:
     """Owns a single PTY session with async I/O, scrollback, ring buffer,
@@ -330,6 +341,32 @@ class TerminalSession:
         self.clear_attention()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
+
+    async def write_submit(self, data: bytes) -> None:
+        """Write ``data`` to the PTY, pause, then write CR as a separate write.
+
+        The CR must NOT travel in the same write as the text: Ink TUIs
+        (Claude CLI) batch each stdin chunk and treat an embedded CR as
+        pasted content, so ``text + "\\r"`` in one chunk fills the composer
+        without submitting. A bare CR arriving as its own read after
+        ``SUBMIT_CR_DELAY_SECONDS`` is parsed as a discrete Enter keypress.
+
+        Awaited inline by the frame dispatchers, so frames for this session
+        queue behind the delay — that ordering is intentional: bytes typed
+        right after a submit logically follow the Enter.
+
+        Callers guard empty ``data``; an empty submit is dropped upstream so
+        a buggy client cannot fire a bare Enter on a stale composer.
+        """
+        await self.write(data)
+        await asyncio.sleep(SUBMIT_CR_DELAY_SECONDS)
+        await self.write(b"\r")
+
+    async def write_execute(self, data: bytes) -> None:
+        """Ctrl+C to cancel stale input, pause for the redraw, then submit ``data``."""
+        await self.write(b"\x03")
+        await asyncio.sleep(EXECUTE_CLEAR_DELAY_SECONDS)
+        await self.write_submit(data)
 
     async def resize(self, rows: int, cols: int) -> None:
         """Resize the PTY terminal."""

@@ -3,12 +3,17 @@ from __future__ import annotations
 import asyncio
 import threading
 from typing import cast
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
 from mobaide.core.models import SessionConfig, SessionEvent, SessionState
 from mobaide.core.pty_backend import PtyBackend
-from mobaide.core.session import TerminalSession
+from mobaide.core.session import (
+    EXECUTE_CLEAR_DELAY_SECONDS,
+    SUBMIT_CR_DELAY_SECONDS,
+    TerminalSession,
+)
 from tests.conftest import IS_WINDOWS
 
 
@@ -546,3 +551,102 @@ class TestTerminalSessionAttention:
         await session.write(b"ls\n")
         assert _drain_attention_events(session) == []
         assert backend._writes == [b"ls\n"]
+
+
+@pytest.mark.timeout(15)
+class TestWriteSubmitAndExecute:
+    """The CR must land as its own delayed PTY write — Ink TUIs treat a CR
+    inside the same stdin chunk as pasted content, not the Enter key."""
+
+    async def test_write_submit_writes_payload_then_cr(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _attention_config(), backend=cast(PtyBackend, backend),
+        )
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep_mock:
+            await session.write_submit(b"hello")
+
+        assert backend._writes == [b"hello", b"\r"]
+        sleep_mock.assert_awaited_once_with(SUBMIT_CR_DELAY_SECONDS)
+
+    async def test_write_execute_writes_ctrl_c_then_payload_then_cr(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _attention_config(), backend=cast(PtyBackend, backend),
+        )
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep_mock:
+            await session.write_execute(b"ls -la")
+
+        assert backend._writes == [b"\x03", b"ls -la", b"\r"]
+        assert sleep_mock.await_args_list == [
+            call(EXECUTE_CLEAR_DELAY_SECONDS),
+            call(SUBMIT_CR_DELAY_SECONDS),
+        ]
+
+    async def test_write_submit_sleeps_between_payload_and_cr(self) -> None:
+        """The pause must land BETWEEN the two writes — back-to-back writes
+        with the sleep elsewhere would let Ink coalesce payload and CR into
+        one read, reintroducing the paste-instead-of-Enter bug."""
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _attention_config(), backend=cast(PtyBackend, backend),
+        )
+
+        events: list[tuple[str, object]] = []
+        scripted_write = backend.write
+
+        def _recording_write(data: bytes) -> None:
+            events.append(("write", data))
+            scripted_write(data)
+
+        backend.write = _recording_write  # type: ignore[method-assign]
+        sleep_mock = AsyncMock(
+            side_effect=lambda delay: events.append(("sleep", delay))
+        )
+
+        with patch("mobaide.core.session.asyncio.sleep", sleep_mock):
+            await session.write_submit(b"hello")
+
+        assert events == [
+            ("write", b"hello"),
+            ("sleep", SUBMIT_CR_DELAY_SECONDS),
+            ("write", b"\r"),
+        ]
+
+    async def test_write_execute_sleeps_between_each_write(self) -> None:
+        """Both pauses must interleave with the writes: the TUI needs the
+        redraw pause after Ctrl+C before text arrives, and the submit pause
+        after the text before the CR."""
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _attention_config(), backend=cast(PtyBackend, backend),
+        )
+
+        events: list[tuple[str, object]] = []
+        scripted_write = backend.write
+
+        def _recording_write(data: bytes) -> None:
+            events.append(("write", data))
+            scripted_write(data)
+
+        backend.write = _recording_write  # type: ignore[method-assign]
+        sleep_mock = AsyncMock(
+            side_effect=lambda delay: events.append(("sleep", delay))
+        )
+
+        with patch("mobaide.core.session.asyncio.sleep", sleep_mock):
+            await session.write_execute(b"ls -la")
+
+        assert events == [
+            ("write", b"\x03"),
+            ("sleep", EXECUTE_CLEAR_DELAY_SECONDS),
+            ("write", b"ls -la"),
+            ("sleep", SUBMIT_CR_DELAY_SECONDS),
+            ("write", b"\r"),
+        ]

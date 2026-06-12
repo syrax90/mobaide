@@ -13,7 +13,8 @@ import okio.ByteString.Companion.toByteString
  * |------|------|-----------|--------------------------------------------------------|
  * | 0x6f | 'o'  | S->C      | raw PTY output bytes (replay chunk or live)            |
  * | 0x69 | 'i'  | C->S      | raw input bytes (CR / Ctrl / Esc / UTF-8)              |
- * | 0x78 | 'x'  | C->S      | execute: server Ctrl+C clears, then writes             |
+ * | 0x78 | 'x'  | C->S      | execute: server Ctrl+C clears, types payload, then CR  |
+ * | 0x6d | 'm'  | C->S      | submit: server writes payload, pauses, then writes CR  |
  * | 0x72 | 'r'  | C->S      | resize: u16 rows + u16 cols (big-endian)               |
  * | 0x73 | 's'  | S->C      | state: UTF-8 JSON {status, pid?, exit_code?}           |
  * | 0x62 | 'b'  | S->C      | replay-buffer start marker (empty payload)             |
@@ -29,6 +30,7 @@ object TerminalProtocol {
     const val TYPE_OUTPUT: Byte = 'o'.code.toByte()
     const val TYPE_INPUT: Byte = 'i'.code.toByte()
     const val TYPE_EXECUTE: Byte = 'x'.code.toByte()
+    const val TYPE_SUBMIT: Byte = 'm'.code.toByte()
     const val TYPE_RESIZE: Byte = 'r'.code.toByte()
     const val TYPE_STATE: Byte = 's'.code.toByte()
     const val TYPE_REPLAY: Byte = 'b'.code.toByte()
@@ -42,10 +44,21 @@ object TerminalProtocol {
         return out.toByteString()
     }
 
-    /** Wrap a complete command in an `'x'` (execute) frame; the server clears stale PTY input before writing the payload. */
+    /** Wrap a complete command in an `'x'` (execute) frame; the server clears stale PTY
+     *  input with Ctrl+C, writes the payload, then submits it with a delayed CR. */
     fun encodeExecute(bytes: ByteArray): ByteString {
         val out = ByteArray(bytes.size + 1)
         out[0] = TYPE_EXECUTE
+        System.arraycopy(bytes, 0, out, 1, bytes.size)
+        return out.toByteString()
+    }
+
+    /** Wrap composer text in an `'m'` (submit) frame; the server writes the payload, pauses,
+     *  then writes CR as a separate PTY write so Ink TUIs parse it as a discrete Enter
+     *  instead of pasted content. */
+    fun encodeSubmit(bytes: ByteArray): ByteString {
+        val out = ByteArray(bytes.size + 1)
+        out[0] = TYPE_SUBMIT
         System.arraycopy(bytes, 0, out, 1, bytes.size)
         return out.toByteString()
     }

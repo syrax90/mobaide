@@ -255,16 +255,20 @@ class TerminalViewModel @Inject constructor(
         // carry raw ESC bytes; the user owns both ends of the session so no privilege
         // boundary is crossed. Strip ESC[201~ from `text` here if a shared-session
         // feature is ever added that lets one user paste into another's session.
+        //
+        // No trailing CR here: a CR in the same stdin chunk as the text is treated by
+        // Ink as pasted content, not Enter. The 'm' (submit) frame makes the server
+        // write the payload, pause, then write CR as a separate PTY write.
         val body = if ('\n' in text) {
-            "[200~$text[201~\r"
+            "[200~$text[201~"
         } else {
-            text + "\r"
+            text
         }
         // Prepend the line clear so this message replaces — never concatenates onto —
         // any stale text already on the PTY's prompt line (e.g. from a double-tap copy).
         val payload = CLEAR_INPUT_LINE + body
         sendChannel.trySend(
-            TerminalProtocol.encodeInput(payload.toByteArray(Charsets.UTF_8))
+            TerminalProtocol.encodeSubmit(payload.toByteArray(Charsets.UTF_8))
         )
         _inputText.value = TextFieldValue("")
     }
@@ -281,7 +285,8 @@ class TerminalViewModel @Inject constructor(
      * When [isCurrentInput] is true the PTY already holds [text] as its active input —
      * only a bare CR is needed. When false, the tap is on a historical row and the PTY's
      * input buffer holds something else, so an 'x' (execute) frame is used: the server
-     * sends Ctrl+C to clear, pauses for the TUI to redraw, then writes [text] + CR.
+     * sends Ctrl+C to clear, pauses for the TUI to redraw, writes [text], then submits
+     * it with a delayed CR.
      *
      * Gated on [ConnectionState.Live] so a tap during reconnect or replay-buffer
      * playback does not queue a send that would land in an unexpected state.
@@ -292,7 +297,7 @@ class TerminalViewModel @Inject constructor(
         val frame = if (isCurrentInput) {
             TerminalProtocol.encodeInput("\r".toByteArray(Charsets.UTF_8))
         } else {
-            TerminalProtocol.encodeExecute((text + "\r").toByteArray(Charsets.UTF_8))
+            TerminalProtocol.encodeExecute(text.toByteArray(Charsets.UTF_8))
         }
         sendChannel.trySend(frame)
     }

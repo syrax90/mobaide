@@ -32,7 +32,8 @@ router = APIRouter()
 FRAME_OUTPUT = b"o"      # 0x6f  S->C  raw PTY bytes
 FRAME_INPUT = b"i"       # 0x69  C->S  raw input bytes
 FRAME_RESIZE = b"r"      # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
-FRAME_EXECUTE = b"x"     # 0x78  C->S  clear-then-write: Ctrl+C + pause + payload
+FRAME_EXECUTE = b"x"     # 0x78  C->S  clear-then-submit: Ctrl+C + pause + payload + pause + CR
+FRAME_SUBMIT = b"m"      # 0x6d  C->S  submit: payload + pause + CR (discrete Enter)
 FRAME_STATE = b"s"       # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
 FRAME_REPLAY = b"b"      # 0x62  S->C  marker: ring-buffer replay starts next frame
 FRAME_REPLAY_END = b"e"  # 0x65  S->C  marker: ring-buffer replay finished; live frames follow
@@ -176,11 +177,12 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                     counters["bytes_in"] += len(payload)
                     counters["msg_count"] += 1
                     if payload:
-                        # Ctrl+C cancels stale input; brief pause lets the TUI
-                        # redraw a fresh prompt before the new command arrives.
-                        await session.write(b"\x03")
-                        await asyncio.sleep(0.1)
-                        await session.write(payload)
+                        await session.write_execute(payload)
+                elif frame_type == FRAME_SUBMIT:
+                    counters["bytes_in"] += len(payload)
+                    counters["msg_count"] += 1
+                    if payload:
+                        await session.write_submit(payload)
                 elif frame_type == FRAME_RESIZE:
                     if len(payload) >= 4:
                         rows, cols = struct.unpack(">HH", payload[:4])
