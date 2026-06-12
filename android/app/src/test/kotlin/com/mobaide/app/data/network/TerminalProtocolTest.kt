@@ -85,6 +85,37 @@ class TerminalProtocolTest {
         assertEquals(0x00.toByte(), frame[3])
     }
 
+    @Test
+    fun encodeSubmit_prependsTypeByte_andPreservesPayload() {
+        val payload = byteArrayOf(0x68, 0x69) // "hi" — no CR; the server appends it
+        val frame = TerminalProtocol.encodeSubmit(payload).toByteArray()
+
+        assertEquals("frame length must be payload + 1 type byte", 3, frame.size)
+        assertEquals("first byte must be 'm'", 'm'.code.toByte(), frame[0])
+        assertArrayEquals(
+            "remaining bytes must match payload verbatim",
+            payload,
+            frame.copyOfRange(1, frame.size),
+        )
+    }
+
+    @Test
+    fun encodeSubmit_emptyPayload_producesSingleTypeByte() {
+        val frame = TerminalProtocol.encodeSubmit(ByteArray(0)).toByteArray()
+        assertArrayEquals(byteArrayOf('m'.code.toByte()), frame)
+    }
+
+    @Test
+    fun encodeSubmit_preservesHighBitBytes() {
+        val payload = byteArrayOf(0xFF.toByte(), 0x80.toByte(), 0x00)
+        val frame = TerminalProtocol.encodeSubmit(payload).toByteArray()
+
+        assertEquals('m'.code.toByte(), frame[0])
+        assertEquals(0xFF.toByte(), frame[1])
+        assertEquals(0x80.toByte(), frame[2])
+        assertEquals(0x00.toByte(), frame[3])
+    }
+
     // ---- encodeResize -------------------------------------------------------
 
     @Test
@@ -184,6 +215,13 @@ class TerminalProtocolTest {
         // 'x' is a client->server type (execute); decode must not accept it.
         val executeWire = byteArrayOf('x'.code.toByte(), 0x68, 0x69, 0x0d).toByteString()
         assertNull(TerminalProtocol.decode(executeWire))
+    }
+
+    @Test
+    fun decode_submitFrame_returnsNull_becauseDecodeIsServerToClientOnly() {
+        // 'm' is a client->server type (submit); decode must not accept it.
+        val submitWire = byteArrayOf('m'.code.toByte(), 0x68, 0x69).toByteString()
+        assertNull(TerminalProtocol.decode(submitWire))
     }
 
     @Test

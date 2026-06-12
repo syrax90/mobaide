@@ -98,9 +98,15 @@ FRAME_OUTPUT = b"o"
 FRAME_INPUT = b"i"
 FRAME_RESIZE = b"r"
 FRAME_EXECUTE = b"x"
+FRAME_SUBMIT = b"m"
 FRAME_STATE = b"s"
 FRAME_REPLAY = b"b"
 FRAME_REPLAY_END = b"e"
+
+# Bound on each session's inbound PTY-frame queue. Input is human-rate;
+# the bound only guards memory if a PTY write wedges. Overflow drops the
+# frame with a warning (mirrors the autoscan inbox policy).
+INPUT_QUEUE_MAXSIZE = 256
 
 _EVENT_TO_STATUS = {
     "started": "running",
@@ -222,6 +228,16 @@ class RelayClient:
 
         # Session bridge state: session_id -> bridge pump task.
         self._bridges: dict[str, asyncio.Task] = {}
+
+        # Inbound PTY-frame dispatch: session_id -> (queue, consumer task).
+        # CH_SESSION_IO frames must not be awaited inline in the tunnel
+        # reader — write_submit/write_execute sleep 0.2-0.3 s, and an inline
+        # await would head-of-line block every other session and all
+        # CH_CONTROL traffic. One FIFO queue + one consumer per session
+        # keeps the per-session ordering invariant (raw input can never
+        # overtake a queued submit) while the tunnel loop stays non-blocking.
+        self._input_queues: dict[str, asyncio.Queue[bytes]] = {}
+        self._input_pumps: dict[str, asyncio.Task] = {}
 
         # Per-mobile auto-scan subscriptions: subscription_id -> stream task.
         # Each mobile device opens its own /relay/ws/autoscan/{agent_id}
@@ -454,7 +470,7 @@ class RelayClient:
             return
 
         if channel == CH_SESSION_IO:
-            await self._handle_session_input(session_id, payload, ws)
+            self._enqueue_session_input(session_id, payload, ws)
         elif channel == CH_AUTOSCAN:
             self._deliver_autoscan_inbound(session_id, payload)
         elif channel == CH_CONTROL:
@@ -1541,6 +1557,69 @@ class RelayClient:
             }
         return {"status": 200, "body": items}
 
+    def _enqueue_session_input(
+        self,
+        session_id: str,
+        payload: bytes,
+        ws: ClientConnection,
+    ) -> None:
+        """Queue an inbound CH_SESSION_IO frame for the session's input pump.
+
+        Never blocks the tunnel reader: the pump absorbs the submit/execute
+        write delays so other sessions and CH_CONTROL traffic keep flowing.
+        On overflow the frame is dropped with a warning.
+        """
+        queue = self._input_queues.get(session_id)
+        if queue is None:
+            queue = asyncio.Queue(maxsize=INPUT_QUEUE_MAXSIZE)
+            self._input_queues[session_id] = queue
+            self._input_pumps[session_id] = asyncio.create_task(
+                self._session_input_pump(session_id, queue, ws),
+                name=f"relay-input-{session_id}",
+            )
+        try:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            logger.warning(
+                "relay.input_queue_full session_id=%s — dropping frame",
+                session_id,
+            )
+
+    async def _session_input_pump(
+        self,
+        session_id: str,
+        queue: asyncio.Queue[bytes],
+        ws: ClientConnection,
+    ) -> None:
+        """Consume queued PTY frames for one session, strictly in order.
+
+        A failing frame (e.g. the PTY dies during the delayed-CR window) is
+        logged and skipped — it must neither kill the pump nor tear down the
+        relay tunnel.
+        """
+        try:
+            while True:
+                payload = await queue.get()
+                try:
+                    await self._handle_session_input(session_id, payload, ws)
+                except Exception as exc:
+                    logger.warning(
+                        "relay.session_input_failed session_id=%s: %s",
+                        session_id,
+                        exc,
+                    )
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # Deregister only our own entries. A successor pump may already
+            # be registered for this session (late frame arriving between the
+            # removed-session sweep's cancel+pop and this unwind); popping
+            # unconditionally would orphan it on an unreachable queue.
+            if self._input_queues.get(session_id) is queue:
+                self._input_queues.pop(session_id, None)
+            if self._input_pumps.get(session_id) is asyncio.current_task():
+                self._input_pumps.pop(session_id, None)
+
     async def _handle_session_input(
         self,
         session_id: str,
@@ -1567,9 +1646,10 @@ class RelayClient:
                 await session.write(frame_data)
         elif frame_type == FRAME_EXECUTE:
             if frame_data:
-                await session.write(b"\x03")
-                await asyncio.sleep(0.1)
-                await session.write(frame_data)
+                await session.write_execute(frame_data)
+        elif frame_type == FRAME_SUBMIT:
+            if frame_data:
+                await session.write_submit(frame_data)
         elif frame_type == FRAME_RESIZE:
             if len(frame_data) >= 4:
                 rows, cols = struct.unpack(">HH", frame_data[:4])
@@ -1738,6 +1818,16 @@ class RelayClient:
                         task = self._bridges.pop(sid, None)
                         if task and not task.done():
                             task.cancel()
+
+                for sid in list(self._input_pumps):
+                    if sid not in current_ids:
+                        pump = self._input_pumps.get(sid)
+                        if pump and not pump.done():
+                            pump.cancel()
+                        # The pump's finally block pops both dicts; pop here
+                        # too so a not-yet-scheduled pump cannot linger.
+                        self._input_pumps.pop(sid, None)
+                        self._input_queues.pop(sid, None)
         except asyncio.CancelledError:
             pass
         finally:
@@ -1805,6 +1895,11 @@ class RelayClient:
             if not task.done():
                 task.cancel()
         self._bridges.clear()
+        for task in list(self._input_pumps.values()):
+            if not task.done():
+                task.cancel()
+        self._input_pumps.clear()
+        self._input_queues.clear()
         for task in list(self._autoscan_streams.values()):
             if not task.done():
                 task.cancel()

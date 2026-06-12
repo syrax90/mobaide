@@ -299,10 +299,13 @@ class TestInputFrame:
 
 
 class TestExecuteFrame:
-    def test_execute_frame_sends_ctrl_c_then_payload(self, test_client, auth_token):
-        """An 'x' frame must write Ctrl+C first, pause, then write the
-        payload — two separate PTY writes so the TUI cancels stale input
-        and shows a fresh prompt before the new command arrives."""
+    def test_execute_frame_sends_ctrl_c_then_payload_then_cr(
+        self, test_client, auth_token
+    ):
+        """An 'x' frame must write Ctrl+C, pause, write the payload, pause,
+        then write CR — three separate PTY writes so the TUI cancels stale
+        input, accepts the replacement text, and parses the CR as a discrete
+        Enter rather than pasted content."""
         sid = _create_session(test_client, auth_token)
 
         manager = test_client.app.state.session_manager
@@ -320,19 +323,21 @@ class TestExecuteFrame:
                 f"/ws/session/{sid}?token={auth_token}",
             ) as ws:
                 _drain_through_replay_end(ws)
-                payload = b"/stats\r"
+                payload = b"/stats"
                 ws.send_bytes(b"x" + payload)
                 time.sleep(1.0)
         finally:
             session._backend.write = original_write  # type: ignore[method-assign]
 
-        assert len(captured) == 2, (
-            f"expected 2 writes (Ctrl+C + command), got {len(captured)}"
+        assert len(captured) == 3, (
+            f"expected 3 writes (Ctrl+C + command + CR), got {len(captured)}"
         )
         # First write: Ctrl+C to cancel stale input
         assert captured[0] == b"\x03"
         # Second write: the actual command (after the pause)
         assert captured[1] == payload
+        # Third write: the CR that submits it, as its own delayed write
+        assert captured[2] == b"\r"
 
     def test_execute_frame_empty_payload_does_not_write(self, test_client, auth_token):
         """An 'x' frame with no payload must NOT write anything to the PTY.
@@ -365,5 +370,73 @@ class TestExecuteFrame:
 
         assert captured == [], (
             "empty execute frame must not trigger any write, "
+            f"but got {len(captured)} write(s)"
+        )
+
+
+class TestSubmitFrame:
+    def test_submit_frame_writes_payload_then_cr(self, test_client, auth_token):
+        """An 'm' frame must write the payload, pause, then write CR as a
+        separate PTY write. Ink TUIs (Claude CLI) treat a CR embedded in the
+        same stdin chunk as pasted content — only a CR arriving as its own
+        later read registers as the Enter key."""
+        sid = _create_session(test_client, auth_token)
+
+        manager = test_client.app.state.session_manager
+        session = manager._sessions[sid]
+        captured: list[bytes] = []
+        original_write = session._backend.write
+
+        def _capture(data):
+            captured.append(data)
+
+        session._backend.write = _capture  # type: ignore[method-assign]
+
+        try:
+            with test_client.websocket_connect(
+                f"/ws/session/{sid}?token={auth_token}",
+            ) as ws:
+                _drain_through_replay_end(ws)
+                payload = b"\x01\x0bhello world"
+                ws.send_bytes(b"m" + payload)
+                time.sleep(1.0)
+        finally:
+            session._backend.write = original_write  # type: ignore[method-assign]
+
+        assert len(captured) == 2, (
+            f"expected 2 writes (payload + CR), got {len(captured)}"
+        )
+        # First write: the text exactly as sent (clear prefix included)
+        assert captured[0] == payload
+        # Second write: the CR that submits it, as its own delayed write
+        assert captured[1] == b"\r"
+
+    def test_submit_frame_empty_payload_does_not_write(self, test_client, auth_token):
+        """An 'm' frame with no payload must NOT write anything to the PTY —
+        a bare Enter could submit whatever stale text sits on the composer."""
+        sid = _create_session(test_client, auth_token)
+
+        manager = test_client.app.state.session_manager
+        session = manager._sessions[sid]
+        captured: list[bytes] = []
+        original_write = session._backend.write
+
+        def _capture(data):
+            captured.append(data)
+
+        session._backend.write = _capture  # type: ignore[method-assign]
+
+        try:
+            with test_client.websocket_connect(
+                f"/ws/session/{sid}?token={auth_token}",
+            ) as ws:
+                _drain_through_replay_end(ws)
+                ws.send_bytes(b"m")
+                time.sleep(0.5)
+        finally:
+            session._backend.write = original_write  # type: ignore[method-assign]
+
+        assert captured == [], (
+            "empty submit frame must not trigger any write, "
             f"but got {len(captured)} write(s)"
         )

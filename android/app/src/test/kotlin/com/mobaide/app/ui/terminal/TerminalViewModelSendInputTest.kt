@@ -32,16 +32,18 @@ import org.junit.Test
  * Unit tests for [TerminalViewModel]'s send paths.
  *
  * [TerminalViewModel.sendInput] prepends a Ctrl+A + Ctrl+K line clear (0x01, 0x0B) to
- * the fresh typed text + CR, then encodes the whole buffer as a single 'i' (input)
- * frame — the clear wipes stale prompt text so the message replaces (never concatenates
- * onto) it, with no SIGINT so a running task is never interrupted.
+ * the fresh typed text, then encodes the buffer as a single 'm' (submit) frame — the
+ * clear wipes stale prompt text so the message replaces (never concatenates onto) it,
+ * with no SIGINT so a running task is never interrupted. No CR travels with the text:
+ * the server submits with a delayed CR as its own PTY write, because Ink TUIs treat a
+ * CR inside the same stdin chunk as pasted content rather than the Enter key.
  *
  * [TerminalViewModel.sendTappedRow] is the "tap `❯` row = Enter"
  * entrypoint; it dispatches on its `isCurrentInput` flag:
  *
  * - `isCurrentInput = true`  → bare CR via 'i' frame (PTY already holds the text).
- * - `isCurrentInput = false` → `text + "\r"` via 'x' (execute) frame so the server
- *   Ctrl+C-clears stale input before writing.
+ * - `isCurrentInput = false` → `text` via 'x' (execute) frame so the server
+ *   Ctrl+C-clears stale input, writes the text, then submits with a delayed CR.
  *
  * [TerminalViewModel.sendTappedRow] also no-ops when the socket is not Live, to avoid
  * queueing frames during reconnect / replay-buffer playback.
@@ -97,7 +99,7 @@ class TerminalViewModelSendInputTest {
     private val clearPrefix = byteArrayOf(0x01, 0x0B)
 
     @Test
-    fun sendInput_freshText_sendsTextPlusCR() {
+    fun sendInput_freshText_sendsTextWithoutCR() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
@@ -105,13 +107,14 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            clearPrefix + "hello\r".toByteArray(Charsets.UTF_8),
+            "no CR may travel with the text — the server appends it as a delayed write",
+            clearPrefix + "hello".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
 
     @Test
-    fun sendInput_freshText_usesInputFrame() {
+    fun sendInput_freshText_usesSubmitFrame() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
@@ -119,14 +122,14 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals(
-            "fresh text must use 'i' (input) frame",
-            'i'.code.toByte(),
+            "fresh text must use 'm' (submit) frame so the server appends the delayed CR",
+            'm'.code.toByte(),
             frameTypeOf(captured.captured),
         )
     }
 
     @Test
-    fun sendInput_freshText_emptyString_sendsClearThenCR() {
+    fun sendInput_freshText_emptyString_sendsClearOnly() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
@@ -134,8 +137,8 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "empty composer send still clears the line, then submits a bare CR",
-            clearPrefix + "\r".toByteArray(Charsets.UTF_8),
+            "empty composer send still clears the line; the server appends the CR",
+            clearPrefix,
             payloadOf(captured.captured),
         )
     }
@@ -149,7 +152,7 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            clearPrefix + "é\r".toByteArray(Charsets.UTF_8),
+            clearPrefix + "é".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
@@ -164,13 +167,13 @@ class TerminalViewModelSendInputTest {
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
             "multi-line input must be wrapped with xterm bracketed-paste markers",
-            clearPrefix + "[200~line1\nline2[201~\r".toByteArray(Charsets.UTF_8),
+            clearPrefix + "[200~line1\nline2[201~".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
 
     @Test
-    fun sendInput_multilineText_usesInputFrame() {
+    fun sendInput_multilineText_usesSubmitFrame() {
         val vm = createViewModel()
         val captured = slot<ByteString>()
 
@@ -178,8 +181,8 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals(
-            "multi-line input must still use 'i' (input) frame, not a new frame type",
-            'i'.code.toByte(),
+            "multi-line input must use 'm' (submit) frame so the server appends the delayed CR",
+            'm'.code.toByte(),
             frameTypeOf(captured.captured),
         )
     }
@@ -208,14 +211,10 @@ class TerminalViewModelSendInputTest {
             payload.copyOfRange(2, 8),
         )
         assertArrayEquals(
-            "end marker must be ESC [ 2 0 1 ~  (0x1B 0x5B 0x32 0x30 0x31 0x7E)",
+            "end marker must be ESC [ 2 0 1 ~  (0x1B 0x5B 0x32 0x30 0x31 0x7E) and " +
+                "must terminate the payload — the submitting CR is the server's job",
             endMarker,
-            payload.copyOfRange(payload.size - 7, payload.size - 1),
-        )
-        assertEquals(
-            "payload must end with CR after the close marker",
-            '\r'.code.toByte(),
-            payload[payload.size - 1],
+            payload.copyOfRange(payload.size - 6, payload.size),
         )
     }
 
@@ -229,7 +228,7 @@ class TerminalViewModelSendInputTest {
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
             "single-line input (no LF) must NOT be wrapped — markers would surface on non-Claude shells",
-            clearPrefix + "single line\r".toByteArray(Charsets.UTF_8),
+            clearPrefix + "single line".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
@@ -308,7 +307,7 @@ class TerminalViewModelSendInputTest {
     }
 
     @Test
-    fun sendTappedRow_historicalInput_sendsTextPlusCR() = runTest {
+    fun sendTappedRow_historicalInput_sendsTextWithoutCR() = runTest {
         val vm = createViewModel()
         goLive()
         val captured = slot<ByteString>()
@@ -317,8 +316,8 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertArrayEquals(
-            "historical-row tap must send the tapped text + CR",
-            "/help\r".toByteArray(Charsets.UTF_8),
+            "historical-row tap must send the tapped text without CR — the server appends it",
+            "/help".toByteArray(Charsets.UTF_8),
             payloadOf(captured.captured),
         )
     }
@@ -333,7 +332,7 @@ class TerminalViewModelSendInputTest {
 
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals(
-            "historical-row tap must use 'x' (execute) frame so server Ctrl+C-clears stale input",
+            "historical-row tap must use 'x' (execute) frame: server Ctrl+C-clears, types, submits",
             'x'.code.toByte(),
             frameTypeOf(captured.captured),
         )
