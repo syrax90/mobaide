@@ -415,7 +415,7 @@ class _FakeManager:
 
     def __init__(self) -> None:
         self.delete_branch_calls: list[tuple[str, str, bool]] = []
-        self.remove_worktree_calls: list[tuple[str, str]] = []
+        self.remove_worktree_calls: list[tuple[str, str, bool]] = []
         self.delete_branch_error: Exception | None = None
         self.remove_worktree_error: Exception | None = None
 
@@ -426,8 +426,10 @@ class _FakeManager:
         if self.delete_branch_error is not None:
             raise self.delete_branch_error
 
-    async def remove_worktree(self, project_root: str, path: str) -> None:
-        self.remove_worktree_calls.append((project_root, path))
+    async def remove_worktree(
+        self, project_root: str, path: str, *, force: bool = False,
+    ) -> None:
+        self.remove_worktree_calls.append((project_root, path, force))
         if self.remove_worktree_error is not None:
             raise self.remove_worktree_error
 
@@ -553,7 +555,7 @@ class TestDeleteGitItems:
             event_bus=bus,
             actor="tester",
         )
-        assert manager.remove_worktree_calls == [(str(tmp_path), wt_path)]
+        assert manager.remove_worktree_calls == [(str(tmp_path), wt_path, False)]
         assert manager.delete_branch_calls == [(str(tmp_path), "feature/x", False)]
         assert response.results[0].ok is True
         assert bus.published == [("git.changed", {"project_name": "alpha"})]
@@ -582,6 +584,58 @@ class TestDeleteGitItems:
         assert response.results[0].ok is False
         assert response.results[0].error == "locked"
         assert bus.published == []
+
+    async def test_orphan_worktree_dirty_returns_force_required(self, tmp_path):
+        # A dirty worktree (modified/untracked files) must map to force_required
+        # so the client can offer a force-delete confirmation, mirroring the
+        # unmerged-branch flow.
+        manager = _FakeManager()
+        manager.remove_worktree_error = WorktreeRemoveError(
+            path="/repo/wt/x",
+            stderr="fatal: '/repo/wt/x' contains modified or untracked files",
+            dirty=True,
+        )
+        bus = _FakeBus()
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(kind="orphan_worktree", worktree_path="/repo/wt/x"),
+        ])
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=bus,
+            actor="tester",
+        )
+        assert response.results[0].ok is False
+        assert response.results[0].error == "force_required"
+        assert bus.published == []
+
+    async def test_orphan_worktree_force_forwarded_to_manager(self, tmp_path):
+        # force=True on the request must reach remove_worktree so the retry
+        # actually passes --force to git.
+        manager = _FakeManager()
+        bus = _FakeBus()
+        request = GitDeleteRequest(items=[
+            GitDeleteItem(
+                kind="orphan_worktree", worktree_path="/repo/wt/x", force=True,
+            ),
+        ])
+        response = await delete_git_items(
+            request,
+            project_name="alpha",
+            project_root=str(tmp_path),
+            manager=manager,
+            session_manager=None,
+            autoscan_manager=None,
+            event_bus=bus,
+            actor="tester",
+        )
+        assert manager.remove_worktree_calls == [(str(tmp_path), "/repo/wt/x", True)]
+        assert response.results[0].ok is True
+        assert bus.published == [("git.changed", {"project_name": "alpha"})]
 
     async def test_invalid_branch_only_payload_returns_invalid(self, tmp_path):
         manager = _FakeManager()
@@ -782,3 +836,47 @@ class TestGitRouterEndpoints:
         assert "busy_by" in detail
         assert any(h["kind"] == "session" for h in detail["busy_by"])
         assert any(h.get("session_id") == "s-busy" for h in detail["busy_by"])
+
+    async def test_post_items_delete_dirty_worktree_force_required_then_force(
+        self, client_git, auth_headers_g, real_repo,
+    ):
+        # An untracked file makes ``git worktree remove`` refuse without
+        # --force. The first (force=false) attempt must surface force_required;
+        # retrying the same item with force=true must remove the worktree and
+        # delete the branch in one shot.
+        topic_wt = os.path.join(real_repo, "wt", "topic")
+        with open(os.path.join(topic_wt, "scratch.txt"), "w", encoding="utf-8") as fh:
+            fh.write("uncommitted work")
+
+        item = {
+            "kind": "branch_with_worktree",
+            "branch": "topic",
+            "worktree_path": topic_wt,
+        }
+        resp = await client_git.post(
+            "/api/projects/alpha/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [item]},
+        )
+        assert resp.status_code == 200, resp.text
+        result = resp.json()["results"][0]
+        assert result["ok"] is False
+        assert result["error"] == "force_required"
+        assert os.path.exists(topic_wt)
+
+        resp2 = await client_git.post(
+            "/api/projects/alpha/git/items:delete",
+            headers=auth_headers_g,
+            json={"items": [{**item, "force": True}]},
+        )
+        assert resp2.status_code == 200, resp2.text
+        assert resp2.json()["results"][0]["ok"] is True
+
+        # The worktree and its branch must both be gone from the listing.
+        resp3 = await client_git.get(
+            "/api/projects/alpha/git/items",
+            headers=auth_headers_g,
+        )
+        items = resp3.json()["items"]
+        assert all(i.get("worktree_path") != topic_wt for i in items)
+        assert all(i.get("branch") != "topic" for i in items)

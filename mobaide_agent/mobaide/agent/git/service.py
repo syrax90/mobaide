@@ -219,6 +219,20 @@ def _result(
     )
 
 
+def _worktree_error_code(exc: WorktreeRemoveError) -> str:
+    """Map a worktree-remove failure to a wire error code.
+
+    A dirty worktree (modified/untracked files) becomes ``force_required`` so
+    the client offers a force-delete confirmation, mirroring the unmerged-branch
+    flow; a locked worktree stays ``locked``; anything else is ``error``.
+    """
+    if exc.dirty:
+        return "force_required"
+    if any(p in exc.stderr for p in _LOCKED_PATTERNS):
+        return "locked"
+    return "error"
+
+
 async def _delete_one(
     item: GitDeleteItem,
     ctx: _DeleteContext,
@@ -252,14 +266,13 @@ async def _delete_one(
         if not item.worktree_path:
             return _result(kind=item.kind, target="", ok=False, error="invalid"), False
         try:
-            await ctx.manager.remove_worktree(ctx.project_root, item.worktree_path)
-        except WorktreeRemoveError as exc:
-            err_code = (
-                "locked" if any(p in exc.stderr for p in _LOCKED_PATTERNS) else "error"
+            await ctx.manager.remove_worktree(
+                ctx.project_root, item.worktree_path, force=item.force,
             )
+        except WorktreeRemoveError as exc:
             return _result(
                 kind=item.kind, target=item.worktree_path, ok=False,
-                error=err_code, error_detail=exc.stderr,
+                error=_worktree_error_code(exc), error_detail=exc.stderr,
             ), False
         audit_event(
             "audit.git.delete",
@@ -278,14 +291,13 @@ async def _delete_one(
         worktree_already_gone = not os.path.exists(item.worktree_path)
         if not worktree_already_gone:
             try:
-                await ctx.manager.remove_worktree(ctx.project_root, item.worktree_path)
-            except WorktreeRemoveError as exc:
-                err_code = (
-                    "locked" if any(p in exc.stderr for p in _LOCKED_PATTERNS) else "error"
+                await ctx.manager.remove_worktree(
+                    ctx.project_root, item.worktree_path, force=item.force,
                 )
+            except WorktreeRemoveError as exc:
                 return _result(
                     kind=item.kind, target=item.worktree_path, ok=False,
-                    error=err_code, error_detail=exc.stderr,
+                    error=_worktree_error_code(exc), error_detail=exc.stderr,
                 ), False
         try:
             await ctx.manager.delete_branch(

@@ -171,11 +171,12 @@ fun GitScreen(
     if (forcePrompt != null) {
         AlertDialog(
             onDismissRequest = viewModel::dismissForceDeletePrompt,
-            title = { Text("Branch not fully merged") },
+            title = { Text("Force delete?") },
             text = {
                 Text(
-                    "These refs are not fully merged: ${forcePrompt.refs.joinToString(", ")}." +
-                        " Force-delete will discard unmerged commits.",
+                    "These items have unmerged commits or uncommitted changes and" +
+                        " can't be deleted normally: ${forcePrompt.refs.joinToString(", ")}." +
+                        " Force-delete permanently discards that work.",
                 )
             },
             confirmButton = {

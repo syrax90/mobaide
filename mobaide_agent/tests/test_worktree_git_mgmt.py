@@ -321,9 +321,18 @@ class TestRemoveWorktree:
         first_args = mock_git.call_args_list[0].args
         second_args = mock_git.call_args_list[1].args
         assert "remove" in first_args and "/repo/wt/foo" in first_args
-        # Refuses to use --force per the v1 contract.
+        # Default is force=False → no --force.
         assert "--force" not in first_args
         assert "prune" in second_args
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_remove_worktree_force_true_adds_force_flag(
+        self, mock_git, manager, tmp_path,
+    ):
+        mock_git.return_value = (0, "", "")
+        await manager.remove_worktree(str(tmp_path), "/repo/wt/foo", force=True)
+        first_args = mock_git.call_args_list[0].args
+        assert "remove" in first_args and "--force" in first_args
 
     @patch("mobaide.linear.worktree._run_git")
     async def test_remove_worktree_failure_raises_and_skips_prune(
@@ -334,8 +343,40 @@ class TestRemoveWorktree:
             await manager.remove_worktree(str(tmp_path), "/repo/wt/foo")
         assert exc_info.value.path == "/repo/wt/foo"
         assert "locked" in exc_info.value.stderr
+        # A locked failure is not "dirty" — it must not map to force_required.
+        assert exc_info.value.dirty is False
         # On failure, prune must NOT be called — only the failed remove.
         assert mock_git.call_count == 1
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_remove_worktree_dirty_sets_dirty_true(
+        self, mock_git, manager, tmp_path,
+    ):
+        # git worktree remove emits "contains modified or untracked files" when
+        # the worktree is dirty; that must set dirty so the API can map it to
+        # force_required.
+        mock_git.return_value = (
+            1, "",
+            "fatal: '/repo/wt/foo' contains modified or untracked files, "
+            "use --force to delete it",
+        )
+        with pytest.raises(WorktreeRemoveError) as exc_info:
+            await manager.remove_worktree(str(tmp_path), "/repo/wt/foo")
+        assert exc_info.value.dirty is True
+        assert mock_git.call_count == 1
+
+    @patch("mobaide.linear.worktree._run_git")
+    async def test_remove_worktree_force_clears_dirty_flag(
+        self, mock_git, manager, tmp_path,
+    ):
+        # Even if a forced remove fails with dirty-sounding stderr, force=True
+        # must clear dirty so the API doesn't loop the user back to a prompt.
+        mock_git.return_value = (
+            1, "", "fatal: '/repo/wt/foo' contains modified or untracked files",
+        )
+        with pytest.raises(WorktreeRemoveError) as exc_info:
+            await manager.remove_worktree(str(tmp_path), "/repo/wt/foo", force=True)
+        assert exc_info.value.dirty is False
 
 
 class TestListMethods:
