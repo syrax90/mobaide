@@ -321,6 +321,54 @@ class GitViewModelTest {
     }
 
     @Test
+    fun confirmDelete_dirtyWorktree_forceRequired_promptsThenReissuesWithForce() = runTest {
+        // A dirty worktree comes back as force_required just like an unmerged
+        // branch; the prompt must surface the worktree path (no branch ref) and
+        // confirming must re-issue that item with force=true.
+        val f = newFixture()
+        advanceUntilIdle()
+        val items = listOf(
+            GitDeleteItem(
+                kind = GitItem.KIND_ORPHAN_WORKTREE,
+                worktree_path = "/repo/wt/orphan",
+            ),
+        )
+        coEvery { f.repo.deleteGitItems("alpha", items) } returns GitDeleteResponse(
+            results = listOf(
+                GitDeleteResultItem(
+                    kind = GitItem.KIND_ORPHAN_WORKTREE,
+                    target = "/repo/wt/orphan",
+                    ok = false,
+                    error = "force_required",
+                ),
+            ),
+        )
+        f.vm.confirmDelete(items)
+        advanceUntilIdle()
+
+        val prompt = f.vm.uiState.value.forceDeletePrompt
+        assertNotNull("dirty worktree force_required must populate the prompt", prompt)
+        // refs falls back to worktree_path when the item has no branch.
+        assertEquals(listOf("/repo/wt/orphan"), prompt!!.refs)
+
+        val forced = items.map { it.copy(force = true) }
+        coEvery { f.repo.deleteGitItems("alpha", forced) } returns GitDeleteResponse(
+            results = listOf(
+                GitDeleteResultItem(
+                    kind = GitItem.KIND_ORPHAN_WORKTREE,
+                    target = "/repo/wt/orphan",
+                    ok = true,
+                ),
+            ),
+        )
+        f.vm.confirmForceDelete()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", forced) }
+        assertNull(f.vm.uiState.value.forceDeletePrompt)
+    }
+
+    @Test
     fun confirmDelete_busyException_setsBusyDialog_noEvent() = runTest {
         val f = newFixture()
         advanceUntilIdle()

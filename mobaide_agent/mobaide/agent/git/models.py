@@ -53,7 +53,9 @@ class GitDeleteItem(BaseModel):
     The wire shape mirrors :class:`GitItemRead`'s discriminator — clients
     echo back the ``kind`` and the appropriate identifier (``branch`` for
     branch kinds, ``worktree_path`` for worktree kinds; both for combined
-    deletions). ``force`` upgrades a branch delete from ``-d`` to ``-D``.
+    deletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and
+    adds ``--force`` to a worktree removal so a worktree holding
+    modified/untracked files is deleted instead of refused.
     """
 
     kind: ItemKind
@@ -70,7 +72,8 @@ class GitDeleteResultItem(BaseModel):
     """Per-item outcome.
 
     ``error`` codes:
-        * ``force_required`` — branch is unmerged; retry with ``force=True``.
+        * ``force_required`` — branch is unmerged, or worktree holds
+          modified/untracked files; retry with ``force=True``.
         * ``locked`` — worktree is locked.
         * ``not_found`` — branch or worktree no longer exists.
         * ``invalid`` — request payload missing the required identifier.

@@ -96,12 +96,18 @@ class BranchDeleteError(RuntimeError):
 
 
 class WorktreeRemoveError(RuntimeError):
-    """Raised when ``git worktree remove`` fails."""
+    """Raised when ``git worktree remove`` fails.
 
-    def __init__(self, *, path: str, stderr: str) -> None:
+    ``dirty`` is set when stderr matches git's "contains modified or untracked
+    files" wording, which the API maps to ``error="force_required"`` so the
+    client can prompt the user to retry with ``force=True``.
+    """
+
+    def __init__(self, *, path: str, stderr: str, dirty: bool = False) -> None:
         super().__init__(f"Failed to remove worktree at {path}: {stderr}")
         self.path = path
         self.stderr = stderr
+        self.dirty = dirty
 
 
 def convert_to_worktree_slug(identifier: str, title: str) -> str:
@@ -285,6 +291,10 @@ def _parse_worktree_porcelain(stdout: str) -> list[WorktreeInfo]:
 _UNMERGED_PATTERNS = (
     "is not fully merged",
     "not fully merged",
+)
+
+_WORKTREE_DIRTY_PATTERNS = (
+    "contains modified or untracked files",
 )
 
 
@@ -539,29 +549,44 @@ class WorktreeManager:
                 force=force,
             )
 
-    @log_call(name="worktree.remove_worktree", log_args=("path",))
-    async def remove_worktree(self, project_root: str, path: str) -> None:
+    @log_call(name="worktree.remove_worktree", log_args=("path", "force"))
+    async def remove_worktree(
+        self,
+        project_root: str,
+        path: str,
+        *,
+        force: bool = False,
+    ) -> None:
         """Remove a git worktree via ``git worktree remove`` and prune.
 
         Unlike :meth:`cleanup_worktree`, failures are propagated as
         :class:`WorktreeRemoveError` so the API can surface them to the user.
-        Refuses to use ``--force`` — locked or dirty worktrees must be
-        unlocked/cleaned in the user's terminal first.
+        Without ``force`` a worktree holding modified/untracked files is left
+        intact and :attr:`WorktreeRemoveError.dirty` is set so the caller can
+        map to ``force_required`` and prompt the user; ``force=True`` passes
+        ``--force`` to discard that work.
         """
+        extra = ("--force",) if force else ()
         async with self._lock_for(project_root):
             rc, _, stderr = await _run_git(
-                "worktree", "remove", path, cwd=project_root,
+                "worktree", "remove", path, *extra, cwd=project_root,
             )
             if rc != 0:
                 err = stderr.strip()
-                logger.warning("Failed to remove worktree %s: %s", path, err)
+                dirty = (not force) and any(
+                    p in err for p in _WORKTREE_DIRTY_PATTERNS
+                )
+                logger.warning(
+                    "Failed to remove worktree %s (force=%s): %s", path, force, err,
+                )
                 audit_event(
                     "audit.git.worktree.remove_failed",
                     target=path,
                     outcome="error",
+                    force=force,
                     error=err,
                 )
-                raise WorktreeRemoveError(path=path, stderr=err)
+                raise WorktreeRemoveError(path=path, stderr=err, dirty=dirty)
             await _run_git("worktree", "prune", cwd=project_root)
             logger.info("Worktree removed and pruned: %s", path)
             audit_event(
