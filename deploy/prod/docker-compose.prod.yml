@@ -29,6 +29,17 @@ services:
       - central-server-data:/app/data
     expose:
       - "9000"
+    # Failure isolation on the shared box (tunable for the actual VPS size):
+    # baseline is <300 MiB and argon2 hashing is app-bounded at 2 workers
+    # (~128 MiB burst, <=2 busy cores), so 1g/2.0 caps a leak or stampede
+    # without starving normal operation. The dockerd default 1024 nofile
+    # soft limit would cap the relay at ~150 active users (~6 sockets each).
+    mem_limit: 1g
+    cpus: 2.0
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     networks:
       - web
     healthcheck:
@@ -53,6 +64,14 @@ services:
     depends_on:
       central-server:
         condition: service_healthy
+    # Caddy terminates TLS and proxies every WebSocket (2 fds per proxied
+    # connection), so it needs the same nofile headroom as the relay.
+    mem_limit: 512m
+    cpus: 1.0
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     networks:
       - web
 

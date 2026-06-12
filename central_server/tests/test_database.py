@@ -1,6 +1,8 @@
 """Tests for the Database layer."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from central_server.db.database import Database
@@ -17,6 +19,17 @@ async def db(tmp_path) -> Database:
 async def _create_test_user(db: Database) -> str:
     """Helper: create a test user, return user_id."""
     return await db.create_user(email="owner@test.local", password_hash="hash")
+
+
+class TestConnectionPragmas:
+    async def test_wal_synchronous_normal_and_busy_timeout(self, db: Database):
+        cursor = await db.conn.execute("PRAGMA journal_mode")
+        assert (await cursor.fetchone())[0] == "wal"
+        # synchronous: 1 == NORMAL
+        cursor = await db.conn.execute("PRAGMA synchronous")
+        assert (await cursor.fetchone())[0] == 1
+        cursor = await db.conn.execute("PRAGMA busy_timeout")
+        assert (await cursor.fetchone())[0] == 5000
 
 
 class TestAgentCRUD:
@@ -55,6 +68,31 @@ class TestAgentCRUD:
         await db.touch_agent_last_seen(agent_id)
         agent = await db.get_agent(agent_id)
         assert agent["last_seen_at"] is not None
+
+    async def test_touch_last_seen_with_explicit_timestamp(self, db: Database):
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("test", owner)
+        sentinel = datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+        await db.touch_agent_last_seen(agent_id, sentinel)
+        agent = await db.get_agent(agent_id)
+        assert agent["last_seen_at"] == sentinel.isoformat()
+
+    async def test_bulk_touch_agents_last_seen(self, db: Database):
+        owner = await _create_test_user(db)
+        a1, _ = await db.register_agent("a1", owner)
+        a2, _ = await db.register_agent("a2", owner)
+        t1 = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        t2 = datetime(2030, 2, 2, tzinfo=timezone.utc)
+        t3 = datetime(2030, 3, 3, tzinfo=timezone.utc)
+        # An id with no DB row (deleted mid-sweep) must be a harmless no-op.
+        await db.bulk_touch_agents_last_seen(
+            [(a1, t1), (a2, t2), ("ghost", t3)]
+        )
+        assert (await db.get_agent(a1))["last_seen_at"] == t1.isoformat()
+        assert (await db.get_agent(a2))["last_seen_at"] == t2.isoformat()
+
+    async def test_bulk_touch_agents_last_seen_empty_is_noop(self, db: Database):
+        await db.bulk_touch_agents_last_seen([])
 
     async def test_list_agents_for_user(self, db: Database):
         owner1 = await db.create_user(email="user1@test.local", password_hash="h")

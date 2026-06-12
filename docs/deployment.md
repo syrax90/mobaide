@@ -50,6 +50,8 @@ cd D:\ML\Projects\mobaide
 
 The deploy script tars `central_server/` with excludes (`.env`, `__pycache__`, `*.db*`, virtualenvs), `scp`s the archive to the VPS, extracts it into `central_server.new`, and **atomically swaps**: `central_server` → `central_server.prev` → `central_server.new` → `central_server`. Then `docker compose up -d --build --remove-orphans` rebuilds the image and restarts the container. The named volume `central-server-data` is never touched, so the SQLite database and Alembic migration state persist.
 
+`docker-compose.prod.yml` is re-synced from `deploy/prod/` each run, so the per-service `mem_limit` / `cpus` / `ulimits.nofile` caps (central-server `1g`/`2.0`, caddy `512m`/`1.0`, both `nofile` 65536 soft/hard) apply automatically on the next deploy — no extra step. The 65536 file-descriptor ceiling is what lets the relay and Caddy hold WebSocket fan-out well past the dockerd default 1024 soft limit; the values are documented inline as tunable per VPS size.
+
 ### Rollback
 
 - **Automatic**: if `docker compose up` or the `/api/health` check fails, the script swaps `central_server.prev` back in and rebuilds automatically.
@@ -345,6 +347,7 @@ Check the agent's logs for `relay.connection_failed` entries. Common causes:
 - `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` don't match the bcrypt hash stored in central-server's DB for this agent — re-pair via the app or re-issue the token via the admin API
 - Central-server unreachable — verify with `curl https://mobaide.com/api/health`
 - For a local dev stack: the workstation's OS trust store must include Caddy's root CA (see `start-all.ps1`, which auto-installs it)
+- A flapping link logs `relay.reconnecting` with a growing `delay` and `uptime`: the reconnect backoff now only resets to base after a connection survives `RELAY_RECONNECT_STABILITY_THRESHOLD` seconds (default `60.0`) and adds decorrelated jitter, so a connection that keeps dropping young keeps its escalated, jittered delay. Raise the threshold on a host with a known-unstable uplink to suppress reconnect-log churn.
 - **Cloudflare Bot Fight Mode (HTTP 403 error 1010):** if the relay is behind Cloudflare, agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>` on all outbound calls (manifest polling, trust-key fetch, pairing initiate), which passes Cloudflare's default Bot Fight Mode. Operators running Super Bot Fight Mode with JA3/JA4 fingerprinting set to "Block" must add a WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`. Older agents should be upgraded to v0.1.3+.
 
 #### Health check failing locally

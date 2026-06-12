@@ -13,6 +13,7 @@ _RELAY_ENV_VARS = (
     "RELAY_HEARTBEAT_INTERVAL",
     "RELAY_RECONNECT_BASE",
     "RELAY_RECONNECT_MAX",
+    "RELAY_RECONNECT_STABILITY_THRESHOLD",
 )
 
 
@@ -102,6 +103,7 @@ class TestRelayConfigDefaults:
         assert cfg.heartbeat_interval == 15
         assert cfg.reconnect_base_delay == 1.0
         assert cfg.reconnect_max_delay == 60.0
+        assert cfg.reconnect_stability_threshold == 60.0
 
 
 class TestRelayConfigOptionalOverrides:
@@ -128,6 +130,18 @@ class TestRelayConfigOptionalOverrides:
 
         assert cfg.reconnect_base_delay == 2.5
         assert isinstance(cfg.reconnect_base_delay, float)
+
+    def test_reconnect_stability_threshold_from_env(self, monkeypatch):
+        monkeypatch.setenv("RELAY_SERVER_URL", "wss://r.io")
+        monkeypatch.setenv("RELAY_AGENT_ID", "a")
+        monkeypatch.setenv("RELAY_AGENT_TOKEN", "t")
+        monkeypatch.setenv("RELAY_RECONNECT_STABILITY_THRESHOLD", "120")
+
+        cfg = RelayConfig.from_env()
+        assert cfg is not None
+
+        assert cfg.reconnect_stability_threshold == 120.0
+        assert isinstance(cfg.reconnect_stability_threshold, float)
 
     def test_reconnect_max_delay_from_env(self, monkeypatch):
         monkeypatch.setenv("RELAY_SERVER_URL", "wss://r.io")

@@ -9,6 +9,9 @@ deploy/prod/.env
 deploy/prod/tls/
 deploy/prod/*.pem
 mobaide_agent/users.json
+# Runtime project store — per-project auto-scan config can embed Linear API
+# keys; never commit.
+mobaide_agent/projects.json
 mobaide_agent/state/
 **/active_workitems.json
 android/app/src/main/res/xml/network_security_config.xml

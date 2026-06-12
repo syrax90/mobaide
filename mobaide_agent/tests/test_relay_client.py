@@ -2871,3 +2871,123 @@ class TestProxySessionsWireShape:
         assert body["pid"] == 4242
         # SessionInfo defaults kind=CLAUDE.
         assert body["kind"] == "claude"
+
+
+class TestConnectLoopStabilityBackoff:
+    """Stability-gated backoff with decorrelated jitter in ``_connect_loop``.
+
+    The backoff state must reset to the base delay only after a connection
+    survives ``reconnect_stability_threshold`` seconds — regardless of how
+    it ended — and every non-protocol-incompatible sleep is drawn from
+    ``uniform(base, delay * 3)`` capped at ``reconnect_max_delay``.
+    Fixture delays: base=0.01, max=0.05, stability threshold default 60.0.
+    """
+
+    @staticmethod
+    def _wire(client, monkeypatch, *, monotonic_values, stop_after, outcome):
+        """Patch _run_connection/time/random/sleep; return (sleeps, uniform)."""
+        async def run_connection():
+            if outcome == "raise":
+                raise ConnectionError("boom")
+
+        monkeypatch.setattr(client, "_run_connection", run_connection)
+        monkeypatch.setattr(
+            "mobaide.relay.client.time",
+            MagicMock(monotonic=MagicMock(side_effect=monotonic_values)),
+        )
+        uniform = MagicMock(side_effect=lambda a, b: b)  # upper bound
+        monkeypatch.setattr(
+            "mobaide.relay.client.random", MagicMock(uniform=uniform),
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+            if len(sleeps) >= stop_after:
+                client._stopping = True
+
+        monkeypatch.setattr("mobaide.relay.client.asyncio.sleep", fake_sleep)
+        return sleeps, uniform
+
+    async def test_stable_connection_resets_backoff(self, client, monkeypatch):
+        # Two flaps escalate the delay, then a 100s-uptime connection drops:
+        # the third jitter draw must start from base again (upper bound
+        # base*3, not prev*3) — this is the de-escalation the old
+        # reset-on-clean-return logic never performed for exceptions.
+        sleeps, uniform = self._wire(
+            client, monkeypatch,
+            monotonic_values=[0, 1, 10, 11, 100, 200],
+            stop_after=3,
+            outcome="raise",
+        )
+
+        await client._connect_loop()
+
+        base = client._config.reconnect_base_delay
+        assert [c.args for c in uniform.call_args_list] == [
+            pytest.approx((base, base * 3)),
+            pytest.approx((base, base * 3 * 3)),
+            pytest.approx((base, base * 3)),  # reset: stable uptime ≥ 60s
+        ]
+        assert sleeps == pytest.approx([0.03, 0.05, 0.03])
+
+    async def test_flapping_keeps_escalating_until_max(self, client, monkeypatch):
+        # Uptimes of 1s never reach the stability threshold; with the
+        # jitter stubbed to its upper bound the delays walk 0.03 → 0.05
+        # and stay capped at reconnect_max_delay.
+        sleeps, _ = self._wire(
+            client, monkeypatch,
+            monotonic_values=[0, 1, 10, 11, 20, 21],
+            stop_after=3,
+            outcome="raise",
+        )
+
+        await client._connect_loop()
+
+        assert sleeps == pytest.approx([0.03, 0.05, 0.05])
+        assert all(s <= client._config.reconnect_max_delay for s in sleeps)
+
+    async def test_clean_instant_return_does_not_reset(self, client, monkeypatch):
+        # The old loop reset the delay on ANY clean return — recreating
+        # thundering herds when the server accepts and instantly closes.
+        # A clean return below the stability threshold must keep escalating.
+        sleeps, _ = self._wire(
+            client, monkeypatch,
+            monotonic_values=[0, 1, 10, 11],
+            stop_after=2,
+            outcome="return",
+        )
+
+        await client._connect_loop()
+
+        assert sleeps == pytest.approx([0.03, 0.05])
+        assert sleeps[1] != client._config.reconnect_base_delay
+
+    async def test_jitter_bounds_with_real_random(self, client, monkeypatch):
+        # With the real ``random`` module every sleep must stay within
+        # [base, max]: uniform(base, ·) bounds it below, the min() caps it.
+        import itertools
+
+        async def run_connection():
+            raise ConnectionError("boom")
+
+        monkeypatch.setattr(client, "_run_connection", run_connection)
+        monkeypatch.setattr(
+            "mobaide.relay.client.time",
+            MagicMock(monotonic=MagicMock(side_effect=itertools.count(0, 1))),
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay):
+            sleeps.append(delay)
+            if len(sleeps) >= 6:
+                client._stopping = True
+
+        monkeypatch.setattr("mobaide.relay.client.asyncio.sleep", fake_sleep)
+
+        await client._connect_loop()
+
+        base = client._config.reconnect_base_delay
+        max_delay = client._config.reconnect_max_delay
+        assert len(sleeps) == 6
+        assert all(base <= s <= max_delay for s in sleeps)

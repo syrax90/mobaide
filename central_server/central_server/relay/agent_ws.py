@@ -137,9 +137,10 @@ async def agent_tunnel(websocket: WebSocket) -> None:
     reported_version = auth_msg.get("agent_version")
     if not (isinstance(reported_version, str) and reported_version):
         reported_version = None
-    # update_agent_handshake_info also bumps last_seen_at so the connect
-    # path issues a single UPDATE+commit (the heartbeat path keeps its own
-    # touch_agent_last_seen which writes only that column).
+    # update_agent_handshake_info also bumps last_seen_at, so the connect
+    # path issues a single UPDATE+commit. Heartbeats after this point are
+    # in-memory only (RoutingTable.last_heartbeat); they reach the DB via
+    # app.py's periodic batched flush and the disconnect flush below.
     await db.update_agent_handshake_info(
         agent_id, reported_version, client_protocol_version,
     )
@@ -181,7 +182,7 @@ async def agent_tunnel(websocket: WebSocket) -> None:
         _enqueue_attach(conn, sid)
 
     reader_task = asyncio.create_task(
-        _reader(websocket, agent_id, routing, db),
+        _reader(websocket, agent_id, routing),
         name=f"agent-reader-{agent_id}",
     )
     writer_task = asyncio.create_task(
@@ -210,17 +211,28 @@ async def agent_tunnel(websocket: WebSocket) -> None:
                 )
             except Exception:
                 pass
-        # Notify the owner's user-scoped clients that the agent is now
-        # offline — but ONLY if no newer tunnel has already replaced this
-        # one. `unregister_agent` above short-circuits on conn_id mismatch
-        # (stale-disconnect guard) and doesn't tell us whether it removed
-        # anything, so we derive that by checking whether the agent_id is
-        # still registered. If it is, a newer coroutine is holding it and
-        # our stale teardown must not undo its online-broadcast.
-        if conn.owner_user_id and routing.get_agent(agent_id) is None:
-            _broadcast_status(
-                routing, conn.owner_user_id, agent_id, online=False
-            )
+        # Persist the final heartbeat and notify the owner's user-scoped
+        # clients that the agent is now offline — but ONLY if no newer tunnel
+        # has already replaced this one. `unregister_agent` above
+        # short-circuits on conn_id mismatch (stale-disconnect guard) and
+        # doesn't tell us whether it removed anything, so we derive that by
+        # checking whether the agent_id is still registered. If it is, a
+        # newer coroutine is holding it: our stale teardown must not undo its
+        # online-broadcast nor regress last_seen_at values the batched
+        # flusher already wrote for it.
+        if routing.get_agent(agent_id) is None:
+            try:
+                await db.touch_agent_last_seen(agent_id, conn.last_heartbeat)
+            except Exception:
+                # A failed write (e.g. shutdown race after db.close()) must
+                # not suppress the offline broadcast below.
+                logger.exception(
+                    "agent_tunnel.last_seen_flush_failed agent_id=%s", agent_id
+                )
+            if conn.owner_user_id:
+                _broadcast_status(
+                    routing, conn.owner_user_id, agent_id, online=False
+                )
         logger.info("agent_tunnel.disconnected agent_id=%s", agent_id)
 
 
@@ -228,7 +240,6 @@ async def _reader(
     websocket: WebSocket,
     agent_id: str,
     routing: RoutingTable,
-    db,
 ) -> None:
     """Read frames from agent tunnel and dispatch to mobile clients."""
     try:
@@ -269,7 +280,7 @@ async def _reader(
 
                 elif channel == CH_CONTROL:
                     await _handle_control(
-                        websocket, agent_id, payload, routing, db
+                        websocket, agent_id, payload, routing
                     )
 
             # Text frames (control messages can also come as text)
@@ -280,7 +291,7 @@ async def _reader(
                 except (json.JSONDecodeError, TypeError):
                     continue
                 await _handle_control_json(
-                    websocket, agent_id, ctrl, routing, db
+                    websocket, agent_id, ctrl, routing
                 )
 
     except WebSocketDisconnect:
@@ -324,25 +335,24 @@ async def _pinger(
 
 
 async def _handle_control(
-    websocket, agent_id, payload, routing, db
+    websocket, agent_id, payload, routing
 ) -> None:
     """Handle a control message from the envelope binary channel."""
     try:
         ctrl = json.loads(payload)
     except (json.JSONDecodeError, TypeError):
         return
-    await _handle_control_json(websocket, agent_id, ctrl, routing, db)
+    await _handle_control_json(websocket, agent_id, ctrl, routing)
 
 
 async def _handle_control_json(
-    websocket, agent_id, ctrl, routing, db
+    websocket, agent_id, ctrl, routing
 ) -> None:
     """Process a parsed control JSON message."""
     msg_type = ctrl.get("type")
 
     if msg_type == "heartbeat":
         routing.agent_heartbeat(agent_id)
-        await db.touch_agent_last_seen(agent_id)
 
     elif msg_type == "proxy_response":
         request_id = ctrl.get("request_id")

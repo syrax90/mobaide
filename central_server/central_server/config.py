@@ -52,6 +52,10 @@ class CentralServerConfig:
     pairing_qr_token_ttl_seconds: int = 120
     ws_ping_interval: int = 20  # seconds, within 15-30s spec
     agent_disconnect_timeout: int = 30
+    # How often in-memory agent heartbeats are batch-flushed to the DB in a
+    # single transaction. Bounds `agents.last_seen_at` staleness for ONLINE
+    # agents; offline timestamps stay exact (flushed on disconnect).
+    heartbeat_flush_interval_seconds: int = 60
 
     # SMTP (optional unless email_verification_required=True)
     smtp_host: str = "localhost"
@@ -159,6 +163,9 @@ class CentralServerConfig:
             ws_ping_interval=int(os.getenv("WS_PING_INTERVAL", "20")),
             agent_disconnect_timeout=int(
                 os.getenv("AGENT_DISCONNECT_TIMEOUT", "30"),
+            ),
+            heartbeat_flush_interval_seconds=int(
+                os.getenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", "60"),
             ),
             smtp_host=os.getenv("SMTP_HOST", "localhost"),
             smtp_port=int(os.getenv("SMTP_PORT", "1025")),
