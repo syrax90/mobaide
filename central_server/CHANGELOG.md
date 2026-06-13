@@ -1,5 +1,19 @@
 # central_server Changelog
 
+## [0.1.15](https://github.com/syrax90/claude_mobile/compare/server-v0.1.14...server-v0.1.15) (2026-06-13)
+
+
+### Features
+
+* **dashboard:** show email verification status on users page ([b56c971](https://github.com/syrax90/claude_mobile/commit/b56c9717bab4f701aa0ca0f838c9b9ab9d657768))
+* **server:** show email verification status on users page ([22a0bb5](https://github.com/syrax90/claude_mobile/commit/22a0bb5b61848bd196be8005839622cccbf30025))
+
+
+### Performance Improvements
+
+* **central-server:** capacity hardening — WAL tuning, batched heartbeats, bounded argon2, backoff de-escalation, container limits (CLA-65) ([817f3c0](https://github.com/syrax90/claude_mobile/commit/817f3c06596fba2f8bb7ab98c8414db612c13c58))
+* **central-server:** SQLite WAL tuning, batched heartbeats, bounded argon2, reconnect backoff de-escalation, container limits (CLA-65) ([814eb2c](https://github.com/syrax90/claude_mobile/commit/814eb2c19f6b84f3529d035f4897dc20d234e0e2))
+
 ## [0.1.14](https://github.com/syrax90/claude_mobile/compare/server-v0.1.13...server-v0.1.14) (2026-06-09)
 
 
