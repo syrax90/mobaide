@@ -1,5 +1,21 @@
 # mobaide_agent Changelog
 
+## [0.2.11](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.10...agent-v0.2.11) (2026-06-13)
+
+
+### Bug Fixes
+
+* **agent:** allow force-deleting worktrees with modified/untracked files ([9ab4892](https://github.com/syrax90/claude_mobile/commit/9ab4892a1ff1b8245470f39303d6b88cbe812952))
+* **agent:** fix Send button not executing commands without manual Enter ([086699f](https://github.com/syrax90/claude_mobile/commit/086699fd3276f2be494f4a32f8df6820c48c5bc4))
+* **git:** allow force-deleting worktrees with modified/untracked files ([003fb66](https://github.com/syrax90/claude_mobile/commit/003fb6673efe7f8b0fe77ac37c19473bf1418d74))
+* **terminal:** fix Send button not executing commands without manual Enter ([261fd96](https://github.com/syrax90/claude_mobile/commit/261fd961bf5dbd5b36c2477c72b3016c132e463c))
+
+
+### Performance Improvements
+
+* **central-server:** capacity hardening — WAL tuning, batched heartbeats, bounded argon2, backoff de-escalation, container limits (CLA-65) ([817f3c0](https://github.com/syrax90/claude_mobile/commit/817f3c06596fba2f8bb7ab98c8414db612c13c58))
+* **central-server:** SQLite WAL tuning, batched heartbeats, bounded argon2, reconnect backoff de-escalation, container limits (CLA-65) ([814eb2c](https://github.com/syrax90/claude_mobile/commit/814eb2c19f6b84f3529d035f4897dc20d234e0e2))
+
 ## [0.2.10](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.9...agent-v0.2.10) (2026-06-09)
 
 
