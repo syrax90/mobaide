@@ -54,6 +54,7 @@ fun SettingsScreen(
     onManageConnections: () -> Unit = {},
     onManageTemplates: () -> Unit = {},
     onManageDevices: () -> Unit = {},
+    onOpenSupport: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -116,6 +117,17 @@ fun SettingsScreen(
                     .padding(horizontal = 16.dp),
             ) {
                 Text("My devices")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onOpenSupport,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            ) {
+                Text("Help & Support")
             }
 
             Spacer(modifier = Modifier.height(8.dp))

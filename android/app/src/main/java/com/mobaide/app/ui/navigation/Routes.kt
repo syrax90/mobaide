@@ -11,6 +11,7 @@ object Routes {
     const val SESSION_DETAIL = "session_detail/{sessionId}"
     const val CREATE_SESSION = "create_session"
     const val SETTINGS = "settings"
+    const val SUPPORT = "support"
     const val AUTO_SCAN_DETAIL = "auto_scan_detail/{projectName}"
     const val CONNECTIONS = "connections"
     const val PROJECTS = "projects"

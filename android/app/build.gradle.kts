@@ -58,6 +58,35 @@ val privacyPolicyUrl: String = run {
     "https://mobaide.com/privacy.html"
 }
 
+// Help & Support destinations surfaced from the Support screen (reachable
+// from Settings and Login). Resolved at build time in the same priority order
+// as PRIVACY_POLICY_URL. SUPPORT_GITHUB_URL must point at a PUBLIC community
+// repo — GitHub Discussions inherit repo visibility, so it can never be the
+// private releases repo (`syrax90/claude_mobile`).
+val supportGithubUrl: String = run {
+    val fromEnv = System.getenv("SUPPORT_GITHUB_URL")
+    if (!fromEnv.isNullOrBlank()) return@run fromEnv
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        val props = Properties().apply { localPropsFile.inputStream().use { load(it) } }
+        val fromProps = props.getProperty("SUPPORT_GITHUB_URL", "").orEmpty()
+        if (fromProps.isNotBlank()) return@run fromProps
+    }
+    "https://github.com/syrax90/mobaide-community/discussions"
+}
+
+val supportEmail: String = run {
+    val fromEnv = System.getenv("SUPPORT_EMAIL")
+    if (!fromEnv.isNullOrBlank()) return@run fromEnv
+    val localPropsFile = rootProject.file("local.properties")
+    if (localPropsFile.exists()) {
+        val props = Properties().apply { localPropsFile.inputStream().use { load(it) } }
+        val fromProps = props.getProperty("SUPPORT_EMAIL", "").orEmpty()
+        if (fromProps.isNotBlank()) return@run fromProps
+    }
+    "support@mobaide.com"
+}
+
 // Release signing config is resolved at build time from (in priority order):
 //   1. Environment variables (CI / release builds)
 //   2. android/signing.properties (developer machines; git-ignored)
@@ -105,6 +134,8 @@ android {
         buildConfigField("String", "CENTRAL_SERVER_URL", "\"$centralServerUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
         buildConfigField("String", "PRIVACY_POLICY_URL", "\"$privacyPolicyUrl\"")
+        buildConfigField("String", "SUPPORT_GITHUB_URL", "\"$supportGithubUrl\"")
+        buildConfigField("String", "SUPPORT_EMAIL", "\"$supportEmail\"")
         buildConfigField("int", "APP_PROTOCOL_VERSION", "4")
         buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "4")
     }
