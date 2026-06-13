@@ -131,6 +131,16 @@ DELETION_SWEEPER_INTERVAL_SECONDS=3600
 PORTAL_BASE_URL=https://mobaide.com
 ```
 
+Capacity-hardening knob (CLA-65): ONLINE agents' heartbeats are batch-flushed to
+the DB instead of written per message, so `agents.last_seen_at` for online agents
+can lag by up to one flush interval (offline timestamps stay exact). Lower it for
+fresher dashboard timestamps at the cost of more DB writes:
+
+```
+# How often (seconds) in-memory agent heartbeats are flushed to the DB (default 60)
+HEARTBEAT_FLUSH_INTERVAL_SECONDS=60
+```
+
 The privacy policy is now served by the central server itself at
 `/privacy.html` (rendered from `central_server/legal/privacy.md` at startup),
 so there is no separate URL to configure.
@@ -187,6 +197,12 @@ Add:
 ```
 
 (Keeps 4 weekly backups in `/opt/mobaide/backups/`.)
+
+> The DB runs in WAL mode with `synchronous=NORMAL` (CLA-65): individual commits
+> are not fsynced, only checkpoints are, so an **OS crash or power loss** can lose
+> the last few un-checkpointed commits. Application crashes are unaffected and the
+> DB stays consistent — but on hosts without reliable power, prefer a more frequent
+> backup cadence than weekly.
 
 ## 6. First deploy
 

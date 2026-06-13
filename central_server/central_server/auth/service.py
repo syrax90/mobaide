@@ -14,6 +14,7 @@ import hmac
 import logging
 import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Mapping
@@ -35,7 +36,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_ph = PasswordHasher()  # Thread-safe singleton
+# Thread-safe singleton. Argon2id with OWASP/RFC-9106 parameters for NEW
+# hashes (m=64 MiB, t=3, p=1 — argon2-cffi defaults to p=4); existing hashes
+# keep verifying because parameters are encoded per-hash, and logins migrate
+# them opportunistically via check_needs_rehash.
+_ph = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=1)
 
 # Strong references to fire-and-forget email tasks. asyncio's internal task
 # set only holds weak refs, so without this the GC can collect a task
@@ -132,15 +137,30 @@ class AuthService:
         self._resend_limiter = resend_limiter
         self._reset_email_limiter = reset_email_limiter
         self._routing = routing
+        # Dedicated bounded executor for argon2 only: each hash pins ~64 MiB,
+        # so a login stampede on the shared default executor could transiently
+        # consume gigabytes. Two workers cap the burst at ~128 MiB and make
+        # excess logins queue instead of spawning threads. Workers spawn
+        # lazily on first submit. Google ID-token verification deliberately
+        # stays on the default executor so it never queues behind argon2.
+        self._hash_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="argon2"
+        )
+
+    def close(self) -> None:
+        """Release the argon2 worker threads. Idempotent."""
+        self._hash_executor.shutdown(wait=False, cancel_futures=True)
 
     async def _hash_password(self, password: str) -> str:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, _ph.hash, password)
+        return await loop.run_in_executor(self._hash_executor, _ph.hash, password)
 
     async def _verify_password(self, hash: str, password: str) -> bool:
         loop = asyncio.get_running_loop()
         try:
-            return await loop.run_in_executor(None, _ph.verify, hash, password)
+            return await loop.run_in_executor(
+                self._hash_executor, _ph.verify, hash, password
+            )
         except VerifyMismatchError:
             return False
 
@@ -283,6 +303,17 @@ class AuthService:
 
         if not await self._verify_password(user["password_hash"], password):
             raise ValueError("Invalid email or password")
+
+        # Opportunistically migrate hashes created with older argon2
+        # parameters to the current ones (cheap string parse; the plaintext
+        # is only available here). A failed rehash must never fail the login.
+        if _ph.check_needs_rehash(user["password_hash"]):
+            try:
+                await self._db.update_user_password(
+                    user["id"], await self._hash_password(password)
+                )
+            except Exception:
+                logger.exception("login.rehash_failed user_id=%s", user["id"])
 
         if self._config.email_verification_required and not user.get("email_verified"):
             raise VerificationRequiredError(user["email"])

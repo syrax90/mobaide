@@ -214,13 +214,16 @@ def access_token(app) -> str:
 
 @pytest.fixture
 def relay_config() -> RelayConfig:
+    # reconnect_base_delay / reconnect_max_delay use validation_alias so
+    # direct construction requires the alias names (RELAY_RECONNECT_BASE /
+    # RELAY_RECONNECT_MAX), not the Python field names.
     return RelayConfig(
         server_url="wss://relay.test.io",
         agent_id="agent-42",
         agent_token="tok-secret",
         heartbeat_interval=15,
-        reconnect_base_delay=0.01,
-        reconnect_max_delay=0.05,
+        RELAY_RECONNECT_BASE=0.01,
+        RELAY_RECONNECT_MAX=0.05,
     )
 
 

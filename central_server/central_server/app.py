@@ -121,12 +121,17 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             _account_deletion_sweeper_loop(app.state.auth_service, config),
             name="account-deletion-sweeper",
         )
+        heartbeat_flush_task = asyncio.create_task(
+            _heartbeat_flush_loop(db, app.state.routing, config),
+            name="heartbeat-flush",
+        )
 
         yield
 
         logger.info("central_server.shutting_down")
         cleanup_task.cancel()
         deletion_sweeper_task.cancel()
+        heartbeat_flush_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
@@ -135,6 +140,18 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             await deletion_sweeper_task
         except asyncio.CancelledError:
             pass
+        try:
+            await heartbeat_flush_task
+        except asyncio.CancelledError:
+            pass
+        # Final sweep after the loop is cancelled (no interleaving) and
+        # before db.close() so still-connected agents' freshest heartbeats
+        # survive the restart.
+        try:
+            await _flush_agent_heartbeats(db, app.state.routing)
+        except Exception as exc:
+            logger.exception("heartbeat_flush.shutdown_error: %s", exc)
+        app.state.auth_service.close()
         await db.close()
         shutdown_logging()
 
@@ -296,3 +313,41 @@ async def _account_deletion_sweeper_loop(
             raise
         except Exception as exc:
             logger.exception("deletion_sweeper.error: %s", exc)
+
+
+async def _flush_agent_heartbeats(db: Database, routing: RoutingTable) -> int:
+    """One sweep: persist every online agent's last heartbeat in one commit.
+
+    The rows are built synchronously from the routing snapshot before any
+    await, so agents disconnecting mid-sweep cannot mutate the batch; an
+    UPDATE for a since-deleted agent row is a harmless no-op.
+    """
+    conns = routing.list_online_agents()
+    if not conns:
+        return 0
+    await db.bulk_touch_agents_last_seen(
+        [(conn.agent_id, conn.last_heartbeat) for conn in conns]
+    )
+    return len(conns)
+
+
+async def _heartbeat_flush_loop(
+    db: Database, routing: RoutingTable, config: CentralServerConfig
+) -> None:
+    """Periodically batch-flush in-memory agent heartbeats to the DB.
+
+    Heartbeats no longer touch the DB individually (one UPDATE+commit per
+    agent per 15 s did not scale); this loop bounds ``agents.last_seen_at``
+    staleness for ONLINE agents by the flush interval. In-memory routing
+    state remains the authority for presence; offline timestamps stay exact
+    because agent_ws flushes the final heartbeat on disconnect.
+    """
+    interval = max(1, config.heartbeat_flush_interval_seconds)
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await _flush_agent_heartbeats(db, routing)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("heartbeat_flush.error: %s", exc)

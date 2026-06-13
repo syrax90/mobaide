@@ -325,7 +325,6 @@ class TestAgentOriginatedCloseAutoscan:
             agent_id=agent_id,
             ctrl=ctrl,
             routing=app.state.routing,
-            db=app.state.db,
         )
 
         mobile_ws.close.assert_awaited_once()
@@ -347,5 +346,4 @@ class TestAgentOriginatedCloseAutoscan:
             agent_id=agent_id,
             ctrl={"type": "close_autoscan"},
             routing=app.state.routing,
-            db=app.state.db,
         )

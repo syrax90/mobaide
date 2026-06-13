@@ -50,6 +50,11 @@ class RelayConfig(BaseSettings):
     reconnect_max_delay: float = Field(
         default=60.0, validation_alias="RELAY_RECONNECT_MAX",
     )
+    # Uptime a connection must survive before the reconnect backoff resets to
+    # the base delay; flapping connections keep their escalated delay. New
+    # field, so no legacy alias — env var is the derived
+    # ``RELAY_RECONNECT_STABILITY_THRESHOLD``.
+    reconnect_stability_threshold: float = 60.0
 
     model_config = SettingsConfigDict(
         env_prefix="RELAY_",

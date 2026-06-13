@@ -369,14 +369,12 @@ class TestUnknownControlTypeTelemetry:
             agent_id="agent-test",
             ctrl={"type": "future.event"},
             routing=None,
-            db=None,
         )
         await agent_ws_module._handle_control_json(
             websocket=None,
             agent_id="agent-test",
             ctrl={"type": "another_unknown"},
             routing=None,
-            db=None,
         )
         after = agent_ws_module._unknown_control_type_total
         assert after - before == 2
@@ -384,14 +382,10 @@ class TestUnknownControlTypeTelemetry:
     async def test_known_types_do_not_increment_counter(self, app, registered_agent):
         agent_id, _ = registered_agent
         before = agent_ws_module._unknown_control_type_total
-        # ``heartbeat`` touches routing + db; provide just enough fakes.
+        # ``heartbeat`` touches routing only (in-memory); provide a fake.
 
         class _FakeRouting:
             def agent_heartbeat(self, agent_id):
-                pass
-
-        class _FakeDb:
-            async def touch_agent_last_seen(self, agent_id):
                 pass
 
         await agent_ws_module._handle_control_json(
@@ -399,7 +393,6 @@ class TestUnknownControlTypeTelemetry:
             agent_id=agent_id,
             ctrl={"type": "heartbeat"},
             routing=_FakeRouting(),
-            db=_FakeDb(),
         )
         after = agent_ws_module._unknown_control_type_total
         assert after == before

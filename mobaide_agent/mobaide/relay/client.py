@@ -11,9 +11,11 @@ import asyncio
 import json
 import logging
 import platform
+import random
 import re
 import struct
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -295,23 +297,33 @@ class RelayClient:
         logger.info("relay.stopped")
 
     async def _connect_loop(self) -> None:
-        """Reconnect loop with exponential backoff.
+        """Reconnect loop with stability-gated backoff and decorrelated jitter.
+
+        The backoff state resets to ``reconnect_base_delay`` only after a
+        connection survives ``reconnect_stability_threshold`` seconds —
+        regardless of HOW it ends. A connection that dies young keeps its
+        escalated delay even when it closed cleanly (an instant clean close
+        is still a flap). Each sleep is drawn from ``uniform(base, delay*3)``
+        capped at ``reconnect_max_delay`` (AWS decorrelated jitter), so when
+        a relay restart kills every stable connection at once the herd's
+        reconnects spread over ``[base, 3*base]`` instead of landing in the
+        same instant.
 
         On :class:`ProtocolIncompatibleError` the loop fires
         ``self._on_protocol_incompatible`` (if wired) so the HTTPS
-        bootstrap can stage an updated release, then clamps the next
-        delay to ``reconnect_max_delay`` instead of doubling the base
-        delay. Hammering the relay at 60s intervals when the agent is
-        provably wire-incompatible only generates log noise and never
-        succeeds; the recovery path is an HTTPS-driven binary swap,
-        not a relay reconnect.
+        bootstrap can stage an updated release, then pins the next
+        delay to exactly ``reconnect_max_delay`` — deliberately skipping
+        jitter; retry spread buys nothing when the agent is provably
+        wire-incompatible. Hammering the relay faster only generates log
+        noise and never succeeds; the recovery path is an HTTPS-driven
+        binary swap, not a relay reconnect.
         """
         delay = self._config.reconnect_base_delay
         while not self._stopping:
+            started = time.monotonic()
+            proto_incompatible = False
             try:
                 await self._run_connection()
-                # Successful connection that ended normally — reset backoff.
-                delay = self._config.reconnect_base_delay
             except asyncio.CancelledError:
                 raise
             except ProtocolIncompatibleError as exc:
@@ -324,19 +336,31 @@ class RelayClient:
                             "relay.protocol_incompatible_callback_failed: %s",
                             cb_exc,
                         )
-                # If the callback staged a release the updater has
-                # already exited; otherwise back off to the max delay
-                # to stop the 60s-warning churn the user sees in logs.
-                delay = self._config.reconnect_max_delay
+                proto_incompatible = True
             except Exception as exc:
                 logger.warning("relay.connection_failed: %s", exc)
 
             if self._stopping:
                 break
 
-            logger.info("relay.reconnecting delay=%.1fs", delay)
+            uptime = time.monotonic() - started
+            if proto_incompatible:
+                # If the callback staged a release the updater has
+                # already exited; otherwise back off to the max delay
+                # to stop the 60s-warning churn the user sees in logs.
+                delay = self._config.reconnect_max_delay
+            else:
+                if uptime >= self._config.reconnect_stability_threshold:
+                    delay = self._config.reconnect_base_delay
+                delay = min(
+                    self._config.reconnect_max_delay,
+                    random.uniform(self._config.reconnect_base_delay, delay * 3),
+                )
+
+            logger.info(
+                "relay.reconnecting delay=%.1fs uptime=%.1fs", delay, uptime
+            )
             await asyncio.sleep(delay)
-            delay = min(delay * 2, self._config.reconnect_max_delay)
 
     async def _run_connection(self) -> None:
         """Single connection attempt: connect, authenticate, run tunnel."""

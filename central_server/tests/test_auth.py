@@ -279,3 +279,102 @@ class TestZeroTtlTokens:
         assert dashboard_token is not None
         with pytest.raises(jwt.InvalidTokenError, match="mobile_access"):
             auth.decode_mobile_token(dashboard_token)
+
+
+class TestArgon2Hardening:
+    async def test_new_hashes_use_argon2id_owasp_params(self, auth: AuthService):
+        import argon2
+
+        h = await auth._hash_password("pw")
+        params = argon2.extract_parameters(h)
+        assert params.type is argon2.Type.ID
+        assert (params.time_cost, params.memory_cost, params.parallelism) == (
+            3,
+            65536,
+            1,
+        )
+
+    async def test_old_param_hash_still_verifies(self, auth: AuthService):
+        from argon2 import PasswordHasher
+
+        # Cheap legacy-style parameters; per-hash encoding means the new
+        # module-level hasher must still verify it.
+        old = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1).hash("pw")
+        assert await auth._verify_password(old, "pw") is True
+        assert await auth._verify_password(old, "wrong") is False
+
+    async def test_login_rehashes_legacy_hash(
+        self, auth: AuthService, db: Database
+    ):
+        import argon2
+        from argon2 import PasswordHasher
+
+        old = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1).hash(
+            "pass123"
+        )
+        await db.create_user(email="legacy@test.local", password_hash=old)
+
+        await auth.login_user("legacy@test.local", "pass123")
+
+        user = await db.get_user_by_email("legacy@test.local")
+        assert user["password_hash"] != old
+        params = argon2.extract_parameters(user["password_hash"])
+        assert (params.time_cost, params.memory_cost, params.parallelism) == (
+            3,
+            65536,
+            1,
+        )
+        # The migrated hash must keep working.
+        await auth.login_user("legacy@test.local", "pass123")
+
+    async def test_login_with_current_hash_does_not_rewrite(
+        self, auth: AuthService, db: Database
+    ):
+        await auth.register_user("current@test.local", "pass123")
+        before = (await db.get_user_by_email("current@test.local"))[
+            "password_hash"
+        ]
+        await auth.login_user("current@test.local", "pass123")
+        after = (await db.get_user_by_email("current@test.local"))[
+            "password_hash"
+        ]
+        assert after == before
+
+    async def test_dedicated_hash_executor(self, auth: AuthService):
+        assert auth._hash_executor._max_workers == 2
+        h = await auth._hash_password("pw")
+        assert await auth._verify_password(h, "pw") is True
+        auth.close()
+        auth.close()  # idempotent
+
+    async def test_login_succeeds_when_rehash_persist_fails(
+        self, auth: AuthService, db: Database
+    ):
+        from argon2 import PasswordHasher
+
+        old = PasswordHasher(time_cost=1, memory_cost=8, parallelism=1).hash(
+            "pass123"
+        )
+        await db.create_user(email="fragile@test.local", password_hash=old)
+
+        persist_attempts: list[str] = []
+
+        async def _boom(user_id: str, password_hash: str) -> None:
+            persist_attempts.append(user_id)
+            raise RuntimeError("disk full")
+
+        db.update_user_password = _boom  # instance attr shadows the method
+        try:
+            _user_id, _role, token, _scheduled = await auth.login_user(
+                "fragile@test.local", "pass123"
+            )
+        finally:
+            del db.update_user_password
+
+        assert token
+        # Guard against a vacuous pass: the rehash path must actually have
+        # run and raised.
+        assert persist_attempts
+        # The failed migration left the stored legacy hash untouched.
+        user = await db.get_user_by_email("fragile@test.local")
+        assert user["password_hash"] == old

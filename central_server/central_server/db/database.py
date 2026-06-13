@@ -183,6 +183,12 @@ class Database:
         self._conn = await aiosqlite.connect(self._db_path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL")
+        # NORMAL is the recommended synchronous level for WAL: commits stop
+        # fsyncing individually (only checkpoints do), at the cost of possibly
+        # losing the last un-checkpointed frames on OS crash/power loss —
+        # acceptable for this data. Durable across application crashes.
+        await self._conn.execute("PRAGMA synchronous=NORMAL")
+        await self._conn.execute("PRAGMA busy_timeout=5000")
         await self._conn.execute("PRAGMA foreign_keys=ON")
 
         # Schema migration via PRAGMA user_version
@@ -791,10 +797,29 @@ class Database:
         row = await cursor.fetchone()
         return row["owner_user_id"] if row else None
 
-    async def touch_agent_last_seen(self, agent_id: str) -> None:
+    async def touch_agent_last_seen(
+        self, agent_id: str, last_seen: datetime | None = None
+    ) -> None:
+        ts = last_seen.isoformat() if last_seen is not None else _now_iso()
         await self.conn.execute(
             "UPDATE agents SET last_seen_at = ? WHERE agent_id = ?",
-            (_now_iso(), agent_id),
+            (ts, agent_id),
+        )
+        await self.conn.commit()
+
+    async def bulk_touch_agents_last_seen(
+        self, heartbeats: list[tuple[str, datetime]]
+    ) -> None:
+        """Persist ``(agent_id, last_heartbeat)`` pairs in one transaction.
+
+        Rows whose agent was deleted after the caller snapshotted its list
+        are harmless no-ops.
+        """
+        if not heartbeats:
+            return
+        await self.conn.executemany(
+            "UPDATE agents SET last_seen_at = ? WHERE agent_id = ?",
+            [(ts.isoformat(), agent_id) for agent_id, ts in heartbeats],
         )
         await self.conn.commit()
 

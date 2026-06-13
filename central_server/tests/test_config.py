@@ -48,6 +48,14 @@ def test_frozen_config():
         config.port = 1234  # type: ignore[misc]
 
 
+def test_heartbeat_flush_interval_default_and_env(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", raising=False)
+    assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 60
+    monkeypatch.setenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", "15")
+    assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 15
+
+
 def test_ttl_env_vars_default_to_zero(monkeypatch):
     """All three user-facing TTLs default to 0 (never expires) when unset."""
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
