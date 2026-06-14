@@ -1,5 +1,4 @@
 .mcp.json
-.claude
 **/__pycache__
 **/.pytest_cache
 **/venv/
@@ -43,4 +42,3 @@ central_server/data/agent_manifest.json
 # resolve the default `data/agent_manifest.json` from the repo root CWD.
 /data/agent_manifest.json
 .github/release.keystore
-CLAUDE.md
