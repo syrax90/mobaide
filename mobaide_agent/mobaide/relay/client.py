@@ -13,6 +13,7 @@ import logging
 import platform
 import random
 import re
+import ssl
 import struct
 import sys
 import time
@@ -20,6 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import certifi
 import orjson
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -94,6 +96,12 @@ from .envelope import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The agent owns its TLS trust store instead of depending on the host
+# interpreter's default CA bundle: a python.org macOS build whose bundled
+# Install Certificates.command never ran has an empty store and fails to verify
+# a valid public cert. Built once at import; applied to wss:// in _run_connection.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 # PTY frame type bytes — must stay in sync with agent/ws/session_io.py.
 FRAME_OUTPUT = b"o"
@@ -365,8 +373,12 @@ class RelayClient:
     async def _run_connection(self) -> None:
         """Single connection attempt: connect, authenticate, run tunnel."""
         tunnel_url = self._config.server_url.rstrip("/") + "/ws/agent-tunnel"
+        # ssl= must be None for ws:// — websockets raises if a context is passed
+        # to a plaintext URL (e.g. a local dev relay).
+        ssl_ctx = _SSL_CONTEXT if tunnel_url.startswith("wss://") else None
         async with websockets.connect(
             tunnel_url,
+            ssl=ssl_ctx,
             open_timeout=10.0,
             ping_interval=None,  # Application-level pings via CH_CONTROL
             max_size=4 * 1024 * 1024,  # 4 MB max frame
