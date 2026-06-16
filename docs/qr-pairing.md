@@ -6,8 +6,8 @@ legacy `mobaide-agent pair --id ... --token ...` invocation.
 ## Overview
 
 A fresh `mobaide_agent` install used to require the operator to (a) read
-`agent_id` / `agent_token` from the Android `CredentialsDialog`, (b) SSH to
-the agent host, and (c) run `mobaide-agent pair --id <ID> --token <TOKEN>`.
+`agent_id` / `agent_token` from the Android app's credentials screen, (b) SSH
+to the agent host, and (c) run `mobaide-agent pair --id <ID> --token <TOKEN>`.
 Tokens leaked into shell history, copy-paste typos were common, and the
 user drove both ends manually.
 
