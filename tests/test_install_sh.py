@@ -320,4 +320,103 @@ def test_wait_agent_healthy_info_writes_to_stderr_not_stdout() -> None:
     )
 
 
+def test_download_asset_helper_is_defined() -> None:
+    """The ``download_asset`` helper must exist.
+
+    ``stage_release`` delegates every release-asset download to it. If it
+    is renamed or dropped, ``stage_release`` calls into the void and the
+    install fails opaquely instead of staging the tarball/wheel.
+    """
+    funcs = _list_function_names()
+    assert "download_asset" in funcs, (
+        f"expected function 'download_asset' in {_DEPLOY_INSTALL_SH}; "
+        f"found functions: {funcs!r}. stage_release downloads the tarball "
+        f"and wheel through it."
+    )
+
+
+def test_download_asset_uses_curl_not_python_urllib() -> None:
+    """``download_asset`` must fetch over HTTPS with ``curl`` (OS-native
+    trust store), carrying the installer ``-A`` User-Agent.
+
+    This is the macOS SSL fix. A python.org framework interpreter whose
+    bundled ``Install Certificates.command`` never ran has an EMPTY
+    OpenSSL CA store, so Python ``urllib`` raises
+    ``CERTIFICATE_VERIFY_FAILED`` while ``curl`` to the same host succeeds
+    (``fetch_manifest`` + ``bootstrap_trust_key`` already prove curl
+    works). Mirrors ``install.ps1``'s ``Invoke-AgentDownload``, which
+    downloads via ``Invoke-WebRequest`` for the identical root cause.
+    """
+    body = _function_body("download_asset")
+    assert re.search(r"\bcurl\b", body), (
+        "download_asset must use curl for network downloads — curl uses "
+        "the OS trust store; python.org urllib has an empty CA store on "
+        "macOS and fails with CERTIFICATE_VERIFY_FAILED. Body:\n"
+        + repr(body)
+    )
+    assert "-A " in body or "--user-agent" in body, (
+        "download_asset must pass the installer User-Agent (curl -A) so a "
+        "Cloudflare-fronted wheel host doesn't 1010-block the default UA. "
+        "Body:\n" + repr(body)
+    )
+
+
+def test_download_asset_preserves_file_scheme_via_copy() -> None:
+    """``download_asset`` must route ``file://`` / absolute-path URLs to a
+    local copy (``cp``), not curl.
+
+    Preserves the air-gapped self-host path (offline mirrors, test
+    fixtures) the old Python ``fetch()`` supported via
+    ``shutil.copyfile``. Mirrors ``install.ps1``'s ``Invoke-AgentDownload``
+    ``file://`` branch (``Copy-Item``).
+    """
+    body = _function_body("download_asset")
+    assert "file://" in body, (
+        "download_asset must special-case file:// URLs for air-gapped / "
+        "test installs. Body:\n" + repr(body)
+    )
+    assert re.search(r"\bcp\b", body), (
+        "download_asset's file:// / absolute-path branch must copy locally "
+        "with cp (curl on file:// is pointless / inconsistent). Body:\n"
+        + repr(body)
+    )
+
+
+def test_stage_release_downloads_through_download_asset() -> None:
+    """``stage_release`` must fetch BOTH assets via ``download_asset``.
+
+    If either the tarball or the wheel is fetched another way (e.g. a
+    reintroduced Python ``urllib`` call), the macOS empty-CA-store crash
+    this fix removes can return for that asset.
+    """
+    body = _function_body("stage_release")
+    assert body.count("download_asset ") >= 2, (
+        "stage_release must call download_asset for the tarball AND the "
+        "wheel (>= 2 calls). Body:\n" + repr(body)
+    )
+
+
+def test_stage_release_staging_python_does_no_urllib_network() -> None:
+    """The Python staging step in ``stage_release`` must NOT touch the
+    network — no ``urllib.request`` import and no ``urlopen`` call.
+
+    Core of the macOS SSL fix: all network I/O moved to curl
+    (``download_asset``), leaving Python to verify sha256 + rename the
+    wheel + extract the tarball. ``urllib.parse`` (pure string parsing, no
+    sockets) is still allowed for wheel-basename derivation, so the
+    assertion targets the network surface specifically.
+    """
+    body = _function_body("stage_release")
+    assert "urllib.request" not in body, (
+        "stage_release's staging Python must not import urllib.request — "
+        "the python.org empty-CA-store crash (CERTIFICATE_VERIFY_FAILED) "
+        "comes from urllib's default-context urlopen. Network downloads "
+        "now go through curl (download_asset). Body:\n" + repr(body)
+    )
+    assert "urlopen" not in body, (
+        "stage_release's staging Python must not call urlopen — network "
+        "I/O moved to curl (download_asset). Body:\n" + repr(body)
+    )
+
+
 _ = sys  # silence unused-import noise on hosts without Git Bash
