@@ -641,8 +641,12 @@ Both scripts are auto-published from `deploy/` to the root of the
      `daemon-reload`, `enable`, `restart`. The unit runs as the invoking
      user (not a `mobaide` system account), uses `ProtectSystem=strict` with
      `ReadWritePaths=$HOME /opt/mobaide`, and sets `RestartForceExitStatus=75`.
-   * **macOS** — write `~/Library/LaunchAgents/com.mobaide.agent.plist`,
-     `launchctl load`.
+   * **macOS** — resolve the runtime user (`MOBAIDE_RUN_AS_USER` →
+     `$SUDO_USER` → console owner), `chown` the prefix to that user, write
+     `~/Library/LaunchAgents/com.mobaide.agent.plist`, and load it into the
+     user's GUI domain via `launchctl bootstrap gui/<uid>` (run with
+     `launchctl asuser` from root), falling back to a legacy `launchctl load`
+     on headless hosts. The agent runs as the GUI user, not root.
    * **Windows** — download `windows_launcher.py` from
      `https://get.mobaide.com/windows_launcher.py` (override via
      `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`) into

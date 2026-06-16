@@ -201,7 +201,13 @@ and registers the supervisor:
   `MOBAIDE_RUN_AS_USER=<user>` for CI / non-interactive provisioning.
 * **macOS** — installs `~/Library/LaunchAgents/com.mobaide.agent.plist`
   (launchd). `ThrottleInterval=10` gives the boot journal the same rollback
-  window on macOS. Already runs as the invoking user; no extra config.
+  window on macOS. The agent runs as the logged-in GUI user (not root):
+  the installer resolves the target user (`MOBAIDE_RUN_AS_USER` →
+  `$SUDO_USER` → console owner), `chown`s the install prefix to that user,
+  and loads the LaunchAgent into that user's GUI domain via
+  `launchctl bootstrap gui/<uid>` (run with `launchctl asuser` from root),
+  falling back to a legacy `launchctl load` on headless/no-GUI hosts.
+  Override the user with `MOBAIDE_RUN_AS_USER=<user>`.
 
 The install script auto-generates `<prefix>/mobaide_agent/.env` with a
 random `JWT_SECRET_KEY` and prefilled `RELAY_SERVER_URL=wss://mobaide.com`,
@@ -347,7 +353,7 @@ Check the agent's logs for `relay.connection_failed` entries. Common causes:
 - `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` don't match the bcrypt hash stored in central-server's DB for this agent — re-pair via the app or re-issue the token via the admin API
 - Central-server unreachable — verify with `curl https://mobaide.com/api/health`
 - For a local dev stack: the workstation's OS trust store must include Caddy's root CA (see `start-all.ps1`, which auto-installs it)
-- **macOS `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate`:** a python.org framework Python ships an empty OpenSSL CA store until its bundled *Install Certificates.command* runs. The relay now verifies `wss://` against the bundled `certifi` store regardless of the host interpreter; on macOS the launchd launcher (`<prefix>/bin/mobaide-agent-launcher.sh`) additionally exports `SSL_CERT_FILE` from the venv's `certifi` bundle so the auto-update/pairing HTTPS paths verify too. Behind a TLS-intercepting proxy, pin your corporate root CA by adding `SSL_CERT_FILE` to the launchd plist's `EnvironmentVariables` (the launcher leaves a pre-set value untouched), then reload it: `launchctl unload ~/Library/LaunchAgents/com.mobaide.agent.plist && launchctl load ~/Library/LaunchAgents/com.mobaide.agent.plist`.
+- **macOS `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate`:** a python.org framework Python ships an empty OpenSSL CA store until its bundled *Install Certificates.command* runs. The relay now verifies `wss://` against the bundled `certifi` store regardless of the host interpreter; on macOS the launchd launcher (`<prefix>/bin/mobaide-agent-launcher.sh`) additionally exports `SSL_CERT_FILE` from the venv's `certifi` bundle so the auto-update/pairing HTTPS paths verify too. Behind a TLS-intercepting proxy, pin your corporate root CA by adding `SSL_CERT_FILE` to the launchd plist's `EnvironmentVariables` (the launcher leaves a pre-set value untouched), then reload it from your own login session: `launchctl bootout gui/$(id -u)/com.mobaide.agent 2>/dev/null; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mobaide.agent.plist`.
 - A flapping link logs `relay.reconnecting` with a growing `delay` and `uptime`: the reconnect backoff now only resets to base after a connection survives `RELAY_RECONNECT_STABILITY_THRESHOLD` seconds (default `60.0`) and adds decorrelated jitter, so a connection that keeps dropping young keeps its escalated, jittered delay. Raise the threshold on a host with a known-unstable uplink to suppress reconnect-log churn.
 - **Cloudflare Bot Fight Mode (HTTP 403 error 1010):** if the relay is behind Cloudflare, agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>` on all outbound calls (manifest polling, trust-key fetch, pairing initiate), which passes Cloudflare's default Bot Fight Mode. Operators running Super Bot Fight Mode with JA3/JA4 fingerprinting set to "Block" must add a WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`. Older agents should be upgraded to v0.1.3+.
 
