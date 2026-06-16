@@ -767,7 +767,18 @@ EOF
 set -e
 prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
 version="$(cat "$prefix/current_version")"
-exec "$prefix/releases/$version/venv/bin/python" -m mobaide.launcher
+py="$prefix/releases/$version/venv/bin/python"
+# python.org framework Python ships an empty OpenSSL CA path; point OpenSSL at
+# the venv's certifi bundle so the agent's wss/HTTPS TLS verifies. Resolved per
+# launch so it tracks the active release after an auto-update; respects an
+# operator-set SSL_CERT_FILE (e.g. a corporate CA).
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+  cert="$("$py" -m certifi 2>/dev/null || true)"
+  if [ -n "$cert" ]; then
+    export SSL_CERT_FILE="$cert"
+  fi
+fi
+exec "$py" -m mobaide.launcher
 LAUNCHER
     chmod +x "$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
 
