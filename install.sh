@@ -417,7 +417,7 @@ stage_release() {
     # name-version-pyver-abi-platform filename, derived from the manifest's
     # `wheel_url` rather than a static placeholder.
     local wheel_path
-    wheel_path="$(python3 - "$manifest_path" "$tmpdir" "$release_dir" <<'PY'
+    python3 - "$manifest_path" "$tmpdir" "$release_dir" > "$tmpdir/wheel_path" <<'PY'
 import hashlib, json, posixpath, shutil, sys, tarfile, urllib.parse, urllib.request
 from pathlib import Path
 
@@ -472,7 +472,7 @@ with tarfile.open(tarball, mode="r:gz") as tar:
 
 print(wheel)
 PY
-)"
+    wheel_path="$(cat "$tmpdir/wheel_path")"
 
     info "Creating venv in $release_dir/venv"
     python3 -m venv "$release_dir/venv"
