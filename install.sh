@@ -615,7 +615,7 @@ Service may have crashed at startup. Inspect:
     else
         fail "Agent service registered but ${url} did not respond within ${timeout_sec}s.
 Service may have crashed at startup. Inspect:
-    launchctl list | grep com.mobaide.agent
+    launchctl print gui/\$(id -u)/com.mobaide.agent
     tail -n 200 ${MOBAIDE_AGENT_PREFIX}/agent.err.log"
     fi
 }
@@ -780,35 +780,112 @@ EOF
     systemctl restart mobaide-agent
 }
 
+resolve_run_as_user_macos() {
+    # macOS analog of resolve_run_as_user. The agent manages the developer's
+    # own source trees and must run in their GUI (Aqua) session as that user,
+    # never as root — so it is loaded as a per-user LaunchAgent in gui/<uid>
+    # (see install_launchd_plist). Sets script-scoped RUN_USER/RUN_GROUP/
+    # RUN_HOME/RUN_UID (intentionally not `local` — read from other frames).
+    if [ "$PLATFORM" != "darwin" ]; then return 0; fi
+
+    if [ -n "$MOBAIDE_RUN_AS_USER" ]; then
+        RUN_USER="$MOBAIDE_RUN_AS_USER"
+    elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        RUN_USER="$SUDO_USER"
+    elif [ "$(id -u)" -ne 0 ]; then
+        # Non-root install (user-writable prefix): run as ourselves.
+        RUN_USER="$(id -un)"
+    else
+        # Root shell with no sudo context: fall back to the GUI console owner —
+        # whoever is logged into the desktop, which is whose session the agent
+        # should live in.
+        RUN_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+    fi
+
+    if [ "$RUN_USER" = "root" ]; then
+        fail "Refusing to run the agent as 'root'. Re-run with sudo as a regular user,
+or pin the user explicitly: MOBAIDE_RUN_AS_USER=<user>."
+    fi
+    # Reject anything outside the macOS short-name charset before $RUN_USER
+    # reaches id/dscl/chown, the tilde `eval`, or the plist — so no shell
+    # metacharacter from MOBAIDE_RUN_AS_USER/SUDO_USER/console can flow downstream.
+    case "$RUN_USER" in
+        ''|*[!A-Za-z0-9._-]*)
+            fail "Refusing unsafe agent username '${RUN_USER:-<empty>}' (allowed: A-Za-z0-9._-).
+Pin a valid user explicitly: MOBAIDE_RUN_AS_USER=<user>." ;;
+    esac
+    if ! id "$RUN_USER" >/dev/null 2>&1; then
+        fail "Could not determine which macOS user to run the agent as (got '$RUN_USER').
+Pin it explicitly: MOBAIDE_RUN_AS_USER=<user>."
+    fi
+
+    RUN_UID="$(id -u "$RUN_USER")"
+    RUN_GROUP="$(id -gn "$RUN_USER")"
+    RUN_HOME="$(dscl . -read "/Users/$RUN_USER" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //' || true)"
+    if [ -z "$RUN_HOME" ]; then
+        RUN_HOME="$(eval echo "~$RUN_USER" 2>/dev/null || true)"
+    fi
+    if [ -z "$RUN_HOME" ] || [ "$RUN_HOME" = "/" ]; then
+        fail "Could not resolve a valid home directory for '$RUN_USER' (got '${RUN_HOME:-<empty>}')."
+    fi
+
+    info "Agent will run as $RUN_USER ($RUN_GROUP, uid $RUN_UID), HOME=$RUN_HOME"
+}
+
+launchctl_user() {
+    # Run launchctl in $RUN_USER's GUI session. From a root context (the common
+    # case after auto-elevation) `launchctl asuser <uid>` attaches to the user's
+    # Aqua session so gui/<uid> resolves and the loaded job runs as the user.
+    # When already running as the user (user-writable prefix), call directly.
+    if [ "$(id -u)" -eq 0 ]; then
+        launchctl asuser "$RUN_UID" launchctl "$@"
+    else
+        launchctl "$@"
+    fi
+}
+
 install_launchd_plist() {
-    local plist="$HOME/Library/LaunchAgents/com.mobaide.agent.plist"
-    info "Installing launchd plist at $plist"
+    # Per-user LaunchAgent in the target user's GUI domain (gui/<uid>), loaded
+    # via `launchctl bootstrap` as that user — NOT a root `launchctl load`,
+    # which warns ("Got LaunchAgents instead") and would run the agent as root.
+    local plist="$RUN_HOME/Library/LaunchAgents/com.mobaide.agent.plist"
+    local launcher="$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
+    local label="com.mobaide.agent"
+    local domain="gui/$RUN_UID"
+    info "Installing launchd plist at $plist (agent runs as $RUN_USER)"
     mkdir -p "$(dirname "$plist")"
     cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.mobaide.agent</string>
+  <key>Label</key><string>$label</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh</string>
+    <string>$launcher</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>MOBAIDE_AGENT_PREFIX</key><string>$MOBAIDE_AGENT_PREFIX</string>
-    <key>PATH</key><string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/opt/homebrew/bin:\$HOME/.npm-global/bin:\$HOME/.local/bin</string>
+    <key>HOME</key><string>$RUN_HOME</string>
+    <!-- launchd does NOT expand \$VAR here, so \$RUN_HOME is substituted at
+         install time. /bin and /sbin are required (macOS keeps bash — the
+         launcher's #!/bin/bash — and other core tools only there);
+         /opt/homebrew/bin and /usr/local/bin cover Apple-Silicon and Intel
+         Homebrew where the Claude Code CLI and node typically live. -->
+    <key>PATH</key><string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin:/sbin:/opt/homebrew/bin:$RUN_HOME/.npm-global/bin:$RUN_HOME/.local/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>StandardOutPath</key><string>$MOBAIDE_AGENT_PREFIX/agent.out.log</string>
   <key>StandardErrorPath</key><string>$MOBAIDE_AGENT_PREFIX/agent.err.log</string>
 </dict>
 </plist>
 EOF
     mkdir -p "$MOBAIDE_AGENT_PREFIX/bin"
-    cat > "$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh" <<'LAUNCHER'
-#!/usr/bin/env bash
+    cat > "$launcher" <<'LAUNCHER'
+#!/bin/bash
 set -e
 prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
 version="$(cat "$prefix/current_version")"
@@ -825,10 +902,34 @@ if [ -z "${SSL_CERT_FILE:-}" ]; then
 fi
 exec "$py" -m mobaide.launcher
 LAUNCHER
-    chmod +x "$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
+    chmod +x "$launcher"
 
-    launchctl unload "$plist" 2>/dev/null || true
-    launchctl load "$plist"
+    # The agent runs as $RUN_USER, so it must own the prefix (logs, run/,
+    # projects) and the plist. Mirrors the Linux chown in install_systemd_unit.
+    if [ "$(id -u)" -eq 0 ]; then
+        chown -R "$RUN_USER:$RUN_GROUP" "$MOBAIDE_AGENT_PREFIX"
+        # Non-recursive on the LaunchAgents dir: fix ownership if mkdir -p just
+        # created it as root, without touching the user's other agents' plists.
+        chown "$RUN_USER:$RUN_GROUP" "$(dirname "$plist")" "$plist"
+    fi
+
+    # bootout first makes re-install idempotent; bootstrap + enable + kickstart
+    # load and start the agent in the user's GUI domain. Fall back to the legacy
+    # load only if bootstrap fails (e.g. no GUI session on a headless host).
+    launchctl_user bootout "$domain/$label" 2>/dev/null || true
+    if launchctl_user bootstrap "$domain" "$plist"; then
+        launchctl_user enable "$domain/$label" 2>/dev/null || true
+        launchctl_user kickstart -k "$domain/$label" 2>/dev/null || true
+        info "LaunchAgent bootstrapped into $domain."
+    else
+        warn "Could not bootstrap the agent into $domain. This usually means $RUN_USER has
+no active GUI (desktop) login session — a per-user LaunchAgent cannot run without
+one (e.g. a headless / SSH-only Mac). Trying a legacy load as a fallback; if that
+also fails the agent will not start and the health check below will time out.
+On a headless host, enable automatic desktop login for $RUN_USER (or run the
+agent under a different supervisor)."
+        launchctl_user load "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null || true
+    fi
 }
 
 print_completion() {
@@ -893,6 +994,7 @@ main() {
         resolve_run_as_user
         install_systemd_unit
     else
+        resolve_run_as_user_macos
         install_launchd_plist
     fi
 
