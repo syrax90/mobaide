@@ -20,6 +20,7 @@ dependencies = [
     "asgi-correlation-id>=4.3",
     "orjson",
     "websockets>=13.0",
+    "certifi",
     "cryptography>=43.0",
     "segno>=1.6",
 ]
