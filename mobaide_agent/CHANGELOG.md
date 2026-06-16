@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.12](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.11...agent-v0.2.12) (2026-06-16)
+
+
+### Bug Fixes
+
+* **agent:** verify relay TLS against certifi instead of host trust store ([5cdd9e1](https://github.com/syrax90/claude_mobile/commit/5cdd9e1c7059d966b47e92e19479eaa339b2cbb9))
+* **agent:** verify relay TLS against certifi instead of host trust store ([8f287e8](https://github.com/syrax90/claude_mobile/commit/8f287e8e88e794b062327f6699f3f2fa81c2964f))
+
 ## [0.2.11](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.10...agent-v0.2.11) (2026-06-13)
 
 
