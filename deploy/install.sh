@@ -259,6 +259,33 @@ fetch_manifest() {
     fi
 }
 
+# Centralized install-time asset download. Network I/O goes through curl (the
+# OS-native trust store), never Python urllib: a python.org framework build
+# whose bundled ``Install Certificates.command`` never ran has an EMPTY OpenSSL
+# CA store, so urllib fails TLS verification with CERTIFICATE_VERIFY_FAILED even
+# when curl to the same endpoint succeeds (fetch_manifest + bootstrap_trust_key
+# above already prove curl works against the same infra). Mirrors
+# deploy/install.ps1's Invoke-AgentDownload, which downloads via Invoke-WebRequest
+# for the identical root cause. The file:// / absolute-path branch preserves the
+# air-gapped self-host path (offline mirrors, test fixtures) the old Python
+# fetch() supported. curl is a required dependency (check_command curl in main).
+#
+# Resilience flags on the network fetch: ``--retry``/``--retry-connrefused``
+# survive a transient blip (DNS hiccup, reset, momentary 5xx) instead of
+# aborting the whole ``curl|bash`` install; ``--connect-timeout`` fail-fasts on
+# an unreachable host while ``--max-time`` still caps a legitimately slow large
+# transfer; ``--`` ends option parsing so a URL can never be read as a flag.
+download_asset() {
+    local url="$1" dest="$2" user_agent="$3"
+    case "$url" in
+        file://*) cp -f -- "${url#file://}" "$dest" ;;
+        /*)       cp -f -- "$url" "$dest" ;;
+        *)        curl -fsSL --connect-timeout 30 --max-time 300 --retry 3 --retry-connrefused \
+                      -A "$user_agent" -o "$dest" -- "$url" \
+                      || fail "Failed to download $url" ;;
+    esac
+}
+
 # Round-trip validate that ``$MOBAIDE_AGENT_TRUST_KEY_B64`` decodes to a
 # 32-byte Ed25519 public key. Used by both the env-var-pinned path and the
 # central-server-fetched path so a malformed key surfaces immediately at
@@ -411,31 +438,46 @@ stage_release() {
     # cleanup below) still surrender the directory on EXIT.
     tmpdir="$(mktemp -d)"
 
-    # Capture the heredoc's stdout: the Python script prints exactly one line
-    # — the staged wheel's full path. pip 25.2+ enforces PEP 427 wheel-filename
-    # validation, so the wheel must be staged under its canonical
-    # name-version-pyver-abi-platform filename, derived from the manifest's
-    # `wheel_url` rather than a static placeholder.
+    # Download the release assets with curl, then hand the local paths to a
+    # network-free Python staging step. curl (OS-native trust store) replaces
+    # the old urllib fetch because a python.org framework build whose bundled
+    # ``Install Certificates.command`` never ran has an EMPTY OpenSSL CA store,
+    # so urllib raises CERTIFICATE_VERIFY_FAILED even though curl to the same
+    # host succeeds — see download_asset. Mirrors deploy/install.ps1.
+    #
+    # The two asset URLs come out of the signature-verified manifest via plain
+    # ``python3 -c`` (local JSON, no network). Deliberately NOT a heredoc inside
+    # ``$(...)``: macOS bash 3.2.57 re-scans such a body and aborts the install
+    # at parse time — see test_install_sh_heredoc_no_subst.py.
+    local tarball_url wheel_url
+    tarball_url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['body']['tarball_url'])" "$manifest_path")"
+    wheel_url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['body']['wheel_url'])" "$manifest_path")"
+    [ -n "$tarball_url" ] || fail "manifest is missing 'tarball_url'"
+    [ -n "$wheel_url" ] || fail "manifest is missing 'wheel_url'"
+
+    # Identify as the installer so a Cloudflare-fronted wheel host doesn't
+    # classify the request as the default curl UA (Bot Fight Mode 1010) —
+    # mirrors deploy/install.ps1's installer User-Agent. The wheel lands under a
+    # temp name; the staging step below renames it to its canonical PEP 427
+    # filename (pip 25.2+ validates wheel filenames at install time).
+    local user_agent="mobaide-agent-installer/${target_version}"
+    download_asset "$tarball_url" "$tmpdir/agent.tar.gz" "$user_agent"
+    download_asset "$wheel_url" "$tmpdir/wheel.download" "$user_agent"
+
+    # Pure-local staging: verify sha256, rename the wheel to its canonical PEP
+    # 427 name, extract the tarball. Prints exactly one line — the staged
+    # wheel's full path. Runs as a plain command with stdout redirected to a
+    # file (NOT captured in ``$(...)``) so macOS bash 3.2 never re-scans the
+    # Python body — see test_install_sh_heredoc_no_subst.py.
     local wheel_path
     python3 - "$manifest_path" "$tmpdir" "$release_dir" > "$tmpdir/wheel_path" <<'PY'
-import hashlib, json, posixpath, shutil, sys, tarfile, urllib.parse, urllib.request
+import hashlib, json, posixpath, sys, tarfile, urllib.parse
 from pathlib import Path
 
 manifest_path, tmpdir, release_dir = sys.argv[1:4]
 record = json.loads(Path(manifest_path).read_text())
 body = record["body"]
 
-# Identify ourselves so a Cloudflare-fronted wheel host doesn't classify the
-# request as the default ``Python-urllib/X.Y`` UA (Bot Fight Mode 1010).
-USER_AGENT = f"mobaide-agent-installer/{body.get('version', 'unknown')}"
-
-def fetch(url, dest):
-    if url.startswith("file://") or url.startswith("/"):
-        shutil.copyfile(url.removeprefix("file://"), dest)
-        return
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as fh:
-        shutil.copyfileobj(resp, fh)
 
 def verify_sha256(path, expected):
     digest = hashlib.sha256()
@@ -444,6 +486,7 @@ def verify_sha256(path, expected):
             digest.update(chunk)
     if digest.hexdigest().lower() != expected.lower():
         sys.exit(f"sha256 mismatch for {path}")
+
 
 def wheel_basename(url):
     if url.startswith("file://"):
@@ -462,9 +505,11 @@ def wheel_basename(url):
 
 tarball = Path(tmpdir) / "agent.tar.gz"
 wheel = Path(tmpdir) / wheel_basename(body["wheel_url"])
-fetch(body["tarball_url"], tarball)
+# curl staged the wheel under a temp name; move it to its canonical PEP 427
+# filename so pip 25.2+'s wheel-filename validator accepts it at install time.
+(Path(tmpdir) / "wheel.download").replace(wheel)
+
 verify_sha256(tarball, body["tarball_sha256"])
-fetch(body["wheel_url"], wheel)
 verify_sha256(wheel, body["wheel_sha256"])
 
 with tarfile.open(tarball, mode="r:gz") as tar:
