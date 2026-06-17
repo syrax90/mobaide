@@ -875,6 +875,14 @@ install_launchd_plist() {
          Homebrew where the Claude Code CLI and node typically live. -->
     <key>PATH</key><string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin:/sbin:/opt/homebrew/bin:$RUN_HOME/.npm-global/bin:$RUN_HOME/.local/bin</string>
   </dict>
+  <!-- The agent's projects.json / users.json store paths are relative
+       (AgentConfig defaults) and resolve against the process CWD. launchd
+       defaults CWD to / (read-only system volume on modern macOS), so
+       without this the agent crashes on its first-boot store write with
+       [Errno 30] Read-only file system and never binds 8000. Pin CWD to
+       the writable prefix, mirroring the systemd unit's
+       WorkingDirectory=\$MOBAIDE_AGENT_PREFIX. -->
+  <key>WorkingDirectory</key><string>$MOBAIDE_AGENT_PREFIX</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
