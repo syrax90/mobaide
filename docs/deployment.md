@@ -191,9 +191,15 @@ release under `<prefix>/releases/<version>/venv/` (`/opt/mobaide` on
 Linux, `/usr/local/mobaide` on macOS), writes `<prefix>/current_version`,
 and registers the supervisor:
 
-* **Linux** — installs `mobaide-agent.service` (systemd). The unit is
-  configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so the
-  launcher's 3-strike rollback heuristic has room to retry a stable sibling
+* **Linux** — installs `mobaide-agent.service` (systemd). `ExecStart` is the
+  generated `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (the same wrapper
+  macOS launchd already uses), not the older inline
+  `bash -c '... python -m mobaide.launcher'`. The wrapper self-heals a
+  missing/corrupt current-release venv by rolling `current_version` forward to
+  the newest sibling release with a runnable venv before exec; the in-venv
+  launcher then does the 3-strike crash-loop rollback. The unit is
+  configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so those
+  recovery paths have room to retry a stable sibling
   release before systemd stops the unit, and `RestartForceExitStatus=75` so
   the updater's restart trigger is honoured. The agent runs as the user
   who invoked `sudo` (resolved from `$SUDO_USER`) so it can read/write
@@ -299,7 +305,7 @@ No data migration is needed — `projects.json`, releases, and `agent.env` survi
 
 ### Linux (systemd, manual)
 
-The service unit at `deploy/mobaide-agent.service` is a **template** with `__RUN_USER__`, `__RUN_GROUP__`, `__RUN_HOME__` placeholders that the install scripts substitute. If you wire it up by hand, fill those in yourself; `mobaide-agent.service` is otherwise configured for the versioned `releases/` layout (`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer).
+The service unit at `deploy/mobaide-agent.service` is a **template** with `__RUN_USER__`, `__RUN_GROUP__`, `__RUN_HOME__` placeholders that the install scripts substitute. If you wire it up by hand, fill those in yourself; `mobaide-agent.service` is otherwise configured for the versioned `releases/` layout (`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer). Its `ExecStart` is `<prefix>/bin/mobaide-agent-launcher.sh` (the self-healing launcher wrapper the install scripts generate via `write_launcher_script`), so a by-hand wireup must also create that wrapper — the install scripts are the source of truth for its contents.
 
 ```bash
 VERSION="0.1.0"      # replace with the actual agent version being installed

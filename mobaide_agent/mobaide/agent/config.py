@@ -103,6 +103,29 @@ class AgentConfig(BaseSettings):
             return value.strip().lower() in _LOG_SAMPLE_WS_TRUTHY
         return False
 
+    @field_validator(
+        "user_store_path", "projects_store_path", "audit_log_path", mode="after"
+    )
+    @classmethod
+    def _anchor_relative_path(cls, value: str | None) -> str | None:
+        """Anchor a relative store/log path to the install prefix.
+
+        The defaults (and any relative override) otherwise resolve against the
+        process CWD. launchd/systemd pin CWD to the prefix today, but a launch
+        with CWD=``/`` (a read-only volume on modern macOS) crashes the first
+        store write with ``[Errno 30] Read-only file system: projects.json.tmp``.
+        Anchoring to ``default_prefix()`` makes the path CWD-independent; for an
+        installed agent (CWD == prefix) the resolved location is unchanged.
+        Explicit absolute paths — and ``audit_log_path=None`` — pass through.
+        """
+        if value is None:
+            return None
+        if Path(value).is_absolute():
+            return value
+        from mobaide.agent.install_paths import default_prefix
+
+        return str(default_prefix() / value)
+
     @model_validator(mode="after")
     def _require_jwt_secret(self) -> "AgentConfig":
         if not self.jwt_secret_key:

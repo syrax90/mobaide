@@ -34,9 +34,10 @@ class _FakeResp:
 def _capture_request():
     captured: dict = {}
 
-    def _fake(req, *, timeout):
+    def _fake(req, *, timeout, context=None):
         captured["request"] = req
         captured["timeout"] = timeout
+        captured["context"] = context
         return _FakeResp()
 
     return captured, patch("urllib.request.urlopen", side_effect=_fake)
@@ -158,3 +159,23 @@ class TestForwarding:
         # asyncio event loop with a default-blocking urlopen.
         with pytest.raises(TypeError):
             _http.urlopen("https://example.test/path")  # type: ignore[call-arg]
+
+
+class TestTlsContext:
+    def test_passes_certifi_pinned_context(self):
+        # The updater's HTTPS downloads must verify against a certifi-pinned
+        # context (mirroring relay/client.py) rather than the interpreter's
+        # default CA store — empty on python.org framework builds (macOS), no
+        # AIA chasing on Windows. Without this the updater depended on a
+        # launcher-set SSL_CERT_FILE.
+        import ssl
+
+        captured, p = _capture_request()
+        with p:
+            with _http.urlopen("https://example.test/path", timeout=10):
+                pass
+
+        ctx = captured["context"]
+        assert isinstance(ctx, ssl.SSLContext)
+        assert ctx.verify_mode == ssl.CERT_REQUIRED
+        assert ctx.check_hostname is True

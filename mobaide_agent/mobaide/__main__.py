@@ -339,6 +339,12 @@ async def _drive_update(layout, public_key_b64, manifest_url, *, force) -> int:
     signature_b64 = record.get("signature_b64", "")
     latest_version = body.get("version", "")
 
+    # The explicit ``mobaide-agent update`` CLI verb builds its own updater
+    # here, deliberately bypassing app._build_updater's dev-run guard
+    # (``_is_running_managed_release``). It is an operator opt-in that requires
+    # MOBAIDE_AGENT_MANIFEST_URL, so running it from a source checkout against
+    # the install prefix is intentional rather than the accidental clobber the
+    # in-process auto-updater guard prevents.
     updater = StagedBinaryUpdater(
         layout=layout,
         public_key_b64=public_key_b64,

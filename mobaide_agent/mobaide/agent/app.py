@@ -7,6 +7,7 @@ import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from asgi_correlation_id import CorrelationIdMiddleware
 from asgi_correlation_id.context import correlation_id
@@ -61,6 +62,9 @@ from .ws.session_io import (
 )
 from .ws.session_list import router as ws_session_list_router
 
+if TYPE_CHECKING:
+    from mobaide.agent.updater import InstallLayout
+
 logger = get_logger(__name__)
 
 # Endpoints excluded from per-request HTTP middleware logging (high-frequency, low-value).
@@ -72,14 +76,36 @@ def _generate_correlation_id() -> str:
     return secrets.token_hex(16)
 
 
+def _is_running_managed_release(layout: InstallLayout) -> bool:
+    """True when the running interpreter lives under ``<prefix>/releases``.
+
+    The installed agent runs as ``<prefix>/releases/<v>/venv/bin/python`` (the
+    launcher execs that interpreter), so its ``sys.prefix`` resolves under
+    ``layout.releases_dir``. A developer / source-checkout run uses an
+    interpreter outside that tree. Both sides are ``resolve()``-d so a
+    symlinked prefix (Homebrew ``/usr/local``) still compares correctly.
+    """
+    try:
+        running = Path(sys.prefix).resolve()
+        releases = layout.releases_dir.resolve()
+    except OSError:
+        return False
+    return running.is_relative_to(releases)
+
+
 def _build_updater(app: FastAPI):
     """Return a ``StagedBinaryUpdater`` bound to this agent's session
-    manager, or ``None`` if the install layout has no trust key.
+    manager, or ``None`` when the auto-updater must stay disabled.
 
-    When the agent runs from a developer checkout there is no
-    ``<prefix>/trust/central_server.pub`` and the auto-updater stays
-    disabled — manifests delivered over the relay are recorded but
-    never applied, fail-closed.
+    Disabled (fail-closed; relay manifests are recorded but never applied) when
+    either:
+
+    * the install layout has no ``<prefix>/trust/central_server.pub`` (a
+      developer checkout with no pinned trust key); or
+    * the running interpreter is not the prefix's managed release venv. This
+      stops a dev / source run — which shares ``default_prefix()`` and keys the
+      updater off ``__version__`` — from staging over and destroying the
+      installed release when its version differs from the published manifest.
     """
     from mobaide.agent.updater import InstallLayout, StagedBinaryUpdater
 
@@ -89,6 +115,13 @@ def _build_updater(app: FastAPI):
         logger.info(
             "updater.disabled reason=no_trust_key prefix=%s",
             layout.prefix,
+        )
+        return None
+    if not _is_running_managed_release(layout):
+        logger.info(
+            "updater.disabled reason=unmanaged_interpreter sys_prefix=%s "
+            "releases_dir=%s",
+            sys.prefix, layout.releases_dir,
         )
         return None
     return StagedBinaryUpdater(
