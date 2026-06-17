@@ -11,6 +11,7 @@ from mobaide.core.models import SessionConfig, SessionEvent, SessionState
 from mobaide.core.pty_backend import PtyBackend
 from mobaide.core.session import (
     EXECUTE_CLEAR_DELAY_SECONDS,
+    STARTUP_STALL_MIN_BYTES,
     SUBMIT_CR_DELAY_SECONDS,
     TerminalSession,
 )
@@ -650,3 +651,208 @@ class TestWriteSubmitAndExecute:
             ("sleep", SUBMIT_CR_DELAY_SECONDS),
             ("write", b"\r"),
         ]
+
+
+def _stall_config(startup_stall_seconds: float | None) -> SessionConfig:
+    return SessionConfig(
+        session_id="stall-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+        startup_stall_seconds=startup_stall_seconds,
+    )
+
+
+class TestStartupStallWatchdog:
+    """The macOS-gated startup-stall watchdog raises ``awaiting_os_permission``
+    when a freshly-spawned session stays RUNNING, sees no user input, and emits
+    fewer than ``STARTUP_STALL_MIN_BYTES`` before the timeout — the signature of
+    a child blocked on an invisible TCC file-access modal on the host.
+
+    The watchdog body is driven directly with ``asyncio.sleep`` stubbed out so
+    the assertions are deterministic on Linux CI regardless of host platform.
+    The session is set RUNNING in-place (``start()`` would spawn a real PTY);
+    this mirrors the direct-invocation style of ``TestTerminalSessionAttention``.
+    """
+
+    async def test_fires_when_starved_of_output(self) -> None:
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep_mock:
+            await session._startup_stall_watchdog(0.01)
+
+        sleep_mock.assert_awaited_once_with(0.01)
+        assert session.to_info().attention == "awaiting_os_permission"
+        events = _drain_attention_events(session)
+        assert [e.attention for e in events] == ["awaiting_os_permission"]
+
+    async def test_does_not_fire_when_output_meets_threshold(self) -> None:
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+        session._startup_output_bytes = STARTUP_STALL_MIN_BYTES
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention is None
+        assert _drain_attention_events(session) == []
+
+    async def test_does_not_fire_after_user_input(self) -> None:
+        # A user who is typing is plainly not staring at a frozen screen, even
+        # if the child has produced no output yet.
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+        session._user_input_seen = True
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention is None
+        assert _drain_attention_events(session) == []
+
+    async def test_does_not_clobber_preset_awaiting_permission(self) -> None:
+        # A genuine Claude ``awaiting_permission`` hook must win — the
+        # ``_attention is None`` guard keeps the watchdog from overwriting it.
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+        session.set_attention("awaiting_permission")
+        _drain_attention_events(session)
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention == "awaiting_permission"
+        assert _drain_attention_events(session) == []
+
+    async def test_does_not_fire_when_not_running(self) -> None:
+        # A session that already stopped/crashed before the timeout elapsed must
+        # not raise a stale attention.
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.STOPPED
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention is None
+        assert _drain_attention_events(session) == []
+
+    async def test_reader_clears_badge_once_output_crosses_threshold(self) -> None:
+        # End-to-end recovery: the watchdog raised the badge, then real output
+        # flows (the user approved on the Mac). One chunk at/over the threshold
+        # must self-clear the ``awaiting_os_permission`` attention.
+        chunk = b"x" * STARTUP_STALL_MIN_BYTES
+        backend = _ScriptedPtyBackend([chunk])
+        session = TerminalSession(
+            _stall_config(0.01), backend=cast(PtyBackend, backend),
+        )
+        session._state = SessionState.RUNNING
+        session.set_attention("awaiting_os_permission")
+        _drain_attention_events(session)
+
+        await session._reader_loop()
+
+        assert session._startup_output_bytes >= STARTUP_STALL_MIN_BYTES
+        assert session.to_info().attention is None
+        events = _drain_attention_events(session)
+        assert events[-1].attention is None
+
+    async def test_reader_below_threshold_keeps_badge(self) -> None:
+        # A trickle of init bytes under the floor must NOT clear the badge —
+        # the child is still effectively stalled.
+        chunk = b"x" * (STARTUP_STALL_MIN_BYTES - 1)
+        backend = _ScriptedPtyBackend([chunk])
+        session = TerminalSession(
+            _stall_config(0.01), backend=cast(PtyBackend, backend),
+        )
+        session._state = SessionState.RUNNING
+        session.set_attention("awaiting_os_permission")
+        _drain_attention_events(session)
+
+        await session._reader_loop()
+
+        assert session._startup_output_bytes < STARTUP_STALL_MIN_BYTES
+        assert session.to_info().attention == "awaiting_os_permission"
+        assert _drain_attention_events(session) == []
+
+
+@pytest.mark.timeout(15)
+class TestStartupStallWatchdogArming:
+    """``start()`` arms the watchdog task only when the effective timeout is
+    positive. The explicit ``startup_stall_seconds`` override keeps the gating
+    deterministic on Linux CI; the platform-default branch is exercised by
+    pinning ``sys.platform``.
+    """
+
+    async def test_armed_when_timeout_positive(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(0.01), backend=cast(PtyBackend, backend),
+        )
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session.start()
+            try:
+                assert session._stall_task is not None
+            finally:
+                await session.stop()
+
+    async def test_disabled_when_zero(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(0.0), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            assert session._stall_task is None
+        finally:
+            await session.stop()
+
+    async def test_none_disables_off_darwin(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(None), backend=cast(PtyBackend, backend),
+        )
+        with patch("mobaide.core.session.sys.platform", "linux"):
+            await session.start()
+            try:
+                assert session._stall_task is None
+            finally:
+                await session.stop()
+
+    async def test_none_enables_on_darwin(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(None), backend=cast(PtyBackend, backend),
+        )
+        with patch("mobaide.core.session.sys.platform", "darwin"), patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session.start()
+            try:
+                assert session._stall_task is not None
+            finally:
+                await session.stop()
+
+    async def test_stop_cancels_watchdog_task(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(60.0), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        task = session._stall_task
+        assert task is not None
+        await session.stop()
+        assert task.done()

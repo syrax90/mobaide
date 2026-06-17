@@ -232,6 +232,33 @@ sudo bash deploy/setup.sh
 MOBAIDE_RUN_AS_USER=alice sudo -E bash deploy/setup.sh
 ```
 
+### macOS file-access permissions (Full Disk Access / TCC)
+
+On macOS, the first time the agent — or a `claude` session it spawns — reads files in
+a privacy-protected folder (Documents, Desktop, Downloads, iCloud Drive, or a
+removable/network volume), macOS posts a **Transparency-Consent-Control (TCC)
+permission dialog** (e.g. *"python3.x would like to access files in your Documents
+folder"*) on the **host's desktop**. The agent runs as a per-user LaunchAgent, so that
+dialog targets the logged-in Mac user — a remote mobile user never sees it, and the
+process that touched the file blocks until it is answered, so the session looks frozen.
+
+The agent does **not** try to suppress these prompts. macOS only grants Full Disk
+Access to `.app` bundles, not to bare interpreters like the agent's venv `python`, and
+there is no supported way to pre-authorize file access on an unmanaged Mac without an
+MDM-pushed PPPC profile. Instead the agent makes the wait **visible**: a per-session
+startup watchdog that sees essentially no output flags the likely block and raises an
+`awaiting_os_permission` attention, which the mobile app surfaces as **"Action needed
+on your Mac"** (notification + badge) rather than a blank terminal. `/api/health` also
+reports `macos_full_disk_access` (`true`/`false` on macOS, `null` elsewhere) for support.
+
+**To resolve:** approve the dialog on the Mac. macOS remembers each grant per folder
+category, so it is a one-time approval per category, not a recurring prompt. To
+eliminate the prompts entirely (power users), wrap the launchd-launched binary in a
+code-signed `.app` bundle and grant *that* Full Disk Access — Apple's only supported
+path for a background tool. It is intentionally **not** automated here, because
+child-process TCC inheritance to the `claude` subprocess tree is not guaranteed across
+macOS versions.
+
 ### Threat model
 
 The agent now runs with the developer's full UID privileges and has read/write access to `$HOME`. A compromise of the relay channel — i.e. a stolen `RELAY_AGENT_TOKEN` or a compromised central server — gains the same access the developer has interactively:

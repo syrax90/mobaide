@@ -4,11 +4,13 @@ import asyncio
 import collections
 import logging
 import re
+import sys
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
 from .da_responder import DaResponder
+from .macos_access import full_disk_access
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
 from .osc_parser import OscTitleExtractor
 from .pty_backend import PtyBackend, create_pty_backend
@@ -62,6 +64,23 @@ SUBMIT_CR_DELAY_SECONDS = 0.2
 # prompt before replacement text arrives.
 EXECUTE_CLEAR_DELAY_SECONDS = 0.1
 
+# A freshly-spawned Claude renders its full TUI (kilobytes) within a second or
+# two; a child blocked on an invisible macOS file-access (TCC) modal emits at
+# most a few terminal-init bytes then stalls. If a session is still RUNNING,
+# has had no user input, and has produced fewer than STARTUP_STALL_MIN_BYTES
+# this many seconds after spawn, the agent raises an ``awaiting_os_permission``
+# attention so a remote client sees an actionable "approve on your Mac" state
+# instead of a silent freeze. macOS-only by default (see
+# ``SessionConfig.startup_stall_seconds``).
+STARTUP_STALL_SECONDS = 8.0
+
+# Output-byte floor separating "rendered its UI and is idly waiting" (a normal
+# ready session — already well past this) from "never got going" (blocked).
+# Kept low: only the handful of init bytes a stalled child emits fall under it,
+# while a healthy Claude banner is several KB — so an idle-but-ready session is
+# never misflagged.
+STARTUP_STALL_MIN_BYTES = 256
+
 
 class TerminalSession:
     """Owns a single PTY session with async I/O, scrollback, ring buffer,
@@ -103,6 +122,13 @@ class TerminalSession:
         # badge even if it missed the one-shot ``session.attention`` event.
         self._attention: str | None = None
         self._exit_reason: str | None = None
+        # Startup-stall watchdog state (see STARTUP_STALL_SECONDS). The reader
+        # loop tallies output bytes; the watchdog raises an
+        # ``awaiting_os_permission`` attention if the child stays silent, which
+        # on macOS almost always means a TCC modal is blocking it on the host.
+        self._startup_output_bytes = 0
+        self._user_input_seen = False
+        self._stall_task: asyncio.Task[None] | None = None
 
     @property
     def state(self) -> SessionState:
@@ -145,6 +171,14 @@ class TerminalSession:
             self._title_coalescer(),
             name=f"title-coalescer-{self._config.session_id}",
         )
+        stall = self._config.startup_stall_seconds
+        if stall is None:
+            stall = STARTUP_STALL_SECONDS if sys.platform == "darwin" else 0.0
+        if stall > 0:
+            self._stall_task = asyncio.create_task(
+                self._startup_stall_watchdog(stall),
+                name=f"stall-watchdog-{self._config.session_id}",
+            )
         logger.info("Session %s started (pid=%s)", self.session_id, self.pid)
 
     async def _reader_loop(self) -> None:
@@ -175,6 +209,14 @@ class TerminalSession:
                     self._title_event.set()
                 self._scrollback.append(data)
                 self._append_ring(data)
+                self._startup_output_bytes += len(data)
+                if (
+                    self._attention == "awaiting_os_permission"
+                    and self._startup_output_bytes >= STARTUP_STALL_MIN_BYTES
+                ):
+                    # Output is flowing again — the user approved the macOS
+                    # modal (or it was a false positive). Drop the badge.
+                    self.clear_attention()
                 # Drop-oldest policy: never stall the PTY reader due to slow
                 # consumers.  Stale output frames are acceptable to lose —
                 # the ring buffer holds recent bytes for reconnect replay.
@@ -230,6 +272,41 @@ class TerminalSession:
         except asyncio.CancelledError:
             raise
 
+    async def _startup_stall_watchdog(self, timeout: float) -> None:
+        """Flag a session that never produced output as awaiting OS permission.
+
+        Sleeps ``timeout`` seconds, then — if the session is still RUNNING, the
+        user has not typed, the child has emitted fewer than
+        ``STARTUP_STALL_MIN_BYTES``, and no other attention is already pending —
+        raises ``awaiting_os_permission``. On macOS that almost always means a
+        TCC file-access modal is blocking the child on the host's desktop, which
+        a remote client can neither see nor answer. The ``_attention is None``
+        guard keeps a genuine Claude ``awaiting_permission`` hook from being
+        clobbered; ``full_disk_access`` is probed only to enrich the log.
+        """
+        try:
+            await asyncio.sleep(timeout)
+        except asyncio.CancelledError:
+            raise
+        if (
+            self._state == SessionState.RUNNING
+            and not self._user_input_seen
+            and self._startup_output_bytes < STARTUP_STALL_MIN_BYTES
+            and self._attention is None
+        ):
+            # Offload the probe's blocking open() off the event loop, matching
+            # this module's run_in_executor discipline for all other I/O.
+            fda = await asyncio.to_thread(full_disk_access)
+            logger.info(
+                "Session %s stalled at startup (%d bytes in %.1fs); raising "
+                "awaiting_os_permission (full_disk_access=%s)",
+                self.session_id,
+                self._startup_output_bytes,
+                timeout,
+                fda,
+            )
+            self.set_attention("awaiting_os_permission")
+
     def _log_da_write_failure(self, fut: asyncio.Future) -> None:
         """Surface exceptions from the fire-and-forget DA reply write."""
         exc = fut.exception()
@@ -281,12 +358,13 @@ class TerminalSession:
             yield snapshot[start : start + chunk_size]
 
     def set_attention(self, attention: str, exit_reason: str | None = None) -> None:
-        """Record a hook-driven attention trigger and emit an attention event.
+        """Record an attention trigger and emit an attention event.
 
         ``attention`` is one of ``awaiting_permission`` | ``turn_finished`` |
-        ``ended``; ``exit_reason`` is supplied only for ``ended``. Called from
-        the agent's ``/internal/hook`` endpoint on the event loop, so the
-        ``put_nowait`` enqueue is safe.
+        ``ended`` (Claude Code hooks, via the agent's ``/internal/hook``
+        endpoint) or ``awaiting_os_permission`` (the startup-stall watchdog).
+        ``exit_reason`` is supplied only for ``ended``. Always called on the
+        event loop, so the ``put_nowait`` enqueue is safe.
         """
         self._attention = attention
         if exit_reason is not None:
@@ -337,7 +415,9 @@ class TerminalSession:
         """Write raw bytes to the PTY stdin."""
         # User input means the user responded — drop any pending attention so
         # the badge clears for both "typed next instruction" and "approved a
-        # permission prompt".
+        # permission prompt". Also suppress the startup-stall watchdog: a user
+        # who is typing is plainly not staring at a frozen screen.
+        self._user_input_seen = True
         self.clear_attention()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
@@ -404,6 +484,13 @@ class TerminalSession:
             self._title_task.cancel()
             try:
                 await asyncio.wait_for(self._title_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+
+        if self._stall_task is not None and not self._stall_task.done():
+            self._stall_task.cancel()
+            try:
+                await asyncio.wait_for(self._stall_task, timeout=2.0)
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 

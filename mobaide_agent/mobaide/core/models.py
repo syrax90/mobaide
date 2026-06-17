@@ -59,6 +59,13 @@ class SessionConfig:
     # staying ``SessionKind.SHELL`` (Claude sessions use claude_options.worktree).
     worktree: bool = False
     branch_name: str | None = None
+    # Seconds after spawn to wait before flagging a session that produced
+    # essentially no output (< STARTUP_STALL_MIN_BYTES) as stalled — almost
+    # always a macOS file-access (TCC) modal blocking the child invisibly on the
+    # host's desktop, which a remote client cannot see. ``None`` lets
+    # ``TerminalSession.start`` pick the platform default (enabled on macOS,
+    # disabled elsewhere); ``0`` disables it; tests set an explicit value.
+    startup_stall_seconds: float | None = None
 
 
 @dataclass
@@ -72,9 +79,12 @@ class SessionInfo:
     title: str | None = None
     project_name: str | None = None
     kind: SessionKind = SessionKind.CLAUDE
-    # Hook-driven attention state: ``awaiting_permission`` | ``turn_finished``
-    # | ``ended`` | ``None``. Stamped on the wire DTO so a client that missed
-    # the one-shot ``session.attention`` event still resyncs from any
+    # Attention state: ``awaiting_permission`` | ``awaiting_os_permission`` |
+    # ``turn_finished`` | ``ended`` | ``None``. ``awaiting_os_permission`` is the
+    # agent's own startup-stall heuristic (a child producing no output is most
+    # likely blocked on an invisible macOS TCC file-access modal); the others
+    # are Claude Code hook-driven. Stamped on the wire DTO so a client that
+    # missed the one-shot ``session.attention`` event still resyncs from any
     # full-state snapshot. ``exit_reason`` carries the human-readable end
     # cause (Claude Code ``SessionEnd`` reason, or ``process_exited`` on crash).
     attention: str | None = None
@@ -89,8 +99,9 @@ class SessionEvent:
     data: bytes | None = None
     timestamp: float = field(default_factory=time.time)
     # For ``attention`` events: the trigger reason (``awaiting_permission`` |
-    # ``turn_finished`` | ``ended``). ``None`` marks a *clear* (user responded),
-    # which refreshes the snapshot but is not a notification trigger.
+    # ``awaiting_os_permission`` | ``turn_finished`` | ``ended``). ``None`` marks
+    # a *clear* (user responded), which refreshes the snapshot but is not a
+    # notification trigger.
     attention: str | None = None
 
 
