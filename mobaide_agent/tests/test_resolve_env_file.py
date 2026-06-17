@@ -1,9 +1,12 @@
 """Tests for ``mobaide.agent.app._resolve_env_file``.
 
-Covers the two-step resolution: install-prefix path first, then a
-developer-checkout fallback adjacent to the package source. Both must
-miss before the function returns ``None`` and pydantic-settings is left
-to read process env vars only.
+Covers the conditional resolution between the install-prefix env and the
+developer-checkout env adjacent to the package source. When
+``MOBAIDE_AGENT_PREFIX`` is set explicitly the install-prefix path is tried
+first (then the dev fallback); when it is unset the developer-checkout env is
+preferred, so a source-tree agent does not silently adopt a co-installed
+agent's env. Both candidates must miss before the function returns ``None``
+and pydantic-settings is left to read process env vars only.
 """
 from __future__ import annotations
 
@@ -84,3 +87,70 @@ class TestResolveEnvFile:
         result = _resolve_env_file()
 
         assert result is None
+
+    def test_dev_checkout_preferred_when_prefix_unset(
+        self, tmp_path, monkeypatch
+    ):
+        # No explicit MOBAIDE_AGENT_PREFIX: a developer `python -m mobaide`
+        # from a source tree must use the checkout's own .env, not a
+        # co-installed agent's env at the OS-default prefix. default_prefix is
+        # patched (not the env var) so the real OS-default path is never read.
+        monkeypatch.delenv("MOBAIDE_AGENT_PREFIX", raising=False)
+
+        install_prefix = tmp_path / "install_prefix"
+        install_env = install_prefix / "mobaide_agent" / ".env"
+        install_env.parent.mkdir(parents=True)
+        install_env.write_text("JWT_SECRET_KEY=from-install\n", encoding="utf-8")
+        monkeypatch.setattr(agent_app, "default_prefix", lambda: install_prefix)
+
+        fake_app = _make_fake_package_root(tmp_path)
+        dev_env = fake_app.parents[2] / ".env"
+        dev_env.write_text("JWT_SECRET_KEY=from-dev\n", encoding="utf-8")
+        monkeypatch.setattr(agent_app, "__file__", str(fake_app))
+
+        result = _resolve_env_file()
+
+        assert result == dev_env
+
+    def test_install_prefix_used_when_prefix_unset_and_no_dev_checkout(
+        self, tmp_path, monkeypatch
+    ):
+        # Non-editable (wheel) install with no env var set: there is no
+        # checkout .env, so the OS-default prefix env is the sole candidate.
+        monkeypatch.delenv("MOBAIDE_AGENT_PREFIX", raising=False)
+
+        install_prefix = tmp_path / "install_prefix"
+        install_env = install_prefix / "mobaide_agent" / ".env"
+        install_env.parent.mkdir(parents=True)
+        install_env.write_text("JWT_SECRET_KEY=from-install\n", encoding="utf-8")
+        monkeypatch.setattr(agent_app, "default_prefix", lambda: install_prefix)
+
+        fake_app = _make_fake_package_root(tmp_path)
+        monkeypatch.setattr(agent_app, "__file__", str(fake_app))
+
+        result = _resolve_env_file()
+
+        assert result == install_env
+
+    def test_empty_prefix_treated_as_unset_prefers_dev_checkout(
+        self, tmp_path, monkeypatch
+    ):
+        # An empty MOBAIDE_AGENT_PREFIX must count as unset (mirroring
+        # default_prefix's `if explicit:` check): the dev-first order wins, so
+        # the checkout .env is returned over the OS-default install prefix.
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", "")
+
+        install_prefix = tmp_path / "install_prefix"
+        install_env = install_prefix / "mobaide_agent" / ".env"
+        install_env.parent.mkdir(parents=True)
+        install_env.write_text("JWT_SECRET_KEY=from-install\n", encoding="utf-8")
+        monkeypatch.setattr(agent_app, "default_prefix", lambda: install_prefix)
+
+        fake_app = _make_fake_package_root(tmp_path)
+        dev_env = fake_app.parents[2] / ".env"
+        dev_env.write_text("JWT_SECRET_KEY=from-dev\n", encoding="utf-8")
+        monkeypatch.setattr(agent_app, "__file__", str(fake_app))
+
+        result = _resolve_env_file()
+
+        assert result == dev_env

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import sys
 import time
@@ -263,28 +264,51 @@ async def _start_relay_in_process(
 def _resolve_env_file() -> Path | None:
     """Return the canonical agent ``.env`` path if one exists.
 
-    Resolution order:
+    Two candidates: the install-prefix env ``<prefix>/mobaide_agent/.env`` and
+    the developer-checkout env ``<package_root>/../.env`` (``__file__``'s
+    ``parents[2]/.env``). The latter only exists in editable / dev installs
+    where ``__file__`` resolves into the repo source tree; for wheel installs
+    ``parents[2]`` is ``site-packages`` and it silently misses.
 
-    1. ``<install_prefix>/mobaide_agent/.env`` — production layout written
-       by the install scripts (see ``env_path_for_prefix``).
-    2. ``<package_root>/../.env`` — developer-checkout fallback so
-       ``python -m mobaide`` works from a source tree without requiring
-       ``MOBAIDE_AGENT_PREFIX`` to be set. Only triggers in editable / dev
-       installs where ``__file__`` resolves into the repo source tree; for
-       wheel installs ``parents[2]`` is ``site-packages`` and the fallback
-       silently misses.
+    Which one is tried first depends on whether ``MOBAIDE_AGENT_PREFIX`` is set
+    in the agent's *process* environment:
 
-    Returning ``None`` when both candidates miss lets pydantic-settings
-    fall back to process-environment vars (which is what tests rely on).
+    * **Prefix set** — the install layout wins: the prefix env first, then the
+      developer-checkout fallback so an editable install with an unpopulated
+      prefix still boots. The POSIX service supervisors export the prefix into
+      the agent's environment (systemd ``Environment=``, launchd plist
+      ``EnvironmentVariables``), so the installed agent always takes this branch.
+    * **Prefix unset** — an uncontrolled ``python -m mobaide`` from a source
+      tree. The checkout's own env wins over the OS-default install prefix, so
+      a source-tree agent keeps its own identity instead of silently adopting a
+      co-installed agent's ``<os-default-prefix>/mobaide_agent/.env`` — what
+      makes a dev agent valid alongside the script-installed one. The Windows
+      Scheduled Task install also lands here: it passes ``--prefix`` to the
+      launcher but does not export ``MOBAIDE_AGENT_PREFIX`` to the agent
+      process. That stays correct because every non-dev install is wheel-based
+      and ships no ``<site-packages>/.env`` for the developer candidate to
+      match, so resolution falls through to the install prefix exactly as
+      before; only an editable/source checkout has a checkout ``.env`` to
+      prefer. (Empty string counts as unset, mirroring ``default_prefix``'s
+      ``if explicit:`` check.)
+
+    Returning ``None`` when both candidates miss lets pydantic-settings fall
+    back to process-environment vars (which is what tests rely on).
     """
     from mobaide.agent._env_writer import env_path_for_prefix
 
-    candidate = env_path_for_prefix(default_prefix())
-    if candidate.exists():
-        return candidate
+    prefix_env = env_path_for_prefix(default_prefix())
+    dev_env = Path(__file__).resolve().parents[2] / ".env"
 
-    dev_candidate = Path(__file__).resolve().parents[2] / ".env"
-    return dev_candidate if dev_candidate.exists() else None
+    if os.environ.get("MOBAIDE_AGENT_PREFIX"):
+        search_order = (prefix_env, dev_env)
+    else:
+        search_order = (dev_env, prefix_env)
+
+    for candidate in search_order:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def create_app(config: AgentConfig | None = None) -> FastAPI:
