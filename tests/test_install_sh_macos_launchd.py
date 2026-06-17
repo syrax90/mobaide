@@ -19,6 +19,17 @@ launchctl in that user's session; ``install_launchd_plist`` loads via
 ``launchctl bootstrap gui/<uid>`` with bootout/enable/kickstart and a legacy
 ``load`` fallback. The Linux systemd path is untouched.
 
+A second macOS-only defect in the same install path: the plist set no
+``WorkingDirectory``, so the agent ran with CWD ``/`` (read-only system
+volume on modern macOS). Its ``projects.json`` / ``users.json`` store paths
+are relative (``AgentConfig`` defaults) and are designed to resolve under
+the supervisor's working directory — the systemd unit pins
+``WorkingDirectory=$MOBAIDE_AGENT_PREFIX`` but the launchd plist did not, so
+the first-boot store write crashed with ``OSError: [Errno 30] Read-only file
+system: 'projects.json.tmp'`` and 8000 never bound (``KeepAlive`` looped it).
+The plist now pins ``WorkingDirectory`` to the writable prefix, matching
+systemd.
+
 These tests are pure text/AST pins on the source-of-truth files (the same
 convention as ``test_install_sh.py`` / ``test_install_sh_heredoc_no_subst.py``);
 they do NOT execute the installer. End-to-end execution is covered by the
@@ -178,6 +189,35 @@ def test_generated_plist_sets_throttle_interval() -> None:
         "install_launchd_plist must emit a ThrottleInterval key so a "
         "crash-looping launcher does not re-exec instantly (parity with "
         "deploy/launchd/com.mobaide.agent.plist). Body:\n" + repr(body)
+    )
+
+
+def test_generated_plist_sets_working_directory_to_prefix() -> None:
+    """The generated plist must pin ``WorkingDirectory`` to the install
+    prefix.
+
+    The agent's ``projects.json`` / ``users.json`` store paths are relative
+    (``AgentConfig`` defaults) and resolve against the process CWD. launchd
+    defaults CWD to ``/`` (read-only system volume on modern macOS), so
+    without this the first-boot store write fails with ``[Errno 30]
+    Read-only file system: 'projects.json.tmp'`` inside ``create_app`` and
+    uvicorn never binds 8000 — ``KeepAlive`` then loops the crash and
+    ``/api/health`` never comes up. The systemd unit already pins
+    ``WorkingDirectory=$MOBAIDE_AGENT_PREFIX``; the launchd plist must match
+    so the relative store paths land in the writable prefix.
+    """
+    body = _sh_function_body("install_launchd_plist")
+    assert re.search(
+        r"<key>WorkingDirectory</key>\s*<string>\$MOBAIDE_AGENT_PREFIX</string>",
+        body,
+    ), (
+        "install_launchd_plist must emit `<key>WorkingDirectory</key>"
+        "<string>$MOBAIDE_AGENT_PREFIX</string>` so the agent's relative "
+        "projects.json/users.json store writes resolve under the writable "
+        "prefix instead of CWD=/ (read-only), mirroring the systemd unit. "
+        "Without it the agent crashes at first-boot store write with "
+        "[Errno 30] Read-only file system and 8000 never binds. Body:\n"
+        + repr(body)
     )
 
 
@@ -464,6 +504,22 @@ def test_reference_plist_declares_home_key() -> None:
     assert "<key>HOME</key>" in text, (
         f"reference plist {_DEPLOY_PLIST} must declare a HOME key in "
         f"EnvironmentVariables (launchd does not inherit HOME)."
+    )
+
+
+def test_reference_plist_declares_working_directory() -> None:
+    """The static reference template must declare a ``WorkingDirectory`` key.
+
+    launchd defaults CWD to ``/`` (read-only system volume); the agent's
+    relative ``projects.json`` / ``users.json`` store paths would then fail
+    to write. The template documents the key so a hand-install matches the
+    generated plist (and the systemd unit's ``WorkingDirectory``).
+    """
+    text = _read_plist_text()
+    assert "<key>WorkingDirectory</key>" in text, (
+        f"reference plist {_DEPLOY_PLIST} must declare a WorkingDirectory "
+        f"key — launchd defaults CWD to / (read-only), which breaks the "
+        f"agent's relative store writes. Pin it to the writable prefix."
     )
 
 
