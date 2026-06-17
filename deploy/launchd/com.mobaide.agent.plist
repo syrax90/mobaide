@@ -29,6 +29,17 @@
     <key>PATH</key>
     <string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin:/sbin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.local/bin</string>
   </dict>
+  <!--
+    Pin the working directory to the (writable) install prefix. The agent's
+    projects.json / users.json store paths are relative and resolve against
+    CWD; launchd defaults CWD to / (read-only system volume on modern
+    macOS), which crashes the agent on its first-boot store write
+    ([Errno 30] Read-only file system) so it never binds 8000. Mirrors the
+    systemd unit's WorkingDirectory. deploy/install.sh substitutes the real
+    $MOBAIDE_AGENT_PREFIX; if you hand-install this template, replace the
+    path below with your absolute prefix.
+  -->
+  <key>WorkingDirectory</key><string>/usr/local/mobaide</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <!--
