@@ -1,5 +1,21 @@
 # mobaide_agent Changelog
 
+## [0.2.13](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.12...agent-v0.2.13) (2026-06-17)
+
+
+### Features
+
+* **agent:** surface macOS file-access (TCC) freezes to the app instead of hanging ([24740f0](https://github.com/syrax90/claude_mobile/commit/24740f0b212e20616ab516f8a18c661f2079cab5))
+* **agent:** surface macOS file-access (TCC) freezes to the app instead of hanging ([ce03474](https://github.com/syrax90/claude_mobile/commit/ce034747322213b587cdbb41603f849b2baa2d8f))
+
+
+### Bug Fixes
+
+* **agent:** prevent session teardown hanging when child ignores SIGTERM ([9b11714](https://github.com/syrax90/claude_mobile/commit/9b117146f1e1ecc7bad87861eb8a80a3c05917d0))
+* **agent:** prevent session teardown hanging when child ignores SIGTERM ([d4a18a3](https://github.com/syrax90/claude_mobile/commit/d4a18a3e5693a2ccfc7d673ca51d30673edbd0b8))
+* **agent:** select .env by prefix detection to support dev-alongside-installed use case ([f3bfa87](https://github.com/syrax90/claude_mobile/commit/f3bfa87c217b2ecf542f2fd98edb80a068accd7c))
+* **agent:** select .env by prefix detection to support dev-alongside-installed use case ([2cd2955](https://github.com/syrax90/claude_mobile/commit/2cd29553f406eaf9bd88da81c760cc0b009e46f0))
+
 ## [0.2.12](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.11...agent-v0.2.12) (2026-06-16)
 
 
