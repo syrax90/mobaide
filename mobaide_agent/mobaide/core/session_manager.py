@@ -298,7 +298,12 @@ class SessionManager:
     async def _check_liveness(self) -> None:
         """Detect sessions whose underlying process has died unexpectedly."""
         dead_ids: list[str] = []
-        for sid, session in self._sessions.items():
+        # Snapshot under the lock: concurrent create_session/stop_session mutate
+        # _sessions (under the same lock), so iterating the live dict here would
+        # risk "dictionary changed size during iteration".
+        async with self._lock:
+            snapshot = list(self._sessions.items())
+        for sid, session in snapshot:
             if session.state == SessionState.RUNNING and not session._backend.is_alive():
                 runtime_seconds = None
                 try:

@@ -81,6 +81,24 @@ STARTUP_STALL_SECONDS = 8.0
 # never misflagged.
 STARTUP_STALL_MIN_BYTES = 256
 
+# Grace period after the graceful signal (SIGTERM) before escalating to a
+# forceful kill (SIGKILL) during teardown. Interactive login shells and many
+# TUIs ignore SIGTERM and would otherwise keep the PTY slave open, stranding
+# the reader's blocking os.read() and hanging stop() forever. force=True stops
+# skip this grace and kill immediately.
+GRACEFUL_TERM_SECONDS = 2.0
+
+# Poll cadence while waiting for the child to exit after a signal. poll() is a
+# non-blocking waitpid(WNOHANG), so this is cheap; 50 ms keeps a well-behaved
+# child's shutdown latency near-instant.
+CHILD_EXIT_POLL_SECONDS = 0.05
+
+# Upper bound on joining each background task (reader, title, stall) during
+# teardown. The reader may be parked in an uncancellable os.read() inside the
+# thread pool; we cancel and wait at most this long, then abandon it rather
+# than letting teardown block forever.
+TASK_JOIN_TIMEOUT_SECONDS = 2.0
+
 
 class TerminalSession:
     """Owns a single PTY session with async I/O, scrollback, ring buffer,
@@ -469,30 +487,15 @@ class TerminalSession:
         self._state = SessionState.STOPPING
         logger.info("Stopping session %s (force=%s)", self.session_id, force)
 
-        # Terminate the PTY first — this unblocks the reader thread.
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._backend.terminate, force)
+        await self._terminate_child(loop, force)
 
-        if self._reader_task is not None and not self._reader_task.done():
-            self._reader_task.cancel()
-            try:
-                await asyncio.wait_for(self._reader_task, timeout=5.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
-
-        if self._title_task is not None and not self._title_task.done():
-            self._title_task.cancel()
-            try:
-                await asyncio.wait_for(self._title_task, timeout=2.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
-
-        if self._stall_task is not None and not self._stall_task.done():
-            self._stall_task.cancel()
-            try:
-                await asyncio.wait_for(self._stall_task, timeout=2.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
+        # Killing the child closes the PTY slave, so the reader's blocking
+        # os.read returns EOF and the task ends on its own. _join_task still
+        # caps the wait defensively — see its docstring.
+        await self._join_task(self._reader_task, TASK_JOIN_TIMEOUT_SECONDS)
+        await self._join_task(self._title_task, TASK_JOIN_TIMEOUT_SECONDS)
+        await self._join_task(self._stall_task, TASK_JOIN_TIMEOUT_SECONDS)
 
         await loop.run_in_executor(None, self._backend.close)
 
@@ -504,6 +507,58 @@ class TerminalSession:
         except asyncio.QueueFull:
             pass
         logger.info("Session %s stopped", self.session_id)
+
+    async def _terminate_child(
+        self, loop: asyncio.AbstractEventLoop, force: bool
+    ) -> None:
+        """Reliably kill the child so the PTY slave closes and the reader's
+        blocking ``os.read`` returns EOF.
+
+        A single SIGTERM is not enough: interactive login shells (``bash -l``)
+        and many TUIs ignore it and keep the PTY slave open, which would strand
+        the reader thread and hang teardown forever. So we send the graceful
+        signal first, give the child a short grace window to exit, then escalate
+        to SIGKILL if it is still alive. ``force=True`` skips the grace and kills
+        immediately.
+        """
+        await loop.run_in_executor(None, self._backend.terminate, force)
+        if not force and self._backend.is_alive():
+            await self._await_child_exit(GRACEFUL_TERM_SECONDS)
+        if self._backend.is_alive():
+            await loop.run_in_executor(None, self._backend.terminate, True)
+
+    async def _await_child_exit(self, timeout: float) -> bool:
+        """Poll the child until it exits or ``timeout`` elapses; return whether
+        it is gone.
+
+        ``is_alive`` wraps a non-blocking ``poll()`` (``waitpid(WNOHANG)``), so
+        polling on the event loop is cheap and never blocks.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._backend.is_alive():
+                return True
+            await asyncio.sleep(CHILD_EXIT_POLL_SECONDS)
+        return not self._backend.is_alive()
+
+    @staticmethod
+    async def _join_task(task: asyncio.Task[None] | None, timeout: float) -> None:
+        """Cancel ``task`` and wait at most ``timeout`` for it to finish.
+
+        Deliberately uses ``asyncio.wait`` rather than ``asyncio.wait_for``:
+        ``wait_for`` cancels then *awaits* the task until cancellation completes,
+        which never happens if the task is parked in an uncancellable executor
+        call (the PTY reader's blocking ``os.read``, the stall watchdog's
+        ``asyncio.to_thread``) — so it would block forever despite its own
+        timeout. ``asyncio.wait`` returns once ``timeout`` elapses regardless of
+        task state, so a still-stuck task is abandoned instead of wedging
+        teardown. An abandoned reader ends harmlessly once its read returns,
+        since the session is no longer RUNNING.
+        """
+        if task is None or task.done():
+            return
+        task.cancel()
+        await asyncio.wait({task}, timeout=timeout)
 
     def to_info(self) -> SessionInfo:
         """Build a lightweight DTO for this session."""
