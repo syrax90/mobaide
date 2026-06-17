@@ -844,6 +844,21 @@ launchctl_user() {
     fi
 }
 
+await_label_unloaded() {
+    # Poll until a launchd target (gui/<uid>/<label>) leaves its domain.
+    # `launchctl bootout` is asynchronous — the job keeps draining after the
+    # command returns — so bootstrapping the same label too soon races the
+    # teardown and fails with "Bootstrap failed: 5: Input/output error".
+    # Bounded (~5s worst case) so a stuck teardown can never hang the installer.
+    local target="$1"
+    local i=0
+    while launchctl_user print "$target" >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -ge 50 ] && break
+        sleep 0.1
+    done
+}
+
 install_launchd_plist() {
     # Per-user LaunchAgent in the target user's GUI domain (gui/<uid>), loaded
     # via `launchctl bootstrap` as that user — NOT a root `launchctl load`,
@@ -923,19 +938,43 @@ LAUNCHER
 
     # bootout first makes re-install idempotent; bootstrap + enable + kickstart
     # load and start the agent in the user's GUI domain. Fall back to the legacy
-    # load only if bootstrap fails (e.g. no GUI session on a headless host).
+    # load only if bootstrap keeps failing (e.g. no GUI session on a headless
+    # host).
+    #
+    # `launchctl bootout` is ASYNCHRONOUS: it returns before launchd has finished
+    # removing the old job from the domain. Bootstrapping the same label while
+    # the previous KeepAlive job is still draining races and fails with
+    # "Bootstrap failed: 5: Input/output error" — the re-install-over-a-running-
+    # agent case (a clean first install has nothing to drain, so it succeeds).
+    # Settle the domain after bootout and retry bootstrap before concluding the
+    # host has no GUI session.
     launchctl_user bootout "$domain/$label" 2>/dev/null || true
-    if launchctl_user bootstrap "$domain" "$plist"; then
+    await_label_unloaded "$domain/$label"
+
+    local bootstrapped=""
+    local attempt=0
+    while [ "$attempt" -lt 5 ]; do
+        if launchctl_user bootstrap "$domain" "$plist" 2>/dev/null; then
+            bootstrapped=1
+            break
+        fi
+        attempt=$((attempt + 1))
+        # Residual teardown race: wait for the domain to settle, then retry.
+        await_label_unloaded "$domain/$label"
+        sleep 1
+    done
+
+    if [ -n "$bootstrapped" ]; then
         launchctl_user enable "$domain/$label" 2>/dev/null || true
         launchctl_user kickstart -k "$domain/$label" 2>/dev/null || true
         info "LaunchAgent bootstrapped into $domain."
     else
-        warn "Could not bootstrap the agent into $domain. This usually means $RUN_USER has
-no active GUI (desktop) login session — a per-user LaunchAgent cannot run without
-one (e.g. a headless / SSH-only Mac). Trying a legacy load as a fallback; if that
-also fails the agent will not start and the health check below will time out.
-On a headless host, enable automatic desktop login for $RUN_USER (or run the
-agent under a different supervisor)."
+        warn "Could not bootstrap the agent into $domain after several attempts.
+This usually means $RUN_USER has no active GUI (desktop) login session — a
+per-user LaunchAgent cannot run without one (e.g. a headless / SSH-only Mac).
+Trying a legacy load as a fallback; if that also fails the agent will not start
+and the health check below will time out. On a headless host, enable automatic
+desktop login for $RUN_USER (or run the agent under a different supervisor)."
         launchctl_user load "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null || true
     fi
 }
