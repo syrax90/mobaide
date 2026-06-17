@@ -21,11 +21,14 @@ data class SessionResponse(
     val title: String? = null,
     val project_name: String? = null,
     val kind: SessionKind = SessionKind.Claude,
-    // Hook-driven attention state (proto-v4): "awaiting_permission" |
-    // "turn_finished" | "ended" | null. Stamped on every session snapshot so a
-    // reconnecting client recovers the "awaiting you" state after a missed
-    // one-shot session.attention event. exit_reason is the human-readable end
-    // cause, set when a session ends.
+    // Attention state (proto-v4): "awaiting_permission" |
+    // "awaiting_os_permission" | "turn_finished" | "ended" | null.
+    // "awaiting_os_permission" is the agent's startup-stall heuristic (the
+    // session is most likely blocked on a macOS file-access prompt on the
+    // host); the rest are Claude Code hook-driven. Stamped on every session
+    // snapshot so a reconnecting client recovers the "awaiting you" state after
+    // a missed one-shot session.attention event. exit_reason is the
+    // human-readable end cause, set when a session ends.
     val attention: String? = null,
     val exit_reason: String? = null,
 )

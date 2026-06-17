@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 from mobaide import __version__
 from mobaide.core import ClaudeLauncher, ProjectsStore, SessionManager
 from mobaide.core.hook_settings import sweep_hooks_dir
+from mobaide.core.macos_access import full_disk_access
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.rate_limiter import LinearRateLimiter
 from mobaide.linear.scanner import AutoScanSessionManager
@@ -306,6 +307,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
+        # macOS-only: ``False`` means no Full Disk Access, so protected-folder
+        # reads pop a host-desktop TCC modal the remote client can't see (the
+        # per-session startup-stall watchdog surfaces that). Logged once.
+        fda = await asyncio.to_thread(full_disk_access)
+        if fda is not None:
+            logger.info("agent.macos_full_disk_access", granted=fda)
         # Clear hook settings files orphaned by a prior run (crashed sessions
         # never reach the SessionEnd delete). Scoped to this agent's port.
         sweep_hooks_dir(config.port)
@@ -651,6 +658,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "sessions": len(sm.list_sessions()),
             "max_sessions": sm.max_sessions,
             "pairing_pending": getattr(app.state, "pairing_pending", False),
+            # macOS: True/False = has/lacks Full Disk Access; None off macOS.
+            # Offloaded — full_disk_access() does a blocking open(); keep it off
+            # the event loop on this polled endpoint.
+            "macos_full_disk_access": await asyncio.to_thread(full_disk_access),
         }
         if autoscan_mgr is not None:
             result["auto_scans_active"] = len(autoscan_mgr.list())

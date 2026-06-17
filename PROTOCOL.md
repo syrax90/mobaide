@@ -20,15 +20,18 @@ cadence; they do **not** gate compatibility.
   * New event type ``session.attention`` — payload ``{"session": <session dict>}``.
     Emitted when a Claude Code hook reports the session needs the user:
     ``attention`` field is one of ``awaiting_permission`` (permission prompt),
-    ``turn_finished`` (Stop — your move), or ``ended`` (SessionEnd). It is a
+    ``awaiting_os_permission`` (the agent's macOS startup-stall watchdog: a
+    spawned child producing no output is most likely blocked on an invisible
+    host-desktop TCC file-access modal — additive within proto-v4, no version
+    bump), ``turn_finished`` (Stop — your move), or ``ended`` (SessionEnd). It is a
     one-shot notification trigger; clients that miss it (the in-process
     ``EventBus`` drops on a full queue) still recover from the snapshot field
     below. Older clients ignore the unknown type (forward-compatible).
   * The single-session wire dict (``session_to_wire_dict`` — used by
     ``sessions.changed``, ``session.updated``, the ``/ws/sessions`` snapshot and
     the ``/sessions`` REST list) gains two nullable fields:
-    ``attention`` (``awaiting_permission`` | ``turn_finished`` | ``ended`` |
-    ``null``) and ``exit_reason`` (human-readable end cause from the Claude Code
+    ``attention`` (``awaiting_permission`` | ``awaiting_os_permission`` |
+    ``turn_finished`` | ``ended`` | ``null``) and ``exit_reason`` (human-readable end cause from the Claude Code
     ``SessionEnd`` ``reason``, or ``process_exited`` on an unexpected death).
     These let a reconnecting/foregrounding client resync the "awaiting you"
     state after a missed one-shot event.
