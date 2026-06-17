@@ -113,43 +113,62 @@ so the script did not auto-elevate. Install the package manually and re-run:
     Alpine:        sudo apk add py3-virtualenv"
     fi
 
-    local installed=0
+    # Captured package-manager output, surfaced only if every attempt fails.
+    # Each command keeps stdin on /dev/null (no interactive prompt under
+    # ``curl|bash``) and folds stderr into the capture; nothing prints on the
+    # happy path. ``pm_out``/``apt_out`` must stay BARE assignments inside the
+    # ``if``/``&&`` below — a ``local pm_out="$(...)"`` would return ``local``'s
+    # own exit status and mask the command's, silently inverting the fallback
+    # (ShellCheck SC2155).
+    local installed=0 pm_out="" apt_out=""
     if command -v apt-get >/dev/null 2>&1; then
         info "Installing python${version}-venv via apt-get (non-interactive)."
         export DEBIAN_FRONTEND=noninteractive
-        if apt-get install -y --no-install-recommends "python${version}-venv" </dev/null >/dev/null 2>&1 \
-           || apt-get install -y --no-install-recommends python3-venv </dev/null >/dev/null 2>&1; then
+        # Refresh lists FIRST, best-effort (exit status deliberately ignored):
+        # a fresh/minimal image (Docker, debootstrap, a cleaned cloud image)
+        # ships an empty /var/lib/apt/lists, so a cold install fails with
+        # "Unable to locate package"; and a single dead mirror or an expired
+        # Release signature on an UNRELATED repo makes ``apt-get update`` exit
+        # non-zero even when the target installs cleanly — so its status must
+        # NOT gate the install. The previous ``apt-get update && apt-get
+        # install`` chain skipped the install on any such hiccup, the opaque
+        # failure this fixes. Its output is kept so a dead mirror surfaces in
+        # the diagnostic below (the real cause often shows here, not in install).
+        pm_out="$(apt-get update -qq </dev/null 2>&1 || true)"
+        if apt_out="$(apt-get install -y --no-install-recommends "python${version}-venv" </dev/null 2>&1)" \
+           || apt_out="$(apt-get install -y --no-install-recommends python3-venv </dev/null 2>&1)"; then
             installed=1
-        else
-            info "Initial install failed — refreshing apt cache and retrying."
-            if apt-get update -qq </dev/null >/dev/null 2>&1 \
-               && { apt-get install -y --no-install-recommends "python${version}-venv" </dev/null >/dev/null 2>&1 \
-                    || apt-get install -y --no-install-recommends python3-venv </dev/null >/dev/null 2>&1; }; then
-                installed=1
-            fi
         fi
+        pm_out="${pm_out}
+${apt_out}"
     elif command -v dnf >/dev/null 2>&1; then
         info "Installing python3-virtualenv via dnf."
-        dnf install -y python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(dnf install -y python3-virtualenv </dev/null 2>&1)" && installed=1
     elif command -v yum >/dev/null 2>&1; then
         info "Installing python3-virtualenv via yum."
-        yum install -y python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(yum install -y python3-virtualenv </dev/null 2>&1)" && installed=1
     elif command -v pacman >/dev/null 2>&1; then
         info "Refreshing pacman db and ensuring python (includes venv)."
-        pacman -Sy --noconfirm --needed python </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(pacman -Sy --noconfirm --needed python </dev/null 2>&1)" && installed=1
     elif command -v zypper >/dev/null 2>&1; then
         info "Installing python3-virtualenv via zypper."
-        zypper --non-interactive install python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(zypper --non-interactive install python3-virtualenv </dev/null 2>&1)" && installed=1
     elif command -v apk >/dev/null 2>&1; then
         info "Installing py3-virtualenv via apk."
-        apk add --no-cache py3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(apk add --no-cache py3-virtualenv </dev/null 2>&1)" && installed=1
     else
         fail "No supported package manager found (tried apt-get, dnf, yum, pacman, zypper, apk).
 Install the Python venv/ensurepip prerequisite for your distro and re-run."
     fi
 
-    [ "$installed" -eq 1 ] || fail "Package manager invocation failed for the venv prerequisite.
+    if [ "$installed" -ne 1 ]; then
+        if [ -n "$pm_out" ]; then
+            warn "Package manager output (the underlying failure follows):"
+            printf '%s\n' "$pm_out" >&2
+        fi
+        fail "Package manager invocation failed for the venv prerequisite.
 Try manually: install python${version}-venv (Debian/Ubuntu) or your distro's equivalent."
+    fi
 
     if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
         fail "Installed the venv package but 'import ensurepip' still fails.

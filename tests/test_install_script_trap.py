@@ -353,8 +353,10 @@ def test_ensure_ensurepip_apt_prefers_versioned_package_first(
     """The apt-get branch must try ``python${{version}}-venv`` first.
 
     Strategy: stub ``apt-get`` to log every invocation, succeed on the
-    versioned package only after a successful import recheck. The first
-    recorded apt-get arg list must contain the versioned package name.
+    versioned package only after a successful import recheck. An
+    ``apt-get update`` refresh now precedes the installs (cold-cache
+    fix), so the first recorded *install* arg list — not the first call
+    overall — must contain the versioned package name.
     """
     assert _BASH is not None
 
@@ -413,7 +415,16 @@ ensure_ensurepip_available
         f"stderr={proc.stderr!r}"
     )
     assert log.exists(), "apt-get stub was never invoked"
-    first_call = log.read_text().splitlines()[0]
+    # `apt-get update` runs before the installs now, so the first logged
+    # line is the refresh, not an install. The ordering contract is about
+    # the install attempts: the versioned package precedes the python3-venv
+    # metapackage fallback. ("install" never matches the `update -qq` line.)
+    logged = log.read_text().splitlines()
+    install_calls = [c for c in logged if "install" in c]
+    assert install_calls, (
+        f"apt-get install was never invoked; logged calls: {logged!r}"
+    )
+    first_call = install_calls[0]
     assert "python3.12-venv" in first_call, (
         f"apt-get must try python${{version}}-venv first (got: "
         f"{first_call!r}). The metapackage 'python3-venv' is the "
@@ -496,11 +507,13 @@ def test_ensure_ensurepip_fails_when_postinstall_recheck_still_fails(
     must re-verify ``import ensurepip`` and ``fail`` with a diagnostic
     pointer if the module is still unavailable.
 
-    This is the user's escape valve: silencing apt's stderr is fine
-    because the recheck catches the case where the install "succeeded"
-    but did not actually deliver ensurepip (broken mirror, wrong
-    package, hold pin). Regression here would let the script proceed
-    to ``python3 -m venv`` and fail with the original opaque error.
+    This is the user's escape valve: the function now surfaces the
+    package manager's captured output when an install fails, but a
+    "succeeded yet ensurepip still absent" install (broken mirror,
+    wrong package, hold pin) prints nothing — so the recheck is the
+    backstop that catches it. Regression here would let the script
+    proceed to ``python3 -m venv`` and fail with the original opaque
+    error.
     """
     assert _BASH is not None
 
@@ -1073,4 +1086,256 @@ resolve_verifier_python
         f"and the subsequent `python3 -m venv \"$BOOTSTRAP_DIR\"` would "
         f"fail with a different error. Marker contents: "
         f"{mktemp_marker.read_text()!r}"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="stub-script PATH shadowing relies on POSIX chmod; "
+    "Git Bash on Windows does not honor Python-set executable bits",
+)
+def test_ensure_ensurepip_apt_runs_update_before_install(
+    tmp_path: Path,
+) -> None:
+    """The apt-get branch must run ``apt-get update`` BEFORE the first
+    ``apt-get install``.
+
+    Cold-cache fix: a fresh/minimal image (Docker ``ubuntu:24.04``,
+    debootstrap, a cleaned cloud image) ships an empty
+    ``/var/lib/apt/lists``, so an install before any refresh fails with
+    "Unable to locate package". Ordering — refresh first, then install —
+    is the contract. A regression that drops the update, or moves it
+    after the install, re-opens the cold-cache failure.
+
+    Strategy: stub ``apt-get`` to append each invocation's verb (``$1``)
+    to an ordered log; ``python3`` fails the pre-flight import (to enter
+    the install path) and passes the recheck. Assert ``update`` is logged
+    and that it precedes the first ``install``.
+    """
+    assert _BASH is not None
+
+    log = tmp_path / "apt_seq.log"
+
+    py_count = tmp_path / "py_count"
+    py_stub = tmp_path / "python3"
+    py_stub.write_text(
+        f"""#!/usr/bin/env bash
+n=$(cat '{py_count}' 2>/dev/null || echo 0)
+echo $((n+1)) > '{py_count}'
+if [ "$n" = "0" ]; then exit 1; fi
+exit 0
+"""
+    )
+    py_stub.chmod(0o755)
+
+    apt_stub = tmp_path / "apt-get"
+    apt_stub.write_text(
+        f"""#!/usr/bin/env bash
+printf '%s\\n' "$1" >> '{log}'
+exit 0
+"""
+    )
+    apt_stub.chmod(0o755)
+
+    harness = f"""
+set -euo pipefail
+PATH='{tmp_path}':"$PATH"
+PLATFORM=linux
+MOBAIDE_AGENT_PREFIX=/opt/mobaide
+version=3.12
+info()  {{ printf '[INFO]  %s\\n' "$*"; }}
+warn()  {{ printf '[WARN]  %s\\n' "$*" >&2; }}
+error() {{ printf '[ERROR] %s\\n' "$*" >&2; }}
+fail()  {{ error "$*"; exit 1; }}
+id()    {{ echo 0; }}
+
+source <(sed -n '/^ensure_ensurepip_available()/,/^}}$/p' '{_DEPLOY_INSTALL_SH.as_posix()}')
+
+ensure_ensurepip_available
+"""
+    proc = subprocess.run(
+        [_BASH, "-c", harness], capture_output=True, text=True
+    )
+    assert proc.returncode == 0, (
+        f"apt path should succeed; stdout={proc.stdout!r} "
+        f"stderr={proc.stderr!r}"
+    )
+    assert log.exists(), "apt-get stub was never invoked"
+    verbs = log.read_text().splitlines()
+    assert "update" in verbs, (
+        f"apt-get update must run before the install (cold-cache fix on "
+        f"fresh/minimal images with an empty /var/lib/apt/lists). It was "
+        f"never invoked; logged verbs: {verbs!r}"
+    )
+    first_install = next(
+        (i for i, v in enumerate(verbs) if v == "install"), None
+    )
+    assert first_install is not None, (
+        f"apt-get install was never invoked; logged verbs: {verbs!r}"
+    )
+    assert verbs.index("update") < first_install, (
+        f"apt-get update must PRECEDE the first apt-get install (refresh "
+        f"the cache, then install). Got verb order: {verbs!r}"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="stub-script PATH shadowing relies on POSIX chmod; "
+    "Git Bash on Windows does not honor Python-set executable bits",
+)
+def test_ensure_ensurepip_apt_install_succeeds_despite_failing_update(
+    tmp_path: Path,
+) -> None:
+    """A non-zero ``apt-get update`` must NOT block a successful install.
+
+    This pins the exact bug that was reported: the old ``apt-get update
+    && apt-get install`` chain gated the install on the refresh exit
+    code, so a benign ``apt-get update`` failure (one dead mirror, an
+    expired Release signature on an UNRELATED repo, a hash-sum mismatch,
+    an IPv6 timeout) silently SKIPPED the install and the function failed
+    with an opaque "Package manager invocation failed". The fix runs the
+    refresh best-effort (``|| true``) and ignores its status.
+
+    Strategy: stub ``apt-get`` so the ``update`` verb returns non-zero
+    while ``install`` returns zero; ``python3`` fails the pre-flight
+    import then passes the recheck. The function must still reach
+    ``installed=1`` and exit 0. A regression that re-couples update and
+    install would make this exit non-zero.
+    """
+    assert _BASH is not None
+
+    py_count = tmp_path / "py_count"
+    py_stub = tmp_path / "python3"
+    py_stub.write_text(
+        f"""#!/usr/bin/env bash
+n=$(cat '{py_count}' 2>/dev/null || echo 0)
+echo $((n+1)) > '{py_count}'
+if [ "$n" = "0" ]; then exit 1; fi
+exit 0
+"""
+    )
+    py_stub.chmod(0o755)
+
+    apt_stub = tmp_path / "apt-get"
+    apt_stub.write_text(
+        """#!/usr/bin/env bash
+# Refresh fails (benign mirror/Release hiccup); install succeeds.
+if [ "$1" = "update" ]; then
+    echo 'W: Failed to fetch http://example/dists/x/Release  Cannot reach mirror' >&2
+    exit 100
+fi
+exit 0
+"""
+    )
+    apt_stub.chmod(0o755)
+
+    harness = f"""
+set -euo pipefail
+PATH='{tmp_path}':"$PATH"
+PLATFORM=linux
+MOBAIDE_AGENT_PREFIX=/opt/mobaide
+version=3.12
+info()  {{ printf '[INFO]  %s\\n' "$*"; }}
+warn()  {{ printf '[WARN]  %s\\n' "$*" >&2; }}
+error() {{ printf '[ERROR] %s\\n' "$*" >&2; }}
+fail()  {{ error "$*"; exit 1; }}
+id()    {{ echo 0; }}
+
+source <(sed -n '/^ensure_ensurepip_available()/,/^}}$/p' '{_DEPLOY_INSTALL_SH.as_posix()}')
+
+ensure_ensurepip_available
+"""
+    proc = subprocess.run(
+        [_BASH, "-c", harness], capture_output=True, text=True
+    )
+    assert proc.returncode == 0, (
+        f"regression: a non-zero `apt-get update` blocked the install "
+        f"(the original bug). The refresh is best-effort and must not "
+        f"gate the install; the function should still install the venv "
+        f"package and exit 0. stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert "Package manager invocation failed" not in proc.stderr, (
+        f"the opaque 'Package manager invocation failed' must NOT appear "
+        f"when the install itself succeeded — that message means the "
+        f"failing update wrongly aborted the install. stderr={proc.stderr!r}"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="stub-script PATH shadowing relies on POSIX chmod; "
+    "Git Bash on Windows does not honor Python-set executable bits",
+)
+def test_ensure_ensurepip_surfaces_pm_output_on_total_failure(
+    tmp_path: Path,
+) -> None:
+    """When every package-manager attempt fails, the function must
+    surface the captured apt-get output to stderr (not discard it).
+
+    The old code piped each invocation to ``/dev/null 2>&1``, so the user
+    saw "Package manager invocation failed" with zero context. The fix
+    captures stdout+stderr into ``pm_out``/``apt_out`` and prints it
+    before ``fail`` so the real apt error (locked dpkg, held package,
+    "Unable to locate package") is actionable. A regression back to
+    ``/dev/null`` makes this assertion fail.
+
+    Strategy: stub ``apt-get`` to emit a unique error sentinel on stderr
+    and exit non-zero for BOTH the versioned and metapackage installs;
+    ``python3`` always fails the import probe (so the install path is
+    entered and never short-circuits). Assert the sentinel reaches the
+    harness stderr and that the install genuinely failed.
+    """
+    assert _BASH is not None
+
+    sentinel = "E: APT_SENTINEL_dpkg_was_locked_by_another_process"
+
+    py_stub = tmp_path / "python3"
+    py_stub.write_text("#!/usr/bin/env bash\nexit 1\n")
+    py_stub.chmod(0o755)
+
+    apt_stub = tmp_path / "apt-get"
+    apt_stub.write_text(
+        f"""#!/usr/bin/env bash
+# update is best-effort; both installs fail and must emit the sentinel
+# so the captured output (pm_out/apt_out) carries the real cause.
+if [ "$1" = "update" ]; then exit 0; fi
+printf '%s\\n' '{sentinel}' >&2
+exit 100
+"""
+    )
+    apt_stub.chmod(0o755)
+
+    harness = f"""
+set -euo pipefail
+PATH='{tmp_path}':"$PATH"
+PLATFORM=linux
+MOBAIDE_AGENT_PREFIX=/opt/mobaide
+version=3.12
+info()  {{ printf '[INFO]  %s\\n' "$*"; }}
+warn()  {{ printf '[WARN]  %s\\n' "$*" >&2; }}
+error() {{ printf '[ERROR] %s\\n' "$*" >&2; }}
+fail()  {{ error "$*"; exit 1; }}
+id()    {{ echo 0; }}
+
+source <(sed -n '/^ensure_ensurepip_available()/,/^}}$/p' '{_DEPLOY_INSTALL_SH.as_posix()}')
+
+ensure_ensurepip_available
+"""
+    proc = subprocess.run(
+        [_BASH, "-c", harness], capture_output=True, text=True
+    )
+    assert proc.returncode != 0, (
+        f"total install failure should exit non-zero; "
+        f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    )
+    assert sentinel in proc.stderr, (
+        f"the real package-manager error must be surfaced to stderr on "
+        f"total failure (the captured pm_out/apt_out), not discarded to "
+        f"/dev/null. The sentinel apt error was not found. "
+        f"stderr={proc.stderr!r}"
+    )
+    assert "Package manager invocation failed" in proc.stderr, (
+        f"the actionable summary must still fire after surfacing the "
+        f"captured output; stderr={proc.stderr!r}"
     )
