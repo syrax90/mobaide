@@ -49,7 +49,7 @@ class PreferencesStore(private val context: Context) {
         context.dataStore.data.map { prefs ->
             prefs[keyTerminalDisplayMode]?.let { stored ->
                 runCatching { TerminalDisplayMode.valueOf(stored) }.getOrNull()
-            } ?: TerminalDisplayMode.Full
+            } ?: TerminalDisplayMode.Static
         }
 
     val terminalStaticColumns: Flow<Int> =

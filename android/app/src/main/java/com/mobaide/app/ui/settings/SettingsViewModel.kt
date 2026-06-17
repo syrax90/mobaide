@@ -21,7 +21,7 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val userEmail: String = "",
-    val terminalDisplayMode: TerminalDisplayMode = TerminalDisplayMode.Full,
+    val terminalDisplayMode: TerminalDisplayMode = TerminalDisplayMode.Static,
     val terminalStaticColumns: Int = TERMINAL_STATIC_COLUMNS_DEFAULT,
     val deleteDialog: DeleteAccountDialogState = DeleteAccountDialogState.Hidden,
 )

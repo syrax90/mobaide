@@ -64,7 +64,7 @@ class TerminalViewModel @Inject constructor(
         .stateIn(
             viewModelScope,
             SharingStarted.Eagerly,
-            TerminalDisplayConfig(TerminalDisplayMode.Full, TERMINAL_STATIC_COLUMNS_DEFAULT),
+            TerminalDisplayConfig(TerminalDisplayMode.Static, TERMINAL_STATIC_COLUMNS_DEFAULT),
         )
 
     private val sessionId: String = savedStateHandle["sessionId"]
