@@ -284,6 +284,59 @@ def test_install_launchd_plist_falls_back_to_legacy_load() -> None:
     )
 
 
+def test_await_label_unloaded_helper_is_defined() -> None:
+    """``await_label_unloaded`` must exist.
+
+    ``install_launchd_plist`` calls it to wait out the asynchronous
+    ``launchctl bootout`` before ``bootstrap``; if it is renamed or dropped,
+    the bootstrap fires into a still-draining domain and the
+    ``5: Input/output error`` race returns on re-install.
+    """
+    funcs = _list_function_names()
+    assert "await_label_unloaded" in funcs, (
+        f"expected function 'await_label_unloaded' in {_DEPLOY_INSTALL_SH} "
+        f"(found: {funcs})"
+    )
+
+
+def test_install_launchd_plist_settles_domain_and_retries_bootstrap() -> None:
+    """``install_launchd_plist`` must wait for the bootout teardown to settle
+    before ``bootstrap``, and retry bootstrap in a bounded loop.
+
+    ``launchctl bootout`` is asynchronous: it returns before launchd has torn
+    the previous KeepAlive job out of the domain. A ``bootstrap`` of the same
+    label issued immediately races the still-draining job and fails with
+    ``Bootstrap failed: 5: Input/output error`` — but only on re-install over
+    a running agent (a clean first install has nothing to drain, which is why
+    it slipped through). Without the settle-and-retry, the re-install leaves
+    the agent unloaded and ``/api/health`` times out.
+    """
+    body = _sh_function_body("install_launchd_plist")
+    bootout_pos = body.find("launchctl_user bootout")
+    bootstrap_pos = body.find("launchctl_user bootstrap")
+    assert bootout_pos >= 0 and bootstrap_pos >= 0, (
+        "install_launchd_plist must call both bootout and bootstrap. "
+        "Body:\n" + repr(body)
+    )
+    assert "await_label_unloaded" in body[bootout_pos:bootstrap_pos], (
+        "install_launchd_plist must wait for the async bootout teardown "
+        "(await_label_unloaded) BETWEEN bootout and bootstrap — otherwise "
+        "the re-install bootstrap races the draining job and fails with "
+        "`5: Input/output error`. Body:\n" + repr(body)
+    )
+    assert re.search(r'while\s+\[\s*"?\$attempt', body), (
+        "install_launchd_plist must wrap bootstrap in a bounded retry loop "
+        '(while [ "$attempt" -lt N ]) so a residual teardown race is '
+        "absorbed instead of dropping straight to the legacy load fallback. "
+        "Body:\n" + repr(body)
+    )
+    assert "await_label_unloaded" in body[bootstrap_pos:], (
+        "install_launchd_plist must re-settle the domain between bootstrap "
+        "retries (await_label_unloaded after the bootstrap attempt). "
+        "Body:\n" + repr(body)
+    )
+
+
 def test_install_launchd_plist_chowns_prefix_to_run_user_when_root() -> None:
     """When running as root, ``install_launchd_plist`` must ``chown`` the
     install prefix to ``$RUN_USER`` so the user-domain agent can write
