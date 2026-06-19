@@ -113,43 +113,62 @@ so the script did not auto-elevate. Install the package manually and re-run:
     Alpine:        sudo apk add py3-virtualenv"
     fi
 
-    local installed=0
+    # Captured package-manager output, surfaced only if every attempt fails.
+    # Each command keeps stdin on /dev/null (no interactive prompt under
+    # ``curl|bash``) and folds stderr into the capture; nothing prints on the
+    # happy path. ``pm_out``/``apt_out`` must stay BARE assignments inside the
+    # ``if``/``&&`` below — a ``local pm_out="$(...)"`` would return ``local``'s
+    # own exit status and mask the command's, silently inverting the fallback
+    # (ShellCheck SC2155).
+    local installed=0 pm_out="" apt_out=""
     if command -v apt-get >/dev/null 2>&1; then
         info "Installing python${version}-venv via apt-get (non-interactive)."
         export DEBIAN_FRONTEND=noninteractive
-        if apt-get install -y --no-install-recommends "python${version}-venv" </dev/null >/dev/null 2>&1 \
-           || apt-get install -y --no-install-recommends python3-venv </dev/null >/dev/null 2>&1; then
+        # Refresh lists FIRST, best-effort (exit status deliberately ignored):
+        # a fresh/minimal image (Docker, debootstrap, a cleaned cloud image)
+        # ships an empty /var/lib/apt/lists, so a cold install fails with
+        # "Unable to locate package"; and a single dead mirror or an expired
+        # Release signature on an UNRELATED repo makes ``apt-get update`` exit
+        # non-zero even when the target installs cleanly — so its status must
+        # NOT gate the install. The previous ``apt-get update && apt-get
+        # install`` chain skipped the install on any such hiccup, the opaque
+        # failure this fixes. Its output is kept so a dead mirror surfaces in
+        # the diagnostic below (the real cause often shows here, not in install).
+        pm_out="$(apt-get update -qq </dev/null 2>&1 || true)"
+        if apt_out="$(apt-get install -y --no-install-recommends "python${version}-venv" </dev/null 2>&1)" \
+           || apt_out="$(apt-get install -y --no-install-recommends python3-venv </dev/null 2>&1)"; then
             installed=1
-        else
-            info "Initial install failed — refreshing apt cache and retrying."
-            if apt-get update -qq </dev/null >/dev/null 2>&1 \
-               && { apt-get install -y --no-install-recommends "python${version}-venv" </dev/null >/dev/null 2>&1 \
-                    || apt-get install -y --no-install-recommends python3-venv </dev/null >/dev/null 2>&1; }; then
-                installed=1
-            fi
         fi
+        pm_out="${pm_out}
+${apt_out}"
     elif command -v dnf >/dev/null 2>&1; then
         info "Installing python3-virtualenv via dnf."
-        dnf install -y python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(dnf install -y python3-virtualenv </dev/null 2>&1)" && installed=1
     elif command -v yum >/dev/null 2>&1; then
         info "Installing python3-virtualenv via yum."
-        yum install -y python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(yum install -y python3-virtualenv </dev/null 2>&1)" && installed=1
     elif command -v pacman >/dev/null 2>&1; then
         info "Refreshing pacman db and ensuring python (includes venv)."
-        pacman -Sy --noconfirm --needed python </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(pacman -Sy --noconfirm --needed python </dev/null 2>&1)" && installed=1
     elif command -v zypper >/dev/null 2>&1; then
         info "Installing python3-virtualenv via zypper."
-        zypper --non-interactive install python3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(zypper --non-interactive install python3-virtualenv </dev/null 2>&1)" && installed=1
     elif command -v apk >/dev/null 2>&1; then
         info "Installing py3-virtualenv via apk."
-        apk add --no-cache py3-virtualenv </dev/null >/dev/null 2>&1 && installed=1
+        pm_out="$(apk add --no-cache py3-virtualenv </dev/null 2>&1)" && installed=1
     else
         fail "No supported package manager found (tried apt-get, dnf, yum, pacman, zypper, apk).
 Install the Python venv/ensurepip prerequisite for your distro and re-run."
     fi
 
-    [ "$installed" -eq 1 ] || fail "Package manager invocation failed for the venv prerequisite.
+    if [ "$installed" -ne 1 ]; then
+        if [ -n "$pm_out" ]; then
+            warn "Package manager output (the underlying failure follows):"
+            printf '%s\n' "$pm_out" >&2
+        fi
+        fail "Package manager invocation failed for the venv prerequisite.
 Try manually: install python${version}-venv (Debian/Ubuntu) or your distro's equivalent."
+    fi
 
     if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
         fail "Installed the venv package but 'import ensurepip' still fails.
@@ -257,6 +276,33 @@ fetch_manifest() {
     if ! curl -fsSL --max-time 30 "$MOBAIDE_AGENT_MANIFEST_URL" -o "$manifest_path"; then
         fail "Could not fetch manifest from $MOBAIDE_AGENT_MANIFEST_URL"
     fi
+}
+
+# Centralized install-time asset download. Network I/O goes through curl (the
+# OS-native trust store), never Python urllib: a python.org framework build
+# whose bundled ``Install Certificates.command`` never ran has an EMPTY OpenSSL
+# CA store, so urllib fails TLS verification with CERTIFICATE_VERIFY_FAILED even
+# when curl to the same endpoint succeeds (fetch_manifest + bootstrap_trust_key
+# above already prove curl works against the same infra). Mirrors
+# deploy/install.ps1's Invoke-AgentDownload, which downloads via Invoke-WebRequest
+# for the identical root cause. The file:// / absolute-path branch preserves the
+# air-gapped self-host path (offline mirrors, test fixtures) the old Python
+# fetch() supported. curl is a required dependency (check_command curl in main).
+#
+# Resilience flags on the network fetch: ``--retry``/``--retry-connrefused``
+# survive a transient blip (DNS hiccup, reset, momentary 5xx) instead of
+# aborting the whole ``curl|bash`` install; ``--connect-timeout`` fail-fasts on
+# an unreachable host while ``--max-time`` still caps a legitimately slow large
+# transfer; ``--`` ends option parsing so a URL can never be read as a flag.
+download_asset() {
+    local url="$1" dest="$2" user_agent="$3"
+    case "$url" in
+        file://*) cp -f -- "${url#file://}" "$dest" ;;
+        /*)       cp -f -- "$url" "$dest" ;;
+        *)        curl -fsSL --connect-timeout 30 --max-time 300 --retry 3 --retry-connrefused \
+                      -A "$user_agent" -o "$dest" -- "$url" \
+                      || fail "Failed to download $url" ;;
+    esac
 }
 
 # Round-trip validate that ``$MOBAIDE_AGENT_TRUST_KEY_B64`` decodes to a
@@ -396,6 +442,14 @@ stage_release() {
     if [ -z "$target_version" ]; then
         fail "manifest is missing 'version'"
     fi
+    # Defense-in-depth: the version is signature-verified, but reject any value
+    # that is not a clean version token before it becomes a releases/<v> path
+    # component — so a crafted/buggy-signer version like ../../etc/... cannot
+    # escape the releases dir. Mirrors the wheel_basename path-separator guard.
+    case "$target_version" in
+        .|..|*[!0-9A-Za-z.+_-]*)
+            fail "manifest 'version' has unsafe path characters: $target_version" ;;
+    esac
 
     local release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${target_version}"
     info "Staging release $target_version into $release_dir"
@@ -411,31 +465,46 @@ stage_release() {
     # cleanup below) still surrender the directory on EXIT.
     tmpdir="$(mktemp -d)"
 
-    # Capture the heredoc's stdout: the Python script prints exactly one line
-    # — the staged wheel's full path. pip 25.2+ enforces PEP 427 wheel-filename
-    # validation, so the wheel must be staged under its canonical
-    # name-version-pyver-abi-platform filename, derived from the manifest's
-    # `wheel_url` rather than a static placeholder.
+    # Download the release assets with curl, then hand the local paths to a
+    # network-free Python staging step. curl (OS-native trust store) replaces
+    # the old urllib fetch because a python.org framework build whose bundled
+    # ``Install Certificates.command`` never ran has an EMPTY OpenSSL CA store,
+    # so urllib raises CERTIFICATE_VERIFY_FAILED even though curl to the same
+    # host succeeds — see download_asset. Mirrors deploy/install.ps1.
+    #
+    # The two asset URLs come out of the signature-verified manifest via plain
+    # ``python3 -c`` (local JSON, no network). Deliberately NOT a heredoc inside
+    # ``$(...)``: macOS bash 3.2.57 re-scans such a body and aborts the install
+    # at parse time — see test_install_sh_heredoc_no_subst.py.
+    local tarball_url wheel_url
+    tarball_url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['body']['tarball_url'])" "$manifest_path")"
+    wheel_url="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['body']['wheel_url'])" "$manifest_path")"
+    [ -n "$tarball_url" ] || fail "manifest is missing 'tarball_url'"
+    [ -n "$wheel_url" ] || fail "manifest is missing 'wheel_url'"
+
+    # Identify as the installer so a Cloudflare-fronted wheel host doesn't
+    # classify the request as the default curl UA (Bot Fight Mode 1010) —
+    # mirrors deploy/install.ps1's installer User-Agent. The wheel lands under a
+    # temp name; the staging step below renames it to its canonical PEP 427
+    # filename (pip 25.2+ validates wheel filenames at install time).
+    local user_agent="mobaide-agent-installer/${target_version}"
+    download_asset "$tarball_url" "$tmpdir/agent.tar.gz" "$user_agent"
+    download_asset "$wheel_url" "$tmpdir/wheel.download" "$user_agent"
+
+    # Pure-local staging: verify sha256, rename the wheel to its canonical PEP
+    # 427 name, extract the tarball. Prints exactly one line — the staged
+    # wheel's full path. Runs as a plain command with stdout redirected to a
+    # file (NOT captured in ``$(...)``) so macOS bash 3.2 never re-scans the
+    # Python body — see test_install_sh_heredoc_no_subst.py.
     local wheel_path
-    wheel_path="$(python3 - "$manifest_path" "$tmpdir" "$release_dir" <<'PY'
-import hashlib, json, posixpath, shutil, sys, tarfile, urllib.parse, urllib.request
+    python3 - "$manifest_path" "$tmpdir" "$release_dir" > "$tmpdir/wheel_path" <<'PY'
+import hashlib, json, posixpath, sys, tarfile, urllib.parse
 from pathlib import Path
 
 manifest_path, tmpdir, release_dir = sys.argv[1:4]
 record = json.loads(Path(manifest_path).read_text())
 body = record["body"]
 
-# Identify ourselves so a Cloudflare-fronted wheel host doesn't classify the
-# request as the default ``Python-urllib/X.Y`` UA (Bot Fight Mode 1010).
-USER_AGENT = f"mobaide-agent-installer/{body.get('version', 'unknown')}"
-
-def fetch(url, dest):
-    if url.startswith("file://") or url.startswith("/"):
-        shutil.copyfile(url.removeprefix("file://"), dest)
-        return
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as fh:
-        shutil.copyfileobj(resp, fh)
 
 def verify_sha256(path, expected):
     digest = hashlib.sha256()
@@ -444,6 +513,7 @@ def verify_sha256(path, expected):
             digest.update(chunk)
     if digest.hexdigest().lower() != expected.lower():
         sys.exit(f"sha256 mismatch for {path}")
+
 
 def wheel_basename(url):
     if url.startswith("file://"):
@@ -462,9 +532,11 @@ def wheel_basename(url):
 
 tarball = Path(tmpdir) / "agent.tar.gz"
 wheel = Path(tmpdir) / wheel_basename(body["wheel_url"])
-fetch(body["tarball_url"], tarball)
+# curl staged the wheel under a temp name; move it to its canonical PEP 427
+# filename so pip 25.2+'s wheel-filename validator accepts it at install time.
+(Path(tmpdir) / "wheel.download").replace(wheel)
+
 verify_sha256(tarball, body["tarball_sha256"])
-fetch(body["wheel_url"], wheel)
 verify_sha256(wheel, body["wheel_sha256"])
 
 with tarfile.open(tarball, mode="r:gz") as tar:
@@ -472,7 +544,7 @@ with tarfile.open(tarball, mode="r:gz") as tar:
 
 print(wheel)
 PY
-)"
+    wheel_path="$(cat "$tmpdir/wheel_path")"
 
     info "Creating venv in $release_dir/venv"
     python3 -m venv "$release_dir/venv"
@@ -570,7 +642,7 @@ Service may have crashed at startup. Inspect:
     else
         fail "Agent service registered but ${url} did not respond within ${timeout_sec}s.
 Service may have crashed at startup. Inspect:
-    launchctl list | grep com.mobaide.agent
+    launchctl print gui/\$(id -u)/com.mobaide.agent
     tail -n 200 ${MOBAIDE_AGENT_PREFIX}/agent.err.log"
     fi
 }
@@ -683,9 +755,88 @@ Pick a regular user account: MOBAIDE_RUN_AS_USER=<user>."
     fi
 }
 
+write_launcher_script() {
+    # Generate <prefix>/bin/mobaide-agent-launcher.sh — the supervisor entry
+    # point on BOTH Linux (systemd ExecStart) and macOS (launchd
+    # ProgramArguments). It resolves the active release and execs its venv
+    # Python into ``mobaide.launcher`` (which then owns crash-loop rollback).
+    #
+    # Self-heal: the in-venv ``mobaide.launcher`` cannot run when the CURRENT
+    # release's own interpreter is missing (a half-staged / corrupt release),
+    # so the supervisor would crash-loop forever. This wrapper detects that and
+    # rolls forward to the newest sibling release that still has a runnable
+    # venv BEFORE exec, rewriting current_version so the in-venv launcher takes
+    # over cleanly. Runs with the system bash — no dependency on any venv.
+    local launcher="$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
+    mkdir -p "$MOBAIDE_AGENT_PREFIX/bin"
+    # Quoted heredoc: NONE of $prefix/$version/$py is expanded at install time;
+    # they resolve at each launch. Intentionally NOT `set -e` — a missing
+    # current_version / venv must drive recovery, not abort the script.
+    cat > "$launcher" <<'LAUNCHER'
+#!/bin/bash
+prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
+version="$(cat "$prefix/current_version" 2>/dev/null || true)"
+py="$prefix/releases/$version/venv/bin/python"
+
+# Recover when the current release has no runnable interpreter.
+if [ -z "$version" ] || [ ! -x "$py" ]; then
+  best=""
+  for d in "$prefix"/releases/*/; do
+    [ -d "$d" ] || continue
+    v="$(basename "$d")"
+    # Only numeric-dotted release names are recovery candidates — skip dotfile
+    # scratch (.staging-*/.old-*) AND any foreign/non-version dir, matching the
+    # strict filter the in-venv mobaide.launcher applies to rollback/prune.
+    case "$v" in ''|.*|*[!0-9.]*) continue ;; esac
+    [ -x "$d/venv/bin/python" ] || continue
+    if [ -z "$best" ]; then
+      best="$v"
+    else
+      # Portable numeric version sort (BSD + GNU); NOT `sort -V` (GNU-only).
+      best="$(printf '%s\n%s\n' "$best" "$v" \
+        | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1)"
+    fi
+  done
+  if [ -z "$best" ]; then
+    echo "mobaide-agent-launcher: FATAL no runnable release venv under $prefix/releases" >&2
+    exit 70
+  fi
+  if [ "$best" != "$version" ]; then
+    printf '%s\n' "$best" > "$prefix/current_version.tmp" \
+      && mv "$prefix/current_version.tmp" "$prefix/current_version"
+    echo "mobaide-agent-launcher: current release '$version' unrunnable; recovered to '$best'" >&2
+  fi
+  version="$best"
+  py="$prefix/releases/$version/venv/bin/python"
+fi
+LAUNCHER
+    # macOS only: python.org framework Python ships an empty OpenSSL CA store;
+    # point OpenSSL at the venv's certifi bundle so wss/HTTPS TLS verifies.
+    # Resolved per launch; respects an operator-set SSL_CERT_FILE. NOT emitted
+    # on Linux — forcing certifi there could exclude a corporate /etc/ssl root
+    # CA and break relay TLS to a self-hosted central server.
+    if [ "$PLATFORM" = "darwin" ]; then
+        cat >> "$launcher" <<'LAUNCHER_CERTIFI'
+
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+  cert="$("$py" -m certifi 2>/dev/null || true)"
+  if [ -n "$cert" ]; then
+    export SSL_CERT_FILE="$cert"
+  fi
+fi
+LAUNCHER_CERTIFI
+    fi
+    cat >> "$launcher" <<'LAUNCHER_EXEC'
+
+exec "$py" -m mobaide.launcher
+LAUNCHER_EXEC
+    chmod +x "$launcher"
+}
+
 install_systemd_unit() {
     local unit="/etc/systemd/system/mobaide-agent.service"
     info "Installing systemd unit at $unit (User=$RUN_USER)"
+    write_launcher_script
     # ProtectHome is absent because the agent must read/write the user's
     # source tree under $RUN_HOME. ProtectSystem=strict still mounts the
     # rest of the OS hierarchy read-only; ReadWritePaths re-grants writes
@@ -714,7 +865,7 @@ EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=$MOBAIDE_AGENT_PREFIX
 Environment=HOME=$RUN_HOME
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:%h/.npm-global/bin:%h/.local/bin
-ExecStart=/usr/bin/env bash -c '$MOBAIDE_AGENT_PREFIX/releases/\$(cat $MOBAIDE_AGENT_PREFIX/current_version)/venv/bin/python -m mobaide.launcher'
+ExecStart=$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh
 Restart=on-failure
 RestartSec=5
 RestartForceExitStatus=75
@@ -735,44 +886,184 @@ EOF
     systemctl restart mobaide-agent
 }
 
+resolve_run_as_user_macos() {
+    # macOS analog of resolve_run_as_user. The agent manages the developer's
+    # own source trees and must run in their GUI (Aqua) session as that user,
+    # never as root — so it is loaded as a per-user LaunchAgent in gui/<uid>
+    # (see install_launchd_plist). Sets script-scoped RUN_USER/RUN_GROUP/
+    # RUN_HOME/RUN_UID (intentionally not `local` — read from other frames).
+    if [ "$PLATFORM" != "darwin" ]; then return 0; fi
+
+    if [ -n "$MOBAIDE_RUN_AS_USER" ]; then
+        RUN_USER="$MOBAIDE_RUN_AS_USER"
+    elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        RUN_USER="$SUDO_USER"
+    elif [ "$(id -u)" -ne 0 ]; then
+        # Non-root install (user-writable prefix): run as ourselves.
+        RUN_USER="$(id -un)"
+    else
+        # Root shell with no sudo context: fall back to the GUI console owner —
+        # whoever is logged into the desktop, which is whose session the agent
+        # should live in.
+        RUN_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+    fi
+
+    if [ "$RUN_USER" = "root" ]; then
+        fail "Refusing to run the agent as 'root'. Re-run with sudo as a regular user,
+or pin the user explicitly: MOBAIDE_RUN_AS_USER=<user>."
+    fi
+    # Reject anything outside the macOS short-name charset before $RUN_USER
+    # reaches id/dscl/chown, the tilde `eval`, or the plist — so no shell
+    # metacharacter from MOBAIDE_RUN_AS_USER/SUDO_USER/console can flow downstream.
+    case "$RUN_USER" in
+        ''|*[!A-Za-z0-9._-]*)
+            fail "Refusing unsafe agent username '${RUN_USER:-<empty>}' (allowed: A-Za-z0-9._-).
+Pin a valid user explicitly: MOBAIDE_RUN_AS_USER=<user>." ;;
+    esac
+    if ! id "$RUN_USER" >/dev/null 2>&1; then
+        fail "Could not determine which macOS user to run the agent as (got '$RUN_USER').
+Pin it explicitly: MOBAIDE_RUN_AS_USER=<user>."
+    fi
+
+    RUN_UID="$(id -u "$RUN_USER")"
+    RUN_GROUP="$(id -gn "$RUN_USER")"
+    RUN_HOME="$(dscl . -read "/Users/$RUN_USER" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //' || true)"
+    if [ -z "$RUN_HOME" ]; then
+        RUN_HOME="$(eval echo "~$RUN_USER" 2>/dev/null || true)"
+    fi
+    if [ -z "$RUN_HOME" ] || [ "$RUN_HOME" = "/" ]; then
+        fail "Could not resolve a valid home directory for '$RUN_USER' (got '${RUN_HOME:-<empty>}')."
+    fi
+
+    info "Agent will run as $RUN_USER ($RUN_GROUP, uid $RUN_UID), HOME=$RUN_HOME"
+}
+
+launchctl_user() {
+    # Run launchctl in $RUN_USER's GUI session. From a root context (the common
+    # case after auto-elevation) `launchctl asuser <uid>` attaches to the user's
+    # Aqua session so gui/<uid> resolves and the loaded job runs as the user.
+    # When already running as the user (user-writable prefix), call directly.
+    if [ "$(id -u)" -eq 0 ]; then
+        launchctl asuser "$RUN_UID" launchctl "$@"
+    else
+        launchctl "$@"
+    fi
+}
+
+await_label_unloaded() {
+    # Poll until a launchd target (gui/<uid>/<label>) leaves its domain.
+    # `launchctl bootout` is asynchronous — the job keeps draining after the
+    # command returns — so bootstrapping the same label too soon races the
+    # teardown and fails with "Bootstrap failed: 5: Input/output error".
+    # Bounded (~5s worst case) so a stuck teardown can never hang the installer.
+    local target="$1"
+    local i=0
+    while launchctl_user print "$target" >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -ge 50 ] && break
+        sleep 0.1
+    done
+}
+
 install_launchd_plist() {
-    local plist="$HOME/Library/LaunchAgents/com.mobaide.agent.plist"
-    info "Installing launchd plist at $plist"
+    # Per-user LaunchAgent in the target user's GUI domain (gui/<uid>), loaded
+    # via `launchctl bootstrap` as that user — NOT a root `launchctl load`,
+    # which warns ("Got LaunchAgents instead") and would run the agent as root.
+    local plist="$RUN_HOME/Library/LaunchAgents/com.mobaide.agent.plist"
+    local launcher="$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
+    local label="com.mobaide.agent"
+    local domain="gui/$RUN_UID"
+    info "Installing launchd plist at $plist (agent runs as $RUN_USER)"
     mkdir -p "$(dirname "$plist")"
     cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.mobaide.agent</string>
+  <key>Label</key><string>$label</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh</string>
+    <string>$launcher</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>MOBAIDE_AGENT_PREFIX</key><string>$MOBAIDE_AGENT_PREFIX</string>
-    <key>PATH</key><string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/opt/homebrew/bin:\$HOME/.npm-global/bin:\$HOME/.local/bin</string>
+    <key>HOME</key><string>$RUN_HOME</string>
+    <!-- launchd does NOT expand \$VAR here, so \$RUN_HOME is substituted at
+         install time. /bin and /sbin are required (macOS keeps bash — the
+         launcher's #!/bin/bash — and other core tools only there);
+         /opt/homebrew/bin and /usr/local/bin cover Apple-Silicon and Intel
+         Homebrew where the Claude Code CLI and node typically live. -->
+    <key>PATH</key><string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin:/sbin:/opt/homebrew/bin:$RUN_HOME/.npm-global/bin:$RUN_HOME/.local/bin</string>
   </dict>
+  <!-- The agent's projects.json / users.json store paths are relative
+       (AgentConfig defaults) and resolve against the process CWD. launchd
+       defaults CWD to / (read-only system volume on modern macOS), so
+       without this the agent crashes on its first-boot store write with
+       [Errno 30] Read-only file system and never binds 8000. Pin CWD to
+       the writable prefix, mirroring the systemd unit's
+       WorkingDirectory=\$MOBAIDE_AGENT_PREFIX. -->
+  <key>WorkingDirectory</key><string>$MOBAIDE_AGENT_PREFIX</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>StandardOutPath</key><string>$MOBAIDE_AGENT_PREFIX/agent.out.log</string>
   <key>StandardErrorPath</key><string>$MOBAIDE_AGENT_PREFIX/agent.err.log</string>
 </dict>
 </plist>
 EOF
-    mkdir -p "$MOBAIDE_AGENT_PREFIX/bin"
-    cat > "$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh" <<'LAUNCHER'
-#!/usr/bin/env bash
-set -e
-prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
-version="$(cat "$prefix/current_version")"
-exec "$prefix/releases/$version/venv/bin/python" -m mobaide.launcher
-LAUNCHER
-    chmod +x "$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
+    write_launcher_script
 
-    launchctl unload "$plist" 2>/dev/null || true
-    launchctl load "$plist"
+    # The agent runs as $RUN_USER, so it must own the prefix (logs, run/,
+    # projects) and the plist. Mirrors the Linux chown in install_systemd_unit.
+    if [ "$(id -u)" -eq 0 ]; then
+        chown -R "$RUN_USER:$RUN_GROUP" "$MOBAIDE_AGENT_PREFIX"
+        # Non-recursive on the LaunchAgents dir: fix ownership if mkdir -p just
+        # created it as root, without touching the user's other agents' plists.
+        chown "$RUN_USER:$RUN_GROUP" "$(dirname "$plist")" "$plist"
+    fi
+
+    # bootout first makes re-install idempotent; bootstrap + enable + kickstart
+    # load and start the agent in the user's GUI domain. Fall back to the legacy
+    # load only if bootstrap keeps failing (e.g. no GUI session on a headless
+    # host).
+    #
+    # `launchctl bootout` is ASYNCHRONOUS: it returns before launchd has finished
+    # removing the old job from the domain. Bootstrapping the same label while
+    # the previous KeepAlive job is still draining races and fails with
+    # "Bootstrap failed: 5: Input/output error" — the re-install-over-a-running-
+    # agent case (a clean first install has nothing to drain, so it succeeds).
+    # Settle the domain after bootout and retry bootstrap before concluding the
+    # host has no GUI session.
+    launchctl_user bootout "$domain/$label" 2>/dev/null || true
+    await_label_unloaded "$domain/$label"
+
+    local bootstrapped=""
+    local attempt=0
+    while [ "$attempt" -lt 5 ]; do
+        if launchctl_user bootstrap "$domain" "$plist" 2>/dev/null; then
+            bootstrapped=1
+            break
+        fi
+        attempt=$((attempt + 1))
+        # Residual teardown race: wait for the domain to settle, then retry.
+        await_label_unloaded "$domain/$label"
+        sleep 1
+    done
+
+    if [ -n "$bootstrapped" ]; then
+        launchctl_user enable "$domain/$label" 2>/dev/null || true
+        launchctl_user kickstart -k "$domain/$label" 2>/dev/null || true
+        info "LaunchAgent bootstrapped into $domain."
+    else
+        warn "Could not bootstrap the agent into $domain after several attempts.
+This usually means $RUN_USER has no active GUI (desktop) login session — a
+per-user LaunchAgent cannot run without one (e.g. a headless / SSH-only Mac).
+Trying a legacy load as a fallback; if that also fails the agent will not start
+and the health check below will time out. On a headless host, enable automatic
+desktop login for $RUN_USER (or run the agent under a different supervisor)."
+        launchctl_user load "$plist" 2>/dev/null || launchctl load "$plist" 2>/dev/null || true
+    fi
 }
 
 print_completion() {
@@ -837,6 +1128,7 @@ main() {
         resolve_run_as_user
         install_systemd_unit
     else
+        resolve_run_as_user_macos
         install_launchd_plist
     fi
 

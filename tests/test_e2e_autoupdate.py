@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import sys
 import tarfile
 from io import BytesIO
 from pathlib import Path
@@ -71,6 +72,24 @@ def _build_tarball_and_wheel(target_dir: Path, version: str) -> tuple[Path, Path
     tarball_path.write_bytes(buf.getvalue())
     wheel_path.write_bytes(b"PK\x03\x04 placeholder wheel")
     return tarball_path, wheel_path
+
+
+def _stub_installer(venv_dir: Path, wheel_path: Path) -> None:
+    """Minimal stand-in for a real venv build.
+
+    A real install produces a runnable interpreter; ``_stage_release`` refuses
+    to swap a staged release whose venv has no interpreter (the bricked-launcher
+    state the staged-swap rewrite prevents), so the stub must materialise that
+    file or staging never reaches the swap. The path mirrors
+    ``updater._release_venv_python`` — keep the two in sync. An empty
+    placeholder is enough for the ``.exists()`` gate.
+    """
+    if sys.platform == "win32":
+        interpreter = venv_dir / "Scripts" / "python.exe"
+    else:
+        interpreter = venv_dir / "bin" / "python"
+    interpreter.parent.mkdir(parents=True, exist_ok=True)
+    interpreter.write_text("")
 
 
 def _sign_manifest(
@@ -187,7 +206,7 @@ async def test_e2e_publish_and_swap(
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel_path: venv.mkdir(parents=True, exist_ok=True),
+        installer=_stub_installer,
         exit_func=lambda code: None,
     )
     outcome = await updater.consider_manifest(
@@ -230,7 +249,7 @@ async def test_e2e_corrupt_sha256_fails_closed(
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel_path: venv.mkdir(parents=True, exist_ok=True),
+        installer=_stub_installer,
         exit_func=lambda code: None,
     )
     outcome = await updater.consider_manifest(

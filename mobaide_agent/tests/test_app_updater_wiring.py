@@ -9,6 +9,7 @@ surface.
 from __future__ import annotations
 
 import base64
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -17,8 +18,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 
-from mobaide.agent.app import _build_updater
-from mobaide.agent.updater import StagedBinaryUpdater
+from mobaide.agent.app import _build_updater, _is_running_managed_release
+from mobaide.agent.updater import InstallLayout, StagedBinaryUpdater
 
 
 def _write_trust_key(prefix: Path) -> str:
@@ -71,6 +72,12 @@ def test_build_updater_returns_instance_with_trust_key(tmp_path, monkeypatch):
     expected_key = _write_trust_key(prefix)
     monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
     monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    # The test interpreter is not under <prefix>/releases, so the managed-venv
+    # guard would otherwise disable the updater; stub it for the with-trust-key
+    # path under test.
+    monkeypatch.setattr(
+        "mobaide.agent.app._is_running_managed_release", lambda layout: True
+    )
 
     updater = _build_updater(_fake_app())
     assert isinstance(updater, StagedBinaryUpdater)
@@ -85,10 +92,54 @@ def test_build_updater_env_trust_key_overrides_disk(tmp_path, monkeypatch):
     override = base64.b64encode(b"\x11" * 32).decode()
     monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
     monkeypatch.setenv("MOBAIDE_AGENT_TRUST_KEY", override)
+    monkeypatch.setattr(
+        "mobaide.agent.app._is_running_managed_release", lambda layout: True
+    )
 
     updater = _build_updater(_fake_app())
     assert updater is not None
     assert updater._public_key_b64 == override
+
+
+def test_build_updater_disabled_for_unmanaged_interpreter(
+    tmp_path, monkeypatch, capsys
+):
+    """Trust key present, but the interpreter is not the managed release venv
+    (a dev / source run) → updater disabled, fail-closed.
+
+    Regression guard for the dev-run-clobber root cause: a source run sharing
+    ``default_prefix()`` must not drive the auto-updater (which would stage
+    over and destroy the installed release).
+    """
+    prefix = tmp_path / "mobaide"
+    prefix.mkdir()
+    _write_trust_key(prefix)
+    monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
+    monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    monkeypatch.setattr(
+        "mobaide.agent.app._is_running_managed_release", lambda layout: False
+    )
+    assert _build_updater(_fake_app()) is None
+    out = capsys.readouterr().out
+    assert "updater.disabled" in out
+    assert "unmanaged_interpreter" in out
+
+
+def test_is_running_managed_release_true_when_under_releases(tmp_path, monkeypatch):
+    layout = InstallLayout(prefix=tmp_path / "mobaide")
+    venv = layout.releases_dir / "0.2.0" / "venv"
+    venv.mkdir(parents=True)
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    assert _is_running_managed_release(layout) is True
+
+
+def test_is_running_managed_release_false_for_dev_interpreter(tmp_path, monkeypatch):
+    layout = InstallLayout(prefix=tmp_path / "mobaide")
+    layout.releases_dir.mkdir(parents=True)
+    dev_venv = tmp_path / "dev" / ".venv"
+    dev_venv.mkdir(parents=True)
+    monkeypatch.setattr(sys, "prefix", str(dev_venv))
+    assert _is_running_managed_release(layout) is False
 
 
 @pytest.mark.asyncio
@@ -103,6 +154,9 @@ async def test_relay_callback_registration_invokes_updater(tmp_path, monkeypatch
     _write_trust_key(prefix)
     monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(prefix))
     monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+    monkeypatch.setattr(
+        "mobaide.agent.app._is_running_managed_release", lambda layout: True
+    )
 
     updater = _build_updater(_fake_app())
     assert updater is not None

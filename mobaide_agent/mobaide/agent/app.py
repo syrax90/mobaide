@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from asgi_correlation_id import CorrelationIdMiddleware
 from asgi_correlation_id.context import correlation_id
@@ -16,6 +18,7 @@ from fastapi.responses import JSONResponse
 from mobaide import __version__
 from mobaide.core import ClaudeLauncher, ProjectsStore, SessionManager
 from mobaide.core.hook_settings import sweep_hooks_dir
+from mobaide.core.macos_access import full_disk_access
 from mobaide.linear.config import AutoScanConfig
 from mobaide.linear.rate_limiter import LinearRateLimiter
 from mobaide.linear.scanner import AutoScanSessionManager
@@ -59,6 +62,9 @@ from .ws.session_io import (
 )
 from .ws.session_list import router as ws_session_list_router
 
+if TYPE_CHECKING:
+    from mobaide.agent.updater import InstallLayout
+
 logger = get_logger(__name__)
 
 # Endpoints excluded from per-request HTTP middleware logging (high-frequency, low-value).
@@ -70,14 +76,36 @@ def _generate_correlation_id() -> str:
     return secrets.token_hex(16)
 
 
+def _is_running_managed_release(layout: InstallLayout) -> bool:
+    """True when the running interpreter lives under ``<prefix>/releases``.
+
+    The installed agent runs as ``<prefix>/releases/<v>/venv/bin/python`` (the
+    launcher execs that interpreter), so its ``sys.prefix`` resolves under
+    ``layout.releases_dir``. A developer / source-checkout run uses an
+    interpreter outside that tree. Both sides are ``resolve()``-d so a
+    symlinked prefix (Homebrew ``/usr/local``) still compares correctly.
+    """
+    try:
+        running = Path(sys.prefix).resolve()
+        releases = layout.releases_dir.resolve()
+    except OSError:
+        return False
+    return running.is_relative_to(releases)
+
+
 def _build_updater(app: FastAPI):
     """Return a ``StagedBinaryUpdater`` bound to this agent's session
-    manager, or ``None`` if the install layout has no trust key.
+    manager, or ``None`` when the auto-updater must stay disabled.
 
-    When the agent runs from a developer checkout there is no
-    ``<prefix>/trust/central_server.pub`` and the auto-updater stays
-    disabled — manifests delivered over the relay are recorded but
-    never applied, fail-closed.
+    Disabled (fail-closed; relay manifests are recorded but never applied) when
+    either:
+
+    * the install layout has no ``<prefix>/trust/central_server.pub`` (a
+      developer checkout with no pinned trust key); or
+    * the running interpreter is not the prefix's managed release venv. This
+      stops a dev / source run — which shares ``default_prefix()`` and keys the
+      updater off ``__version__`` — from staging over and destroying the
+      installed release when its version differs from the published manifest.
     """
     from mobaide.agent.updater import InstallLayout, StagedBinaryUpdater
 
@@ -87,6 +115,13 @@ def _build_updater(app: FastAPI):
         logger.info(
             "updater.disabled reason=no_trust_key prefix=%s",
             layout.prefix,
+        )
+        return None
+    if not _is_running_managed_release(layout):
+        logger.info(
+            "updater.disabled reason=unmanaged_interpreter sys_prefix=%s "
+            "releases_dir=%s",
+            sys.prefix, layout.releases_dir,
         )
         return None
     return StagedBinaryUpdater(
@@ -263,28 +298,51 @@ async def _start_relay_in_process(
 def _resolve_env_file() -> Path | None:
     """Return the canonical agent ``.env`` path if one exists.
 
-    Resolution order:
+    Two candidates: the install-prefix env ``<prefix>/mobaide_agent/.env`` and
+    the developer-checkout env ``<package_root>/../.env`` (``__file__``'s
+    ``parents[2]/.env``). The latter only exists in editable / dev installs
+    where ``__file__`` resolves into the repo source tree; for wheel installs
+    ``parents[2]`` is ``site-packages`` and it silently misses.
 
-    1. ``<install_prefix>/mobaide_agent/.env`` — production layout written
-       by the install scripts (see ``env_path_for_prefix``).
-    2. ``<package_root>/../.env`` — developer-checkout fallback so
-       ``python -m mobaide`` works from a source tree without requiring
-       ``MOBAIDE_AGENT_PREFIX`` to be set. Only triggers in editable / dev
-       installs where ``__file__`` resolves into the repo source tree; for
-       wheel installs ``parents[2]`` is ``site-packages`` and the fallback
-       silently misses.
+    Which one is tried first depends on whether ``MOBAIDE_AGENT_PREFIX`` is set
+    in the agent's *process* environment:
 
-    Returning ``None`` when both candidates miss lets pydantic-settings
-    fall back to process-environment vars (which is what tests rely on).
+    * **Prefix set** — the install layout wins: the prefix env first, then the
+      developer-checkout fallback so an editable install with an unpopulated
+      prefix still boots. The POSIX service supervisors export the prefix into
+      the agent's environment (systemd ``Environment=``, launchd plist
+      ``EnvironmentVariables``), so the installed agent always takes this branch.
+    * **Prefix unset** — an uncontrolled ``python -m mobaide`` from a source
+      tree. The checkout's own env wins over the OS-default install prefix, so
+      a source-tree agent keeps its own identity instead of silently adopting a
+      co-installed agent's ``<os-default-prefix>/mobaide_agent/.env`` — what
+      makes a dev agent valid alongside the script-installed one. The Windows
+      Scheduled Task install also lands here: it passes ``--prefix`` to the
+      launcher but does not export ``MOBAIDE_AGENT_PREFIX`` to the agent
+      process. That stays correct because every non-dev install is wheel-based
+      and ships no ``<site-packages>/.env`` for the developer candidate to
+      match, so resolution falls through to the install prefix exactly as
+      before; only an editable/source checkout has a checkout ``.env`` to
+      prefer. (Empty string counts as unset, mirroring ``default_prefix``'s
+      ``if explicit:`` check.)
+
+    Returning ``None`` when both candidates miss lets pydantic-settings fall
+    back to process-environment vars (which is what tests rely on).
     """
     from mobaide.agent._env_writer import env_path_for_prefix
 
-    candidate = env_path_for_prefix(default_prefix())
-    if candidate.exists():
-        return candidate
+    prefix_env = env_path_for_prefix(default_prefix())
+    dev_env = Path(__file__).resolve().parents[2] / ".env"
 
-    dev_candidate = Path(__file__).resolve().parents[2] / ".env"
-    return dev_candidate if dev_candidate.exists() else None
+    if os.environ.get("MOBAIDE_AGENT_PREFIX"):
+        search_order = (prefix_env, dev_env)
+    else:
+        search_order = (dev_env, prefix_env)
+
+    for candidate in search_order:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def create_app(config: AgentConfig | None = None) -> FastAPI:
@@ -306,6 +364,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("agent.starting")
+        # macOS-only: ``False`` means no Full Disk Access, so protected-folder
+        # reads pop a host-desktop TCC modal the remote client can't see (the
+        # per-session startup-stall watchdog surfaces that). Logged once.
+        fda = await asyncio.to_thread(full_disk_access)
+        if fda is not None:
+            logger.info("agent.macos_full_disk_access", granted=fda)
         # Clear hook settings files orphaned by a prior run (crashed sessions
         # never reach the SessionEnd delete). Scoped to this agent's port.
         sweep_hooks_dir(config.port)
@@ -651,6 +715,10 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "sessions": len(sm.list_sessions()),
             "max_sessions": sm.max_sessions,
             "pairing_pending": getattr(app.state, "pairing_pending", False),
+            # macOS: True/False = has/lacks Full Disk Access; None off macOS.
+            # Offloaded — full_disk_access() does a blocking open(); keep it off
+            # the event loop on this polled endpoint.
+            "macos_full_disk_access": await asyncio.to_thread(full_disk_access),
         }
         if autoscan_mgr is not None:
             result["auto_scans_active"] = len(autoscan_mgr.list())

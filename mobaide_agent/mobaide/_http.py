@@ -10,12 +10,24 @@ default rule set the same way ``curl``, ``pip``, ``npm``, etc. do.
 """
 from __future__ import annotations
 
+import ssl
 import urllib.request
 from typing import Mapping
+
+import certifi
 
 from mobaide import __version__
 
 USER_AGENT = f"mobaide-agent/{__version__}"
+
+# Pin outbound TLS trust to certifi, mirroring the relay client
+# (``relay/client.py``). Without an explicit context, ``urlopen`` builds a
+# default ``SSLContext`` and calls ``load_default_certs()``, which inherits
+# the interpreter's CA store — empty on python.org framework builds (macOS)
+# and lacking AIA intermediate chasing on Windows. The auto-updater's
+# HTTPS downloads would then depend on a launcher-set ``SSL_CERT_FILE``
+# rather than being agent-pinned on every platform.
+_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 
 def _has_user_agent(request: urllib.request.Request) -> bool:
@@ -66,4 +78,6 @@ def urlopen(
     if not _has_user_agent(request):
         request.add_header("User-Agent", USER_AGENT)
 
-    return urllib.request.urlopen(request, timeout=timeout)
+    # ``context`` is ignored by urllib for non-HTTPS schemes (``http://``,
+    # ``file://``), so passing it unconditionally is safe.
+    return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)

@@ -14,14 +14,32 @@
     <string>/usr/local/mobaide</string>
     <!--
       launchd uses a minimal default PATH that omits npm/homebrew/user-local
-      bins where the Claude Code CLI typically lives. Extend it so the
-      runtime resolver and any subprocess the CLI shells out to can find
-      both Apple Silicon homebrew (/opt/homebrew/bin) and Intel
-      (/usr/local/bin) installs as well as user-installed npm.
+      bins where the Claude Code CLI typically lives, and keeps bash and other
+      core tools only under /bin and /sbin. Include /bin:/sbin (the launcher's
+      #!/bin/bash and basic tools need them) plus both Apple Silicon homebrew
+      (/opt/homebrew/bin) and Intel (/usr/local/bin) and user-installed npm.
+
+      NOTE: launchd does NOT expand $VAR in this file. deploy/install.sh
+      generates the real plist with absolute paths substituted; if you
+      hand-install this template, replace $HOME below with your absolute home
+      (e.g. /Users/you).
     -->
+    <key>HOME</key>
+    <string>$HOME</string>
     <key>PATH</key>
-    <string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.local/bin</string>
+    <string>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin:/sbin:/opt/homebrew/bin:$HOME/.npm-global/bin:$HOME/.local/bin</string>
   </dict>
+  <!--
+    Pin the working directory to the (writable) install prefix. The agent's
+    projects.json / users.json store paths are relative and resolve against
+    CWD; launchd defaults CWD to / (read-only system volume on modern
+    macOS), which crashes the agent on its first-boot store write
+    ([Errno 30] Read-only file system) so it never binds 8000. Mirrors the
+    systemd unit's WorkingDirectory. deploy/install.sh substitutes the real
+    $MOBAIDE_AGENT_PREFIX; if you hand-install this template, replace the
+    path below with your absolute prefix.
+  -->
+  <key>WorkingDirectory</key><string>/usr/local/mobaide</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <!--

@@ -1,5 +1,44 @@
 # mobaide_agent Changelog
 
+## [0.2.15](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.14...agent-v0.2.15) (2026-06-19)
+
+
+### Bug Fixes
+
+* **agent:** make cross-platform auto-update non-destructive and self-healing ([bf56671](https://github.com/syrax90/claude_mobile/commit/bf56671028154065947369ff62c827165cb4f297))
+
+## [0.2.14](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.13...agent-v0.2.14) (2026-06-19)
+
+
+### Bug Fixes
+
+* **agent:** add `re-pair --fresh` to recover from missing-agent 404 ([8db9e00](https://github.com/syrax90/claude_mobile/commit/8db9e0058de2c46f7fb98dbd34caf35a011e08e4))
+* **pairing:** add `re-pair --fresh` to recover from missing-agent 404 ([a6b261a](https://github.com/syrax90/claude_mobile/commit/a6b261a6fe6b02be6cc173c88222333a2fe1095c))
+
+## [0.2.13](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.12...agent-v0.2.13) (2026-06-17)
+
+
+### Features
+
+* **agent:** surface macOS file-access (TCC) freezes to the app instead of hanging ([24740f0](https://github.com/syrax90/claude_mobile/commit/24740f0b212e20616ab516f8a18c661f2079cab5))
+* **agent:** surface macOS file-access (TCC) freezes to the app instead of hanging ([ce03474](https://github.com/syrax90/claude_mobile/commit/ce034747322213b587cdbb41603f849b2baa2d8f))
+
+
+### Bug Fixes
+
+* **agent:** prevent session teardown hanging when child ignores SIGTERM ([9b11714](https://github.com/syrax90/claude_mobile/commit/9b117146f1e1ecc7bad87861eb8a80a3c05917d0))
+* **agent:** prevent session teardown hanging when child ignores SIGTERM ([d4a18a3](https://github.com/syrax90/claude_mobile/commit/d4a18a3e5693a2ccfc7d673ca51d30673edbd0b8))
+* **agent:** select .env by prefix detection to support dev-alongside-installed use case ([f3bfa87](https://github.com/syrax90/claude_mobile/commit/f3bfa87c217b2ecf542f2fd98edb80a068accd7c))
+* **agent:** select .env by prefix detection to support dev-alongside-installed use case ([2cd2955](https://github.com/syrax90/claude_mobile/commit/2cd29553f406eaf9bd88da81c760cc0b009e46f0))
+
+## [0.2.12](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.11...agent-v0.2.12) (2026-06-16)
+
+
+### Bug Fixes
+
+* **agent:** verify relay TLS against certifi instead of host trust store ([5cdd9e1](https://github.com/syrax90/claude_mobile/commit/5cdd9e1c7059d966b47e92e19479eaa339b2cbb9))
+* **agent:** verify relay TLS against certifi instead of host trust store ([8f287e8](https://github.com/syrax90/claude_mobile/commit/8f287e8e88e794b062327f6699f3f2fa81c2964f))
+
 ## [0.2.11](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.10...agent-v0.2.11) (2026-06-13)
 
 

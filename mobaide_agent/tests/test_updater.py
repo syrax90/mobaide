@@ -8,6 +8,8 @@ of ``current_version``. The manifest body itself is passed in directly
 from __future__ import annotations
 
 import base64
+import logging
+import os
 import sys
 import tarfile
 from io import BytesIO
@@ -18,9 +20,13 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mobaide.agent.updater import (
+    _STALE_SCRATCH_SECONDS,
     InstallLayout,
     StagedBinaryUpdater,
+    _assert_safe_version,
     _install_wheel_into_venv,
+    _is_version_newer,
+    _version_tuple,
     _wheel_basename_from_url,
 )
 from mobaide.manifest_signing import canonical_json
@@ -65,6 +71,21 @@ def layout(tmp_path: Path) -> InstallLayout:
     layout.releases_dir.mkdir(parents=True, exist_ok=True)
     layout.trust_dir.mkdir(parents=True, exist_ok=True)
     return layout
+
+
+def _fake_installer(venv_dir: Path, wheel_path: Path) -> None:
+    """Stub the wheel install: create the venv interpreter the updater's
+    pre-swap verification (``_release_venv_python``) probes for, mirroring the
+    layout ``conftest.make_release`` builds (``Scripts`` on Windows, ``bin``
+    elsewhere)."""
+    if sys.platform == "win32":
+        bin_dir = venv_dir / "Scripts"
+        python = bin_dir / "python.exe"
+    else:
+        bin_dir = venv_dir / "bin"
+        python = bin_dir / "python"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    python.write_text("#!/bin/sh\nexec /bin/true\n", encoding="utf-8")
 
 
 async def test_no_change_when_versions_match(layout) -> None:
@@ -133,7 +154,7 @@ async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: venv.mkdir(parents=True, exist_ok=True),
+        installer=_fake_installer,
         exit_func=fake_exit,
     )
     outcome = await updater.consider_manifest(
@@ -143,6 +164,194 @@ async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
     assert (layout.releases_dir / "0.2.0").is_dir()
     assert layout.current_version_file.read_text().strip() == "0.2.0"
     assert exits == [75]
+
+
+async def test_forward_only_skips_older_version_without_force(layout) -> None:
+    """Auto/poll updates are forward-only: a manifest OLDER than the running
+    version is a no_change, never a (destructive) re-stage. This is the guard
+    against the dev-run clobber (a newer source build vs an older manifest)."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    installer_calls: list = []
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.3.0",  # newer than the manifest's 0.2.0
+        installer=lambda venv, wheel: installer_calls.append(venv),
+    )
+    outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+    assert outcome == "no_change"
+    assert installer_calls == []
+    assert not (layout.releases_dir / "0.2.0").exists()
+
+
+async def test_failed_force_restage_preserves_running_release(layout) -> None:
+    """The original brick: a force re-stage of the CURRENT version whose build
+    FAILS must NOT destroy the running release (no rmtree-before-build) and
+    must leave no scratch dirs behind."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    live = layout.releases_dir / "0.2.0"
+    (live / "venv" / "bin").mkdir(parents=True)
+    (live / "venv" / "bin" / "python").write_text("running", encoding="utf-8")
+
+    def _boom(venv_dir, wheel_path):
+        raise RuntimeError("install failed mid-stage")
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.2.0",
+        installer=_boom,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.force_update_now(
+        body, signature_b64, body["version"], exit_after_stage=False,
+    )
+    assert outcome == "signature_failed"
+    # Running release intact — never rmtree'd before the new build succeeded.
+    assert (live / "venv" / "bin" / "python").read_text() == "running"
+    assert not list(layout.releases_dir.glob(".staging-*"))
+    assert not list(layout.releases_dir.glob(".old-*"))
+
+
+async def test_force_restage_existing_version_swaps_in_new_build(layout) -> None:
+    """A force re-stage of an existing version that SUCCEEDS atomically swaps in
+    the freshly-built release (old contents replaced) and cleans the backup."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    live = layout.releases_dir / "0.2.0"
+    (live / "venv" / "bin").mkdir(parents=True)
+    (live / "venv" / "bin" / "python").write_text("old", encoding="utf-8")
+    (live / "stale_marker").write_text("x", encoding="utf-8")
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.2.0",
+        installer=_fake_installer,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.force_update_now(
+        body, signature_b64, body["version"], exit_after_stage=False,
+    )
+    assert outcome == "staged"
+    # New build swapped in: the old-only marker is gone, the venv exists, and
+    # no backup scratch dir lingers.
+    assert not (live / "stale_marker").exists()
+    assert (live / "venv" / "bin" / "python").exists()
+    assert not list(layout.releases_dir.glob(".old-*"))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "../evil", "..", ".", "a/b", "a\\b", "x\x00y", "",
+        # Windows drive-relative escape: ``releases / "z:evil"`` drops the
+        # anchor. The allowlist rejects ``:`` (and any other metacharacter).
+        "z:evil", "a:b:c", "a;b", "a b", "$(x)",
+    ],
+)
+def test_assert_safe_version_rejects_path_escapes(bad: str) -> None:
+    with pytest.raises(ValueError, match="safe path component"):
+        _assert_safe_version(bad)
+
+
+@pytest.mark.parametrize("ok", ["0.2.13", "0.2.0rc1", "1.0.0+build", "0.2.0.dev1"])
+def test_assert_safe_version_allows_real_versions(ok: str) -> None:
+    _assert_safe_version(ok)  # must not raise
+
+
+async def test_force_stage_rejects_path_escaping_version(layout) -> None:
+    """A signed-but-malicious version must be rejected before it becomes a
+    releases/<v> path component — defense-in-depth at the manifest->fs boundary.
+    Force bypasses the forward-only gate, so this reaches _stage_release where
+    the guard fires."""
+    import hashlib
+
+    private_key = Ed25519PrivateKey.generate()
+    public_key_b64 = base64.b64encode(
+        private_key.public_key().public_bytes_raw()
+    ).decode()
+    tmp = layout.prefix / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    tb = tmp / "agent.tar.gz"
+    wh = tmp / "mobaide_agent-9.9.9-py3-none-any.whl"
+    buf = BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo(name="x")
+        info.size = 1
+        tar.addfile(info, BytesIO(b"x"))
+    tb.write_bytes(buf.getvalue())
+    wh.write_bytes(b"PK\x03\x04")
+    body = {
+        "version": "../../../tmp/mobaide-escape",
+        "tarball_url": f"file://{tb}",
+        "tarball_sha256": hashlib.sha256(tb.read_bytes()).hexdigest(),
+        "wheel_url": f"file://{wh}",
+        "wheel_sha256": hashlib.sha256(wh.read_bytes()).hexdigest(),
+        "released_at": "2026-04-26T00:00:00+00:00",
+    }
+    sig = base64.b64encode(private_key.sign(canonical_json(body))).decode()
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        installer=_fake_installer,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.force_update_now(
+        body, sig, body["version"], exit_after_stage=False,
+    )
+    assert outcome == "signature_failed"
+    # No directory created outside releases/.
+    assert not (layout.prefix.parent / "mobaide-escape").exists()
+    assert not (layout.prefix / "mobaide-escape").exists()
+
+
+def test_sweep_preserves_concurrent_other_pid_scratch(layout) -> None:
+    """The scratch sweep removes this process's own leftovers but must NOT
+    delete a concurrent process's recent in-flight staging dir."""
+    releases = layout.releases_dir
+    own = releases / f".staging-0.2.0-{os.getpid()}"
+    own.mkdir()
+    other_recent = releases / f".staging-0.2.0-{os.getpid() + 1}"
+    other_recent.mkdir()
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64="x",
+        session_manager=None,
+        current_version="0.1.0",
+        installer=lambda venv, wheel: None,
+    )
+    updater._sweep_scratch_dirs()
+    assert not own.exists(), "own-pid scratch should be swept"
+    assert other_recent.exists(), (
+        "a concurrent other-pid recent scratch must be preserved (no cross-"
+        "process corruption)"
+    )
+
+
+def test_sweep_removes_stale_other_pid_scratch(layout) -> None:
+    """A scratch dir old enough that its creator is certainly gone is GC'd even
+    if its pid is not this process's."""
+    import time as _time
+
+    releases = layout.releases_dir
+    stale = releases / f".old-0.2.0-{os.getpid() + 999}"
+    stale.mkdir()
+    old = _time.time() - (_STALE_SCRATCH_SECONDS + 100)
+    os.utime(stale, (old, old))
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64="x",
+        session_manager=None,
+        current_version="0.1.0",
+        installer=lambda venv, wheel: None,
+    )
+    updater._sweep_scratch_dirs()
+    assert not stale.exists(), "stale other-pid scratch should be GC'd"
 
 
 async def test_non_dict_body_fails_closed(layout) -> None:
@@ -344,7 +553,7 @@ async def test_consider_manifest_apply_path_never_calls_urlopen(
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: venv.mkdir(parents=True, exist_ok=True),
+        installer=_fake_installer,
         exit_func=lambda code: None,
     )
     outcome = await updater.consider_manifest(
@@ -393,7 +602,7 @@ async def test_force_update_now_apply_path_never_calls_urlopen(
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: venv.mkdir(parents=True, exist_ok=True),
+        installer=_fake_installer,
         exit_func=lambda code: None,
     )
     outcome = await updater.force_update_now(
@@ -415,7 +624,7 @@ def test_download_to_routes_through_user_agent_wrapper(tmp_path) -> None:
     captured: dict = {}
     payload = b"PK\x03\x04 fake wheel bytes"
 
-    def _fake_urlopen(req, timeout=None):
+    def _fake_urlopen(req, timeout=None, context=None):
         captured["request"] = req
         return _FakeBytesResp(payload)
 
@@ -528,3 +737,169 @@ class TestInstallWheelIntoVenvHidesWindow:
             )
         else:
             assert _updater_mod._WINDOWS_NO_WINDOW == 0
+
+
+@pytest.mark.parametrize(
+    "version, expected",
+    [
+        ("0.2.0", (0, 2, 0)),
+        # PEP 440 local/build metadata after `+` is stripped.
+        ("0.2.13+local", (0, 2, 13)),
+        # Pre-release metadata after the first `-` is stripped.
+        ("1.4.2-rc1", (1, 4, 2)),
+        # Parsing stops at the first non-numeric dotted component.
+        ("1.2.dev3", (1, 2)),
+        ("2.0.0a1", (2, 0)),
+        # Nothing numeric -> empty tuple (the "unparseable" signal the
+        # forward-only gate treats conservatively).
+        ("garbage", ()),
+        ("", ()),
+        ("v1.2.3", ()),
+    ],
+)
+def test_version_tuple_strips_metadata_and_stops_at_non_numeric(
+    version: str, expected: tuple[int, ...]
+) -> None:
+    assert _version_tuple(version) == expected
+
+
+@pytest.mark.parametrize(
+    "candidate, current, expected",
+    [
+        ("0.2.1", "0.2.0", True),
+        ("0.3.0", "0.2.9", True),
+        # Numeric (not lexical) comparison of components.
+        ("0.10.0", "0.9.0", True),
+        ("0.2.0", "0.2.0", False),
+        ("0.2.0", "0.3.0", False),
+        # Conservative: an unparseable candidate is never "newer", so a
+        # malformed manifest version cannot drive a stage on the auto path.
+        ("garbage", "0.2.0", False),
+        ("", "0.2.0", False),
+        # Conservative: an unparseable current also blocks (we can't prove
+        # the candidate is forward).
+        ("0.3.0", "garbage", False),
+    ],
+)
+def test_is_version_newer_is_strict_and_conservative(
+    candidate: str, current: str, expected: bool
+) -> None:
+    assert _is_version_newer(candidate, current) is expected
+
+
+async def test_forward_only_skips_unparseable_version_without_force(
+    layout, caplog
+) -> None:
+    """An unparseable manifest version on the non-forced path is a no_change
+    (conservative ``_is_version_newer`` -> False), never a stage, and it emits
+    the ``updater.forward_only_skipped`` INFO breadcrumb so operators can see
+    why a poll/auto update did nothing. The gate fires on the ``latest_version``
+    argument before signature verification, so the signed body is irrelevant
+    here -- a malformed version string can never reach the destructive stage."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    installer_calls: list = []
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.2.0",
+        installer=lambda venv, wheel: installer_calls.append(venv),
+    )
+
+    with caplog.at_level(logging.INFO, logger="mobaide.agent.updater"):
+        outcome = await updater.consider_manifest(body, signature_b64, "garbage")
+
+    assert outcome == "no_change"
+    assert installer_calls == []
+    assert not (layout.releases_dir / "garbage").exists()
+    skip_logs = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "mobaide.agent.updater" and r.levelno == logging.INFO
+    ]
+    assert any("updater.forward_only_skipped" in m for m in skip_logs), (
+        f"expected a forward_only_skipped INFO breadcrumb; got {skip_logs!r}"
+    )
+
+
+def test_swap_into_place_restores_backup_when_forward_replace_fails(
+    layout, monkeypatch, caplog
+) -> None:
+    """The data-loss-prevention branch the integration tests don't reach: when
+    ``releases/<v>`` already exists, ``_swap_into_place`` moves it aside to a
+    ``.old-*`` backup and only then forward-replaces it with the staging dir.
+    If that forward ``os.replace`` raises, the backup MUST be restored to the
+    original release path (so the running release is never left missing) and the
+    error re-raised for the caller's cleanup. The success path is already
+    covered by ``test_force_restage_existing_version_swaps_in_new_build``; this
+    pins the failure-restore half of the all-or-nothing contract."""
+    release_dir = layout.releases_dir / "0.2.0"
+    (release_dir / "venv" / "bin").mkdir(parents=True)
+    (release_dir / "venv" / "bin" / "python").write_text("running", encoding="utf-8")
+
+    staging_dir = layout.releases_dir / ".staging-0.2.0-99999"
+    (staging_dir / "venv" / "bin").mkdir(parents=True)
+    (staging_dir / "venv" / "bin" / "python").write_text("new", encoding="utf-8")
+
+    real_replace = os.replace
+    calls: list[tuple[str, str]] = []
+
+    def flaky_replace(src, dst, *args, **kwargs):
+        calls.append((str(src), str(dst)))
+        # Let the move-aside (release -> backup) succeed, then blow up on the
+        # forward move (staging -> release) that the restore logic guards.
+        if Path(src) == staging_dir and Path(dst) == release_dir:
+            raise OSError("simulated cross-device / locked-file failure")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", flaky_replace)
+
+    with caplog.at_level(logging.ERROR, logger="mobaide.agent.updater"):
+        with pytest.raises(OSError, match="simulated"):
+            StagedBinaryUpdater._swap_into_place(staging_dir, release_dir)
+
+    # Restore happened: the original release is back in place with its content,
+    # and no `.old-*` backup is left orphaned at the release path.
+    assert (release_dir / "venv" / "bin" / "python").read_text() == "running"
+    assert not list(layout.releases_dir.glob(".old-*"))
+    # Restore succeeded, so the "restore failed" loud-error path must NOT fire.
+    restore_failures = [
+        r.getMessage()
+        for r in caplog.records
+        if "updater.swap_restore_failed" in r.getMessage()
+    ]
+    assert restore_failures == []
+
+
+async def test_stage_sweeps_stale_scratch_dirs_before_building(layout) -> None:
+    """A stage killed mid-build can leave ``.staging-*`` / ``.old-*`` scratch
+    dirs behind. ``_stage_release`` sweeps them at entry (``_sweep_scratch_dirs``)
+    so they don't accumulate across attempts; a successful stage then writes the
+    real ``releases/<v>``. The scratch names never parse as a version, so this
+    is purely about keeping ``releases/`` tidy -- but a regression that dropped
+    the sweep would silently leak directories on every recovered update."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+
+    stale_staging = layout.releases_dir / f".staging-0.1.9-{os.getpid()}"
+    stale_old = layout.releases_dir / f".old-0.1.9-{os.getpid()}"
+    for scratch in (stale_staging, stale_old):
+        scratch.mkdir(parents=True)
+        (scratch / "leftover").write_text("x", encoding="utf-8")
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        installer=_fake_installer,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+
+    assert outcome == "staged"
+    assert (layout.releases_dir / "0.2.0").is_dir()
+    # Both pre-existing scratch dirs were swept at stage start.
+    assert not stale_staging.exists()
+    assert not stale_old.exists()
+    assert not list(layout.releases_dir.glob(".staging-*"))
+    assert not list(layout.releases_dir.glob(".old-*"))

@@ -6,8 +6,8 @@ legacy `mobaide-agent pair --id ... --token ...` invocation.
 ## Overview
 
 A fresh `mobaide_agent` install used to require the operator to (a) read
-`agent_id` / `agent_token` from the Android `CredentialsDialog`, (b) SSH to
-the agent host, and (c) run `mobaide-agent pair --id <ID> --token <TOKEN>`.
+`agent_id` / `agent_token` from the Android app's credentials screen, (b) SSH
+to the agent host, and (c) run `mobaide-agent pair --id <ID> --token <TOKEN>`.
 Tokens leaked into shell history, copy-paste typos were common, and the
 user drove both ends manually.
 
@@ -155,9 +155,14 @@ The agent's CLI captures its current `RELAY_AGENT_ID` (if any) into the
 initiate request's `agent_metadata.current_agent_id` field. The claim
 handler then chooses one of three paths:
 
-* **No current agent** (`current_agent_id` absent or unknown/deleted) —
-  the server calls `db.register_agent()` to create a new agent row and
-  returns 404 for an unknown ID.
+* **No current agent id** (`current_agent_id` absent) — the server calls
+  `db.register_agent()` to create a new agent row (first-pair).
+* **Unknown / deleted agent id** (`current_agent_id` present but no
+  matching row) — the claim returns **HTTP 404**. The agent host must
+  first-pair instead: run `mobaide-agent re-pair --fresh` to drop the dead
+  id, then rescan. This happens when the agent was removed from the account
+  or the relay database was redeployed — plain `re-pair` keeps the id and
+  would 404 on every cycle.
 * **Same owner** — `db.is_agent_owner(current_agent_id, claimer)`
   returns true. The server calls `db.reregister_agent(current_agent_id)`
   to rotate the token. The mobile UI sees the same agent row reappear
@@ -215,14 +220,33 @@ To move a host to a different account:
 2. On the agent host, run:
 
    ```bash
-   mobaide-agent re-pair
+   mobaide-agent re-pair --fresh
    ```
 
-   This blanks `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` in `.env` and
-   restarts the supervisor, surfacing a fresh QR via the boot autorun.
+   `--fresh` blanks BOTH `RELAY_AGENT_ID` and `RELAY_AGENT_TOKEN` in `.env`
+   (plain `re-pair` keeps the id) and restarts the supervisor, surfacing a
+   fresh QR via the boot autorun. The id **must** be cleared here: after
+   step 1 the relay no longer has this agent, so carrying the old id would
+   make the claim fail with HTTP 404 "Re-pair target agent does not exist".
 3. Scan the QR from the new account's mobile app. Because no agent ID is
    carried in the initiate request, the server registers a fresh agent
    row under the new owner.
+
+### Re-pair after the agent was removed or the relay was redeployed
+
+If pairing fails with **HTTP 404** `Re-pair target agent does not exist on
+this relay`, the agent's `RELAY_AGENT_ID` points at an agent the relay no
+longer knows — typically because the agent was removed from the account or
+the relay database was redeployed. Plain `re-pair` keeps that dead id and
+re-sends it on every cycle, so it 404s forever. Recover with a true
+first-pair:
+
+```bash
+mobaide-agent re-pair --fresh
+```
+
+This clears `RELAY_AGENT_ID` as well as the token (and the cached pending
+nonce), so the next claim registers a brand-new agent. Then rescan the QR.
 
 ### Skip the install-time QR
 

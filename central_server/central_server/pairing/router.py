@@ -217,8 +217,8 @@ async def claim_pairing(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=(
                     "Re-pair target agent does not exist on this relay; "
-                    "the agent may need to clear its credentials and "
-                    "first-pair instead."
+                    "the agent must first-pair as a new agent instead. On "
+                    "the agent host run: mobaide-agent re-pair --fresh"
                 ),
             )
         if existing_owner != user.sub:

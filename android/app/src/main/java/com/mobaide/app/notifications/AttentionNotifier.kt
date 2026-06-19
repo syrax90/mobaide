@@ -70,6 +70,8 @@ class AttentionNotifier @Inject constructor(
             ?: "Claude session"
         return when (session.attention) {
             "awaiting_permission" -> "Permission needed" to "$label is waiting for your approval"
+            "awaiting_os_permission" -> "Action needed on your Mac" to
+                "$label is paused — your Mac is asking to allow file access. Approve it on the Mac to continue."
             "turn_finished" -> "Your move" to "$label finished its turn — tap to continue"
             "ended" -> {
                 val reason = session.exit_reason

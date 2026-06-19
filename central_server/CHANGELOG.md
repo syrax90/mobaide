@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.16](https://github.com/syrax90/claude_mobile/compare/server-v0.1.15...server-v0.1.16) (2026-06-19)
+
+
+### Bug Fixes
+
+* **agent:** add `re-pair --fresh` to recover from missing-agent 404 ([8db9e00](https://github.com/syrax90/claude_mobile/commit/8db9e0058de2c46f7fb98dbd34caf35a011e08e4))
+* **pairing:** add `re-pair --fresh` to recover from missing-agent 404 ([a6b261a](https://github.com/syrax90/claude_mobile/commit/a6b261a6fe6b02be6cc173c88222333a2fe1095c))
+
 ## [0.1.15](https://github.com/syrax90/claude_mobile/compare/server-v0.1.14...server-v0.1.15) (2026-06-13)
 
 

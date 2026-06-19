@@ -32,7 +32,7 @@ import org.junit.Test
  *
  * Behaviour pinned here:
  * 1. Initial seed value (before any upstream emission) is the
- *    documented default: `Full` mode with 120 columns.
+ *    documented default: `Static` mode with 120 columns.
  * 2. Static-mode prefs flow through to a [TerminalDisplayConfig] with
  *    matching `mode` + `staticColumns`.
  * 3. Combined StateFlow re-emits when either upstream prefs flow changes
@@ -72,21 +72,21 @@ class TerminalViewModelDisplayConfigTest {
         )
 
     @Test
-    fun displayConfig_seedValue_isFullModeWithDefaultColumns() = runTest(testDispatcher) {
-        // No upstream emission yet — combine() can only produce a value once
-        // BOTH source flows have emitted at least once. Until then, the
+    fun displayConfig_seedValue_isStaticModeWithDefaultColumns() = runTest(testDispatcher) {
+        // Upstream prefs that never emit — combine() can only produce a value
+        // once BOTH source flows have emitted at least once. Until then, the
         // SharingStarted.Eagerly seed must surface so the UI has something
         // to render on first composition.
         val prefs = mockk<PreferencesStore> {
-            every { terminalDisplayMode } returns MutableStateFlow(TerminalDisplayMode.Full)
-            every { terminalStaticColumns } returns MutableStateFlow(TERMINAL_STATIC_COLUMNS_DEFAULT)
+            every { terminalDisplayMode } returns MutableSharedFlow<TerminalDisplayMode>()
+            every { terminalStaticColumns } returns MutableSharedFlow<Int>()
         }
 
         val vm = createViewModel(prefs)
         runCurrent()
 
         assertEquals(
-            TerminalDisplayConfig(TerminalDisplayMode.Full, TERMINAL_STATIC_COLUMNS_DEFAULT),
+            TerminalDisplayConfig(TerminalDisplayMode.Static, TERMINAL_STATIC_COLUMNS_DEFAULT),
             vm.displayConfig.value,
         )
     }

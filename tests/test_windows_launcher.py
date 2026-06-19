@@ -1543,3 +1543,121 @@ def test_log_rotate_threshold_is_5mb() -> None:
     silently would invalidate that operator-facing guidance.
     """
     assert windows_launcher._AGENT_LOG_ROTATE_BYTES == 5 * 1024 * 1024
+
+
+def _make_win_release(prefix: Path, version: str) -> None:
+    """Create ``releases/<version>/venv/Scripts/python.exe`` (a stub file)."""
+    scripts = prefix / "releases" / version / "venv" / "Scripts"
+    scripts.mkdir(parents=True, exist_ok=True)
+    (scripts / "python.exe").write_text("stub", encoding="utf-8")
+
+
+class TestSuperviseRecovery:
+    """Self-heal: when ``current_version`` points at a release whose
+    ``python.exe`` is gone (half-staged / corrupt), the supervisor rolls
+    forward to the newest sibling with a runnable venv and respawns, rather
+    than exiting straight to Task Scheduler and crash-looping. The in-venv
+    ``mobaide.launcher`` cannot do this — it needs its own interpreter to run.
+    """
+
+    def test_find_recovery_version_picks_newest_numeric(self, tmp_path: Path) -> None:
+        for v in ("0.2.0", "0.10.0", "0.9.0"):
+            _make_win_release(tmp_path, v)
+        assert windows_launcher._find_recovery_version(tmp_path) == "0.10.0"
+
+    def test_find_recovery_version_ignores_scratch_and_venvless(
+        self, tmp_path: Path
+    ) -> None:
+        # Scratch dir with a venv must be ignored (name does not parse).
+        _make_win_release(tmp_path, ".staging-9.9.9-1")
+        # Version dir without a venv must be ignored.
+        (tmp_path / "releases" / "0.3.0").mkdir(parents=True)
+        _make_win_release(tmp_path, "0.2.0")
+        assert windows_launcher._find_recovery_version(tmp_path) == "0.2.0"
+
+    def test_find_recovery_version_none_when_no_runnable(self, tmp_path: Path) -> None:
+        (tmp_path / "releases" / "0.2.0").mkdir(parents=True)  # no venv
+        assert windows_launcher._find_recovery_version(tmp_path) is None
+
+    def test_find_recovery_version_none_when_no_releases_dir(
+        self, tmp_path: Path
+    ) -> None:
+        assert windows_launcher._find_recovery_version(tmp_path) is None
+
+    def test_write_current_version_atomic(self, tmp_path: Path) -> None:
+        windows_launcher._write_current_version(tmp_path, "1.2.3")
+        assert (tmp_path / "current_version").read_text().strip() == "1.2.3"
+
+    def test_supervise_recovers_then_spawns(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        _make_win_release(tmp_path, "0.2.13")
+        # current_version points at a missing release → triggers recovery.
+        (tmp_path / "current_version").write_text("0.2.99\n", encoding="utf-8")
+
+        spawn_log: list[Path] = []
+
+        def fake_spawn(python_path: Path, prefix: Path) -> _StubProc:
+            spawn_log.append(python_path)
+            return _StubProc(returncode=0, poll_returncode=0)
+
+        monkeypatch.setattr(windows_launcher, "_spawn_release_launcher", fake_spawn)
+
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 0
+        assert (tmp_path / "current_version").read_text().strip() == "0.2.13"
+        assert len(spawn_log) == 1
+        assert "0.2.13" in str(spawn_log[0])
+
+    def test_supervise_returns_70_when_no_recovery_target(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        (tmp_path / "releases").mkdir(parents=True)  # empty: nothing runnable
+        (tmp_path / "current_version").write_text("0.2.0\n", encoding="utf-8")
+
+        def fake_spawn(python_path: Path, prefix: Path) -> _StubProc:
+            raise AssertionError("spawn must not run when no recovery target")
+
+        monkeypatch.setattr(windows_launcher, "_spawn_release_launcher", fake_spawn)
+
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 70
+
+    def test_supervise_recovery_is_bounded(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Recovery cannot loop forever: if every recovery target still fails to
+        resolve, the supervisor exits 70 after at most _MAX_RECOVERY_ATTEMPTS
+        recoveries (bounded by the cap, even when each target is distinct so the
+        per-version `recovered` set never short-circuits)."""
+        (tmp_path / "current_version").write_text("0.0.0\n", encoding="utf-8")
+
+        resolve_calls: list[Path] = []
+
+        def always_missing(prefix: Path) -> Path:
+            resolve_calls.append(prefix)
+            raise FileNotFoundError("missing interpreter")
+
+        counter = {"n": 0}
+
+        def fake_find(prefix: Path) -> str:
+            counter["n"] += 1
+            return f"9.9.{counter['n']}"  # a fresh distinct target each time
+
+        monkeypatch.setattr(
+            windows_launcher, "_resolve_release_python", always_missing
+        )
+        monkeypatch.setattr(windows_launcher, "_find_recovery_version", fake_find)
+        monkeypatch.setattr(
+            windows_launcher, "_write_current_version", lambda p, v: None
+        )
+
+        def fake_spawn(python_path: Path, prefix: Path) -> _StubProc:
+            raise AssertionError("must not spawn when resolve always fails")
+
+        monkeypatch.setattr(windows_launcher, "_spawn_release_launcher", fake_spawn)
+
+        rc = windows_launcher._supervise(tmp_path)
+        assert rc == 70
+        # Initial resolve per loop iteration; bounded by the cap + 1.
+        assert len(resolve_calls) <= windows_launcher._MAX_RECOVERY_ATTEMPTS + 1

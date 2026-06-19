@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from mobaide.agent.config import AgentConfig
+from mobaide.agent.install_paths import default_prefix
 from mobaide.linear.config import AutoScanConfig
 
 # All env vars AgentConfig.from_env consults. Auto-scan-related settings
@@ -71,8 +72,12 @@ class TestAgentConfigDefaults:
         # Default is 0 = never expires (issue JWTs without an `exp` claim).
         assert cfg.jwt_access_token_expire_minutes == 0
         assert cfg.jwt_refresh_token_expire_minutes == 0
-        assert cfg.user_store_path == "users.json"
-        assert cfg.projects_store_path == "projects.json"
+        # Relative store-path defaults are anchored to the install prefix so a
+        # launch with CWD=/ (read-only) can't crash the first store write
+        # ([Errno 30]). For an installed agent CWD==prefix, so the resolved
+        # location is unchanged.
+        assert cfg.user_store_path == str(default_prefix() / "users.json")
+        assert cfg.projects_store_path == str(default_prefix() / "projects.json")
         assert cfg.host == "0.0.0.0"
         assert cfg.port == 8000
         assert cfg.max_sessions == 16
@@ -191,13 +196,31 @@ class TestAgentConfigProjectsStorePath:
     def test_unset_default(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
         cfg = AgentConfig.from_env()
-        assert cfg.projects_store_path == "projects.json"
+        assert cfg.projects_store_path == str(default_prefix() / "projects.json")
 
     def test_env_overrides_default(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
         monkeypatch.setenv("PROJECTS_STORE_PATH", "/var/agent/projects.json")
         cfg = AgentConfig.from_env()
         assert cfg.projects_store_path == "/var/agent/projects.json"
+
+    def test_relative_override_anchored_to_prefix(self, monkeypatch, tmp_path):
+        """A relative store-path override is anchored to the prefix, not CWD."""
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path))
+        monkeypatch.setenv("PROJECTS_STORE_PATH", "projects.json")
+        monkeypatch.setenv("USER_STORE_PATH", "users.json")
+        cfg = AgentConfig.from_env()
+        assert cfg.projects_store_path == str(tmp_path / "projects.json")
+        assert cfg.user_store_path == str(tmp_path / "users.json")
+
+    def test_relative_audit_path_anchored_none_preserved(self, monkeypatch, tmp_path):
+        """A relative audit path is anchored; ``None`` stays ``None``."""
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("MOBAIDE_AGENT_PREFIX", str(tmp_path))
+        monkeypatch.setenv("AUDIT_LOG_PATH", "audit.log")
+        cfg = AgentConfig.from_env()
+        assert cfg.audit_log_path == str(tmp_path / "audit.log")
 
 
 class TestAgentConfigStringPassThrough:

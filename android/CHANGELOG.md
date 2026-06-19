@@ -1,5 +1,23 @@
 # Android Changelog
 
+## [1.12.0](https://github.com/syrax90/claude_mobile/compare/android-v1.11.0...android-v1.12.0) (2026-06-17)
+
+
+### Features
+
+* **agent:** surface macOS file-access (TCC) freezes to the app instead of hanging ([24740f0](https://github.com/syrax90/claude_mobile/commit/24740f0b212e20616ab516f8a18c661f2079cab5))
+* **agent:** surface macOS file-access (TCC) freezes to the app instead of hanging ([ce03474](https://github.com/syrax90/claude_mobile/commit/ce034747322213b587cdbb41603f849b2baa2d8f))
+* **terminal:** default Terminal Display to Static mode ([625da1b](https://github.com/syrax90/claude_mobile/commit/625da1b40b497205732c3fcbb27f93b99c405c44))
+* **terminal:** default Terminal Display to Static mode ([711034d](https://github.com/syrax90/claude_mobile/commit/711034d770dbb660b11ec0ef1df0630823c4c223))
+
+## [1.11.0](https://github.com/syrax90/claude_mobile/compare/android-v1.10.1...android-v1.11.0) (2026-06-16)
+
+
+### Features
+
+* **android:** guide users to apply Agent ID + Token on the agent host ([09677a4](https://github.com/syrax90/claude_mobile/commit/09677a4d5b82fb170b82e77be379ba34e24d5828))
+* **android:** guide users to apply Agent ID + Token on the agent host ([84563d6](https://github.com/syrax90/claude_mobile/commit/84563d607e3a7864f67064752b2c35c918442eb4))
+
 ## [1.10.1](https://github.com/syrax90/claude_mobile/compare/android-v1.10.0...android-v1.10.1) (2026-06-13)
 
 

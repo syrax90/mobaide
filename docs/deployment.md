@@ -191,9 +191,15 @@ release under `<prefix>/releases/<version>/venv/` (`/opt/mobaide` on
 Linux, `/usr/local/mobaide` on macOS), writes `<prefix>/current_version`,
 and registers the supervisor:
 
-* **Linux** — installs `mobaide-agent.service` (systemd). The unit is
-  configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so the
-  launcher's 3-strike rollback heuristic has room to retry a stable sibling
+* **Linux** — installs `mobaide-agent.service` (systemd). `ExecStart` is the
+  generated `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (the same wrapper
+  macOS launchd already uses), not the older inline
+  `bash -c '... python -m mobaide.launcher'`. The wrapper self-heals a
+  missing/corrupt current-release venv by rolling `current_version` forward to
+  the newest sibling release with a runnable venv before exec; the in-venv
+  launcher then does the 3-strike crash-loop rollback. The unit is
+  configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so those
+  recovery paths have room to retry a stable sibling
   release before systemd stops the unit, and `RestartForceExitStatus=75` so
   the updater's restart trigger is honoured. The agent runs as the user
   who invoked `sudo` (resolved from `$SUDO_USER`) so it can read/write
@@ -201,7 +207,13 @@ and registers the supervisor:
   `MOBAIDE_RUN_AS_USER=<user>` for CI / non-interactive provisioning.
 * **macOS** — installs `~/Library/LaunchAgents/com.mobaide.agent.plist`
   (launchd). `ThrottleInterval=10` gives the boot journal the same rollback
-  window on macOS. Already runs as the invoking user; no extra config.
+  window on macOS. The agent runs as the logged-in GUI user (not root):
+  the installer resolves the target user (`MOBAIDE_RUN_AS_USER` →
+  `$SUDO_USER` → console owner), `chown`s the install prefix to that user,
+  and loads the LaunchAgent into that user's GUI domain via
+  `launchctl bootstrap gui/<uid>` (run with `launchctl asuser` from root),
+  falling back to a legacy `launchctl load` on headless/no-GUI hosts.
+  Override the user with `MOBAIDE_RUN_AS_USER=<user>`.
 
 The install script auto-generates `<prefix>/mobaide_agent/.env` with a
 random `JWT_SECRET_KEY` and prefilled `RELAY_SERVER_URL=wss://mobaide.com`,
@@ -225,6 +237,33 @@ sudo bash deploy/setup.sh
 # or, to pin which user owns the agent on a multi-user host:
 MOBAIDE_RUN_AS_USER=alice sudo -E bash deploy/setup.sh
 ```
+
+### macOS file-access permissions (Full Disk Access / TCC)
+
+On macOS, the first time the agent — or a `claude` session it spawns — reads files in
+a privacy-protected folder (Documents, Desktop, Downloads, iCloud Drive, or a
+removable/network volume), macOS posts a **Transparency-Consent-Control (TCC)
+permission dialog** (e.g. *"python3.x would like to access files in your Documents
+folder"*) on the **host's desktop**. The agent runs as a per-user LaunchAgent, so that
+dialog targets the logged-in Mac user — a remote mobile user never sees it, and the
+process that touched the file blocks until it is answered, so the session looks frozen.
+
+The agent does **not** try to suppress these prompts. macOS only grants Full Disk
+Access to `.app` bundles, not to bare interpreters like the agent's venv `python`, and
+there is no supported way to pre-authorize file access on an unmanaged Mac without an
+MDM-pushed PPPC profile. Instead the agent makes the wait **visible**: a per-session
+startup watchdog that sees essentially no output flags the likely block and raises an
+`awaiting_os_permission` attention, which the mobile app surfaces as **"Action needed
+on your Mac"** (notification + badge) rather than a blank terminal. `/api/health` also
+reports `macos_full_disk_access` (`true`/`false` on macOS, `null` elsewhere) for support.
+
+**To resolve:** approve the dialog on the Mac. macOS remembers each grant per folder
+category, so it is a one-time approval per category, not a recurring prompt. To
+eliminate the prompts entirely (power users), wrap the launchd-launched binary in a
+code-signed `.app` bundle and grant *that* Full Disk Access — Apple's only supported
+path for a background tool. It is intentionally **not** automated here, because
+child-process TCC inheritance to the `claude` subprocess tree is not guaranteed across
+macOS versions.
 
 ### Threat model
 
@@ -266,7 +305,7 @@ No data migration is needed — `projects.json`, releases, and `agent.env` survi
 
 ### Linux (systemd, manual)
 
-The service unit at `deploy/mobaide-agent.service` is a **template** with `__RUN_USER__`, `__RUN_GROUP__`, `__RUN_HOME__` placeholders that the install scripts substitute. If you wire it up by hand, fill those in yourself; `mobaide-agent.service` is otherwise configured for the versioned `releases/` layout (`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer).
+The service unit at `deploy/mobaide-agent.service` is a **template** with `__RUN_USER__`, `__RUN_GROUP__`, `__RUN_HOME__` placeholders that the install scripts substitute. If you wire it up by hand, fill those in yourself; `mobaide-agent.service` is otherwise configured for the versioned `releases/` layout (`/opt/mobaide/releases/<version>/venv/` with a `current_version` pointer). Its `ExecStart` is `<prefix>/bin/mobaide-agent-launcher.sh` (the self-healing launcher wrapper the install scripts generate via `write_launcher_script`), so a by-hand wireup must also create that wrapper — the install scripts are the source of truth for its contents.
 
 ```bash
 VERSION="0.1.0"      # replace with the actual agent version being installed
@@ -347,6 +386,7 @@ Check the agent's logs for `relay.connection_failed` entries. Common causes:
 - `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` don't match the bcrypt hash stored in central-server's DB for this agent — re-pair via the app or re-issue the token via the admin API
 - Central-server unreachable — verify with `curl https://mobaide.com/api/health`
 - For a local dev stack: the workstation's OS trust store must include Caddy's root CA (see `start-all.ps1`, which auto-installs it)
+- **macOS `CERTIFICATE_VERIFY_FAILED` / `unable to get local issuer certificate`:** a python.org framework Python ships an empty OpenSSL CA store until its bundled *Install Certificates.command* runs. The relay now verifies `wss://` against the bundled `certifi` store regardless of the host interpreter; on macOS the launchd launcher (`<prefix>/bin/mobaide-agent-launcher.sh`) additionally exports `SSL_CERT_FILE` from the venv's `certifi` bundle so the auto-update/pairing HTTPS paths verify too. Behind a TLS-intercepting proxy, pin your corporate root CA by adding `SSL_CERT_FILE` to the launchd plist's `EnvironmentVariables` (the launcher leaves a pre-set value untouched), then reload it from your own login session: `launchctl bootout gui/$(id -u)/com.mobaide.agent 2>/dev/null; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mobaide.agent.plist`.
 - A flapping link logs `relay.reconnecting` with a growing `delay` and `uptime`: the reconnect backoff now only resets to base after a connection survives `RELAY_RECONNECT_STABILITY_THRESHOLD` seconds (default `60.0`) and adds decorrelated jitter, so a connection that keeps dropping young keeps its escalated, jittered delay. Raise the threshold on a host with a known-unstable uplink to suppress reconnect-log churn.
 - **Cloudflare Bot Fight Mode (HTTP 403 error 1010):** if the relay is behind Cloudflare, agent v0.1.3+ sends `User-Agent: mobaide-agent/<version>` on all outbound calls (manifest polling, trust-key fetch, pairing initiate), which passes Cloudflare's default Bot Fight Mode. Operators running Super Bot Fight Mode with JA3/JA4 fingerprinting set to "Block" must add a WAF Skip rule: `(http.user_agent wildcard "mobaide-agent/*") and (http.request.uri.path starts_with "/api/")`. Older agents should be upgraded to v0.1.3+.
 

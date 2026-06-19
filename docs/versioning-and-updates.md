@@ -405,7 +405,12 @@ release lives in its own directory and a single pointer file selects the
 polling, tarball/wheel downloads, trust-key fetch) are made through a centralised
 wrapper (`mobaide._http`) that injects `User-Agent: mobaide-agent/<version>` so
 Cloudflare-fronted relay and artifact hosts do not classify them as generic
-`Python-urllib` bot traffic (Cloudflare error 1010).
+`Python-urllib` bot traffic (Cloudflare error 1010). The wrapper also pins its
+TLS trust to the bundled `certifi` store, so the manifest/tarball/wheel HTTPS
+fetches verify regardless of the host interpreter's OpenSSL CA store and no
+longer depend on a launcher-set `SSL_CERT_FILE` (closes the Windows-exposed TLS
+gap; an operator-set `SSL_CERT_FILE` still takes precedence on the launcher's
+`wss://` path).
 
 ### Install layout
 
@@ -425,8 +430,17 @@ Cloudflare-fronted relay and artifact hosts do not classify them as generic
 ```
 
 The platform-specific service unit (`systemd`, `launchd`, Windows Scheduled Task) does
-**not** invoke a release directly. It calls
-`python -m mobaide.launcher`, which:
+**not** invoke a release directly. On Linux/macOS the unit's entry point is the
+generated `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (shared by both, written
+by `write_launcher_script` in `install.sh`); on Windows the equivalent is the
+stdlib-only `windows_launcher.py` supervisor. The wrapper/supervisor first
+**self-heals** a missing or corrupt current-release venv: if
+`<prefix>/releases/<current_version>/venv` has no runnable interpreter it rolls
+`current_version` *forward* to the newest sibling release that does (skipping
+`.staging-*` / `.old-*` scratch and any non-version dir) before exec, converting a
+permanent crash loop into automatic rollback to the last good release. With no
+runnable sibling at all it exits 70 rather than looping. It then execs
+`releases/<version>/venv/bin/python -m mobaide.launcher`, which:
 
 1. Reads `<prefix>/current_version`.
 2. Appends the boot attempt to `<prefix>/.boot_journal` (timestamp + version).
@@ -467,7 +481,8 @@ rolled-back release time to prove stable.
                                     idle
                                        v
                                +-----------------+
-                               |  Stage release  |  releases/<v>/
+                               |  Stage release  |  .staging-<v>-<pid>/, then
+                               |   (sidecar)     |  os.replace -> releases/<v>/
                                +-----------------+
                                        |
                                        v
@@ -490,6 +505,29 @@ Properties guaranteed by `StagedBinaryUpdater` (`mobaide_agent/.../updater.py`):
 * **Tar-extraction safety** — `tarfile.extractall(filter="data")` mitigates
   CVE-2007-4559 path traversal. Required because the tarball arrives over
   the network from a manifest the agent only verified for signature.
+* **Non-destructive staging** — the release is built into a sibling scratch
+  dir `releases/.staging-<v>-<pid>` and its venv is verified runnable
+  *before* a single `os.replace` swaps it into `releases/<v>`. A failed
+  stage never overwrites or destroys the running release and leaves no empty
+  `releases/<v>` behind; leftover `.staging-*` / `.old-*` scratch is
+  garbage-collected best-effort on the next run.
+* **Forward-only on the auto path** — auto/poll updates only stage a manifest
+  whose version is **strictly newer** than the running one, so a stale or
+  mismatched manifest (e.g. a newer dev build seeing an older published
+  version) can never downgrade an install. The forced paths — operator
+  "Install now" and 4002 protocol-incompatible recovery — bypass this and
+  apply any version.
+* **Path-component validation** — the signed manifest `version` is checked
+  against a safe-path allowlist at the manifest→filesystem boundary (in both
+  `updater.py` and `install.sh`) before it is used as a `releases/<v>` path
+  component.
+* **Manager-release guard** — the in-process auto-updater is disabled when the
+  agent runs from a developer/source checkout (the interpreter is not under
+  `<prefix>/releases`), so a source run that shares the install prefix can no
+  longer drive an update that overwrites the installed release; relay manifests
+  are still recorded but never applied (fail-closed). The explicit
+  `mobaide-agent update` CLI verb is an operator opt-in that deliberately
+  bypasses this guard.
 * **Activity awareness** — defers the swap when any session is running. The
   updater queries `SessionManager.list_sessions()` and only proceeds when all
   sessions are stopped/crashed. Deferral retries after 30 minutes; a single
@@ -641,8 +679,12 @@ Both scripts are auto-published from `deploy/` to the root of the
      `daemon-reload`, `enable`, `restart`. The unit runs as the invoking
      user (not a `mobaide` system account), uses `ProtectSystem=strict` with
      `ReadWritePaths=$HOME /opt/mobaide`, and sets `RestartForceExitStatus=75`.
-   * **macOS** — write `~/Library/LaunchAgents/com.mobaide.agent.plist`,
-     `launchctl load`.
+   * **macOS** — resolve the runtime user (`MOBAIDE_RUN_AS_USER` →
+     `$SUDO_USER` → console owner), `chown` the prefix to that user, write
+     `~/Library/LaunchAgents/com.mobaide.agent.plist`, and load it into the
+     user's GUI domain via `launchctl bootstrap gui/<uid>` (run with
+     `launchctl asuser` from root), falling back to a legacy `launchctl load`
+     on headless hosts. The agent runs as the GUI user, not root.
    * **Windows** — download `windows_launcher.py` from
      `https://get.mobaide.com/windows_launcher.py` (override via
      `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`) into

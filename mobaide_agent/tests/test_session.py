@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 from typing import cast
 from unittest.mock import AsyncMock, call, patch
@@ -11,10 +12,12 @@ from mobaide.core.models import SessionConfig, SessionEvent, SessionState
 from mobaide.core.pty_backend import PtyBackend
 from mobaide.core.session import (
     EXECUTE_CLEAR_DELAY_SECONDS,
+    GRACEFUL_TERM_SECONDS,
+    STARTUP_STALL_MIN_BYTES,
     SUBMIT_CR_DELAY_SECONDS,
     TerminalSession,
 )
-from tests.conftest import IS_WINDOWS
+from tests.conftest import IS_WINDOWS, skip_if_not_linux
 
 
 @pytest.mark.timeout(15)
@@ -28,6 +31,54 @@ class TestTerminalSessionLifecycle:
         assert session.session_id == "test-session"
 
         await session.stop()
+        assert session.state == SessionState.STOPPED
+
+    @skip_if_not_linux
+    async def test_stop_terminates_sigterm_ignoring_child(self) -> None:
+        """A child that ignores SIGTERM must still be stopped promptly.
+
+        Regression for the agent-wide freeze: ``stop(force=False)`` used to send
+        only SIGTERM, which interactive login shells and many TUIs ignore. The
+        PTY reader's blocking ``os.read`` then never saw EOF, and
+        ``asyncio.wait_for(reader_task, 5.0)`` could not honour its timeout
+        against an uncancellable executor read — so teardown hung forever and,
+        because the relay reader awaits each handler inline, froze the whole
+        agent. ``stop`` now escalates to SIGKILL, so this completes.
+        """
+        config = SessionConfig(
+            session_id="sigterm-ignorer",
+            command=[
+                sys.executable,
+                "-c",
+                "import signal, sys, time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "sys.stdout.write('ready\\n'); sys.stdout.flush(); "
+                "time.sleep(300)",
+            ],
+            rows=24,
+            cols=80,
+            scrollback_size=100,
+        )
+        session = TerminalSession(config)
+        await session.start()
+        assert session.state == SessionState.RUNNING
+
+        # Wait for "ready", which the child prints only after installing the
+        # SIGTERM-ignoring handler — so by now SIGTERM provably won't kill it.
+        seen_ready = False
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while asyncio.get_event_loop().time() < deadline and not seen_ready:
+            try:
+                event = await asyncio.wait_for(session.event_queue.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                continue
+            if event.event_type == "output" and event.data and b"ready" in event.data:
+                seen_ready = True
+        assert seen_ready, "child never signalled readiness"
+
+        # Before the fix this never returns; the outer timeout turns the
+        # regression into a clear failure instead of a frozen test run.
+        await asyncio.wait_for(session.stop(force=False), timeout=10.0)
         assert session.state == SessionState.STOPPED
 
     async def test_write_and_read_output(self, session_config: SessionConfig) -> None:
@@ -650,3 +701,431 @@ class TestWriteSubmitAndExecute:
             ("sleep", SUBMIT_CR_DELAY_SECONDS),
             ("write", b"\r"),
         ]
+
+
+def _stall_config(startup_stall_seconds: float | None) -> SessionConfig:
+    return SessionConfig(
+        session_id="stall-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+        startup_stall_seconds=startup_stall_seconds,
+    )
+
+
+class TestStartupStallWatchdog:
+    """The macOS-gated startup-stall watchdog raises ``awaiting_os_permission``
+    when a freshly-spawned session stays RUNNING, sees no user input, and emits
+    fewer than ``STARTUP_STALL_MIN_BYTES`` before the timeout — the signature of
+    a child blocked on an invisible TCC file-access modal on the host.
+
+    The watchdog body is driven directly with ``asyncio.sleep`` stubbed out so
+    the assertions are deterministic on Linux CI regardless of host platform.
+    The session is set RUNNING in-place (``start()`` would spawn a real PTY);
+    this mirrors the direct-invocation style of ``TestTerminalSessionAttention``.
+    """
+
+    async def test_fires_when_starved_of_output(self) -> None:
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ) as sleep_mock:
+            await session._startup_stall_watchdog(0.01)
+
+        sleep_mock.assert_awaited_once_with(0.01)
+        assert session.to_info().attention == "awaiting_os_permission"
+        events = _drain_attention_events(session)
+        assert [e.attention for e in events] == ["awaiting_os_permission"]
+
+    async def test_does_not_fire_when_output_meets_threshold(self) -> None:
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+        session._startup_output_bytes = STARTUP_STALL_MIN_BYTES
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention is None
+        assert _drain_attention_events(session) == []
+
+    async def test_does_not_fire_after_user_input(self) -> None:
+        # A user who is typing is plainly not staring at a frozen screen, even
+        # if the child has produced no output yet.
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+        session._user_input_seen = True
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention is None
+        assert _drain_attention_events(session) == []
+
+    async def test_does_not_clobber_preset_awaiting_permission(self) -> None:
+        # A genuine Claude ``awaiting_permission`` hook must win — the
+        # ``_attention is None`` guard keeps the watchdog from overwriting it.
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.RUNNING
+        session.set_attention("awaiting_permission")
+        _drain_attention_events(session)
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention == "awaiting_permission"
+        assert _drain_attention_events(session) == []
+
+    async def test_does_not_fire_when_not_running(self) -> None:
+        # A session that already stopped/crashed before the timeout elapsed must
+        # not raise a stale attention.
+        session = TerminalSession(_stall_config(0.01))
+        session._state = SessionState.STOPPED
+
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session._startup_stall_watchdog(0.01)
+
+        assert session.to_info().attention is None
+        assert _drain_attention_events(session) == []
+
+    async def test_reader_clears_badge_once_output_crosses_threshold(self) -> None:
+        # End-to-end recovery: the watchdog raised the badge, then real output
+        # flows (the user approved on the Mac). One chunk at/over the threshold
+        # must self-clear the ``awaiting_os_permission`` attention.
+        chunk = b"x" * STARTUP_STALL_MIN_BYTES
+        backend = _ScriptedPtyBackend([chunk])
+        session = TerminalSession(
+            _stall_config(0.01), backend=cast(PtyBackend, backend),
+        )
+        session._state = SessionState.RUNNING
+        session.set_attention("awaiting_os_permission")
+        _drain_attention_events(session)
+
+        await session._reader_loop()
+
+        assert session._startup_output_bytes >= STARTUP_STALL_MIN_BYTES
+        assert session.to_info().attention is None
+        events = _drain_attention_events(session)
+        assert events[-1].attention is None
+
+    async def test_reader_below_threshold_keeps_badge(self) -> None:
+        # A trickle of init bytes under the floor must NOT clear the badge —
+        # the child is still effectively stalled.
+        chunk = b"x" * (STARTUP_STALL_MIN_BYTES - 1)
+        backend = _ScriptedPtyBackend([chunk])
+        session = TerminalSession(
+            _stall_config(0.01), backend=cast(PtyBackend, backend),
+        )
+        session._state = SessionState.RUNNING
+        session.set_attention("awaiting_os_permission")
+        _drain_attention_events(session)
+
+        await session._reader_loop()
+
+        assert session._startup_output_bytes < STARTUP_STALL_MIN_BYTES
+        assert session.to_info().attention == "awaiting_os_permission"
+        assert _drain_attention_events(session) == []
+
+
+@pytest.mark.timeout(15)
+class TestStartupStallWatchdogArming:
+    """``start()`` arms the watchdog task only when the effective timeout is
+    positive. The explicit ``startup_stall_seconds`` override keeps the gating
+    deterministic on Linux CI; the platform-default branch is exercised by
+    pinning ``sys.platform``.
+    """
+
+    async def test_armed_when_timeout_positive(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(0.01), backend=cast(PtyBackend, backend),
+        )
+        with patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session.start()
+            try:
+                assert session._stall_task is not None
+            finally:
+                await session.stop()
+
+    async def test_disabled_when_zero(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(0.0), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            assert session._stall_task is None
+        finally:
+            await session.stop()
+
+    async def test_none_disables_off_darwin(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(None), backend=cast(PtyBackend, backend),
+        )
+        with patch("mobaide.core.session.sys.platform", "linux"):
+            await session.start()
+            try:
+                assert session._stall_task is None
+            finally:
+                await session.stop()
+
+    async def test_none_enables_on_darwin(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(None), backend=cast(PtyBackend, backend),
+        )
+        with patch("mobaide.core.session.sys.platform", "darwin"), patch(
+            "mobaide.core.session.asyncio.sleep", new_callable=AsyncMock
+        ):
+            await session.start()
+            try:
+                assert session._stall_task is not None
+            finally:
+                await session.stop()
+
+    async def test_stop_cancels_watchdog_task(self) -> None:
+        backend = _ScriptedPtyBackend([])
+        session = TerminalSession(
+            _stall_config(60.0), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        task = session._stall_task
+        assert task is not None
+        await session.stop()
+        assert task.done()
+
+
+class _TerminationSpyBackend:
+    """Backend double that records ``terminate`` calls and lets the test drive
+    ``is_alive``.
+
+    The real :class:`_ScriptedPtyBackend` ties ``is_alive`` to ``close``, so it
+    cannot model a child that survives SIGTERM and only dies on SIGKILL — the
+    exact case the SIGTERM→SIGKILL escalation in ``_terminate_child`` exists for.
+    ``alive_sequence`` is popped on each ``is_alive`` call; once exhausted the
+    last value sticks.
+    """
+
+    def __init__(self, alive_sequence: list[bool]) -> None:
+        self._alive_sequence = list(alive_sequence)
+        self._last_alive = alive_sequence[-1] if alive_sequence else False
+        self.terminate_calls: list[bool] = []
+
+    def is_alive(self) -> bool:
+        if self._alive_sequence:
+            self._last_alive = self._alive_sequence.pop(0)
+        return self._last_alive
+
+    def terminate(self, force: bool = False) -> None:
+        self.terminate_calls.append(force)
+
+
+def _term_config() -> SessionConfig:
+    return SessionConfig(
+        session_id="term-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+    )
+
+
+@pytest.mark.timeout(15)
+class TestTerminateChildEscalation:
+    """``_terminate_child`` is the primary fix: a single SIGTERM leaves
+    SIGTERM-ignoring children (interactive login shells, TUIs) alive with the
+    PTY slave open, stranding the reader's blocking ``os.read``. These drive the
+    helper directly with a spy backend so the SIGTERM→SIGKILL decision is
+    exercised deterministically on every platform — the real-child integration
+    test (``test_stop_terminates_sigterm_ignoring_child``) is Linux/macOS-only.
+
+    ``_await_child_exit`` is patched out so each test isolates the escalation
+    branch; the polling loop itself is covered by ``TestAwaitChildExit``.
+    """
+
+    async def test_survives_sigterm_escalates_to_sigkill(self) -> None:
+        # Child still alive after the graceful signal and after the grace
+        # window → must escalate to a forceful kill.
+        backend = _TerminationSpyBackend(alive_sequence=[True, True])
+        session = TerminalSession(
+            _term_config(), backend=cast(PtyBackend, backend),
+        )
+        loop = asyncio.get_running_loop()
+
+        with patch.object(
+            session, "_await_child_exit", new_callable=AsyncMock
+        ) as await_exit:
+            await session._terminate_child(loop, force=False)
+
+        assert backend.terminate_calls == [False, True]
+        await_exit.assert_awaited_once_with(GRACEFUL_TERM_SECONDS)
+
+    async def test_dies_after_sigterm_does_not_escalate(self) -> None:
+        # First is_alive (gate before the grace wait) sees the child alive, the
+        # grace wait reaps it, the post-wait is_alive sees it gone → no SIGKILL.
+        backend = _TerminationSpyBackend(alive_sequence=[True, False])
+        session = TerminalSession(
+            _term_config(), backend=cast(PtyBackend, backend),
+        )
+        loop = asyncio.get_running_loop()
+
+        with patch.object(
+            session, "_await_child_exit", new_callable=AsyncMock
+        ) as await_exit:
+            await session._terminate_child(loop, force=False)
+
+        assert backend.terminate_calls == [False]
+        await_exit.assert_awaited_once_with(GRACEFUL_TERM_SECONDS)
+
+    async def test_already_dead_after_sigterm_skips_grace_window(self) -> None:
+        # A well-behaved child reaped by the time the gate is checked must not
+        # pay the grace window at all.
+        backend = _TerminationSpyBackend(alive_sequence=[False])
+        session = TerminalSession(
+            _term_config(), backend=cast(PtyBackend, backend),
+        )
+        loop = asyncio.get_running_loop()
+
+        with patch.object(
+            session, "_await_child_exit", new_callable=AsyncMock
+        ) as await_exit:
+            await session._terminate_child(loop, force=False)
+
+        assert backend.terminate_calls == [False]
+        await_exit.assert_not_awaited()
+
+    async def test_force_kills_immediately_without_grace(self) -> None:
+        # force=True (used by stop_all on shutdown) sends the forceful signal
+        # straight away and never enters the grace window, even if the child
+        # would still report alive.
+        backend = _TerminationSpyBackend(alive_sequence=[False])
+        session = TerminalSession(
+            _term_config(), backend=cast(PtyBackend, backend),
+        )
+        loop = asyncio.get_running_loop()
+
+        with patch.object(
+            session, "_await_child_exit", new_callable=AsyncMock
+        ) as await_exit:
+            await session._terminate_child(loop, force=True)
+
+        assert backend.terminate_calls == [True]
+        await_exit.assert_not_awaited()
+
+
+@pytest.mark.timeout(15)
+class TestAwaitChildExit:
+    """``_await_child_exit`` polls the non-blocking ``is_alive`` until the child
+    is gone or the timeout elapses, returning whether it died. Tiny real
+    timeouts keep these deterministic without stubbing the clock.
+    """
+
+    async def test_returns_true_once_child_exits(self) -> None:
+        # Alive on the first poll, gone on the second → returns True well within
+        # the timeout, so the loop must exit on detection rather than spinning.
+        backend = _TerminationSpyBackend(alive_sequence=[True, False])
+        session = TerminalSession(
+            _term_config(), backend=cast(PtyBackend, backend),
+        )
+
+        assert await session._await_child_exit(timeout=5.0) is True
+
+    async def test_returns_false_when_child_never_exits(self) -> None:
+        backend = _TerminationSpyBackend(alive_sequence=[True])
+        session = TerminalSession(
+            _term_config(), backend=cast(PtyBackend, backend),
+        )
+
+        assert await session._await_child_exit(timeout=0.02) is False
+
+    async def test_immediate_exit_returns_true(self) -> None:
+        backend = _TerminationSpyBackend(alive_sequence=[False])
+        session = TerminalSession(
+            _term_config(), backend=cast(PtyBackend, backend),
+        )
+
+        assert await session._await_child_exit(timeout=5.0) is True
+
+
+@pytest.mark.timeout(15)
+class TestJoinTask:
+    """``_join_task`` is the true freeze guarantee: it cancels a background task
+    and bounds the wait with ``asyncio.wait`` (not ``wait_for``), so a task
+    parked in an uncancellable executor call is abandoned after the timeout
+    instead of wedging teardown forever.
+    """
+
+    async def test_none_task_is_noop(self) -> None:
+        await TerminalSession._join_task(None, timeout=0.01)
+
+    async def test_already_done_task_is_noop(self) -> None:
+        async def _immediate() -> None:
+            return None
+
+        task = asyncio.create_task(_immediate())
+        await task
+        assert task.done()
+
+        await TerminalSession._join_task(task, timeout=0.01)
+        # A completed task must not be re-cancelled into a CancelledError state.
+        assert not task.cancelled()
+
+    async def test_cancels_and_joins_a_live_task(self) -> None:
+        async def _sleeper() -> None:
+            await asyncio.sleep(60.0)
+
+        task = asyncio.create_task(_sleeper())
+        await asyncio.sleep(0)  # let it start running
+
+        await TerminalSession._join_task(task, timeout=2.0)
+
+        assert task.done()
+        assert task.cancelled()
+
+    async def test_returns_within_timeout_against_uncancellable_task(self) -> None:
+        # The root-cause guarantee: a task that swallows cancellation (modelling
+        # the reader parked in an uncancellable os.read) must NOT block the join
+        # past its timeout. wait_for would re-await the still-pending task and
+        # hang; asyncio.wait returns regardless.
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _uncancellable() -> None:
+            started.set()
+            while not release.is_set():
+                try:
+                    await asyncio.sleep(60.0)
+                except asyncio.CancelledError:
+                    pass  # refuse to die, like a stuck executor read
+
+        task = asyncio.create_task(_uncancellable())
+        await started.wait()
+
+        loop = asyncio.get_running_loop()
+        before = loop.time()
+        await TerminalSession._join_task(task, timeout=0.1)
+        elapsed = loop.time() - before
+
+        # Join returned despite the task still running — that is the fix.
+        assert elapsed < 2.0
+        assert not task.done()
+
+        # Cleanup: release the flag, then cancel to break the in-flight sleep —
+        # the loop re-checks ``release`` after the CancelledError and exits, so
+        # the orphan does not leak past the test.
+        release.set()
+        task.cancel()
+        await asyncio.wait_for(task, timeout=2.0)
