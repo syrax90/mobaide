@@ -28,6 +28,7 @@ def _ns(**overrides) -> argparse.Namespace:
         "print": False,
         "wait": False,
         "require_pending": False,
+        "fresh": False,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -269,6 +270,46 @@ class TestRunRePair:
                 assert line == "RELAY_AGENT_TOKEN="
         # Relay URL is preserved.
         assert "RELAY_SERVER_URL=wss://relay.test" in env_text
+
+    def test_fresh_blanks_both_id_and_token(self, tmp_path):
+        # --fresh forgets RELAY_AGENT_ID too, so the next claim first-pairs
+        # as a brand-new agent instead of re-sending an id the relay no
+        # longer has — the recovery path for the HTTP 404 "Re-pair target
+        # agent does not exist" dead-end (agent removed / relay redeployed).
+        _seed_env(
+            tmp_path,
+            RELAY_SERVER_URL="wss://relay.test",
+            RELAY_AGENT_ID="dead-agent",
+            RELAY_AGENT_TOKEN="prior-token",
+        )
+
+        rc = _run_re_pair(
+            _ns(prefix=str(tmp_path), no_restart=True, fresh=True)
+        )
+
+        assert rc == 0
+        env_text = env_path_for_prefix(tmp_path).read_text(encoding="utf-8")
+        for line in env_text.splitlines():
+            if line.startswith("RELAY_AGENT_ID="):
+                assert line == "RELAY_AGENT_ID="
+            if line.startswith("RELAY_AGENT_TOKEN="):
+                assert line == "RELAY_AGENT_TOKEN="
+        # Relay URL is preserved — only the agent identity is dropped.
+        assert "RELAY_SERVER_URL=wss://relay.test" in env_text
+
+    def test_default_message_hints_fresh_recovery(self, tmp_path, capsys):
+        # The same-owner default path tells the operator how to recover if
+        # the relay 404s because the agent is gone: re-run with --fresh.
+        _seed_env(
+            tmp_path,
+            RELAY_SERVER_URL="wss://relay.test",
+            RELAY_AGENT_ID="x",
+            RELAY_AGENT_TOKEN="y",
+        )
+
+        _run_re_pair(_ns(prefix=str(tmp_path), no_restart=True))
+
+        assert "re-pair --fresh" in capsys.readouterr().out
 
     def test_clears_pending_pairing_file(self, tmp_path):
         # Any cached pending nonce is dropped — the next show-qr must
