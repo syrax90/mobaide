@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.2.15](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.14...agent-v0.2.15) (2026-06-19)
+
+
+### Bug Fixes
+
+* **agent:** make cross-platform auto-update non-destructive and self-healing ([bf56671](https://github.com/syrax90/claude_mobile/commit/bf56671028154065947369ff62c827165cb4f297))
+
 ## [0.2.14](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.13...agent-v0.2.14) (2026-06-19)
 
 
