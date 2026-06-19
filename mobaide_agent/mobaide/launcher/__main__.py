@@ -12,10 +12,15 @@ It also garbage-collects superseded release dirs on each boot, keeping
 the current version plus the rollback target (see ``_prune_old_releases``),
 so updates don't leak a full venv per version forever.
 
-Self-contained on purpose — this module runs across release directories
-(it's installed at ``<prefix>/bin/mobaide-agent-launcher``, not inside
-any ``releases/<v>/venv``) and must not import ``mobaide`` so it
-survives a partially-staged or corrupt release.
+Stdlib-only on purpose — this module imports nothing from the rest of
+``mobaide`` so it keeps working across release boundaries (GC'ing a
+half-staged sibling, rolling back a crash-looping release). It is invoked
+as ``releases/<current>/venv/bin/python -m mobaide.launcher`` (by the POSIX
+launcher wrapper / systemd ExecStart / the Windows supervisor), so it ships
+inside each release venv rather than standalone. A *missing* current-release
+interpreter is therefore handled one level up: the supervisor wrapper
+self-heals to a sibling release before this module would run — it cannot run
+without its own interpreter.
 
 POSIX vs Windows hand-off
 -------------------------
@@ -87,6 +92,7 @@ def _read_current_version(prefix: Path) -> str | None:
 
 
 def _write_current_version(prefix: Path, version: str) -> None:
+    """Atomically rewrite ``<prefix>/current_version`` (tmp + ``os.replace``)."""
     target = prefix / "current_version"
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(version + "\n", encoding="utf-8")

@@ -71,6 +71,13 @@ _CREATE_NO_WINDOW = 0x08000000
 # exits to Task Scheduler instead of respawning immediately.
 _EXIT_RESTART_REQUESTED = 75
 
+# Cap on self-heal recoveries within a single supervisor process. A missing
+# current-release interpreter rolls forward to a sibling (below); the cap
+# bounds oscillation if recovery targets keep disappearing — once hit, the
+# supervisor exits 70 and Task Scheduler's restart (1-minute floor) provides
+# the outer reset.
+_MAX_RECOVERY_ATTEMPTS = 5
+
 
 def _default_prefix(cli_prefix: str | None = None) -> Path:
     """Resolve the install prefix.
@@ -90,6 +97,16 @@ def _default_prefix(cli_prefix: str | None = None) -> Path:
     return Path(program_files) / _DEFAULT_INSTALL_DIR_NAME
 
 
+def _venv_python_path(release_dir: Path) -> Path:
+    """Path to a release dir's venv interpreter (Windows layout).
+
+    Single source of truth for the ``venv/Scripts/python.exe`` layout so the
+    ``_resolve_release_python`` happy path and the ``_find_recovery_version``
+    scan cannot drift.
+    """
+    return release_dir / "venv" / "Scripts" / "python.exe"
+
+
 def _resolve_release_python(prefix: Path) -> Path:
     """Read ``current_version`` and return the active release's ``python.exe``.
 
@@ -107,12 +124,64 @@ def _resolve_release_python(prefix: Path) -> Path:
         ) from exc
     if not version:
         raise FileNotFoundError(f"empty {version_file}")
-    python = prefix / "releases" / version / "venv" / "Scripts" / "python.exe"
+    python = _venv_python_path(prefix / "releases" / version)
     if not python.exists():
         raise FileNotFoundError(
             f"missing release interpreter {python} (current_version={version!r})"
         )
     return python
+
+
+def _version_key(name: str) -> tuple[int, ...]:
+    """Leading numeric dotted components of a release-dir name, else ``()``.
+
+    Strict (like ``mobaide.launcher._parse_version``): any non-numeric
+    component yields ``()``, so scratch dirs (``.staging-*`` / ``.old-*``) and
+    other foreign names are never recovery candidates.
+    """
+    parts: list[int] = []
+    for component in name.split("."):
+        if not component.isdigit():
+            return ()
+        parts.append(int(component))
+    return tuple(parts)
+
+
+def _find_recovery_version(prefix: Path) -> str | None:
+    """Newest sibling release with a runnable ``python.exe``, or ``None``.
+
+    The Windows counterpart to the POSIX launcher wrapper's self-heal: when the
+    current release's interpreter is gone, roll forward to the newest sibling
+    that still has a venv so the supervisor stops crash-looping instead of
+    exiting straight to Task Scheduler. Stdlib-only — never imports ``mobaide``.
+    """
+    releases = prefix / "releases"
+    try:
+        entries = list(releases.iterdir())
+    except OSError:
+        return None
+    best_key: tuple[int, ...] | None = None
+    best_name: str | None = None
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        key = _version_key(entry.name)
+        if not key:
+            continue
+        if not _venv_python_path(entry).exists():
+            continue
+        if best_key is None or key > best_key:
+            best_key = key
+            best_name = entry.name
+    return best_name
+
+
+def _write_current_version(prefix: Path, version: str) -> None:
+    """Atomically rewrite ``<prefix>/current_version`` (tmp + ``os.replace``)."""
+    target = prefix / "current_version"
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(version + "\n", encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def _open_log(prefix: Path, file_name: str, backup_name: str):
@@ -210,8 +279,12 @@ def _supervise(prefix: Path) -> int:
     """Spawn → wait → exit-75 respawn loop. Returns the final exit code.
 
     Lifecycle:
-      * Resolve ``current_version`` → release ``python.exe`` (errors print
-        to stderr and exit code 70).
+      * Resolve ``current_version`` → release ``python.exe``. If the
+        interpreter is missing (a half-staged / corrupt current release),
+        self-heal: roll forward to the newest sibling release that still has a
+        venv, rewrite ``current_version``, and respawn — bounded by
+        ``_MAX_RECOVERY_ATTEMPTS`` to stop oscillation. Only when no sibling is
+        runnable does the supervisor print to stderr and exit code 70.
       * Spawn ``release_python -m mobaide.launcher`` with stdout/stderr
         captured to rotated log files.
       * Wait for subprocess exit.
@@ -230,6 +303,8 @@ def _supervise(prefix: Path) -> int:
     ``Stop-ScheduledTask``) terminates the subprocess and exits 0.
     """
     proc: subprocess.Popen[bytes] | None = None
+    recovered: set[str] = set()
+    recovery_attempts = 0
     try:
         while True:
             try:
@@ -238,7 +313,27 @@ def _supervise(prefix: Path) -> int:
                 sys.stderr.write(
                     f"mobaide_launcher: cannot resolve release interpreter: {exc}\n"
                 )
-                return 70
+                target = _find_recovery_version(prefix)
+                if (
+                    target is None
+                    or target in recovered
+                    or recovery_attempts >= _MAX_RECOVERY_ATTEMPTS
+                ):
+                    return 70
+                try:
+                    _write_current_version(prefix, target)
+                except OSError as werr:
+                    sys.stderr.write(
+                        f"mobaide_launcher: recovery write failed: {werr}\n"
+                    )
+                    return 70
+                recovered.add(target)
+                recovery_attempts += 1
+                sys.stderr.write(
+                    f"mobaide_launcher: current release unrunnable; recovered "
+                    f"to {target!r}; respawning.\n"
+                )
+                continue
             try:
                 proc = _spawn_release_launcher(release_python, prefix)
             except OSError as exc:

@@ -442,6 +442,14 @@ stage_release() {
     if [ -z "$target_version" ]; then
         fail "manifest is missing 'version'"
     fi
+    # Defense-in-depth: the version is signature-verified, but reject any value
+    # that is not a clean version token before it becomes a releases/<v> path
+    # component — so a crafted/buggy-signer version like ../../etc/... cannot
+    # escape the releases dir. Mirrors the wheel_basename path-separator guard.
+    case "$target_version" in
+        .|..|*[!0-9A-Za-z.+_-]*)
+            fail "manifest 'version' has unsafe path characters: $target_version" ;;
+    esac
 
     local release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${target_version}"
     info "Staging release $target_version into $release_dir"
@@ -747,9 +755,88 @@ Pick a regular user account: MOBAIDE_RUN_AS_USER=<user>."
     fi
 }
 
+write_launcher_script() {
+    # Generate <prefix>/bin/mobaide-agent-launcher.sh — the supervisor entry
+    # point on BOTH Linux (systemd ExecStart) and macOS (launchd
+    # ProgramArguments). It resolves the active release and execs its venv
+    # Python into ``mobaide.launcher`` (which then owns crash-loop rollback).
+    #
+    # Self-heal: the in-venv ``mobaide.launcher`` cannot run when the CURRENT
+    # release's own interpreter is missing (a half-staged / corrupt release),
+    # so the supervisor would crash-loop forever. This wrapper detects that and
+    # rolls forward to the newest sibling release that still has a runnable
+    # venv BEFORE exec, rewriting current_version so the in-venv launcher takes
+    # over cleanly. Runs with the system bash — no dependency on any venv.
+    local launcher="$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh"
+    mkdir -p "$MOBAIDE_AGENT_PREFIX/bin"
+    # Quoted heredoc: NONE of $prefix/$version/$py is expanded at install time;
+    # they resolve at each launch. Intentionally NOT `set -e` — a missing
+    # current_version / venv must drive recovery, not abort the script.
+    cat > "$launcher" <<'LAUNCHER'
+#!/bin/bash
+prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
+version="$(cat "$prefix/current_version" 2>/dev/null || true)"
+py="$prefix/releases/$version/venv/bin/python"
+
+# Recover when the current release has no runnable interpreter.
+if [ -z "$version" ] || [ ! -x "$py" ]; then
+  best=""
+  for d in "$prefix"/releases/*/; do
+    [ -d "$d" ] || continue
+    v="$(basename "$d")"
+    # Only numeric-dotted release names are recovery candidates — skip dotfile
+    # scratch (.staging-*/.old-*) AND any foreign/non-version dir, matching the
+    # strict filter the in-venv mobaide.launcher applies to rollback/prune.
+    case "$v" in ''|.*|*[!0-9.]*) continue ;; esac
+    [ -x "$d/venv/bin/python" ] || continue
+    if [ -z "$best" ]; then
+      best="$v"
+    else
+      # Portable numeric version sort (BSD + GNU); NOT `sort -V` (GNU-only).
+      best="$(printf '%s\n%s\n' "$best" "$v" \
+        | sort -t. -k1,1n -k2,2n -k3,3n -k4,4n | tail -1)"
+    fi
+  done
+  if [ -z "$best" ]; then
+    echo "mobaide-agent-launcher: FATAL no runnable release venv under $prefix/releases" >&2
+    exit 70
+  fi
+  if [ "$best" != "$version" ]; then
+    printf '%s\n' "$best" > "$prefix/current_version.tmp" \
+      && mv "$prefix/current_version.tmp" "$prefix/current_version"
+    echo "mobaide-agent-launcher: current release '$version' unrunnable; recovered to '$best'" >&2
+  fi
+  version="$best"
+  py="$prefix/releases/$version/venv/bin/python"
+fi
+LAUNCHER
+    # macOS only: python.org framework Python ships an empty OpenSSL CA store;
+    # point OpenSSL at the venv's certifi bundle so wss/HTTPS TLS verifies.
+    # Resolved per launch; respects an operator-set SSL_CERT_FILE. NOT emitted
+    # on Linux — forcing certifi there could exclude a corporate /etc/ssl root
+    # CA and break relay TLS to a self-hosted central server.
+    if [ "$PLATFORM" = "darwin" ]; then
+        cat >> "$launcher" <<'LAUNCHER_CERTIFI'
+
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+  cert="$("$py" -m certifi 2>/dev/null || true)"
+  if [ -n "$cert" ]; then
+    export SSL_CERT_FILE="$cert"
+  fi
+fi
+LAUNCHER_CERTIFI
+    fi
+    cat >> "$launcher" <<'LAUNCHER_EXEC'
+
+exec "$py" -m mobaide.launcher
+LAUNCHER_EXEC
+    chmod +x "$launcher"
+}
+
 install_systemd_unit() {
     local unit="/etc/systemd/system/mobaide-agent.service"
     info "Installing systemd unit at $unit (User=$RUN_USER)"
+    write_launcher_script
     # ProtectHome is absent because the agent must read/write the user's
     # source tree under $RUN_HOME. ProtectSystem=strict still mounts the
     # rest of the OS hierarchy read-only; ReadWritePaths re-grants writes
@@ -778,7 +865,7 @@ EnvironmentFile=-$MOBAIDE_AGENT_PREFIX/mobaide_agent/.env
 Environment=MOBAIDE_AGENT_PREFIX=$MOBAIDE_AGENT_PREFIX
 Environment=HOME=$RUN_HOME
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:%h/.npm-global/bin:%h/.local/bin
-ExecStart=/usr/bin/env bash -c '$MOBAIDE_AGENT_PREFIX/releases/\$(cat $MOBAIDE_AGENT_PREFIX/current_version)/venv/bin/python -m mobaide.launcher'
+ExecStart=$MOBAIDE_AGENT_PREFIX/bin/mobaide-agent-launcher.sh
 Restart=on-failure
 RestartSec=5
 RestartForceExitStatus=75
@@ -925,26 +1012,7 @@ install_launchd_plist() {
 </dict>
 </plist>
 EOF
-    mkdir -p "$MOBAIDE_AGENT_PREFIX/bin"
-    cat > "$launcher" <<'LAUNCHER'
-#!/bin/bash
-set -e
-prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
-version="$(cat "$prefix/current_version")"
-py="$prefix/releases/$version/venv/bin/python"
-# python.org framework Python ships an empty OpenSSL CA path; point OpenSSL at
-# the venv's certifi bundle so the agent's wss/HTTPS TLS verifies. Resolved per
-# launch so it tracks the active release after an auto-update; respects an
-# operator-set SSL_CERT_FILE (e.g. a corporate CA).
-if [ -z "${SSL_CERT_FILE:-}" ]; then
-  cert="$("$py" -m certifi 2>/dev/null || true)"
-  if [ -n "$cert" ]; then
-    export SSL_CERT_FILE="$cert"
-  fi
-fi
-exec "$py" -m mobaide.launcher
-LAUNCHER
-    chmod +x "$launcher"
+    write_launcher_script
 
     # The agent runs as $RUN_USER, so it must own the prefix (logs, run/,
     # projects) and the plist. Mirrors the Linux chown in install_systemd_unit.

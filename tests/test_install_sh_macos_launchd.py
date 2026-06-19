@@ -75,7 +75,7 @@ def _list_function_names() -> list[str]:
 
 
 def test_generated_launcher_uses_absolute_bin_bash_shebang() -> None:
-    """The generated launcher heredoc must start with ``#!/bin/bash``.
+    """The generated launcher wrapper must start with ``#!/bin/bash``.
 
     THE reported root cause. With ``#!/usr/bin/env bash``, launchd execs
     ``/usr/bin/env`` which searches the plist ``PATH`` for ``bash`` — and
@@ -83,10 +83,13 @@ def test_generated_launcher_uses_absolute_bin_bash_shebang() -> None:
     omitted — so it failed with ``env: bash: No such file or directory``,
     the launcher never exec'd, and ``/api/health`` never came up. An
     absolute interpreter path removes the PATH dependency entirely.
+
+    The launcher wrapper is now emitted by the shared ``write_launcher_script``
+    (used by both ``install_launchd_plist`` and ``install_systemd_unit``).
     """
-    body = _sh_function_body("install_launchd_plist")
+    body = _sh_function_body("write_launcher_script")
     assert "#!/bin/bash" in body, (
-        "install_launchd_plist must emit the launcher with an absolute "
+        "write_launcher_script must emit the launcher with an absolute "
         "`#!/bin/bash` shebang — macOS ships bash only at /bin/bash. "
         "Body:\n" + repr(body)
     )

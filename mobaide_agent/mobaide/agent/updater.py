@@ -45,6 +45,7 @@ import hashlib
 import logging
 import os
 import posixpath
+import re
 import shutil
 import subprocess
 import sys
@@ -78,6 +79,11 @@ DEFERRED_RETRY_SECONDS = 30 * 60
 # Log a WARN if a single update has been deferred for longer than this.
 LONG_DEFER_WARN_SECONDS = 24 * 60 * 60
 
+# A ``.staging-*`` / ``.old-*`` scratch dir older than this is treated as a
+# crashed-stage leftover safe to GC even if its pid is not this process's — a
+# concurrent in-flight stage uses a fresh mtime, so it is never swept.
+_STALE_SCRATCH_SECONDS = 24 * 60 * 60
+
 # Suppress the transient console window every ``python -m venv`` and
 # ``pip install`` would otherwise pop into the user's session. The agent
 # runs under ``pythonw.exe`` via the Scheduled Task (no parent console),
@@ -85,6 +91,92 @@ LONG_DEFER_WARN_SECONDS = 24 * 60 * 60
 # console for the child. ``CREATE_NO_WINDOW`` suppresses that while
 # preserving ``capture_output=True``'s stdio inheritance.
 _WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """Leading numeric ``X.Y.Z`` components of a version string.
+
+    Strips PEP 440 build/pre-release metadata (``+local``, ``-rc1``) and stops
+    at the first non-numeric component, returning ``()`` when nothing parses.
+    Deliberately separate from the import-isolated ``launcher._parse_version``
+    (which the launcher keeps dependency-free and which only ranks clean
+    on-disk ``X.Y.Z`` release-dir names) — do not unify them.
+    """
+    core = version.split("+", 1)[0].split("-", 1)[0]
+    parts: list[int] = []
+    for component in core.split("."):
+        if component.isdigit():
+            parts.append(int(component))
+        else:
+            break
+    return tuple(parts)
+
+
+def _is_version_newer(candidate: str, current: str) -> bool:
+    """Return True only when ``candidate`` is strictly newer than ``current``.
+
+    Conservative: returns False when either version is unparseable, so a
+    malformed manifest version never drives a destructive downgrade-style
+    stage on the non-forced auto-update path.
+    """
+    cand = _version_tuple(candidate)
+    cur = _version_tuple(current)
+    if not cand or not cur:
+        return False
+    return cand > cur
+
+
+def _release_venv_python(release_dir: Path) -> Path:
+    """Path to a release dir's venv interpreter (``Scripts`` on Windows).
+
+    Mirrors ``mobaide.launcher._resolve_python`` — the interpreter the
+    supervisor execs — so the updater can verify a staged release is runnable
+    before swapping it into ``releases/<v>``.
+    """
+    if sys.platform == "win32":
+        return release_dir / "venv" / "Scripts" / "python.exe"
+    return release_dir / "venv" / "bin" / "python"
+
+
+# Allowlist for manifest versions used as a ``releases/<v>`` path component.
+# Mirrors the ``install.sh`` ``stage_release`` charset guard so the two
+# manifest->filesystem boundaries agree on what is safe.
+_SAFE_VERSION_RE = re.compile(r"[0-9A-Za-z.+_-]+")
+
+
+def _assert_safe_version(version: str) -> None:
+    """Reject a manifest version that could escape ``releases/`` as a path.
+
+    Allowlist: a version may contain only ``[0-9A-Za-z.+_-]`` and may not be
+    ``.`` / ``..``. This blocks path separators (``/``, ``\\``), the Windows
+    drive marker (``:`` — a ``PureWindowsPath`` join with ``"z:evil"`` is
+    *drive-relative* and drops the ``releases/`` anchor), NUL, and any other
+    metacharacter by construction. ``version`` is Ed25519-verified, so this is
+    defense-in-depth against a compromised / buggy signer; raised as
+    ``ValueError`` so ``consider_manifest`` maps it to ``"signature_failed"``.
+    """
+    if (
+        not version
+        or version in (".", "..")
+        or not _SAFE_VERSION_RE.fullmatch(version)
+    ):
+        raise ValueError(
+            f"manifest version is not a safe path component: {version!r}"
+        )
+
+
+def _scratch_pid(name: str) -> int | None:
+    """Trailing ``-<pid>`` of a ``.staging-<v>-<pid>`` / ``.old-<v>-<pid>`` name."""
+    tail = name.rsplit("-", 1)[-1]
+    return int(tail) if tail.isdigit() else None
+
+
+def _is_stale_scratch(path: Path, now: float) -> bool:
+    """True when ``path`` is older than the stale-scratch horizon."""
+    try:
+        return (now - path.stat().st_mtime) > _STALE_SCRATCH_SECONDS
+    except OSError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -201,6 +293,19 @@ class StagedBinaryUpdater:
         if not force and latest_version == self._current_version:
             self._first_deferred_at = None
             return "no_change"
+        if not force and not _is_version_newer(latest_version, self._current_version):
+            # Auto/poll updates are forward-only: never stage a non-newer (or
+            # unparseable) version. This is the guard that stops a stale or
+            # mismatched manifest — e.g. a newer dev build seeing an older
+            # published version — from driving a destructive re-stage. Forced
+            # paths (user "install now", 4002 protocol-incompatible recovery)
+            # bypass this so a deliberate same/older reinstall still works.
+            self._first_deferred_at = None
+            logger.info(
+                "updater.forward_only_skipped latest=%s current=%s",
+                latest_version, self._current_version,
+            )
+            return "no_change"
 
         async with self._lock:
             if not force and not self._is_idle():
@@ -302,6 +407,7 @@ class StagedBinaryUpdater:
         # Validate the manifest shape BEFORE any on-disk side effects so a
         # rejected manifest leaves no empty ``releases/<v>/`` skeleton — the
         # fail-closed contract documented at the top of this module.
+        _assert_safe_version(target_version)
         tarball_url = str(manifest_body.get("tarball_url", ""))
         tarball_sha = str(manifest_body.get("tarball_sha256", "")).lower()
         wheel_url = str(manifest_body.get("wheel_url", ""))
@@ -313,29 +419,113 @@ class StagedBinaryUpdater:
             raise ValueError("manifest missing wheel_url/wheel_sha256")
         wheel_name = _wheel_basename_from_url(wheel_url)
 
-        release_dir = self._layout.releases_dir / target_version
-        if release_dir.exists():
-            shutil.rmtree(release_dir)
-        release_dir.mkdir(parents=True, exist_ok=False)
+        releases_dir = self._layout.releases_dir
+        releases_dir.mkdir(parents=True, exist_ok=True)
+        # Clear scratch dirs left by a previously-crashed stage before building.
+        self._sweep_scratch_dirs()
 
-        with tempfile.TemporaryDirectory(prefix="mobaide-agent-") as tmpdir:
-            tarball_path = Path(tmpdir) / "agent.tar.gz"
-            wheel_path = Path(tmpdir) / wheel_name
-            self._download_to(tarball_url, tarball_path)
-            self._verify_sha256(tarball_path, tarball_sha)
-            self._download_to(wheel_url, wheel_path)
-            self._verify_sha256(wheel_path, wheel_sha)
+        # Build the whole release into a scratch dir on the SAME filesystem as
+        # ``releases/`` (so the final ``os.replace`` is an atomic rename) and
+        # swap it into ``releases/<v>`` only after the venv is built + verified.
+        # This is the non-destructive contract: a failed download / extract /
+        # venv build never touches an existing release, and leaves no empty
+        # ``releases/<v>/`` behind — the scratch name does not parse as a
+        # version, so launcher rollback/prune ignore it.
+        staging_dir = releases_dir / f".staging-{target_version}-{os.getpid()}"
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
+        staging_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            with tempfile.TemporaryDirectory(prefix="mobaide-agent-") as tmpdir:
+                tarball_path = Path(tmpdir) / "agent.tar.gz"
+                wheel_path = Path(tmpdir) / wheel_name
+                self._download_to(tarball_url, tarball_path)
+                self._verify_sha256(tarball_path, tarball_sha)
+                self._download_to(wheel_url, wheel_path)
+                self._verify_sha256(wheel_path, wheel_sha)
 
-            with tarfile.open(tarball_path, mode="r:gz") as tar:
-                # `filter="data"` mitigates CVE-2007-4559 (tar path traversal)
-                # and matches the Python 3.14+ default. Required because the
-                # tarball arrives over the network — a malicious manifest
-                # could otherwise write outside ``release_dir``.
-                tar.extractall(release_dir, filter="data")
+                with tarfile.open(tarball_path, mode="r:gz") as tar:
+                    # `filter="data"` mitigates CVE-2007-4559 (tar path
+                    # traversal) and matches the Python 3.14+ default. Required
+                    # because the tarball arrives over the network — a malicious
+                    # manifest could otherwise write outside ``staging_dir``.
+                    tar.extractall(staging_dir, filter="data")
 
-            venv_dir = release_dir / "venv"
-            self._installer(venv_dir, wheel_path)
+                venv_dir = staging_dir / "venv"
+                self._installer(venv_dir, wheel_path)
+
+            # Refuse to swap in a release whose interpreter is missing — that
+            # is exactly the bricked state (a launcher that can't exec its
+            # venv python) this rewrite exists to prevent.
+            staged_python = _release_venv_python(staging_dir)
+            if not staged_python.exists():
+                raise RuntimeError(
+                    f"staged venv has no interpreter at {staged_python}"
+                )
+
+            release_dir = releases_dir / target_version
+            self._swap_into_place(staging_dir, release_dir)
+        except BaseException:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
         return release_dir
+
+    def _sweep_scratch_dirs(self) -> None:
+        """Best-effort removal of leftover ``.staging-*`` / ``.old-*`` dirs.
+
+        A stage killed mid-build can leave scratch dirs behind. Only this
+        process's own leftovers (matching pid) and dirs old enough that their
+        creator is certainly gone (``_STALE_SCRATCH_SECONDS``) are removed —
+        NEVER a concurrent process's in-flight scratch (a separate
+        ``mobaide-agent update`` run uses a different pid and a fresh mtime), so
+        a concurrent stage is not corrupted into a spurious failure. Either way
+        these names never parse as a version, so launcher GC ignores them.
+        """
+        releases_dir = self._layout.releases_dir
+        my_pid = os.getpid()
+        now = time.time()
+        for pattern in (".staging-*", ".old-*"):
+            for scratch in releases_dir.glob(pattern):
+                if (
+                    _scratch_pid(scratch.name) == my_pid
+                    or _is_stale_scratch(scratch, now)
+                ):
+                    shutil.rmtree(scratch, ignore_errors=True)
+
+    @staticmethod
+    def _swap_into_place(staging_dir: Path, release_dir: Path) -> None:
+        """Atomically move a fully-built staging dir to ``releases/<v>``.
+
+        ``os.replace`` renames atomically on the same filesystem when the
+        target does not exist (the normal new-version case). When
+        ``releases/<v>`` already exists (a re-stage of an on-disk version), the
+        existing dir is moved aside first and restored if the forward move
+        fails, so the swap is all-or-nothing and never leaves the release
+        missing. On Windows a re-stage of the *currently running* version
+        raises (the live ``python.exe`` is locked); that propagates and the
+        caller cleans the staging dir, leaving the running release intact —
+        non-destructive by construction.
+        """
+        if not release_dir.exists():
+            os.replace(staging_dir, release_dir)
+            return
+        backup = release_dir.parent / f".old-{release_dir.name}-{os.getpid()}"
+        if backup.exists():
+            shutil.rmtree(backup)
+        os.replace(release_dir, backup)
+        try:
+            os.replace(staging_dir, release_dir)
+        except BaseException:
+            try:
+                os.replace(backup, release_dir)
+            except OSError:
+                logger.error(
+                    "updater.swap_restore_failed release_dir=%s backup=%s "
+                    "(previous release left at the backup path)",
+                    release_dir, backup,
+                )
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
 
     @staticmethod
     def _download_to(url: str, dest: Path) -> None:
