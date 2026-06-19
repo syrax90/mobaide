@@ -161,13 +161,27 @@ def _build_parser() -> argparse.ArgumentParser:
     re_pair = sub.add_parser(
         "re-pair",
         help=(
-            "Tear down the running agent, blank its relay credentials, "
-            "and start a fresh QR pairing cycle."
+            "Re-pair this agent and start a fresh QR pairing cycle. Default: "
+            "blank only RELAY_AGENT_TOKEN and keep RELAY_AGENT_ID so the relay "
+            "rotates the existing agent's token (same-owner re-pair). Use "
+            "--fresh to also forget RELAY_AGENT_ID and first-pair as a NEW "
+            "agent — required when the relay no longer has this agent."
         ),
     )
     re_pair.add_argument(
         "--prefix",
         help="Override install prefix (default: install_paths.default_prefix()).",
+    )
+    re_pair.add_argument(
+        "--fresh",
+        action="store_true",
+        help=(
+            "Forget RELAY_AGENT_ID too (not just the token) so the next claim "
+            "registers a brand-new agent instead of re-registering the old "
+            "one. Use this when pairing fails with HTTP 404 'Re-pair target "
+            "agent does not exist' — the old agent_id is gone server-side "
+            "(removed from the account, or the relay DB was redeployed)."
+        ),
     )
     re_pair.add_argument(
         "--no-restart",
@@ -401,7 +415,7 @@ def _run_fetch_trust_key(args: argparse.Namespace) -> int:
             sys.stderr.write(
                 f"mobaide-agent fetch-trust-key: {env_file} does not exist.\n"
                 f"Pass --from-url <central_server_base>{_TRUST_KEY_ENDPOINT_PATH} "
-                f"or run init-env first.\n"
+                f"or run: python -m mobaide.agent.config init-env\n"
             )
             return 2
         relay_server_url = parse_env_file(env_file).get("RELAY_SERVER_URL", "").strip()
@@ -536,7 +550,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
     if not env_file.exists():
         sys.stderr.write(
             f"mobaide-agent pair-qr: {env_file} does not exist.\n"
-            f"Run: mobaide-agent init-env\n"
+            f"Run: python -m mobaide.agent.config init-env\n"
         )
         return 2
     env_kv = parse_env_file(env_file)
@@ -692,7 +706,22 @@ def _run_show_qr(args: argparse.Namespace) -> int:
 
 
 def _run_re_pair(args: argparse.Namespace) -> int:
-    """Blank credentials in .env and trigger a fresh QR pairing cycle.
+    """Blank relay credentials in .env and trigger a fresh QR pairing cycle.
+
+    Two modes:
+
+    * **default (same-owner re-pair)** — blanks only ``RELAY_AGENT_TOKEN``
+      and preserves ``RELAY_AGENT_ID``. The boot autorun carries the
+      retained id into the next initiate as ``current_agent_id`` so the
+      relay re-registers (rotates the token for) the *existing* agent row.
+      Correct only when the agent still exists on the relay.
+    * **--fresh (first-pair)** — blanks BOTH ``RELAY_AGENT_ID`` and
+      ``RELAY_AGENT_TOKEN`` so no ``current_agent_id`` is carried and the
+      relay registers a brand-new agent. Use this when the relay no longer
+      has this agent: the claim 404s with "Re-pair target agent does not
+      exist" because the id was removed from the account or the relay DB
+      was redeployed. The default mode cannot recover from that — it keeps
+      re-sending the dead id and 404s on every cycle.
 
     Authorization model: shell access on the agent host is sufficient.
     On platforms with a registered service supervisor we restart so the
@@ -719,23 +748,33 @@ def _run_re_pair(args: argparse.Namespace) -> int:
     if not env_file.exists():
         sys.stderr.write(
             f"mobaide-agent re-pair: {env_file} does not exist.\n"
-            f"Run: mobaide-agent init-env\n"
+            f"Run: python -m mobaide.agent.config init-env\n"
         )
         return 2
 
+    fresh = getattr(args, "fresh", False)
+    overrides = {"RELAY_AGENT_TOKEN": ""}
+    if fresh:
+        overrides["RELAY_AGENT_ID"] = ""
     template_text = env_file.read_text(encoding="utf-8")
-    rendered = render_template(
-        template_text,
-        overrides={"RELAY_AGENT_TOKEN": ""},
-    )
+    rendered = render_template(template_text, overrides=overrides)
     atomic_write(env_file, rendered)
     restrict_perms(env_file)
     clear_pending_pairing(layout)
-    sys.stdout.write(
-        "[mobaide-agent] Blanked RELAY_AGENT_TOKEN in "
-        f"{env_file}; RELAY_AGENT_ID is preserved so the next pairing "
-        "claim can rotate or transfer the existing agent.\n"
-    )
+    if fresh:
+        sys.stdout.write(
+            "[mobaide-agent] Blanked RELAY_AGENT_ID and RELAY_AGENT_TOKEN in "
+            f"{env_file}; the next pairing claim first-pairs as a brand-new "
+            "agent.\n"
+        )
+    else:
+        sys.stdout.write(
+            "[mobaide-agent] Blanked RELAY_AGENT_TOKEN in "
+            f"{env_file}; RELAY_AGENT_ID is preserved so the next pairing "
+            "claim rotates the existing agent's token. If pairing then 404s "
+            "with 'Re-pair target agent does not exist', the relay no longer "
+            "has this agent — re-run: mobaide-agent re-pair --fresh\n"
+        )
 
     if args.no_restart:
         sys.stdout.write(
