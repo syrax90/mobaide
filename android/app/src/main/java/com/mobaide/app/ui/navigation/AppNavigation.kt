@@ -30,6 +30,7 @@ import com.mobaide.app.ui.register.VerifyEmailScreen
 import com.mobaide.app.ui.sessions.CreateSessionScreen
 import com.mobaide.app.ui.sessions.SessionListScreen
 import com.mobaide.app.ui.settings.SettingsScreen
+import com.mobaide.app.ui.support.SupportScreen
 import com.mobaide.app.ui.templates.TemplatesScreen
 import com.mobaide.app.ui.terminal.TerminalScreen
 import com.mobaide.app.ui.update.IncompatibleServerScreen
@@ -115,6 +116,9 @@ fun AppNavigation(
                 },
                 onForgotPasswordClick = {
                     navController.navigate(Routes.FORGOT_PASSWORD)
+                },
+                onHelpSupportClick = {
+                    navController.navigate(Routes.SUPPORT)
                 },
             )
         }
@@ -294,6 +298,16 @@ fun AppNavigation(
                 onManageDevices = {
                     navController.navigate(Routes.DEVICES)
                 },
+                onOpenSupport = {
+                    navController.navigate(Routes.SUPPORT)
+                },
+            )
+        }
+
+        composable(Routes.SUPPORT) {
+            SupportScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
             )
         }
 

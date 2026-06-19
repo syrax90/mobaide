@@ -60,6 +60,7 @@ fun LoginScreen(
     onVerificationRequired: (String) -> Unit = {},
     onRegisterClick: () -> Unit = {},
     onForgotPasswordClick: () -> Unit = {},
+    onHelpSupportClick: () -> Unit = {},
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -228,6 +229,13 @@ fun LoginScreen(
 
             TextButton(onClick = onRegisterClick) {
                 Text("Don't have an account? Create one")
+            }
+
+            TextButton(onClick = onHelpSupportClick) {
+                Text(
+                    text = "Help & Support",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
 
             TextButton(
