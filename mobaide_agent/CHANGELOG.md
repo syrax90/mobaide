@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.2.14](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.13...agent-v0.2.14) (2026-06-19)
+
+
+### Bug Fixes
+
+* **agent:** add `re-pair --fresh` to recover from missing-agent 404 ([8db9e00](https://github.com/syrax90/claude_mobile/commit/8db9e0058de2c46f7fb98dbd34caf35a011e08e4))
+* **pairing:** add `re-pair --fresh` to recover from missing-agent 404 ([a6b261a](https://github.com/syrax90/claude_mobile/commit/a6b261a6fe6b02be6cc173c88222333a2fe1095c))
+
 ## [0.2.13](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.12...agent-v0.2.13) (2026-06-17)
 
 
