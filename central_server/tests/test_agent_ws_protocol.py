@@ -25,6 +25,7 @@ from central_server.relay.agent_ws import _coerce_int
 from central_server.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     PROTOCOL_INCOMPATIBLE_CLOSE_CODE,
+    PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
 )
 
@@ -128,7 +129,7 @@ class TestAgentTunnelProtocolHandshake:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_version": "0.1.0",
                 "capabilities": {},
             }))
@@ -148,10 +149,9 @@ class TestAgentTunnelProtocolHandshake:
     def test_missing_protocol_version_defaults_to_incompatible(
         self, app, registered_agent,
     ):
-        # MIN_CLIENT_PROTOCOL_VERSION is 4 — the legacy default
-        # (``protocol_version=1``) the parser falls back to is no longer in
-        # ``SUPPORTED_PROTOCOL_VERSIONS``. A pre-v4 build with no
-        # ``protocol_version`` field is correctly rejected here.
+        # The legacy default (``protocol_version=1``) the parser falls back to
+        # for a missing field is no longer in ``SUPPORTED_PROTOCOL_VERSIONS``, so
+        # a pre-handshake build with no ``protocol_version`` is rejected here.
         agent_id, raw_token = registered_agent
         client = TestClient(app)
         with client.websocket_connect("/ws/agent-tunnel") as ws:
@@ -187,7 +187,7 @@ class TestAgentTunnelProtocolHandshake:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"
@@ -214,7 +214,7 @@ class TestHandshakeVersionPersisted:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_version": "0.3.0",
             }))
             resp = json.loads(ws.receive_text())
@@ -223,7 +223,7 @@ class TestHandshakeVersionPersisted:
         agent = await db.get_agent(agent_id)
         assert agent is not None
         assert agent["agent_version"] == "0.3.0"
-        assert agent["agent_protocol_version"] == 4
+        assert agent["agent_protocol_version"] == PROTOCOL_VERSION
 
     async def test_reauth_without_agent_version_preserves_stored_value(
         self, app, registered_agent, db,
@@ -243,7 +243,7 @@ class TestHandshakeVersionPersisted:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_version": "0.3.0",
             }))
             assert json.loads(ws.receive_text())["type"] == "auth_ok"
@@ -253,14 +253,14 @@ class TestHandshakeVersionPersisted:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 # No agent_version field at all.
             }))
             assert json.loads(ws.receive_text())["type"] == "auth_ok"
 
         agent = await db.get_agent(agent_id)
         assert agent["agent_version"] == "0.3.0"
-        assert agent["agent_protocol_version"] == 4
+        assert agent["agent_protocol_version"] == PROTOCOL_VERSION
 
     async def test_non_string_agent_version_does_not_clobber(
         self, app, registered_agent, db,
@@ -279,7 +279,7 @@ class TestHandshakeVersionPersisted:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_version": 5,  # int, not a string
             }))
             assert json.loads(ws.receive_text())["type"] == "auth_ok"
@@ -288,7 +288,7 @@ class TestHandshakeVersionPersisted:
         assert agent["agent_version"] is None
         # Protocol version is still captured because it has its own
         # ``_coerce_int`` path, not the string guard.
-        assert agent["agent_protocol_version"] == 4
+        assert agent["agent_protocol_version"] == PROTOCOL_VERSION
 
     async def test_empty_string_agent_version_does_not_clobber(
         self, app, registered_agent, db,
@@ -302,7 +302,7 @@ class TestHandshakeVersionPersisted:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_version": "0.3.0",
             }))
             assert json.loads(ws.receive_text())["type"] == "auth_ok"
@@ -315,7 +315,7 @@ class TestHandshakeVersionPersisted:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_version": "",
             }))
             assert json.loads(ws.receive_text())["type"] == "auth_ok"
@@ -346,7 +346,7 @@ class TestHandshakeVersionPersisted:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_version": "0.3.0",
             }))
             assert json.loads(ws.receive_text())["type"] == "auth_ok"
@@ -354,7 +354,7 @@ class TestHandshakeVersionPersisted:
         after = await db.get_agent(agent_id)
         assert after["last_seen_at"] is not None
         assert after["agent_version"] == "0.3.0"
-        assert after["agent_protocol_version"] == 4
+        assert after["agent_protocol_version"] == PROTOCOL_VERSION
 
 
 class TestUnknownControlTypeTelemetry:

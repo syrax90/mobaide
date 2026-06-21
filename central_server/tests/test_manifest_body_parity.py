@@ -29,7 +29,7 @@ from starlette.testclient import TestClient
 
 from central_server.manifest.router import broadcast_manifest_update
 from central_server.manifest.store import ManifestStore, StoredManifest, canonical_json
-from central_server.relay.envelope import CH_CONTROL, decode
+from central_server.relay.envelope import CH_CONTROL, PROTOCOL_VERSION, decode
 
 
 def _signed_manifest_record() -> tuple[StoredManifest, str]:
@@ -90,7 +90,7 @@ def test_broadcast_and_auth_ok_emit_identical_body_bytes(
             "type": "auth",
             "agent_id": agent_id,
             "token": raw_token,
-            "protocol_version": 4,
+            "protocol_version": PROTOCOL_VERSION,
         }))
         resp = json.loads(ws.receive_text())
     auth_ok_body = resp["manifest_body"]

@@ -18,6 +18,7 @@ from starlette.testclient import TestClient
 
 from central_server.db.database import Database
 from central_server.relay.agent_ws import _broadcast_status
+from central_server.relay.envelope import PROTOCOL_VERSION
 from central_server.relay.routing import RoutingTable, UserClient
 
 from tests.conftest import (
@@ -394,7 +395,7 @@ class TestUserEventsEndpoint:
                             "type": "auth",
                             "agent_id": agent_id,
                             "token": raw_token,
-                            "protocol_version": 4,
+                            "protocol_version": PROTOCOL_VERSION,
                         }
                     )
                 )
@@ -411,7 +412,7 @@ class TestUserEventsEndpoint:
                                 "type": "auth",
                                 "agent_id": agent_id,
                                 "token": raw_token,
-                                "protocol_version": 4,
+                                "protocol_version": PROTOCOL_VERSION,
                             }
                         )
                     )

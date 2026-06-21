@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+import os
+import stat
+from pathlib import Path
+
+import pytest
+
+from mobaide.core import codex_launcher
+from mobaide.core.claude_launcher import AdHocLaunch
+from mobaide.core.codex_launcher import (
+    CodexBinaryNotFoundError,
+    CodexLauncher,
+    CodexOptions,
+)
+from mobaide.core.projects_config import ProjectConfig
+
+# Captured before the autouse ``_pin_codex_binary`` fixture swaps it, so the
+# resolver tests below exercise the real implementation.
+_REAL_CODEX_RESOLVER = codex_launcher._resolve_codex_binary
+
+
+def _make_project(path: str, *, conda: str | None = None) -> ProjectConfig:
+    return ProjectConfig(name="test", path=path, conda_env=conda)
+
+
+# ---------------------------------------------------------------------------
+# argv
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_argv_default_is_sandboxed_non_interactive_preset(tmp_path: Path):
+    """Default options reproduce the v1 preset: sandboxed, no approval prompts
+    (the mobile client cannot mediate them yet), high reasoning effort."""
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.argv == [
+        "codex",
+        "--sandbox", "workspace-write",
+        "--ask-for-approval", "never",
+        "-c", "model_reasoning_effort=high",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_argv_model_flag_uses_long_form(tmp_path: Path):
+    spec = await CodexLauncher().build(
+        _make_project(str(tmp_path)), CodexOptions(model="gpt-5.4-codex"),
+    )
+    assert spec.argv[:3] == ["codex", "--model", "gpt-5.4-codex"]
+
+
+@pytest.mark.asyncio
+async def test_argv_full_auto_omits_sandbox_and_approval(tmp_path: Path):
+    """full_auto maps to --dangerously-bypass-approvals-and-sandbox, which is
+    mutually exclusive with the sandbox/approval flags — those must be dropped."""
+    spec = await CodexLauncher().build(
+        _make_project(str(tmp_path)), CodexOptions(full_auto=True),
+    )
+    assert "--dangerously-bypass-approvals-and-sandbox" in spec.argv
+    assert "--sandbox" not in spec.argv
+    assert "--ask-for-approval" not in spec.argv
+
+
+@pytest.mark.asyncio
+async def test_argv_custom_sandbox_and_approval(tmp_path: Path):
+    spec = await CodexLauncher().build(
+        _make_project(str(tmp_path)),
+        CodexOptions(sandbox="read-only", approval="on-request"),
+    )
+    assert spec.argv[spec.argv.index("--sandbox") + 1] == "read-only"
+    assert spec.argv[spec.argv.index("--ask-for-approval") + 1] == "on-request"
+
+
+@pytest.mark.asyncio
+async def test_argv_initial_prompt_is_trailing_positional(tmp_path: Path):
+    """Codex takes the prompt as a trailing positional — no ``--`` separator
+    (unlike Claude)."""
+    spec = await CodexLauncher().build(
+        _make_project(str(tmp_path)), CodexOptions(initial_prompt="do the thing"),
+    )
+    assert spec.argv[-1] == "do the thing"
+    assert "--" not in spec.argv
+
+
+@pytest.mark.asyncio
+async def test_argv_no_reasoning_effort_omits_config_override(tmp_path: Path):
+    spec = await CodexLauncher().build(
+        _make_project(str(tmp_path)), CodexOptions(reasoning_effort=None),
+    )
+    assert "-c" not in spec.argv
+    assert not any("model_reasoning_effort" in a for a in spec.argv)
+
+
+@pytest.mark.asyncio
+async def test_argv_independent_of_target(tmp_path: Path):
+    """Switching ProjectConfig -> AdHocLaunch must not change the flags."""
+    opts = CodexOptions(model="m", initial_prompt="go")
+    project = await CodexLauncher().build(_make_project(str(tmp_path)), opts)
+    adhoc = await CodexLauncher().build(AdHocLaunch(cwd=str(tmp_path)), opts)
+    assert project.argv == adhoc.argv
+
+
+# ---------------------------------------------------------------------------
+# env
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_env_sets_encoding_and_term(tmp_path: Path):
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.env["PYTHONIOENCODING"] == "utf-8"
+    assert spec.env.get("TERM")
+
+
+@pytest.mark.asyncio
+async def test_env_adds_no_claude_specific_vars(tmp_path: Path, monkeypatch):
+    """Codex copies the inherited env but ADDS none of Claude's extras: no
+    forced 1h-cache preset, no attention-hook vars, and — even for a project
+    carrying a Linear key — no injected ``LINEAR_API_KEY``. The parent env is
+    cleared first so the assertion isolates what the launcher itself injects."""
+    for key in (
+        "ENABLE_PROMPT_CACHING_1H", "MOBAIDE_SESSION_ID",
+        "MOBAIDE_HOOK_URL", "MOBAIDE_HOOK_TOKEN", "LINEAR_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    proj = ProjectConfig(
+        name="t", path=str(tmp_path), linear_api_key="lin_secret",
+    )
+    spec = await CodexLauncher().build(proj, CodexOptions())
+    assert "ENABLE_PROMPT_CACHING_1H" not in spec.env
+    assert "MOBAIDE_SESSION_ID" not in spec.env
+    assert "LINEAR_API_KEY" not in spec.env
+
+
+@pytest.mark.asyncio
+async def test_env_prepends_binary_dir_to_path(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        codex_launcher, "_resolve_codex_binary",
+        lambda *_a, **_k: os.path.join("/opt", "cx", "bin", "codex"),
+    )
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.env["PATH"].split(os.pathsep)[0] == os.path.join("/opt", "cx", "bin")
+
+
+# ---------------------------------------------------------------------------
+# cwd / project files
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cwd_project_root_no_worktree(tmp_path: Path):
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_cwd_adhoc_target(tmp_path: Path):
+    spec = await CodexLauncher().build(AdHocLaunch(cwd=str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_cwd_missing_raises_clean_file_not_found(tmp_path: Path):
+    missing = tmp_path / "does" / "not" / "exist"
+    with pytest.raises(FileNotFoundError) as exc_info:
+        await CodexLauncher().build(_make_project(str(missing)), CodexOptions())
+    assert exc_info.value.filename == str(missing)
+    assert exc_info.value.errno == 2
+
+
+@pytest.mark.asyncio
+async def test_writes_no_project_files(tmp_path: Path):
+    """Codex needs no .mcp.json / .claude settings — created_files is empty."""
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.created_files == []
+    assert not (tmp_path / ".mcp.json").exists()
+    assert not (tmp_path / ".claude").exists()
+
+
+# ---------------------------------------------------------------------------
+# binary resolution
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_propagates_binary_not_found(tmp_path: Path, monkeypatch):
+    def _raise(*_a, **_kw):
+        raise CodexBinaryNotFoundError(searched_paths=["PATH:codex"])
+
+    monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _raise)
+    with pytest.raises(CodexBinaryNotFoundError):
+        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+
+
+@pytest.mark.asyncio
+async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatch):
+    captured: dict[str, str | None] = {}
+
+    def _capture(override=None):
+        captured["override"] = override
+        return "codex"
+
+    monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _capture)
+    await CodexLauncher(codex_bin_override="/my/codex").build(
+        _make_project(str(tmp_path)), CodexOptions(),
+    )
+    assert captured["override"] == "/my/codex"
+
+
+def test_codex_options_is_frozen():
+    from dataclasses import FrozenInstanceError
+
+    opts = CodexOptions()
+    with pytest.raises(FrozenInstanceError):
+        opts.model = "x"  # type: ignore[misc]
+
+
+def test_binary_not_found_message_is_actionable():
+    err = CodexBinaryNotFoundError(searched_paths=["PATH:codex", "fallback:/x"])
+    msg = str(err)
+    assert "npm install -g @openai/codex" in msg
+    assert "MOBAIDE_CODEX_BIN" in msg
+    assert err.cli_name == "codex"
+    assert err.searched_paths == ["PATH:codex", "fallback:/x"]
+
+
+# ---------------------------------------------------------------------------
+# real resolver (override / env / not-found)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _clean_codex_env(monkeypatch):
+    monkeypatch.delenv("MOBAIDE_CODEX_BIN", raising=False)
+    yield
+
+
+def _make_executable(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\nexit 0\n")
+    path.chmod(stat.S_IRWXU)
+    return path
+
+
+def test_real_resolver_uses_env_var_override(monkeypatch, tmp_path, _clean_codex_env):
+    fake = _make_executable(tmp_path / "mycodex")
+    monkeypatch.setenv("MOBAIDE_CODEX_BIN", str(fake))
+    assert _REAL_CODEX_RESOLVER() == str(fake)
+
+
+def test_real_resolver_prefers_override_over_env(monkeypatch, tmp_path, _clean_codex_env):
+    fake_override = _make_executable(tmp_path / "from_override")
+    fake_env = _make_executable(tmp_path / "from_env")
+    monkeypatch.setenv("MOBAIDE_CODEX_BIN", str(fake_env))
+    assert _REAL_CODEX_RESOLVER(override=str(fake_override)) == str(fake_override)
+
+
+def test_real_resolver_raises_with_actionable_message(
+    monkeypatch, tmp_path, _clean_codex_env,
+):
+    from mobaide.core import cli_launcher
+
+    monkeypatch.setattr(codex_launcher, "_posix_fallback_candidates", lambda: [])
+    monkeypatch.setattr(codex_launcher, "_windows_fallback_candidates", lambda: [])
+    monkeypatch.setattr(cli_launcher.shutil, "which", lambda *_a, **_kw: None)
+
+    with pytest.raises(CodexBinaryNotFoundError) as exc_info:
+        _REAL_CODEX_RESOLVER()
+
+    msg = str(exc_info.value)
+    assert "@openai/codex" in msg
+    assert "MOBAIDE_CODEX_BIN" in msg
+    assert exc_info.value.searched_paths

@@ -70,6 +70,16 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_CLAUDE_BIN",
     )
 
+    # Operator override pointing at the absolute path of the Codex CLI
+    # executable (``codex.cmd`` on Windows, ``codex`` on POSIX). Mirrors
+    # ``claude_bin`` and needs its own typed field for the same reason —
+    # pydantic-settings populates this from .env without mutating
+    # ``os.environ``, so the resolver in ``codex_launcher.py`` would never see
+    # a ``MOBAIDE_CODEX_BIN`` line in .env (``extra="ignore"`` drops it).
+    codex_bin: str | None = Field(
+        default=None, validation_alias="MOBAIDE_CODEX_BIN",
+    )
+
     auto_scan_config: AutoScanConfig | None = Field(default=None, exclude=True)
     relay_config: RelayConfig | None = Field(default=None, exclude=True)
 
@@ -216,6 +226,8 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
             overrides["RELAY_SERVER_URL"] = existing["RELAY_SERVER_URL"]
         if existing.get("MOBAIDE_CLAUDE_BIN"):
             overrides["MOBAIDE_CLAUDE_BIN"] = existing["MOBAIDE_CLAUDE_BIN"]
+        if existing.get("MOBAIDE_CODEX_BIN"):
+            overrides["MOBAIDE_CODEX_BIN"] = existing["MOBAIDE_CODEX_BIN"]
 
     # An explicit --claude-bin from the installer wins over a preserved
     # existing value: a re-install where the operator just moved the

@@ -1,19 +1,38 @@
 from __future__ import annotations
 
-import glob
 import json
 import logging
 import os
-import platform
-import shutil
+
+# ``shutil`` is imported solely so ``test_claude_resolver`` can monkeypatch
+# ``claude_launcher.shutil.which``; the shared ``resolve_cli_binary`` reads the
+# same global ``shutil``. Binary resolution itself is delegated below, so the
+# name is otherwise unused in this module.
+import shutil  # noqa: F401
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 from typing import TYPE_CHECKING
 
+from .cli_launcher import (
+    AdHocLaunch,
+    CliBinaryNotFoundError,
+    LaunchSpec,
+    LaunchTarget,
+    check_cwd_exists,
+    conda_env_bin,
+    posix_npm_fallbacks,
+    prepend_path_dir,
+    resolve_cli_binary,
+    windows_npm_fallbacks,
+)
+
+# Re-exported (explicit ``as`` alias) only so ``test_claude_resolver`` can
+# reference ``claude_launcher._nvm_version_key`` directly.
+from .cli_launcher import _nvm_version_key as _nvm_version_key
 from .hook_settings import write_session_hooks
 from .projects_config import ProjectConfig
 from .projects_store import safe_path_exists
@@ -21,159 +40,57 @@ from .projects_store import safe_path_exists
 if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
 
+# ``AdHocLaunch`` / ``LaunchSpec`` / ``LaunchTarget`` / ``check_cwd_exists`` are
+# imported above from ``cli_launcher`` and re-exported here so the existing
+# ``from mobaide.core.claude_launcher import ...`` sites keep working.
+# ``_nvm_version_key`` is referenced as ``claude_launcher._nvm_version_key`` by
+# ``test_claude_resolver``.
 
-class ClaudeBinaryNotFoundError(RuntimeError):
+
+class ClaudeBinaryNotFoundError(CliBinaryNotFoundError):
     """Raised when the Claude Code CLI cannot be located on the host."""
 
+    cli_name = "claude"
     _INSTALL_HINT = (
         "Claude CLI not found. Install it with:\n"
         "    npm install -g @anthropic-ai/claude-code\n"
         "or set MOBAIDE_CLAUDE_BIN to its absolute path in the agent's env file."
     )
 
-    def __init__(self, searched_paths: list[str]) -> None:
-        self.searched_paths = list(searched_paths)
-        searched = ", ".join(self.searched_paths) if self.searched_paths else "(none)"
-        super().__init__(f"{self._INSTALL_HINT}\nSearched: {searched}")
-
 
 _CLAUDE_BIN_ENV_VAR = "MOBAIDE_CLAUDE_BIN"
 
 
-def _is_executable_file(path: str) -> bool:
-    return os.path.isfile(path) and os.access(path, os.X_OK)
-
-
-def _normalise_user_path(path: str) -> str:
-    return os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
-
-
-def _nvm_version_key(path: str) -> tuple[int, ...]:
-    """Parse the ``vX.Y.Z`` segment of an nvm path into a comparable tuple.
-
-    nvm directories are named like ``v18.20.4``; lexicographic sort would
-    rank ``v9.x`` after ``v10.x`` because ``'1' < '9'``. Falling back to
-    ``(0,)`` for unparseable names keeps such entries below any real
-    semver-named one without crashing.
-    """
-    try:
-        version_dir = Path(path).parent.parent.name
-        parts = version_dir.lstrip("v").split(".")
-        return tuple(int(p) for p in parts)
-    except (ValueError, IndexError):
-        return (0,)
-
-
 def _posix_fallback_candidates() -> list[str]:
-    home = Path.home()
-    candidates = [
-        str(home / ".npm-global" / "bin" / "claude"),
-        str(home / ".local" / "bin" / "claude"),
-        "/usr/local/bin/claude",
-        "/opt/homebrew/bin/claude",
-    ]
-    nvm_matches = glob.glob(
-        str(home / ".nvm" / "versions" / "node" / "*" / "bin" / "claude")
-    )
-    if nvm_matches:
-        candidates.append(max(nvm_matches, key=_nvm_version_key))
-    return candidates
+    return posix_npm_fallbacks("claude")
 
 
 def _windows_fallback_candidates() -> list[str]:
-    """Common Windows install locations for ``claude.cmd``.
-
-    Last-ditch guess for environments where neither ``MOBAIDE_CLAUDE_BIN``
-    nor PATH resolves ``claude.cmd``: probe the default
-    ``%APPDATA%\\npm\\`` landing site for
-    ``npm install -g @anthropic-ai/claude-code``, plus the relocated
-    variants under ``%LOCALAPPDATA%`` / ``%USERPROFILE%`` and the
-    machine-scope ``%ProgramData%\\npm`` / ``%ProgramFiles%\\nodejs``
-    locations some operators use. The agent now runs in the installing
-    user's session (Scheduled Task with ``-LogonType Interactive``), so
-    these env vars resolve correctly and PATH usually contains the npm
-    dir already; this fallback is belt-and-suspenders for non-standard
-    installs (chocolatey, relocated npm prefix, etc.).
-    """
-    candidates: list[str] = []
-    for var in ("APPDATA", "LOCALAPPDATA", "USERPROFILE"):
-        base = os.environ.get(var)
-        if not base:
-            continue
-        if var == "USERPROFILE":
-            for suffix in (
-                r"AppData\Roaming\npm\claude.cmd",
-                r"AppData\Roaming\npm\claude.exe",
-            ):
-                candidates.append(os.path.join(base, suffix))
-        else:
-            for suffix in (r"npm\claude.cmd", r"npm\claude.exe"):
-                candidates.append(os.path.join(base, suffix))
-    program_data = os.environ.get("ProgramData") or r"C:\ProgramData"
-    candidates.append(os.path.join(program_data, "npm", "claude.cmd"))
-    program_files = os.environ.get("ProgramFiles")
-    if program_files:
-        candidates.append(os.path.join(program_files, "nodejs", "claude.cmd"))
-    return candidates
+    return windows_npm_fallbacks("claude")
 
 
 def _resolve_claude_binary(override: str | None = None) -> str:
-    """Locate the Claude Code CLI executable.
-
-    Resolution order (high → low):
-      1. ``override`` arg (config-supplied ``MOBAIDE_CLAUDE_BIN``).
-      2. ``MOBAIDE_CLAUDE_BIN`` env var (direct shell export).
-      3. ``shutil.which`` against the current PATH.
-      4. Platform-specific fallback candidates (Windows: ``%APPDATA%\\npm``
-         and friends; POSIX: ``~/.npm-global/bin``, ``/usr/local/bin``,
-         nvm).
+    """Locate the Claude Code CLI executable via the shared resolver.
 
     Stateless — caching is the caller's responsibility. ``ClaudeLauncher``
-    caches the result for the lifetime of one launcher instance, which is
-    the natural unit because the launcher is constructed once per app
-    boot from a fixed ``AgentConfig``.
-
-    Raises :class:`ClaudeBinaryNotFoundError` with an actionable message
-    listing every path that was probed, each tagged with its source
-    (``override:``, ``env:``, ``PATH:``, ``fallback:``) so the mobile
-    client can tell the operator which lookup channel was tried.
+    caches the result for the lifetime of one launcher instance, the natural
+    unit because the launcher is constructed once per app boot from a fixed
+    ``AgentConfig``. The module-local ``_*_fallback_candidates`` wrappers are
+    kept so existing tests can monkeypatch them by name.
     """
-    searched: list[str] = []
-
-    typed_candidates: list[tuple[str, str]] = []
-    if override:
-        typed_candidates.append(("override", _normalise_user_path(override)))
-    env_val = os.environ.get(_CLAUDE_BIN_ENV_VAR)
-    if env_val:
-        typed_candidates.append(("env", _normalise_user_path(env_val)))
-
-    for label, path in typed_candidates:
-        searched.append(f"{label}:{path}")
-        if _is_executable_file(path):
-            return path
-
     if sys.platform == "win32":
-        for name in ("claude", "claude.cmd", "claude.exe"):
-            hit = shutil.which(name)
-            searched.append(f"PATH:{name}")
-            if hit:
-                return os.path.abspath(hit)
-        for candidate in _windows_fallback_candidates():
-            searched.append(f"fallback:{candidate}")
-            if _is_executable_file(candidate):
-                return candidate
+        which_names = ("claude", "claude.cmd", "claude.exe")
+        fallbacks = _windows_fallback_candidates()
     else:
-        hit = shutil.which("claude")
-        searched.append("PATH:claude")
-        if hit:
-            return os.path.abspath(hit)
-
-        for candidate in _posix_fallback_candidates():
-            searched.append(f"fallback:{candidate}")
-            if _is_executable_file(candidate):
-                return candidate
-
-    raise ClaudeBinaryNotFoundError(searched)
+        which_names = ("claude",)
+        fallbacks = _posix_fallback_candidates()
+    return resolve_cli_binary(
+        override=override,
+        env_var=_CLAUDE_BIN_ENV_VAR,
+        which_names=which_names,
+        fallbacks=fallbacks,
+        error_cls=ClaudeBinaryNotFoundError,
+    )
 
 
 @dataclass(frozen=True)
@@ -190,32 +107,6 @@ class ClaudeOptions:
     identifier: str | None = None
     title: str | None = None
     max_effort: bool = True
-
-
-@dataclass
-class LaunchSpec:
-    """Result of building a launch — argv/cwd/env ready to hand to a PTY."""
-
-    argv: list[str]
-    cwd: str
-    env: dict[str, str]
-    created_files: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class AdHocLaunch:
-    """Ad-hoc Claude launch target: a bare cwd with no stored project context.
-
-    Used by the custom-path entry on the mobile picker to spawn a one-off
-    Claude session against an arbitrary folder. No Linear key, no conda env,
-    no project files written. The log "source" is recorded as ``<ad-hoc>``
-    rather than synthesising a fake :class:`ProjectConfig`.
-    """
-
-    cwd: str
-
-
-LaunchTarget = ProjectConfig | AdHocLaunch
 
 
 _LINEAR_MCP_TEMPLATE = {
@@ -246,20 +137,6 @@ _LOCAL_SETTINGS_TEMPLATE = {
 CLAUDE_SESSION_PRESET_ENV: dict[str, str] = {
     "ENABLE_PROMPT_CACHING_1H": "1",
 }
-
-
-def check_cwd_exists(cwd: str) -> str:
-    """Raise ``FileNotFoundError`` with a clean ``filename`` if ``cwd`` is missing.
-
-    Pre-empts ``pywinpty.PtyProcess.spawn`` / ``subprocess.Popen`` on bad paths
-    so the session router/relay can map the error to a 400 with a readable,
-    unescaped path — rather than letting Starlette's default 500 handler
-    surface a ``repr``-escaped filename. Shared by ``ClaudeLauncher`` cwd
-    resolution and ``SessionManager`` Terminal-mode worktree resolution.
-    """
-    if not Path(cwd).exists():
-        raise FileNotFoundError(2, "No such file or directory", cwd)
-    return cwd
 
 
 class ClaudeLauncher:
@@ -373,40 +250,17 @@ class ClaudeLauncher:
         env["PYTHONIOENCODING"] = "utf-8"
 
         if is_project and target.conda_env:
-            conda_bin = ClaudeLauncher._conda_env_bin(target.conda_env)
+            conda_bin = conda_env_bin(target.conda_env)
             if conda_bin:
                 sep = os.pathsep
                 env["PATH"] = f"{conda_bin}{sep}{env.get('PATH', '')}"
 
         try:
             claude_dir = os.path.dirname(self._resolve_binary())
-        except ClaudeBinaryNotFoundError:
+        except CliBinaryNotFoundError:
             claude_dir = ""
-        if claude_dir:
-            sep = os.pathsep
-            existing = env.get("PATH", "")
-            parts = existing.split(sep) if existing else []
-            if claude_dir not in parts:
-                env["PATH"] = f"{claude_dir}{sep}{existing}" if existing else claude_dir
+        prepend_path_dir(env, claude_dir)
         return env
-
-    @staticmethod
-    def _conda_env_bin(conda_env: str) -> str | None:
-        """Resolve the bin / Scripts dir for a conda env name or absolute path.
-
-        Returns None if it cannot be resolved — the caller will simply skip
-        the PATH prepend rather than break the launch.
-        """
-        candidate = Path(conda_env)
-        if not candidate.is_absolute():
-            base = os.environ.get("CONDA_PREFIX") or os.environ.get("CONDA_ROOT")
-            if base:
-                candidate = Path(base).parent / conda_env
-            else:
-                return None
-        sub = "Scripts" if platform.system() == "Windows" else "bin"
-        resolved = candidate / sub
-        return str(resolved) if resolved.exists() else str(resolved)
 
     async def _resolve_cwd(
         self, target: LaunchTarget, options: ClaudeOptions

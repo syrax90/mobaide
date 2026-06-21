@@ -142,6 +142,7 @@ class TestSessionToWireDictKind:
         ("kind_enum", "expected_value"),
         [
             ("CLAUDE", "claude"),
+            ("CODEX", "codex"),
             ("AUTO_SCAN", "auto_scan"),
             ("SHELL", "shell"),
         ],
@@ -296,3 +297,129 @@ class TestSessionEventAttentionField:
             event_type="attention", session_id="s1", attention="turn_finished",
         )
         assert ev.attention == "turn_finished"
+
+
+class TestCodexToOptions:
+    """``CodexOptionsModel.to_options()`` must return a real ``CodexOptions``
+    dataclass carrying every field verbatim — the same drift guard as the
+    Claude DTO so a future field addition can't silently slip on the Codex path.
+    """
+
+    def test_round_trip_all_fields_populated(self):
+        from mobaide.agent.sessions.models import CodexOptionsModel
+        from mobaide.core.codex_launcher import CodexOptions
+
+        model = CodexOptionsModel(
+            model="gpt-5.4-codex",
+            sandbox="danger-full-access",
+            approval="on-request",
+            reasoning_effort="low",
+            full_auto=True,
+            initial_prompt="ship it",
+        )
+        opts = model.to_options()
+
+        assert isinstance(opts, CodexOptions)
+        assert opts.model == "gpt-5.4-codex"
+        assert opts.sandbox == "danger-full-access"
+        assert opts.approval == "on-request"
+        assert opts.reasoning_effort == "low"
+        assert opts.full_auto is True
+        assert opts.initial_prompt == "ship it"
+
+    def test_round_trip_defaults_match_v1_preset(self):
+        from mobaide.agent.sessions.models import CodexOptionsModel
+        from mobaide.core.codex_launcher import CodexOptions
+
+        opts = CodexOptionsModel().to_options()
+
+        assert isinstance(opts, CodexOptions)
+        assert opts.model is None
+        assert opts.sandbox == "workspace-write"
+        assert opts.approval == "never"
+        assert opts.reasoning_effort == "high"
+        assert opts.full_auto is False
+        assert opts.initial_prompt is None
+
+    def test_invalid_enum_value_rejected_at_wire_boundary(self):
+        import pydantic
+
+        from mobaide.agent.sessions.models import CodexOptionsModel
+
+        for bad in ({"sandbox": "bogus"}, {"approval": "always"},
+                    {"reasoning_effort": "ultra"}):
+            with pytest.raises(pydantic.ValidationError):
+                CodexOptionsModel.model_validate(bad)
+
+
+class TestResolveSpawnArgs:
+    """``resolve_spawn_args`` is the single normaliser the REST + relay create
+    paths share: it picks the kind, applies the shell security guard, and
+    guarantees exactly one options object is set for a managed session.
+    """
+
+    _SHELL = ["/bin/sh"]
+
+    def _call(self, cli=None, claude=None, codex=None, cmd=None, env=None):
+        from mobaide.core.models import resolve_spawn_args
+
+        return resolve_spawn_args(cli, claude, codex, cmd, env, self._SHELL)
+
+    def test_no_cli_no_options_is_shell_with_clean_env(self):
+        from mobaide.core.models import SessionKind
+
+        kind, command, env, claude, codex = self._call(
+            cmd=["rm", "-rf"], env={"EVIL": "1"},
+        )
+        # Security guard: client command/env hints are dropped for shell.
+        assert kind is SessionKind.SHELL
+        assert command == self._SHELL
+        assert env is None
+        assert claude is None and codex is None
+
+    def test_claude_options_only_infers_claude(self):
+        from mobaide.core.claude_launcher import ClaudeOptions
+        from mobaide.core.models import SessionKind
+
+        kind, command, env, claude, codex = self._call(
+            claude=ClaudeOptions(), cmd=["claude"], env={"X": "1"},
+        )
+        assert kind is SessionKind.CLAUDE
+        assert command == ["claude"] and env == {"X": "1"}
+        assert isinstance(claude, ClaudeOptions) and codex is None
+
+    def test_codex_options_only_infers_codex(self):
+        from mobaide.core.codex_launcher import CodexOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex = self._call(codex=CodexOptions())
+        assert kind is SessionKind.CODEX
+        assert isinstance(codex, CodexOptions) and claude is None
+
+    def test_explicit_cli_codex_defaults_options_when_omitted(self):
+        from mobaide.core.codex_launcher import CodexOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex = self._call(cli="codex")
+        assert kind is SessionKind.CODEX
+        assert isinstance(codex, CodexOptions) and claude is None
+
+    def test_explicit_cli_claude_defaults_options_when_omitted(self):
+        from mobaide.core.claude_launcher import ClaudeOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex = self._call(cli="claude")
+        assert kind is SessionKind.CLAUDE
+        assert isinstance(claude, ClaudeOptions) and codex is None
+
+    def test_explicit_cli_codex_clears_stray_claude_options(self):
+        from mobaide.core.claude_launcher import ClaudeOptions
+        from mobaide.core.codex_launcher import CodexOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex = self._call(
+            cli="codex", claude=ClaudeOptions(), codex=CodexOptions(),
+        )
+        # Exactly one options object survives, matching the chosen kind.
+        assert kind is SessionKind.CODEX
+        assert codex is not None and claude is None

@@ -277,6 +277,103 @@ class TestCreateSessionProjectPathErrors:
         assert "\\\\\\\\" not in resp.text
 
 
+class TestCreateSessionCodex:
+    """``POST /api/sessions`` with ``cli="codex"`` threads ``codex_options``
+    through to a CODEX session and maps a missing Codex binary to a clean 503.
+    """
+
+    async def test_cli_codex_threads_options_and_kind(
+        self, app, client, auth_headers,
+    ):
+        """The router must build a CODEX ``SessionConfig`` carrying the parsed
+        ``codex_options`` (and no ``claude_options``), and surface ``kind`` as
+        ``"codex"`` on the wire. ``create_session`` is captured so the test is
+        independent of whether a real ``codex`` binary is installed."""
+        from datetime import datetime, timezone
+
+        from mobaide.core.models import (
+            SessionInfo,
+            SessionKind,
+            SessionState,
+        )
+
+        captured: dict = {}
+
+        class _FakeSession:
+            def __init__(self, config):
+                self.session_id = config.session_id
+                self._config = config
+
+            def to_info(self):
+                return SessionInfo(
+                    session_id=self.session_id,
+                    state=SessionState.RUNNING,
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    pid=123,
+                    command=self._config.command,
+                    cwd=self._config.cwd,
+                    kind=self._config.kind,
+                )
+
+        async def _capture(config):
+            captured["config"] = config
+            return _FakeSession(config)
+
+        app.state.session_manager.create_session = _capture
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "codex",
+                "codex_options": {"model": "gpt-5.4-codex", "sandbox": "read-only"},
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["kind"] == "codex"
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.CODEX
+        assert cfg.claude_options is None
+        assert cfg.codex_options is not None
+        assert cfg.codex_options.model == "gpt-5.4-codex"
+        assert cfg.codex_options.sandbox == "read-only"
+
+    async def test_invalid_codex_options_returns_422(self, client, auth_headers):
+        """An out-of-range enum value is rejected at the Pydantic boundary."""
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cli": "codex", "codex_options": {"sandbox": "nope"}},
+        )
+        assert resp.status_code == 422
+
+    async def test_codex_cli_missing_returns_503_with_clean_detail(
+        self, app, client, auth_headers,
+    ):
+        """A missing Codex binary mirrors the Claude path: 503 with a detail
+        starting ``codex CLI not found:`` and the Codex-specific install hint."""
+        from mobaide.core import CodexBinaryNotFoundError
+
+        async def _raise_cli_missing(*args, **kwargs):
+            raise CodexBinaryNotFoundError(searched_paths=["PATH:codex"])
+
+        app.state.session_manager.create_session = _raise_cli_missing
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cli": "codex", "codex_options": {}},
+        )
+
+        assert resp.status_code == 503
+        detail = resp.json()["detail"]
+        assert detail.startswith("Codex CLI not found:")
+        assert "npm install -g @openai/codex" in detail
+        assert "MOBAIDE_CODEX_BIN" in detail
+
+
 class TestCreateSessionAdHoc:
     """``POST /api/sessions`` with ``project_name=None`` and a
     user-supplied ``cwd``: the new ad-hoc (custom-path) launch path.

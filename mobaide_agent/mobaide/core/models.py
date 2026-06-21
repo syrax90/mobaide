@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .claude_launcher import ClaudeOptions  # noqa: F401
+    from .codex_launcher import CodexOptions  # noqa: F401
 
 
 class SessionState(enum.Enum):
@@ -21,14 +22,16 @@ class SessionState(enum.Enum):
 class SessionKind(enum.Enum):
     """Classifies what runs inside a session for UI/icon routing.
 
-    ``CLAUDE`` — Claude CLI launched via ``ClaudeLauncher`` (REST/relay create
-    with ``claude_options`` set). ``AUTO_SCAN`` — sub-sessions spawned by the
-    Linear scanner; argv/cwd/env pre-built by the scanner. ``SHELL`` — raw
-    shell (``_DEFAULT_SHELL``) anchored to a project's cwd; bypasses the
-    Claude launcher entirely.
+    ``CLAUDE`` — Claude CLI launched via ``ClaudeLauncher`` (create with
+    ``claude_options``). ``CODEX`` — Codex CLI launched via ``CodexLauncher``
+    (create with ``cli="codex"`` / ``codex_options``). ``AUTO_SCAN`` —
+    sub-sessions spawned by the Linear scanner; argv/cwd/env pre-built by the
+    scanner. ``SHELL`` — raw shell (``_DEFAULT_SHELL``) anchored to a project's
+    cwd; bypasses the managed-CLI launchers entirely.
     """
 
     CLAUDE = "claude"
+    CODEX = "codex"
     AUTO_SCAN = "auto_scan"
     SHELL = "shell"
 
@@ -52,6 +55,10 @@ class SessionConfig:
     # fields above before the PTY is spawned.
     project_name: str | None = None
     claude_options: ClaudeOptions | None = None
+    # Set when the session runs the Codex CLI. Mutually exclusive with
+    # ``claude_options`` (the entry layers normalise via ``resolve_spawn_args``);
+    # ``SessionManager`` dispatches to ``CodexLauncher`` when this is set.
+    codex_options: CodexOptions | None = None
     kind: SessionKind = SessionKind.CLAUDE
     # Terminal-mode worktree request. Consumed only on the SHELL+project path
     # (``SessionManager._resolve_project_cwd``); kept separate from
@@ -105,25 +112,74 @@ class SessionEvent:
     attention: str | None = None
 
 
-def resolve_spawn_args(
+def _resolve_session_kind(
+    cli: str | None,
     claude_options: "ClaudeOptions | None",
+    codex_options: "CodexOptions | None",
+) -> SessionKind:
+    """Pick the managed CLI from an explicit ``cli`` plus options presence.
+
+    Explicit ``cli`` wins; otherwise the kind is inferred from whichever options
+    object the client sent (back-compat: a legacy ``claude_options``-only payload
+    with no ``cli`` still resolves to ``CLAUDE``). Anything else is ``SHELL``.
+    """
+    if cli == SessionKind.CODEX.value or (cli is None and codex_options is not None):
+        return SessionKind.CODEX
+    if cli == SessionKind.CLAUDE.value or (cli is None and claude_options is not None):
+        return SessionKind.CLAUDE
+    return SessionKind.SHELL
+
+
+def resolve_spawn_args(
+    cli: str | None,
+    claude_options: "ClaudeOptions | None",
+    codex_options: "CodexOptions | None",
     command_hint: list[str] | None,
     env_hint: dict[str, str] | None,
     default_shell: list[str],
-) -> tuple[SessionKind, list[str], dict[str, str] | None]:
-    """Resolve ``(kind, command, env)`` for a create-session request.
+) -> tuple[
+    SessionKind,
+    list[str],
+    dict[str, str] | None,
+    "ClaudeOptions | None",
+    "CodexOptions | None",
+]:
+    """Resolve ``(kind, command, env, claude_options, codex_options)`` for create.
 
-    The single source of truth for the Terminal-mode security guard: when the
-    caller did not pass ``claude_options``, the spawn always uses
-    ``default_shell`` with a clean env regardless of any client-supplied
-    ``command``/``env`` hints. This prevents an authenticated client from
-    piggybacking arbitrary argv into a project's cwd via the Terminal path.
-    Claude-mode requests still honour the hints (they will be overwritten
-    later by ``ClaudeLauncher`` inside ``SessionManager``).
+    The single source of truth for the Terminal-mode security guard: for a
+    non-managed (shell) request the spawn always uses ``default_shell`` with a
+    clean env, regardless of any client-supplied ``command``/``env`` hints. This
+    prevents an authenticated client from piggybacking arbitrary argv into a
+    project's cwd via the Terminal path. Managed (Claude/Codex) requests honour
+    the hints (overwritten later by the launcher inside ``SessionManager``).
+
+    Also normalises the options so exactly the chosen CLI's object is set —
+    defaulted when the client gave an explicit ``cli`` but omitted the options
+    block — and the other is cleared, keeping ``kind`` / options / launcher
+    choice consistent for ``SessionManager`` dispatch.
     """
-    if claude_options is None:
-        return SessionKind.SHELL, default_shell, None
-    return SessionKind.CLAUDE, command_hint or default_shell, env_hint
+    kind = _resolve_session_kind(cli, claude_options, codex_options)
+    if kind is SessionKind.CODEX:
+        from .codex_launcher import CodexOptions
+
+        return (
+            kind,
+            command_hint or default_shell,
+            env_hint,
+            None,
+            codex_options or CodexOptions(),
+        )
+    if kind is SessionKind.CLAUDE:
+        from .claude_launcher import ClaudeOptions
+
+        return (
+            kind,
+            command_hint or default_shell,
+            env_hint,
+            claude_options or ClaudeOptions(),
+            None,
+        )
+    return SessionKind.SHELL, default_shell, None, None, None
 
 
 def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:

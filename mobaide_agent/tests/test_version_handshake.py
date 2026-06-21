@@ -29,8 +29,9 @@ async def test_get_version(client) -> None:
 
 
 def test_protocol_version_constants() -> None:
-    # proto-v4: additive bump adding the session.attention event and
-    # the attention/exit_reason session wire fields (see PROTOCOL.md).
-    assert PROTOCOL_VERSION == 4
-    assert MIN_CLIENT_PROTOCOL_VERSION == 4
-    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (4,)
+    # proto-v5: additive bump adding the create-session ``cli`` discriminator
+    # and ``codex_options`` for Codex CLI support (see PROTOCOL.md). This is a
+    # deliberate tripwire — bumping the constants must consciously update it.
+    assert PROTOCOL_VERSION == 5
+    assert MIN_CLIENT_PROTOCOL_VERSION == 5
+    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (5,)

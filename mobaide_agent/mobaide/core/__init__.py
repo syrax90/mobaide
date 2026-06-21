@@ -4,6 +4,12 @@ from .claude_launcher import (
     ClaudeOptions,
     LaunchSpec,
 )
+from .cli_launcher import CliBinaryNotFoundError, CliLauncher
+from .codex_launcher import (
+    CodexBinaryNotFoundError,
+    CodexLauncher,
+    CodexOptions,
+)
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .projects_config import AutoScanFilter, ProjectConfig
 from .projects_store import (
@@ -30,6 +36,11 @@ __all__ = [
     "ClaudeBinaryNotFoundError",
     "ClaudeLauncher",
     "ClaudeOptions",
+    "CliLauncher",
+    "CliBinaryNotFoundError",
+    "CodexLauncher",
+    "CodexOptions",
+    "CodexBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",
