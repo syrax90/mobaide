@@ -108,23 +108,30 @@ class AgentConfig(BaseSettings):
     )
     @classmethod
     def _anchor_relative_path(cls, value: str | None) -> str | None:
-        """Anchor a relative store/log path to the install prefix.
+        """Anchor a relative store/log path to the writable state prefix.
 
         The defaults (and any relative override) otherwise resolve against the
         process CWD. launchd/systemd pin CWD to the prefix today, but a launch
         with CWD=``/`` (a read-only volume on modern macOS) crashes the first
         store write with ``[Errno 30] Read-only file system: projects.json.tmp``.
-        Anchoring to ``default_prefix()`` makes the path CWD-independent; for an
-        installed agent (CWD == prefix) the resolved location is unchanged.
+        Anchoring makes the path CWD-independent.
+
+        ``state_prefix()`` resolves to the install prefix for an installed
+        agent (unchanged) but falls back to a per-user data dir when that
+        prefix isn't writable — the source/dev run case, where the OS-wide
+        default (``C:\\Program Files\\MobaideAgent`` / ``/opt/mobaide``) is
+        unwritable by an unprivileged process and the first store write would
+        otherwise die with ``[Errno 13] Permission denied``.
+
         Explicit absolute paths — and ``audit_log_path=None`` — pass through.
         """
         if value is None:
             return None
         if Path(value).is_absolute():
             return value
-        from mobaide.agent.install_paths import default_prefix
+        from mobaide.agent.install_paths import state_prefix
 
-        return str(default_prefix() / value)
+        return str(state_prefix() / value)
 
     @model_validator(mode="after")
     def _require_jwt_secret(self) -> "AgentConfig":

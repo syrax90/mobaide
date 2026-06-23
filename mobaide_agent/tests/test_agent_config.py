@@ -17,6 +17,7 @@ _ENV_VARS = (
     "JWT_REFRESH_TOKEN_EXPIRE_MINUTES",
     "USER_STORE_PATH",
     "PROJECTS_STORE_PATH",
+    "MOBAIDE_AGENT_PREFIX",
     "HOST",
     "PORT",
     "MAX_SESSIONS",
@@ -64,6 +65,12 @@ class TestAgentConfigJwtSecretRequirement:
 class TestAgentConfigDefaults:
     def test_only_jwt_secret_set_uses_dataclass_defaults(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "supersecret")
+        # Pin the writable branch of ``state_prefix()`` so the default anchors
+        # to ``default_prefix()`` deterministically without probing the real
+        # (possibly unwritable) install dir on the test host.
+        monkeypatch.setattr(
+            "mobaide.agent.install_paths._is_writable_dir", lambda *_: True
+        )
 
         cfg = AgentConfig.from_env()
 
@@ -72,10 +79,10 @@ class TestAgentConfigDefaults:
         # Default is 0 = never expires (issue JWTs without an `exp` claim).
         assert cfg.jwt_access_token_expire_minutes == 0
         assert cfg.jwt_refresh_token_expire_minutes == 0
-        # Relative store-path defaults are anchored to the install prefix so a
-        # launch with CWD=/ (read-only) can't crash the first store write
-        # ([Errno 30]). For an installed agent CWD==prefix, so the resolved
-        # location is unchanged.
+        # Relative store-path defaults are anchored to the writable state
+        # prefix so a launch with CWD=/ (read-only) can't crash the first store
+        # write ([Errno 30]). With a writable install prefix that resolves to
+        # ``default_prefix()``, so the location is unchanged.
         assert cfg.user_store_path == str(default_prefix() / "users.json")
         assert cfg.projects_store_path == str(default_prefix() / "projects.json")
         assert cfg.host == "0.0.0.0"
@@ -195,8 +202,30 @@ class TestAgentConfigAuditLogPath:
 class TestAgentConfigProjectsStorePath:
     def test_unset_default(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        # Writable install prefix → ``state_prefix()`` == ``default_prefix()``.
+        monkeypatch.setattr(
+            "mobaide.agent.install_paths._is_writable_dir", lambda *_: True
+        )
         cfg = AgentConfig.from_env()
         assert cfg.projects_store_path == str(default_prefix() / "projects.json")
+
+    def test_unset_default_unwritable_prefix_falls_back_to_user_data_dir(
+        self, monkeypatch, tmp_path
+    ):
+        """The regression guard: an unwritable install prefix (source/dev run)
+        anchors relative state to the per-user data dir instead of crashing the
+        first store write with ``[Errno 13] Permission denied``."""
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        fallback = tmp_path / "userdata"
+        monkeypatch.setattr(
+            "mobaide.agent.install_paths._is_writable_dir", lambda *_: False
+        )
+        monkeypatch.setattr(
+            "mobaide.agent.install_paths.user_data_dir", lambda: fallback
+        )
+        cfg = AgentConfig.from_env()
+        assert cfg.projects_store_path == str(fallback / "projects.json")
+        assert cfg.user_store_path == str(fallback / "users.json")
 
     def test_env_overrides_default(self, monkeypatch):
         monkeypatch.setenv("JWT_SECRET_KEY", "s")

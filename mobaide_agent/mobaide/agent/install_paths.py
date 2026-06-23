@@ -39,6 +39,78 @@ def default_prefix() -> Path:
     return Path("/opt/mobaide")
 
 
+def user_data_dir() -> Path:
+    """Per-user, always-writable data dir for the agent's mutable state.
+
+    The anchor for ``projects.json`` / ``users.json`` / a relative
+    ``audit_log_path`` when the install prefix is *not* writable — the case
+    for an unprivileged ``python -m mobaide`` from a source checkout, where
+    :func:`default_prefix` points at the OS-wide install location
+    (``C:\\Program Files\\MobaideAgent`` / ``/opt/mobaide``) that only the
+    installer's privileged context can write to.
+
+    * Windows: ``%LOCALAPPDATA%\\MobaideAgent`` (``~/AppData/Local`` fallback).
+    * POSIX (Linux/macOS): ``$XDG_DATA_HOME/mobaide`` or ``~/.local/share/mobaide``.
+    """
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        root = Path(base) if base else Path.home() / "AppData" / "Local"
+        return root / "MobaideAgent"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    root = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return root / "mobaide"
+
+
+def _is_writable_dir(path: Path) -> bool:
+    """Return whether ``path`` exists-or-can-be-created and accepts a write.
+
+    Probes by ensuring the directory then writing and removing a uniquely
+    named temp file inside it. Returns ``False`` on any ``OSError`` —
+    permission denied (the Windows ACL on ``C:\\Program Files``), a read-only
+    volume, or a missing parent the process can't create under.
+
+    ``os.access(path, os.W_OK)`` is deliberately *not* used: on Windows it
+    reflects only the read-only file attribute, not the ACLs that actually
+    block ``C:\\Program Files`` writes, so it reports a false-positive for
+    precisely the case this guards. Probing with a real write is the only
+    reliable signal. Side-effect-free on failure: when the directory can't be
+    created or written, nothing is left behind.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".mobaide-write-probe-{os.getpid()}"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def state_prefix() -> Path:
+    """Return the writable anchor for the agent's mutable state files.
+
+    Equal to :func:`default_prefix` for an installed agent — the installer
+    provisions its prefix as writable. A source/dev run with no
+    ``MOBAIDE_AGENT_PREFIX`` would otherwise anchor state to the OS-wide
+    install dir, which an unprivileged process cannot write to, and die on the
+    first store write with ``[Errno 13] Permission denied``. When the resolved
+    prefix isn't writable, fall back to :func:`user_data_dir` so a source run
+    persists its own state, isolated from any co-installed agent — mirroring
+    how ``app._resolve_env_file`` keeps a source run on its own ``.env``.
+
+    An explicit ``MOBAIDE_AGENT_PREFIX`` always wins and is never second-
+    guessed: an operator who pins the agent to a directory gets exactly that,
+    and a real permission problem there surfaces loudly instead of being
+    silently rerouted elsewhere.
+    """
+    prefix = default_prefix()
+    if os.environ.get("MOBAIDE_AGENT_PREFIX"):
+        return prefix
+    if _is_writable_dir(prefix):
+        return prefix
+    return user_data_dir()
+
+
 def read_trust_public_key(layout) -> str | None:
     """Return the base64-encoded Ed25519 manifest-signing public key.
 
