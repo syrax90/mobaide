@@ -1,33 +1,34 @@
 """Launcher for the OpenAI Codex CLI (``codex``).
 
 Sibling of :mod:`claude_launcher`, sharing the CLI-agnostic primitives in
-:mod:`cli_launcher`. Codex is deliberately thinner than Claude: no git worktree,
-no attention hooks (Codex has no ``--settings`` equivalent), and no Linear-MCP /
-``.mcp.json`` project files. Flags are verified against
+:mod:`cli_launcher`. Codex is thinner than Claude: no attention hooks (Codex has
+no ``--settings`` equivalent) and no Linear-MCP / ``.mcp.json`` project files. It
+does support git worktrees on stored projects, resolved the same way Claude's
+Standard mode does (``create_standard_worktree``). Flags are verified against
 ``developers.openai.com/codex/cli/reference``.
 """
 from __future__ import annotations
 
-import logging
 import os
 import sys
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from .cli_launcher import (
-    AdHocLaunch,
     CliBinaryNotFoundError,
     LaunchSpec,
     LaunchTarget,
-    check_cwd_exists,
     conda_env_bin,
     posix_npm_fallbacks,
     prepend_path_dir,
     resolve_cli_binary,
+    resolve_standard_worktree_cwd,
     windows_npm_fallbacks,
 )
 from .projects_config import ProjectConfig
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from mobaide.linear.worktree import WorktreeManager
 
 _CODEX_BIN_ENV_VAR = "MOBAIDE_CODEX_BIN"
 
@@ -86,13 +87,22 @@ class CodexOptions:
     reasoning_effort: str | None = "high"
     full_auto: bool = False
     initial_prompt: str | None = None
+    # Worktree intent for a stored git project, resolved by ``_resolve_cwd``
+    # exactly like Claude's Standard mode; ignored for ad-hoc launches.
+    worktree: bool = False
+    branch_name: str | None = None
 
 
 class CodexLauncher:
     """Build a ``codex`` invocation (argv / env / cwd) from a target and options."""
 
-    def __init__(self, codex_bin_override: str | None = None) -> None:
+    def __init__(
+        self,
+        codex_bin_override: str | None = None,
+        worktree_mgr: WorktreeManager | None = None,
+    ) -> None:
         self._codex_bin_override = codex_bin_override
+        self._worktree_mgr = worktree_mgr
         self._resolved_binary: str | None = None
 
     def _resolve_binary(self) -> str:
@@ -112,7 +122,7 @@ class CodexLauncher:
         # has no per-session hooks. Resolving the binary first (inside
         # ``_build_argv``) means a missing CLI aborts before any cwd work.
         argv = self._build_argv(options)
-        cwd = self._resolve_cwd(target)
+        cwd = await self._resolve_cwd(target, options)
         env = self._build_env(target)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
 
@@ -135,13 +145,18 @@ class CodexLauncher:
             argv.append(options.initial_prompt)
         return argv
 
-    def _resolve_cwd(self, target: LaunchTarget) -> str:
-        # Codex v1 has no worktree concept: a project session runs in the project
-        # root, an ad-hoc session in its bare cwd. Both are existence-checked so a
-        # bad path surfaces as a clean 400 rather than a pty spawn error.
-        if isinstance(target, AdHocLaunch):
-            return check_cwd_exists(target.cwd)
-        return check_cwd_exists(target.path)
+    async def _resolve_cwd(self, target: LaunchTarget, options: CodexOptions) -> str:
+        # A project session runs in the project root, or — when worktree=True — in
+        # a freshly created git worktree (the same Standard-mode resolution Claude
+        # uses); an ad-hoc session always runs in its bare cwd. Shared guards live
+        # in cli_launcher so the per-CLI modules stay thin.
+        return await resolve_standard_worktree_cwd(
+            target,
+            worktree=options.worktree,
+            branch_name=options.branch_name,
+            worktree_mgr=self._worktree_mgr,
+            fallback_prefix="codex-session",
+        )
 
     def _build_env(self, target: LaunchTarget) -> dict[str, str]:
         env = os.environ.copy()

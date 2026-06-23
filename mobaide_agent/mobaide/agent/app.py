@@ -650,10 +650,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         hook_port=config.port,
         hook_token=app.state.hook_token,
     )
-    # Codex CLI launcher — no worktree and no attention hooks (Codex has no
-    # ``--settings`` equivalent); the binary resolves lazily at first spawn.
+    # Codex CLI launcher — shares the WorktreeManager so stored-project sessions
+    # can create a git worktree (same as Claude's Standard mode); no attention
+    # hooks (Codex has no ``--settings`` equivalent). Binary resolves lazily.
     app.state.codex_launcher = CodexLauncher(
         codex_bin_override=config.codex_bin,
+        worktree_mgr=worktree_mgr,
     )
     # Registry keyed by CLI name. SessionManager picks a launcher per session;
     # the Auto Scan scanner stays Claude-only.

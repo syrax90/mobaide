@@ -27,6 +27,7 @@ from .cli_launcher import (
     posix_npm_fallbacks,
     prepend_path_dir,
     resolve_cli_binary,
+    resolve_standard_worktree_cwd,
     windows_npm_fallbacks,
 )
 
@@ -265,51 +266,42 @@ class ClaudeLauncher:
     async def _resolve_cwd(
         self, target: LaunchTarget, options: ClaudeOptions
     ) -> str:
-        if isinstance(target, AdHocLaunch):
-            # Ad-hoc launches have no git/project context — never create a
-            # worktree. Log if the client still sent worktree=true so the
-            # silent downgrade is auditable.
-            if options.worktree:
+        # Auto Scan (``identifier`` set) derives the worktree branch from a Linear
+        # slug and calls the manager directly, so resolve it here; every other
+        # case (ad-hoc, no worktree, non-git, Standard branch) delegates to the
+        # shared resolver in ``cli_launcher``.
+        if (
+            options.identifier
+            and options.worktree
+            and not isinstance(target, AdHocLaunch)
+        ):
+            # A stale client may still send worktree=true for a non-git project;
+            # fall back to the project root.
+            if not safe_path_exists(Path(target.path) / ".git"):
                 logger.warning(
-                    "worktree=true requested for ad-hoc launch %r; ignoring",
-                    "<ad-hoc>",
+                    "worktree=true requested for non-git project %r; ignoring",
+                    target.name,
                 )
-            return check_cwd_exists(target.cwd)
-        if not options.worktree:
-            return check_cwd_exists(target.path)
-        # A stale client may still send worktree=true for a non-git project;
-        # fall back to the project root.
-        if not safe_path_exists(Path(target.path) / ".git"):
-            logger.warning(
-                "worktree=true requested for non-git project %r; ignoring",
-                target.name,
-            )
-            return check_cwd_exists(target.path)
-        if self._worktree_mgr is None:
-            raise RuntimeError(
-                "worktree=true requested but no WorktreeManager is configured; "
-                "this is a server misconfiguration"
-            )
-        from mobaide.linear.worktree import (
-            convert_to_worktree_slug,
-            create_standard_worktree,
-        )
+                return check_cwd_exists(target.path)
+            if self._worktree_mgr is None:
+                raise RuntimeError(
+                    "worktree=true requested but no WorktreeManager is configured; "
+                    "this is a server misconfiguration"
+                )
+            from mobaide.linear.worktree import convert_to_worktree_slug
 
-        if options.identifier:
-            # Auto Scan path: derive slug + prefixed branch from the Linear
-            # issue identifier and title. The WorktreeManager applies its
-            # configured ``branch_prefix`` (e.g. ``feature/claude/<slug>``).
-            slug = convert_to_worktree_slug(
-                options.identifier, options.title or ""
-            )
+            # The WorktreeManager applies its configured ``branch_prefix``
+            # (e.g. ``feature/claude/<slug>``) to the issue-derived slug.
+            slug = convert_to_worktree_slug(options.identifier, options.title or "")
             result = await self._worktree_mgr.create_worktree(slug, target.path)
-        else:
-            # Standard path: honour the user's entered branch name verbatim,
-            # falling back to a unique ``claude-session-<hex>`` default.
-            result = await create_standard_worktree(
-                self._worktree_mgr, target.path, options.branch_name,
-            )
-        return check_cwd_exists(result.path)
+            return check_cwd_exists(result.path)
+        return await resolve_standard_worktree_cwd(
+            target,
+            worktree=options.worktree,
+            branch_name=options.branch_name,
+            worktree_mgr=self._worktree_mgr,
+            fallback_prefix="claude-session",
+        )
 
     @staticmethod
     def _write_project_files(target: LaunchTarget, cwd: str) -> list[str]:

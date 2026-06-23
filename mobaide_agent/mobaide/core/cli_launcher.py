@@ -10,14 +10,20 @@ do not duplicate the platform-probing logic.
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import platform
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .projects_config import ProjectConfig
+
+if TYPE_CHECKING:
+    from mobaide.linear.worktree import WorktreeManager
+
+logger = logging.getLogger(__name__)
 
 
 class CliBinaryNotFoundError(RuntimeError):
@@ -94,6 +100,56 @@ def check_cwd_exists(cwd: str) -> str:
     if not Path(cwd).exists():
         raise FileNotFoundError(2, "No such file or directory", cwd)
     return cwd
+
+
+async def resolve_standard_worktree_cwd(
+    target: LaunchTarget,
+    *,
+    worktree: bool,
+    branch_name: str | None,
+    worktree_mgr: WorktreeManager | None,
+    fallback_prefix: str,
+) -> str:
+    """Worktree-aware cwd resolution shared by the managed CLI launchers.
+
+    Centralises the guard sequence both ``ClaudeLauncher`` (Standard mode) and
+    ``CodexLauncher`` apply: an ad-hoc launch, a ``worktree=False`` request, or a
+    worktree request against a non-git project all resolve to the bare cwd (a
+    requested-but-unhonorable worktree is logged as a downgrade); a worktree
+    request on a git project creates one via ``create_standard_worktree`` under
+    ``fallback_prefix`` (e.g. ``claude-session`` / ``codex-session``). A missing
+    ``WorktreeManager`` is a server misconfiguration and fails loud.
+
+    Claude's Auto Scan (``identifier``) path is NOT routed here — it derives the
+    branch from a Linear slug and calls the manager directly — so that launcher
+    keeps its slug branch and delegates only the non-identifier case.
+    """
+    from .projects_store import safe_path_exists
+
+    if isinstance(target, AdHocLaunch):
+        if worktree:
+            logger.warning(
+                "worktree=true requested for ad-hoc launch %r; ignoring", "<ad-hoc>",
+            )
+        return check_cwd_exists(target.cwd)
+    if not worktree:
+        return check_cwd_exists(target.path)
+    if not safe_path_exists(Path(target.path) / ".git"):
+        logger.warning(
+            "worktree=true requested for non-git project %r; ignoring", target.name,
+        )
+        return check_cwd_exists(target.path)
+    if worktree_mgr is None:
+        raise RuntimeError(
+            "worktree=true requested but no WorktreeManager is configured; "
+            "this is a server misconfiguration"
+        )
+    from mobaide.linear.worktree import create_standard_worktree
+
+    result = await create_standard_worktree(
+        worktree_mgr, target.path, branch_name, fallback_prefix=fallback_prefix,
+    )
+    return check_cwd_exists(result.path)
 
 
 def _is_executable_file(path: str) -> bool:

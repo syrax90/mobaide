@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class SessionKind {
     @SerialName("claude") Claude,
+    @SerialName("codex") Codex,
     @SerialName("auto_scan") AutoScan,
     @SerialName("shell") Shell,
 }
@@ -42,9 +43,14 @@ data class CreateSessionRequest(
     val cols: Int = 80,
     // When set, command/cwd/env are ignored; the server derives them from the named project.
     val project_name: String? = null,
+    // Which managed CLI to launch: "claude" | "codex". Null for Terminal/shell sessions;
+    // when null the server infers the kind from whichever options block is present.
+    val cli: String? = null,
     val claude_options: ClaudeOptionsModel? = null,
-    // Terminal-mode worktree: create a git worktree for a shell session (claude_options null)
-    // on a stored git project and spawn the shell inside it.
+    val codex_options: CodexOptionsModel? = null,
+    // Terminal-mode worktree: create a git worktree for a shell session (no CLI options)
+    // on a stored git project and spawn the shell inside it. Managed Claude/Codex sessions
+    // instead carry worktree intent inside their own options block.
     val worktree: Boolean = false,
     val branch_name: String? = null,
 )

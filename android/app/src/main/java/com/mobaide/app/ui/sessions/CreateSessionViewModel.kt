@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.repository.AutoScanRepository
@@ -23,9 +24,17 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, AutoScanConfig, TerminalConfig }
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AutoScanConfig, TerminalConfig }
 
-enum class CreateSessionMode { Standard, AutoScan, CustomShell }
+enum class CreateSessionMode { Standard, Codex, AutoScan, CustomShell }
+
+/**
+ * Convenience autonomy presets that collapse Codex's two-axis sandbox×approval
+ * model into one choice. [Auto] is the wizard default; [FullAccess] maps to
+ * Codex's `--yolo` (full_auto). The Advanced controls can set any raw
+ * sandbox/approval combination, in which case no preset is highlighted.
+ */
+enum class CodexAutonomyPreset { ReadOnly, Auto, FullAccess }
 
 /**
  * Active selection on the project picker.
@@ -54,6 +63,12 @@ data class CreateSessionUiState(
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = true,
     val maxEffort: Boolean = true,
+    // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
+    val codexModel: String? = null,
+    val codexSandbox: String = "workspace-write",
+    val codexApproval: String = "on-request",
+    val codexFullAuto: Boolean = false,
+    val codexReasoningEffort: String = "high",
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
@@ -71,6 +86,19 @@ data class CreateSessionUiState(
  */
 val CreateSessionUiState.selectedProjectName: String?
     get() = (selection as? ProjectSelection.Stored)?.name
+
+/**
+ * The autonomy preset currently reflected by the raw Codex sandbox/approval/
+ * full-auto fields, or `null` when the user has dialed in a custom combination
+ * via the Advanced controls (so the segmented control highlights nothing).
+ */
+val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
+    get() = when {
+        codexFullAuto -> CodexAutonomyPreset.FullAccess
+        codexSandbox == "read-only" && codexApproval == "on-request" -> CodexAutonomyPreset.ReadOnly
+        codexSandbox == "workspace-write" && codexApproval == "on-request" -> CodexAutonomyPreset.Auto
+        else -> null
+    }
 
 @HiltViewModel
 class CreateSessionViewModel @Inject constructor(
@@ -222,6 +250,10 @@ class CreateSessionViewModel @Inject constructor(
         it.copy(step = CreateSessionStep.StandardConfig)
     }
 
+    fun selectCodexMode() = _uiState.update {
+        it.copy(step = CreateSessionStep.CodexConfig)
+    }
+
     /**
      * Continue from the mode picker for Terminal mode. A stored git project
      * opens the Terminal session page (worktree toggle); anything else
@@ -285,6 +317,7 @@ class CreateSessionViewModel @Inject constructor(
     fun goBack() = _uiState.update {
         when (it.step) {
             CreateSessionStep.StandardConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.CodexConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.TerminalConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.ModePick -> it.copy(
@@ -303,6 +336,23 @@ class CreateSessionViewModel @Inject constructor(
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
     fun clearError() = _uiState.update { it.copy(error = null) }
+
+    /** Sets sandbox + approval + full-auto together from a one-tap autonomy preset. */
+    fun selectCodexPreset(preset: CodexAutonomyPreset) = _uiState.update {
+        when (preset) {
+            CodexAutonomyPreset.ReadOnly ->
+                it.copy(codexSandbox = "read-only", codexApproval = "on-request", codexFullAuto = false)
+            CodexAutonomyPreset.Auto ->
+                it.copy(codexSandbox = "workspace-write", codexApproval = "on-request", codexFullAuto = false)
+            CodexAutonomyPreset.FullAccess ->
+                it.copy(codexFullAuto = true)
+        }
+    }
+
+    fun setCodexModel(v: String?) = _uiState.update { it.copy(codexModel = v) }
+    fun setCodexReasoningEffort(v: String) = _uiState.update { it.copy(codexReasoningEffort = v) }
+    fun setCodexSandbox(v: String) = _uiState.update { it.copy(codexSandbox = v) }
+    fun setCodexApproval(v: String) = _uiState.update { it.copy(codexApproval = v) }
 
     fun consumeDismiss() = _uiState.update { it.copy(dismiss = false) }
 
@@ -332,6 +382,43 @@ class CreateSessionViewModel @Inject constructor(
                         project_name = null,
                         cwd = sel.path,
                         claude_options = claudeOptions.copy(worktree = false, branch_name = null),
+                    ),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
+    }
+
+    fun submitCodex() {
+        val state = _uiState.value
+        if (state.submitting) return
+        val codexOptions = CodexOptionsModel(
+            model = state.codexModel?.takeIf { it.isNotBlank() },
+            sandbox = state.codexSandbox,
+            approval = state.codexApproval,
+            reasoning_effort = state.codexReasoningEffort,
+            full_auto = state.codexFullAuto,
+            worktree = state.worktree,
+            branch_name = state.branchName.takeIf { it.isNotBlank() },
+        )
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = CreateSessionRequest(
+                    project_name = sel.name,
+                    cli = "codex",
+                    codex_options = codexOptions,
+                ),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = CreateSessionRequest(
+                        project_name = null,
+                        cwd = sel.path,
+                        cli = "codex",
+                        codex_options = codexOptions.copy(worktree = false, branch_name = null),
                     ),
                 )
             }
@@ -416,5 +503,16 @@ class CreateSessionViewModel @Inject constructor(
 
     companion object {
         private val WINDOWS_ABS_REGEX = Regex("^[A-Za-z]:[\\\\/]")
+
+        /**
+         * Curated Codex model quick-picks for the wizard dropdown. The server's
+         * `model` field is free-form, so "Default" (a null model, Codex's account
+         * default) is always offered alongside these and the list is trivially
+         * extended. Current as of 2026-06.
+         */
+        val CODEX_MODELS = listOf("gpt-5.5", "gpt-5.4-mini")
+
+        /** Codex reasoning-effort levels, low→high; "high" is the wizard default. */
+        val REASONING_EFFORTS = listOf("minimal", "low", "medium", "high")
     }
 }
