@@ -519,8 +519,10 @@ class TestReaderLoopQueryInterception:
 
     async def test_combined_da_then_osc_reply_in_reader_loop(self) -> None:
         # A chunk carrying both a DA query and an OSC color query is answered in
-        # one combined write, DA before OSC — the ordering the reader loop fixes
-        # by concatenating ``_da.pending_replies() + _osc_color.pending_replies()``.
+        # one combined write. Replies are batched DA-then-OSC (``_da
+        # .pending_replies() + _osc_color.pending_replies()``) regardless of
+        # which type the child emitted first; here the DA query leads, so batch
+        # order coincides with emission order.
         backend = _ScriptedPtyBackend([b"x\x1b[c\x1b]11;?\x07y"])
         session = TerminalSession(
             _osc_config(), backend=cast(PtyBackend, backend),
@@ -548,6 +550,37 @@ class TestReaderLoopQueryInterception:
             assert event.data == b"hello \x1b[31mworld\x1b[0m"
 
             # Let any (erroneous) reply write reach the executor, then assert none.
+            await asyncio.sleep(0.1)
+            assert backend._writes == []
+        finally:
+            await session.stop()
+
+    async def test_split_cpr_across_reads_is_kept_out_of_ring(self) -> None:
+        # A CPR/DSR query (``ESC[6n``) split across two PTY reads — ``ESC[`` in
+        # the first, ``6n`` in the second. The ring scrubber is stateless, but
+        # the upstream DaResponder carries the unfinished trailing CSI into the
+        # next read, so ``_append_ring`` only ever sees the whole ``ESC[6n`` and
+        # scrubs it. Without that upstream carry both fragments would reach the
+        # ring and replay as a complete live query on reconnect.
+        backend = _ScriptedPtyBackend([b"foo\x1b[", b"6n bar"])
+        session = TerminalSession(
+            _osc_config(), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            # Drain both reads' output events so the ring is fully populated.
+            first = await _drain_event_of_type(session, "output", timeout=2.0)
+            assert first.data == b"foo"
+            second = await _drain_event_of_type(session, "output", timeout=2.0)
+            # The live stream keeps the reassembled CPR query intact (an attached
+            # client answers it inside the child's window); only the ring is scrubbed.
+            assert second.data == b"\x1b[6n bar"
+
+            # The reassembled CPR query never made it into the replay ring.
+            assert session.get_ring() == b"foo bar"
+            assert b"\x1b[6n" not in session.get_ring()
+
+            # DSR/CPR is ring-only: the agent never writes a synthetic reply.
             await asyncio.sleep(0.1)
             assert backend._writes == []
         finally:

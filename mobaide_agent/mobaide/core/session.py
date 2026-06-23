@@ -40,6 +40,15 @@ logger = logging.getLogger(__name__)
 #     (it returns via the input channel). The query is what makes a replayed
 #     stream re-trigger the client emulator.
 #   * DSR / CPR / DECDSR queries (CSI 5 n / CSI 6 n / CSI ? 6 n)
+#
+# This scrub is stateless, yet it never has to rejoin a query split across PTY
+# reads: ``DaResponder.process`` runs first in the reader loop and carries any
+# unfinished trailing CSI (up to its 8-byte carry window) into the next read, so
+# a CPR/DSR query straddling a chunk boundary (e.g. ``ESC[`` then ``6n``) is
+# already reassembled before ``_append_ring`` applies this regex — and the
+# longest sequence matched here (``ESC[?6n``, 5 bytes) fits well inside that
+# window. OSC color queries are likewise removed upstream by OscColorResponder,
+# so the OSC alternation here is belt-and-braces.
 _RING_SCRUB_RE = re.compile(
     rb"\x1b\[\?[\d;]*c"
     rb"|\x1b\[>[\d;]*c"
