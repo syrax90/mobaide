@@ -432,6 +432,14 @@ class TestRingScrub:
         session._append_ring(b"a\x1b[6nb\x1b[5nc\x1b[?6nd")
         assert session.get_ring() == b"abcd"
 
+    def test_osc_compound_color_query_scrubbed(self) -> None:
+        # Compound color queries (ESC]10;?;?…) are scrubbed from the ring too —
+        # the belt-and-braces regex matches one-or-more ;? specs, matching the
+        # stateful responder's compound handling.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"a\x1b]10;?;?\x07b\x1b]11;?;?;?\x1b\\c")
+        assert session.get_ring() == b"abc"
+
     def test_color_set_and_rendering_survive(self) -> None:
         # A color *set* (byte-identical to a color reply), SGR, and titles are
         # legitimate rendering and must survive replay — only queries are scrubbed.

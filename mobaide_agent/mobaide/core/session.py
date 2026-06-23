@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 #
 # Matches:
 #   * DA1/DA2 replies (CSI ? … c / CSI > … c) and DA3 (DCS ! | … ST)
-#   * OSC 10/11/12 dynamic-color *queries* (… ;? , BEL/ST). Only the query form
+#   * OSC 10/11/12 dynamic-color *queries*, single or compound (… ;? repeated,
+#     BEL/ST). Only the query form
 #     is scrubbed, never ``… ;rgb:…`` — a color *reply* is byte-identical to a
 #     legitimate color *set*, and the reply never reaches the output ring anyway
 #     (it returns via the input channel). The query is what makes a replayed
@@ -53,7 +54,7 @@ _RING_SCRUB_RE = re.compile(
     rb"\x1b\[\?[\d;]*c"
     rb"|\x1b\[>[\d;]*c"
     rb"|\x1bP![|][^\x1b]*\x1b\\"
-    rb"|\x1b\]1[012];\?(?:\x07|\x1b\\)"
+    rb"|\x1b\]1[012](?:;\?)+(?:\x07|\x1b\\)"
     rb"|\x1b\[(?:[56]|\?6)n",
 )
 

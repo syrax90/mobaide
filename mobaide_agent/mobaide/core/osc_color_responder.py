@@ -31,16 +31,17 @@ from __future__ import annotations
 
 import re
 
-# The two legal OSC string terminators: BEL or ST (ESC \).
-_BEL = b"\x07"
-_ST = b"\x1b\\"
-
 # Color reported per OSC code, matching Termux's DEFAULT_COLORSCHEME (foreground
 # and cursor white, background black). The 16-bit-per-channel ``rgb:`` form is
-# what xterm and the Termux emulator emit (an 8-bit 0xff scales to 0xffff). OSC
-# 12 (cursor) uses the shipped default; a user-applied *light* theme could flip
-# the emulator's real cursor reply to black, but Codex probes only 10/11, so the
-# divergence is accepted.
+# what xterm and the Termux emulator emit (an 8-bit 0xff scales to 0xffff). These
+# are fixed defaults: the responder answers every query from the shipped palette
+# rather than tracking runtime color *set*/reset (``OSC 10/11/12;rgb``, ``OSC
+# 110-112``) state. That is correct for the case that matters — a child probing
+# the ambient theme at startup, before it changes anything — and keeps a reply
+# available even when no client is attached. A child that sets a color then
+# re-queries it (or OSC 12 under a user-applied *light* theme) gets the default
+# rather than the live value; that divergence is accepted, as no CLI in use does
+# this and Codex probes only 10/11.
 _COLOR_BY_CODE = {
     10: b"rgb:ffff/ffff/ffff",  # foreground
     11: b"rgb:0000/0000/0000",  # background
@@ -53,23 +54,22 @@ _COLOR_BY_CODE = {
 # compound form keeps it from slipping through to the client.
 _QUERY_RE = re.compile(rb"\x1b\](10|11|12)((?:;\?)+)(\x07|\x1b\\)")
 
-# Every full *single*-query target, used by the carry rule: a trailing fragment
-# is carried across reads only while it is a strict prefix of one of these, so a
-# split query reassembles, but long titles and other OSC are never over-buffered.
-_TARGETS = tuple(
-    b"\x1b]" + code + b";?" + term
-    for code in (b"10", b"11", b"12")
-    for term in (_BEL, _ST)
-)
+# Longest *incomplete* color query we hold across a read boundary. A query
+# reports at most three colors (fg, bg, cursor — specs past code 12 are ignored),
+# i.e. ``ESC]10;?;?;?ST`` = 13 bytes; 16 leaves headroom while bounding the carry
+# so a query that never terminates cannot grow it without limit.
+_MAX_CARRY = 16
 
-
-def _is_strict_prefix_of_target(tail: bytes) -> bool:
-    """True if ``tail`` is a non-empty strict prefix of some single-query target.
-
-    Strictness (``len(tail) < len(t)``) bounds the carry to ~8 bytes and ensures
-    a tail that already equals a full query was matched by ``_QUERY_RE`` instead.
-    """
-    return any(len(tail) < len(t) and t.startswith(tail) for t in _TARGETS)
+# A tail that is the *start* of a (single or compound) color query but is not yet
+# complete — the carry rule holds such a tail across a read boundary so a split
+# query reassembles. It matches the introducer byte-by-byte (``ESC``, ``ESC]``,
+# ``ESC]1``, ``ESC]1[012]``) then any run of ``;?`` units with an optional
+# dangling ``;`` or the lone ``ESC`` of a half-written ST terminator. A *complete*
+# query is matched by ``_QUERY_RE`` first, so this only classifies genuinely
+# incomplete tails; anything that cannot continue into a color query — a title
+# (``ESC]0``), OSC 4, the ``ESC]110`` reset, or a color *set* (``ESC]10;rgb``) —
+# fails to full-match and falls through to pass-through.
+_PARTIAL_QUERY_RE = re.compile(rb"\x1b(?:\](?:1(?:[012](?:;\??)*\x1b?)?)?)?")
 
 
 class OscColorResponder:
@@ -142,12 +142,13 @@ class OscColorResponder:
                 continue
 
             # Not a complete color query at ``esc``. If the remaining tail is a
-            # strict prefix of a target, the query is split across reads — carry
-            # it and resume next chunk. Otherwise it is some other OSC (a title,
-            # OSC 4/52, or a color *set* like ESC]11;rgb:…): emit the introducer
-            # and advance so the rest passes through untouched.
+            # viable (still-completable) color-query prefix within the carry
+            # bound, the query is split across reads — carry it and resume next
+            # chunk. Otherwise it is some other OSC (a title, OSC 4/52, or a color
+            # *set* like ESC]11;rgb:…): emit the introducer and advance so the
+            # rest passes through untouched.
             tail = data[esc:]
-            if _is_strict_prefix_of_target(tail):
+            if len(tail) <= _MAX_CARRY and _PARTIAL_QUERY_RE.fullmatch(tail):
                 self._carry.extend(tail)
                 return bytes(out)
 

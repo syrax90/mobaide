@@ -179,6 +179,41 @@ def test_split_inside_st_terminator() -> None:
     assert r.pending_replies() == BG_ST
 
 
+def test_split_compound_query_after_first_spec() -> None:
+    # Compound query ESC]10;?;? split right after the first ;? — the boundary the
+    # old single-query carry list missed. ESC]10;?; is still a completable query
+    # prefix, so it is carried and the compound reassembles on the next read.
+    r = OscColorResponder()
+    a = r.process(b"\x1b]10;?;")
+    assert a == b""
+    assert r.pending_replies() == b""  # incomplete: nothing emitted yet
+    b = r.process(b"?\x07")
+    assert b == b""
+    assert r.pending_replies() == (
+        b"\x1b]10;rgb:ffff/ffff/ffff\x07" + b"\x1b]10;rgb:0000/0000/0000\x07"
+    )
+
+
+def test_split_compound_query_before_second_spec() -> None:
+    # Same compound query, split one byte earlier (after a full first ;?).
+    r = OscColorResponder()
+    a = r.process(b"\x1b]10;?")
+    b = r.process(b";?\x07")
+    assert a + b == b""
+    assert r.pending_replies() == (
+        b"\x1b]10;rgb:ffff/ffff/ffff\x07" + b"\x1b]10;rgb:0000/0000/0000\x07"
+    )
+
+
+def test_incomplete_query_past_carry_bound_passes_through() -> None:
+    # A never-terminated query longer than the carry bound is not buffered without
+    # limit — it flows straight through rather than growing the carry unboundedly.
+    r = OscColorResponder()
+    payload = b"\x1b]10" + b";?" * 10  # 25 bytes, no terminator
+    assert r.process(payload) == payload
+    assert r.pending_replies() == b""
+
+
 def test_osc11_prefix_resolves_to_osc110_passthrough() -> None:
     # ESC]11 is an ambiguous prefix (OSC 11 query vs OSC 110 reset). When the
     # next read reveals OSC 110, the bytes pass through with no reply.
