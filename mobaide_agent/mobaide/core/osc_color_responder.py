@@ -51,7 +51,11 @@ _COLOR_BY_CODE = {
 # A complete color query: ESC ] (10|11|12) (;?)+ (BEL | ST). The repeated ``;?``
 # group captures xterm's compound form (e.g. ``ESC]10;?;?ST`` asks fg then bg);
 # ratatui sends two separate single queries in practice, but matching the
-# compound form keeps it from slipping through to the client.
+# compound form keeps it from slipping through to the client. Only *pure*-query
+# controls are matched (every spec is ``?``): a mixed query+set like
+# ``ESC]10;?;rgb:…`` is intentionally not handled here — the specs are positional
+# (spec k sets color base+k), so answering the ``?`` while preserving the set spec
+# needs per-color current-value tracking, which is deferred.
 _QUERY_RE = re.compile(rb"\x1b\](10|11|12)((?:;\?)+)(\x07|\x1b\\)")
 
 # Longest *incomplete* color query we hold across a read boundary. A query
