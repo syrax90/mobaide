@@ -12,21 +12,40 @@ from datetime import UTC, datetime
 from .da_responder import DaResponder
 from .macos_access import full_disk_access
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
+from .osc_color_responder import OscColorResponder
 from .osc_parser import OscTitleExtractor
 from .pty_backend import PtyBackend, create_pty_backend
 
 logger = logging.getLogger(__name__)
 
-# Belt-and-braces strip for DA capability-query *replies* that may leak into
-# the ring (e.g. from sessions started before the agent-side DaResponder was
-# deployed). Applied per-write inside ``_append_ring`` so the ring is
-# always DA-clean — the replay senders (``agent/ws/session_io.py`` and
-# ``relay/client.py``) no longer need a second sweep. Matches DA1/DA2
-# (CSI ? ... c / CSI > ... c) and DA3 (DCS ! | ... ST). The primary fix
-# remains ``core/da_responder.py``, which intercepts queries before the
-# child writes a reply at all.
-_DA_REPLY_STRIP = re.compile(
-    rb"\x1b\[\?[\d;]*c|\x1b\[>[\d;]*c|\x1bP![|][^\x1b]*\x1b\\",
+# Belt-and-braces scrub of terminal query/response bytes that would otherwise
+# leak into the ring (e.g. from sessions started before the agent-side
+# interceptors were deployed, or a reply echoed by the child). Applied per-write
+# inside ``_append_ring`` so the ring is always clean — the replay senders
+# (``agent/ws/session_io.py`` and ``relay/client.py``) need no second sweep.
+#
+# Because it runs only on the ring path, this is also where CPR/DSR queries are
+# neutralized: they are left intact on the *live* stream (a live client still
+# answers correctly inside the child's query window) and removed only from the
+# replayed history, so a reconnect can never re-trigger the client emulator into
+# answering a stale query. The primary fixes remain the stateful interceptors in
+# ``core/da_responder.py`` and ``core/osc_color_responder.py``, which strip
+# queries before the child writes a reply at all.
+#
+# Matches:
+#   * DA1/DA2 replies (CSI ? … c / CSI > … c) and DA3 (DCS ! | … ST)
+#   * OSC 10/11/12 dynamic-color *queries* (… ;? , BEL/ST). Only the query form
+#     is scrubbed, never ``… ;rgb:…`` — a color *reply* is byte-identical to a
+#     legitimate color *set*, and the reply never reaches the output ring anyway
+#     (it returns via the input channel). The query is what makes a replayed
+#     stream re-trigger the client emulator.
+#   * DSR / CPR / DECDSR queries (CSI 5 n / CSI 6 n / CSI ? 6 n)
+_RING_SCRUB_RE = re.compile(
+    rb"\x1b\[\?[\d;]*c"
+    rb"|\x1b\[>[\d;]*c"
+    rb"|\x1bP![|][^\x1b]*\x1b\\"
+    rb"|\x1b\]1[012];\?(?:\x07|\x1b\\)"
+    rb"|\x1b\[(?:[56]|\?6)n",
 )
 
 # Default sliding-window cap on the raw PTY ring buffer replayed to clients
@@ -126,6 +145,10 @@ class TerminalSession:
         # Intercepts DA1/2/3 queries from the child so they don't end up in
         # the ring buffer leaking into the client input field.
         self._da = DaResponder()
+        # Intercepts OSC 10/11/12 color queries the same way, answering with the
+        # Termux default palette so the reply never has to come from the client
+        # emulator — whose reply would otherwise loop back as input on replay.
+        self._osc_color = OscColorResponder()
         # Passive OSC 0/1/2 tap. Observes bytes flowing through the reader
         # loop; never mutates them. The latest committed title is mirrored
         # to ``_title`` after the coalescer flushes.
@@ -209,16 +232,23 @@ class TerminalSession:
                 )
                 if not data:
                     break
-                # Intercept DA queries before they hit the ring buffer.
-                # Replies are written back to the PTY master so the child
-                # sees a normal terminal response.
+                # Intercept terminal capability/color queries before they hit
+                # the ring buffer: a replayed query would make the client
+                # emulator answer it and loop the reply back into the input
+                # field. DA (CSI) and OSC 10/11/12 (color) queries are stripped
+                # here and answered on the child's behalf; the combined replies
+                # go back to the PTY master in one write so the child sees a
+                # normal terminal response. (CPR/DSR is handled ring-only in
+                # ``_append_ring`` because the agent has no cursor position to
+                # report.)
                 data = self._da.process(data)
-                replies = self._da.pending_replies()
+                data = self._osc_color.process(data)
+                replies = self._da.pending_replies() + self._osc_color.pending_replies()
                 if replies:
                     fut = loop.run_in_executor(
                         None, self._backend.write, replies,
                     )
-                    fut.add_done_callback(self._log_da_write_failure)
+                    fut.add_done_callback(self._log_reply_write_failure)
                 if not data:
                     continue
                 new_title = self._osc.feed(data)
@@ -325,22 +355,24 @@ class TerminalSession:
             )
             self.set_attention("awaiting_os_permission")
 
-    def _log_da_write_failure(self, fut: asyncio.Future) -> None:
-        """Surface exceptions from the fire-and-forget DA reply write."""
+    def _log_reply_write_failure(self, fut: asyncio.Future) -> None:
+        """Surface exceptions from the fire-and-forget query-reply write
+        (DA + OSC color)."""
         exc = fut.exception()
         if exc is not None:
             logger.warning(
-                "Session %s: DA reply write failed: %r",
+                "Session %s: terminal-query reply write failed: %r",
                 self.session_id,
                 exc,
             )
 
     def _append_ring(self, data: bytes) -> None:
-        # Strip DA replies in-line so the ring is always DA-clean. Replay
-        # senders rely on this — without the per-write strip they'd have to
-        # snapshot-then-strip the entire (up to 4 MB) ring on every
-        # reconnect, doubling peak heap during the handshake.
-        cleaned = _DA_REPLY_STRIP.sub(b"", data)
+        # Scrub terminal query/response bytes in-line so the ring is always
+        # clean. Replay senders rely on this — without the per-write strip
+        # they'd have to snapshot-then-strip the entire (up to 4 MB) ring on
+        # every reconnect, doubling peak heap during the handshake. This is also
+        # the ring-only neutralization point for CPR/DSR (see _RING_SCRUB_RE).
+        cleaned = _RING_SCRUB_RE.sub(b"", data)
         if not cleaned:
             return
         self._ring += cleaned

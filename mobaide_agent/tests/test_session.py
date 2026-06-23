@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
+from mobaide.core.da_responder import DA1_REPLY
 from mobaide.core.models import SessionConfig, SessionEvent, SessionState
 from mobaide.core.pty_backend import PtyBackend
 from mobaide.core.session import (
@@ -270,14 +271,14 @@ def _title_config() -> SessionConfig:
     )
 
 
-async def _drain_title_event(
-    session: TerminalSession, timeout: float = 2.0
+async def _drain_event_of_type(
+    session: TerminalSession, event_type: str, timeout: float = 2.0
 ) -> SessionEvent:
-    """Pull events off the queue until the first ``title`` event arrives.
+    """Pull events off the queue until the first event of ``event_type`` arrives.
 
-    The reader-loop output and the synthetic ``started`` event share the
-    queue; this helper drops them and returns only the coalescer's emission
-    so callers don't have to know the interleaving.
+    The synthetic ``started`` event (and, for ``"title"``, interleaved
+    reader-loop output) share the queue; this drops the others and returns only
+    the first matching emission so callers don't have to know the interleaving.
     """
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
@@ -287,9 +288,11 @@ async def _drain_title_event(
         event = await asyncio.wait_for(
             session.event_queue.get(), timeout=remaining,
         )
-        if event.event_type == "title":
+        if event.event_type == event_type:
             return event
-    raise AssertionError("title event was not enqueued within the timeout")
+    raise AssertionError(
+        f"{event_type} event was not enqueued within the timeout"
+    )
 
 
 @pytest.mark.timeout(15)
@@ -309,7 +312,7 @@ class TestTerminalSessionTitleCoalescer:
         )
         await session.start()
         try:
-            event = await _drain_title_event(session, timeout=2.0)
+            event = await _drain_event_of_type(session, "title", timeout=2.0)
 
             assert event.event_type == "title"
             assert event.session_id == "title-session"
@@ -331,7 +334,7 @@ class TestTerminalSessionTitleCoalescer:
         )
         await session.start()
         try:
-            event = await _drain_title_event(session, timeout=2.0)
+            event = await _drain_event_of_type(session, "title", timeout=2.0)
 
             assert event.event_type == "title"
             assert event.session_id == "title-session"
@@ -406,6 +409,149 @@ class TestRingBufferCap:
         large._append_ring(b"abcdefgh")
         assert len(small.get_ring()) == 4
         assert large.get_ring() == b"abcdefgh"
+
+
+class TestRingScrub:
+    """``_append_ring`` scrubs terminal *queries* (and DA replies) from the
+    replay ring so a reconnect can't make the client emulator re-answer them and
+    loop the reply into the input field — the ring-only half of the OSC/DSR fix.
+    The live stream (the SessionEvent the reader enqueues) is untouched.
+    """
+
+    def test_osc_color_query_scrubbed(self) -> None:
+        # OSC 10/11/12 color queries are removed from the ring (belt-and-braces
+        # for the stateful OscColorResponder); both BEL and ST terminators.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"a\x1b]10;?\x07b\x1b]11;?\x1b\\c")
+        assert session.get_ring() == b"abc"
+
+    def test_dsr_cpr_queries_scrubbed(self) -> None:
+        # DSR (CSI 5 n), CPR (CSI 6 n) and DECDSR (CSI ? 6 n) are scrubbed from
+        # the ring — the ring-only neutralization the agent can't answer live.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"a\x1b[6nb\x1b[5nc\x1b[?6nd")
+        assert session.get_ring() == b"abcd"
+
+    def test_color_set_and_rendering_survive(self) -> None:
+        # A color *set* (byte-identical to a color reply), SGR, and titles are
+        # legitimate rendering and must survive replay — only queries are scrubbed.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        payload = (
+            b"hello \x1b[31mred\x1b[0m"
+            b"\x1b]0;title\x07"
+            b"\x1b]11;rgb:1234/5678/9abc\x07"
+        )
+        session._append_ring(payload)
+        assert session.get_ring() == payload
+
+
+# Canonical synthetic replies the reader loop should write back to the PTY,
+# mirroring the unit-level expectations in the dedicated responder test modules.
+_OSC_FG_REPLY = b"\x1b]10;rgb:ffff/ffff/ffff\x07"
+_OSC_BG_REPLY = b"\x1b]11;rgb:0000/0000/0000\x07"
+
+
+def _osc_config() -> SessionConfig:
+    return SessionConfig(
+        session_id="osc-session",
+        command=["does-not-run"],
+        rows=24,
+        cols=80,
+        scrollback_size=100,
+    )
+
+
+async def _wait_for_writes(
+    backend: _ScriptedPtyBackend, count: int, timeout: float = 2.0
+) -> None:
+    """Wait until ``backend`` has recorded at least ``count`` writes.
+
+    The reader loop dispatches the query reply through ``run_in_executor`` as a
+    fire-and-forget future, so the write lands on a thread-pool worker slightly
+    after the matching output event is enqueued. Polling the recorded-write
+    count (rather than sleeping a fixed interval) keeps the assertion
+    deterministic without coupling to executor latency.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while len(backend._writes) < count:
+        if asyncio.get_event_loop().time() >= deadline:
+            raise AssertionError(
+                f"backend recorded {len(backend._writes)} writes, "
+                f"expected at least {count} within {timeout}s"
+            )
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.timeout(15)
+class TestReaderLoopQueryInterception:
+    """End-to-end reader-loop wiring for terminal-query interception.
+
+    Drives :meth:`TerminalSession._reader_loop` through ``_ScriptedPtyBackend``
+    to verify the integration the isolated responder/ring tests cannot: that a
+    color query is stripped from the *live* output event AND a synthetic reply
+    is written back to the PTY master in the reader loop's combined write.
+    """
+
+    async def test_osc_color_query_stripped_from_live_event_and_answered(
+        self,
+    ) -> None:
+        backend = _ScriptedPtyBackend(
+            [b"banner\x1b]10;?\x07\x1b]11;?\x07more"]
+        )
+        session = TerminalSession(
+            _osc_config(), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            event = await _drain_event_of_type(session, "output", timeout=2.0)
+
+            # The live event the reader enqueues has the queries removed.
+            assert event.event_type == "output"
+            assert event.data == b"bannermore"
+
+            # And the agent answered both queries back to the PTY master so the
+            # child gets a color report without the client emulator ever seeing
+            # the query. Order is fg-then-bg, matching the chunk's query order.
+            await _wait_for_writes(backend, 1, timeout=2.0)
+            assert b"".join(backend._writes) == _OSC_FG_REPLY + _OSC_BG_REPLY
+        finally:
+            await session.stop()
+
+    async def test_combined_da_then_osc_reply_in_reader_loop(self) -> None:
+        # A chunk carrying both a DA query and an OSC color query is answered in
+        # one combined write, DA before OSC — the ordering the reader loop fixes
+        # by concatenating ``_da.pending_replies() + _osc_color.pending_replies()``.
+        backend = _ScriptedPtyBackend([b"x\x1b[c\x1b]11;?\x07y"])
+        session = TerminalSession(
+            _osc_config(), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            event = await _drain_event_of_type(session, "output", timeout=2.0)
+            assert event.data == b"xy"
+
+            await _wait_for_writes(backend, 1, timeout=2.0)
+            assert b"".join(backend._writes) == DA1_REPLY + _OSC_BG_REPLY
+        finally:
+            await session.stop()
+
+    async def test_plain_output_writes_no_reply(self) -> None:
+        # Output with no embedded query passes through verbatim and triggers no
+        # write back to the PTY — guards against an over-eager interceptor.
+        backend = _ScriptedPtyBackend([b"hello \x1b[31mworld\x1b[0m"])
+        session = TerminalSession(
+            _osc_config(), backend=cast(PtyBackend, backend),
+        )
+        await session.start()
+        try:
+            event = await _drain_event_of_type(session, "output", timeout=2.0)
+            assert event.data == b"hello \x1b[31mworld\x1b[0m"
+
+            # Let any (erroneous) reply write reach the executor, then assert none.
+            await asyncio.sleep(0.1)
+            assert backend._writes == []
+        finally:
+            await session.stop()
 
 
 class TestIterRingChunks:
