@@ -11,11 +11,15 @@ literal text (``]10;rgb:ffff/ffff/ffff\\]11;rgb:0000/0000/0000\\``). Because the
 query is replayed on every reconnect, the leak doubles each time.
 
 This is the OSC analogue of :mod:`da_responder`. The filter:
-  * scans PTY output for OSC 10/11/12 color queries (spec == ``?``),
-  * strips them from the byte stream (so the client emulator never sees a query
-    and so never generates a reply that loops back as input),
-  * queues a synthetic reply to be written back to the PTY master so the child
-    still gets a color report immediately, regardless of client-attach state.
+  * scans PTY output for OSC 10/11/12 color controls,
+  * for each ``?`` (query) spec, strips it from the byte stream (so the client
+    emulator never sees a query and never loops a reply back as input) and queues
+    a synthetic reply to the PTY master, so the child gets a color report
+    immediately regardless of client-attach state,
+  * for a mixed query+set control (``ESC]10;?;rgb:…``), re-emits each value spec
+    re-targeted to its absolute color code, so the set still applies while the
+    query is removed,
+  * passes a pure color *set* through unchanged.
 
 Reply colors and the echoed BEL/ST terminator match Termux's
 ``TerminalEmulator.doOscSetTextParameters`` and the shipped
@@ -48,32 +52,35 @@ _COLOR_BY_CODE = {
     12: b"rgb:ffff/ffff/ffff",  # cursor
 }
 
-# A complete color query: ESC ] (10|11|12) (;?)+ (BEL | ST). The repeated ``;?``
-# group captures xterm's compound form (e.g. ``ESC]10;?;?ST`` asks fg then bg);
-# ratatui sends two separate single queries in practice, but matching the
-# compound form keeps it from slipping through to the client. Only *pure*-query
-# controls are matched (every spec is ``?``): a mixed query+set like
-# ``ESC]10;?;rgb:…`` is intentionally not handled here — the specs are positional
-# (spec k sets color base+k), so answering the ``?`` while preserving the set spec
-# needs per-color current-value tracking, which is deferred.
-_QUERY_RE = re.compile(rb"\x1b\](10|11|12)((?:;\?)+)(\x07|\x1b\\)")
+# A complete OSC dynamic-color control: ESC ] (10|11|12) (; spec)+ (BEL | ST),
+# where each spec is ``?`` (query that color) or a value (set it). xterm/Termux
+# walk the specs left-to-right from the base slot (10=fg, 11=bg, 12=cursor),
+# advancing one slot per spec and stopping after the cursor; a ``?`` makes the
+# emulator reply ``ESC]<base>;rgb:…<term>`` (Ps is always the base, the color is
+# the slot's current value), a value spec sets that slot. Matching the whole
+# control — not just the all-``?`` form — lets us answer queries, re-target value
+# specs, and keep mixed query+set controls (``ESC]10;?;rgb:…``) from leaking on
+# replay. ratatui sends separate single queries in practice; the broader forms
+# are defensive.
+_CONTROL_RE = re.compile(rb"\x1b\](10|11|12)((?:;[^;\x07\x1b]*)+)(\x07|\x1b\\)")
 
-# Longest *incomplete* color query we hold across a read boundary. A query
-# reports at most three colors (fg, bg, cursor — specs past code 12 are ignored),
-# i.e. ``ESC]10;?;?;?ST`` = 13 bytes; 16 leaves headroom while bounding the carry
-# so a query that never terminates cannot grow it without limit.
-_MAX_CARRY = 16
+# Longest *incomplete* control we hold across a read boundary so a split control
+# reassembles. A full three-slot control with value specs (e.g.
+# ``ESC]10;rgb:…/…/…;rgb:…/…/…;rgb:…/…/…ST``) is ~60 bytes; 64 covers it while
+# bounding the carry so a control that never terminates cannot grow it forever.
+_MAX_CARRY = 64
 
-# A tail that is the *start* of a (single or compound) color query but is not yet
-# complete — the carry rule holds such a tail across a read boundary so a split
-# query reassembles. It matches the introducer byte-by-byte (``ESC``, ``ESC]``,
-# ``ESC]1``, ``ESC]1[012]``) then any run of ``;?`` units with an optional
-# dangling ``;`` or the lone ``ESC`` of a half-written ST terminator. A *complete*
-# query is matched by ``_QUERY_RE`` first, so this only classifies genuinely
-# incomplete tails; anything that cannot continue into a color query — a title
-# (``ESC]0``), OSC 4, the ``ESC]110`` reset, or a color *set* (``ESC]10;rgb``) —
-# fails to full-match and falls through to pass-through.
-_PARTIAL_QUERY_RE = re.compile(rb"\x1b(?:\](?:1(?:[012](?:;\??)*\x1b?)?)?)?")
+# A tail that is the *start* of a color control but not yet complete — the carry
+# rule holds such a tail across a read boundary so a split control reassembles.
+# It matches the introducer byte-by-byte (``ESC``, ``ESC]``, ``ESC]1``,
+# ``ESC]1[012]``) then any run of ``;<spec>`` groups with the optional lone ``ESC``
+# of a half-written ST. A *complete* control is matched by ``_CONTROL_RE`` first,
+# so this only classifies genuinely incomplete tails; anything that cannot
+# continue into a color control — a title (``ESC]0``), OSC 4, the ``ESC]110``
+# reset — fails to full-match and falls through to pass-through.
+_PARTIAL_CONTROL_RE = re.compile(
+    rb"\x1b(?:\](?:1(?:[012](?:;[^;\x07\x1b]*)*\x1b?)?)?)?"
+)
 
 
 class OscColorResponder:
@@ -95,7 +102,8 @@ class OscColorResponder:
         self._pending = bytearray()
 
     def process(self, chunk: bytes) -> bytes:
-        """Strip OSC color queries from ``chunk`` and queue replies for them.
+        """Strip OSC color *queries* from ``chunk`` and queue replies for them,
+        while preserving color *sets* (re-targeting them inside mixed controls).
 
         Returns the sanitized chunk. Call :meth:`pending_replies` afterward to
         retrieve any reply bytes to write back to the PTY master. Sequences split
@@ -126,33 +134,43 @@ class OscColorResponder:
             # Pass through everything before the OSC introducer.
             out += data[i:esc]
 
-            m = _QUERY_RE.match(data, esc)
+            m = _CONTROL_RE.match(data, esc)
             if m:
-                code_bytes = m.group(1)
-                term = m.group(3)
-                base = int(code_bytes)
-                # One reply per ``?`` spec, with the reported color advancing
-                # (fg -> bg -> cursor) while the reply's Ps echoes the request's
-                # original code — exactly what TerminalEmulator does. Stop once
-                # the advancing slot passes the cursor (code > 12).
-                for j in range(m.group(2).count(b"?")):
-                    code = base + j
-                    if code > 12:
-                        break
-                    self._pending += (
-                        b"\x1b]" + code_bytes + b";" + _COLOR_BY_CODE[code] + term
-                    )
+                specs = m.group(2).split(b";")[1:]
+                if b"?" in specs:
+                    # A query or mixed query+set control. Answer each ``?`` slot
+                    # from the default palette (so the child gets a report and the
+                    # query never reaches the client to be looped back as input),
+                    # and re-emit each value slot re-targeted to its absolute color
+                    # code so the set still takes effect. Mirrors TerminalEmulator's
+                    # left-to-right slot walk, stopping after the cursor (code > 12);
+                    # the reply's Ps is always the base, matching the emulator.
+                    base_bytes = m.group(1)
+                    base = int(base_bytes)
+                    term = m.group(3)
+                    for offset, spec in enumerate(specs):
+                        code = base + offset
+                        if code > 12:
+                            break
+                        if spec == b"?":
+                            self._pending += (
+                                b"\x1b]" + base_bytes + b";" + _COLOR_BY_CODE[code] + term
+                            )
+                        elif spec:
+                            out += b"\x1b]" + b"%d" % code + b";" + spec + term
+                    i = m.end()
+                    continue
+                # A pure color *set* (no ``?``): legitimate output, pass verbatim.
+                out += data[esc : m.end()]
                 i = m.end()
                 continue
 
-            # Not a complete color query at ``esc``. If the remaining tail is a
-            # viable (still-completable) color-query prefix within the carry
-            # bound, the query is split across reads — carry it and resume next
-            # chunk. Otherwise it is some other OSC (a title, OSC 4/52, or a color
-            # *set* like ESC]11;rgb:…): emit the introducer and advance so the
-            # rest passes through untouched.
+            # Not a complete control at ``esc``. If the tail is a still-completable
+            # partial control within the carry bound, it is split across reads —
+            # carry it and resume next chunk. Otherwise it is other OSC (a title,
+            # OSC 4/52): emit the introducer and advance so the rest passes through.
             tail = data[esc:]
-            if len(tail) <= _MAX_CARRY and _PARTIAL_QUERY_RE.fullmatch(tail):
+            if len(tail) <= _MAX_CARRY and _PARTIAL_CONTROL_RE.fullmatch(tail):
                 self._carry.extend(tail)
                 return bytes(out)
 

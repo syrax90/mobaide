@@ -206,10 +206,62 @@ def test_split_compound_query_before_second_spec() -> None:
 
 
 def test_incomplete_query_past_carry_bound_passes_through() -> None:
-    # A never-terminated query longer than the carry bound is not buffered without
-    # limit — it flows straight through rather than growing the carry unboundedly.
+    # A never-terminated control longer than the carry bound is not buffered
+    # without limit — it flows straight through rather than growing the carry.
     r = OscColorResponder()
-    payload = b"\x1b]10" + b";?" * 10  # 25 bytes, no terminator
+    payload = b"\x1b]10" + b";?" * 40  # 84 bytes, no terminator (> _MAX_CARRY)
+    assert r.process(payload) == payload
+    assert r.pending_replies() == b""
+
+
+def test_mixed_query_then_set() -> None:
+    # ESC]10;?;rgb:X = "query fg, set bg". The query is answered from defaults
+    # (Ps = base = 10) and removed; the set is re-emitted re-targeted to bg (11)
+    # so it still applies — matching TerminalEmulator's positional slot walk.
+    r = OscColorResponder()
+    out = r.process(b"\x1b]10;?;rgb:1234/5678/9abc\x07")
+    assert out == b"\x1b]11;rgb:1234/5678/9abc\x07"
+    assert r.pending_replies() == b"\x1b]10;rgb:ffff/ffff/ffff\x07"
+
+
+def test_mixed_set_then_query() -> None:
+    # ESC]10;rgb:X;? = "set fg, query bg". Set re-emitted as fg (10); query
+    # answered for the bg slot (default black), Ps still the base 10.
+    r = OscColorResponder()
+    out = r.process(b"\x1b]10;rgb:1111/2222/3333;?\x07")
+    assert out == b"\x1b]10;rgb:1111/2222/3333\x07"
+    assert r.pending_replies() == b"\x1b]10;rgb:0000/0000/0000\x07"
+
+
+def test_mixed_query_set_query() -> None:
+    # ESC]10;?;rgb:X;? = query fg, set bg, query cursor (cursor default white).
+    r = OscColorResponder()
+    out = r.process(b"\x1b]10;?;rgb:0a0a/0b0b/0c0c;?\x07")
+    assert out == b"\x1b]11;rgb:0a0a/0b0b/0c0c\x07"
+    assert r.pending_replies() == (
+        b"\x1b]10;rgb:ffff/ffff/ffff\x07"  # fg query
+        + b"\x1b]10;rgb:ffff/ffff/ffff\x07"  # cursor query
+    )
+
+
+def test_mixed_query_set_split_mid_value() -> None:
+    # The mixed control split mid-value (ESC]10;?;rgb:00 then 00/0000/0000 BEL).
+    # The first fragment is a still-completable control, so it is carried and
+    # reassembled before being answered and re-targeted — the case the old
+    # single-query carry could not handle.
+    r = OscColorResponder()
+    a = r.process(b"\x1b]10;?;rgb:00")
+    assert a == b""
+    assert r.pending_replies() == b""
+    b = r.process(b"00/0000/0000\x07")
+    assert b == b"\x1b]11;rgb:0000/0000/0000\x07"
+    assert r.pending_replies() == b"\x1b]10;rgb:ffff/ffff/ffff\x07"
+
+
+def test_compound_color_set_passes_through() -> None:
+    # A pure multi-slot SET (no ?) is legitimate output: verbatim, no reply.
+    r = OscColorResponder()
+    payload = b"\x1b]10;rgb:1111/1111/1111;rgb:2222/2222/2222\x07"
     assert r.process(payload) == payload
     assert r.pending_replies() == b""
 
