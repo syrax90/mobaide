@@ -1,5 +1,15 @@
 # mobaide_agent Changelog
 
+## [0.2.16](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.15...agent-v0.2.16) (2026-06-23)
+
+
+### Features
+
+* **agent:** generalize CLI launch abstraction and add Codex CLI support (CLA-68) ([de719f2](https://github.com/syrax90/claude_mobile/commit/de719f27d013f277ede0bac900ca4ff8bd4fb59d))
+* **agent:** generalize CLI launch abstraction and add Codex CLI support (CLA-68) ([f9c0d83](https://github.com/syrax90/claude_mobile/commit/f9c0d8375d5a5106cb78561881b9cb93b8c584b3))
+* enhance state management for agent configuration and add tests for writable state prefix ([4862dc2](https://github.com/syrax90/claude_mobile/commit/4862dc220902392f74eece81f88728758bd7ebd9))
+* enhance state management for agent configuration and add tests for writable state prefix ([c70f4f1](https://github.com/syrax90/claude_mobile/commit/c70f4f1cf41b43e41bda50a71456c1a3bc1f7c40))
+
 ## [0.2.15](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.14...agent-v0.2.15) (2026-06-19)
 
 

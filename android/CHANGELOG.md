@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [1.13.0](https://github.com/syrax90/claude_mobile/compare/android-v1.12.0...android-v1.13.0) (2026-06-23)
+
+
+### Features
+
+* **agent:** generalize CLI launch abstraction and add Codex CLI support (CLA-68) ([de719f2](https://github.com/syrax90/claude_mobile/commit/de719f27d013f277ede0bac900ca4ff8bd4fb59d))
+* **agent:** generalize CLI launch abstraction and add Codex CLI support (CLA-68) ([f9c0d83](https://github.com/syrax90/claude_mobile/commit/f9c0d8375d5a5106cb78561881b9cb93b8c584b3))
+
 ## [1.12.0](https://github.com/syrax90/claude_mobile/compare/android-v1.11.0...android-v1.12.0) (2026-06-17)
 
 
