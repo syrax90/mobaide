@@ -16,7 +16,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from mobaide import __version__
-from mobaide.core import ClaudeLauncher, ProjectsStore, SessionManager
+from mobaide.core import (
+    ClaudeLauncher,
+    CodexLauncher,
+    ProjectsStore,
+    SessionManager,
+)
 from mobaide.core.hook_settings import sweep_hooks_dir
 from mobaide.core.macos_access import full_disk_access
 from mobaide.linear.config import AutoScanConfig
@@ -645,6 +650,17 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         hook_port=config.port,
         hook_token=app.state.hook_token,
     )
+    # Codex CLI launcher — no worktree and no attention hooks (Codex has no
+    # ``--settings`` equivalent); the binary resolves lazily at first spawn.
+    app.state.codex_launcher = CodexLauncher(
+        codex_bin_override=config.codex_bin,
+    )
+    # Registry keyed by CLI name. SessionManager picks a launcher per session;
+    # the Auto Scan scanner stays Claude-only.
+    app.state.cli_launchers = {
+        "claude": app.state.claude_launcher,
+        "codex": app.state.codex_launcher,
+    }
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
     # so the on_session_created hook can attach a SessionEventFanout
@@ -664,6 +680,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         max_sessions=config.max_sessions,
         projects_store=projects_store,
         launcher=app.state.claude_launcher,
+        codex_launcher=app.state.codex_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,

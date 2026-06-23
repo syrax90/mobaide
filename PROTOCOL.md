@@ -6,7 +6,50 @@ and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own
 cadence; they do **not** gate compatibility.
 
-## proto-v4 (current)
+## proto-v5 (current)
+
+* Introduced: 2026-06-21
+* App support: ``APP_PROTOCOL_VERSION = 5`` (Android), ``PROTOCOL_VERSION = 5``
+  (Python — both ``mobaide_agent`` and ``central_server``).
+* Change vs proto-v4: **additive** (no frame-layout or existing-shape break).
+  Foundation for managing the **Codex CLI** as a second coding agent alongside
+  Claude (CLA-68). The version is bumped so the three artifacts stay in lockstep
+  and ``protocol-integrity`` has a single authoritative integer to assert against.
+* Wire shape (delta from proto-v4), all on ``CH_CONTROL`` (forwarded verbatim by
+  ``central_server`` — no server logic change):
+  * The ``create_session`` control message (and the ``POST /api/sessions`` body
+    proxied over ``CH_CONTROL``) gains three optional fields:
+    * ``cli`` — ``"claude"`` | ``"codex"``: selects the managed CLI. When
+      omitted, the agent infers it from whichever options block is present, so a
+      legacy ``claude_options``-only payload still launches Claude
+      (forward/backward compatible).
+    * ``codex_options`` — object mirroring ``claude_options`` for Codex:
+      ``model`` (str|null), ``sandbox`` (``read-only`` | ``workspace-write`` |
+      ``danger-full-access``), ``approval`` (``untrusted`` | ``on-request`` |
+      ``never``), ``reasoning_effort`` (``minimal`` | ``low`` | ``medium`` |
+      ``high`` | null), ``full_auto`` (bool — Codex
+      ``--dangerously-bypass-approvals-and-sandbox``), ``initial_prompt``
+      (str|null). Exactly one of ``claude_options`` / ``codex_options`` is
+      honoured per session.
+  * The single-session wire dict (``session_to_wire_dict``) ``kind`` field gains
+    a new value ``"codex"`` (alongside ``claude`` / ``auto_scan`` / ``shell``).
+    Forward-compatibility caveat: a client that models ``kind`` as a string with
+    a default tolerates the new value, but the current Android app models it as a
+    typed ``SessionKind`` enum **without** a ``Codex`` member, so it relies on the
+    proto-5 version gate (a pre-5 client is rejected at the relay handshake before
+    it ever decodes a v5 session). Adding the ``Codex`` enum member + an
+    unknown-value fallback is part of the Android work (CLA-69).
+  * ``session_create_failed`` / proxy ``503`` responses for a missing Codex
+    binary carry ``codex_cli_missing: true`` + ``searched_paths`` — the exact
+    parallel of the existing ``claude_cli_missing`` marker.
+* Out of scope (downstream issues): Android create-session UI for Codex
+  (CLA-69), terminal control-key / approval affordances (CLA-70), Codex
+  auth/login (CLA-71). v1 assumes the host is already Codex-authed and cannot
+  yet mediate Codex approval prompts, so the agent defaults Codex sessions to a
+  non-interactive sandboxed preset (``--sandbox workspace-write
+  --ask-for-approval never``).
+
+## proto-v4 (superseded by proto-v5)
 
 * Introduced: 2026-06-09
 * App support: ``APP_PROTOCOL_VERSION = 4`` (Android), ``PROTOCOL_VERSION = 4``

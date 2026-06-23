@@ -20,7 +20,14 @@ from .claude_launcher import (
     ClaudeOptions,
     check_cwd_exists,
 )
-from .models import SessionConfig, SessionInfo, SessionState, session_to_wire_dict
+from .cli_launcher import CliLauncher
+from .codex_launcher import CodexLauncher, CodexOptions
+from .models import (
+    SessionConfig,
+    SessionInfo,
+    SessionState,
+    session_to_wire_dict,
+)
 from .projects_store import ProjectsStore, safe_path_exists
 from .session import TerminalSession
 
@@ -42,6 +49,7 @@ class SessionManager:
         max_sessions: int = 16,
         projects_store: ProjectsStore | None = None,
         launcher: ClaudeLauncher | None = None,
+        codex_launcher: CodexLauncher | None = None,
         worktree_mgr: WorktreeManager | None = None,
         event_bus: Any | None = None,
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
@@ -53,7 +61,10 @@ class SessionManager:
         self._max_sessions = max_sessions
         self._liveness_task: asyncio.Task[None] | None = None
         self._projects_store = projects_store
+        # ``launcher`` keeps its historical name (the Claude launcher); the
+        # Codex launcher is a sibling. Dispatch picks between them per session.
         self._launcher = launcher
+        self._codex_launcher = codex_launcher
         self._worktree_mgr = worktree_mgr
         self._event_bus = event_bus
         self._on_session_created = on_session_created
@@ -80,25 +91,30 @@ class SessionManager:
     async def create_session(self, config: SessionConfig) -> TerminalSession:
         """Create, start, and register a new terminal session.
 
-        Dispatch matrix on (``project_name``, ``claude_options``):
+        Dispatch matrix on (``project_name``, managed-CLI options). A session is
+        "managed" when it carries ``claude_options`` or ``codex_options`` — the
+        entry layers normalise exactly one of them via ``resolve_spawn_args``, so
+        a raw shell session (neither set) keeps its caller-supplied argv:
 
-        * stored project + Claude → ``_apply_project_launch`` builds full
-          argv/cwd/env via ``ClaudeLauncher`` against ``ProjectsStore``.
-        * stored project + no Claude → ``_resolve_project_cwd`` only fills
-          ``cwd`` so the caller's ``_DEFAULT_SHELL`` argv stays intact.
-        * no project + Claude → ``_apply_adhoc_launch`` builds a launch
-          against the bare ``config.cwd`` (custom-path Claude mode); never
-          touches ``ProjectsStore``.
-        * no project + no Claude → raw Terminal session in ``config.cwd``
-          (or the default cwd if ``cwd`` is also ``None``); no resolution
-          required.
+        * stored project + managed → ``_apply_project_launch`` builds full
+          argv/cwd/env via the matching launcher against ``ProjectsStore``.
+        * stored project + shell → ``_resolve_project_cwd`` only fills ``cwd`` so
+          the caller's ``_DEFAULT_SHELL`` argv stays intact.
+        * no project + managed → ``_apply_adhoc_launch`` builds a launch against
+          the bare ``config.cwd`` (custom-path mode); never touches
+          ``ProjectsStore``.
+        * no project + shell → raw Terminal session in ``config.cwd`` (or the
+          default cwd if ``cwd`` is also ``None``); no resolution required.
         """
+        managed = (
+            config.claude_options is not None or config.codex_options is not None
+        )
         if config.project_name is not None:
-            if config.claude_options is not None:
+            if managed:
                 await self._apply_project_launch(config)
             else:
                 await self._resolve_project_cwd(config)
-        elif config.claude_options is not None:
+        elif managed:
             await self._apply_adhoc_launch(config)
         async with self._lock:
             if len(self._sessions) >= self._max_sessions:
@@ -132,43 +148,60 @@ class SessionManager:
         await self._publish_sessions_changed()
         return session
 
+    def _launcher_and_options(
+        self, config: SessionConfig,
+    ) -> tuple[CliLauncher, ClaudeOptions | CodexOptions]:
+        """Pick the launcher + options for a managed session.
+
+        ``resolve_spawn_args`` guarantees exactly one of ``claude_options`` /
+        ``codex_options`` is set, so presence is the discriminator. Raises if the
+        requested CLI's launcher was not wired into this manager.
+        """
+        if config.codex_options is not None:
+            if self._codex_launcher is None:
+                raise ValueError(
+                    "codex session requested but agent has no Codex launcher",
+                )
+            return self._codex_launcher, config.codex_options
+        if self._launcher is None:
+            raise ValueError(
+                "claude session requested but agent has no Claude launcher",
+            )
+        return self._launcher, config.claude_options or ClaudeOptions()
+
     async def _apply_project_launch(self, config: SessionConfig) -> None:
-        """Resolve a project via the launcher and overwrite command/cwd/env on the config in place.
+        """Resolve a project via the matching launcher and overwrite command/cwd/env in place.
 
         The lookup goes through the live ``ProjectsStore`` so callers always
         see post-mutation state (e.g. a project added via the REST CRUD API
         is launchable without a restart).
         """
-        if self._projects_store is None or self._launcher is None:
+        if self._projects_store is None:
             raise ValueError(
                 "project_name set but agent has no projects store",
             )
         project = self._projects_store.get(config.project_name or "")
         if project is None:
             raise KeyError(f"Project '{config.project_name}' not found")
-        options = config.claude_options or ClaudeOptions()
-        spec = await self._launcher.build(project, options, session_id=config.session_id)
+        launcher, options = self._launcher_and_options(config)
+        spec = await launcher.build(project, options, session_id=config.session_id)
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env
 
     async def _apply_adhoc_launch(self, config: SessionConfig) -> None:
-        """Build an ad-hoc Claude launch against ``config.cwd`` and overwrite command/cwd/env in place.
+        """Build an ad-hoc managed-CLI launch against ``config.cwd`` and overwrite command/cwd/env in place.
 
         Never touches ``ProjectsStore`` — a custom-path session is not a
         project. Router/relay layers are expected to pre-validate that
         ``cwd`` is non-empty, absolute, exists, and is a directory; the
         ``ValueError`` raised here is defense-in-depth.
         """
-        if self._launcher is None:
-            raise ValueError(
-                "project_name is null but agent has no Claude launcher",
-            )
         if config.cwd is None:
-            raise ValueError("cwd is required for ad-hoc Claude launch")
-        options = config.claude_options or ClaudeOptions()
+            raise ValueError("cwd is required for ad-hoc launch")
+        launcher, options = self._launcher_and_options(config)
         target = AdHocLaunch(cwd=config.cwd)
-        spec = await self._launcher.build(target, options, session_id=config.session_id)
+        spec = await launcher.build(target, options, session_id=config.session_id)
         config.command = spec.argv
         config.cwd = spec.cwd
         config.env = spec.env

@@ -37,7 +37,7 @@ from mobaide.relay.envelope import (
     encode,
 )
 from mobaide.agent.events.bus import AgentEvent
-from mobaide.core import ClaudeBinaryNotFoundError
+from mobaide.core import ClaudeBinaryNotFoundError, CodexBinaryNotFoundError
 from mobaide.core.models import SessionKind, SessionState
 
 
@@ -2991,3 +2991,281 @@ class TestConnectLoopStabilityBackoff:
         max_delay = client._config.reconnect_max_delay
         assert len(sleeps) == 6
         assert all(base <= s <= max_delay for s in sleeps)
+
+
+class TestHandleCreateSessionCodex:
+    """The control-channel ``create_session`` path (used when a central relay
+    drives the agent directly, not via the HTTP proxy) must support the second
+    managed CLI: parse ``codex_options``, thread the ``cli`` discriminator into
+    a CODEX ``SessionConfig``, and map a missing Codex binary to its own
+    ``codex_cli_missing`` marker — the Claude-only coverage in
+    ``TestHandleControl`` / ``TestHandleCreateSessionPathErrors`` never exercises
+    the Codex branch.
+    """
+
+    async def test_create_session_forwards_codex_options_and_kind(
+        self, client, mock_session_manager,
+    ):
+        """An explicit ``cli="codex"`` plus a ``codex_options`` block must reach
+        ``create_session`` as a CODEX ``SessionConfig`` carrying the parsed
+        :class:`CodexOptions` (and no ``claude_options``). Otherwise the sandbox
+        / model selection is silently dropped on the relay control path."""
+        from mobaide.core.codex_launcher import CodexOptions
+        from mobaide.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "codex-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "codex-sess",
+            "cli": "codex",
+            "codex_options": {
+                "model": "gpt-5.4-codex",
+                "sandbox": "read-only",
+            },
+        }
+        payload = json.dumps(ctrl).encode()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(payload, ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.CODEX
+        assert cfg.claude_options is None
+        assert isinstance(cfg.codex_options, CodexOptions)
+        assert cfg.codex_options.model == "gpt-5.4-codex"
+        assert cfg.codex_options.sandbox == "read-only"
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "codex-sess"
+        assert resp["pid"] == 7
+
+    async def test_codex_options_without_cli_still_resolves_codex_kind(
+        self, client, mock_session_manager,
+    ):
+        """Back-compat inference: a payload that carries ``codex_options`` but
+        omits the ``cli`` discriminator must still resolve to a CODEX session
+        (mirrors how a ``claude_options``-only payload resolves to Claude)."""
+        from mobaide.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "infer-sess"
+            s.pid = 8
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "infer-sess",
+            "codex_options": {"sandbox": "workspace-write"},
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.CODEX
+        assert cfg.codex_options is not None
+        assert cfg.codex_options.sandbox == "workspace-write"
+
+    async def test_invalid_codex_options_returns_create_failed(
+        self, client, mock_session_manager,
+    ):
+        """An out-of-range enum value in ``codex_options`` is rejected at the
+        ``CodexOptionsModel`` boundary, producing ``session_create_failed`` with
+        an ``Invalid codex_options:`` error — and ``create_session`` is never
+        reached."""
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "bad-codex",
+            "cli": "codex",
+            "codex_options": {"sandbox": "nope"},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "bad-codex"
+        assert resp["error"].startswith("Invalid codex_options:")
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_codex_cli_missing_emits_codex_cli_missing_discriminator(
+        self, client, mock_session_manager,
+    ):
+        """``CodexBinaryNotFoundError`` from the spawn path must map to
+        ``session_create_failed`` with ``codex_cli_missing: true`` (NOT
+        ``claude_cli_missing``) and the Codex-specific install hint, so the
+        mobile client renders an "install Codex CLI" affordance. The marker key
+        is derived from ``exc.cli_name`` — this proves the Codex subclass routes
+        through the shared ``except CliBinaryNotFoundError`` branch correctly."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=CodexBinaryNotFoundError(
+                searched_paths=["PATH:codex", "/home/test/.npm-global/bin/codex"]
+            ),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "no-codex-sess",
+            "cli": "codex",
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "no-codex-sess"
+        assert resp["codex_cli_missing"] is True
+        assert "claude_cli_missing" not in resp
+        assert resp["error"].startswith("Codex CLI not found:")
+        assert "npm install -g @openai/codex" in resp["error"]
+        assert "MOBAIDE_CODEX_BIN" in resp["error"]
+        assert resp["searched_paths"] == [
+            "PATH:codex",
+            "/home/test/.npm-global/bin/codex",
+        ]
+
+
+class TestHandleProxyRequestCodex:
+    """``POST /api/sessions`` proxied through the central relay
+    (``proxy_request`` control frame) must thread Codex the same way the direct
+    HTTP router does: parse ``codex_options`` into a CODEX session and map a
+    missing Codex binary to status 503 with a ``codex_cli_missing`` body marker.
+    The pre-existing proxy coverage in ``TestHandleProxyRequestPathErrors`` is
+    Claude-only.
+    """
+
+    async def test_proxy_post_sessions_threads_codex_options(
+        self, client, mock_session_manager,
+    ):
+        """A proxied ``POST /api/sessions`` body with ``cli="codex"`` builds a
+        CODEX ``SessionConfig`` from ``codex_options`` and returns a 201
+        ``proxy_response`` whose body reports ``kind == "codex"``."""
+        from mobaide.core.codex_launcher import CodexOptions
+        from mobaide.core.models import SessionConfig
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "proxy-codex"
+            s.pid = 11
+            info = MagicMock()
+            info.session_id = "proxy-codex"
+            info.state = SessionState.RUNNING
+            info.created_at = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+            info.pid = 11
+            info.command = ["codex"]
+            info.cwd = None
+            info.title = None
+            info.project_name = None
+            info.kind = SessionKind.CODEX
+            info.attention = None
+            info.exit_reason = None
+            s.to_info = MagicMock(return_value=info)
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-codex",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {
+                "cli": "codex",
+                "codex_options": {"model": "gpt-5.4-codex", "sandbox": "read-only"},
+            },
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.CODEX
+        assert cfg.claude_options is None
+        assert isinstance(cfg.codex_options, CodexOptions)
+        assert cfg.codex_options.model == "gpt-5.4-codex"
+        assert cfg.codex_options.sandbox == "read-only"
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-codex"
+        assert resp["status"] == 201
+        assert resp["body"]["kind"] == "codex"
+
+    async def test_proxy_invalid_codex_options_returns_422(
+        self, client, mock_session_manager,
+    ):
+        """An out-of-range ``codex_options`` enum on the proxy path is rejected
+        by ``CreateSessionRequest`` validation, returning a 422 ``proxy_response``
+        without ever reaching ``create_session``."""
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-bad-codex",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {"cli": "codex", "codex_options": {"sandbox": "nope"}},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-bad-codex"
+        assert resp["status"] == 422
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_proxy_codex_cli_missing_returns_503_with_discriminator(
+        self, client, mock_session_manager,
+    ):
+        """A missing Codex binary on the proxy path must map to status=503
+        (not 400 / not 500) with ``codex_cli_missing: true`` in the body and the
+        Codex install hint — the marker key derives from ``exc.cli_name`` so the
+        Codex subclass and Claude share one 503 handler."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=CodexBinaryNotFoundError(
+                searched_paths=["PATH:codex", "/usr/local/bin/codex"]
+            ),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-codex-missing",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {"cli": "codex", "codex_options": {}},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-codex-missing"
+        assert resp["status"] == 503
+        assert resp["body"]["codex_cli_missing"] is True
+        assert "claude_cli_missing" not in resp["body"]
+        assert resp["body"]["detail"].startswith("Codex CLI not found:")
+        assert "npm install -g @openai/codex" in resp["body"]["detail"]
+        assert resp["body"]["searched_paths"] == [
+            "PATH:codex",
+            "/usr/local/bin/codex",
+        ]

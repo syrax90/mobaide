@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from mobaide.core import (
-    ClaudeBinaryNotFoundError,
+    CliBinaryNotFoundError,
     MaxSessionsError,
     SessionConfig,
     SessionManager,
@@ -78,14 +78,19 @@ async def create_session(
         if body.claude_options is not None
         else None
     )
+    codex_options = (
+        body.codex_options.to_options()
+        if body.codex_options is not None
+        else None
+    )
     # Pre-validate user-supplied custom paths so the error surfaces as a
     # clean 400 from this layer rather than as a FileNotFoundError-mapped
-    # 400 from ClaudeLauncher or PtyBackend further down. Skipped when a
+    # 400 from the launcher or PtyBackend further down. Skipped when a
     # stored project is named (server derives cwd from the project).
     if body.project_name is None and body.cwd is not None:
         _validate_adhoc_cwd(body.cwd)
-    kind, spawn_command, spawn_env = resolve_spawn_args(
-        claude_options, body.command, body.env, _DEFAULT_SHELL,
+    kind, spawn_command, spawn_env, claude_options, codex_options = resolve_spawn_args(
+        body.cli, claude_options, codex_options, body.command, body.env, _DEFAULT_SHELL,
     )
     config = SessionConfig(
         session_id=session_id,
@@ -96,6 +101,7 @@ async def create_session(
         cols=body.cols,
         project_name=body.project_name,
         claude_options=claude_options,
+        codex_options=codex_options,
         worktree=body.worktree,
         branch_name=body.branch_name,
         kind=kind,
@@ -117,10 +123,10 @@ async def create_session(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         )
-    except ClaudeBinaryNotFoundError as exc:
+    except CliBinaryNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Claude CLI not found: {exc}",
+            detail=f"{exc.cli_name.capitalize()} CLI not found: {exc}",
         )
     except FileNotFoundError as exc:
         # Use ``exc.filename`` (plain str) rather than ``str(exc)`` which

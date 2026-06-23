@@ -26,7 +26,7 @@ import orjson
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
+from mobaide.core.cli_launcher import CliBinaryNotFoundError
 from mobaide.core.models import (
     SessionConfig,
     SessionEvent,
@@ -70,7 +70,11 @@ from mobaide.linear.rate_limiter import LinearRateLimiter
 
 from mobaide.agent.autoscan.models import StartScanRequest
 from mobaide.agent.autoscan.stream import run_autoscan_stream
-from mobaide.agent.sessions.models import ClaudeOptionsModel, CreateSessionRequest
+from mobaide.agent.sessions.models import (
+    ClaudeOptionsModel,
+    CodexOptionsModel,
+    CreateSessionRequest,
+)
 from mobaide.agent.ws.session_list import (
     _serialize_sessions as _list_session_dicts,
 )
@@ -847,6 +851,26 @@ class RelayClient:
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
 
+        codex_options = None
+        raw_codex_options = ctrl.get("codex_options")
+        if raw_codex_options is not None:
+            try:
+                codex_options = CodexOptionsModel.model_validate(
+                    raw_codex_options
+                ).to_options()
+            except ValidationError as exc:
+                logger.warning(
+                    "relay.create_session_invalid_codex_options session_id=%s: %s",
+                    session_id, exc,
+                )
+                resp = {
+                    "type": "session_create_failed",
+                    "session_id": session_id,
+                    "error": f"Invalid codex_options: {exc}",
+                }
+                await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+                return
+
         ctrl_cwd = ctrl.get("cwd")
         ctrl_project_name = ctrl.get("project_name")
         if ctrl_project_name is None and ctrl_cwd is not None:
@@ -863,8 +887,9 @@ class RelayClient:
                 }
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
-        kind, spawn_command, spawn_env = resolve_spawn_args(
-            claude_options, ctrl.get("command"), ctrl.get("env"), _DEFAULT_SHELL,
+        kind, spawn_command, spawn_env, claude_options, codex_options = resolve_spawn_args(
+            ctrl.get("cli"), claude_options, codex_options,
+            ctrl.get("command"), ctrl.get("env"), _DEFAULT_SHELL,
         )
         config = SessionConfig(
             session_id=session_id,
@@ -875,6 +900,7 @@ class RelayClient:
             cols=ctrl.get("cols", 80),
             project_name=ctrl_project_name,
             claude_options=claude_options,
+            codex_options=codex_options,
             worktree=bool(ctrl.get("worktree", False)),
             branch_name=ctrl.get("branch_name"),
             kind=kind,
@@ -889,16 +915,18 @@ class RelayClient:
                 "session_id": session.session_id,
                 "pid": session.pid,
             }
-        except ClaudeBinaryNotFoundError as exc:
+        except CliBinaryNotFoundError as exc:
             logger.warning(
-                "relay.create_session_claude_cli_missing session_id=%s",
-                session_id,
+                "relay.create_session_cli_missing session_id=%s cli=%s",
+                session_id, exc.cli_name,
             )
             resp = {
                 "type": "session_create_failed",
                 "session_id": session_id,
-                "error": f"Claude CLI not found: {exc}",
-                "claude_cli_missing": True,
+                "error": f"{exc.cli_name.capitalize()} CLI not found: {exc}",
+                # Back-compat: ``claude_cli_missing`` for Claude; ``codex_cli_missing``
+                # for Codex. Lets the mobile client surface a CLI-specific hint.
+                f"{exc.cli_name}_cli_missing": True,
                 "searched_paths": list(exc.searched_paths),
             }
         except FileNotFoundError as exc:
@@ -998,18 +1026,18 @@ class RelayClient:
                 "status": result.get("status", 200),
                 "body": result.get("body"),
             }
-        except ClaudeBinaryNotFoundError as exc:
+        except CliBinaryNotFoundError as exc:
             logger.warning(
-                "relay.proxy_request_claude_cli_missing path=%s",
-                path,
+                "relay.proxy_request_cli_missing path=%s cli=%s",
+                path, exc.cli_name,
             )
             resp = {
                 "type": "proxy_response",
                 "request_id": request_id,
                 "status": 503,
                 "body": {
-                    "detail": f"Claude CLI not found: {exc}",
-                    "claude_cli_missing": True,
+                    "detail": f"{exc.cli_name.capitalize()} CLI not found: {exc}",
+                    f"{exc.cli_name}_cli_missing": True,
                     "searched_paths": list(exc.searched_paths),
                 },
             }
@@ -1157,8 +1185,14 @@ class RelayClient:
                 if parsed.claude_options is not None
                 else None
             )
-            kind, spawn_command, spawn_env = resolve_spawn_args(
-                claude_options, parsed.command, parsed.env, _DEFAULT_SHELL,
+            codex_options = (
+                parsed.codex_options.to_options()
+                if parsed.codex_options is not None
+                else None
+            )
+            kind, spawn_command, spawn_env, claude_options, codex_options = resolve_spawn_args(
+                parsed.cli, claude_options, codex_options,
+                parsed.command, parsed.env, _DEFAULT_SHELL,
             )
             config = SessionConfig(
                 session_id=session_id,
@@ -1169,6 +1203,7 @@ class RelayClient:
                 cols=parsed.cols,
                 project_name=parsed.project_name,
                 claude_options=claude_options,
+                codex_options=codex_options,
                 worktree=parsed.worktree,
                 branch_name=parsed.branch_name,
                 kind=kind,

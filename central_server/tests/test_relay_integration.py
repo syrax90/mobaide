@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from central_server.relay.envelope import CH_CONTROL, decode
+from central_server.relay.envelope import CH_CONTROL, PROTOCOL_VERSION, decode
 from central_server.relay.routing import AgentConnection
 
 
@@ -74,7 +74,7 @@ class TestAgentTunnel:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"
@@ -87,7 +87,7 @@ class TestAgentTunnel:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
             }))
             ws.receive_text()  # auth_ok
             # Agent should be online
@@ -211,7 +211,7 @@ class TestSessionLifecycleSignals:
                 "type": "auth",
                 "agent_id": agent_id,
                 "token": raw_token,
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
             }))
             resp = json.loads(ws.receive_text())
             assert resp["type"] == "auth_ok"

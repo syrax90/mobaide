@@ -42,6 +42,24 @@ def _pin_claude_binary(monkeypatch):
     )
     yield
 
+
+@pytest.fixture(autouse=True)
+def _pin_codex_binary(monkeypatch):
+    """Pin the Codex resolver to the literal string ``"codex"`` for every test.
+
+    Parallel of :func:`_pin_claude_binary`: codex launcher tests assert
+    ``spec.argv[0] == "codex"`` and REST/relay tests must not hit the real host
+    resolver. Tests exercising the missing-binary path re-patch
+    ``codex_launcher._resolve_codex_binary`` to raise inside the test body, which
+    overrides this fixture.
+    """
+    from mobaide.core import codex_launcher
+
+    monkeypatch.setattr(
+        codex_launcher, "_resolve_codex_binary", lambda *_a, **_kw: "codex"
+    )
+    yield
+
 TEST_JWT_SECRET = "test-secret-key-for-jwt-signing-do-not-use-in-prod"
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpass123"

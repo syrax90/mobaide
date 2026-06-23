@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from mobaide.core.claude_launcher import ClaudeOptions
+from mobaide.core.codex_launcher import CodexOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
 
 
@@ -21,19 +24,49 @@ class ClaudeOptionsModel(BaseModel):
         return ClaudeOptions(**self.model_dump())
 
 
+class CodexOptionsModel(BaseModel):
+    """Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).
+
+    The enum-like fields are ``Literal``-typed so an invalid value is rejected
+    with a 422 at the wire boundary rather than producing a broken ``codex``
+    argv. ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for
+    the legitimately-named ``model`` field.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model: str | None = None
+    sandbox: Literal["read-only", "workspace-write", "danger-full-access"] = (
+        "workspace-write"
+    )
+    approval: Literal["untrusted", "on-request", "never"] = "never"
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = "high"
+    full_auto: bool = False
+    initial_prompt: str | None = None
+
+    def to_options(self) -> CodexOptions:
+        return CodexOptions(**self.model_dump())
+
+
 class CreateSessionRequest(BaseModel):
     command: list[str] | None = None
     cwd: str | None = None
     env: dict[str, str] | None = None
     rows: int = 24
     cols: int = 80
-    # When set, ``command``/``cwd``/``env`` are ignored and
-    # ``ClaudeLauncher`` builds them from the project + ``claude_options``.
+    # When set, ``command``/``cwd``/``env`` are ignored and the matching
+    # launcher builds them from the project + the CLI options block.
     project_name: str | None = None
+    # Which managed CLI to launch: "claude" | "codex". Optional — when omitted
+    # the kind is inferred from whichever options block is present (a legacy
+    # claude_options-only payload still resolves to Claude). Shell/Terminal
+    # sessions leave this null and send no options block.
+    cli: str | None = None
     claude_options: ClaudeOptionsModel | None = None
+    codex_options: CodexOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
-    # (no ``claude_options``) anchored to a stored git project and spawn the
-    # shell inside it. Claude sessions use ``claude_options.worktree`` instead.
+    # (no CLI options) anchored to a stored git project and spawn the shell
+    # inside it. Claude sessions use ``claude_options.worktree`` instead.
     worktree: bool = False
     branch_name: str | None = None
 
