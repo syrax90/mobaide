@@ -1035,4 +1035,190 @@ class CreateSessionViewModelTest {
         assertEquals("", s.customPathDraft)
         assertNull(s.customPathError)
     }
+
+    @Test
+    fun wizardFlow_ModePick_to_CodexConfig_andBack() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Codex)
+        vm.selectCodexMode()
+        assertEquals(CreateSessionStep.CodexConfig, vm.uiState.value.step)
+
+        vm.goBack()
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun defaultCodexState_derivesAutoPreset() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        assertEquals(CodexAutonomyPreset.Auto, vm.uiState.value.codexPreset)
+    }
+
+    @Test
+    fun selectCodexPreset_fullAccess_setsFullAuto_andDerivesFullAccess() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectCodexPreset(CodexAutonomyPreset.FullAccess)
+        assertTrue(vm.uiState.value.codexFullAuto)
+        assertEquals(CodexAutonomyPreset.FullAccess, vm.uiState.value.codexPreset)
+    }
+
+    @Test
+    fun setCodexApproval_customCombo_clearsPresetHighlight() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        // workspace-write + never matches no preset (presets use on-request),
+        // so the segmented control highlights nothing (Custom).
+        vm.setCodexApproval("never")
+        assertNull(vm.uiState.value.codexPreset)
+    }
+
+    @Test
+    fun submitCodex_happyPath_sendsCliCodex_andCodexOptions() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-codex", "starting", "2026-06-23T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+
+        vm.navigateToSession.test {
+            vm.submitCodex()
+            advanceUntilIdle()
+            assertEquals("sess-codex", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        val req = requestSlot.captured
+        assertEquals("alpha", req.project_name)
+        assertEquals("codex", req.cli)
+        assertNull("Codex must not send claude_options", req.claude_options)
+        val opts = req.codex_options
+        assertNotNull(opts)
+        assertEquals("workspace-write", opts!!.sandbox)
+        assertEquals("on-request", opts.approval)
+        assertEquals("high", opts.reasoning_effort)
+        assertFalse(opts.full_auto)
+        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-codex") }
+        assertFalse(vm.uiState.value.submitting)
+    }
+
+    @Test
+    fun submitCodex_fullAccessPreset_sendsFullAuto() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-yolo", "starting", "2026-06-23T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.selectCodexPreset(CodexAutonomyPreset.FullAccess)
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        assertTrue(
+            "Full-access preset must send full_auto=true",
+            requestSlot.captured.codex_options?.full_auto == true,
+        )
+    }
+
+    @Test
+    fun submitCodex_gitProject_withWorktree_carriesWorktreeAndBranchInCodexOptions() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-wt", "starting", "2026-06-23T00:00:00Z")
+
+        vm.selectProject("alpha") // is_git = true
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        val opts = requestSlot.captured.codex_options
+        assertNotNull(opts)
+        assertTrue("worktree must travel inside codex_options", opts!!.worktree)
+        assertEquals("feature/x", opts.branch_name)
+        assertFalse(
+            "Codex worktree travels in codex_options, not the top-level request field",
+            requestSlot.captured.worktree,
+        )
+    }
+
+    @Test
+    fun submitCodex_customPath_clampsWorktreeAndBranch() = runTest {
+        val fx = newFixture(agentId = "agent-1")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        // Even with worktree toggled on, the custom-path branch must clamp it.
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-codex-adhoc", "starting", "2026-06-23T00:00:00Z")
+
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        val req = requestSlot.captured
+        assertNull(req.project_name)
+        assertEquals(hostAbsolutePath, req.cwd)
+        assertEquals("codex", req.cli)
+        val opts = req.codex_options
+        assertNotNull(opts)
+        assertFalse("worktree must clamp false for custom path", opts!!.worktree)
+        assertNull("branch_name must be null for custom path", opts.branch_name)
+    }
+
+    @Test
+    fun submitCodex_readOnlyPreset_sendsReadOnlySandbox() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-ro", "starting", "2026-06-23T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.selectCodexPreset(CodexAutonomyPreset.ReadOnly)
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        val opts = requestSlot.captured.codex_options
+        assertNotNull(opts)
+        assertEquals("read-only", opts!!.sandbox)
+        assertEquals("on-request", opts.approval)
+        assertFalse(opts.full_auto)
+    }
 }

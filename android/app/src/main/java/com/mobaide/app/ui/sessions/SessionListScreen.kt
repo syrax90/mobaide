@@ -237,6 +237,7 @@ private fun SessionCard(
                 Text(
                     text = when (session.kind) {
                         SessionKind.Claude -> "Claude Code"
+                        SessionKind.Codex -> "Codex"
                         SessionKind.AutoScan -> "Auto Scan"
                         SessionKind.Shell -> "Terminal"
                     },

@@ -178,6 +178,88 @@ async def test_writes_no_project_files(tmp_path: Path):
     assert not (tmp_path / ".claude").exists()
 
 
+class _RecordingWorktreeMgr:
+    """Minimal WorktreeManager double mirroring the real signature; returns a
+    real (existing) worktree dir so ``check_cwd_exists`` passes."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    async def create_worktree(self, slug, project_root, *, branch_name=None):
+        from mobaide.linear.worktree import WorktreeResult
+
+        self.calls.append({"slug": slug, "branch_name": branch_name})
+        wt = Path(project_root) / "wt" / slug
+        wt.mkdir(parents=True, exist_ok=True)
+        return WorktreeResult(
+            path=str(wt), is_new=True, branch=branch_name or slug,
+        )
+
+
+@pytest.mark.asyncio
+async def test_cwd_worktree_on_git_project_resolves_to_worktree(tmp_path: Path):
+    """worktree=True on a git project resolves cwd to the created worktree (not
+    the project root) and hands the user's branch name to the manager verbatim."""
+    (tmp_path / ".git").mkdir()
+    mgr = _RecordingWorktreeMgr()
+    spec = await CodexLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
+        _make_project(str(tmp_path)),
+        CodexOptions(worktree=True, branch_name="feature/x"),
+    )
+    assert len(mgr.calls) == 1
+    assert mgr.calls[0]["branch_name"] == "feature/x"
+    assert spec.cwd != str(tmp_path)
+    assert "feature-x" in spec.cwd
+
+
+@pytest.mark.asyncio
+async def test_cwd_worktree_blank_branch_uses_codex_prefix(tmp_path: Path):
+    """With no branch_name the launcher auto-generates one under the
+    ``codex-session-`` prefix (distinct from Claude/Terminal prefixes)."""
+    (tmp_path / ".git").mkdir()
+    mgr = _RecordingWorktreeMgr()
+    await CodexLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
+        _make_project(str(tmp_path)), CodexOptions(worktree=True),
+    )
+    branch = mgr.calls[0]["branch_name"]
+    assert isinstance(branch, str)
+    assert branch.startswith("codex-session-")
+
+
+@pytest.mark.asyncio
+async def test_cwd_worktree_non_git_falls_back_to_root(tmp_path: Path):
+    """A stale worktree=True for a non-git project is downgraded to the project
+    root and the WorktreeManager is never touched."""
+    mgr = _RecordingWorktreeMgr()
+    spec = await CodexLauncher(worktree_mgr=mgr).build(  # type: ignore[arg-type]
+        _make_project(str(tmp_path)), CodexOptions(worktree=True),
+    )
+    assert spec.cwd == str(tmp_path)
+    assert mgr.calls == []
+
+
+@pytest.mark.asyncio
+async def test_cwd_worktree_without_mgr_raises(tmp_path: Path):
+    """worktree=True on a git project with no WorktreeManager wired fails loud
+    rather than silently landing in the project root (mirrors Claude)."""
+    (tmp_path / ".git").mkdir()
+    with pytest.raises(RuntimeError, match="WorktreeManager"):
+        await CodexLauncher().build(
+            _make_project(str(tmp_path)),
+            CodexOptions(worktree=True, branch_name="x"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_cwd_adhoc_worktree_is_ignored(tmp_path: Path):
+    """Ad-hoc launches have no git/project context, so worktree=True is ignored
+    and the bare cwd is used."""
+    spec = await CodexLauncher().build(
+        AdHocLaunch(cwd=str(tmp_path)), CodexOptions(worktree=True),
+    )
+    assert spec.cwd == str(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # binary resolution
 # ---------------------------------------------------------------------------

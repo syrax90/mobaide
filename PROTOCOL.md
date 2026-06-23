@@ -33,12 +33,12 @@ cadence; they do **not** gate compatibility.
       honoured per session.
   * The single-session wire dict (``session_to_wire_dict``) ``kind`` field gains
     a new value ``"codex"`` (alongside ``claude`` / ``auto_scan`` / ``shell``).
-    Forward-compatibility caveat: a client that models ``kind`` as a string with
-    a default tolerates the new value, but the current Android app models it as a
-    typed ``SessionKind`` enum **without** a ``Codex`` member, so it relies on the
-    proto-5 version gate (a pre-5 client is rejected at the relay handshake before
-    it ever decodes a v5 session). Adding the ``Codex`` enum member + an
-    unknown-value fallback is part of the Android work (CLA-69).
+    The Android app models ``kind`` as a typed ``SessionKind`` enum and now
+    carries a ``Codex`` member (CLA-69), so it decodes a v5 session directly
+    rather than relying on the proto-5 version gate to reject it. For
+    forward-compatibility it also coerces an unknown future ``kind`` to the
+    enum's default (``coerceInputValues`` on the event-bus JSON decoder) instead
+    of dropping the whole event.
   * ``session_create_failed`` / proxy ``503`` responses for a missing Codex
     binary carry ``codex_cli_missing: true`` + ``searched_paths`` — the exact
     parallel of the existing ``claude_cli_missing`` marker.

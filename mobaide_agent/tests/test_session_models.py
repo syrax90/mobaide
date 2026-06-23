@@ -340,6 +340,24 @@ class TestCodexToOptions:
         assert opts.reasoning_effort == "high"
         assert opts.full_auto is False
         assert opts.initial_prompt is None
+        assert opts.worktree is False
+        assert opts.branch_name is None
+
+    def test_worktree_fields_round_trip(self):
+        # The worktree pair is the server-side addition: ``_resolve_cwd``
+        # reads ``options.worktree`` / ``options.branch_name`` off the dataclass,
+        # so both must survive ``model_dump()`` -> ``CodexOptions(**...)`` or the
+        # git-worktree path silently never fires.
+        from mobaide.agent.sessions.models import CodexOptionsModel
+        from mobaide.core.codex_launcher import CodexOptions
+
+        opts = CodexOptionsModel(
+            worktree=True, branch_name="feature/x",
+        ).to_options()
+
+        assert isinstance(opts, CodexOptions)
+        assert opts.worktree is True
+        assert opts.branch_name == "feature/x"
 
     def test_invalid_enum_value_rejected_at_wire_boundary(self):
         import pydantic

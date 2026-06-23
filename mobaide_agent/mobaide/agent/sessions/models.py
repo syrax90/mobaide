@@ -43,6 +43,8 @@ class CodexOptionsModel(BaseModel):
     reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = "high"
     full_auto: bool = False
     initial_prompt: str | None = None
+    worktree: bool = False
+    branch_name: str | None = None
 
     def to_options(self) -> CodexOptions:
         return CodexOptions(**self.model_dump())
@@ -66,7 +68,8 @@ class CreateSessionRequest(BaseModel):
     codex_options: CodexOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
     # (no CLI options) anchored to a stored git project and spawn the shell
-    # inside it. Claude sessions use ``claude_options.worktree`` instead.
+    # inside it. Managed Claude/Codex sessions instead carry worktree intent
+    # inside their own options block (``claude_options``/``codex_options``).
     worktree: bool = False
     branch_name: str | None = None
 

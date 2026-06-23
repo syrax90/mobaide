@@ -17,6 +17,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -34,10 +36,14 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -122,6 +128,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.ProjectSelect -> "New Session"
                             CreateSessionStep.ModePick -> "Select mode"
                             CreateSessionStep.StandardConfig -> "Claude code session"
+                            CreateSessionStep.CodexConfig -> "Codex session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                             CreateSessionStep.TerminalConfig -> "Terminal session"
                         }
@@ -185,6 +192,7 @@ fun CreateSessionScreen(
                     onCommit = {
                         when (state.selectedMode) {
                             CreateSessionMode.Standard -> viewModel.selectStandardMode()
+                            CreateSessionMode.Codex -> viewModel.selectCodexMode()
                             CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
                             CreateSessionMode.CustomShell -> viewModel.selectTerminalMode()
                             null -> Unit
@@ -192,6 +200,12 @@ fun CreateSessionScreen(
                     },
                 )
                 CreateSessionStep.StandardConfig -> StandardConfigSection(
+                    state = state,
+                    showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                        storedProject?.is_git == true,
+                    viewModel = viewModel,
+                )
+                CreateSessionStep.CodexConfig -> CodexConfigSection(
                     state = state,
                     showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                         storedProject?.is_git == true,
@@ -458,6 +472,18 @@ private fun ModePickerSection(
         )
     }
 
+    ElevatedCard(
+        onClick = { onPickMode(CreateSessionMode.Codex) },
+        colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.elevatedCardColors(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        ListItem(
+            headlineContent = { Text("Codex session") },
+            supportingContent = { Text("Configure and launch an OpenAI Codex session.") },
+            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+        )
+    }
+
     if (header.showAutoScan) {
         ElevatedCard(
             onClick = { onPickMode(CreateSessionMode.AutoScan) },
@@ -529,6 +555,180 @@ private fun StandardConfigSection(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CodexConfigSection(
+    state: CreateSessionUiState,
+    showWorktreeToggle: Boolean,
+    viewModel: CreateSessionViewModel,
+) {
+    val preset = state.codexPreset
+
+    Text("Autonomy", style = MaterialTheme.typography.labelLarge)
+    val presets = listOf(
+        CodexAutonomyPreset.ReadOnly to "Read-only",
+        CodexAutonomyPreset.Auto to "Auto",
+        CodexAutonomyPreset.FullAccess to "Full-access",
+    )
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        presets.forEachIndexed { index, (value, label) ->
+            SegmentedButton(
+                selected = preset == value,
+                onClick = { viewModel.selectCodexPreset(value) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = presets.size),
+                icon = {},
+            ) { Text(label) }
+        }
+    }
+    Text(
+        text = when (preset) {
+            CodexAutonomyPreset.ReadOnly -> "Reads the project; asks before any change."
+            CodexAutonomyPreset.Auto -> "Edits within the workspace; asks before risky actions."
+            CodexAutonomyPreset.FullAccess -> "No sandbox or approval prompts (--yolo)."
+            null -> "Custom sandbox/approval set in Advanced."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Text("Model", style = MaterialTheme.typography.labelLarge)
+    CodexModelDropdown(selected = state.codexModel, onSelect = viewModel::setCodexModel)
+
+    Text("Reasoning effort", style = MaterialTheme.typography.labelLarge)
+    val efforts = CreateSessionViewModel.REASONING_EFFORTS
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        efforts.forEachIndexed { index, effort ->
+            SegmentedButton(
+                selected = state.codexReasoningEffort == effort,
+                onClick = { viewModel.setCodexReasoningEffort(effort) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = efforts.size),
+                icon = {},
+            ) { Text(effort.replaceFirstChar { it.uppercase() }) }
+        }
+    }
+
+    var advancedExpanded by remember { mutableStateOf(false) }
+    TextButton(
+        onClick = { advancedExpanded = !advancedExpanded },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Icon(
+            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+        )
+        Text("Advanced")
+    }
+    if (advancedExpanded) {
+        val fullAuto = state.codexFullAuto
+        Text("Sandbox (-s)", style = MaterialTheme.typography.labelLarge)
+        val sandboxes = listOf(
+            "read-only" to "Read-only",
+            "workspace-write" to "Workspace",
+            "danger-full-access" to "Full",
+        )
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            sandboxes.forEachIndexed { index, (value, label) ->
+                SegmentedButton(
+                    selected = state.codexSandbox == value,
+                    onClick = { viewModel.setCodexSandbox(value) },
+                    enabled = !fullAuto,
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = sandboxes.size),
+                    icon = {},
+                ) { Text(label) }
+            }
+        }
+        Text("Approval (-a)", style = MaterialTheme.typography.labelLarge)
+        val approvals = listOf(
+            "untrusted" to "Untrusted",
+            "on-request" to "On-request",
+            "never" to "Never",
+        )
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            approvals.forEachIndexed { index, (value, label) ->
+                SegmentedButton(
+                    selected = state.codexApproval == value,
+                    onClick = { viewModel.setCodexApproval(value) },
+                    enabled = !fullAuto,
+                    shape = SegmentedButtonDefaults.itemShape(index = index, count = approvals.size),
+                    icon = {},
+                ) { Text(label) }
+            }
+        }
+        if (fullAuto) {
+            Text(
+                text = "Sandbox and approval are ignored in Full-access (--yolo).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) {
+            OutlinedTextField(
+                value = state.branchName,
+                onValueChange = viewModel::setBranchName,
+                label = { Text("Branch name (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+
+    Button(
+        onClick = viewModel::submitCodex,
+        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CodexModelDropdown(
+    selected: String?,
+    onSelect: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = selected ?: "Default",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Model") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Default") },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                },
+            )
+            CreateSessionViewModel.CODEX_MODELS.forEach { model ->
+                DropdownMenuItem(
+                    text = { Text(model) },
+                    onClick = {
+                        onSelect(model)
+                        expanded = false
+                    },
+                )
+            }
+        }
     }
 }
 
