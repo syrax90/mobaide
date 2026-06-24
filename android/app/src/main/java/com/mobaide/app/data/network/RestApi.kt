@@ -3,6 +3,8 @@ package com.mobaide.app.data.network
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.AutoScanListResponse
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.CodexLoginRequest
+import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.LinearLabelDto
 import com.mobaide.app.data.network.dto.LinearStateDto
 import com.mobaide.app.data.network.dto.CreateSessionRequest
@@ -106,6 +108,17 @@ class RestApi(
         val request = Request.Builder()
             .url("${baseUrl()}/api/sessions")
             .get()
+            .build()
+        return execute(request)
+    }
+
+    /** Authenticate the host's Codex CLI with an OpenAI API key (stdin-piped,
+     *  never persisted by app or agent). */
+    suspend fun codexLogin(apiKey: String): CodexLoginResponse {
+        val body = json.encodeToString(CodexLoginRequest(apiKey)).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/codex/login")
+            .post(body)
             .build()
         return execute(request)
     }

@@ -4,8 +4,9 @@ from .claude_launcher import (
     ClaudeOptions,
     LaunchSpec,
 )
-from .cli_launcher import CliBinaryNotFoundError, CliLauncher
+from .cli_launcher import CliAuthRequiredError, CliBinaryNotFoundError, CliLauncher
 from .codex_launcher import (
+    CodexAuthRequiredError,
     CodexBinaryNotFoundError,
     CodexLauncher,
     CodexOptions,
@@ -38,9 +39,11 @@ __all__ = [
     "ClaudeOptions",
     "CliLauncher",
     "CliBinaryNotFoundError",
+    "CliAuthRequiredError",
     "CodexLauncher",
     "CodexOptions",
     "CodexBinaryNotFoundError",
+    "CodexAuthRequiredError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

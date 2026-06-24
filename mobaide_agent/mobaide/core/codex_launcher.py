@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .cli_launcher import (
+    CliAuthRequiredError,
     CliBinaryNotFoundError,
     LaunchSpec,
     LaunchTarget,
@@ -25,6 +26,7 @@ from .cli_launcher import (
     resolve_standard_worktree_cwd,
     windows_npm_fallbacks,
 )
+from .codex_auth import codex_auth_present
 from .projects_config import ProjectConfig
 
 if TYPE_CHECKING:
@@ -41,6 +43,22 @@ class CodexBinaryNotFoundError(CliBinaryNotFoundError):
         "Codex CLI not found. Install it with:\n"
         "    npm install -g @openai/codex\n"
         "or set MOBAIDE_CODEX_BIN to its absolute path in the agent's env file."
+    )
+
+
+class CodexAuthRequiredError(CliAuthRequiredError):
+    """Raised when the Codex CLI is installed but not authenticated.
+
+    Guards the spawn path: launching an unauthenticated ``codex`` would surface
+    its interactive login screen inside the PTY relay. The router/relay map this
+    to a ``codex_auth_required`` marker so the app can prompt for an API-key
+    login instead.
+    """
+
+    cli_name = "codex"
+    _AUTH_HINT = (
+        "Codex is not authenticated. Sign in from the app with an OpenAI API "
+        "key, or run 'codex login' on the agent host."
     )
 
 
@@ -112,6 +130,11 @@ class CodexLauncher:
             )
         return self._resolved_binary
 
+    def resolve_binary(self) -> str:
+        """Public access to the resolved Codex binary (honours the configured
+        override) so the login endpoint runs the same ``codex`` sessions use."""
+        return self._resolve_binary()
+
     async def build(
         self,
         target: LaunchTarget,
@@ -119,11 +142,16 @@ class CodexLauncher:
         session_id: str | None = None,
     ) -> LaunchSpec:
         # ``session_id`` is accepted for ``CliLauncher`` parity but unused: Codex
-        # has no per-session hooks. Resolving the binary first (inside
-        # ``_build_argv``) means a missing CLI aborts before any cwd work.
+        # has no per-session hooks. Build argv (resolves the binary) and verify
+        # auth before any cwd work, so a missing CLI (503) or an unauthenticated
+        # one (409) aborts before a worktree is created. The auth check reads the
+        # built launch env (same CODEX_HOME / OPENAI_API_KEY / keyring the session
+        # would use) and may probe ``codex login status``, so it needs the binary.
         argv = self._build_argv(options)
-        cwd = await self._resolve_cwd(target, options)
         env = self._build_env(target)
+        if not await codex_auth_present(self._resolve_binary(), env):
+            raise CodexAuthRequiredError()
+        cwd = await self._resolve_cwd(target, options)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
 
     def _build_argv(self, options: CodexOptions) -> list[str]:

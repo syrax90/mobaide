@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
@@ -20,6 +21,12 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
@@ -77,6 +84,13 @@ data class CreateSessionUiState(
     val autoScanConfigInitialized: Boolean = false,
     val dismiss: Boolean = false,
     val error: String? = null,
+    // Codex login dialog. All fields are memory-only — the API key is
+    // never persisted to disk on the device.
+    val codexLoginVisible: Boolean = false,
+    val codexApiKeyDraft: String = "",
+    val codexApiKeyVisible: Boolean = false,
+    val codexLoginSubmitting: Boolean = false,
+    val codexLoginError: String? = null,
 )
 
 /**
@@ -426,6 +440,56 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
+    fun setCodexApiKeyDraft(v: String) = _uiState.update {
+        it.copy(codexApiKeyDraft = v, codexLoginError = null)
+    }
+
+    fun toggleCodexApiKeyVisible() = _uiState.update {
+        it.copy(codexApiKeyVisible = !it.codexApiKeyVisible)
+    }
+
+    /** Closes the Codex login dialog and wipes the typed key from memory. */
+    fun dismissCodexLogin() = _uiState.update {
+        it.copy(
+            codexLoginVisible = false,
+            codexApiKeyDraft = "",
+            codexApiKeyVisible = false,
+            codexLoginSubmitting = false,
+            codexLoginError = null,
+        )
+    }
+
+    /**
+     * Sends the API key to the agent (`POST /api/codex/login`); on success wipes
+     * the key, closes the dialog, and re-runs [submitCodex] so the session the
+     * user originally asked for is created. The key lives only in transient
+     * UiState — never persisted.
+     */
+    fun submitCodexLogin() {
+        val key = _uiState.value.codexApiKeyDraft
+        if (key.isBlank() || _uiState.value.codexLoginSubmitting) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(codexLoginSubmitting = true, codexLoginError = null) }
+            try {
+                sessionRepository.codexLogin(key)
+                _uiState.update {
+                    it.copy(
+                        codexLoginVisible = false,
+                        codexApiKeyDraft = "",
+                        codexApiKeyVisible = false,
+                        codexLoginSubmitting = false,
+                        codexLoginError = null,
+                    )
+                }
+                submitCodex()
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(codexLoginSubmitting = false, codexLoginError = codexLoginErrorMessage(e))
+                }
+            }
+        }
+    }
+
     fun submitCustomShell() {
         val state = _uiState.value
         if (state.submitting) return
@@ -479,12 +543,47 @@ class CreateSessionViewModel @Inject constructor(
                 _uiState.update { it.copy(submitting = false) }
                 _navigateToSession.tryEmit(response.session_id)
             } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(submitting = false, error = "Failed to create session: ${e.message}")
+                if (e is ApiException && isCodexAuthRequired(e.errorBody)) {
+                    // Codex is installed but not signed in: prompt for an API key
+                    // instead of a raw error, then retry the original create. The
+                    // marker drives this (not the status code) — the server sends
+                    // 409, not 401, so the AuthInterceptor's refresh-retry on 401
+                    // can't swallow the marker before we read it.
+                    _uiState.update {
+                        it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(submitting = false, error = "Failed to create session: ${e.message}")
+                    }
                 }
             }
         }
     }
+
+    /**
+     * True when an error body carries the `codex_auth_required` marker. The
+     * marker is top-level on the relay path and nested under `detail` on direct
+     * REST, so both shapes are checked; tolerant of any non-JSON body.
+     */
+    private fun isCodexAuthRequired(body: String): Boolean = runCatching {
+        val obj = Json.parseToJsonElement(body).jsonObject
+        obj.hasCodexAuthMarker() || (obj["detail"] as? JsonObject)?.hasCodexAuthMarker() == true
+    }.getOrDefault(false)
+
+    private fun JsonObject.hasCodexAuthMarker(): Boolean =
+        this["codex_auth_required"]?.jsonPrimitive?.booleanOrNull == true
+
+    /** Login-failure text that never echoes the submitted key (the agent already
+     *  sanitizes its `detail`). */
+    private fun codexLoginErrorMessage(e: Throwable): String = when {
+        e is ApiException -> extractDetail(e.errorBody) ?: "Login failed (HTTP ${e.code})"
+        else -> e.message ?: "Login failed"
+    }
+
+    private fun extractDetail(body: String): String? = runCatching {
+        Json.parseToJsonElement(body).jsonObject["detail"]?.jsonPrimitive?.contentOrNull
+    }.getOrNull()
 
     private fun agentScopeKey(): String? = tokenStore.getAgentId() ?: tokenStore.getAgentUrl()
 

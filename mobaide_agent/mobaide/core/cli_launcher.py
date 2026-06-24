@@ -45,6 +45,25 @@ class CliBinaryNotFoundError(RuntimeError):
         super().__init__(f"{self._INSTALL_HINT}\nSearched: {searched}")
 
 
+class CliAuthRequiredError(RuntimeError):
+    """Base error when a managed CLI is installed but not authenticated.
+
+    Parallel to :class:`CliBinaryNotFoundError`: subclasses set ``cli_name`` and
+    an actionable ``_AUTH_HINT``, and the router/relay layers derive a uniform
+    ``<cli>_auth_required`` marker from ``cli_name`` so the mobile client can
+    surface a login prompt instead of spawning a session that would hang on the
+    CLI's interactive login screen. Distinct from a missing binary (503): an
+    unauthenticated-but-present CLI is client-actionable and surfaced as 409 (not
+    401, which the app's JWT-refresh interceptor would intercept and retry).
+    """
+
+    cli_name: str = "cli"
+    _AUTH_HINT: str = "CLI authentication required."
+
+    def __init__(self) -> None:
+        super().__init__(self._AUTH_HINT)
+
+
 @dataclass
 class LaunchSpec:
     """Result of building a launch — argv/cwd/env ready to hand to a PTY."""

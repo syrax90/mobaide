@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from mobaide.core import codex_launcher
+from mobaide.core import codex_auth, codex_launcher
 from mobaide.core.claude_launcher import AdHocLaunch
 from mobaide.core.codex_launcher import (
+    CodexAuthRequiredError,
     CodexBinaryNotFoundError,
     CodexLauncher,
     CodexOptions,
@@ -18,6 +20,21 @@ from mobaide.core.projects_config import ProjectConfig
 # Captured before the autouse ``_pin_codex_binary`` fixture swaps it, so the
 # resolver tests below exercise the real implementation.
 _REAL_CODEX_RESOLVER = codex_launcher._resolve_codex_binary
+
+
+@pytest.fixture(autouse=True)
+def _codex_authed_by_default(monkeypatch):
+    """Default every launcher test to an authenticated Codex.
+
+    Most tests here exercise argv/env/cwd, not auth, so the CLA-71 ``build()``
+    auth guard would otherwise trip them in a clean CI env (no
+    ``~/.codex/auth.json``, no ``OPENAI_API_KEY``) — they'd raise
+    ``CodexAuthRequiredError`` before reaching their assertions, and pass only on
+    a host that happens to be Codex-authed. The auth-specific tests override this
+    (the negative ones via ``_unauthenticated_codex_env``; the positive ones set
+    their own env in the test body), so this default never masks them.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-default")
 
 
 def _make_project(path: str, *, conda: str | None = None) -> ProjectConfig:
@@ -354,3 +371,126 @@ def test_real_resolver_raises_with_actionable_message(
     assert "@openai/codex" in msg
     assert "MOBAIDE_CODEX_BIN" in msg
     assert exc_info.value.searched_paths
+
+
+# ---------------------------------------------------------------------------
+# auth guard (CLA-71)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _unauthenticated_codex_env(monkeypatch, tmp_path):
+    """Empty CODEX_HOME (no auth.json), no env key, and a ``codex login status``
+    that reports logged-out — so ``codex_auth_present`` returns False
+    deterministically, independent of the test host's real codex credentials."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(argv, 1, b"", b""),
+    )
+    yield
+
+
+@pytest.mark.asyncio
+async def test_build_raises_auth_required_when_unauthenticated(
+    tmp_path: Path, _unauthenticated_codex_env,
+):
+    """``build()`` must raise ``CodexAuthRequiredError`` BEFORE any cwd/worktree
+    work when neither an env key nor an auth.json is reachable — so the spawn
+    path never launches an unauthenticated codex into its login TUI."""
+    with pytest.raises(CodexAuthRequiredError):
+        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+
+
+@pytest.mark.asyncio
+async def test_build_auth_guard_runs_before_worktree_creation(
+    tmp_path: Path, _unauthenticated_codex_env,
+):
+    """The guard fires before worktree resolution: a git project requesting a
+    worktree with no WorktreeManager would otherwise raise the loud
+    misconfiguration ``RuntimeError`` — proving auth is checked first."""
+    (tmp_path / ".git").mkdir()
+    with pytest.raises(CodexAuthRequiredError):
+        await CodexLauncher().build(
+            _make_project(str(tmp_path)),
+            CodexOptions(worktree=True, branch_name="x"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_succeeds_when_env_api_key_present(
+    tmp_path: Path, monkeypatch,
+):
+    """An ``OPENAI_API_KEY`` in the inherited env passes the guard and the build
+    completes normally (no auth.json required)."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-present")
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+    assert spec.argv[0] == "codex"
+
+
+@pytest.mark.asyncio
+async def test_build_falls_back_to_auth_json_when_status_unsupported(
+    tmp_path: Path, monkeypatch,
+):
+    """On an older codex without ``login status`` (clap exit 2), detection is
+    indeterminate and falls back to auth.json presence, so a valid file-authed
+    host still builds."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(
+            argv, 2, b"", b"error: unrecognized subcommand 'status'",
+        ),
+    )
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_build_raises_when_auth_json_stale_and_status_logged_out(
+    tmp_path: Path, monkeypatch,
+):
+    """A present-but-stale ``auth.json`` no longer short-circuits: when ``codex
+    login status`` reports signed out, ``build()`` must raise
+    ``CodexAuthRequiredError`` instead of launching Codex into interactive
+    login — the round-4 review fix."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(argv, 1, b"", b"Not logged in"),
+    )
+    with pytest.raises(CodexAuthRequiredError):
+        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+
+
+@pytest.mark.asyncio
+async def test_build_succeeds_when_login_status_reports_signed_in(
+    tmp_path: Path, monkeypatch,
+):
+    """No env key and no auth.json, but ``codex login status`` exits 0 — the
+    credential lives in the OS keyring the file check can't see. The guard must
+    pass and build complete, rather than wrongly demanding an API-key login."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(argv, 0, b"", b""),
+    )
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+    assert spec.argv[0] == "codex"
+
+
+def test_auth_required_error_discriminator_and_hint():
+    err = CodexAuthRequiredError()
+    assert err.cli_name == "codex"
+    msg = str(err)
+    assert "not authenticated" in msg.lower()
+    assert "codex login" in msg.lower()
