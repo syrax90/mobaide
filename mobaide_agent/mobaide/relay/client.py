@@ -141,13 +141,33 @@ _EVENT_TO_STATUS = {
 _SECRET_VALIDATION_FIELDS = frozenset({"linear_api_key", "api_key"})
 
 
+def _input_carries_secret(value: object, secret_fields: frozenset[str]) -> bool:
+    """True if a validation error's ``input`` payload embeds a secret field.
+
+    Mirrors the agent ``app.py`` helper: the ``loc`` check misses body-level
+    errors (a malformed body is reported at ``loc=("body",)`` with the whole raw
+    body as ``input``), so walk the parsed payload to catch a secret nested under
+    a key ``loc`` never names.
+    """
+    if isinstance(value, dict):
+        return any(
+            key in secret_fields or _input_carries_secret(val, secret_fields)
+            for key, val in value.items()
+        )
+    if isinstance(value, list):
+        return any(_input_carries_secret(item, secret_fields) for item in value)
+    return False
+
+
 def _scrub_validation_errors(exc: "ValidationError") -> list[dict[str, object]]:
     """Return Pydantic error records with raw inputs stripped from secret fields."""
     scrubbed: list[dict[str, object]] = []
     for err in exc.errors():
         loc = err.get("loc", ())
         cleaned: dict[str, object] = dict(err)
-        if any(part in _SECRET_VALIDATION_FIELDS for part in loc):
+        if any(part in _SECRET_VALIDATION_FIELDS for part in loc) or _input_carries_secret(
+            err.get("input"), _SECRET_VALIDATION_FIELDS
+        ):
             cleaned.pop("input", None)
         scrubbed.append(cleaned)
     return scrubbed

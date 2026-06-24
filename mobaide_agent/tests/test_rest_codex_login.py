@@ -142,3 +142,19 @@ class TestCodexLoginAuthAndValidation:
 
         assert resp.status_code == 422
         assert "sk-leaked-secret-value" not in resp.text
+
+    async def test_body_level_validation_error_scrubs_nested_api_key(
+        self, client, auth_headers,
+    ):
+        """A whole-body type error (a JSON array where an object is expected) is
+        reported at ``loc=("body",)`` with the entire raw body as ``input`` — the
+        field-name scrub alone can't see the nested ``api_key``. The handler must
+        walk the payload and strip it anyway."""
+        resp = await client.post(
+            "/api/codex/login",
+            headers=auth_headers,
+            json=[{"api_key": "sk-body-level-leak-123456"}],
+        )
+
+        assert resp.status_code == 422
+        assert "sk-body-level-leak-123456" not in resp.text

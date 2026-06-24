@@ -33,30 +33,73 @@ def test_codex_home_defaults_to_user_dot_codex():
     assert "CODEX_HOME" not in home
 
 
-def test_auth_present_true_when_env_has_api_key(tmp_path):
-    """An ``OPENAI_API_KEY`` in the env satisfies the guard with no auth.json —
-    the env-credential path Codex itself honours."""
+async def test_auth_present_true_when_env_has_api_key(tmp_path, monkeypatch):
+    """An ``OPENAI_API_KEY`` in the env satisfies the guard with no auth.json and
+    no status probe — the env-credential path Codex itself honours."""
+    captured = _patch_run(monkeypatch, returncode=0)
     env = {"OPENAI_API_KEY": "sk-live-xyz", "CODEX_HOME": str(tmp_path)}
-    assert codex_auth_present(env) is True
+    assert await codex_auth_present(codex_bin="codex", env=env) is True
+    assert "argv" not in captured  # short-circuits before `codex login status`
 
 
-def test_auth_present_true_when_auth_json_exists(tmp_path):
+async def test_auth_present_true_when_auth_json_exists(tmp_path, monkeypatch):
+    """An existing ``auth.json`` (the file store) passes with no status probe."""
+    captured = _patch_run(monkeypatch, returncode=1)
     (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
     env = {"CODEX_HOME": str(tmp_path)}
-    assert codex_auth_present(env) is True
+    assert await codex_auth_present(codex_bin="codex", env=env) is True
+    assert "argv" not in captured  # file present short-circuits the probe
 
 
-def test_auth_present_false_when_neither_credential(tmp_path):
-    """No env key and no auth.json under an empty CODEX_HOME -> unauthenticated.
-    This is the no-credential hang the launcher guard prevents."""
+async def test_auth_present_true_via_login_status_when_no_file(tmp_path, monkeypatch):
+    """No env key and no auth.json, but ``codex login status`` exits 0 — the
+    keyring/auto credential store the file check cannot see. The status probe is
+    the authoritative positive signal here."""
+    captured = _patch_run(monkeypatch, returncode=0)
     env = {"CODEX_HOME": str(tmp_path)}
-    assert codex_auth_present(env) is False
+    assert await codex_auth_present(codex_bin="codex", env=env) is True
+    assert captured["argv"] == ["codex", "login", "status"]
 
 
-def test_auth_present_false_for_empty_env_api_key(tmp_path):
-    """A present-but-empty ``OPENAI_API_KEY`` must not count as a credential."""
+async def test_auth_present_false_when_no_file_and_status_logged_out(
+    tmp_path, monkeypatch,
+):
+    """No env key, no auth.json, and ``codex login status`` exits non-zero -> the
+    no-credential hang the launcher guard prevents."""
+    _patch_run(monkeypatch, returncode=1)
+    env = {"CODEX_HOME": str(tmp_path)}
+    assert await codex_auth_present(codex_bin="codex", env=env) is False
+
+
+async def test_auth_present_false_when_status_probe_cannot_run(tmp_path, monkeypatch):
+    """If the status probe can't execute (missing/old binary), detection falls
+    back to unauthenticated rather than crashing — env and file creds are already
+    ruled out, so 'can't confirm' is safely treated as not signed in."""
+    def _boom(argv, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory", argv[0])
+
+    monkeypatch.setattr(codex_auth.subprocess, "run", _boom)
+    env = {"CODEX_HOME": str(tmp_path)}
+    assert await codex_auth_present(codex_bin="codex", env=env) is False
+
+
+async def test_auth_present_false_for_empty_env_api_key(tmp_path, monkeypatch):
+    """A present-but-empty ``OPENAI_API_KEY`` is not a credential; with no
+    auth.json and a logged-out status the guard reports unauthenticated."""
+    _patch_run(monkeypatch, returncode=1)
     env = {"OPENAI_API_KEY": "", "CODEX_HOME": str(tmp_path)}
-    assert codex_auth_present(env) is False
+    assert await codex_auth_present(codex_bin="codex", env=env) is False
+
+
+async def test_auth_present_status_windows_cmd_shim_wrapped(tmp_path, monkeypatch):
+    """The status probe wraps a Windows ``.cmd`` shim via ``cmd /c`` — the same
+    shared argv builder the login path uses."""
+    monkeypatch.setattr(codex_auth.sys, "platform", "win32")
+    captured = _patch_run(monkeypatch, returncode=0)
+    env = {"CODEX_HOME": str(tmp_path)}
+    assert await codex_auth_present(codex_bin=r"C:\npm\codex.cmd", env=env) is True
+    assert captured["argv"][:2] == ["cmd", "/c"]
+    assert captured["argv"][2:] == [r"C:\npm\codex.cmd", "login", "status"]
 
 
 # ---------------------------------------------------------------------------

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from mobaide.core import codex_launcher
+from mobaide.core import codex_auth, codex_launcher
 from mobaide.core.claude_launcher import AdHocLaunch
 from mobaide.core.codex_launcher import (
     CodexAuthRequiredError,
@@ -379,10 +380,15 @@ def test_real_resolver_raises_with_actionable_message(
 
 @pytest.fixture
 def _unauthenticated_codex_env(monkeypatch, tmp_path):
-    """Point CODEX_HOME at an empty tmp dir (no auth.json) and clear the env
-    key, so ``codex_auth_present`` on the built launch env returns False."""
+    """Empty CODEX_HOME (no auth.json), no env key, and a ``codex login status``
+    that reports logged-out — so ``codex_auth_present`` returns False
+    deterministically, independent of the test host's real codex credentials."""
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(argv, 1, b"", b""),
+    )
     yield
 
 
@@ -436,6 +442,24 @@ async def test_build_succeeds_when_auth_json_present(
     (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
     spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
     assert spec.cwd == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_build_succeeds_when_login_status_reports_signed_in(
+    tmp_path: Path, monkeypatch,
+):
+    """No env key and no auth.json, but ``codex login status`` exits 0 — the
+    credential lives in the OS keyring the file check can't see. The guard must
+    pass and build complete, rather than wrongly demanding an API-key login."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(argv, 0, b"", b""),
+    )
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+    assert spec.argv[0] == "codex"
 
 
 def test_auth_required_error_discriminator_and_hint():

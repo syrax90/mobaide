@@ -551,6 +551,24 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     # the secret back to the caller; other fields keep `input`.
     _SECRET_FIELDS = frozenset({"linear_api_key", "api_key"})
 
+    def _input_carries_secret(value: object) -> bool:
+        """True if a validation error's ``input`` payload embeds a secret field.
+
+        The ``loc`` check alone misses *body-level* errors: a malformed body
+        (e.g. a JSON array posted to an object route) is rejected before field
+        extraction, so Pydantic reports ``loc=("body",)`` with the whole raw body
+        as ``input`` — carrying the secret under a key ``loc`` never names. Walk
+        the parsed payload (plain dict/list from JSON) so those are scrubbed too.
+        """
+        if isinstance(value, dict):
+            return any(
+                key in _SECRET_FIELDS or _input_carries_secret(val)
+                for key, val in value.items()
+            )
+        if isinstance(value, list):
+            return any(_input_carries_secret(item) for item in value)
+        return False
+
     @app.exception_handler(RequestValidationError)
     async def _scrub_validation_errors(
         request: Request, exc: RequestValidationError,
@@ -558,7 +576,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         scrubbed = []
         for err in exc.errors():
             loc = err.get("loc", ())
-            if any(part in _SECRET_FIELDS for part in loc):
+            if any(part in _SECRET_FIELDS for part in loc) or _input_carries_secret(
+                err.get("input")
+            ):
                 err = {k: v for k, v in err.items() if k != "input"}
             scrubbed.append(err)
         return JSONResponse(status_code=422, content={"detail": scrubbed})

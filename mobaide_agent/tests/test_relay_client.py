@@ -1161,6 +1161,28 @@ class TestDispatchProxyCodexLogin:
         assert '"input": ""' not in wire
         assert '"input":""' not in wire
 
+    async def test_body_level_malformed_body_scrubs_nested_key(
+        self, client, mock_app_state
+    ):
+        """A whole-body type error (a JSON array, not an object) is reported with
+        the entire raw body as ``input`` — the field-name scrub can't see the
+        nested ``api_key``, so the relay's payload walk must strip it (mirrors the
+        agent app.py guarantee)."""
+        mock_app_state.codex_launcher = MagicMock()
+        ws = AsyncMock()
+
+        await client._handle_control(
+            json.dumps(
+                self._login_ctrl([{"api_key": "sk-relay-body-leak-123456"}]),
+            ).encode(),
+            ws,
+        )
+
+        _, _, payload = decode(ws.send.call_args[0][0])
+        resp = json.loads(payload)
+        assert resp["status"] == 422
+        assert "sk-relay-body-leak-123456" not in payload.decode("utf-8")
+
     async def test_successful_login_returns_200_authenticated(
         self, client, mock_app_state, monkeypatch
     ):

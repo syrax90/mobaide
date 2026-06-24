@@ -144,12 +144,12 @@ class CodexLauncher:
         # ``session_id`` is accepted for ``CliLauncher`` parity but unused: Codex
         # has no per-session hooks. Build argv (resolves the binary) and verify
         # auth before any cwd work, so a missing CLI (503) or an unauthenticated
-        # one (401) aborts before a worktree is created. The auth check reads the
-        # built launch env so it sees the same CODEX_HOME / OPENAI_API_KEY the
-        # session would launch with.
+        # one (409) aborts before a worktree is created. The auth check reads the
+        # built launch env (same CODEX_HOME / OPENAI_API_KEY / keyring the session
+        # would use) and may probe ``codex login status``, so it needs the binary.
         argv = self._build_argv(options)
         env = self._build_env(target)
-        if not codex_auth_present(env):
+        if not await codex_auth_present(self._resolve_binary(), env):
             raise CodexAuthRequiredError()
         cwd = await self._resolve_cwd(target, options)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
