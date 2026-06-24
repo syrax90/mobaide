@@ -1,5 +1,38 @@
 # mobaide_agent Changelog
 
+## [0.2.17](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.16...agent-v0.2.17) (2026-06-24)
+
+
+### Features
+
+* add Codex to the create-session wizard (CLA-69) ([f41919c](https://github.com/syrax90/claude_mobile/commit/f41919c1c51f5191cf754c80d9e2471e108a04f3))
+* add Codex to the create-session wizard (CLA-69) ([c7600f6](https://github.com/syrax90/claude_mobile/commit/c7600f6df2a019fec6a37f73ba9376a932a2eaf4))
+* **agent:** preserve per-project Auto Scan initial prompt across sessions ([a58be75](https://github.com/syrax90/claude_mobile/commit/a58be75a100c0e0e276f02451b1b1c6a777af114))
+* **agent:** preserve per-project Auto Scan initial prompt across sessions ([dc95191](https://github.com/syrax90/claude_mobile/commit/dc9519167d024895b2bbaf90a42126db5ba44e70))
+* **codex:** add in-app Codex CLI authentication/login flow (CLA-71) ([63b72b6](https://github.com/syrax90/claude_mobile/commit/63b72b6dd6d1dfb24f81f057b3de95778de05e0e))
+* **codex:** add in-app Codex CLI authentication/login flow (CLA-71) ([6f7fb00](https://github.com/syrax90/claude_mobile/commit/6f7fb00953d89d44e9cad2ed17e29e066185b599))
+* **installer:** auto-detect Codex binary and write MOBAIDE_CODEX_BIN (CLA-72) ([b9d7922](https://github.com/syrax90/claude_mobile/commit/b9d79224103dd63086161b572fadc3f0730e8583))
+* **installer:** auto-detect Codex binary and write MOBAIDE_CODEX_BIN (CLA-72) ([70760f7](https://github.com/syrax90/claude_mobile/commit/70760f7a8f63df24af5c6a3f0695637a3fc857b9))
+
+
+### Bug Fixes
+
+* **agent:** address Codex review — harden auto_scan_prompt persistence and seeding ([456a5f8](https://github.com/syrax90/claude_mobile/commit/456a5f874779dabed3391306ed16ba2703bc8dee))
+* **agent:** carry split compound OSC color queries; scrub compound from ring ([c7f555b](https://github.com/syrax90/claude_mobile/commit/c7f555b7a304b3df7e1071b3b8c1ceca6886fe8c))
+* **agent:** handle mixed OSC color query+set controls in OscColorResponder ([2b04023](https://github.com/syrax90/claude_mobile/commit/2b040230874012ad3cbd5a4ba5ab46c4a62fbd8d))
+* **agent:** make Auto Scan prompt save best-effort so a persist error can't fail a running scan ([ee2060e](https://github.com/syrax90/claude_mobile/commit/ee2060e56909e4ff99257ccf7d561261c53396fb))
+* **agent:** stop OSC color-query responses leaking into the terminal input field ([da915bd](https://github.com/syrax90/claude_mobile/commit/da915bd483416439bc2ff372c437e2238b527ef0))
+* **agent:** stop OSC color-query responses leaking into the terminal input field ([a54c208](https://github.com/syrax90/claude_mobile/commit/a54c20851c9f0f2571d7245755ca3a177b953626))
+* **codex:** address PR [#270](https://github.com/syrax90/claude_mobile/issues/270) review-round-2 — launcher test CI fix + SecretTextField IME hardening (CLA-71) ([1348d83](https://github.com/syrax90/claude_mobile/commit/1348d8386e92ac0ef311e4ee69bfef5fd57d6db3))
+* **codex:** address PR [#270](https://github.com/syrax90/claude_mobile/issues/270) review-round-3 — keyring-aware auth, login timeout, body-level scrub (CLA-71) ([b0b60da](https://github.com/syrax90/claude_mobile/commit/b0b60da02bbe7dc5643e0f711d4d21995d3d948e))
+* **codex:** address PR [#270](https://github.com/syrax90/claude_mobile/issues/270) review-round-4 — make `codex login status` authoritative over a stale auth.json (CLA-71) ([fc2e15a](https://github.com/syrax90/claude_mobile/commit/fc2e15a0f9a3d2847dc9ea8f4df2ae7ff2b23d04))
+* **codex:** remap auth-required codes to 409/400 to avoid AuthInterceptor retry (CLA-71) ([62d38c4](https://github.com/syrax90/claude_mobile/commit/62d38c4ff5cd96adf6f60afd5c184e2d0366170a))
+
+
+### Documentation
+
+* **agent:** note OscColorResponder handles pure-query OSC controls only ([27f5950](https://github.com/syrax90/claude_mobile/commit/27f59503f51c4f8e61ebb9847abe6e8c79941ec1))
+
 ## [0.2.16](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.15...agent-v0.2.16) (2026-06-23)
 
 

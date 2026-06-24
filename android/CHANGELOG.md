@@ -1,5 +1,27 @@
 # Android Changelog
 
+## [1.14.0](https://github.com/syrax90/claude_mobile/compare/android-v1.13.0...android-v1.14.0) (2026-06-24)
+
+
+### Features
+
+* add Codex to the create-session wizard (CLA-69) ([f41919c](https://github.com/syrax90/claude_mobile/commit/f41919c1c51f5191cf754c80d9e2471e108a04f3))
+* add Codex to the create-session wizard (CLA-69) ([c7600f6](https://github.com/syrax90/claude_mobile/commit/c7600f6df2a019fec6a37f73ba9376a932a2eaf4))
+* **agent:** preserve per-project Auto Scan initial prompt across sessions ([a58be75](https://github.com/syrax90/claude_mobile/commit/a58be75a100c0e0e276f02451b1b1c6a777af114))
+* **agent:** preserve per-project Auto Scan initial prompt across sessions ([dc95191](https://github.com/syrax90/claude_mobile/commit/dc9519167d024895b2bbaf90a42126db5ba44e70))
+* **android:** make terminal control-key bar CLI-aware for Codex (CLA-70) ([c0f50ac](https://github.com/syrax90/claude_mobile/commit/c0f50ac10cb8bcf15d7f3ca4f02473d46d56cd68))
+* **android:** make terminal control-key bar CLI-aware for Codex (CLA-70) ([4abfc10](https://github.com/syrax90/claude_mobile/commit/4abfc1005ad3cda9a418baba406009e5696016f8))
+* **codex:** add in-app Codex CLI authentication/login flow (CLA-71) ([63b72b6](https://github.com/syrax90/claude_mobile/commit/63b72b6dd6d1dfb24f81f057b3de95778de05e0e))
+* **codex:** add in-app Codex CLI authentication/login flow (CLA-71) ([6f7fb00](https://github.com/syrax90/claude_mobile/commit/6f7fb00953d89d44e9cad2ed17e29e066185b599))
+
+
+### Bug Fixes
+
+* **agent:** address Codex review — harden auto_scan_prompt persistence and seeding ([456a5f8](https://github.com/syrax90/claude_mobile/commit/456a5f874779dabed3391306ed16ba2703bc8dee))
+* **android:** seed Codex sessionKind from REST on cold launch (CLA-70 review) ([88012f8](https://github.com/syrax90/claude_mobile/commit/88012f8b96ea3b9371206aca15b02b71de1b5ca8))
+* **codex:** address PR [#270](https://github.com/syrax90/claude_mobile/issues/270) review-round-2 — launcher test CI fix + SecretTextField IME hardening (CLA-71) ([1348d83](https://github.com/syrax90/claude_mobile/commit/1348d8386e92ac0ef311e4ee69bfef5fd57d6db3))
+* **codex:** remap auth-required codes to 409/400 to avoid AuthInterceptor retry (CLA-71) ([62d38c4](https://github.com/syrax90/claude_mobile/commit/62d38c4ff5cd96adf6f60afd5c184e2d0366170a))
+
 ## [1.13.0](https://github.com/syrax90/claude_mobile/compare/android-v1.12.0...android-v1.13.0) (2026-06-23)
 
 
