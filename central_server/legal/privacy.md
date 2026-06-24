@@ -1,7 +1,7 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 22 May 2026
+**Last updated:** 24 June 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android device, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
@@ -88,7 +88,14 @@ The following information stays on your phone and is not transmitted to the cent
 - Terminal display preferences (display mode, column count).
 - A local cache of Linear labels / states for your project (only if you use the Linear Auto Scan feature on your agent), so the in-app filter pickers can render offline.
 
-### 3.6 Information we do **not** collect
+### 3.6 In-app support requests
+
+The app includes an in-app **Help & Support** screen (reachable from the Login and Settings screens, including when you are signed out). It offers two actions:
+
+- **Email support.** When you tap "Email support", the app opens *your own email client* with a message pre-filled to our support address (this does **not** go through the Mobaide central server). The body includes a short diagnostics block to help us troubleshoot: the **app version**, your **device model** (manufacturer and model name, e.g. "Google Pixel 8"), the random **device identifier (UUID)** described in Section 3.2, and — **only if you are signed in** — your **account email address**. You can read and edit the whole message before sending, and **nothing is sent unless you yourself send the email**. If no email app is installed, the app only copies the support address to your clipboard and sends nothing. Support emails are processed by us (and our email-delivery provider) solely to answer your request.
+- **Ask the community.** When you tap "Ask the community", the app opens our public **GitHub Discussions** page in an in-app browser tab. This is a third-party service operated by GitHub, Inc.; the app sends it none of your data. Reading is anonymous; posting requires a GitHub account. Your activity there is governed by [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
+
+### 3.7 Information we do **not** collect
 
 For transparency, the app does **not** collect or use:
 
@@ -99,6 +106,8 @@ For transparency, the app does **not** collect or use:
 - Photos, microphone, or camera input. (QR pairing uses the Google Play Services "Code Scanner" module, which runs in a separate Google Play process and only returns the decoded text of the scanned QR code — Mobaide does not request the `CAMERA` permission and never receives raw camera frames.)
 - Advertising identifiers (Android Advertising ID is not read).
 - Crash reports or telemetry from third-party SDKs. The app does **not** integrate Firebase Analytics, Firebase Crashlytics, Google Analytics, Sentry, Amplitude, Mixpanel, Facebook SDK, or any comparable analytics/tracking SDK.
+
+The in-app support diagnostics described in Section 3.6 are not an exception to the above: they are **not** collected automatically or in the background. They are assembled only when you tap "Email support", are shown to you in your own email client, and reach us only if you choose to send the message.
 
 ---
 
@@ -124,6 +133,7 @@ The app does **not** declare `CAMERA`, `RECORD_AUDIO`, `ACCESS_FINE_LOCATION`, `
 | Pair your phone with your agent and route traffic between them | Device ID, agent ID, pairing ID, JWT tokens | Art. 6(1)(b) — performance of the contract. |
 | Operational logs (connection events, error events) without payload content | Account ID, agent ID, timestamps, IP address of the requesting connection | Art. 6(1)(f) — legitimate interest in operating, debugging, and securing the service. |
 | Detect abuse / brute-force login attempts (rate limiting) | Email, IP address, timestamp | Art. 6(1)(f) — legitimate interest in security. |
+| Respond to your in-app support requests | App version, device model, device UUID, and — if you are signed in — your account email, together with the message you write | Art. 6(1)(f) — legitimate interest in providing user support and troubleshooting the app. |
 
 We do **not** use your data for advertising, profiling, automated decision-making with legal effect, or training machine-learning models.
 
@@ -136,8 +146,9 @@ We do **not** sell, rent, or trade your personal data. Your information is share
 - **Hosting / infrastructure providers** for the central server (located in the EU/EEA). They process data only on our instructions and under a data-processing agreement.
 - **Google LLC** — only when you choose "Sign in with Google". Google verifies your Google ID token; we receive your email and your Google `sub` from Google's identity service. Google's processing is governed by [Google's Privacy Policy](https://policies.google.com/privacy).
 - **Google Play services** — for distributing the app, delivering in-app updates, and providing the GMS Code Scanner module used for QR pairing. Google Play's processing of installation telemetry is governed by [Google Play's terms](https://play.google.com/about/play-terms/).
-- **Email-delivery providers** (SMTP transactional email) that send our verification, password-reset, and security-notification emails. These providers process the recipient address and the email body strictly to deliver the message.
+- **Email-delivery providers** (SMTP transactional email) that send our verification, password-reset, and security-notification emails, and that carry the support emails you send us through the in-app "Email support" action. These providers process the recipient address and the email body strictly to deliver the message.
 - **Anthropic** — when you type a prompt that is routed through your own agent to Claude Code. The content you send to Claude is processed by Anthropic according to [Anthropic's Privacy Policy](https://www.anthropic.com/legal/privacy). Mobaide is not a party to your Anthropic relationship; we merely relay the bytes.
+- **GitHub, Inc.** — when you tap "Ask the community", the app opens our public GitHub Discussions page in your browser. The app does not send GitHub any of your data; anything you choose to post there is provided by you and processed by GitHub under [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - **Public authorities**, if compelled by a valid legal order and only to the extent legally required.
 
 We do **not** share your data with advertisers, data brokers, or analytics aggregators.
@@ -163,6 +174,7 @@ Some of the third parties listed in Section 6 (in particular Google and Anthropi
 | Prompt templates | Until you delete them, or — if you delete your account — purged together with your account: immediately for *Immediate* deletion, or at the end of the 14-day grace window for *Scheduled* deletion. |
 | Operational logs (connection-event level, no payload) | Up to 90 days, then permanently deleted. |
 | Deletion audit record (account identifier, timestamps, request source and outcome) | Retained indefinitely as a minimal proof-of-deletion record, in order to demonstrate compliance with GDPR Art. 17 ("right to erasure"). |
+| Support correspondence (the email you send to our support address and our replies) | Kept only as long as necessary to handle your request and for a reasonable period afterwards, then deleted. |
 | Server-side backups | Rolled over within 30 days. |
 
 After account deletion, all directly identifying data (other than the minimal deletion audit record described above) is purged from the live database within 30 days; backup rotations remove it within an additional 30 days.
