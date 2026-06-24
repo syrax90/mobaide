@@ -13,6 +13,7 @@ import com.mobaide.app.data.network.TerminalFrame
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -122,6 +124,16 @@ class TerminalViewModel @Inject constructor(
 
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
+
+    /** CLI of this session, read from the app-scoped session list (the single source
+     *  of truth) to drive the CLI-aware control-key bar. Defaults to Claude until the
+     *  session-list snapshot resolves, then flips to the real kind reactively. */
+    val sessionKind: StateFlow<SessionKind> =
+        sessionRepository.observeSessionList()
+            .map { sessions ->
+                sessions.firstOrNull { it.session_id == sessionId }?.kind ?: SessionKind.Claude
+            }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()

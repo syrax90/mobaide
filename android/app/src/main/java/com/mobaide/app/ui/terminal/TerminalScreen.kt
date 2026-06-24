@@ -73,6 +73,7 @@ fun TerminalScreen(
     val requestInputFocus by viewModel.requestInputFocus.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
     val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
+    val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showTemplatesPicker by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
@@ -192,6 +193,7 @@ fun TerminalScreen(
                 onExpand = { showFullScreenInput = true },
                 onOpenTemplates = { showTemplatesPicker = true },
                 onSaveAsTemplate = { showSaveTemplateDialog = true },
+                sessionKind = sessionKind,
             )
         }
     }
