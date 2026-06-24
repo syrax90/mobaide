@@ -21,6 +21,21 @@ from mobaide.core.projects_config import ProjectConfig
 _REAL_CODEX_RESOLVER = codex_launcher._resolve_codex_binary
 
 
+@pytest.fixture(autouse=True)
+def _codex_authed_by_default(monkeypatch):
+    """Default every launcher test to an authenticated Codex.
+
+    Most tests here exercise argv/env/cwd, not auth, so the CLA-71 ``build()``
+    auth guard would otherwise trip them in a clean CI env (no
+    ``~/.codex/auth.json``, no ``OPENAI_API_KEY``) — they'd raise
+    ``CodexAuthRequiredError`` before reaching their assertions, and pass only on
+    a host that happens to be Codex-authed. The auth-specific tests override this
+    (the negative ones via ``_unauthenticated_codex_env``; the positive ones set
+    their own env in the test body), so this default never masks them.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-default")
+
+
 def _make_project(path: str, *, conda: str | None = None) -> ProjectConfig:
     return ProjectConfig(name="test", path=path, conda_env=conda)
 
