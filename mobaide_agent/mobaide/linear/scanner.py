@@ -857,11 +857,15 @@ class AutoScanSessionManager:
                 project_name,
                 ProjectUpdatePatch(auto_scan_prompt=applied),
             )
-        except KeyError:
-            # Project vanished between the start-time snapshot and here — never
-            # fail a scan over a best-effort prompt save.
+        except Exception:
+            # Best-effort metadata save: the scan is already started and
+            # registered by the time we get here, so a persistence failure —
+            # the project vanished (KeyError) or a transient disk/permission
+            # error on the store write — must NOT surface as a start failure.
+            # Log and carry on; the prompt simply re-seeds on the next start.
             logger.warning(
-                "autoscan.prompt_persist.project_missing project=%s", project_name,
+                "autoscan.prompt_persist.failed project=%s",
+                project_name, exc_info=True,
             )
             return False
         return True

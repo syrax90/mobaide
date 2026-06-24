@@ -170,6 +170,36 @@ class TestStartPersistsAppliedPrompt:
         assert "projects.changed" not in bus.topics()
 
     @pytest.mark.asyncio
+    async def test_persist_failure_does_not_fail_running_scan(
+        self, tmp_path, monkeypatch,
+    ):
+        # The prompt save is best-effort and runs after the scan is registered;
+        # a transient disk/permission error on the store write must NOT surface
+        # as a start failure — the scan is already running by then.
+        store = _make_store(tmp_path, prompt="previously saved")
+        bus = _RecordingEventBus()
+        mgr = _make_manager(store, bus)
+
+        def _boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(store, "update", _boom)
+
+        instance = await mgr.start(
+            "alpha",
+            client_options=ClaudeOptions(initial_prompt="new prompt"),
+        )
+
+        # start() succeeded and the scan is registered despite the save failing.
+        assert instance is not None
+        assert mgr.get("alpha") is instance
+        # Nothing was persisted (record untouched) or published.
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_prompt == "previously saved"
+        assert "projects.changed" not in bus.topics()
+
+    @pytest.mark.asyncio
     async def test_rejected_start_does_not_rewrite_saved_prompt(self, tmp_path):
         # The prompt save runs AFTER the already-running gate, under the lock,
         # so a second start for the same project must not touch the record.
