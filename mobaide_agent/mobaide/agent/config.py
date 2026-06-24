@@ -236,11 +236,13 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
         if existing.get("MOBAIDE_CODEX_BIN"):
             overrides["MOBAIDE_CODEX_BIN"] = existing["MOBAIDE_CODEX_BIN"]
 
-    # An explicit --claude-bin from the installer wins over a preserved
-    # existing value: a re-install where the operator just moved the
-    # claude package to a new prefix needs the new path to land.
+    # An explicit --claude-bin / --codex-bin from the installer wins over a
+    # preserved existing value: a re-install where the operator just moved the
+    # claude/codex package to a new prefix needs the new path to land.
     if args.claude_bin:
         overrides["MOBAIDE_CLAUDE_BIN"] = args.claude_bin
+    if args.codex_bin:
+        overrides["MOBAIDE_CODEX_BIN"] = args.codex_bin
 
     rendered = render_template(template, overrides=overrides)
     atomic_write(target, rendered)
@@ -261,11 +263,11 @@ def _cmd_set_env(args: argparse.Namespace) -> int:
     """Set a single ``KEY=value`` in an existing ``.env`` in-place.
 
     Used by ``install.ps1`` to surgically backfill ``MOBAIDE_CLAUDE_BIN``
-    on a re-install over an already-paired agent without touching
-    ``JWT_SECRET_KEY`` / ``RELAY_AGENT_TOKEN``. ``init-env --force``
-    preserves those keys explicitly, but it's heavier — it rewrites
-    every templated line. ``set-env`` is the smallest operation that
-    achieves the same outcome for one key.
+    / ``MOBAIDE_CODEX_BIN`` on a re-install over an already-paired agent
+    without touching ``JWT_SECRET_KEY`` / ``RELAY_AGENT_TOKEN``.
+    ``init-env --force`` preserves those keys explicitly, but it's
+    heavier — it rewrites every templated line. ``set-env`` is the
+    smallest operation that achieves the same outcome for one key.
     """
     from mobaide.agent._env_writer import (
         atomic_write,
@@ -318,13 +320,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "MOBAIDE_CLAUDE_BIN. Used by install.ps1 on Windows."
         ),
     )
+    init.add_argument(
+        "--codex-bin",
+        dest="codex_bin",
+        help=(
+            "Absolute path to codex.cmd / codex executable; written as "
+            "MOBAIDE_CODEX_BIN. Used by install.ps1 on Windows."
+        ),
+    )
     init.set_defaults(func=_cmd_init_env)
 
     set_env = sub.add_parser(
         "set-env",
         help=(
             "Set a single KEY=value in an existing .env (in-place; preserves "
-            "all other keys). Used by install.ps1 to backfill MOBAIDE_CLAUDE_BIN."
+            "all other keys). Used by install.ps1 to backfill "
+            "MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN."
         ),
     )
     set_env.add_argument(
