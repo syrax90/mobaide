@@ -432,16 +432,42 @@ async def test_build_succeeds_when_env_api_key_present(
 
 
 @pytest.mark.asyncio
-async def test_build_succeeds_when_auth_json_present(
+async def test_build_falls_back_to_auth_json_when_status_unsupported(
     tmp_path: Path, monkeypatch,
 ):
-    """An existing ``auth.json`` under CODEX_HOME passes the guard with no env
-    key — the file-presence credential path."""
+    """On an older codex without ``login status`` (clap exit 2), detection is
+    indeterminate and falls back to auth.json presence, so a valid file-authed
+    host still builds."""
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(
+            argv, 2, b"", b"error: unrecognized subcommand 'status'",
+        ),
+    )
     spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
     assert spec.cwd == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_build_raises_when_auth_json_stale_and_status_logged_out(
+    tmp_path: Path, monkeypatch,
+):
+    """A present-but-stale ``auth.json`` no longer short-circuits: when ``codex
+    login status`` reports signed out, ``build()`` must raise
+    ``CodexAuthRequiredError`` instead of launching Codex into interactive
+    login — the round-4 review fix."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        codex_auth.subprocess, "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(argv, 1, b"", b"Not logged in"),
+    )
+    with pytest.raises(CodexAuthRequiredError):
+        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
 
 
 @pytest.mark.asyncio

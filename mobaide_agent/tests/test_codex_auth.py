@@ -34,58 +34,90 @@ def test_codex_home_defaults_to_user_dot_codex():
 
 
 async def test_auth_present_true_when_env_has_api_key(tmp_path, monkeypatch):
-    """An ``OPENAI_API_KEY`` in the env satisfies the guard with no auth.json and
-    no status probe — the env-credential path Codex itself honours."""
-    captured = _patch_run(monkeypatch, returncode=0)
+    """An ``OPENAI_API_KEY`` in the env is a definitive credential — returned
+    with no status probe (the env-credential path Codex itself honours)."""
+    captured = _patch_run(monkeypatch, returncode=1)
     env = {"OPENAI_API_KEY": "sk-live-xyz", "CODEX_HOME": str(tmp_path)}
     assert await codex_auth_present(codex_bin="codex", env=env) is True
-    assert "argv" not in captured  # short-circuits before `codex login status`
+    assert "argv" not in captured  # env key short-circuits the status probe
 
 
-async def test_auth_present_true_when_auth_json_exists(tmp_path, monkeypatch):
-    """An existing ``auth.json`` (the file store) passes with no status probe."""
-    captured = _patch_run(monkeypatch, returncode=1)
-    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
-    env = {"CODEX_HOME": str(tmp_path)}
-    assert await codex_auth_present(codex_bin="codex", env=env) is True
-    assert "argv" not in captured  # file present short-circuits the probe
-
-
-async def test_auth_present_true_via_login_status_when_no_file(tmp_path, monkeypatch):
-    """No env key and no auth.json, but ``codex login status`` exits 0 — the
-    keyring/auto credential store the file check cannot see. The status probe is
-    the authoritative positive signal here."""
+async def test_auth_present_true_when_status_signed_in(tmp_path, monkeypatch):
+    """``codex login status`` exit 0 is authoritative — signed in. Also covers the
+    OS keyring / auto store with no auth.json present."""
     captured = _patch_run(monkeypatch, returncode=0)
     env = {"CODEX_HOME": str(tmp_path)}
     assert await codex_auth_present(codex_bin="codex", env=env) is True
     assert captured["argv"] == ["codex", "login", "status"]
 
 
-async def test_auth_present_false_when_no_file_and_status_logged_out(
+async def test_auth_present_false_when_status_logged_out_despite_auth_json(
     tmp_path, monkeypatch,
 ):
-    """No env key, no auth.json, and ``codex login status`` exits non-zero -> the
-    no-credential hang the launcher guard prevents."""
-    _patch_run(monkeypatch, returncode=1)
+    """A present-but-stale ``auth.json`` must NOT be trusted: when ``codex login
+    status`` reports signed out (exit 1), the guard returns False so the session
+    is never launched into Codex's interactive login/failure path. This is the
+    round-4 fix — file presence no longer short-circuits."""
+    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    _patch_run(monkeypatch, returncode=1, stderr=b"Not logged in")
     env = {"CODEX_HOME": str(tmp_path)}
     assert await codex_auth_present(codex_bin="codex", env=env) is False
 
 
-async def test_auth_present_false_when_status_probe_cannot_run(tmp_path, monkeypatch):
-    """If the status probe can't execute (missing/old binary), detection falls
-    back to unauthenticated rather than crashing — env and file creds are already
-    ruled out, so 'can't confirm' is safely treated as not signed in."""
+async def test_auth_present_true_when_status_unsupported_falls_back_to_auth_json(
+    tmp_path, monkeypatch,
+):
+    """An older codex without the ``status`` subcommand (clap exit 2 /
+    'unrecognized subcommand') is indeterminate — fall back to auth.json presence
+    so a valid file-authed host on an old CLI is not wrongly rejected."""
+    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    _patch_run(
+        monkeypatch, returncode=2,
+        stderr=b"error: unrecognized subcommand 'status'",
+    )
+    env = {"CODEX_HOME": str(tmp_path)}
+    assert await codex_auth_present(codex_bin="codex", env=env) is True
+
+
+async def test_auth_present_false_when_status_unsupported_and_no_auth_json(
+    tmp_path, monkeypatch,
+):
+    """Indeterminate status (old codex) with no auth.json -> unauthenticated."""
+    _patch_run(
+        monkeypatch, returncode=2,
+        stderr=b"error: unrecognized subcommand 'status'",
+    )
+    env = {"CODEX_HOME": str(tmp_path)}
+    assert await codex_auth_present(codex_bin="codex", env=env) is False
+
+
+async def test_auth_present_true_when_status_cannot_run_falls_back_to_auth_json(
+    tmp_path, monkeypatch,
+):
+    """If the probe can't execute (missing/broken binary), fall back to auth.json
+    presence rather than crashing or wrongly rejecting a file credential."""
     def _boom(argv, **_kwargs):
         raise FileNotFoundError(2, "No such file or directory", argv[0])
 
     monkeypatch.setattr(codex_auth.subprocess, "run", _boom)
+    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    env = {"CODEX_HOME": str(tmp_path)}
+    assert await codex_auth_present(codex_bin="codex", env=env) is True
+
+
+async def test_auth_present_false_when_status_logged_out_and_no_auth_json(
+    tmp_path, monkeypatch,
+):
+    """No env key, ``codex login status`` signed out, no auth.json -> the
+    no-credential hang the launcher guard prevents."""
+    _patch_run(monkeypatch, returncode=1, stderr=b"Not logged in")
     env = {"CODEX_HOME": str(tmp_path)}
     assert await codex_auth_present(codex_bin="codex", env=env) is False
 
 
 async def test_auth_present_false_for_empty_env_api_key(tmp_path, monkeypatch):
-    """A present-but-empty ``OPENAI_API_KEY`` is not a credential; with no
-    auth.json and a logged-out status the guard reports unauthenticated."""
+    """A present-but-empty ``OPENAI_API_KEY`` is not a credential; it falls
+    through to a signed-out status with no auth.json -> unauthenticated."""
     _patch_run(monkeypatch, returncode=1)
     env = {"OPENAI_API_KEY": "", "CODEX_HOME": str(tmp_path)}
     assert await codex_auth_present(codex_bin="codex", env=env) is False

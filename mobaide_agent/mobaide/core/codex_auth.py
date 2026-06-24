@@ -35,6 +35,14 @@ _MAX_DETAIL = 500
 _WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 # OpenAI-style secret shapes, scrubbed from any captured subprocess output.
 _SK_RE = re.compile(r"sk-[A-Za-z0-9_-]{8,}")
+# clap's signature when ``codex login status`` is not a known subcommand (an
+# older CLI) — lets the probe distinguish "this codex can't tell me" from a
+# genuine signed-out exit, so a stale-auth.json fallback only kicks in for the
+# former.
+_STATUS_UNSUPPORTED_RE = re.compile(
+    r"unrecognized subcommand|unknown subcommand|invalid subcommand|unexpected argument",
+    re.IGNORECASE,
+)
 
 
 def codex_home(env: Mapping[str, str]) -> str:
@@ -51,26 +59,33 @@ async def codex_auth_present(
 ) -> bool:
     """True when Codex has a usable credential reachable from ``env``.
 
-    Probed cheapest-first so the common cases pay no subprocess cost:
+    ``codex login status`` (exit 0 == signed in) is authoritative and is the
+    primary check: it is the only signal that reflects Codex's *actual*
+    credential state across every store — the env key, the ``file`` store
+    (``auth.json``), and the OS ``keyring`` / ``auto`` stores — so it both sees a
+    keyring credential the file check would miss AND rejects a present-but-stale
+    ``auth.json`` that would otherwise launch Codex straight into its interactive
+    login/failure path.
 
-    1. an ``OPENAI_API_KEY`` in the env, then
-    2. an ``auth.json`` under :func:`codex_home` (the ``file`` credential store),
-       then
-    3. ``codex login status`` — which exits 0 when signed in and is the only
-       check that also sees the OS keyring behind Codex's ``keyring`` / ``auto``
-       credential stores (the file check in (2) cannot). Consulted only when (1)
-       and (2) miss, so an env-/file-authed host never spawns it.
+    Order:
 
-    Still presence-, not validity-based: ``status`` exiting non-zero (or being
-    unavailable on an older codex) falls through to "unauthenticated", and a
-    stale ``auth.json`` from (2) is trusted. Probing an existing credential's
-    freshness is deferred (CLA-81).
+    1. An ``OPENAI_API_KEY`` in the env is a definitive credential — returned
+       immediately, no probe.
+    2. ``codex login status``: exit 0 -> signed in; a recognized non-zero ->
+       signed out (returned even when ``auth.json`` exists — a stale file is not
+       trusted).
+    3. Only when the probe is *indeterminate* — it can't run (missing binary,
+       timeout) or this codex predates the ``status`` subcommand — fall back to
+       ``auth.json`` presence, so a file-authed host on an older CLI still
+       builds. (A stale file on such an old CLI is the one residual the probe
+       can't catch — tracked in CLA-81.)
     """
     if env.get("OPENAI_API_KEY"):
         return True
-    if os.path.isfile(os.path.join(codex_home(env), _AUTH_FILE)):
-        return True
-    return await _codex_login_status(codex_bin, env, timeout=status_timeout)
+    status = await _codex_login_status(codex_bin, env, timeout=status_timeout)
+    if status is not None:
+        return status
+    return os.path.isfile(os.path.join(codex_home(env), _AUTH_FILE))
 
 
 def _codex_argv(codex_bin: str, *args: str) -> list[str]:
@@ -86,14 +101,16 @@ def _codex_argv(codex_bin: str, *args: str) -> list[str]:
 
 async def _codex_login_status(
     codex_bin: str, env: Mapping[str, str], *, timeout: float,
-) -> bool:
-    """True iff ``codex login status`` exits 0 (a credential exists in the active
-    store, including the OS keyring the ``auth.json`` check can't see).
+) -> bool | None:
+    """Run ``codex login status`` as a tri-state credential probe.
 
-    A probe that cannot run — missing/old binary, timeout — returns False: the
-    caller has already ruled out the env and file credentials, so "can't confirm"
-    is safely treated as unauthenticated. Runs via ``asyncio.to_thread`` for the
-    same Windows-event-loop reason as :func:`codex_login_with_api_key`.
+    Returns ``True`` (exit 0 -> signed in), ``False`` (ran and reported signed
+    out), or ``None`` when the result is *indeterminate*: the probe couldn't run
+    (missing/broken binary, timeout) or this codex doesn't recognise the
+    ``status`` subcommand (older CLI). ``None`` tells the caller to fall back to a
+    file-presence check rather than wrongly rejecting a valid credential. Runs
+    via ``asyncio.to_thread`` for the same Windows-event-loop reason as
+    :func:`codex_login_with_api_key`.
     """
     try:
         completed = await asyncio.to_thread(
@@ -105,8 +122,21 @@ async def _codex_login_status(
             creationflags=_WINDOWS_NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError):
-        return False
-    return completed.returncode == 0
+        return None
+    if completed.returncode == 0:
+        return True
+    if _status_probe_unsupported(completed):
+        return None
+    return False
+
+
+def _status_probe_unsupported(completed: subprocess.CompletedProcess) -> bool:
+    """True when a non-zero ``codex login status`` means the subcommand is
+    unavailable (older CLI) rather than a genuine signed-out state: clap exits 2
+    for an unknown subcommand and prints an "unrecognized subcommand" usage error.
+    """
+    stderr = completed.stderr.decode(errors="replace") if completed.stderr else ""
+    return completed.returncode == 2 or bool(_STATUS_UNSUPPORTED_RE.search(stderr))
 
 
 def _sanitize(text: str, api_key: str) -> str:
