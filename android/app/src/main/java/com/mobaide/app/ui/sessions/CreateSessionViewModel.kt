@@ -290,11 +290,17 @@ class CreateSessionViewModel @Inject constructor(
         if (it.autoScanConfigInitialized) {
             it.copy(step = CreateSessionStep.AutoScanConfig)
         } else {
+            // Pre-seed from this project's last-saved Auto Scan prompt (persisted
+            // server-side on the previous scan start, delivered via ProjectInfo);
+            // fall back to the agent-wide default, then empty.
+            val savedPrompt = it.selectedProjectName
+                ?.let { name -> it.projects.firstOrNull { p -> p.name == name } }
+                ?.auto_scan_prompt
             it.copy(
                 step = CreateSessionStep.AutoScanConfig,
                 autoScanConfigInitialized = true,
                 worktree = true,
-                initialPrompt = autoScanRepository.getAutoScanPrompt() ?: "",
+                initialPrompt = savedPrompt ?: autoScanRepository.getAutoScanPrompt() ?: "",
             )
         }
     }

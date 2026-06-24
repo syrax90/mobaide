@@ -50,6 +50,10 @@ class ProjectConfig:
     that scanner re-reads it from the projects store at the top of each
     cycle, so filter changes apply on the next scan iteration without
     needing a restart.
+
+    ``auto_scan_prompt`` is the per-project Auto Scan initial prompt, saved
+    when a scan is started so the next scan for this project pre-seeds it.
+    ``None`` means "fall back to the engine-wide default prompt".
     """
 
     name: str
@@ -58,6 +62,7 @@ class ProjectConfig:
     conda_env: str | None = None
     default_flags: dict[str, object] = field(default_factory=dict)
     auto_scan_filter: AutoScanFilter = field(default_factory=AutoScanFilter)
+    auto_scan_prompt: str | None = None
 
 
 __all__ = ["AutoScanFilter", "ProjectConfig"]

@@ -336,6 +336,56 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun selectAutoScanMode_firstCall_seedsPromptFromSelectedProjectsSavedPrompt() = runTest {
+        // The per-project saved prompt (delivered on ProjectInfo.auto_scan_prompt)
+        // takes precedence over the agent-wide default when seeding the field.
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(
+                    name = "alpha",
+                    path = "/p/alpha",
+                    is_git = true,
+                    auto_scan_prompt = "project saved prompt",
+                ),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+
+        assertEquals("project saved prompt", vm.uiState.value.initialPrompt)
+    }
+
+    @Test
+    fun selectAutoScanMode_firstCall_fallsBackToAgentDefault_whenProjectHasNoSavedPrompt() = runTest {
+        // A project that has never customized its prompt (auto_scan_prompt = null)
+        // must fall back to the agent-wide default from the AutoScan repository.
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(
+                    name = "alpha",
+                    path = "/p/alpha",
+                    is_git = true,
+                    auto_scan_prompt = null,
+                ),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+
+        assertEquals("agent wide default", vm.uiState.value.initialPrompt)
+    }
+
+    @Test
     fun submitAutoScan_happyPath_sendsOptions_andEmitsNavigateToAutoScan() = runTest {
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()

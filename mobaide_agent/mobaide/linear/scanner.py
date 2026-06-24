@@ -25,6 +25,7 @@ from mobaide.core import (
     ClaudeOptions,
     ProjectConfig,
     ProjectsStore,
+    ProjectUpdatePatch,
     SessionConfig,
     SessionKind,
     SessionManager,
@@ -763,6 +764,14 @@ class AutoScanSessionManager:
                     f"Maximum {self._max_scans} concurrent auto scans reached"
                 )
 
+            # Persist the just-applied prompt so the next scan for this project
+            # pre-seeds it. Done under the lock, after the gate checks, so a
+            # rejected start (already-running / at-capacity) never rewrites the
+            # saved prompt.
+            prompt_persisted = self._persist_applied_prompt(
+                project_name, client_options,
+            )
+
             client = LinearApiClient(
                 api_key=project.linear_api_key,
                 rate_limiter=self._rate_limiter,
@@ -789,6 +798,10 @@ class AutoScanSessionManager:
             self._scans[project_name] = instance
 
         self._publish_list_changed()
+        # Emit projects.changed outside the lock so clients reconcile their
+        # cached project list — and thus the wizard's pre-seeded prompt.
+        if prompt_persisted:
+            self._publish_projects_changed()
         return instance
 
     async def stop(self, project_name: str) -> None:
@@ -813,4 +826,42 @@ class AutoScanSessionManager:
         if self._event_bus is not None:
             self._event_bus.publish(
                 "autoscan.list.changed", self.list_response()
+            )
+
+    def _persist_applied_prompt(
+        self,
+        project_name: str,
+        client_options: ClaudeOptions | None,
+    ) -> bool:
+        """Save the just-applied Auto Scan prompt onto the project record.
+
+        Returns ``True`` when the store was written (so the caller emits
+        ``projects.changed``). No-op returning ``False`` when ``client_options``
+        is ``None`` — that path expresses no prompt intent, so an existing saved
+        prompt must not be clobbered. An empty/blank ``initial_prompt`` is
+        persisted as ``""``, which the store clears to ``None`` so the next scan
+        falls back to the engine-wide default.
+        """
+        if client_options is None:
+            return False
+        applied = client_options.initial_prompt
+        try:
+            self._projects_store.update(
+                project_name,
+                ProjectUpdatePatch(auto_scan_prompt=applied if applied else ""),
+            )
+        except KeyError:
+            # Project vanished between the start-time snapshot and here — never
+            # fail a scan over a best-effort prompt save.
+            logger.warning(
+                "autoscan.prompt_persist.project_missing project=%s", project_name,
+            )
+            return False
+        return True
+
+    def _publish_projects_changed(self) -> None:
+        if self._event_bus is not None:
+            self._event_bus.publish(
+                "projects.changed",
+                {"projects": self._projects_store.list_public()},
             )

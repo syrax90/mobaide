@@ -1294,3 +1294,243 @@ class TestSeedFromEnvParsesAutoScanFilter:
 
         assert len(records) == 1
         assert records[0].auto_scan_filter == AutoScanFilter()
+
+
+# ---------------------------------------------------------------------------
+# Per-project auto_scan_prompt (preserve-last-applied)
+# ---------------------------------------------------------------------------
+
+
+class TestAutoScanPromptRoundTrip:
+    """The per-project Auto Scan prompt mirrors ``conda_env``: ``None`` means
+    "use the engine-wide default", a non-``None`` string is persisted and
+    must round-trip through save/load and reach clients via ``list_public``."""
+
+    def test_round_trip_preserves_prompt(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        store.create(
+            ProjectRecord(
+                name="alpha", path="C:/alpha",
+                auto_scan_prompt="Resolve the issue carefully.",
+            ),
+        )
+
+        # Reload from disk and verify the snapshot carries the prompt.
+        store2 = ProjectsStore(str(path))
+        store2.load()
+        snap = store2.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_prompt == "Resolve the issue carefully."
+
+    def test_record_to_dict_omits_prompt_when_none(self, tmp_path):
+        # Like ``conda_env``: the key is written only when non-None so a
+        # legacy/default project stays a minimal row on disk.
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        store.create(ProjectRecord(name="alpha", path="C:/alpha"))
+
+        on_disk = json.loads(path.read_text())
+        assert len(on_disk) == 1
+        assert "auto_scan_prompt" not in on_disk[0]
+
+    def test_record_to_dict_writes_prompt_when_present(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        store.create(
+            ProjectRecord(
+                name="alpha", path="C:/alpha", auto_scan_prompt="do the thing",
+            ),
+        )
+
+        on_disk = json.loads(path.read_text())
+        assert on_disk[0]["auto_scan_prompt"] == "do the thing"
+
+    def test_prompt_appears_in_list_public(self, tmp_path):
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        store.create(
+            ProjectRecord(
+                name="alpha", path="C:/alpha", auto_scan_prompt="seed prompt",
+            ),
+        )
+
+        rows = store.list_public()
+        assert len(rows) == 1
+        assert cast("dict", rows[0])["auto_scan_prompt"] == "seed prompt"
+
+    def test_list_public_prompt_is_none_when_unset(self, tmp_path):
+        # The key is always present in the public dict (clients rely on it),
+        # but defaults to None when the project never customized the prompt.
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        store.create(ProjectRecord(name="alpha", path="C:/alpha"))
+
+        row = cast("dict", store.list_public()[0])
+        assert "auto_scan_prompt" in row
+        assert row["auto_scan_prompt"] is None
+
+
+class TestAutoScanPromptLegacyRecords:
+    """Legacy on-disk rows predate the field; they must load as ``None`` so
+    the engine-wide default applies — no behavior change after upgrade."""
+
+    def test_legacy_record_without_prompt_loads_as_none(self, tmp_path):
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "linear_api_key": "lin",
+                        "order": 0,
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_prompt is None
+
+    def test_blank_prompt_on_disk_coerced_to_none(self, tmp_path):
+        # A hand-edited / whitespace-only prompt must not become a saved
+        # value that suppresses the default; the loader normalizes it to None.
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_prompt": "   ",
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_prompt is None
+
+    def test_non_string_prompt_on_disk_coerced_to_none(self, tmp_path):
+        path = tmp_path / "projects.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "name": "alpha",
+                        "path": "C:/alpha",
+                        "order": 0,
+                        "auto_scan_prompt": 42,
+                    },
+                ],
+            ),
+        )
+
+        store = ProjectsStore(str(path))
+        store.load()
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_prompt is None
+
+
+class TestUpdateAppliesPromptPatch:
+    """``ProjectUpdatePatch.auto_scan_prompt`` three-state, identical to
+    ``linear_api_key`` / ``conda_env``: ``None`` keeps, ``""`` clears to
+    ``None`` (→ default), any other string replaces."""
+
+    def _seed(self, tmp_path):
+        store = ProjectsStore(str(tmp_path / "projects.json"))
+        store.load()
+        store.create(
+            ProjectRecord(
+                name="alpha", path="C:/alpha",
+                auto_scan_prompt="original prompt",
+            ),
+        )
+        return store
+
+    def test_none_keeps_existing_prompt(self, tmp_path):
+        store = self._seed(tmp_path)
+
+        # A patch touching only another field must not disturb the prompt.
+        snap = store.update("alpha", ProjectUpdatePatch(conda_env="ml"))
+
+        assert snap.auto_scan_prompt == "original prompt"
+
+    def test_empty_string_clears_prompt_to_none(self, tmp_path):
+        store = self._seed(tmp_path)
+
+        snap = store.update("alpha", ProjectUpdatePatch(auto_scan_prompt=""))
+
+        assert snap.auto_scan_prompt is None
+
+    def test_value_replaces_prompt(self, tmp_path):
+        store = self._seed(tmp_path)
+
+        snap = store.update(
+            "alpha", ProjectUpdatePatch(auto_scan_prompt="new prompt"),
+        )
+
+        assert snap.auto_scan_prompt == "new prompt"
+
+    def test_cleared_prompt_persists_as_omitted_on_disk(self, tmp_path):
+        # After clearing, the next save must not re-introduce the key — a
+        # cleared prompt is indistinguishable from never-set on reload.
+        path = tmp_path / "projects.json"
+        store = ProjectsStore(str(path))
+        store.load()
+        store.create(
+            ProjectRecord(
+                name="alpha", path="C:/alpha", auto_scan_prompt="x",
+            ),
+        )
+
+        store.update("alpha", ProjectUpdatePatch(auto_scan_prompt=""))
+
+        on_disk = json.loads(path.read_text())
+        assert "auto_scan_prompt" not in on_disk[0]
+
+
+class TestSeedFromEnvParsesAutoScanPrompt:
+    """The ``PROJECTS`` env seed must also pick up ``auto_scan_prompt`` so an
+    env-driven first boot has parity with the persisted/REST paths."""
+
+    def test_seed_carries_prompt_from_env(self, monkeypatch):
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps(
+                {"P": {"path": "C:/p", "auto_scan_prompt": "env prompt"}},
+            ),
+        )
+
+        records = _seed_from_env()
+
+        assert len(records) == 1
+        assert records[0].auto_scan_prompt == "env prompt"
+
+    def test_seed_prompt_none_when_field_absent(self, monkeypatch):
+        monkeypatch.setenv(
+            "PROJECTS",
+            json.dumps({"P": {"path": "C:/p"}}),
+        )
+
+        records = _seed_from_env()
+
+        assert len(records) == 1
+        assert records[0].auto_scan_prompt is None

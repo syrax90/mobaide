@@ -80,6 +80,7 @@ class ProjectRecord:
     default_flags: dict[str, object] = field(default_factory=dict)
     order: int = 0
     auto_scan_filter: AutoScanFilter = field(default_factory=AutoScanFilter)
+    auto_scan_prompt: str | None = None
 
 
 @dataclass
@@ -94,6 +95,8 @@ class ProjectUpdatePatch:
       (stored as ``None``), any other string replaces.
     * ``default_flags``: ``None`` keeps, a dict replaces.
     * ``auto_scan_filter``: ``None`` keeps, a filter replaces wholesale.
+    * ``auto_scan_prompt``: ``None`` keeps, ``""`` clears (stored as ``None``,
+      so the engine-wide default prompt is used), any other string replaces.
     """
 
     name: str | None = None
@@ -102,6 +105,7 @@ class ProjectUpdatePatch:
     conda_env: str | None = None
     default_flags: dict[str, object] | None = None
     auto_scan_filter: AutoScanFilter | None = None
+    auto_scan_prompt: str | None = None
 
 
 class ProjectsStore:
@@ -278,6 +282,11 @@ class ProjectsStore:
             if patch.auto_scan_filter is not None:
                 record.auto_scan_filter = patch.auto_scan_filter
 
+            if patch.auto_scan_prompt is not None:
+                record.auto_scan_prompt = (
+                    None if patch.auto_scan_prompt == "" else patch.auto_scan_prompt
+                )
+
             if new_name != record.name:
                 self._projects.pop(record.name)
                 record.name = new_name
@@ -404,6 +413,7 @@ def _record_from_dict(data: object) -> ProjectRecord | None:
     conda_env = data.get("conda_env")
     default_flags = data.get("default_flags") or {}
     order = data.get("order")
+    prompt = data.get("auto_scan_prompt")
     return ProjectRecord(
         name=name,
         path=normalized_path,
@@ -412,6 +422,7 @@ def _record_from_dict(data: object) -> ProjectRecord | None:
         default_flags=default_flags if isinstance(default_flags, dict) else {},
         order=order if isinstance(order, int) else 0,
         auto_scan_filter=_filter_from_dict(data.get("auto_scan_filter")),
+        auto_scan_prompt=prompt if isinstance(prompt, str) and prompt.strip() else None,
     )
 
 
@@ -427,6 +438,8 @@ def _record_to_dict(r: ProjectRecord) -> dict[str, object]:
         d["conda_env"] = r.conda_env
     if r.default_flags:
         d["default_flags"] = dict(r.default_flags)
+    if r.auto_scan_prompt is not None:
+        d["auto_scan_prompt"] = r.auto_scan_prompt
     d["auto_scan_filter"] = _filter_to_dict(r.auto_scan_filter)
     return d
 
@@ -439,6 +452,7 @@ def _record_to_config(r: ProjectRecord) -> ProjectConfig:
         conda_env=r.conda_env,
         default_flags=dict(r.default_flags),
         auto_scan_filter=r.auto_scan_filter,
+        auto_scan_prompt=r.auto_scan_prompt,
     )
 
 
@@ -454,6 +468,7 @@ def _record_to_public(r: ProjectRecord) -> dict[str, object]:
         "is_git": safe_path_exists(p / ".git"),
         "path_exists": safe_path_exists(p),
         "auto_scan_filter": _filter_to_dict(r.auto_scan_filter),
+        "auto_scan_prompt": r.auto_scan_prompt,
     }
 
 
@@ -499,6 +514,7 @@ def _seed_from_env(raw: str | None = None) -> list[ProjectRecord]:
         api_key = value.get("linear_api_key")
         conda_env = value.get("conda_env")
         default_flags = value.get("default_flags") or {}
+        prompt = value.get("auto_scan_prompt")
         records.append(
             ProjectRecord(
                 name=name,
@@ -509,6 +525,9 @@ def _seed_from_env(raw: str | None = None) -> list[ProjectRecord]:
                     default_flags if isinstance(default_flags, dict) else {}
                 ),
                 auto_scan_filter=_filter_from_dict(value.get("auto_scan_filter")),
+                auto_scan_prompt=(
+                    prompt if isinstance(prompt, str) and prompt.strip() else None
+                ),
             ),
         )
     for i, r in enumerate(records):
