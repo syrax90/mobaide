@@ -313,11 +313,11 @@ class CreateSessionViewModelTest {
         assertEquals(CreateSessionStep.AutoScanConfig, s.step)
         assertTrue("AutoScan preset must enable worktree", s.worktree)
         assertEquals("scan everything", s.initialPrompt)
-        assertTrue(s.autoScanConfigInitialized)
+        assertEquals("alpha", s.autoScanConfigInitializedFor)
     }
 
     @Test
-    fun selectAutoScanMode_secondCall_doesNotOverwriteUserEdits() = runTest {
+    fun selectAutoScanMode_secondCall_sameProject_doesNotOverwriteUserEdits() = runTest {
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -328,11 +328,89 @@ class CreateSessionViewModelTest {
         vm.setInitialPrompt("user edit")
         vm.toggleNoMemory(true)
         vm.goBack()
-        vm.selectAutoScanMode() // must NOT re-seed — autoScanConfigInitialized=true
+        vm.selectAutoScanMode() // same project → must NOT re-seed (preserve edits)
 
         val s = vm.uiState.value
         assertEquals("user edit", s.initialPrompt)
         assertTrue(s.noMemory)
+    }
+
+    @Test
+    fun selectAutoScanMode_afterProjectChange_reseedsPromptForNewProject() = runTest {
+        // Switching to a different project mid-wizard must re-seed the prompt
+        // from the new project's saved value, not retain the first project's.
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(name = "alpha", path = "/p/alpha", is_git = true, auto_scan_prompt = "alpha prompt"),
+                ProjectInfo(name = "beta", path = "/p/beta", is_git = true, auto_scan_prompt = "beta prompt"),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        assertEquals("alpha prompt", vm.uiState.value.initialPrompt)
+
+        // User goes back, picks a different project, re-enters AutoScan config.
+        vm.selectProject("beta")
+        vm.selectAutoScanMode()
+
+        val s = vm.uiState.value
+        assertEquals("beta prompt", s.initialPrompt)
+        assertEquals("beta", s.autoScanConfigInitializedFor)
+    }
+
+    @Test
+    fun selectAutoScanMode_firstCall_seedsPromptFromSelectedProjectsSavedPrompt() = runTest {
+        // The per-project saved prompt (delivered on ProjectInfo.auto_scan_prompt)
+        // takes precedence over the agent-wide default when seeding the field.
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(
+                    name = "alpha",
+                    path = "/p/alpha",
+                    is_git = true,
+                    auto_scan_prompt = "project saved prompt",
+                ),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+
+        assertEquals("project saved prompt", vm.uiState.value.initialPrompt)
+    }
+
+    @Test
+    fun selectAutoScanMode_firstCall_fallsBackToAgentDefault_whenProjectHasNoSavedPrompt() = runTest {
+        // A project that has never customized its prompt (auto_scan_prompt = null)
+        // must fall back to the agent-wide default from the AutoScan repository.
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(
+                    name = "alpha",
+                    path = "/p/alpha",
+                    is_git = true,
+                    auto_scan_prompt = null,
+                ),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+
+        assertEquals("agent wide default", vm.uiState.value.initialPrompt)
     }
 
     @Test

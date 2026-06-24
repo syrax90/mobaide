@@ -25,6 +25,7 @@ from mobaide.core import (
     ClaudeOptions,
     ProjectConfig,
     ProjectsStore,
+    ProjectUpdatePatch,
     SessionConfig,
     SessionKind,
     SessionManager,
@@ -398,7 +399,10 @@ class AutoScanInstance:
             initial_prompt=(
                 base.initial_prompt
                 if base is not None and base.initial_prompt
-                else self._config.auto_scan_prompt
+                # Honour this project's saved prompt (construction-time snapshot,
+                # no extra I/O) before the engine-wide default, so optionless or
+                # prompt-less starts still use the project's own prompt.
+                else (project.auto_scan_prompt or self._config.auto_scan_prompt)
             ),
             worktree=True,
         )
@@ -753,6 +757,7 @@ class AutoScanSessionManager:
                 f"Project '{project_name}' has no Linear API key configured.",
             )
 
+        prompt_persisted = False
         async with self._lock:
             if project_name in self._scans:
                 raise AutoScanAlreadyRunning(
@@ -788,7 +793,19 @@ class AutoScanSessionManager:
             await instance.start()
             self._scans[project_name] = instance
 
+            # Persist the applied prompt only after the scan has actually
+            # started and been registered, so a rejected start (already-running
+            # / at-capacity) or a failed instance.start() never rewrites the
+            # project's saved prompt.
+            prompt_persisted = self._persist_applied_prompt(
+                project_name, client_options,
+            )
+
         self._publish_list_changed()
+        # Emit projects.changed outside the lock so clients reconcile their
+        # cached project list — and thus the wizard's pre-seeded prompt.
+        if prompt_persisted:
+            self._publish_projects_changed()
         return instance
 
     async def stop(self, project_name: str) -> None:
@@ -813,4 +830,49 @@ class AutoScanSessionManager:
         if self._event_bus is not None:
             self._event_bus.publish(
                 "autoscan.list.changed", self.list_response()
+            )
+
+    def _persist_applied_prompt(
+        self,
+        project_name: str,
+        client_options: ClaudeOptions | None,
+    ) -> bool:
+        """Save the just-applied Auto Scan prompt onto the project record.
+
+        Returns ``True`` when the store was written (so the caller emits
+        ``projects.changed``). It is a no-op returning ``False`` unless the
+        caller supplied a non-empty ``initial_prompt``: a start that omits the
+        prompt (``client_options is None``) or sends a blank one expresses no
+        prompt intent, so the project's existing saved prompt is preserved
+        rather than clobbered — e.g. a flags-only start that just toggles
+        ``no_memory`` must not wipe the saved prompt.
+        """
+        if client_options is None:
+            return False
+        applied = client_options.initial_prompt
+        if not applied:
+            return False
+        try:
+            self._projects_store.update(
+                project_name,
+                ProjectUpdatePatch(auto_scan_prompt=applied),
+            )
+        except Exception:
+            # Best-effort metadata save: the scan is already started and
+            # registered by the time we get here, so a persistence failure —
+            # the project vanished (KeyError) or a transient disk/permission
+            # error on the store write — must NOT surface as a start failure.
+            # Log and carry on; the prompt simply re-seeds on the next start.
+            logger.warning(
+                "autoscan.prompt_persist.failed project=%s",
+                project_name, exc_info=True,
+            )
+            return False
+        return True
+
+    def _publish_projects_changed(self) -> None:
+        if self._event_bus is not None:
+            self._event_bus.publish(
+                "projects.changed",
+                {"projects": self._projects_store.list_public()},
             )

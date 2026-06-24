@@ -94,6 +94,9 @@ class ProjectReadModel(BaseModel):
     is_git: bool
     path_exists: bool
     auto_scan_filter: AutoScanFilterModel = Field(default_factory=AutoScanFilterModel)
+    # Per-project Auto Scan initial prompt, saved on scan start so the wizard
+    # can pre-seed it next time. ``None`` means "use the engine-wide default".
+    auto_scan_prompt: str | None = None
 
 
 class ProjectWriteModel(BaseModel):

@@ -81,7 +81,11 @@ data class CreateSessionUiState(
     val branchName: String = "",
     val submitting: Boolean = false,
     val autoScanStarting: Boolean = false,
-    val autoScanConfigInitialized: Boolean = false,
+    // Name of the stored project the AutoScan config step was last seeded for
+    // (null = not yet seeded). Tracked per-project so switching projects mid-
+    // wizard re-seeds the prompt, while re-entering the same project preserves
+    // the user's in-flight edits.
+    val autoScanConfigInitializedFor: String? = null,
     val dismiss: Boolean = false,
     val error: String? = null,
     // Codex login dialog. All fields are memory-only — the API key is
@@ -287,14 +291,23 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun selectAutoScanMode() = _uiState.update {
-        if (it.autoScanConfigInitialized) {
+        val projectName = it.selectedProjectName
+        if (projectName != null && it.autoScanConfigInitializedFor == projectName) {
+            // Already seeded for this project — keep the user's in-flight edits.
             it.copy(step = CreateSessionStep.AutoScanConfig)
         } else {
+            // First entry for this project, or the selected project changed since
+            // the last entry: (re-)seed from this project's last-saved Auto Scan
+            // prompt (persisted server-side on the previous scan start, delivered
+            // via ProjectInfo); fall back to the agent-wide default, then empty.
+            val savedPrompt = projectName
+                ?.let { name -> it.projects.firstOrNull { p -> p.name == name } }
+                ?.auto_scan_prompt
             it.copy(
                 step = CreateSessionStep.AutoScanConfig,
-                autoScanConfigInitialized = true,
+                autoScanConfigInitializedFor = projectName,
                 worktree = true,
-                initialPrompt = autoScanRepository.getAutoScanPrompt() ?: "",
+                initialPrompt = savedPrompt ?: autoScanRepository.getAutoScanPrompt() ?: "",
             )
         }
     }

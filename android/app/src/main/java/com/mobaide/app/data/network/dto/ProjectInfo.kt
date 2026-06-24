@@ -17,4 +17,7 @@ data class ProjectInfo(
     val order: Int = 0,
     val path_exists: Boolean = true,
     val auto_scan_filter: AutoScanFilterDto = AutoScanFilterDto(),
+    // Per-project Auto Scan initial prompt, saved on scan start so the create-
+    // session wizard can pre-seed it. `null` means "use the agent's default".
+    val auto_scan_prompt: String? = null,
 )
