@@ -8,7 +8,9 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.text.input.TextFieldValue
+import com.mobaide.app.data.network.dto.SessionKind
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -18,12 +20,16 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * UI tests for [InputBar] covering the buttons-refactor:
+ * UI tests for [InputBar] covering the buttons-refactor and the CLI-aware control-key bar:
  *   - Orientation-aware layout (portrait stacks; landscape inline).
- *   - The single horizontally scrollable control-key panel exposes exactly
- *     the 9 keys `Esc, Tab, S+Tab, Enter, Ctrl+C, ↑, ↓, ←, →` — with
- *     `Ctrl+L`/`Ctrl-D` removed and the `Ctrl-C`/`S-Tab` labels renamed.
+ *   - For the default/Claude set ([SessionKind.Claude]), the single horizontally
+ *     scrollable control-key panel exposes exactly the 9 keys
+ *     `Esc, Tab, S+Tab, Enter, Ctrl+C, ↑, ↓, ←, →` — with `Ctrl+L`/`Ctrl-D` removed
+ *     and the `Ctrl-C`/`S-Tab` labels renamed.
  *   - Byte payloads for renamed keys are unchanged (display-only rename).
+ *   - For [SessionKind.Codex] the panel swaps in the Codex set (Approve/Reject/
+ *     Back-Edit/Newline + Ctrl+L/O/R) with the correct raw-byte payloads, and those
+ *     Codex-only keys never leak into the Claude set ([InputBarCodexTest]).
  *
  * Robolectric SDK pinned to 33 to match existing project precedent
  * (`AgentListScreenTest`). The `qualifiers` differ per test class to
@@ -230,5 +236,141 @@ class InputBarLandscapeTest {
         // not that every one fits on screen at every width.
         listOf("Esc", "Tab", "S+Tab", "Enter", "Ctrl+C", "↑", "↓", "←", "→")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
+    }
+}
+
+/**
+ * Codex control-key set: passing `sessionKind = SessionKind.Codex` swaps in the
+ * Codex-shaped panel. Verifies the Codex-only keys are present with the correct raw
+ * byte payloads (sent via `onSendBytes`, the raw 'i'-frame path — never the submit
+ * path), and that those keys do not leak into the default/Claude set.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
+class InputBarCodexTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    private fun openCodexPanel(onSendBytes: (ByteArray) -> Unit = {}) {
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = onSendBytes,
+                    sessionKind = SessionKind.Codex,
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+    }
+
+    @Test
+    fun codexPanel_exposesCodexSpecificKeys_plusSharedKeys() {
+        openCodexPanel()
+
+        listOf("Approve", "Reject", "Back/Edit", "Newline", "Ctrl+L", "Ctrl+O", "Ctrl+R")
+            .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("Esc", "Enter", "Ctrl+C", "Tab", "↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithText(it).assertExists() }
+    }
+
+    @Test
+    fun approve_sendsLiteralLowercaseY_0x79() {
+        val captured = mutableListOf<ByteArray>()
+        openCodexPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Approve").performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf('y'.code.toByte()), captured.single())
+    }
+
+    @Test
+    fun reject_sendsLiteralLowercaseN_0x6e() {
+        val captured = mutableListOf<ByteArray>()
+        openCodexPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Reject").performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf('n'.code.toByte()), captured.single())
+    }
+
+    @Test
+    fun newline_sendsRawLineFeed_0x0a() {
+        val captured = mutableListOf<ByteArray>()
+        openCodexPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Newline").performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x0a), captured.single())
+    }
+
+    @Test
+    fun backEdit_sendsEscEsc_0x1b_0x1b() {
+        val captured = mutableListOf<ByteArray>()
+        openCodexPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Back/Edit").performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x1b, 0x1b), captured.single())
+    }
+
+    @Test
+    fun ctrlL_sendsFormFeed_0x0c() {
+        val captured = mutableListOf<ByteArray>()
+        openCodexPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Ctrl+L").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x0c), captured.single())
+    }
+
+    @Test
+    fun ctrlO_sendsShiftOut_0x0f() {
+        val captured = mutableListOf<ByteArray>()
+        openCodexPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Ctrl+O").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x0f), captured.single())
+    }
+
+    @Test
+    fun ctrlR_sendsDeviceControl2_0x12() {
+        val captured = mutableListOf<ByteArray>()
+        openCodexPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Ctrl+R").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x12), captured.single())
+    }
+
+    @Test
+    fun claudeSet_doesNotExposeCodexOnlyKeys() {
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = {},
+                    sessionKind = SessionKind.Claude,
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+
+        listOf("Approve", "Reject", "Back/Edit", "Newline", "Ctrl+L", "Ctrl+O", "Ctrl+R")
+            .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 }

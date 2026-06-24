@@ -44,20 +44,44 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import com.mobaide.app.data.network.dto.SessionKind
 
 private data class ControlKey(val label: String, val bytes: ByteArray)
 
-private val CONTROL_KEYS = listOf(
-    ControlKey("Esc", byteArrayOf(0x1b)),
-    ControlKey("Tab", byteArrayOf(0x09)),
-    ControlKey("S+Tab", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte())),
-    ControlKey("Enter", byteArrayOf(0x0d)),
-    ControlKey("Ctrl+C", byteArrayOf(0x03)),
-    ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte())),
-    ControlKey("↓", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte())),
-    ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte())),
-    ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte())),
+private val EscKey = ControlKey("Esc", byteArrayOf(0x1b))
+private val TabKey = ControlKey("Tab", byteArrayOf(0x09))
+private val ShiftTabKey = ControlKey("S+Tab", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()))
+private val EnterKey = ControlKey("Enter", byteArrayOf(0x0d))
+private val CtrlCKey = ControlKey("Ctrl+C", byteArrayOf(0x03))
+private val UpKey = ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte()))
+private val DownKey = ControlKey("↓", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte()))
+private val LeftKey = ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte()))
+private val RightKey = ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte()))
+
+private val CLAUDE_CONTROL_KEYS = listOf(
+    EscKey, TabKey, ShiftTabKey, EnterKey, CtrlCKey, UpKey, DownKey, LeftKey, RightKey,
 )
+
+// Codex-first keys: Approve/Reject answer the frequent approval prompts (bare 'y'/'n',
+// no CR — Enter stays a separate key); Back/Edit is the Esc-Esc backtrack; Newline
+// (Ctrl+J, 0x0a) inserts a newline the server's delayed-CR submit path cannot. Then the
+// shared keys, then power-user extras (Ctrl+L clear / Ctrl+O copy-output / Ctrl+R history).
+private val CODEX_CONTROL_KEYS = listOf(
+    ControlKey("Approve", byteArrayOf('y'.code.toByte())),
+    ControlKey("Reject", byteArrayOf('n'.code.toByte())),
+    ControlKey("Back/Edit", byteArrayOf(0x1b, 0x1b)),
+    ControlKey("Newline", byteArrayOf(0x0a)),
+    EscKey, EnterKey, CtrlCKey, TabKey,
+    UpKey, DownKey, LeftKey, RightKey,
+    ControlKey("Ctrl+L", byteArrayOf(0x0c)),
+    ControlKey("Ctrl+O", byteArrayOf(0x0f)),
+    ControlKey("Ctrl+R", byteArrayOf(0x12)),
+)
+
+private fun controlKeysFor(kind: SessionKind): List<ControlKey> = when (kind) {
+    SessionKind.Codex -> CODEX_CONTROL_KEYS
+    else -> CLAUDE_CONTROL_KEYS // Claude, shell and auto-scan share the original set.
+}
 
 @Composable
 fun InputBar(
@@ -71,12 +95,14 @@ fun InputBar(
     onExpand: () -> Unit = {},
     onOpenTemplates: () -> Unit = {},
     onSaveAsTemplate: () -> Unit = {},
+    sessionKind: SessionKind = SessionKind.Claude,
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
     var panelExpanded by remember { mutableStateOf(false) }
     var hasFocus by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
+    val controlKeys = remember(sessionKind) { controlKeysFor(sessionKind) }
     val isLandscape = LocalConfiguration.current.orientation ==
         Configuration.ORIENTATION_LANDSCAPE
 
@@ -172,7 +198,7 @@ fun InputBar(
                     .padding(horizontal = 8.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                CONTROL_KEYS.forEach { key ->
+                controlKeys.forEach { key ->
                     FilledTonalButton(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)

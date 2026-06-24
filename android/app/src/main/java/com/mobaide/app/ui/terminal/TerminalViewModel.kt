@@ -13,6 +13,7 @@ import com.mobaide.app.data.network.TerminalFrame
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
@@ -32,6 +33,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -122,6 +126,36 @@ class TerminalViewModel @Inject constructor(
 
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
+
+    /** CLI of this session, used to drive the CLI-aware control-key bar. Resolved from
+     *  the app-scoped session list (the single source of truth) and, on a cold launch,
+     *  from a one-shot REST seed. Defaults to Claude until either resolves, then sticks
+     *  to the real kind (immutable per session, so the two sources never disagree). */
+    val sessionKind: StateFlow<SessionKind> =
+        merge(
+            sessionRepository.observeSessionList()
+                .mapNotNull { sessions ->
+                    sessions.firstOrNull { it.session_id == sessionId }?.kind
+                },
+            flow {
+                // observeSessionList() is WS-pushed with no replay, so a cold launch
+                // (notification tap / deep link) can build this VM before the first
+                // sessions.changed snapshot — the list starts empty and a Codex session
+                // would show the Claude key bar. Seed from a one-shot REST fetch when the
+                // live list hasn't already resolved the session. mapNotNull above means
+                // the Claude default only ever comes from stateIn's seed value, so there
+                // is no Codex→Claude→Codex flicker once a real kind arrives.
+                if (sessionRepository.observeSessionList().value
+                        .none { it.session_id == sessionId }
+                ) {
+                    runCatching { sessionRepository.listSessions() }
+                        .getOrNull()
+                        ?.firstOrNull { it.session_id == sessionId }
+                        ?.kind
+                        ?.let { emit(it) }
+                }
+            },
+        ).stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
