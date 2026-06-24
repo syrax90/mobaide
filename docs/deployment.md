@@ -81,6 +81,7 @@ The Android app never talks to the agent directly; it always goes through `centr
 - Python 3.12+ (the production `install.ps1` flow on Windows auto-installs Python 3.12 via `winget`, with a python.org-installer fallback when `winget` is unavailable; the conda dev path still needs it pre-installed)
 - `git`, `curl`
 - Claude CLI installed on the same machine (the agent spawns `claude` via PTY — see https://claude.ai/code). **v2.1.108 or newer is recommended** — the agent presets `ENABLE_PROMPT_CACHING_1H=1` on every spawn to enable the 1-hour prompt-cache TTL introduced in that release ([release notes](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)); older CLIs will simply ignore the variable. The CLI must be on the agent's `PATH` — Windows installs auto-detect `claude.cmd` from the installing user's `%APPDATA%\npm` and pin it as `MOBAIDE_CLAUDE_BIN` in `<prefix>\mobaide_agent\.env`; the Linux/macOS unit files ship with `%h/.npm-global/bin` and `%h/.local/bin` already appended. To use a non-standard install location set `MOBAIDE_CLAUDE_BIN=/absolute/path/to/claude` in `<prefix>/agent.env`.
+- Codex CLI (optional — the second managed agent; install with `npm install -g @openai/codex`). When present, Windows installs auto-detect `codex` from the installing user's `%APPDATA%\npm` and pin its absolute path as `MOBAIDE_CODEX_BIN` in `<prefix>\mobaide_agent\.env`, exactly mirroring the `MOBAIDE_CLAUDE_BIN` auto-detection above; otherwise the agent probes the same npm-global locations on `PATH`. To use a non-standard install location set `MOBAIDE_CODEX_BIN=/absolute/path/to/codex` in `<prefix>/agent.env`.
 - A paired agent: `RELAY_AGENT_ID` + `RELAY_AGENT_TOKEN` issued by `central-server`. Pair from the Android app: **Settings → Agents → Pair new**, or via the admin REST API.
 
 ### Windows (conda — recommended for development)
@@ -374,6 +375,14 @@ Common causes:
     & "$env:ProgramFiles\MobaideAgent\releases\<version>\venv\Scripts\python.exe" `
       -m mobaide.agent.config set-env --key MOBAIDE_CLAUDE_BIN `
       --value "C:\Users\<you>\AppData\Roaming\npm\claude.cmd"
+    Stop-ScheduledTask -TaskName MobaideAgent
+    Start-ScheduledTask -TaskName MobaideAgent
+    ```
+- Codex CLI not on the service's `PATH` (only relevant if you use the optional Codex agent) — the Windows installer auto-detects `codex` in the installing user's `%APPDATA%\npm` and writes its absolute path as `MOBAIDE_CODEX_BIN` into the agent's `.env`, mirroring the Claude detection above, so a clean install on a host where the user already ran `npm install -g @openai/codex` resolves Codex without manual edits. If `codex` was installed after the agent, or lives outside the npm-global / PATH locations: re-run `irm https://get.mobaide.com/install.ps1 | iex` (the install script surgically backfills `MOBAIDE_CODEX_BIN` without touching pairing credentials), or run the `set-env` verb directly:
+    ```powershell
+    & "$env:ProgramFiles\MobaideAgent\releases\<version>\venv\Scripts\python.exe" `
+      -m mobaide.agent.config set-env --key MOBAIDE_CODEX_BIN `
+      --value "C:\Users\<you>\AppData\Roaming\npm\codex.cmd"
     Stop-ScheduledTask -TaskName MobaideAgent
     Start-ScheduledTask -TaskName MobaideAgent
     ```

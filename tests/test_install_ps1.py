@@ -3363,3 +3363,246 @@ def test_write_agent_env_warns_when_claude_not_found() -> None:
         "@anthropic-ai/claude-code` so the operator has an actionable "
         "next step. Body:\n" + repr(body)
     )
+
+
+# Find-CodexBinary / MOBAIDE_AGENT_CODEX_BIN_HINT / Write-AgentEnv pins
+#
+# Mirror the claude.cmd auto-detection for the optional Codex CLI
+# (the second managed agent). The installer must discover the user's
+# codex path BEFORE the UAC relaunch (under the originating user's env),
+# carry it across the boundary via the ``MOBAIDE_AGENT_CODEX_BIN_HINT``
+# passthrough, and write it into ``<prefix>\mobaide_agent\.env`` as
+# ``MOBAIDE_CODEX_BIN`` using either ``init-env --codex-bin`` (fresh
+# install) or ``set-env --key MOBAIDE_CODEX_BIN`` (re-install backfill).
+# These are the Codex analogue of the Find-ClaudeBinary pins above; each
+# leg is the difference between the agent resolving codex on a
+# non-standard PATH and failing silently at Codex-session-create time.
+
+
+def test_find_codex_binary_is_defined() -> None:
+    """The ``Find-CodexBinary`` helper must exist as a real function.
+
+    Called by both ``Assert-AdminOrElevate`` (pre-UAC discovery) and
+    ``Write-AgentEnv`` (post-UAC fallback), exactly like
+    ``Find-ClaudeBinary``. If it is renamed or deleted, both callsites
+    silently lose codex auto-detection on hosts where codex is installed
+    outside the runtime PATH.
+    """
+    funcs = _list_function_names()
+    assert "Find-CodexBinary" in funcs, (
+        f"expected function 'Find-CodexBinary' in {_DEPLOY_INSTALL_PS1}; "
+        f"found functions: {funcs!r}."
+    )
+
+
+def test_find_codex_binary_probes_appdata_npm() -> None:
+    """``Find-CodexBinary`` must probe ``%APPDATA%\\npm\\codex.cmd``.
+
+    Codex ships as the npm-global package ``@openai/codex``, so its
+    default landing site is the same ``%APPDATA%\\npm`` prefix Claude
+    uses. A regression to a PATH-only check re-opens the resolve gap on
+    relocated-npm / chocolatey hosts.
+    """
+    body = _function_body_text("Find-CodexBinary")
+    assert "APPDATA" in body, (
+        "Find-CodexBinary must read $env:APPDATA to probe the user's "
+        "npm prefix; not found in body:\n" + repr(body)
+    )
+    assert "npm" in body and "codex.cmd" in body, (
+        "Find-CodexBinary must reference both 'npm' and 'codex.cmd' "
+        "(default Windows install path: %APPDATA%\\npm\\codex.cmd). "
+        "Body:\n" + repr(body)
+    )
+
+
+def test_find_codex_binary_skips_windowsapps_stub() -> None:
+    """``Find-CodexBinary`` must filter out the WindowsApps reparse stub.
+
+    Mirrors the same guard ``Find-ClaudeBinary`` / ``Find-Python`` apply:
+    the App Execution Alias under ``WindowsApps`` is a reparse-point
+    trampoline that never runs a real codex binary.
+    """
+    body = _function_body_text("Find-CodexBinary")
+    assert "WindowsApps" in body, (
+        "Find-CodexBinary must filter out the WindowsApps App Execution "
+        "Alias stub (same protection as Find-ClaudeBinary); not found in "
+        "body:\n" + repr(body)
+    )
+
+
+def test_assert_admin_or_elevate_captures_codex_bin_pre_uac() -> None:
+    """``Assert-AdminOrElevate`` must call ``Find-CodexBinary`` BEFORE
+    starting the elevated child, so the lookup runs under the originating
+    user's env (where ``%APPDATA%\\npm\\codex.cmd`` resolves to a real
+    path).
+
+    Same cross-account-elevation rationale as the Claude pin: discovery
+    that runs AFTER ``Start-Process`` would execute inside an
+    already-elevated session whose profile may lack codex.cmd, so the
+    hint never lands for a ``Run as different user`` consent.
+    """
+    body = _function_body_text("Assert-AdminOrElevate")
+    find_at = body.find("Find-CodexBinary")
+    start_at = body.find("Start-Process")
+    assert find_at != -1, (
+        "Assert-AdminOrElevate must call Find-CodexBinary; not found "
+        "in body:\n" + repr(body)
+    )
+    assert start_at != -1, (
+        "Assert-AdminOrElevate must call Start-Process for the UAC "
+        "relaunch. Body:\n" + repr(body)
+    )
+    assert find_at < start_at, (
+        f"Assert-AdminOrElevate must call Find-CodexBinary BEFORE "
+        f"Start-Process (pre-UAC discovery under the originating user's "
+        f"env). Found Find-CodexBinary at offset {find_at}, Start-Process "
+        f"at offset {start_at}. Body:\n" + repr(body)
+    )
+
+
+def test_codex_bin_hint_is_preserved_across_uac_elevation() -> None:
+    """``MOBAIDE_AGENT_CODEX_BIN_HINT`` must be in the elevation
+    passthrough array literal inside ``Assert-AdminOrElevate``.
+
+    Without it the elevated child re-fetches without the pre-UAC
+    discovery and falls back to its own ``Find-CodexBinary`` from inside
+    the elevated session — defeating the pre-UAC capture on a
+    ``Run as different user`` consent.
+    """
+    body = _function_body_text("Assert-AdminOrElevate")
+    assert re.search(
+        r"['\"]MOBAIDE_AGENT_CODEX_BIN_HINT['\"]", body
+    ), (
+        "MOBAIDE_AGENT_CODEX_BIN_HINT must appear in the $passthrough "
+        "array inside Assert-AdminOrElevate so the pre-UAC-discovered "
+        "codex.cmd path survives the UAC re-launch. Function body:\n"
+        + repr(body)
+    )
+
+
+def test_write_agent_env_passes_codex_bin_to_init_env_fresh_install() -> None:
+    """``Write-AgentEnv`` must pass ``--codex-bin <path>`` to ``init-env``
+    on the fresh-install path.
+
+    Mirrors ``--claude-bin``: the discovered codex path is wired into the
+    one-shot ``init-env`` so the freshly rendered .env lands an
+    uncommented ``MOBAIDE_CODEX_BIN=<path>`` line in a single step.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    assert "init-env" in body, (
+        "Write-AgentEnv must invoke init-env. Body:\n" + repr(body)
+    )
+    assert "--codex-bin" in body, (
+        "Write-AgentEnv must pass `--codex-bin` to init-env so the fresh "
+        ".env carries MOBAIDE_CODEX_BIN. Body:\n" + repr(body)
+    )
+
+
+def test_write_agent_env_invokes_set_env_for_codex_reinstall_backfill() -> None:
+    """``Write-AgentEnv`` must invoke ``set-env --key MOBAIDE_CODEX_BIN``
+    on the re-install path (``.env`` already exists).
+
+    Surgical single-key backfill, mirroring the MOBAIDE_CLAUDE_BIN
+    re-install pin — ``init-env --force`` would clobber operator-edited
+    keys, so the installer uses ``set-env`` for codex too.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    assert re.search(r"--key\s+MOBAIDE_CODEX_BIN", body), (
+        "Write-AgentEnv must pass `--key MOBAIDE_CODEX_BIN` to set-env "
+        "on the re-install path; not found in body:\n" + repr(body)
+    )
+
+
+def test_write_agent_env_reinstall_backfills_are_independent_no_early_return() -> None:
+    """``Write-AgentEnv``'s re-install section must NOT short-circuit with
+    an early ``return`` before the Codex backfill — the Claude and Codex
+    backfills must be independent sibling ``if`` blocks.
+
+    This pins the one load-bearing control-flow change this introduces to
+    *existing* Claude code. The re-install path previously opened with::
+
+        if (-not $claudeBin) { return }   # Claude-missing -> bail entirely
+
+    which, once a parallel Codex backfill was appended below it, would
+    skip the Codex ``set-env`` on every host where Claude is absent but
+    Codex is present (relocated-npm / chocolatey / Codex-only operators).
+    The fix converts that early ``return`` into an ``if ($claudeBin) {...}``
+    block so the Codex ``if ($codexBin) {...}`` block below always runs.
+
+    The sibling pins
+    (``..._invokes_set_env_for_codex_reinstall_backfill`` /
+    ``..._invokes_set_env_for_reinstall_backfill``) only assert the
+    ``--key MOBAIDE_*_BIN`` tokens are textually present; a regression that
+    re-introduced ``if (-not $claudeBin) { return }`` above the Codex block
+    would leave both tokens in place and keep every one of those pins
+    green while silently re-breaking exactly the bug this change fixes.
+    Only a control-flow assertion catches it.
+
+    Strategy: the entire re-install section lives after the
+    ``"Existing ... preserved (re-install)."`` log line and consists of
+    two guard-only ``if`` blocks (no loops, no nested functions, no other
+    early exits). A bare ``return`` anywhere in that comment-stripped
+    slice is therefore the regression. The fresh-install ``return`` (the
+    ``if (-not $envExists) { ... return }`` arm) sits *above* the marker
+    and is correctly excluded. Comments are stripped first so the
+    "(and vice versa)" policy note in the block header cannot create a
+    false token match.
+    """
+    body = _strip_powershell_comments(_function_body_text("Write-AgentEnv"))
+    marker_at = body.find("preserved (re-install)")
+    assert marker_at != -1, (
+        "Write-AgentEnv must log 'Existing ... preserved (re-install).' at "
+        "the head of the re-install section; the marker anchors this "
+        "control-flow pin. Body:\n" + repr(body)
+    )
+    reinstall_section = body[marker_at:]
+    # Both backfill keys must live in this slice — proves the marker really
+    # precedes the backfill logic (guards against the marker text drifting
+    # above the fresh-install branch and silently voiding the assertion).
+    assert "MOBAIDE_CLAUDE_BIN" in reinstall_section, (
+        "The re-install section (after the 'preserved' marker) must contain "
+        "the MOBAIDE_CLAUDE_BIN backfill; not found. The marker may have "
+        "drifted. Section:\n" + repr(reinstall_section)
+    )
+    assert "MOBAIDE_CODEX_BIN" in reinstall_section, (
+        "The re-install section (after the 'preserved' marker) must contain "
+        "the MOBAIDE_CODEX_BIN backfill; not found. Section:\n"
+        + repr(reinstall_section)
+    )
+    early_return = re.search(r"\breturn\b", reinstall_section)
+    assert early_return is None, (
+        "Write-AgentEnv's re-install section must NOT contain an early "
+        "`return` — it makes the Claude and Codex backfills independent "
+        "sibling `if` blocks. A `return` here (e.g. a re-introduced "
+        "`if (-not $claudeBin) { return }`) short-circuits before the Codex "
+        "backfill, silently re-breaking codex auto-detection on hosts where "
+        "Claude is absent but Codex is present. Found `return` at offset "
+        f"{early_return.start()} within the re-install section:\n"
+        + repr(reinstall_section)
+    )
+
+
+def test_write_agent_env_prefers_codex_hint_then_falls_back_to_find() -> None:
+    """``Write-AgentEnv`` must read ``$env:MOBAIDE_AGENT_CODEX_BIN_HINT``
+    first and only fall back to ``Find-CodexBinary`` if the hint is empty.
+
+    Same hint-then-fallback ordering as the Claude path: the pre-UAC hint
+    carries the originating-user discovery across the UAC boundary; the
+    fallback covers already-elevated invocations.
+    """
+    body = _function_body_text("Write-AgentEnv")
+    hint_at = body.find("MOBAIDE_AGENT_CODEX_BIN_HINT")
+    find_at = body.find("Find-CodexBinary")
+    assert hint_at != -1, (
+        "Write-AgentEnv must read $env:MOBAIDE_AGENT_CODEX_BIN_HINT "
+        "(the pre-UAC discovery). Body:\n" + repr(body)
+    )
+    assert find_at != -1, (
+        "Write-AgentEnv must call Find-CodexBinary as a fallback. "
+        "Body:\n" + repr(body)
+    )
+    assert hint_at < find_at, (
+        f"Write-AgentEnv must check MOBAIDE_AGENT_CODEX_BIN_HINT BEFORE "
+        f"falling back to Find-CodexBinary. Hint at offset {hint_at}, "
+        f"Find-CodexBinary at offset {find_at}. Body:\n" + repr(body)
+    )
