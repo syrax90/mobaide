@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
@@ -59,6 +60,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
 import com.mobaide.app.ui.projects.ProjectsViewModel
@@ -247,6 +249,77 @@ fun CreateSessionScreen(
             onSave = projectsViewModel::save,
         )
     }
+
+    if (state.codexLoginVisible) {
+        CodexLoginDialog(
+            apiKey = state.codexApiKeyDraft,
+            revealed = state.codexApiKeyVisible,
+            submitting = state.codexLoginSubmitting,
+            error = state.codexLoginError,
+            onKeyChange = viewModel::setCodexApiKeyDraft,
+            onToggleRevealed = viewModel::toggleCodexApiKeyVisible,
+            onSubmit = viewModel::submitCodexLogin,
+            onDismiss = viewModel::dismissCodexLogin,
+        )
+    }
+}
+
+/**
+ * Sign-in prompt shown when creating a Codex session fails because the agent's
+ * Codex CLI isn't authenticated. The key is forwarded to `POST /api/codex/login`
+ * and held only in transient state — never persisted on the device. On success
+ * the ViewModel retries the original create.
+ */
+@Composable
+private fun CodexLoginDialog(
+    apiKey: String,
+    revealed: Boolean,
+    submitting: Boolean,
+    error: String?,
+    onKeyChange: (String) -> Unit,
+    onToggleRevealed: () -> Unit,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Codex needs sign-in") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Codex isn't signed in on this agent. Enter an OpenAI API key to " +
+                        "sign in — it's sent to the agent and never stored on your device.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                SecretTextField(
+                    value = apiKey,
+                    onValueChange = onKeyChange,
+                    label = "OpenAI API key",
+                    revealed = revealed,
+                    onToggleRevealed = onToggleRevealed,
+                    enabled = !submitting,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (error != null) {
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onSubmit, enabled = apiKey.isNotBlank() && !submitting) {
+                Text(if (submitting) "Signing in…" else "Sign in")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !submitting) {
+                Text("Cancel")
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)

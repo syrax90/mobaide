@@ -37,7 +37,11 @@ from mobaide.relay.envelope import (
     encode,
 )
 from mobaide.agent.events.bus import AgentEvent
-from mobaide.core import ClaudeBinaryNotFoundError, CodexBinaryNotFoundError
+from mobaide.core import (
+    ClaudeBinaryNotFoundError,
+    CodexAuthRequiredError,
+    CodexBinaryNotFoundError,
+)
 from mobaide.core.models import SessionKind, SessionState
 
 
@@ -910,6 +914,27 @@ class TestHandleCreateSessionPathErrors:
             "/home/test/.npm-global/bin/claude",
         ]
 
+    async def test_codex_auth_required_emits_codex_auth_required_marker(
+        self, client, mock_session_manager
+    ):
+        """``CodexAuthRequiredError`` from the spawn path maps to
+        ``session_create_failed`` with ``codex_auth_required: true`` top-level
+        (parallel to ``<cli>_cli_missing``) so the mobile client opens a login
+        prompt rather than the generic error toast."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=CodexAuthRequiredError(),
+        )
+        ws = AsyncMock()
+        ctrl = {"type": "create_session", "session_id": "no-auth-sess"}
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "no-auth-sess"
+        assert resp["codex_auth_required"] is True
+        assert isinstance(resp["error"], str) and resp["error"]
+
 
 # -- _handle_proxy_request: OSError/FileNotFoundError branches -----------------
 
@@ -1056,6 +1081,147 @@ class TestHandleProxyRequestPathErrors:
         assert resp["type"] == "proxy_response"
         assert resp["status"] == 500
         assert "boom" in resp["body"]["detail"]
+
+    async def test_proxy_codex_auth_required_returns_401_with_marker(
+        self, client, mock_session_manager
+    ):
+        """``POST /api/sessions`` proxied through the relay must map
+        ``CodexAuthRequiredError`` to status=401 (not 503 / not 500) with
+        ``codex_auth_required: true`` in the body so the mobile client renders
+        the login prompt."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=CodexAuthRequiredError(),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-auth",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-auth"
+        assert resp["status"] == 401
+        assert resp["body"]["codex_auth_required"] is True
+        assert isinstance(resp["body"]["detail"], str) and resp["body"]["detail"]
+
+
+# -- _dispatch_proxy: POST /api/codex/login ------------------------------------
+
+
+class TestDispatchProxyCodexLogin:
+    """``POST /api/codex/login`` proxied through the relay mirrors the direct
+    HTTP handler: 503 when Codex isn't configured, 422 on a malformed body
+    (with the raw key scrubbed), 200 on success, 401 on login failure.
+    """
+
+    def _login_ctrl(self, body, request_id="req-login"):
+        return {
+            "type": "proxy_request",
+            "request_id": request_id,
+            "method": "POST",
+            "path": "/api/codex/login",
+            "body": body,
+        }
+
+    async def test_no_codex_launcher_returns_503(self, client, mock_app_state):
+        mock_app_state.codex_launcher = None
+        ws = AsyncMock()
+
+        await client._handle_control(
+            json.dumps(self._login_ctrl({"api_key": "sk-x"})).encode(), ws,
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["status"] == 503
+        assert "not configured" in resp["body"]["detail"].lower()
+
+    async def test_malformed_body_returns_422_and_scrubs_key(
+        self, client, mock_app_state
+    ):
+        """A blank ``api_key`` trips ``CodexLoginRequest`` validation; the 422
+        body must not echo the raw key (it is in ``_SECRET_VALIDATION_FIELDS``)."""
+        mock_app_state.codex_launcher = MagicMock()
+        ws = AsyncMock()
+
+        await client._handle_control(
+            json.dumps(self._login_ctrl({"api_key": ""})).encode(), ws,
+        )
+
+        _, _, payload = decode(ws.send.call_args[0][0])
+        resp = json.loads(payload)
+        assert resp["status"] == 422
+        wire = payload.decode("utf-8")
+        assert '"input": ""' not in wire
+        assert '"input":""' not in wire
+
+    async def test_successful_login_returns_200_authenticated(
+        self, client, mock_app_state, monkeypatch
+    ):
+        launcher = MagicMock()
+        launcher.resolve_binary.return_value = "codex"
+        mock_app_state.codex_launcher = launcher
+
+        async def _ok(api_key, *, codex_bin, env, **_kw):
+            return True, ""
+
+        monkeypatch.setattr("mobaide.relay.client.codex_login_with_api_key", _ok)
+        ws = AsyncMock()
+
+        await client._handle_control(
+            json.dumps(self._login_ctrl({"api_key": "sk-good"})).encode(), ws,
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["status"] == 200
+        assert resp["body"]["authenticated"] is True
+
+    async def test_failed_login_returns_401_with_sanitized_detail(
+        self, client, mock_app_state, monkeypatch
+    ):
+        launcher = MagicMock()
+        launcher.resolve_binary.return_value = "codex"
+        mock_app_state.codex_launcher = launcher
+
+        async def _fail(api_key, *, codex_bin, env, **_kw):
+            return False, "rejected ***"
+
+        monkeypatch.setattr("mobaide.relay.client.codex_login_with_api_key", _fail)
+        ws = AsyncMock()
+
+        await client._handle_control(
+            json.dumps(self._login_ctrl({"api_key": "sk-bad-9999999999"})).encode(),
+            ws,
+        )
+
+        _, _, payload = decode(ws.send.call_args[0][0])
+        resp = json.loads(payload)
+        assert resp["status"] == 401
+        assert resp["body"]["detail"].startswith("Codex login failed:")
+        assert "sk-bad-9999999999" not in payload.decode("utf-8")
+
+    async def test_binary_not_found_propagates_to_503(self, client, mock_app_state):
+        """``resolve_binary`` raising ``CodexBinaryNotFoundError`` propagates to
+        ``_handle_proxy_request``'s 503 handler (same as ``POST /api/sessions``)."""
+        launcher = MagicMock()
+        launcher.resolve_binary.side_effect = CodexBinaryNotFoundError(
+            searched_paths=["PATH:codex"],
+        )
+        mock_app_state.codex_launcher = launcher
+        ws = AsyncMock()
+
+        await client._handle_control(
+            json.dumps(self._login_ctrl({"api_key": "sk-x"})).encode(), ws,
+        )
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["status"] == 503
+        assert resp["body"]["codex_cli_missing"] is True
 
 
 # -- _handle_session_input ------------------------------------------------------

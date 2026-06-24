@@ -9,6 +9,7 @@ import pytest
 from mobaide.core import codex_launcher
 from mobaide.core.claude_launcher import AdHocLaunch
 from mobaide.core.codex_launcher import (
+    CodexAuthRequiredError,
     CodexBinaryNotFoundError,
     CodexLauncher,
     CodexOptions,
@@ -354,3 +355,77 @@ def test_real_resolver_raises_with_actionable_message(
     assert "@openai/codex" in msg
     assert "MOBAIDE_CODEX_BIN" in msg
     assert exc_info.value.searched_paths
+
+
+# ---------------------------------------------------------------------------
+# auth guard (CLA-71)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _unauthenticated_codex_env(monkeypatch, tmp_path):
+    """Point CODEX_HOME at an empty tmp dir (no auth.json) and clear the env
+    key, so ``codex_auth_present`` on the built launch env returns False."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    yield
+
+
+@pytest.mark.asyncio
+async def test_build_raises_auth_required_when_unauthenticated(
+    tmp_path: Path, _unauthenticated_codex_env,
+):
+    """``build()`` must raise ``CodexAuthRequiredError`` BEFORE any cwd/worktree
+    work when neither an env key nor an auth.json is reachable — so the spawn
+    path never launches an unauthenticated codex into its login TUI."""
+    with pytest.raises(CodexAuthRequiredError):
+        await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+
+
+@pytest.mark.asyncio
+async def test_build_auth_guard_runs_before_worktree_creation(
+    tmp_path: Path, _unauthenticated_codex_env,
+):
+    """The guard fires before worktree resolution: a git project requesting a
+    worktree with no WorktreeManager would otherwise raise the loud
+    misconfiguration ``RuntimeError`` — proving auth is checked first."""
+    (tmp_path / ".git").mkdir()
+    with pytest.raises(CodexAuthRequiredError):
+        await CodexLauncher().build(
+            _make_project(str(tmp_path)),
+            CodexOptions(worktree=True, branch_name="x"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_succeeds_when_env_api_key_present(
+    tmp_path: Path, monkeypatch,
+):
+    """An ``OPENAI_API_KEY`` in the inherited env passes the guard and the build
+    completes normally (no auth.json required)."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-present")
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+    assert spec.argv[0] == "codex"
+
+
+@pytest.mark.asyncio
+async def test_build_succeeds_when_auth_json_present(
+    tmp_path: Path, monkeypatch,
+):
+    """An existing ``auth.json`` under CODEX_HOME passes the guard with no env
+    key — the file-presence credential path."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    (tmp_path / "auth.json").write_text("{}", encoding="utf-8")
+    spec = await CodexLauncher().build(_make_project(str(tmp_path)), CodexOptions())
+    assert spec.cwd == str(tmp_path)
+
+
+def test_auth_required_error_discriminator_and_hint():
+    err = CodexAuthRequiredError()
+    assert err.cli_name == "codex"
+    msg = str(err)
+    assert "not authenticated" in msg.lower()
+    assert "codex login" in msg.lower()

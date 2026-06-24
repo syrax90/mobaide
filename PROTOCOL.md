@@ -42,12 +42,23 @@ cadence; they do **not** gate compatibility.
   * ``session_create_failed`` / proxy ``503`` responses for a missing Codex
     binary carry ``codex_cli_missing: true`` + ``searched_paths`` — the exact
     parallel of the existing ``claude_cli_missing`` marker.
+  * Codex auth/login (CLA-71 — **additive, no version bump**): when Codex is
+    installed but not signed in, the agent guards the spawn path and returns a
+    ``codex_auth_required: true`` marker (direct REST: HTTP ``401`` with the
+    marker inside a dict ``detail``; relay: top-level on
+    ``session_create_failed`` and the proxy ``401`` body) — the parallel of
+    ``codex_cli_missing``. A new authenticated endpoint ``POST /api/codex/login``
+    (body ``{"api_key": "<secret>"}``) runs ``codex login --with-api-key`` (key
+    fed on stdin, never argv / never persisted by the agent) and returns
+    ``{"authenticated": true}`` on success. The app shows a login prompt on the
+    marker, then retries the create.
 * Out of scope (downstream issues): Android create-session UI for Codex
-  (CLA-69), terminal control-key / approval affordances (CLA-70), Codex
-  auth/login (CLA-71). v1 assumes the host is already Codex-authed and cannot
-  yet mediate Codex approval prompts, so the agent defaults Codex sessions to a
-  non-interactive sandboxed preset (``--sandbox workspace-write
-  --ask-for-approval never``).
+  (CLA-69, done), terminal control-key / approval affordances (CLA-70, done).
+  The agent defaults Codex sessions to a non-interactive sandboxed preset
+  (``--sandbox workspace-write --ask-for-approval never``) and cannot yet
+  mediate in-session Codex approval prompts. Further Codex-auth work is tracked
+  downstream: device-code login (CLA-79), mid-session re-auth (CLA-80),
+  credential-validity probing (CLA-81).
 
 ## proto-v4 (superseded by proto-v5)
 

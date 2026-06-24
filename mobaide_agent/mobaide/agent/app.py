@@ -39,6 +39,7 @@ from .auth.router import router as auth_router
 from .auth.user_store import UserStore
 from .autoscan.router import router as autoscan_router
 from .autoscan.router import ws_router as autoscan_ws_router
+from .codex.router import router as codex_router
 from .config import AgentConfig
 from .git.router import router as git_router
 from .hooks.router import router as hooks_router
@@ -546,9 +547,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app = FastAPI(title="Mobaide Agent", version=__version__, lifespan=lifespan)
 
-    # Strip `linear_api_key` inputs from validation errors so a malformed body
-    # cannot echo the secret back to the caller; other fields keep `input`.
-    _SECRET_FIELDS = frozenset({"linear_api_key"})
+    # Strip secret inputs from validation errors so a malformed body cannot echo
+    # the secret back to the caller; other fields keep `input`.
+    _SECRET_FIELDS = frozenset({"linear_api_key", "api_key"})
 
     @app.exception_handler(RequestValidationError)
     async def _scrub_validation_errors(
@@ -714,6 +715,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(sessions_router)
+    app.include_router(codex_router)
     app.include_router(hooks_router)
     app.include_router(projects_router)
     app.include_router(git_router)

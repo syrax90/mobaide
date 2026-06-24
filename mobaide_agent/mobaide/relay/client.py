@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import platform
 import random
 import re
@@ -26,7 +27,12 @@ import orjson
 import websockets
 from websockets.asyncio.client import ClientConnection
 
-from mobaide.core.cli_launcher import CliBinaryNotFoundError
+from mobaide.core.cli_launcher import (
+    CliAuthRequiredError,
+    CliBinaryNotFoundError,
+    prepend_path_dir,
+)
+from mobaide.core.codex_auth import codex_login_with_api_key
 from mobaide.core.models import (
     SessionConfig,
     SessionEvent,
@@ -70,6 +76,7 @@ from mobaide.linear.rate_limiter import LinearRateLimiter
 
 from mobaide.agent.autoscan.models import StartScanRequest
 from mobaide.agent.autoscan.stream import run_autoscan_stream
+from mobaide.agent.codex.models import CodexLoginRequest
 from mobaide.agent.sessions.models import (
     ClaudeOptionsModel,
     CodexOptionsModel,
@@ -131,7 +138,7 @@ _EVENT_TO_STATUS = {
 # Fields whose raw input must never be echoed back in a validation error —
 # mirrors the handler registered in ``agent/app.py`` so direct HTTP and
 # relay-forwarded 422 responses have identical redaction guarantees.
-_SECRET_VALIDATION_FIELDS = frozenset({"linear_api_key"})
+_SECRET_VALIDATION_FIELDS = frozenset({"linear_api_key", "api_key"})
 
 
 def _scrub_validation_errors(exc: "ValidationError") -> list[dict[str, object]]:
@@ -929,6 +936,19 @@ class RelayClient:
                 f"{exc.cli_name}_cli_missing": True,
                 "searched_paths": list(exc.searched_paths),
             }
+        except CliAuthRequiredError as exc:
+            logger.warning(
+                "relay.create_session_auth_required session_id=%s cli=%s",
+                session_id, exc.cli_name,
+            )
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": str(exc),
+                # Parallel to ``<cli>_cli_missing``: CLI present but not signed
+                # in. Lets the mobile client surface a login prompt.
+                f"{exc.cli_name}_auth_required": True,
+            }
         except FileNotFoundError as exc:
             # Mirror the HTTP router: interpolate ``exc.filename`` as a plain
             # string rather than ``str(exc)``, which would embed
@@ -1039,6 +1059,20 @@ class RelayClient:
                     "detail": f"{exc.cli_name.capitalize()} CLI not found: {exc}",
                     f"{exc.cli_name}_cli_missing": True,
                     "searched_paths": list(exc.searched_paths),
+                },
+            }
+        except CliAuthRequiredError as exc:
+            logger.warning(
+                "relay.proxy_request_auth_required path=%s cli=%s",
+                path, exc.cli_name,
+            )
+            resp = {
+                "type": "proxy_response",
+                "request_id": request_id,
+                "status": 401,
+                "body": {
+                    f"{exc.cli_name}_auth_required": True,
+                    "detail": str(exc),
                 },
             }
         except FileNotFoundError as exc:
@@ -1355,6 +1389,39 @@ class RelayClient:
                     "project_name": project_name,
                     "next_scan_at": dto.get("next_scan_at"),
                 },
+            }
+
+        if method == "POST" and path == "/api/codex/login":
+            # Mirrors the direct-HTTP ``/api/codex/login`` handler so relay and
+            # LAN clients get identical semantics. ``resolve_binary`` raising
+            # ``CliBinaryNotFoundError`` propagates to ``_handle_proxy_request``'s
+            # 503 handler (as ``POST /api/sessions`` does).
+            launcher = getattr(self._app_state, "codex_launcher", None)
+            if launcher is None:
+                return {
+                    "status": 503,
+                    "body": {"detail": "Codex is not configured on this agent."},
+                }
+            try:
+                parsed = CodexLoginRequest.model_validate(body or {})
+            except ValidationError as exc:
+                return {
+                    "status": 422,
+                    "body": {"detail": _scrub_validation_errors(exc)},
+                }
+            codex_bin = launcher.resolve_binary()
+            env = os.environ.copy()
+            prepend_path_dir(env, os.path.dirname(codex_bin))
+            ok, detail = await codex_login_with_api_key(
+                parsed.api_key.get_secret_value(),
+                codex_bin=codex_bin,
+                env=env,
+            )
+            if ok:
+                return {"status": 200, "body": {"authenticated": True}}
+            return {
+                "status": 401,
+                "body": {"detail": f"Codex login failed: {detail}"},
             }
 
         return {

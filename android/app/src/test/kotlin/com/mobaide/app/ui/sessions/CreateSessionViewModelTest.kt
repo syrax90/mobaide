@@ -3,7 +3,9 @@ package com.mobaide.app.ui.sessions
 import app.cash.turbine.test
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.PreferencesStore
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
+import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
@@ -1220,5 +1222,208 @@ class CreateSessionViewModelTest {
         assertEquals("read-only", opts!!.sandbox)
         assertEquals("on-request", opts.approval)
         assertFalse(opts.full_auto)
+    }
+
+    // ---- Codex auth-required login flow (CLA-71) ---------------------------
+
+    @Test
+    fun submitCodex_authRequired401_nestedDetailMarker_opensLoginDialog() = runTest {
+        // Direct-REST shape: the marker is nested under `detail`.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(401, """{"detail":{"codex_auth_required":true}}""")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue("auth-required 401 must open the login dialog", s.codexLoginVisible)
+        assertNull("the generic error must NOT be set on the auth path", s.error)
+        assertFalse(s.submitting)
+    }
+
+    @Test
+    fun submitCodex_authRequired401_topLevelMarker_opensLoginDialog() = runTest {
+        // Relay shape: the marker is top-level.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(401, """{"codex_auth_required":true,"detail":"Codex sign-in required."}""")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.codexLoginVisible)
+        assertNull(vm.uiState.value.error)
+    }
+
+    @Test
+    fun submitCodex_non401Error_setsGenericError_doesNotOpenDialog() = runTest {
+        // A 500 (or any non-401) is not the auth case -> generic error, no dialog.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(500, """{"detail":"boom"}""")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse("non-auth failure must not open the login dialog", s.codexLoginVisible)
+        assertNotNull("non-auth failure must surface the generic error", s.error)
+    }
+
+    @Test
+    fun submitCodex_401WithoutMarker_setsGenericError_doesNotOpenDialog() = runTest {
+        // A 401 that is NOT the codex marker (e.g. an expired JWT) must fall
+        // through to the generic error, never the Codex login dialog.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(401, """{"detail":"Not authenticated"}""")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.codexLoginVisible)
+        assertNotNull(s.error)
+    }
+
+    @Test
+    fun submitCodex_401WithGarbageBody_setsGenericError_doesNotOpenDialog() = runTest {
+        // A non-JSON 401 body must be tolerated (no crash) and routed to the
+        // generic error — `isCodexAuthRequired` defaults to false on parse failure.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(401, "not json at all <<<")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse(s.codexLoginVisible)
+        assertNotNull(s.error)
+    }
+
+    @Test
+    fun submitCodexLogin_success_wipesKey_closesDialog_andRetriesSubmitCodex() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.codexLogin("sk-user-key") } returns
+            CodexLoginResponse(authenticated = true)
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-after-login", "starting", "2026-06-23T00:00:00Z")
+
+        // The user is on the Codex step with the login dialog open.
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.setCodexApiKeyDraft("sk-user-key")
+
+        vm.submitCodexLogin()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertFalse("dialog must close after a successful login", s.codexLoginVisible)
+        assertEquals("the key must be wiped from memory", "", s.codexApiKeyDraft)
+        assertFalse(s.codexLoginSubmitting)
+        assertNull(s.codexLoginError)
+        // The original Codex create is retried -> repo login then create.
+        coVerify(exactly = 1) { fx.sessionRepo.codexLogin("sk-user-key") }
+        coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+        assertEquals("codex", requestSlot.captured.cli)
+    }
+
+    @Test
+    fun submitCodexLogin_failure_setsErrorWithoutEchoingKey_keepsDialogOpen() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val secretKey = "sk-super-secret-key-value"
+        coEvery { fx.sessionRepo.codexLogin(secretKey) } throws
+            ApiException(401, """{"detail":"Codex login failed: bad key"}""")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.setCodexApiKeyDraft(secretKey)
+
+        vm.submitCodexLogin()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertNotNull("a failed login must surface an inline error", s.codexLoginError)
+        assertFalse(s.codexLoginSubmitting)
+        // The submitted key must never appear in the surfaced error text.
+        assertFalse(
+            "login error must never echo the submitted key",
+            s.codexLoginError!!.contains(secretKey),
+        )
+        // No session is created when login fails.
+        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
+    }
+
+    @Test
+    fun submitCodexLogin_blankKey_isNoop() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setCodexApiKeyDraft("   ")
+        vm.submitCodexLogin()
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { fx.sessionRepo.codexLogin(any()) }
+        assertFalse(vm.uiState.value.codexLoginSubmitting)
+    }
+
+    @Test
+    fun dismissCodexLogin_wipesDraftAndClosesDialog() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setCodexApiKeyDraft("sk-typed-then-cancelled")
+        vm.toggleCodexApiKeyVisible()
+
+        vm.dismissCodexLogin()
+
+        val s = vm.uiState.value
+        assertFalse(s.codexLoginVisible)
+        assertEquals("", s.codexApiKeyDraft)
+        assertFalse(s.codexApiKeyVisible)
+        assertNull(s.codexLoginError)
     }
 }

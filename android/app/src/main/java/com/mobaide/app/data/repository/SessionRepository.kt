@@ -5,6 +5,7 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.RestApi
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
+import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ScrollbackResponse
 import com.mobaide.app.data.network.dto.SessionResponse
@@ -50,6 +51,10 @@ class SessionRepository(
         restApi.createSession(request)
 
     suspend fun listSessions(): List<SessionResponse> = restApi.listSessions()
+
+    /** One-shot Codex sign-in; the successful retry reconciles the session list
+     *  via the existing `SessionsChanged` subscription above. */
+    suspend fun codexLogin(apiKey: String): CodexLoginResponse = restApi.codexLogin(apiKey)
 
     suspend fun deleteSession(sessionId: String, force: Boolean = false) {
         restApi.deleteSession(sessionId, force)

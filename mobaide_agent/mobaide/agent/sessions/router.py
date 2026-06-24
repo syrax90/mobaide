@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from mobaide.core import (
+    CliAuthRequiredError,
     CliBinaryNotFoundError,
     MaxSessionsError,
     SessionConfig,
@@ -127,6 +128,14 @@ async def create_session(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"{exc.cli_name.capitalize()} CLI not found: {exc}",
+        )
+    except CliAuthRequiredError as exc:
+        # CLI present but not signed in: client-actionable (401). The dict detail
+        # carries a `<cli>_auth_required` marker so the app shows a login prompt
+        # rather than spawning a session that would hang on the CLI's login TUI.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={f"{exc.cli_name}_auth_required": True, "detail": str(exc)},
         )
     except FileNotFoundError as exc:
         # Use ``exc.filename`` (plain str) rather than ``str(exc)`` which
