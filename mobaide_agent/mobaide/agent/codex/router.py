@@ -59,8 +59,11 @@ async def codex_login(body: CodexLoginRequest, request: Request) -> CodexLoginRe
     )
     if not ok:
         logger.warning("codex.login_failed")
+        # 400 (not 401): a rejected Codex key is bad input, not an app-session
+        # auth failure. A 401 would trip the Android AuthInterceptor into
+        # refreshing the JWT and retrying — re-running the login subprocess.
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Codex login failed: {detail}",
         )
     return CodexLoginResponse(authenticated=True)

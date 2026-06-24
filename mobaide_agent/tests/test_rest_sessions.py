@@ -373,13 +373,14 @@ class TestCreateSessionCodex:
         assert "npm install -g @openai/codex" in detail
         assert "MOBAIDE_CODEX_BIN" in detail
 
-    async def test_codex_unauthenticated_returns_401_with_auth_marker(
+    async def test_codex_unauthenticated_returns_409_with_auth_marker(
         self, app, client, auth_headers,
     ):
         """A Codex present-but-unauthenticated spawn (``CodexAuthRequiredError``)
-        is client-actionable: 401 with a dict detail carrying
+        is client-actionable: 409 with a dict detail carrying
         ``codex_auth_required: true`` so the app shows a login prompt instead of
-        the generic ``Project path not found`` toast. Distinct from the 503
+        the generic toast. 409 (not 401) so the Android AuthInterceptor's
+        refresh-retry-on-401 can't swallow the marker. Distinct from the 503
         missing-binary case above (string detail), whose shape is asserted there."""
         from mobaide.core import CodexAuthRequiredError
 
@@ -394,7 +395,7 @@ class TestCreateSessionCodex:
             json={"cli": "codex", "codex_options": {}},
         )
 
-        assert resp.status_code == 401
+        assert resp.status_code == 409
         detail = resp.json()["detail"]
         assert detail["codex_auth_required"] is True
         assert isinstance(detail["detail"], str) and detail["detail"]

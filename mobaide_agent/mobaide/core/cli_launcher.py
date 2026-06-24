@@ -53,7 +53,8 @@ class CliAuthRequiredError(RuntimeError):
     ``<cli>_auth_required`` marker from ``cli_name`` so the mobile client can
     surface a login prompt instead of spawning a session that would hang on the
     CLI's interactive login screen. Distinct from a missing binary (503): an
-    unauthenticated-but-present CLI is client-actionable (401).
+    unauthenticated-but-present CLI is client-actionable and surfaced as 409 (not
+    401, which the app's JWT-refresh interceptor would intercept and retry).
     """
 
     cli_name: str = "cli"

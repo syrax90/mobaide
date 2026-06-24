@@ -1069,7 +1069,9 @@ class RelayClient:
             resp = {
                 "type": "proxy_response",
                 "request_id": request_id,
-                "status": 401,
+                # 409 (not 401) so the Android AuthInterceptor doesn't refresh +
+                # retry on it and swallow the marker. Mirrors the REST router.
+                "status": 409,
                 "body": {
                     f"{exc.cli_name}_auth_required": True,
                     "detail": str(exc),
@@ -1419,8 +1421,10 @@ class RelayClient:
             )
             if ok:
                 return {"status": 200, "body": {"authenticated": True}}
+            # 400 (not 401): a rejected key is bad input — a 401 would make the
+            # Android AuthInterceptor refresh + retry, re-running the subprocess.
             return {
-                "status": 401,
+                "status": 400,
                 "body": {"detail": f"Codex login failed: {detail}"},
             }
 

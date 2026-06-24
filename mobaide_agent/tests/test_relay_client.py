@@ -1082,13 +1082,14 @@ class TestHandleProxyRequestPathErrors:
         assert resp["status"] == 500
         assert "boom" in resp["body"]["detail"]
 
-    async def test_proxy_codex_auth_required_returns_401_with_marker(
+    async def test_proxy_codex_auth_required_returns_409_with_marker(
         self, client, mock_session_manager
     ):
         """``POST /api/sessions`` proxied through the relay must map
-        ``CodexAuthRequiredError`` to status=401 (not 503 / not 500) with
-        ``codex_auth_required: true`` in the body so the mobile client renders
-        the login prompt."""
+        ``CodexAuthRequiredError`` to status=409 (not 401 / not 503 / not 500)
+        with ``codex_auth_required: true`` in the body so the mobile client
+        renders the login prompt — 409 (not 401) so the Android AuthInterceptor
+        doesn't refresh-retry and swallow the marker."""
         mock_session_manager.create_session = AsyncMock(
             side_effect=CodexAuthRequiredError(),
         )
@@ -1106,7 +1107,7 @@ class TestHandleProxyRequestPathErrors:
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
         assert resp["request_id"] == "req-auth"
-        assert resp["status"] == 401
+        assert resp["status"] == 409
         assert resp["body"]["codex_auth_required"] is True
         assert isinstance(resp["body"]["detail"], str) and resp["body"]["detail"]
 
@@ -1181,9 +1182,11 @@ class TestDispatchProxyCodexLogin:
         assert resp["status"] == 200
         assert resp["body"]["authenticated"] is True
 
-    async def test_failed_login_returns_401_with_sanitized_detail(
+    async def test_failed_login_returns_400_with_sanitized_detail(
         self, client, mock_app_state, monkeypatch
     ):
+        # 400 (not 401): mirrors the REST router so the Android AuthInterceptor
+        # doesn't refresh-retry on a rejected key and re-run the subprocess.
         launcher = MagicMock()
         launcher.resolve_binary.return_value = "codex"
         mock_app_state.codex_launcher = launcher
@@ -1201,7 +1204,7 @@ class TestDispatchProxyCodexLogin:
 
         _, _, payload = decode(ws.send.call_args[0][0])
         resp = json.loads(payload)
-        assert resp["status"] == 401
+        assert resp["status"] == 400
         assert resp["body"]["detail"].startswith("Codex login failed:")
         assert "sk-bad-9999999999" not in payload.decode("utf-8")
 

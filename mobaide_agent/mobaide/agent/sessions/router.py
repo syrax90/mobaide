@@ -130,11 +130,13 @@ async def create_session(
             detail=f"{exc.cli_name.capitalize()} CLI not found: {exc}",
         )
     except CliAuthRequiredError as exc:
-        # CLI present but not signed in: client-actionable (401). The dict detail
-        # carries a `<cli>_auth_required` marker so the app shows a login prompt
-        # rather than spawning a session that would hang on the CLI's login TUI.
+        # CLI present but not signed in: client-actionable. Uses 409 (not 401) so
+        # the Android AuthInterceptor — which refreshes the app JWT and retries on
+        # any 401 — can't swallow the marker before the ViewModel reads it. The
+        # dict detail carries a `<cli>_auth_required` marker so the app shows a
+        # login prompt instead of spawning a session that hangs on the login TUI.
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_409_CONFLICT,
             detail={f"{exc.cli_name}_auth_required": True, "detail": str(exc)},
         )
     except FileNotFoundError as exc:

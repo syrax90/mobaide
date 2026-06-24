@@ -57,9 +57,11 @@ class TestCodexLoginSuccess:
 
 
 class TestCodexLoginFailure:
-    async def test_login_failure_returns_401_with_sanitized_detail(
+    async def test_login_failure_returns_400_with_sanitized_detail(
         self, app, client, auth_headers, monkeypatch,
     ):
+        # 400 (not 401): a rejected key must not trip the Android AuthInterceptor's
+        # refresh-retry-on-401, which would re-run the login subprocess.
         async def _fail(api_key, *, codex_bin, env, **_kw):
             return False, "key rejected ***"
 
@@ -71,7 +73,7 @@ class TestCodexLoginFailure:
             json={"api_key": "sk-bad-key-1234567890"},
         )
 
-        assert resp.status_code == 401
+        assert resp.status_code == 400
         detail = resp.json()["detail"]
         assert detail.startswith("Codex login failed:")
         # The submitted key must never echo back, even on the failure path.

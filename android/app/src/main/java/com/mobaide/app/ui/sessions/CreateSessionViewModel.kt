@@ -543,9 +543,12 @@ class CreateSessionViewModel @Inject constructor(
                 _uiState.update { it.copy(submitting = false) }
                 _navigateToSession.tryEmit(response.session_id)
             } catch (e: Exception) {
-                if (e is ApiException && e.code == 401 && isCodexAuthRequired(e.errorBody)) {
+                if (e is ApiException && isCodexAuthRequired(e.errorBody)) {
                     // Codex is installed but not signed in: prompt for an API key
-                    // instead of a raw error, then retry the original create.
+                    // instead of a raw error, then retry the original create. The
+                    // marker drives this (not the status code) — the server sends
+                    // 409, not 401, so the AuthInterceptor's refresh-retry on 401
+                    // can't swallow the marker before we read it.
                     _uiState.update {
                         it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
                     }
@@ -559,7 +562,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * True when a 401 error body carries the `codex_auth_required` marker. The
+     * True when an error body carries the `codex_auth_required` marker. The
      * marker is top-level on the relay path and nested under `detail` on direct
      * REST, so both shapes are checked; tolerant of any non-JSON body.
      */

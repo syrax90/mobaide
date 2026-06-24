@@ -44,14 +44,17 @@ cadence; they do **not** gate compatibility.
     parallel of the existing ``claude_cli_missing`` marker.
   * Codex auth/login (CLA-71 — **additive, no version bump**): when Codex is
     installed but not signed in, the agent guards the spawn path and returns a
-    ``codex_auth_required: true`` marker (direct REST: HTTP ``401`` with the
-    marker inside a dict ``detail``; relay: top-level on
-    ``session_create_failed`` and the proxy ``401`` body) — the parallel of
+    ``codex_auth_required: true`` marker on session create — HTTP ``409`` (direct
+    REST: marker inside a dict ``detail``; relay proxy: top-level in the body),
+    and top-level on the ``session_create_failed`` control message. ``409`` (not
+    ``401``) so the Android app-JWT interceptor's refresh-retry-on-401 can't
+    swallow the marker before the client reads it. Parallel to
     ``codex_cli_missing``. A new authenticated endpoint ``POST /api/codex/login``
     (body ``{"api_key": "<secret>"}``) runs ``codex login --with-api-key`` (key
     fed on stdin, never argv / never persisted by the agent) and returns
-    ``{"authenticated": true}`` on success. The app shows a login prompt on the
-    marker, then retries the create.
+    ``{"authenticated": true}`` on success, or ``400`` with a sanitized detail on
+    a rejected key (also non-``401`` for the same interceptor reason). The app
+    shows a login prompt on the marker, then retries the create.
 * Out of scope (downstream issues): Android create-session UI for Codex
   (CLA-69, done), terminal control-key / approval affordances (CLA-70, done).
   The agent defaults Codex sessions to a non-interactive sandboxed preset

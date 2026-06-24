@@ -1227,14 +1227,14 @@ class CreateSessionViewModelTest {
     // ---- Codex auth-required login flow (CLA-71) ---------------------------
 
     @Test
-    fun submitCodex_authRequired401_nestedDetailMarker_opensLoginDialog() = runTest {
-        // Direct-REST shape: the marker is nested under `detail`.
+    fun submitCodex_authRequired409_nestedDetailMarker_opensLoginDialog() = runTest {
+        // Direct-REST shape: the marker is nested under `detail`, status 409.
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(401, """{"detail":{"codex_auth_required":true}}""")
+            ApiException(409, """{"detail":{"codex_auth_required":true}}""")
 
         vm.selectProject("alpha")
         vm.confirmProject()
@@ -1243,20 +1243,20 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         val s = vm.uiState.value
-        assertTrue("auth-required 401 must open the login dialog", s.codexLoginVisible)
+        assertTrue("auth-required 409 must open the login dialog", s.codexLoginVisible)
         assertNull("the generic error must NOT be set on the auth path", s.error)
         assertFalse(s.submitting)
     }
 
     @Test
-    fun submitCodex_authRequired401_topLevelMarker_opensLoginDialog() = runTest {
-        // Relay shape: the marker is top-level.
+    fun submitCodex_authRequired409_topLevelMarker_opensLoginDialog() = runTest {
+        // Relay shape: the marker is top-level, status 409.
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(401, """{"codex_auth_required":true,"detail":"Codex sign-in required."}""")
+            ApiException(409, """{"codex_auth_required":true,"detail":"Codex sign-in required."}""")
 
         vm.selectProject("alpha")
         vm.confirmProject()
@@ -1373,7 +1373,7 @@ class CreateSessionViewModelTest {
 
         val secretKey = "sk-super-secret-key-value"
         coEvery { fx.sessionRepo.codexLogin(secretKey) } throws
-            ApiException(401, """{"detail":"Codex login failed: bad key"}""")
+            ApiException(400, """{"detail":"Codex login failed: bad key"}""")
 
         vm.selectProject("alpha")
         vm.confirmProject()

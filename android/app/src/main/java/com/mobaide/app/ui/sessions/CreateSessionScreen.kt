@@ -282,7 +282,10 @@ private fun CodexLoginDialog(
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        // Ignore back-press / outside-tap while a login is in flight, matching
+        // the disabled Cancel button — otherwise dismissing mid-login leaves the
+        // coroutine running and it would still retry the session create on success.
+        onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text("Codex needs sign-in") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
