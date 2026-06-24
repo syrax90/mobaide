@@ -313,11 +313,11 @@ class CreateSessionViewModelTest {
         assertEquals(CreateSessionStep.AutoScanConfig, s.step)
         assertTrue("AutoScan preset must enable worktree", s.worktree)
         assertEquals("scan everything", s.initialPrompt)
-        assertTrue(s.autoScanConfigInitialized)
+        assertEquals("alpha", s.autoScanConfigInitializedFor)
     }
 
     @Test
-    fun selectAutoScanMode_secondCall_doesNotOverwriteUserEdits() = runTest {
+    fun selectAutoScanMode_secondCall_sameProject_doesNotOverwriteUserEdits() = runTest {
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -328,11 +328,39 @@ class CreateSessionViewModelTest {
         vm.setInitialPrompt("user edit")
         vm.toggleNoMemory(true)
         vm.goBack()
-        vm.selectAutoScanMode() // must NOT re-seed — autoScanConfigInitialized=true
+        vm.selectAutoScanMode() // same project → must NOT re-seed (preserve edits)
 
         val s = vm.uiState.value
         assertEquals("user edit", s.initialPrompt)
         assertTrue(s.noMemory)
+    }
+
+    @Test
+    fun selectAutoScanMode_afterProjectChange_reseedsPromptForNewProject() = runTest {
+        // Switching to a different project mid-wizard must re-seed the prompt
+        // from the new project's saved value, not retain the first project's.
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(name = "alpha", path = "/p/alpha", is_git = true, auto_scan_prompt = "alpha prompt"),
+                ProjectInfo(name = "beta", path = "/p/beta", is_git = true, auto_scan_prompt = "beta prompt"),
+            ),
+            autoScanPrompt = "agent wide default",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        assertEquals("alpha prompt", vm.uiState.value.initialPrompt)
+
+        // User goes back, picks a different project, re-enters AutoScan config.
+        vm.selectProject("beta")
+        vm.selectAutoScanMode()
+
+        val s = vm.uiState.value
+        assertEquals("beta prompt", s.initialPrompt)
+        assertEquals("beta", s.autoScanConfigInitializedFor)
     }
 
     @Test

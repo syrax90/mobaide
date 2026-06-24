@@ -126,9 +126,9 @@ class TestStartPersistsAppliedPrompt:
         assert "projects.changed" not in bus.topics()
 
     @pytest.mark.asyncio
-    async def test_blank_prompt_clears_saved_prompt_to_none(self, tmp_path):
-        # An empty initial_prompt is the "use the default" signal: it clears
-        # the saved prompt (→ None) and still publishes the change.
+    async def test_blank_prompt_keeps_saved_prompt(self, tmp_path):
+        # A blank initial_prompt expresses no prompt intent: the project's saved
+        # prompt is preserved (not clobbered), and no projects.changed fires.
         store = _make_store(tmp_path, prompt="previously saved")
         bus = _RecordingEventBus()
         mgr = _make_manager(store, bus)
@@ -139,8 +139,35 @@ class TestStartPersistsAppliedPrompt:
 
         snap = store.get("alpha")
         assert snap is not None
-        assert snap.auto_scan_prompt is None
-        assert "projects.changed" in bus.topics()
+        assert snap.auto_scan_prompt == "previously saved"
+        assert "projects.changed" not in bus.topics()
+
+    @pytest.mark.asyncio
+    async def test_failed_instance_start_does_not_persist_prompt(
+        self, tmp_path, monkeypatch,
+    ):
+        # The prompt is saved only AFTER instance.start() succeeds; if the Linear
+        # auth probe inside instance.start() raises, the saved prompt is left
+        # untouched and no projects.changed fires.
+        store = _make_store(tmp_path, prompt="previously saved")
+        bus = _RecordingEventBus()
+        mgr = _make_manager(store, bus)
+
+        async def _boom(self) -> None:
+            raise RuntimeError("linear auth failed")
+
+        monkeypatch.setattr(AutoScanInstance, "start", _boom)
+
+        with pytest.raises(RuntimeError, match="linear auth failed"):
+            await mgr.start(
+                "alpha",
+                client_options=ClaudeOptions(initial_prompt="new prompt"),
+            )
+
+        snap = store.get("alpha")
+        assert snap is not None
+        assert snap.auto_scan_prompt == "previously saved"
+        assert "projects.changed" not in bus.topics()
 
     @pytest.mark.asyncio
     async def test_rejected_start_does_not_rewrite_saved_prompt(self, tmp_path):

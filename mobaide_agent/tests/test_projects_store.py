@@ -1296,11 +1296,6 @@ class TestSeedFromEnvParsesAutoScanFilter:
         assert records[0].auto_scan_filter == AutoScanFilter()
 
 
-# ---------------------------------------------------------------------------
-# Per-project auto_scan_prompt (preserve-last-applied)
-# ---------------------------------------------------------------------------
-
-
 class TestAutoScanPromptRoundTrip:
     """The per-project Auto Scan prompt mirrors ``conda_env``: ``None`` means
     "use the engine-wide default", a non-``None`` string is persisted and

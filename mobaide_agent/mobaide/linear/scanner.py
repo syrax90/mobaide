@@ -399,7 +399,10 @@ class AutoScanInstance:
             initial_prompt=(
                 base.initial_prompt
                 if base is not None and base.initial_prompt
-                else self._config.auto_scan_prompt
+                # Honour this project's saved prompt (construction-time snapshot,
+                # no extra I/O) before the engine-wide default, so optionless or
+                # prompt-less starts still use the project's own prompt.
+                else (project.auto_scan_prompt or self._config.auto_scan_prompt)
             ),
             worktree=True,
         )
@@ -754,6 +757,7 @@ class AutoScanSessionManager:
                 f"Project '{project_name}' has no Linear API key configured.",
             )
 
+        prompt_persisted = False
         async with self._lock:
             if project_name in self._scans:
                 raise AutoScanAlreadyRunning(
@@ -763,14 +767,6 @@ class AutoScanSessionManager:
                 raise AutoScanCapacityReached(
                     f"Maximum {self._max_scans} concurrent auto scans reached"
                 )
-
-            # Persist the just-applied prompt so the next scan for this project
-            # pre-seeds it. Done under the lock, after the gate checks, so a
-            # rejected start (already-running / at-capacity) never rewrites the
-            # saved prompt.
-            prompt_persisted = self._persist_applied_prompt(
-                project_name, client_options,
-            )
 
             client = LinearApiClient(
                 api_key=project.linear_api_key,
@@ -796,6 +792,14 @@ class AutoScanSessionManager:
             )
             await instance.start()
             self._scans[project_name] = instance
+
+            # Persist the applied prompt only after the scan has actually
+            # started and been registered, so a rejected start (already-running
+            # / at-capacity) or a failed instance.start() never rewrites the
+            # project's saved prompt.
+            prompt_persisted = self._persist_applied_prompt(
+                project_name, client_options,
+            )
 
         self._publish_list_changed()
         # Emit projects.changed outside the lock so clients reconcile their
@@ -836,19 +840,22 @@ class AutoScanSessionManager:
         """Save the just-applied Auto Scan prompt onto the project record.
 
         Returns ``True`` when the store was written (so the caller emits
-        ``projects.changed``). No-op returning ``False`` when ``client_options``
-        is ``None`` — that path expresses no prompt intent, so an existing saved
-        prompt must not be clobbered. An empty/blank ``initial_prompt`` is
-        persisted as ``""``, which the store clears to ``None`` so the next scan
-        falls back to the engine-wide default.
+        ``projects.changed``). It is a no-op returning ``False`` unless the
+        caller supplied a non-empty ``initial_prompt``: a start that omits the
+        prompt (``client_options is None``) or sends a blank one expresses no
+        prompt intent, so the project's existing saved prompt is preserved
+        rather than clobbered — e.g. a flags-only start that just toggles
+        ``no_memory`` must not wipe the saved prompt.
         """
         if client_options is None:
             return False
         applied = client_options.initial_prompt
+        if not applied:
+            return False
         try:
             self._projects_store.update(
                 project_name,
-                ProjectUpdatePatch(auto_scan_prompt=applied if applied else ""),
+                ProjectUpdatePatch(auto_scan_prompt=applied),
             )
         except KeyError:
             # Project vanished between the start-time snapshot and here — never

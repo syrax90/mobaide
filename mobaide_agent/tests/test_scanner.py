@@ -615,6 +615,88 @@ class TestProcessIssueForwardsClientOptions:
             "the per-issue worktree — regression guard for the dropped-field bug"
         )
 
+    @pytest.mark.asyncio
+    async def test_process_issue_uses_project_prompt_when_no_client_prompt(
+        self, tmp_path,
+    ):
+        """When no per-scan prompt is supplied (optionless start), the scanner
+        falls back to the project's saved ``auto_scan_prompt`` before the
+        engine-wide default."""
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
+
+        project_config = ProjectConfig(
+            name="test-project",
+            path=Path(tmp_path / "repo").as_posix(),
+            linear_api_key="lin_api_test",
+            auto_scan_prompt="PROJECT SAVED PROMPT",
+        )
+        config = AutoScanConfig(
+            worktree_base="claude_worktree",
+            scan_interval_seconds=1,
+            branch_prefix="feature/claude",
+            main_branch="main",
+            auto_scan_prompt="ENGINE DEFAULT",
+            auto_remove_worktrees=False,
+            state_dir=str(tmp_path / "state"),
+        )
+
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+            config=config, project_config=project_config,
+        )
+        assert inst._client_options is None  # optionless start
+
+        await inst._process_issue(_make_issue(issue_id="uuid-pp", identifier="CLA-PP"))
+
+        call = launcher.build.await_args
+        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
+        assert forwarded.initial_prompt == "PROJECT SAVED PROMPT"
+
+    @pytest.mark.asyncio
+    async def test_process_issue_client_prompt_wins_over_project_prompt(
+        self, tmp_path,
+    ):
+        """An explicit per-scan prompt takes precedence over both the project's
+        saved prompt and the engine-wide default."""
+        from mobaide.core.claude_launcher import ClaudeOptions
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
+
+        project_config = ProjectConfig(
+            name="test-project",
+            path=Path(tmp_path / "repo").as_posix(),
+            linear_api_key="lin_api_test",
+            auto_scan_prompt="PROJECT SAVED PROMPT",
+        )
+
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+            project_config=project_config,
+        )
+        inst._client_options = ClaudeOptions(initial_prompt="PER SCAN PROMPT")
+
+        await inst._process_issue(_make_issue(issue_id="uuid-cp", identifier="CLA-CP"))
+
+        call = launcher.build.await_args
+        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
+        assert forwarded.initial_prompt == "PER SCAN PROMPT"
+
 
 class TestWorktreeCleanup:
     """Coverage for the active_workitems.json + cleanup-on-Done feature."""
