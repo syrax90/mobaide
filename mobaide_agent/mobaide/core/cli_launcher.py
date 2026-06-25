@@ -14,6 +14,7 @@ import logging
 import os
 import platform
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
@@ -105,6 +106,12 @@ class CliLauncher(Protocol):
         options: Any,
         session_id: str | None = None,
     ) -> LaunchSpec: ...
+
+    def resolve_binary(self) -> str:
+        """Resolve the managed CLI's executable path (override → env → PATH →
+        fallbacks), raising :class:`CliBinaryNotFoundError` when absent. Lets
+        callers probe availability without building a full launch."""
+        ...
 
 
 def check_cwd_exists(cwd: str) -> str:
@@ -291,6 +298,40 @@ def resolve_cli_binary(
             return candidate
 
     raise error_cls(searched)
+
+
+def probe_cli_available(launcher: CliLauncher) -> bool:
+    """Whether ``launcher``'s managed CLI binary resolves on this host.
+
+    Wraps the launcher's own ``resolve_binary`` (override → env → PATH →
+    fallbacks) so the verdict matches what a real session spawn would resolve —
+    an enabled mode in the UI therefore implies a spawnable CLI. Never raises
+    and never spawns a subprocess: resolution only reads PATH and stats
+    candidate files, so a missing binary returns ``False``.
+    """
+    try:
+        launcher.resolve_binary()
+        return True
+    except CliBinaryNotFoundError:
+        return False
+
+
+def build_cli_capabilities(
+    launchers: Mapping[str, CliLauncher],
+) -> dict[str, dict[str, bool]]:
+    """Map each registered CLI launcher to ``{"available": <bool>}``.
+
+    Shared by both transports that answer ``GET /api/version`` — the FastAPI
+    handler (direct) and the relay client's proxy branch (relay) — so they
+    report identical availability; one source here is what stops the two
+    hand-maintained handlers drifting apart. Driven off the agent's
+    ``cli_launchers`` registry, so a newly registered CLI is reported with no
+    further change.
+    """
+    return {
+        cli_id: {"available": probe_cli_available(launcher)}
+        for cli_id, launcher in (launchers or {}).items()
+    }
 
 
 def prepend_path_dir(env: dict[str, str], directory: str) -> None:

@@ -668,3 +668,51 @@ async def test_hooks_file_url_bakes_session_id(
     doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
     url = doc["hooks"]["Stop"][0]["hooks"][0]["url"]
     assert "session_id=sid-unique" in url
+
+
+def test_resolve_binary_delegates_to_private_resolver():
+    """``resolve_binary`` is the public surface ``probe_cli_available`` calls;
+    it must return exactly what the private ``_resolve_binary`` resolves (here
+    the conftest-pinned ``"claude"``) so a probe sees the same binary a spawn
+    would."""
+    launcher = ClaudeLauncher()
+    assert launcher.resolve_binary() == "claude"
+    assert launcher.resolve_binary() == launcher._resolve_binary()
+
+
+def test_resolve_binary_honours_override(monkeypatch, tmp_path):
+    """The configured ``claude_bin_override`` must flow through ``resolve_binary``
+    so an operator's ``MOBAIDE_CLAUDE_BIN``-equivalent decides availability the
+    same way it decides the spawn binary. The pinned resolver echoes its
+    ``override`` argument so we can assert the launcher forwarded it."""
+    from mobaide.core import claude_launcher
+
+    captured: dict[str, object] = {}
+
+    def _echo(override=None):
+        captured["override"] = override
+        return override or "claude"
+
+    monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _echo)
+
+    override_path = str(tmp_path / "vendored-claude")
+    launcher = ClaudeLauncher(claude_bin_override=override_path)
+    assert launcher.resolve_binary() == override_path
+    assert captured["override"] == override_path
+
+
+def test_resolve_binary_propagates_not_found_error(monkeypatch):
+    """When the binary can't be located, ``resolve_binary`` raises
+    ``ClaudeBinaryNotFoundError`` (not a silent ``None``) — the contract
+    ``probe_cli_available`` relies on to return ``False``."""
+    from mobaide.core import claude_launcher
+    from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
+
+    def _raise(*_a, **_kw):
+        raise ClaudeBinaryNotFoundError(["PATH:claude"])
+
+    monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _raise)
+
+    launcher = ClaudeLauncher()
+    with pytest.raises(ClaudeBinaryNotFoundError):
+        launcher.resolve_binary()

@@ -28,6 +28,7 @@ import websockets
 from websockets.asyncio.client import ClientConnection
 
 from mobaide.core.cli_launcher import (
+    build_cli_capabilities,
     CliAuthRequiredError,
     CliBinaryNotFoundError,
     prepend_path_dir,
@@ -1173,7 +1174,15 @@ class RelayClient:
                     "server_version": __version__,
                     "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
                     "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
-                    "capabilities": {},
+                    # Offload the binary probes off the event loop (see the direct
+                    # /api/version handler) so a slow filesystem stat on a missing
+                    # CLI's fallback path can't stall the relay dispatch loop.
+                    "capabilities": {
+                        "cli": await asyncio.to_thread(
+                            build_cli_capabilities,
+                            getattr(self._app_state, "cli_launchers", {}),
+                        )
+                    },
                     "latest_agent_version": (manifest or {}).get("version"),
                 },
             }

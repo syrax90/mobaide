@@ -166,6 +166,11 @@ class ClaudeLauncher:
             )
         return self._resolved_binary
 
+    def resolve_binary(self) -> str:
+        """Public access to the resolved Claude binary (honours the configured
+        override) so availability probes use the same resolution sessions do."""
+        return self._resolve_binary()
+
     async def build(
         self,
         target: LaunchTarget,

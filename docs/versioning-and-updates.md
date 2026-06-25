@@ -269,10 +269,21 @@ range is rejected up front.
   "server_version": "0.1.0",
   "protocol_versions": [5],
   "min_client_version": 5,
-  "capabilities": {},
+  "capabilities": {
+    "cli": {
+      "claude": { "available": true },
+      "codex": { "available": false }
+    }
+  },
   "latest_agent_version": "0.1.0"
 }
 ```
+
+(`capabilities.cli` carries one `{ "available": <bool> }` entry per managed CLI
+the agent registers — additive, no `protocol_version` bump — and the Android
+mode-select screen disables a per-CLI button when its binary is absent. The
+client parses it tolerantly: an absent / old-agent / malformed value is treated
+as available. See `PROTOCOL.md` (proto-v5) for the full shape.)
 
 (The signed manifest body / signature is NOT echoed back through this REST
 surface — it is delivered to the agent inline over the relay WebSocket as

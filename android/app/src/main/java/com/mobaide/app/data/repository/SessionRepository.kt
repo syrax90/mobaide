@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ScrollbackResponse
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.data.network.dto.VersionInfoResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,6 +56,11 @@ class SessionRepository(
     /** One-shot Codex sign-in; the successful retry reconciles the session list
      *  via the existing `SessionsChanged` subscription above. */
     suspend fun codexLogin(apiKey: String): CodexLoginResponse = restApi.codexLogin(apiKey)
+
+    /** Fresh per-call probe of the agent's installed CLIs (via `GET /api/version`).
+     *  A stateless read, not server-pushed state, so it stays a plain pass-through
+     *  (like [codexLogin]) rather than a cached StateFlow with an event subscription. */
+    suspend fun getAgentVersion(): VersionInfoResponse = restApi.getAgentVersion()
 
     suspend fun deleteSession(sessionId: String, force: Boolean = false) {
         restApi.deleteSession(sessionId, force)

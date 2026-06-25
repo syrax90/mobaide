@@ -55,6 +55,18 @@ cadence; they do **not** gate compatibility.
     ``{"authenticated": true}`` on success, or ``400`` with a sanitized detail on
     a rejected key (also non-``401`` for the same interceptor reason). The app
     shows a login prompt on the marker, then retries the create.
+  * CLI-availability advertisement (**additive, no version bump**): the
+    ``capabilities`` field on ``GET /api/version`` — previously always ``{}`` —
+    now carries ``{"cli": {"<cli>": {"available": <bool>}, …}}`` with one entry
+    per registered managed CLI (e.g. ``claude``, ``codex``). ``available``
+    reflects whether that CLI's binary resolves on the agent host via the same
+    override → env → PATH → fallbacks resolution a real spawn uses. Emitted
+    identically by the direct FastAPI handler and the relay proxy path (one
+    shared builder). The Android client parses it tolerantly — an absent /
+    old-agent / malformed value is treated as available (optimistic) — and the
+    create-session ``503`` ``<cli>_cli_missing`` / ``409`` ``<cli>_auth_required``
+    markers remain the authoritative backstop. Drives the mode-select screen's
+    per-CLI button enablement.
 * Out of scope (downstream issues): Android create-session UI for Codex
   (CLA-69, done), terminal control-key / approval affordances (CLA-70, done).
   The agent defaults Codex sessions to a non-interactive sandboxed preset
