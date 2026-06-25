@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [1.15.0](https://github.com/syrax90/claude_mobile/compare/android-v1.14.0...android-v1.15.0) (2026-06-25)
+
+
+### Features
+
+* **agent+android:** gray out Claude/Codex mode buttons when CLI is not installed ([7134c33](https://github.com/syrax90/claude_mobile/commit/7134c33f1480c8e33be6d4c0b0c172380a09096c))
+* **android:** gray out Claude/Codex mode buttons when CLI is not installed ([cf95d70](https://github.com/syrax90/claude_mobile/commit/cf95d708274f048bdb9f5dc47e27b36563e6ddfb))
+
 ## [1.14.0](https://github.com/syrax90/claude_mobile/compare/android-v1.13.0...android-v1.14.0) (2026-06-24)
 
 
