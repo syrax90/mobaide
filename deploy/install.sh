@@ -471,12 +471,17 @@ stage_release() {
     local release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${target_version}"
     info "Staging release $target_version into $release_dir"
 
+    # Reinstall into a clean dir. A same-version reinstall builds in place, and
+    # BOTH completeness signals would otherwise survive into the rebuild window:
+    # the prior '.installed' AND the prior 'venv/bin/mobaide-agent' console script
+    # (python -m venv leaves unrelated scripts behind). A crash before the new
+    # sentinel is written would then leave a half-rebuilt release the launcher
+    # self-heal still treats as complete (via the legacy console-script fallback
+    # in is_release_complete). Removing the dir first — matching install.ps1's
+    # Remove-Item — guarantees an interrupted reinstall reads as incomplete.
+    # Bounded to releases/<version> by the charset guard above.
+    rm -rf "$release_dir"
     mkdir -p "$release_dir"
-    # Reinstall-in-place: clear any prior completion sentinel BEFORE rebuilding
-    # so a crash mid-rebuild leaves the release marked incomplete (the launcher
-    # self-heal then skips it) rather than trusting a stale '.installed' from the
-    # previous successful install. The sentinel is rewritten only on success.
-    rm -f "$release_dir/.installed"
     # Intentionally NOT `local`: the centralized `cleanup_on_exit` trap
     # installed at the top of `main()` resolves `$tmpdir` from this scope
     # via deferred expansion (`[ -n "${tmpdir:-}" ] && rm -rf -- "$tmpdir"`).

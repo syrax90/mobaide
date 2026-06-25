@@ -204,33 +204,35 @@ def test_stage_release_writes_installed_sentinel() -> None:
     )
 
 
-def test_stage_release_clears_stale_sentinel_before_build() -> None:
-    """``stage_release`` must ``rm -f`` the prior ``.installed`` BEFORE building.
+def test_stage_release_removes_stale_release_dir_before_build() -> None:
+    """``stage_release`` must remove the existing release dir BEFORE building.
 
-    A same-version reinstall builds in place (``mkdir -p`` is a no-op on an
-    existing release dir), so a stale ``.installed`` from a previous successful
-    install would otherwise survive the rebuild. A crash mid-rebuild (before the
-    new sentinel is rewritten) would then leave a 'complete' marker on a
-    half-rebuilt venv, which the launcher self-heal/rollback would trust. Clear
-    it first so an interrupted reinstall reads as incomplete. (The updater is
-    immune — it builds in a fresh ``.staging-*`` dir; install.ps1 is immune — it
-    removes the whole release dir first. Only this in-place path needs it.)
+    A same-version reinstall builds in place, so a stale completion signal from
+    a previous install would otherwise survive the rebuild — not only
+    ``.installed`` but the prior ``venv/bin/mobaide-agent`` console script, which
+    ``is_release_complete``'s legacy fallback also accepts and which
+    ``python -m venv`` does not remove. A crash mid-rebuild (before the new
+    sentinel is written) would then leave a half-rebuilt release the launcher
+    self-heal still treats as complete. Removing the whole dir first clears BOTH
+    signals so an interrupted reinstall reads as incomplete. (The updater is
+    immune — it builds in a fresh ``.staging-*`` dir; install.ps1 does the same
+    ``Remove-Item``. Only this in-place path needed it.)
     """
     body = _function_body("stage_release")
-    clear_at = body.find('rm -f "$release_dir/.installed"')
-    write_at = body.find('> "$release_dir/.installed"')
+    clear_at = body.find('rm -rf "$release_dir"')
     assert clear_at != -1, (
-        f"stage_release must `rm -f \"$release_dir/.installed\"` before "
-        f"rebuilding so a stale sentinel can't survive a reinstall; not found "
-        f"in body:\n{body!r}"
+        f"stage_release must `rm -rf \"$release_dir\"` before rebuilding so "
+        f"neither a stale .installed nor a stale mobaide-agent console script "
+        f"can survive a same-version reinstall; not found in body:\n{body!r}"
     )
-    # The clear must precede the venv build (and therefore the sentinel write),
-    # otherwise it would wipe the very sentinel it just wrote.
+    # Must precede the venv build (and the sentinel write) — otherwise it would
+    # wipe the freshly-built release.
     venv_at = body.find('-m venv "$release_dir/venv"')
+    write_at = body.find('> "$release_dir/.installed"')
     assert venv_at != -1 and clear_at < venv_at, (
-        f"the stale-sentinel `rm -f` (offset {clear_at}) must come BEFORE the "
-        f"venv build (offset {venv_at}); otherwise it clears the fresh "
-        f"sentinel. Body:\n{body!r}"
+        f"the `rm -rf \"$release_dir\"` (offset {clear_at}) must come BEFORE the "
+        f"venv build (offset {venv_at}); otherwise it wipes the fresh build. "
+        f"Body:\n{body!r}"
     )
     assert write_at != -1 and clear_at < write_at
 
