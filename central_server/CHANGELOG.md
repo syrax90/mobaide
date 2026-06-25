@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.1.18](https://github.com/syrax90/claude_mobile/compare/server-v0.1.17...server-v0.1.18) (2026-06-24)
+
+
+### Documentation
+
+* **privacy:** disclose in-app Help & Support data flows (CLA-67) ([c22abac](https://github.com/syrax90/claude_mobile/commit/c22abac01e9e09e4fd123be18d62c79f1118a660))
+* **privacy:** disclose in-app Help & Support data flows (CLA-67) ([6fa0e16](https://github.com/syrax90/claude_mobile/commit/6fa0e164d2c7027a8104914d5080559a2fb8e24e))
+
 ## [0.1.17](https://github.com/syrax90/claude_mobile/compare/server-v0.1.16...server-v0.1.17) (2026-06-23)
 
 
