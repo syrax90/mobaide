@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.2.19](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.18...agent-v0.2.19) (2026-06-25)
+
+
+### Bug Fixes
+
+* **updater:** resolve venv bad-interpreter after atomic release swap ([67151e7](https://github.com/syrax90/claude_mobile/commit/67151e792ae8b40da0f771b0d52d0fb1546871cb))
+
 ## [0.2.18](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.17...agent-v0.2.18) (2026-06-25)
 
 
