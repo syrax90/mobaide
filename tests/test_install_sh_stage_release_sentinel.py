@@ -204,6 +204,37 @@ def test_stage_release_writes_installed_sentinel() -> None:
     )
 
 
+def test_stage_release_clears_stale_sentinel_before_build() -> None:
+    """``stage_release`` must ``rm -f`` the prior ``.installed`` BEFORE building.
+
+    A same-version reinstall builds in place (``mkdir -p`` is a no-op on an
+    existing release dir), so a stale ``.installed`` from a previous successful
+    install would otherwise survive the rebuild. A crash mid-rebuild (before the
+    new sentinel is rewritten) would then leave a 'complete' marker on a
+    half-rebuilt venv, which the launcher self-heal/rollback would trust. Clear
+    it first so an interrupted reinstall reads as incomplete. (The updater is
+    immune — it builds in a fresh ``.staging-*`` dir; install.ps1 is immune — it
+    removes the whole release dir first. Only this in-place path needs it.)
+    """
+    body = _function_body("stage_release")
+    clear_at = body.find('rm -f "$release_dir/.installed"')
+    write_at = body.find('> "$release_dir/.installed"')
+    assert clear_at != -1, (
+        f"stage_release must `rm -f \"$release_dir/.installed\"` before "
+        f"rebuilding so a stale sentinel can't survive a reinstall; not found "
+        f"in body:\n{body!r}"
+    )
+    # The clear must precede the venv build (and therefore the sentinel write),
+    # otherwise it would wipe the very sentinel it just wrote.
+    venv_at = body.find('-m venv "$release_dir/venv"')
+    assert venv_at != -1 and clear_at < venv_at, (
+        f"the stale-sentinel `rm -f` (offset {clear_at}) must come BEFORE the "
+        f"venv build (offset {venv_at}); otherwise it clears the fresh "
+        f"sentinel. Body:\n{body!r}"
+    )
+    assert write_at != -1 and clear_at < write_at
+
+
 def test_stage_release_writes_sentinel_after_wheel_install() -> None:
     """The ``.installed`` write must come AFTER the wheel ``pip install``.
 
@@ -216,7 +247,9 @@ def test_stage_release_writes_sentinel_after_wheel_install() -> None:
     """
     body = _function_body("stage_release")
     wheel_install_at = body.find('pip" install --no-cache-dir "$wheel_path"')
-    sentinel_at = body.find(".installed")
+    # Target the sentinel WRITE (the redirect), not the early `rm -f
+    # "$release_dir/.installed"` that clears a stale marker before rebuilding.
+    sentinel_at = body.find('> "$release_dir/.installed"')
     assert wheel_install_at != -1, (
         f"stage_release must `pip install \"$wheel_path\"` (the wheel "
         f"install step the sentinel attests to); not found in "
@@ -247,7 +280,9 @@ def test_stage_release_writes_sentinel_before_current_version_flip() -> None:
     the sentinel".
     """
     body = _function_body("stage_release")
-    sentinel_at = body.find(".installed")
+    # Target the sentinel WRITE (the redirect), not the early `rm -f
+    # "$release_dir/.installed"` that clears a stale marker before rebuilding.
+    sentinel_at = body.find('> "$release_dir/.installed"')
     # The flip is the atomic rename of current_version.tmp -> current_version.
     flip_at = body.find('mv "${MOBAIDE_AGENT_PREFIX}/current_version.tmp"')
     assert flip_at != -1, (

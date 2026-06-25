@@ -472,6 +472,11 @@ stage_release() {
     info "Staging release $target_version into $release_dir"
 
     mkdir -p "$release_dir"
+    # Reinstall-in-place: clear any prior completion sentinel BEFORE rebuilding
+    # so a crash mid-rebuild leaves the release marked incomplete (the launcher
+    # self-heal then skips it) rather than trusting a stale '.installed' from the
+    # previous successful install. The sentinel is rewritten only on success.
+    rm -f "$release_dir/.installed"
     # Intentionally NOT `local`: the centralized `cleanup_on_exit` trap
     # installed at the top of `main()` resolves `$tmpdir` from this scope
     # via deferred expansion (`[ -n "${tmpdir:-}" ] && rm -rf -- "$tmpdir"`).
