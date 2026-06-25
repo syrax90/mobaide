@@ -254,11 +254,19 @@ and re-run."
 }
 
 # Centralized EXIT trap installed by main() — single source of truth for the
-# transient temp dirs this installer creates:
+# transient temp dirs this installer creates AND for restoring a release that
+# stage_release moved aside but did not finish rebuilding:
 #   * $tmpdir          — stage_release's tarball/wheel scratch (mktemp -d
 #                        at line ~320). NOT local in stage_release so this
 #                        trap can see it from a deferred-expansion context.
 #   * $BOOTSTRAP_DIR   — resolve_verifier_python's bootstrap venv root.
+#   * $release_backup  — when stage_release reinstalls over an existing
+#                        same-version release it moves the live dir aside to
+#                        $release_backup first; if `set -e` aborts before the
+#                        rebuild completes, restore it so a single-release
+#                        install is not left pointing at a deleted/half-built
+#                        dir. stage_release clears $release_backup on success,
+#                        making the restore a no-op on the happy path.
 # ``${var:-}`` defaults are essential: ``set -u`` would otherwise trip when
 # the trap fires before either variable is set (fail-fast paths in
 # detect_platform / check_python). Future contributors adding a third
@@ -267,6 +275,11 @@ and re-run."
 cleanup_on_exit() {
     [ -n "${tmpdir:-}" ] && rm -rf -- "$tmpdir"
     [ -n "${BOOTSTRAP_DIR:-}" ] && rm -rf -- "$BOOTSTRAP_DIR"
+    if [ -n "${release_backup:-}" ] && [ -n "${release_dir:-}" ] \
+       && [ -d "$release_backup" ]; then
+        rm -rf -- "$release_dir"
+        mv "$release_backup" "$release_dir"
+    fi
     return 0
 }
 
@@ -435,6 +448,23 @@ except InvalidSignature:
 PY
 }
 
+resolve_base_python() {
+    # When ``python3`` is itself a venv, ``sys._base_executable`` is the real
+    # (non-venv) interpreter it was created from. Basing the release venv off
+    # that stable interpreter — and clearing any active VIRTUAL_ENV/PYTHONHOME
+    # for the ``-m venv`` call — keeps the release venv's interpreter from
+    # symlinking into a transient/relocatable venv that, once moved or removed,
+    # would leave a 'bad interpreter' shebang on pip / mobaide-agent. A no-op in
+    # the normal case (system python3: ``_base_executable == executable``).
+    local base
+    base="$(python3 -c 'import sys; print(sys._base_executable or sys.executable)' 2>/dev/null || true)"
+    if [ -n "$base" ] && [ -x "$base" ]; then
+        printf '%s' "$base"
+    else
+        command -v python3
+    fi
+}
+
 stage_release() {
     local manifest_path="$1"
     local target_version
@@ -451,9 +481,36 @@ stage_release() {
             fail "manifest 'version' has unsafe path characters: $target_version" ;;
     esac
 
-    local release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${target_version}"
+    # NOT `local`: the centralized EXIT trap (cleanup_on_exit) restores these
+    # from a deferred-expansion context if `set -e` aborts mid-stage — the same
+    # reason `tmpdir` below is script-scoped. Every other function declares its
+    # own `local release_dir`, so this script-scoped value never leaks to them.
+    release_dir="${MOBAIDE_AGENT_PREFIX}/releases/${target_version}"
     info "Staging release $target_version into $release_dir"
 
+    # Reinstall safely over an existing same-version release: move the live dir
+    # ASIDE rather than deleting it. main() only restarts the service after
+    # stage_release returns, so a download / checksum / extraction / venv / pip
+    # failure must leave the prior release intact — deleting it up front would
+    # leave a single-release install pointing at a missing/half-built dir with no
+    # complete sibling for the self-heal wrapper to recover to. Building into a
+    # FRESH empty dir also guarantees no stale completeness signal survives into
+    # the rebuild window: both the prior '.installed' AND the prior
+    # 'venv/bin/mobaide-agent' console script that `python -m venv` would leave
+    # behind are gone, so a crash before the new sentinel correctly reads as
+    # incomplete. The backup uses the updater's '.old-<v>-<pid>' scratch
+    # convention, so it is skipped by every release selector (dotfile, non-version
+    # name — see the launcher self-heal filter) and reclaimed by the agent's
+    # _sweep_scratch_dirs if ever leaked. cleanup_on_exit restores it on a
+    # mid-stage abort; the tail of this function drops it on success. Mirrors
+    # install.ps1's Install-Release and the updater's _swap_into_place. Bounded to
+    # releases/ by the charset guard above.
+    release_backup=""
+    if [ -e "$release_dir" ]; then
+        release_backup="${MOBAIDE_AGENT_PREFIX}/releases/.old-${target_version}-$$"
+        rm -rf "$release_backup"
+        mv "$release_dir" "$release_backup"
+    fi
     mkdir -p "$release_dir"
     # Intentionally NOT `local`: the centralized `cleanup_on_exit` trap
     # installed at the top of `main()` resolves `$tmpdir` from this scope
@@ -547,15 +604,30 @@ PY
     wheel_path="$(cat "$tmpdir/wheel_path")"
 
     info "Creating venv in $release_dir/venv"
-    python3 -m venv "$release_dir/venv"
+    local base_python
+    base_python="$(resolve_base_python)"
+    env -u VIRTUAL_ENV -u PYTHONHOME "$base_python" -m venv "$release_dir/venv"
     "$release_dir/venv/bin/pip" install --no-cache-dir --upgrade pip
     "$release_dir/venv/bin/pip" install --no-cache-dir "$wheel_path"
 
     rm -rf "$tmpdir"
 
+    # Mark the release complete only after pip + the wheel are installed, so the
+    # launcher self-heal / rollback / prune never select a half-built release.
+    # Keep '.installed' in sync with install_paths.is_release_complete.
+    printf '%s\n' "$target_version" > "$release_dir/.installed"
+
     printf '%s\n' "$target_version" > "${MOBAIDE_AGENT_PREFIX}/current_version.tmp"
     mv "${MOBAIDE_AGENT_PREFIX}/current_version.tmp" "${MOBAIDE_AGENT_PREFIX}/current_version"
     info "Pinned current_version=$target_version"
+
+    # Rebuild succeeded and current_version now points at it — discard the saved
+    # previous release and disarm the EXIT-trap restore (cleanup_on_exit keys off
+    # a non-empty $release_backup).
+    if [ -n "$release_backup" ]; then
+        rm -rf "$release_backup"
+        release_backup=""
+    fi
 }
 
 write_trust_key() {
@@ -778,8 +850,18 @@ prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
 version="$(cat "$prefix/current_version" 2>/dev/null || true)"
 py="$prefix/releases/$version/venv/bin/python"
 
-# Recover when the current release has no runnable interpreter.
-if [ -z "$version" ] || [ ! -x "$py" ]; then
+# A release is runnable only when fully installed. The updater swaps a pip-less
+# venv into place and writes '.installed' only after pip + the wheel land, so
+# gate on the sentinel (or, for releases predating it, the mobaide-agent console
+# script pip writes last). Keep '.installed' in sync with
+# mobaide.agent.install_paths.is_release_complete.
+release_complete() {
+  [ -f "$1/.installed" ] || [ -e "$1/venv/bin/mobaide-agent" ]
+}
+
+# Recover when the current release has no runnable, finalized interpreter.
+if [ -z "$version" ] || [ ! -x "$py" ] \
+   || ! release_complete "$prefix/releases/$version"; then
   best=""
   for d in "$prefix"/releases/*/; do
     [ -d "$d" ] || continue
@@ -789,6 +871,7 @@ if [ -z "$version" ] || [ ! -x "$py" ]; then
     # strict filter the in-venv mobaide.launcher applies to rollback/prune.
     case "$v" in ''|.*|*[!0-9.]*) continue ;; esac
     [ -x "$d/venv/bin/python" ] || continue
+    release_complete "$d" || continue
     if [ -z "$best" ]; then
       best="$v"
     else
