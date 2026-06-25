@@ -257,6 +257,82 @@ def test_install_release_writes_sentinel_after_wheel_install() -> None:
     )
 
 
+def test_install_release_moves_existing_release_aside_not_delete() -> None:
+    """``Install-Release`` must move an existing same-version release aside,
+    not delete it before staging succeeds.
+
+    The Windows mirror of install.sh's crash-safety fix: ``Main`` swaps
+    ``current_version`` and (re)starts the service only after
+    ``Install-Release`` returns, so deleting ``$releaseDir`` up front would leave
+    a single-release install pointing at a missing/half-built dir if any
+    download / checksum / extraction / venv / pip step fails. ``Install-Release``
+    must instead move the live dir to a ``$releaseBackup`` and let the ``finally``
+    restore it on failure (or discard it on success). Building into a fresh
+    ``New-Item`` dir also keeps any stale completeness signal out of the rebuild
+    window.
+    """
+    body = _function_body_text("Install-Release")
+    move_aside = re.search(
+        r"Move-Item\s+-Force\s+\$releaseDir\s+\$releaseBackup", body
+    )
+    assert move_aside is not None, (
+        f"Install-Release must move an existing release aside via "
+        f"`Move-Item -Force $releaseDir $releaseBackup` (preserving it for "
+        f"restore) rather than deleting it up front; not found in body:\n{body!r}"
+    )
+    # No destructive removal of the live release BEFORE the move-aside. (The only
+    # legitimate `Remove-Item ... $releaseDir` is the restore branch in finally,
+    # textually after the move-aside.)
+    pre = body[: move_aside.start()]
+    assert not re.search(r"Remove-Item[^\n]*\$releaseDir\b", pre), (
+        f"Install-Release must NOT Remove-Item $releaseDir before moving it "
+        f"aside — that re-opens the destroy-before-stage brick. Body:\n{body!r}"
+    )
+    # Backup uses the hidden '.old-<v>-<pid>' scratch convention.
+    assert re.search(r"\.old-\$version-\$PID", body), (
+        f"the move-aside backup must use the '.old-<v>-<pid>' scratch name "
+        f"(matching install.sh / the updater) so selectors skip it; not found "
+        f"in body:\n{body!r}"
+    )
+    # Move-aside precedes the fresh-dir creation and the venv build.
+    new_item_at = body.find("New-Item -ItemType Directory -Path $releaseDir")
+    venv_at = body.find("-m venv")
+    assert new_item_at != -1 and move_aside.start() < new_item_at, (
+        f"the move-aside must precede the fresh New-Item dir creation; "
+        f"body:\n{body!r}"
+    )
+    assert venv_at != -1 and move_aside.start() < venv_at
+
+
+def test_install_release_restores_or_discards_backup_in_finally() -> None:
+    """``Install-Release``'s ``finally`` must settle the moved-aside release.
+
+    ``Write-Fail`` (``Write-Error; exit 1``) unwinds through ``finally`` — the
+    same property the existing ``$tmp`` cleanup relies on — so on any
+    pre-sentinel failure (``$staged`` still ``$false``) the live release is
+    restored, and on success the backup is discarded. Without this, a staging
+    failure would leave the install bricked with the live release stranded under
+    its ``$releaseBackup`` name.
+    """
+    body = _function_body_text("Install-Release")
+    # Success is signalled by $staged = $true right after the sentinel write.
+    assert re.search(r"\$staged\s*=\s*\$true", body), (
+        f"Install-Release must set $staged = $true after the .installed write "
+        f"to mark a completed rebuild; not found in body:\n{body!r}"
+    )
+    # finally restores the live release on failure...
+    assert re.search(r"Move-Item\s+-Force\s+\$releaseBackup\s+\$releaseDir", body), (
+        f"Install-Release's finally must restore the live release via "
+        f"`Move-Item -Force $releaseBackup $releaseDir` when staging fails; "
+        f"not found in body:\n{body!r}"
+    )
+    # ...and the restore/discard branches on the $staged flag.
+    assert re.search(r"if\s*\(\s*\$staged\s*\)", body), (
+        f"Install-Release's backup settlement must branch on $staged (discard "
+        f"on success, restore on failure); not found in body:\n{body!r}"
+    )
+
+
 def test_install_ps1_parses_cleanly() -> None:
     """``deploy/install.ps1`` must parse under the AST parser.
 

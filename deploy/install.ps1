@@ -769,11 +769,31 @@ function Install-Release {
     $releaseDir = Join-Path (Join-Path $Script:Prefix "releases") $version
 
     Write-Info "Staging release $version into $releaseDir"
-    if (Test-Path $releaseDir) { Remove-Item -Recurse -Force $releaseDir }
-    New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
-
+    # Reinstall safely over an existing same-version release: move the live dir
+    # ASIDE rather than deleting it up front. The finally below restores it if any
+    # staging step (move / fresh-dir / download / checksum / extraction / venv /
+    # pip) fails, so a single-release install is never left pointing at a
+    # deleted/half-built dir with no complete sibling for supervisor recovery.
+    # Building into a FRESH empty dir also guarantees no stale completeness signal
+    # survives into the rebuild window (the prior '.installed' AND the prior
+    # console script that `python -m venv` leaves behind are gone). The backup uses
+    # the updater's '.old-<v>-<pid>' scratch convention, so it is skipped by every
+    # release selector and reclaimed by the agent's _sweep_scratch_dirs if leaked.
+    # Mirrors deploy/install.sh's stage_release and the updater's _swap_into_place.
+    $releaseBackup = $null
+    $staged = $false
+    # $tmp is created BEFORE the try so the finally always has it to remove; the
+    # move-aside runs INSIDE the try so a failing Move-Item / New-Item is covered
+    # by the same restore path as a later download / pip failure.
     $tmp = New-Item -ItemType Directory -Path (Join-Path $env:TEMP ("mobaide-agent-" + [guid]::NewGuid()))
     try {
+        if (Test-Path $releaseDir) {
+            $releaseBackup = Join-Path (Join-Path $Script:Prefix "releases") ".old-$version-$PID"
+            if (Test-Path $releaseBackup) { Remove-Item -Recurse -Force $releaseBackup }
+            Move-Item -Force $releaseDir $releaseBackup
+        }
+        New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+
         $tarballPath = Join-Path $tmp.FullName "agent.tar.gz"
         # Stage the wheel under its canonical PEP 427 filename directly so
         # pip 25.2+'s wheel-filename validator accepts it at install time.
@@ -852,8 +872,24 @@ print(wheel_path)
         # the supervisor recovery never selects a half-built release. Keep
         # '.installed' in sync with install_paths.is_release_complete.
         Set-Content -Path (Join-Path $releaseDir ".installed") -Value $version -NoNewline
+        $staged = $true
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+        # Settle the moved-aside previous release. Write-Fail (Write-Error; exit 1)
+        # unwinds through this finally just like the $tmp cleanup above relies on,
+        # so on any pre-sentinel failure ($staged still $false) restore the live
+        # release; on success discard the backup. Guarded on Test-Path so a
+        # Move-Item that threw without moving (atomic-rename failure — the backup
+        # was never created) does not trigger a bogus restore. No-op when there was
+        # no existing release to move aside.
+        if ($releaseBackup -and (Test-Path $releaseBackup)) {
+            if ($staged) {
+                Remove-Item -Recurse -Force $releaseBackup -ErrorAction SilentlyContinue
+            } else {
+                Remove-Item -Recurse -Force $releaseDir -ErrorAction SilentlyContinue
+                Move-Item -Force $releaseBackup $releaseDir
+            }
+        }
     }
 
     $currentTmp = Join-Path $Script:Prefix "current_version.tmp"

@@ -204,37 +204,105 @@ def test_stage_release_writes_installed_sentinel() -> None:
     )
 
 
-def test_stage_release_removes_stale_release_dir_before_build() -> None:
-    """``stage_release`` must remove the existing release dir BEFORE building.
+def test_stage_release_moves_existing_release_aside_before_build() -> None:
+    """A same-version reinstall must MOVE the live release aside, not delete it.
 
-    A same-version reinstall builds in place, so a stale completion signal from
-    a previous install would otherwise survive the rebuild — not only
-    ``.installed`` but the prior ``venv/bin/mobaide-agent`` console script, which
-    ``is_release_complete``'s legacy fallback also accepts and which
-    ``python -m venv`` does not remove. A crash mid-rebuild (before the new
-    sentinel is written) would then leave a half-rebuilt release the launcher
-    self-heal still treats as complete. Removing the whole dir first clears BOTH
-    signals so an interrupted reinstall reads as incomplete. (The updater is
-    immune — it builds in a fresh ``.staging-*`` dir; install.ps1 does the same
-    ``Remove-Item``. Only this in-place path needed it.)
+    Two contracts in one move:
+
+    * **Crash-safety.** ``main()`` only restarts the service after
+      ``stage_release`` returns, so the prior release must survive a download /
+      checksum / extraction / venv / pip failure. Deleting it up front (the old
+      ``rm -rf "$release_dir"``) left a single-release install pointing at a
+      missing/half-built dir with no complete sibling for the self-heal wrapper
+      to recover to. Moving it to ``$release_backup`` lets ``cleanup_on_exit``
+      restore it on a mid-stage abort.
+    * **No stale completeness signal.** Building into a FRESH ``mkdir -p`` dir
+      (the live one moved away) still guarantees neither a stale ``.installed``
+      nor the prior ``venv/bin/mobaide-agent`` console script — which
+      ``python -m venv`` leaves behind and ``is_release_complete``'s legacy
+      fallback accepts — survives into the rebuild window. A crash before the new
+      sentinel then reads as incomplete.
     """
     body = _function_body("stage_release")
-    clear_at = body.find('rm -rf "$release_dir"')
-    assert clear_at != -1, (
-        f"stage_release must `rm -rf \"$release_dir\"` before rebuilding so "
-        f"neither a stale .installed nor a stale mobaide-agent console script "
-        f"can survive a same-version reinstall; not found in body:\n{body!r}"
+    # The live release is moved aside, NOT deleted in place.
+    move_at = body.find('mv "$release_dir" "$release_backup"')
+    assert move_at != -1, (
+        f"stage_release must move an existing same-version release aside via "
+        f"`mv \"$release_dir\" \"$release_backup\"` (preserving it for restore) "
+        f"rather than deleting the live dir before staging; not found in "
+        f"body:\n{body!r}"
     )
-    # Must precede the venv build (and the sentinel write) — otherwise it would
-    # wipe the freshly-built release.
+    # It must NOT unconditionally destroy the live release before staging — that
+    # is exactly the brick this change closes.
+    assert 'rm -rf "$release_dir"' not in body, (
+        f"stage_release must NOT `rm -rf \"$release_dir\"` the live release "
+        f"before staging succeeds (a download/extract/pip failure would then "
+        f"brick a single-release install). Move it aside instead. Body:\n{body!r}"
+    )
+    # The backup uses the updater's hidden '.old-*' scratch convention so every
+    # release selector skips it (dotfile + non-version name) and the agent's
+    # _sweep_scratch_dirs reclaims it if leaked.
+    assert re.search(r'release_backup="[^"]*/releases/\.old-', body), (
+        f"the move-aside backup must use the hidden '.old-<v>-<pid>' scratch "
+        f"name (matching the updater's _swap_into_place) so release selectors "
+        f"skip it; not found in body:\n{body!r}"
+    )
+    # Fresh dir + move-aside must precede the venv build and the sentinel write.
     venv_at = body.find('-m venv "$release_dir/venv"')
     write_at = body.find('> "$release_dir/.installed"')
-    assert venv_at != -1 and clear_at < venv_at, (
-        f"the `rm -rf \"$release_dir\"` (offset {clear_at}) must come BEFORE the "
-        f"venv build (offset {venv_at}); otherwise it wipes the fresh build. "
-        f"Body:\n{body!r}"
+    assert venv_at != -1 and move_at < venv_at, (
+        f"the move-aside (offset {move_at}) must precede the venv build (offset "
+        f"{venv_at}) so the rebuild lands in a fresh dir. Body:\n{body!r}"
     )
-    assert write_at != -1 and clear_at < write_at
+    assert write_at != -1 and move_at < write_at
+
+
+def test_stage_release_drops_backup_on_success() -> None:
+    """On success ``stage_release`` must drop the moved-aside backup.
+
+    Once ``current_version`` points at the freshly built release the saved copy
+    is dead weight AND it must be cleared so ``cleanup_on_exit`` (which keys off a
+    non-empty ``$release_backup``) does not later restore it over the new release
+    on an unrelated non-zero exit. The drop must come AFTER the ``current_version``
+    flip and must clear the variable.
+    """
+    body = _function_body("stage_release")
+    flip_at = body.find('mv "${MOBAIDE_AGENT_PREFIX}/current_version.tmp"')
+    drop_at = body.find('rm -rf "$release_backup"', flip_at if flip_at != -1 else 0)
+    assert flip_at != -1 and drop_at != -1 and flip_at < drop_at, (
+        f"stage_release must drop $release_backup AFTER the current_version flip "
+        f"(flip at {flip_at}, drop at {drop_at}); otherwise the EXIT trap could "
+        f"restore the old release over the new one. Body:\n{body!r}"
+    )
+    # The drop must also clear the variable so the trap's restore is disarmed.
+    assert re.search(r'rm -rf "\$release_backup"\s*\n\s*release_backup=""', body), (
+        f"the success-path drop must clear release_backup (release_backup=\"\") "
+        f"to disarm cleanup_on_exit's restore; not found in body:\n{body!r}"
+    )
+
+
+def test_cleanup_on_exit_restores_moved_aside_release() -> None:
+    """The EXIT trap must restore a moved-aside release on a mid-stage abort.
+
+    ``stage_release`` runs under ``set -e``; if any staging step fails after the
+    live release was moved to ``$release_backup`` but before the success-path
+    drop, the centralized ``cleanup_on_exit`` trap must put it back so the install
+    is not left bricked. The restore is gated on a non-empty ``$release_backup``
+    (cleared on success) so it is a no-op on the happy path.
+    """
+    body = _function_body("cleanup_on_exit")
+    # The restore: drop the half-built dir, move the backup back into place.
+    assert re.search(r'mv "\$release_backup" "\$release_dir"', body), (
+        f"cleanup_on_exit must restore via `mv \"$release_backup\" "
+        f"\"$release_dir\"` on a mid-stage abort; not found in body:\n{body!r}"
+    )
+    # Guarded so it only fires when a backup actually exists (happy-path no-op).
+    assert re.search(r'-n "\$\{release_backup:-\}"', body), (
+        f"cleanup_on_exit's restore must be guarded on a non-empty "
+        f"${{release_backup:-}} so it is a no-op when stage_release succeeded "
+        f"(which clears it) or never moved a dir aside; not found in "
+        f"body:\n{body!r}"
+    )
 
 
 def test_stage_release_writes_sentinel_after_wheel_install() -> None:
@@ -249,8 +317,7 @@ def test_stage_release_writes_sentinel_after_wheel_install() -> None:
     """
     body = _function_body("stage_release")
     wheel_install_at = body.find('pip" install --no-cache-dir "$wheel_path"')
-    # Target the sentinel WRITE (the redirect), not the early `rm -f
-    # "$release_dir/.installed"` that clears a stale marker before rebuilding.
+    # Target the sentinel WRITE (the redirect into the release dir).
     sentinel_at = body.find('> "$release_dir/.installed"')
     assert wheel_install_at != -1, (
         f"stage_release must `pip install \"$wheel_path\"` (the wheel "
@@ -282,8 +349,7 @@ def test_stage_release_writes_sentinel_before_current_version_flip() -> None:
     the sentinel".
     """
     body = _function_body("stage_release")
-    # Target the sentinel WRITE (the redirect), not the early `rm -f
-    # "$release_dir/.installed"` that clears a stale marker before rebuilding.
+    # Target the sentinel WRITE (the redirect into the release dir).
     sentinel_at = body.find('> "$release_dir/.installed"')
     # The flip is the atomic rename of current_version.tmp -> current_version.
     flip_at = body.find('mv "${MOBAIDE_AGENT_PREFIX}/current_version.tmp"')
