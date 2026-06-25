@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
+import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -24,6 +25,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -1503,5 +1507,244 @@ class CreateSessionViewModelTest {
         assertEquals("", s.codexApiKeyDraft)
         assertFalse(s.codexApiKeyVisible)
         assertNull(s.codexLoginError)
+    }
+
+    // ---- CLI-availability gate (ModePick: gray out an uninstalled CLI) ------
+
+    /**
+     * Builds a [VersionInfoResponse] whose `capabilities.cli` carries the given
+     * per-CLI availability flags, mirroring the agent's wire shape. A `null`
+     * flag omits that id (the "key absent" case); the whole `cli` map is omitted
+     * when both are null so the response models an old agent's `capabilities:{}`.
+     */
+    private fun versionResponse(
+        claude: Boolean? = null,
+        codex: Boolean? = null,
+    ): VersionInfoResponse {
+        val entries = buildList {
+            if (claude != null) add("\"claude\":{\"available\":$claude}")
+            if (codex != null) add("\"codex\":{\"available\":$codex}")
+        }
+        val capabilitiesJson =
+            if (entries.isEmpty()) "{}"
+            else "{\"cli\":{${entries.joinToString(",")}}}"
+        val capabilities: JsonObject = Json.parseToJsonElement(capabilitiesJson).jsonObject
+        return VersionInfoResponse(
+            name = "mobaide_agent",
+            server_version = "0.2.16",
+            protocol_versions = listOf(5),
+            min_client_version = 5,
+            capabilities = capabilities,
+        )
+    }
+
+    @Test
+    fun refreshCliAvailability_bothInstalled_setsBothAvailableTrue() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals(true, s.claudeAvailable)
+        assertEquals(true, s.codexAvailable)
+        assertFalse("loading flag must reset after the probe", s.cliAvailabilityLoading)
+        assertTrue(s.claudeEnabled)
+        assertTrue(s.codexEnabled)
+    }
+
+    @Test
+    fun refreshCliAvailability_codexMissing_disablesCodex_keepsClaudeEnabled() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = false)
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals(true, s.claudeAvailable)
+        assertEquals(false, s.codexAvailable)
+        assertTrue("claude stays enabled when installed", s.claudeEnabled)
+        assertFalse("codex card grays out when its CLI is missing", s.codexEnabled)
+    }
+
+    @Test
+    fun refreshCliAvailability_unknownCapabilities_leavesBothNull_optimisticallyEnabled() = runTest {
+        // Old agent (capabilities: {}) → cliAvailable returns null for both.
+        // null must read as "enabled" so a probe that can't see the field never
+        // disables a working mode.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse()
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertNull(s.claudeAvailable)
+        assertNull(s.codexAvailable)
+        assertTrue("null availability must stay optimistically enabled", s.claudeEnabled)
+        assertTrue(s.codexEnabled)
+    }
+
+    @Test
+    fun refreshCliAvailability_fetchThrows_keepsStateNull_andSetsNoError() = runTest {
+        // Best-effort probe: a failed version fetch must NOT surface a user-
+        // facing error and must reset the loading flag, leaving the optimistic
+        // (null → enabled) state intact. The create-time 503 stays the backstop.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } throws RuntimeException("network down")
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertNull(s.claudeAvailable)
+        assertNull(s.codexAvailable)
+        assertNull("a passive probe failure must never set the error banner", s.error)
+        assertFalse(s.cliAvailabilityLoading)
+        assertTrue(s.claudeEnabled)
+        assertTrue(s.codexEnabled)
+    }
+
+    @Test
+    fun refreshCliAvailability_failureAfterPriorSuccess_doesNotClobberLastKnown() = runTest {
+        // A later transient failure must preserve the last good availability —
+        // the catch block only resets the loading flag, it must not null out
+        // the previously-resolved flags.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = false)
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertEquals(false, vm.uiState.value.codexAvailable)
+
+        coEvery { fx.sessionRepo.getAgentVersion() } throws RuntimeException("blip")
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("last-known claude availability must survive a failed re-probe", true, s.claudeAvailable)
+        assertEquals("last-known codex availability must survive a failed re-probe", false, s.codexAvailable)
+        assertNull(s.error)
+    }
+
+    @Test
+    fun selectStandardMode_claudeUnavailable_isNoop_staysOnModePick() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = false, codex = true)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+
+        vm.selectStandardMode()
+
+        // Guard: a disabled Claude must not advance to StandardConfig even if a
+        // racing tap slips past the grayed-out card.
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun selectCodexMode_codexUnavailable_isNoop_staysOnModePick() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = false)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.selectCodexMode()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun selectAutoScanMode_claudeUnavailable_isNoop_doesNotSeedOrAdvance() = runTest {
+        // Auto Scan launches `claude` under the hood, so it's gated on claude
+        // too. A disabled-claude tap must not advance, must not seed worktree,
+        // and must not set autoScanConfigInitializedFor.
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = false, codex = true)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.selectAutoScanMode()
+
+        val s = vm.uiState.value
+        assertEquals(CreateSessionStep.ModePick, s.step)
+        assertNull("Auto Scan must not seed its config when claude is unavailable", s.autoScanConfigInitializedFor)
+    }
+
+    @Test
+    fun selectStandardMode_claudeAvailableTrue_advancesNormally() = runTest {
+        // Regression guard: the guard must only block on an explicit false —
+        // an available (true) claude must still advance to StandardConfig.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.selectStandardMode()
+
+        assertEquals(CreateSessionStep.StandardConfig, vm.uiState.value.step)
+    }
+
+    @Test
+    fun selectCodexMode_codexUnknownNull_advancesOptimistically() = runTest {
+        // No probe run (or an old agent) leaves codexAvailable null. The guard
+        // keys off `codexEnabled` (null != false → enabled), so the mode still
+        // opens and the create-time path remains the authority.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+
+        assertEquals(CreateSessionStep.CodexConfig, vm.uiState.value.step)
     }
 }

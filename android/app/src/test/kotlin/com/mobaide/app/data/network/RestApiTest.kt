@@ -3,6 +3,7 @@ package com.mobaide.app.data.network
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.cliAvailable
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -426,6 +427,154 @@ class RestApiTest {
         assertEquals(5, resp.max_scans)
         assertEquals("Do the thing", resp.auto_scan_prompt)
         assertEquals(listOf("alpha", "beta"), resp.available_projects)
+    }
+
+    // ---- getAgentVersion: capabilities.cli availability parse ----------------
+
+    @Test
+    fun getAgentVersion_getsApiVersion_andParsesCliAvailability() = runTest {
+        // Full wire → DTO → cliAvailable() path: the agent reports claude
+        // installed and codex not, and the tolerant extension must read both
+        // booleans out of the nested capabilities.cli.<id>.available shape.
+        val (api, client) = newApi()
+        val captured = stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.2.16",
+                    "protocol_versions":[5],
+                    "min_client_version":5,
+                    "capabilities":{"cli":{"claude":{"available":true},"codex":{"available":false}}},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertEquals(
+            "https://api.example.com/api/version",
+            captured.captured.url.toString(),
+        )
+        assertEquals("GET", captured.captured.method)
+        assertEquals(true, resp.cliAvailable("claude"))
+        assertEquals(false, resp.cliAvailable("codex"))
+    }
+
+    @Test
+    fun getAgentVersion_oldAgentEmptyCapabilities_cliAvailableReturnsNull() = runTest {
+        // An older agent that predates the cli field returns capabilities: {}.
+        // cliAvailable must return null (not false) so the caller stays
+        // optimistic and never disables a mode whose CLI is actually present.
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.2.0",
+                    "protocol_versions":[5],
+                    "min_client_version":5,
+                    "capabilities":{},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertNull("absent cli key must read as null (unknown), not false", resp.cliAvailable("claude"))
+        assertNull(resp.cliAvailable("codex"))
+    }
+
+    @Test
+    fun getAgentVersion_capabilitiesFieldOmitted_usesDefaultAndReturnsNull() = runTest {
+        // The capabilities field has a JsonObject default in the DTO, so an
+        // agent payload omitting it entirely (with ignoreUnknownKeys) must
+        // decode without throwing and yield null availability.
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.2.0",
+                    "protocol_versions":[5],
+                    "min_client_version":5
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertNull(resp.cliAvailable("claude"))
+    }
+
+    @Test
+    fun getAgentVersion_malformedCliShape_returnsNull_withoutThrowing() = runTest {
+        // capabilities.cli is the wrong shape (a string, and an id whose value
+        // is a bare bool rather than an object). The loose JsonObject walk must
+        // swallow the mismatch and return null per id — never throw, which would
+        // surface a probe failure as a user-facing error.
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.2.16",
+                    "protocol_versions":[5],
+                    "min_client_version":5,
+                    "capabilities":{"cli":"not-an-object"},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertNull("malformed cli map must not throw", resp.cliAvailable("claude"))
+    }
+
+    @Test
+    fun getAgentVersion_cliEntryMissingAvailableKey_returnsNull() = runTest {
+        // The id object exists but carries no `available` key (a forward-compat
+        // payload that only sent a future `version` field, say). cliAvailable
+        // must read that as null, not crash.
+        val (api, client) = newApi()
+        stubCall(client) { req ->
+            responseFor(
+                req,
+                200,
+                bodyJson = """
+                  {
+                    "name":"mobaide_agent",
+                    "server_version":"0.2.16",
+                    "protocol_versions":[5],
+                    "min_client_version":5,
+                    "capabilities":{"cli":{"claude":{"version":"2.1.0"}}},
+                    "latest_agent_version":null
+                  }
+                """.trimIndent(),
+            )
+        }
+
+        val resp = api.getAgentVersion()
+
+        assertNull(resp.cliAvailable("claude"))
     }
 
     // ---- ApiException mapping: 401 / 403 / 404 / 409 / 429 / 500 ------------

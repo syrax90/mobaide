@@ -34,6 +34,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -54,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -110,6 +112,13 @@ fun CreateSessionScreen(
             viewModel.consumeDismiss()
             onBack()
         }
+    }
+    // Re-probe CLI availability every time the user reaches the mode picker so
+    // the Claude / Codex / Auto Scan cards reflect what's installed on the agent
+    // right now. The ViewModel survives intra-wizard step changes, so a one-shot
+    // init fetch would go stale on a return visit to this step.
+    LaunchedEffect(state.step) {
+        if (state.step == CreateSessionStep.ModePick) viewModel.refreshCliAvailability()
     }
 
     // System back navigates between steps before exiting the screen.
@@ -190,6 +199,8 @@ fun CreateSessionScreen(
                 CreateSessionStep.ModePick -> ModePickerSection(
                     header = modeHeader,
                     selectedMode = state.selectedMode,
+                    claudeEnabled = state.claudeEnabled,
+                    codexEnabled = state.codexEnabled,
                     onPickMode = viewModel::pickMode,
                     onCommit = {
                         when (state.selectedMode) {
@@ -513,10 +524,24 @@ private data class ModeHeader(
     val showAutoScan: Boolean,
 )
 
+/** Continue is enabled only when the chosen mode's CLI is available, so a card
+ *  that flipped to disabled after selection can't be committed. */
+private fun modeEnabled(
+    mode: CreateSessionMode,
+    claudeEnabled: Boolean,
+    codexEnabled: Boolean,
+): Boolean = when (mode) {
+    CreateSessionMode.Standard, CreateSessionMode.AutoScan -> claudeEnabled
+    CreateSessionMode.Codex -> codexEnabled
+    CreateSessionMode.CustomShell -> true
+}
+
 @Composable
 private fun ModePickerSection(
     header: ModeHeader,
     selectedMode: CreateSessionMode?,
+    claudeEnabled: Boolean,
+    codexEnabled: Boolean,
     onPickMode: (CreateSessionMode) -> Unit,
     onCommit: () -> Unit,
 ) {
@@ -535,41 +560,70 @@ private fun ModePickerSection(
     val selectedColors = CardDefaults.elevatedCardColors(
         containerColor = MaterialTheme.colorScheme.secondaryContainer,
     )
+    // Transparent container so the ElevatedCard (incl. its dimmed disabled
+    // colour) shows through; the disabled variant also fades the text to the
+    // Material disabled-content alpha so a grayed-out card reads as inert.
+    val enabledList = ListItemDefaults.colors(
+        containerColor = Color.Transparent,
+    )
+    val disabledList = ListItemDefaults.colors(
+        containerColor = Color.Transparent,
+        headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        supportingColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+    )
 
     ElevatedCard(
-        onClick = { onPickMode(CreateSessionMode.Standard) },
+        onClick = { if (claudeEnabled) onPickMode(CreateSessionMode.Standard) },
+        enabled = claudeEnabled,
         colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.elevatedCardColors(),
         modifier = Modifier.fillMaxWidth(),
     ) {
         ListItem(
             headlineContent = { Text("Claude code session") },
-            supportingContent = { Text("Configure and launch a Claude session.") },
-            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+            supportingContent = {
+                Text(
+                    if (claudeEnabled) "Configure and launch a Claude session."
+                    else "Claude CLI is not installed on the agent.",
+                )
+            },
+            colors = if (claudeEnabled) enabledList else disabledList,
         )
     }
 
     ElevatedCard(
-        onClick = { onPickMode(CreateSessionMode.Codex) },
+        onClick = { if (codexEnabled) onPickMode(CreateSessionMode.Codex) },
+        enabled = codexEnabled,
         colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.elevatedCardColors(),
         modifier = Modifier.fillMaxWidth(),
     ) {
         ListItem(
             headlineContent = { Text("Codex session") },
-            supportingContent = { Text("Configure and launch an OpenAI Codex session.") },
-            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+            supportingContent = {
+                Text(
+                    if (codexEnabled) "Configure and launch an OpenAI Codex session."
+                    else "Codex CLI is not installed on the agent.",
+                )
+            },
+            colors = if (codexEnabled) enabledList else disabledList,
         )
     }
 
     if (header.showAutoScan) {
         ElevatedCard(
-            onClick = { onPickMode(CreateSessionMode.AutoScan) },
+            onClick = { if (claudeEnabled) onPickMode(CreateSessionMode.AutoScan) },
+            enabled = claudeEnabled,
             colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
             modifier = Modifier.fillMaxWidth(),
         ) {
             ListItem(
                 headlineContent = { Text("Auto Scan mode") },
-                supportingContent = { Text("Scan Linear for AutoPipeline issues and launch sessions.") },
-                colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                supportingContent = {
+                    Text(
+                        if (claudeEnabled) "Scan Linear for AutoPipeline issues and launch sessions."
+                        else "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
+                    )
+                },
+                colors = if (claudeEnabled) enabledList else disabledList,
             )
         }
     }
@@ -588,13 +642,13 @@ private fun ModePickerSection(
                     contentDescription = null,
                 )
             },
-            colors = androidx.compose.material3.ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+            colors = enabledList,
         )
     }
 
     Button(
         onClick = onCommit,
-        enabled = selectedMode != null,
+        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")

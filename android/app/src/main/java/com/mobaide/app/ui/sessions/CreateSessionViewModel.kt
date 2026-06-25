@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
 import com.mobaide.app.data.network.dto.ProjectInfo
+import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -66,6 +67,15 @@ data class CreateSessionUiState(
     val customPathError: String? = null,
     val recentCustomPaths: List<String> = emptyList(),
     val selectedMode: CreateSessionMode? = null,
+    // CLI availability for the ModePick gate (binary-on-PATH per managed CLI),
+    // re-probed each time the user reaches the step. null = unknown / not-yet-
+    // probed / probe failed → treated as available (optimistic) so a transient
+    // failure never disables a working mode; only an explicit false from the
+    // agent grays a card out. The create-time 503 (CLI-missing) path stays the
+    // authoritative backstop.
+    val claudeAvailable: Boolean? = null,
+    val codexAvailable: Boolean? = null,
+    val cliAvailabilityLoading: Boolean = false,
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = true,
@@ -117,6 +127,14 @@ val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
         codexSandbox == "workspace-write" && codexApproval == "on-request" -> CodexAutonomyPreset.Auto
         else -> null
     }
+
+/**
+ * Mode-picker gate. Only an explicit `false` from the agent disables a card;
+ * `null` (unknown / not-yet-probed / probe failed) stays optimistically enabled
+ * so a transient probe failure never blocks a CLI that's actually installed.
+ */
+val CreateSessionUiState.claudeEnabled: Boolean get() = claudeAvailable != false
+val CreateSessionUiState.codexEnabled: Boolean get() = codexAvailable != false
 
 @HiltViewModel
 class CreateSessionViewModel @Inject constructor(
@@ -260,16 +278,43 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Re-probe the agent for which managed CLIs are installed and update the
+     * mode-picker gate. Called each time the user lands on the ModePick step
+     * (see `CreateSessionScreen`), so the buttons reflect the agent's current
+     * state rather than a value cached at connect time. Best-effort: a failure
+     * leaves the last-known/optimistic flags untouched and never raises a
+     * user-facing error (this is a passive probe, not a user action) — a missing
+     * CLI that slips through still falls back to the create-time 503 handling.
+     */
+    fun refreshCliAvailability() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(cliAvailabilityLoading = true) }
+            try {
+                val version = sessionRepository.getAgentVersion()
+                _uiState.update {
+                    it.copy(
+                        claudeAvailable = version.cliAvailable("claude"),
+                        codexAvailable = version.cliAvailable("codex"),
+                        cliAvailabilityLoading = false,
+                    )
+                }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(cliAvailabilityLoading = false) }
+            }
+        }
+    }
+
     fun pickMode(mode: CreateSessionMode) {
         _uiState.update { it.copy(selectedMode = mode) }
     }
 
     fun selectStandardMode() = _uiState.update {
-        it.copy(step = CreateSessionStep.StandardConfig)
+        if (it.claudeEnabled) it.copy(step = CreateSessionStep.StandardConfig) else it
     }
 
     fun selectCodexMode() = _uiState.update {
-        it.copy(step = CreateSessionStep.CodexConfig)
+        if (it.codexEnabled) it.copy(step = CreateSessionStep.CodexConfig) else it
     }
 
     /**
@@ -291,6 +336,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     fun selectAutoScanMode() = _uiState.update {
+        if (!it.claudeEnabled) return@update it
         val projectName = it.selectedProjectName
         if (projectName != null && it.autoScanConfigInitializedFor == projectName) {
             // Already seeded for this project — keep the user's in-flight edits.

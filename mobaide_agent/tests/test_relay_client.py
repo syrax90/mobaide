@@ -3460,3 +3460,103 @@ class TestHandleProxyRequestCodex:
             "PATH:codex",
             "/usr/local/bin/codex",
         ]
+
+
+class TestProxyVersionCapabilities:
+    """The relay's ``GET /api/version`` branch must report per-CLI availability
+    in ``capabilities.cli`` using the *same* ``build_cli_capabilities`` builder
+    the direct FastAPI handler uses — so a CLI grayed out in DIRECT mode is
+    grayed out identically in RELAY mode. This is the ``TestProxyGitItems``
+    "missing relay route" bug class applied to the additive ``capabilities``
+    field: the two handlers are hand-maintained and must not drift.
+    """
+
+    def _launcher(self, resolves: bool):
+        launcher = MagicMock(name="launcher")
+        if resolves:
+            launcher.resolve_binary.return_value = "/bin/cli"
+        else:
+            launcher.resolve_binary.side_effect = ClaudeBinaryNotFoundError(
+                searched_paths=["PATH:cli"],
+            )
+        return launcher
+
+    async def test_reports_cli_availability(self, client, mock_app_state):
+        # claude resolves, codex raises → claude available, codex not.
+        mock_app_state.cli_launchers = {
+            "claude": self._launcher(resolves=True),
+            "codex": self._launcher(resolves=False),
+        }
+        ws = AsyncMock()
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, ws,
+        )
+
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"] == {
+            "claude": {"available": True},
+            "codex": {"available": False},
+        }
+
+    async def test_capabilities_equal_shared_builder_locks_direct_relay_parity(
+        self, client, mock_app_state,
+    ):
+        """The relay body's ``capabilities.cli`` must be byte-for-byte what
+        ``build_cli_capabilities`` produces from the same registry — the single
+        assertion that pins DIRECT/RELAY parity. If the relay branch ever
+        hand-rolls the shape instead of calling the shared builder, this fails.
+        """
+        from mobaide.core.cli_launcher import build_cli_capabilities
+
+        mock_app_state.cli_launchers = {
+            "claude": self._launcher(resolves=True),
+            "codex": self._launcher(resolves=False),
+        }
+        ws = AsyncMock()
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, ws,
+        )
+
+        expected = build_cli_capabilities(mock_app_state.cli_launchers)
+        assert result["body"]["capabilities"] == {"cli": expected}
+
+    async def test_missing_cli_launchers_attr_degrades_to_empty_cli(
+        self, client, mock_app_state,
+    ):
+        """An ``app_state`` without ``cli_launchers`` (partially-built state)
+        must not crash the version branch — ``getattr(..., {})`` falls back to
+        an empty registry, yielding ``capabilities.cli == {}``."""
+        if hasattr(mock_app_state, "cli_launchers"):
+            del mock_app_state.cli_launchers
+        ws = AsyncMock()
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, ws,
+        )
+
+        assert result["status"] == 200
+        assert result["body"]["capabilities"] == {"cli": {}}
+
+    async def test_version_body_keeps_core_fields(self, client, mock_app_state):
+        """The added ``capabilities`` work must not drop the existing version
+        fields the client relies on (name / server_version / protocol set)."""
+        from mobaide import __version__
+        from mobaide.relay.envelope import (
+            MIN_CLIENT_PROTOCOL_VERSION,
+            SUPPORTED_PROTOCOL_VERSIONS,
+        )
+
+        mock_app_state.cli_launchers = {"claude": self._launcher(resolves=True)}
+        ws = AsyncMock()
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, ws,
+        )
+
+        body = result["body"]
+        assert body["name"] == "mobaide_agent"
+        assert body["server_version"] == __version__
+        assert body["protocol_versions"] == list(SUPPORTED_PROTOCOL_VERSIONS)
+        assert body["min_client_version"] == MIN_CLIENT_PROTOCOL_VERSION

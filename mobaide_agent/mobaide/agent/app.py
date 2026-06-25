@@ -22,6 +22,7 @@ from mobaide.core import (
     ProjectsStore,
     SessionManager,
 )
+from mobaide.core.cli_launcher import build_cli_capabilities
 from mobaide.core.hook_settings import sweep_hooks_dir
 from mobaide.core.macos_access import full_disk_access
 from mobaide.linear.config import AutoScanConfig
@@ -774,7 +775,14 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             "server_version": __version__,
             "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
             "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
-            "capabilities": {},
+            # Offload the binary probes (shutil.which + filesystem stats over the
+            # npm fallback paths) so a slow/missing-CLI lookup can't block the
+            # event loop — mirrors the full_disk_access offload in /api/health.
+            "capabilities": {
+                "cli": await asyncio.to_thread(
+                    build_cli_capabilities, app.state.cli_launchers
+                )
+            },
             "latest_agent_version": (manifest or {}).get("version"),
         }
 
