@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any
 
 import mobaide._http as _http
+from mobaide.agent.install_paths import RELEASE_SENTINEL, is_release_complete
 from mobaide.manifest_signing import (
     ManifestSignatureError,
     verify_signature,
@@ -246,14 +247,20 @@ class StagedBinaryUpdater:
         session_manager: Any | None,
         *,
         current_version: str,
-        installer: Any | None = None,
+        venv_builder: Any | None = None,
+        finalizer: Any | None = None,
         exit_func: Any | None = None,
     ) -> None:
         self._layout = layout
         self._public_key_b64 = public_key_b64
         self._session_manager = session_manager
         self._current_version = current_version
-        self._installer = installer or _install_wheel_into_venv
+        # Two-phase install: build the pip-less venv in staging (move-safe),
+        # then finalize (pip + wheel) at the final path AFTER the swap so no
+        # console-script shebang ever encodes the staging dir. Both phases are
+        # injectable so tests can stub the subprocess work.
+        self._venv_builder = venv_builder or _build_venv_without_pip
+        self._finalizer = finalizer or _finalize_wheel_install
         self._exit_func = exit_func or sys.exit
         self._first_deferred_at: float | None = None
         self._lock = asyncio.Lock()
@@ -421,20 +428,27 @@ class StagedBinaryUpdater:
 
         releases_dir = self._layout.releases_dir
         releases_dir.mkdir(parents=True, exist_ok=True)
-        # Clear scratch dirs left by a previously-crashed stage before building.
+        # Clear scratch dirs and stale half-finalized releases left by a
+        # previously-crashed stage before building.
         self._sweep_scratch_dirs()
+        self._reclaim_incomplete_releases()
 
-        # Build the whole release into a scratch dir on the SAME filesystem as
-        # ``releases/`` (so the final ``os.replace`` is an atomic rename) and
-        # swap it into ``releases/<v>`` only after the venv is built + verified.
-        # This is the non-destructive contract: a failed download / extract /
-        # venv build never touches an existing release, and leaves no empty
-        # ``releases/<v>/`` behind — the scratch name does not parse as a
-        # version, so launcher rollback/prune ignore it.
+        # Build the release in a scratch dir on the SAME filesystem as
+        # ``releases/`` (so the swap is an atomic ``os.replace`` rename), swap
+        # the pip-less venv into ``releases/<v>``, then finalize (pip + wheel)
+        # at the FINAL path. A failed download / extract / venv build never
+        # touches an existing release; a failed finalize tears down the
+        # incomplete release and restores the prior copy. The scratch name
+        # never parses as a version, and the swapped-but-not-yet-finalized
+        # release has no sentinel, so launcher rollback/prune/recovery ignore
+        # both until ``_write_release_sentinel`` marks the release complete.
         staging_dir = releases_dir / f".staging-{target_version}-{os.getpid()}"
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
         staging_dir.mkdir(parents=True, exist_ok=False)
+        release_dir = releases_dir / target_version
+        backup: Path | None = None
+        swapped = False
         try:
             with tempfile.TemporaryDirectory(prefix="mobaide-agent-") as tmpdir:
                 tarball_path = Path(tmpdir) / "agent.tar.gz"
@@ -451,21 +465,56 @@ class StagedBinaryUpdater:
                     # manifest could otherwise write outside ``staging_dir``.
                     tar.extractall(staging_dir, filter="data")
 
+                # Build the venv WITHOUT pip in staging: only the bin/python
+                # symlinks exist (no console-script shebangs that would bake in
+                # the staging path and break once the dir is moved). pip + the
+                # wheel are installed below, AFTER the swap, at the final path.
                 venv_dir = staging_dir / "venv"
-                self._installer(venv_dir, wheel_path)
+                self._venv_builder(venv_dir)
 
-            # Refuse to swap in a release whose interpreter is missing — that
-            # is exactly the bricked state (a launcher that can't exec its
-            # venv python) this rewrite exists to prevent.
-            staged_python = _release_venv_python(staging_dir)
-            if not staged_python.exists():
-                raise RuntimeError(
-                    f"staged venv has no interpreter at {staged_python}"
-                )
+                # Refuse to swap in a release whose interpreter is missing — that
+                # is exactly the bricked state (a launcher that can't exec its
+                # venv python) this rewrite exists to prevent.
+                staged_python = _release_venv_python(staging_dir)
+                if not staged_python.exists():
+                    raise RuntimeError(
+                        f"staged venv has no interpreter at {staged_python}"
+                    )
 
-            release_dir = releases_dir / target_version
-            self._swap_into_place(staging_dir, release_dir)
+                # Atomic swap into the final path, capturing any displaced prior
+                # release so a post-swap finalize failure can restore it.
+                backup = self._swap_into_place(staging_dir, release_dir)
+                swapped = True
+
+                # POST-SWAP: bootstrap pip + install the wheel with the FINAL
+                # interpreter so every shebang points at releases/<v>/venv, not
+                # the (now-gone) staging dir. Still inside the tmpdir context so
+                # ``wheel_path`` is valid.
+                self._finalizer(_release_venv_python(release_dir), wheel_path)
+
+            # Fully built at the final path: mark complete. Only now is the
+            # release eligible for selection, and only now does
+            # ``consider_manifest`` flip ``current_version``.
+            _write_release_sentinel(release_dir)
+            if backup is not None:
+                shutil.rmtree(backup, ignore_errors=True)
         except BaseException:
+            if swapped:
+                # A finalize/sentinel failure left an incomplete release at the
+                # final path. Tear it down and restore the prior good copy (if
+                # any) so a re-stage is non-destructive.
+                shutil.rmtree(release_dir, ignore_errors=True)
+                if backup is not None:
+                    try:
+                        os.replace(backup, release_dir)
+                    except OSError:
+                        logger.error(
+                            "updater.finalize_restore_failed release_dir=%s "
+                            "backup=%s (previous release left at the backup path)",
+                            release_dir, backup,
+                        )
+            # If the swap never completed, ``_swap_into_place`` already restored
+            # any displaced release itself; only the staging dir needs cleaning.
             shutil.rmtree(staging_dir, ignore_errors=True)
             raise
         return release_dir
@@ -492,23 +541,59 @@ class StagedBinaryUpdater:
                 ):
                     shutil.rmtree(scratch, ignore_errors=True)
 
+    def _reclaim_incomplete_releases(self) -> None:
+        """Remove stale, never-finalized ``releases/<v>`` dirs.
+
+        The two-phase install swaps a pip-less venv into ``releases/<v>`` and
+        only then installs the wheel + writes the sentinel. A crash in that
+        post-swap window leaves a version-named dir every selector already
+        ignores (it is not :func:`is_release_complete`), but whose name is not a
+        ``.staging-*`` / ``.old-*`` scratch pattern, so ``_sweep_scratch_dirs``
+        won't reclaim it. Reclaim it here — but ONLY when it is stale (a release
+        another process just swapped in and is mid-finalize on has a fresh mtime
+        and is spared) and never the current version.
+        """
+        releases_dir = self._layout.releases_dir
+        now = time.time()
+        try:
+            entries = [p for p in releases_dir.iterdir() if p.is_dir()]
+        except OSError:
+            return
+        for entry in entries:
+            if entry.name == self._current_version:
+                continue
+            if _version_tuple(entry.name) == ():
+                continue  # scratch/foreign name — handled by _sweep_scratch_dirs
+            if is_release_complete(entry):
+                continue
+            if not _is_stale_scratch(entry, now):
+                continue  # fresh — may be a concurrent finalize in progress
+            shutil.rmtree(entry, ignore_errors=True)
+            logger.info(
+                "updater.reclaimed_incomplete_release version=%s", entry.name
+            )
+
     @staticmethod
-    def _swap_into_place(staging_dir: Path, release_dir: Path) -> None:
+    def _swap_into_place(staging_dir: Path, release_dir: Path) -> Path | None:
         """Atomically move a fully-built staging dir to ``releases/<v>``.
 
+        Returns the ``.old-*`` backup path of a displaced prior release — which
+        the caller deletes only after the post-swap finalize + sentinel succeed,
+        so a failed finalize can restore it — or ``None`` when there was no
+        prior release at ``release_dir`` (the normal new-version case).
+
         ``os.replace`` renames atomically on the same filesystem when the
-        target does not exist (the normal new-version case). When
-        ``releases/<v>`` already exists (a re-stage of an on-disk version), the
-        existing dir is moved aside first and restored if the forward move
-        fails, so the swap is all-or-nothing and never leaves the release
-        missing. On Windows a re-stage of the *currently running* version
-        raises (the live ``python.exe`` is locked); that propagates and the
-        caller cleans the staging dir, leaving the running release intact —
-        non-destructive by construction.
+        target does not exist. When ``releases/<v>`` already exists (a re-stage
+        of an on-disk version), the existing dir is moved aside first and
+        restored if the forward move fails, so the swap is all-or-nothing and
+        never leaves the release missing. On Windows a re-stage of the
+        *currently running* version raises (the live ``python.exe`` is locked);
+        that propagates and the caller cleans the staging dir, leaving the
+        running release intact — non-destructive by construction.
         """
         if not release_dir.exists():
             os.replace(staging_dir, release_dir)
-            return
+            return None
         backup = release_dir.parent / f".old-{release_dir.name}-{os.getpid()}"
         if backup.exists():
             shutil.rmtree(backup)
@@ -525,7 +610,7 @@ class StagedBinaryUpdater:
                     release_dir, backup,
                 )
             raise
-        shutil.rmtree(backup, ignore_errors=True)
+        return backup
 
     @staticmethod
     def _download_to(url: str, dest: Path) -> None:
@@ -556,28 +641,69 @@ class StagedBinaryUpdater:
         os.replace(tmp, target)
 
 
-def _install_wheel_into_venv(venv_dir: Path, wheel_path: Path) -> None:
-    """Create a venv at ``venv_dir`` and install the wheel into it."""
+def _build_venv_without_pip(venv_dir: Path) -> None:
+    """Create a pip-less venv — only the ``bin/python*`` symlinks, no scripts.
+
+    A ``--without-pip`` venv carries no console-script shebangs (``pip``,
+    ``mobaide-agent``), only interpreter symlinks that point at the stable base
+    interpreter and survive an ``os.replace`` move. That makes it safe to swap
+    into ``releases/<v>`` before pip and the wheel are installed; the
+    shebang-bearing scripts are written later by :func:`_finalize_wheel_install`
+    running the FINAL-path interpreter, so they never encode the staging dir
+    (the "bad interpreter" bug this avoids).
+    """
     venv_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [sys.executable, "-m", "venv", str(venv_dir)],
+        [sys.executable, "-m", "venv", "--without-pip", str(venv_dir)],
         check=True,
         capture_output=True,
         creationflags=_WINDOWS_NO_WINDOW,
     )
-    if sys.platform == "win32":
-        pip = venv_dir / "Scripts" / "pip.exe"
-    else:
-        pip = venv_dir / "bin" / "pip"
+
+
+def _finalize_wheel_install(python: Path, wheel_path: Path) -> None:
+    """Bootstrap pip and install the wheel using ``python`` at its final path.
+
+    Runs AFTER the venv is swapped into ``releases/<v>`` so every shebang pip
+    writes (``pip``, ``mobaide-agent``) points at the final interpreter. pip is
+    always invoked as ``python -m pip`` — never the ``bin/pip`` script — so the
+    finalize step itself never depends on a (possibly not-yet-written) shebang.
+    """
+    # ``--default-pip`` also writes the unversioned ``pip`` console script so an
+    # updater-built venv matches an install.sh-built one (which uses plain
+    # ``python -m venv``). All scripts get the final-path shebang because this
+    # runs the final-path interpreter post-swap.
     subprocess.run(
-        [str(pip), "install", "--no-cache-dir", "--upgrade", "pip"],
+        [str(python), "-m", "ensurepip", "--default-pip"],
         check=True,
         capture_output=True,
         creationflags=_WINDOWS_NO_WINDOW,
     )
     subprocess.run(
-        [str(pip), "install", "--no-cache-dir", str(wheel_path)],
+        [str(python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "pip"],
         check=True,
         capture_output=True,
         creationflags=_WINDOWS_NO_WINDOW,
+    )
+    subprocess.run(
+        [str(python), "-m", "pip", "install", "--no-cache-dir", str(wheel_path)],
+        check=True,
+        capture_output=True,
+        creationflags=_WINDOWS_NO_WINDOW,
+    )
+
+
+def _write_release_sentinel(release_dir: Path) -> None:
+    """Mark a release complete — the final step of a successful install.
+
+    Written only after pip + the wheel are installed at the final path, so a
+    release carrying ``RELEASE_SENTINEL`` is guaranteed runnable. The launcher
+    self-heal, rollback, recovery, and prune logic gate on its presence (or the
+    legacy console-script fallback in ``install_paths.is_release_complete``), so
+    a half-built release swapped into place but not yet finalized is never
+    selected. Content is irrelevant — presence is the signal — so a torn write
+    is harmless (finalize has already succeeded by the time this runs).
+    """
+    (release_dir / RELEASE_SENTINEL).write_text(
+        release_dir.name + "\n", encoding="utf-8"
     )

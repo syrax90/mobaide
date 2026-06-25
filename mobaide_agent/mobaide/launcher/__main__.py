@@ -84,6 +84,26 @@ def _resolve_python(release_dir: Path) -> Path:
     return release_dir / "venv" / "bin" / "python"
 
 
+# Marker the updater/installers drop into a release dir once pip + the wheel
+# are installed. Releases predating the sentinel are recognised by the agent
+# console script (pip writes it only after a successful wheel install), so a
+# half-built --without-pip venv swapped into place but not yet finalized is
+# correctly excluded. Keep in sync with
+# ``mobaide.agent.install_paths.is_release_complete`` — this module is
+# import-isolated (stdlib-only) and cannot import that helper.
+_RELEASE_SENTINEL = ".installed"
+
+
+def _is_release_complete(release_dir: Path) -> bool:
+    if (release_dir / _RELEASE_SENTINEL).exists():
+        return True
+    if sys.platform == "win32":
+        console_script = release_dir / "venv" / "Scripts" / "mobaide-agent.exe"
+    else:
+        console_script = release_dir / "venv" / "bin" / "mobaide-agent"
+    return console_script.exists()
+
+
 def _read_current_version(prefix: Path) -> str | None:
     try:
         return (prefix / "current_version").read_text(encoding="utf-8").strip() or None
@@ -159,7 +179,12 @@ def _find_rollback_target(
     journal_entries: list[tuple[float, str]] | None = None,
     now: float | None = None,
 ) -> str | None:
-    """Pick the highest-versioned sibling release with a usable venv.
+    """Pick the highest-versioned sibling release with a usable, complete venv.
+
+    "Complete" means fully installed (``_is_release_complete``) — a release the
+    updater swapped into place but has not yet finalized (pip + wheel) is
+    skipped, so a crash mid-finalize never rolls the agent into a half-built
+    release.
 
     A candidate that has itself crossed the crash-loop threshold within
     the same window is excluded — without this, a deployment where two
@@ -181,6 +206,8 @@ def _find_rollback_target(
         if version == current_version:
             continue
         if not _resolve_python(candidate).exists():
+            continue
+        if not _is_release_complete(candidate):
             continue
         if (
             journal_entries is not None
@@ -212,11 +239,13 @@ def _prune_old_releases(
     """GC superseded release dirs, returning ``(kept, pruned)``.
 
     Retains ``current_version`` plus the highest-versioned other releases
-    with a usable venv — the same eligibility gate ``_find_rollback_target``
-    applies — up to ``keep`` dirs total, deleting the rest. A dir whose name
-    is not a parseable version, or that lacks a venv interpreter (a foreign
-    dir, or a half-staged release the updater is still building), is never a
-    deletion candidate.
+    with a usable, complete venv — the same eligibility gate
+    ``_find_rollback_target`` applies — up to ``keep`` dirs total, deleting the
+    rest. A dir whose name is not a parseable version, that lacks a venv
+    interpreter, or that is not yet finalized (``_is_release_complete`` — a
+    foreign dir, a half-staged release the updater is still building, or one
+    swapped into place but not yet pip-installed) is never a deletion
+    candidate.
 
     Best-effort: a failed ``rmtree`` (e.g. a Windows file lock on a stale
     interpreter) is logged and retried on the next boot. Cleanup must never
@@ -236,6 +265,8 @@ def _prune_old_releases(
         if parsed == ():
             continue
         if not _resolve_python(entry).exists():
+            continue
+        if not _is_release_complete(entry):
             continue
         valid.append((parsed, entry.name))
 

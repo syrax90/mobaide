@@ -1,9 +1,10 @@
 """Cover the staged-binary auto-updater state machine.
 
-The install path is stubbed via the injected ``installer`` callable — what
-we exercise is signature verification, idle deferral, and the atomic swap
-of ``current_version``. The manifest body itself is passed in directly
-(no HTTP fetch in the relay-driven update path).
+The install path is stubbed via the injected ``venv_builder`` (pre-swap) and
+``finalizer`` (post-swap pip + wheel) callables — what we exercise is signature
+verification, idle deferral, the atomic swap of ``current_version``, and the
+``.installed`` completion sentinel. The manifest body itself is passed in
+directly (no HTTP fetch in the relay-driven update path).
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import logging
 import os
 import sys
 import tarfile
+import time
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,12 +21,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from mobaide.agent.install_paths import RELEASE_SENTINEL, is_release_complete
 from mobaide.agent.updater import (
     _STALE_SCRATCH_SECONDS,
     InstallLayout,
     StagedBinaryUpdater,
     _assert_safe_version,
-    _install_wheel_into_venv,
+    _build_venv_without_pip,
+    _finalize_wheel_install,
     _is_version_newer,
     _version_tuple,
     _wheel_basename_from_url,
@@ -73,10 +77,11 @@ def layout(tmp_path: Path) -> InstallLayout:
     return layout
 
 
-def _fake_installer(venv_dir: Path, wheel_path: Path) -> None:
-    """Stub the wheel install: create the venv interpreter the updater's
-    pre-swap verification (``_release_venv_python``) probes for, mirroring the
-    layout ``conftest.make_release`` builds (``Scripts`` on Windows, ``bin``
+def _fake_venv_builder(venv_dir: Path) -> None:
+    """Stub the pre-swap venv build: create only the interpreter the updater's
+    pre-swap verification (``_release_venv_python``) probes for — the move-safe
+    symlink a real ``--without-pip`` venv would have. Mirrors the layout
+    ``conftest.make_release`` builds (``Scripts`` on Windows, ``bin``
     elsewhere)."""
     if sys.platform == "win32":
         bin_dir = venv_dir / "Scripts"
@@ -88,6 +93,18 @@ def _fake_installer(venv_dir: Path, wheel_path: Path) -> None:
     python.write_text("#!/bin/sh\nexec /bin/true\n", encoding="utf-8")
 
 
+def _fake_finalizer(python: Path, wheel_path: Path) -> None:
+    """Stub the post-swap pip + wheel install: create the agent console script
+    that a real ``pip install`` writes (so the release reads as complete via the
+    legacy fallback in ``is_release_complete``). ``python`` is the FINAL-path
+    interpreter, asserting the finalize runs after the swap."""
+    bin_dir = python.parent
+    script = bin_dir / (
+        "mobaide-agent.exe" if sys.platform == "win32" else "mobaide-agent"
+    )
+    script.write_text("#!/bin/sh\nexec /bin/true\n", encoding="utf-8")
+
+
 async def test_no_change_when_versions_match(layout) -> None:
     public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
     updater = StagedBinaryUpdater(
@@ -95,7 +112,8 @@ async def test_no_change_when_versions_match(layout) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.2.0",
-        installer=lambda venv, wheel: None,
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
     )
     outcome = await updater.consider_manifest(
         body, signature_b64, body["version"],
@@ -110,7 +128,8 @@ async def test_signature_failed_blocks_swap(layout) -> None:
         public_key_b64=base64.b64encode(b"\x00" * 32).decode(),
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: None,
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
     )
     outcome = await updater.consider_manifest(
         body, signature_b64, body["version"],
@@ -133,7 +152,8 @@ async def test_deferred_when_session_active(layout, monkeypatch) -> None:
         public_key_b64=public_key_b64,
         session_manager=sm,
         current_version="0.1.0",
-        installer=lambda venv, wheel: None,
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
     )
     outcome = await updater.consider_manifest(
         body, signature_b64, body["version"],
@@ -154,7 +174,8 @@ async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=_fake_installer,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
         exit_func=fake_exit,
     )
     outcome = await updater.consider_manifest(
@@ -162,6 +183,10 @@ async def test_staged_swap_succeeds(layout, monkeypatch) -> None:
     )
     assert outcome == "staged"
     assert (layout.releases_dir / "0.2.0").is_dir()
+    # The completion sentinel is written before current_version flips, so a
+    # staged release is always recognised as complete by the launcher.
+    assert (layout.releases_dir / "0.2.0" / RELEASE_SENTINEL).exists()
+    assert is_release_complete(layout.releases_dir / "0.2.0")
     assert layout.current_version_file.read_text().strip() == "0.2.0"
     assert exits == [75]
 
@@ -177,7 +202,8 @@ async def test_forward_only_skips_older_version_without_force(layout) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.3.0",  # newer than the manifest's 0.2.0
-        installer=lambda venv, wheel: installer_calls.append(venv),
+        venv_builder=lambda venv: installer_calls.append(venv),
+        finalizer=lambda python, wheel: None,
     )
     outcome = await updater.consider_manifest(body, signature_b64, body["version"])
     assert outcome == "no_change"
@@ -194,15 +220,16 @@ async def test_failed_force_restage_preserves_running_release(layout) -> None:
     (live / "venv" / "bin").mkdir(parents=True)
     (live / "venv" / "bin" / "python").write_text("running", encoding="utf-8")
 
-    def _boom(venv_dir, wheel_path):
-        raise RuntimeError("install failed mid-stage")
+    def _boom(venv_dir):
+        raise RuntimeError("venv build failed mid-stage")
 
     updater = StagedBinaryUpdater(
         layout=layout,
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.2.0",
-        installer=_boom,
+        venv_builder=_boom,
+        finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
     outcome = await updater.force_update_now(
@@ -229,7 +256,8 @@ async def test_force_restage_existing_version_swaps_in_new_build(layout) -> None
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.2.0",
-        installer=_fake_installer,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
     outcome = await updater.force_update_now(
@@ -240,7 +268,173 @@ async def test_force_restage_existing_version_swaps_in_new_build(layout) -> None
     # no backup scratch dir lingers.
     assert not (live / "stale_marker").exists()
     assert (live / "venv" / "bin" / "python").exists()
+    assert (live / RELEASE_SENTINEL).exists()
     assert not list(layout.releases_dir.glob(".old-*"))
+
+
+async def test_finalizer_runs_at_final_path_not_staging(layout) -> None:
+    """Regression guard for the 'bad interpreter' bug: pip + the wheel must be
+    installed by the FINAL-path interpreter (``releases/<v>/venv``), never the
+    staging interpreter — that is what makes the console-script shebangs point
+    at the final path instead of the swept ``.staging-*`` dir."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    seen: dict[str, Path] = {}
+
+    def recording_finalizer(python: Path, wheel_path: Path) -> None:
+        seen["python"] = python
+        _fake_finalizer(python, wheel_path)
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=recording_finalizer,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+
+    assert outcome == "staged"
+    final_python = seen["python"]
+    assert ".staging-" not in str(final_python), (
+        f"finalizer ran the staging interpreter ({final_python}); shebangs would "
+        f"break once the staging dir is swept — the exact bug being fixed"
+    )
+    assert (layout.releases_dir / "0.2.0") in final_python.parents
+
+
+async def test_sentinel_written_only_after_finalize(layout) -> None:
+    """The completion sentinel must be absent while the finalizer runs (the
+    release is still incomplete) and present once staging returns — so a crash
+    mid-finalize leaves an incomplete, never-selected release."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    release = layout.releases_dir / "0.2.0"
+    sentinel_during_finalize: list[bool] = []
+
+    def checking_finalizer(python: Path, wheel_path: Path) -> None:
+        sentinel_during_finalize.append((release / RELEASE_SENTINEL).exists())
+        _fake_finalizer(python, wheel_path)
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=checking_finalizer,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.consider_manifest(body, signature_b64, body["version"])
+
+    assert outcome == "staged"
+    assert sentinel_during_finalize == [False], "sentinel must follow finalize"
+    assert (release / RELEASE_SENTINEL).exists()
+
+
+async def test_finalize_failure_restores_prior_release(layout) -> None:
+    """A post-swap finalize failure on a re-stage of an existing version
+    restores the prior good copy (non-destructive), writes no sentinel on the
+    running release's content, and never flips ``current_version``."""
+    public_key_b64, body, signature_b64 = _signed_manifest(layout.prefix / "tmp")
+    live = layout.releases_dir / "0.2.0"
+    (live / "venv" / "bin").mkdir(parents=True)
+    (live / "venv" / "bin" / "python").write_text("old-good", encoding="utf-8")
+    (live / RELEASE_SENTINEL).write_text("0.2.0\n", encoding="utf-8")
+    (live / "old_marker").write_text("x", encoding="utf-8")
+
+    def boom_finalizer(python: Path, wheel_path: Path) -> None:
+        raise RuntimeError("pip install failed post-swap")
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64=public_key_b64,
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=_fake_venv_builder,
+        finalizer=boom_finalizer,
+        exit_func=lambda code: None,
+    )
+    outcome = await updater.force_update_now(
+        body, signature_b64, body["version"], exit_after_stage=False,
+    )
+
+    assert outcome == "signature_failed"
+    # Prior release restored byte-for-byte; no leftover scratch.
+    assert (live / "venv" / "bin" / "python").read_text() == "old-good"
+    assert (live / "old_marker").exists()
+    assert (live / RELEASE_SENTINEL).exists()
+    assert not list(layout.releases_dir.glob(".staging-*"))
+    assert not list(layout.releases_dir.glob(".old-*"))
+    # current_version never advanced past the running version.
+    assert not layout.current_version_file.exists()
+
+
+def test_swap_into_place_returns_backup_for_existing_release(layout) -> None:
+    """``_swap_into_place`` now returns the ``.old-*`` backup (the caller drops
+    it only after finalize + sentinel), or ``None`` when there was no prior
+    release — the contract the finalize-restore path in ``_stage_release``
+    depends on."""
+    releases = layout.releases_dir
+    staging = releases / ".staging-0.2.0-1"
+    (staging / "venv" / "bin").mkdir(parents=True)
+    (staging / "venv" / "bin" / "python").write_text("new", encoding="utf-8")
+
+    # No prior release -> returns None.
+    new_only = releases / "0.9.0"
+    assert StagedBinaryUpdater._swap_into_place(staging, new_only) is None
+    assert (new_only / "venv" / "bin" / "python").read_text() == "new"
+
+    # Prior release present -> returns the surviving backup, NOT deleted.
+    staging2 = releases / ".staging-0.3.0-1"
+    (staging2 / "venv" / "bin").mkdir(parents=True)
+    (staging2 / "venv" / "bin" / "python").write_text("newer", encoding="utf-8")
+    existing = releases / "0.3.0"
+    (existing / "venv" / "bin").mkdir(parents=True)
+    (existing / "venv" / "bin" / "python").write_text("prior", encoding="utf-8")
+
+    backup = StagedBinaryUpdater._swap_into_place(staging2, existing)
+    assert backup is not None and backup.exists(), "backup must survive for restore"
+    assert (backup / "venv" / "bin" / "python").read_text() == "prior"
+    assert (existing / "venv" / "bin" / "python").read_text() == "newer"
+
+
+def test_reclaim_incomplete_releases(layout) -> None:
+    """The pre-stage sweep reclaims stale, unfinalized (sentinel-less) release
+    dirs, while sparing fresh ones (a possible concurrent finalize), complete
+    ones, and the current version."""
+    releases = layout.releases_dir
+    old = time.time() - (_STALE_SCRATCH_SECONDS + 100)
+
+    def _mk(name: str, *, complete: bool, stale: bool) -> Path:
+        d = releases / name
+        (d / "venv" / "bin").mkdir(parents=True)
+        (d / "venv" / "bin" / "python").write_text("x", encoding="utf-8")
+        if complete:
+            (d / RELEASE_SENTINEL).write_text(name, encoding="utf-8")
+        if stale:
+            os.utime(d, (old, old))
+        return d
+
+    stale_incomplete = _mk("0.1.5", complete=False, stale=True)
+    fresh_incomplete = _mk("0.1.6", complete=False, stale=False)
+    stale_complete = _mk("0.1.7", complete=True, stale=True)
+    current = _mk("0.1.0", complete=False, stale=True)  # == current_version
+
+    updater = StagedBinaryUpdater(
+        layout=layout,
+        public_key_b64="x",
+        session_manager=None,
+        current_version="0.1.0",
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
+    )
+    updater._reclaim_incomplete_releases()
+
+    assert not stale_incomplete.exists(), "stale + unfinalized must be reclaimed"
+    assert fresh_incomplete.exists(), "fresh unfinalized (maybe finalizing) is spared"
+    assert stale_complete.exists(), "a complete release is never reclaimed"
+    assert current.exists(), "the current version is never reclaimed"
 
 
 @pytest.mark.parametrize(
@@ -298,7 +492,8 @@ async def test_force_stage_rejects_path_escaping_version(layout) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=_fake_installer,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
     outcome = await updater.force_update_now(
@@ -323,7 +518,8 @@ def test_sweep_preserves_concurrent_other_pid_scratch(layout) -> None:
         public_key_b64="x",
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: None,
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
     )
     updater._sweep_scratch_dirs()
     assert not own.exists(), "own-pid scratch should be swept"
@@ -348,7 +544,8 @@ def test_sweep_removes_stale_other_pid_scratch(layout) -> None:
         public_key_b64="x",
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: None,
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
     )
     updater._sweep_scratch_dirs()
     assert not stale.exists(), "stale other-pid scratch should be GC'd"
@@ -364,7 +561,8 @@ async def test_non_dict_body_fails_closed(layout) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: None,
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
     )
     outcome = await updater.consider_manifest(
         ["not", "a", "dict"],  # type: ignore[arg-type]
@@ -415,7 +613,8 @@ async def test_staging_rejects_non_pep427_wheel_url(layout) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=lambda venv, wheel: None,
+        venv_builder=lambda venv: None,
+        finalizer=lambda python, wheel: None,
     )
     outcome = await updater.consider_manifest(
         body, sig_b64, body["version"],
@@ -553,7 +752,8 @@ async def test_consider_manifest_apply_path_never_calls_urlopen(
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=_fake_installer,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
     outcome = await updater.consider_manifest(
@@ -602,7 +802,8 @@ async def test_force_update_now_apply_path_never_calls_urlopen(
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=_fake_installer,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
     outcome = await updater.force_update_now(
@@ -640,9 +841,9 @@ def test_download_to_routes_through_user_agent_wrapper(tmp_path) -> None:
     assert ua is not None and ua.startswith("mobaide-agent/")
 
 
-class TestInstallWheelIntoVenvHidesWindow:
+class TestVenvBuildAndFinalizeHideWindow:
     """Pin the Windows ``CREATE_NO_WINDOW`` flag on every ``subprocess.run``
-    invocation in ``_install_wheel_into_venv``.
+    invocation in ``_build_venv_without_pip`` and ``_finalize_wheel_install``.
 
     The updater runs inside the long-lived agent process. The agent
     runs under ``pythonw.exe`` via the per-user Scheduled Task (no
@@ -678,31 +879,46 @@ class TestInstallWheelIntoVenvHidesWindow:
         monkeypatch.setattr(_updater_mod.subprocess, "run", fake_run)
         return calls
 
-    def test_all_three_subprocess_run_calls_pass_creationflags(
+    def test_all_subprocess_run_calls_pass_creationflags(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path,
     ) -> None:
-        # _install_wheel_into_venv makes three subprocess.run calls:
-        #   1. python -m venv <venv_dir>
-        #   2. <venv>/Scripts/pip.exe install --upgrade pip
-        #   3. <venv>/Scripts/pip.exe install <wheel>
-        # All three MUST pass ``creationflags=_WINDOWS_NO_WINDOW``.
-        # Without any one, that subprocess pops a console window on
-        # Windows on every auto-update cycle.
+        # _build_venv_without_pip + _finalize_wheel_install make four
+        # subprocess.run calls total:
+        #   1. python -m venv --without-pip <venv_dir>
+        #   2. <python> -m ensurepip --default-pip
+        #   3. <python> -m pip install --upgrade pip
+        #   4. <python> -m pip install <wheel>
+        # All four MUST pass ``creationflags=_WINDOWS_NO_WINDOW``. Without any
+        # one, that subprocess pops a console window on Windows on every
+        # auto-update cycle.
         calls = self._capture_run(monkeypatch)
         import mobaide.agent.updater as _updater_mod
 
         venv_dir = tmp_path / "venv"
+        final_python = venv_dir / "bin" / "python"
         wheel_path = tmp_path / "mobaide_agent-0.2.0-py3-none-any.whl"
         wheel_path.write_bytes(b"PK\x03\x04 fake")
 
-        _install_wheel_into_venv(venv_dir, wheel_path)
+        _build_venv_without_pip(venv_dir)
+        _finalize_wheel_install(final_python, wheel_path)
 
-        assert len(calls) == 3, (
-            f"expected exactly 3 subprocess.run calls (venv, pip "
-            f"upgrade, wheel install); got {len(calls)}"
+        assert len(calls) == 4, (
+            f"expected exactly 4 subprocess.run calls (venv --without-pip, "
+            f"ensurepip, pip upgrade, wheel install); got {len(calls)}"
         )
+        # The pip-less build is what avoids baking a staging shebang; finalize
+        # invokes pip as ``python -m pip`` (never the bin/pip script) so it never
+        # depends on a shebang. Pin both invariants.
+        assert "--without-pip" in calls[0]["cmd"], (
+            f"venv build must pass --without-pip; got {calls[0]['cmd']!r}"
+        )
+        for call in calls[1:]:
+            assert call["cmd"][1:3] in (["-m", "ensurepip"], ["-m", "pip"]), (
+                f"finalize must invoke ensurepip / python -m pip, not the "
+                f"bin/pip script; got {call['cmd']!r}"
+            )
 
         expected_flag = _updater_mod._WINDOWS_NO_WINDOW
         for idx, call in enumerate(calls):
@@ -803,7 +1019,8 @@ async def test_forward_only_skips_unparseable_version_without_force(
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.2.0",
-        installer=lambda venv, wheel: installer_calls.append(venv),
+        venv_builder=lambda venv: installer_calls.append(venv),
+        finalizer=lambda python, wheel: None,
     )
 
     with caplog.at_level(logging.INFO, logger="mobaide.agent.updater"):
@@ -891,7 +1108,8 @@ async def test_stage_sweeps_stale_scratch_dirs_before_building(layout) -> None:
         public_key_b64=public_key_b64,
         session_manager=None,
         current_version="0.1.0",
-        installer=_fake_installer,
+        venv_builder=_fake_venv_builder,
+        finalizer=_fake_finalizer,
         exit_func=lambda code: None,
     )
     outcome = await updater.consider_manifest(body, signature_b64, body["version"])

@@ -20,6 +20,13 @@ MANIFEST_ENDPOINT_PATH = "/api/v1/agent/manifest.json"
 
 ALLOW_INSECURE_HTTPS_BOOTSTRAP_ENV = "MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH"
 
+# Marker file the updater/installers drop into ``releases/<v>/`` as the final
+# step of a successful install. Its presence (or the legacy fallback below)
+# is the contract that a release dir is runnable; the launcher self-heal,
+# rollback, and prune logic — which live in import-isolated modules and the
+# install scripts — duplicate this filename literally, so keep them in sync.
+RELEASE_SENTINEL = ".installed"
+
 
 def default_prefix() -> Path:
     """Return the canonical install prefix for the current OS.
@@ -127,6 +134,31 @@ def read_trust_public_key(layout) -> str | None:
     except OSError:
         return None
     return text or None
+
+
+def is_release_complete(release_dir: Path) -> bool:
+    """Return True if ``release_dir`` holds a fully-installed agent release.
+
+    A release is complete once the venv is built AND the wheel is installed.
+    New installs/updates drop ``RELEASE_SENTINEL`` as their final step. A
+    release created before the sentinel existed is recognised by its agent
+    console script, which pip writes only after a successful wheel install —
+    so a half-built ``--without-pip`` venv (swapped into place but not yet
+    finalized, or interrupted mid-finalize before the wheel) is correctly
+    treated as incomplete and never selected by rollback/recovery/prune.
+
+    This is the canonical definition; the import-isolated launcher modules
+    (``mobaide.launcher``, ``deploy/windows_launcher.py``) and the install
+    scripts re-implement it inline against ``RELEASE_SENTINEL`` and the
+    console-script name — keep them in sync.
+    """
+    if (release_dir / RELEASE_SENTINEL).exists():
+        return True
+    venv_bin = release_dir / "venv" / ("Scripts" if sys.platform == "win32" else "bin")
+    console_script = venv_bin / (
+        "mobaide-agent.exe" if sys.platform == "win32" else "mobaide-agent"
+    )
+    return console_script.exists()
 
 
 def endpoint_url_from_relay_server_url(relay_server_url: str, endpoint_path: str) -> str:

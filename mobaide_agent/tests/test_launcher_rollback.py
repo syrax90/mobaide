@@ -64,6 +64,32 @@ def test_find_rollback_target_skips_release_without_python(tmp_path):
     assert target == "0.1.0"
 
 
+def test_find_rollback_target_skips_incomplete_release(tmp_path):
+    """A sibling swapped into place but not yet finalized (no ``.installed``
+    sentinel, no console script) has a runnable interpreter but must still be
+    skipped — the launcher must never roll back into a half-built release."""
+    prefix = tmp_path
+    make_release(prefix, "0.1.0")
+    make_release(prefix, "0.1.5", complete=False)  # higher, but unfinalized
+    target = launcher._find_rollback_target(prefix, "0.2.0")
+    assert target == "0.1.0"
+
+
+def test_find_rollback_target_accepts_legacy_release_without_sentinel(tmp_path):
+    """Upgrade compatibility: a release installed before the sentinel existed
+    has no ``.installed`` but does have the agent console script (pip writes it
+    only after a successful wheel install), so it reads as complete and remains
+    a valid rollback target — otherwise an upgrade would strand it."""
+    prefix = tmp_path
+    legacy = make_release(prefix, "0.1.0", complete=False)
+    bin_dir = legacy / "venv" / ("Scripts" if sys.platform == "win32" else "bin")
+    script = bin_dir / (
+        "mobaide-agent.exe" if sys.platform == "win32" else "mobaide-agent"
+    )
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    assert launcher._find_rollback_target(prefix, "0.2.0") == "0.1.0"
+
+
 def test_find_rollback_target_returns_none_when_alone(tmp_path):
     prefix = tmp_path
     make_release(prefix, "0.2.0")
