@@ -103,12 +103,16 @@ def drain_text_preamble(ws) -> None:
     ws.receive_bytes = _receive_bytes_with_pending  # type: ignore[assignment]
 
 
-def make_release(prefix: Path, version: str) -> Path:
+def make_release(prefix: Path, version: str, *, complete: bool = True) -> Path:
     """Create a fake ``<prefix>/releases/<version>/`` with a venv interpreter.
 
     Shared by the launcher rollback and prune tests, which build the same
     on-disk release layout ``_resolve_python`` probes (``Scripts`` on Windows,
-    ``bin`` elsewhere).
+    ``bin`` elsewhere). When ``complete`` (the default), also drop the
+    ``.installed`` sentinel so the release reads as fully installed
+    (``_is_release_complete``); pass ``complete=False`` to simulate a release
+    swapped into place but not yet finalized (no sentinel, no console script),
+    which selectors must skip.
     """
     release = prefix / "releases" / version
     if IS_WINDOWS:
@@ -119,6 +123,8 @@ def make_release(prefix: Path, version: str) -> Path:
         python = bin_dir / "python"
     bin_dir.mkdir(parents=True, exist_ok=True)
     python.write_text("#!/bin/sh\nexec /bin/true\n", encoding="utf-8")
+    if complete:
+        (release / ".installed").write_text(version + "\n", encoding="utf-8")
     return release
 
 

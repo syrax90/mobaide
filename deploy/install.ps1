@@ -818,6 +818,16 @@ print(wheel_path)
 
         $venv = Join-Path $releaseDir "venv"
         Write-Info "Creating venv in $venv"
+        # Base-interpreter hardening (mirrors install.sh): when $PythonExe is
+        # itself a venv, sys._base_executable is the real interpreter it was
+        # created from. Basing the release venv off that stable interpreter and
+        # clearing any active VIRTUAL_ENV/PYTHONHOME keeps the venv's
+        # interpreter from symlinking into a transient venv whose later removal
+        # would brick the release with a 'bad interpreter' shim.
+        $basePython = (& $PythonExe -c 'import sys; print(sys._base_executable or sys.executable)' 2>$null | Out-String).Trim()
+        if (-not $basePython) { $basePython = $PythonExe }
+        Remove-Item Env:\VIRTUAL_ENV -ErrorAction SilentlyContinue
+        Remove-Item Env:\PYTHONHOME -ErrorAction SilentlyContinue
         # Every `&`-invoked native command emits its stdout onto the
         # surrounding function's success pipeline. Without `| Out-Host`,
         # pip's `[notice]` lines and `python -m venv`'s chatter get glued
@@ -825,7 +835,7 @@ print(wheel_path)
         # receives an `object[]` instead of a string. Downstream
         # `Join-Path -ChildPath $Version` then crashes with
         # `Cannot convert 'System.Object[]' to ... 'ChildPath'`.
-        & $PythonExe -m venv $venv | Out-Host
+        & $basePython -m venv $venv | Out-Host
         $venvPython = Join-Path $venv "Scripts\python.exe"
         $venvPip = Join-Path $venv "Scripts\pip.exe"
         # pip on Windows refuses to self-overwrite through the `pip.exe`
@@ -838,6 +848,10 @@ print(wheel_path)
         }
         & $venvPip install --no-cache-dir $wheel | Out-Host
         if ($LASTEXITCODE -ne 0) { Write-Fail "Wheel install failed" }
+        # Mark the release complete only after pip + the wheel are installed, so
+        # the supervisor recovery never selects a half-built release. Keep
+        # '.installed' in sync with install_paths.is_release_complete.
+        Set-Content -Path (Join-Path $releaseDir ".installed") -Value $version -NoNewline
     } finally {
         Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }

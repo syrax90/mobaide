@@ -138,6 +138,12 @@ class TestResolveReleasePython:
         release_scripts = tmp_path / "releases" / "1.2.3" / "venv" / "Scripts"
         release_scripts.mkdir(parents=True)
         (release_scripts / "python.exe").write_bytes(b"\x4d\x5a")  # MZ
+        # A release current_version points at is, by definition, finalized;
+        # the post-fix gate requires the completion sentinel (or console
+        # script) before resolving the interpreter.
+        (tmp_path / "releases" / "1.2.3" / ".installed").write_text(
+            "1.2.3", encoding="utf-8"
+        )
         resolved = windows_launcher._resolve_release_python(tmp_path)
         assert resolved == release_scripts / "python.exe"
 
@@ -156,6 +162,11 @@ class TestResolveReleasePython:
         release_scripts = tmp_path / "releases" / "1.2.3" / "venv" / "Scripts"
         release_scripts.mkdir(parents=True)
         (release_scripts / "python.exe").write_bytes(b"\x4d\x5a")
+        # Finalized release: the post-fix completeness gate needs the
+        # sentinel before _resolve_release_python returns the interpreter.
+        (tmp_path / "releases" / "1.2.3" / ".installed").write_text(
+            "1.2.3", encoding="utf-8"
+        )
         resolved = windows_launcher._resolve_release_python(tmp_path)
         assert resolved == release_scripts / "python.exe"
 
@@ -1545,11 +1556,27 @@ def test_log_rotate_threshold_is_5mb() -> None:
     assert windows_launcher._AGENT_LOG_ROTATE_BYTES == 5 * 1024 * 1024
 
 
-def _make_win_release(prefix: Path, version: str) -> None:
-    """Create ``releases/<version>/venv/Scripts/python.exe`` (a stub file)."""
+def _make_win_release(
+    prefix: Path, version: str, *, complete: bool = True
+) -> None:
+    """Create ``releases/<version>/venv/Scripts/python.exe`` (a stub file).
+
+    A real release is only selectable once it is *complete* — the venv is
+    built AND the wheel is installed — which the supervisor now enforces
+    via ``_is_release_complete`` (sentinel OR ``mobaide-agent.exe`` console
+    script). ``complete=True`` (the default, matching the steady state of
+    every installed release) drops the ``.installed`` sentinel so the
+    fixture models a finalized release; ``complete=False`` models a venv
+    swapped into place but not yet pip-installed (no sentinel, no console
+    script), which recovery/resolve must skip.
+    """
     scripts = prefix / "releases" / version / "venv" / "Scripts"
     scripts.mkdir(parents=True, exist_ok=True)
     (scripts / "python.exe").write_text("stub", encoding="utf-8")
+    if complete:
+        (prefix / "releases" / version / ".installed").write_text(
+            version, encoding="utf-8"
+        )
 
 
 class TestSuperviseRecovery:
@@ -1661,3 +1688,164 @@ class TestSuperviseRecovery:
         assert rc == 70
         # Initial resolve per loop iteration; bounded by the cap + 1.
         assert len(resolve_calls) <= windows_launcher._MAX_RECOVERY_ATTEMPTS + 1
+
+
+class TestReleaseCompletenessGate:
+    """The venv "bad interpreter" fix made the supervisor treat a release
+    as runnable only when it is *complete* — the pip-less venv has been
+    swapped into place AND the wheel installed. Completeness is signalled
+    by the ``.installed`` sentinel OR (for releases predating it) the
+    ``mobaide-agent.exe`` console script pip writes last.
+
+    ``_is_release_complete`` is the inlined Windows copy of
+    ``mobaide.agent.install_paths.is_release_complete``; both
+    ``_find_recovery_version`` and ``_resolve_release_python`` gate on it
+    so the supervisor never exec's a half-built venv whose ``pip`` /
+    ``mobaide-agent`` shebangs point at a swept staging dir. These tests
+    pin the new gate from both directions: a sentinel-less / console-
+    script-less release is excluded; a sentinel-bearing release is
+    included; a legacy console-script-only release is still accepted.
+    """
+
+    def test_is_release_complete_true_with_sentinel(self, tmp_path: Path) -> None:
+        """A release carrying ``.installed`` is complete even without the
+        console script — the sentinel is the canonical post-fix signal the
+        updater and installers write as their final step.
+        """
+        release = tmp_path / "releases" / "0.3.0"
+        (release / "venv" / "Scripts").mkdir(parents=True)
+        (release / ".installed").write_text("0.3.0", encoding="utf-8")
+        assert windows_launcher._is_release_complete(release) is True
+
+    def test_is_release_complete_true_with_legacy_console_script(
+        self, tmp_path: Path
+    ) -> None:
+        """A release with no sentinel but a ``mobaide-agent.exe`` console
+        script is accepted — pip writes that script only after a successful
+        wheel install, so it proves completeness for releases made by a
+        prior installer/updater that predates the sentinel. Without this
+        legacy fallback, every pre-fix release would be judged incomplete
+        and upgrades would brick.
+        """
+        release = tmp_path / "releases" / "0.3.0"
+        scripts = release / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "mobaide-agent.exe").write_bytes(b"\x4d\x5a")  # MZ
+        assert not (release / ".installed").exists()
+        assert windows_launcher._is_release_complete(release) is True
+
+    def test_is_release_complete_false_when_unfinalized(
+        self, tmp_path: Path
+    ) -> None:
+        """A venv swapped into place but not yet pip-installed — no
+        sentinel AND no console script — is incomplete. This is the exact
+        half-built post-swap state the fix exists to exclude; treating it
+        as complete is what produced the "bad interpreter" crash when the
+        supervisor exec'd a release whose wheel had never been installed.
+        """
+        release = tmp_path / "releases" / "0.3.0"
+        (release / "venv" / "Scripts").mkdir(parents=True)
+        # python.exe exists (venv was built) but neither completeness
+        # signal is present.
+        (release / "venv" / "Scripts" / "python.exe").write_text(
+            "stub", encoding="utf-8"
+        )
+        assert windows_launcher._is_release_complete(release) is False
+
+    def test_find_recovery_version_skips_incomplete_release(
+        self, tmp_path: Path
+    ) -> None:
+        """``_find_recovery_version`` must skip a sentinel-less incomplete
+        release even though its ``python.exe`` exists.
+
+        The newest sibling (0.10.0) is swapped-into-place-but-unfinalized;
+        recovery must fall through to the older complete 0.2.0 rather than
+        roll forward onto a release whose wheel was never installed. Before
+        the fix, ``_find_recovery_version`` keyed only on ``python.exe``
+        existence and would have selected the broken 0.10.0 — the supervisor
+        would then crash-loop on its missing ``mobaide-agent`` entry point.
+        """
+        _make_win_release(tmp_path, "0.2.0", complete=True)
+        _make_win_release(tmp_path, "0.10.0", complete=False)
+        assert windows_launcher._find_recovery_version(tmp_path) == "0.2.0", (
+            "recovery must skip the newer incomplete release (no .installed "
+            "sentinel, no console script) and pick the older complete one; "
+            "selecting the half-built release re-opens the bad-interpreter "
+            "crash"
+        )
+
+    def test_find_recovery_version_accepts_legacy_release_without_sentinel(
+        self, tmp_path: Path
+    ) -> None:
+        """A legacy release (console script present, no ``.installed``) must
+        still be recoverable.
+
+        Guards the upgrade path: a host whose only sibling is a pre-sentinel
+        release must not be stranded with "no recovery target". The
+        console-script fallback in ``_is_release_complete`` is what keeps
+        that release selectable.
+        """
+        release = tmp_path / "releases" / "0.9.0"
+        scripts = release / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "python.exe").write_text("stub", encoding="utf-8")
+        (scripts / "mobaide-agent.exe").write_bytes(b"\x4d\x5a")
+        assert not (release / ".installed").exists()
+        assert windows_launcher._find_recovery_version(tmp_path) == "0.9.0", (
+            "a legacy console-script release (no sentinel) must remain a "
+            "valid recovery target, otherwise upgrades from a pre-sentinel "
+            "install strand the supervisor with no rollback sibling"
+        )
+
+    def test_find_recovery_version_none_when_only_incomplete(
+        self, tmp_path: Path
+    ) -> None:
+        """When every sibling is incomplete, ``_find_recovery_version``
+        returns ``None`` so ``_supervise`` exits 70 rather than exec a
+        half-built venv. The interpreter existing is not enough — only a
+        finalized release is a valid recovery target.
+        """
+        _make_win_release(tmp_path, "0.2.0", complete=False)
+        _make_win_release(tmp_path, "0.3.0", complete=False)
+        assert windows_launcher._find_recovery_version(tmp_path) is None
+
+    def test_resolve_release_python_rejects_incomplete_current_release(
+        self, tmp_path: Path
+    ) -> None:
+        """``_resolve_release_python`` must reject a ``current_version``
+        that points at an unfinalized release, surfacing it as a
+        ``FileNotFoundError`` so ``_supervise`` recovers to a complete
+        sibling instead of exec-ing the half-built venv.
+
+        This covers Decision 4's forced-restage-crash case: the updater
+        flipped (or a prior installer left) ``current_version`` at a
+        release whose venv was swapped in but never pip-installed. The
+        interpreter file exists, so the pre-fix code returned it happily;
+        the post-fix gate rejects it with a "not finalized" message.
+        """
+        (tmp_path / "current_version").write_text("0.5.0\n", encoding="utf-8")
+        scripts = tmp_path / "releases" / "0.5.0" / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "python.exe").write_bytes(b"\x4d\x5a")  # interpreter present
+        # No .installed sentinel and no mobaide-agent.exe → unfinalized.
+        with pytest.raises(FileNotFoundError, match="not finalized") as excinfo:
+            windows_launcher._resolve_release_python(tmp_path)
+        # The version must be named so the operator can correlate it with
+        # the staged-update state (mirrors the missing-interpreter branch).
+        assert "0.5.0" in str(excinfo.value)
+
+    def test_resolve_release_python_accepts_complete_current_release(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive control: a ``current_version`` pointing at a complete
+        release (sentinel present) resolves to its ``python.exe`` — the
+        gate must not over-reject a finalized release.
+        """
+        (tmp_path / "current_version").write_text("0.5.0\n", encoding="utf-8")
+        release = tmp_path / "releases" / "0.5.0"
+        scripts = release / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "python.exe").write_bytes(b"\x4d\x5a")
+        (release / ".installed").write_text("0.5.0", encoding="utf-8")
+        resolved = windows_launcher._resolve_release_python(tmp_path)
+        assert resolved == scripts / "python.exe"

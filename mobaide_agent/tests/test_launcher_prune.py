@@ -28,6 +28,27 @@ def test_prune_keeps_current_and_rollback_target(tmp_path):
     assert release_names(tmp_path) == {"0.2.0", "0.1.5"}
 
 
+def test_prune_ignores_incomplete_release(tmp_path):
+    """A release swapped into place but not yet finalized (no ``.installed``
+    sentinel, no console script) is invisible to prune: it is neither counted
+    toward ``keep`` nor a deletion candidate — a concurrent updater may still be
+    finalizing it, and reclaiming it is the updater's staleness-gated job."""
+    make_release(tmp_path, "0.1.0")
+    make_release(tmp_path, "0.1.5")
+    make_release(tmp_path, "0.2.0")
+    make_release(tmp_path, "0.3.0", complete=False)  # higher, but unfinalized
+
+    kept, pruned = launcher._prune_old_releases(tmp_path, "0.2.0", keep=2)
+
+    # keep=2 retains current 0.2.0 + highest COMPLETE sibling 0.1.5; the oldest
+    # complete release 0.1.0 is pruned. 0.3.0 is invisible to both lists and
+    # survives untouched (its higher version does NOT consume a keep slot).
+    assert pruned == ["0.1.0"]
+    assert "0.3.0" not in kept
+    assert (tmp_path / "releases" / "0.3.0").exists()
+    assert release_names(tmp_path) == {"0.2.0", "0.1.5", "0.3.0"}
+
+
 def test_prune_keeps_current_when_not_highest(tmp_path):
     """Post-rollback the current version is below a sibling on disk. The
     current version must survive, and the kept sibling is the rollback

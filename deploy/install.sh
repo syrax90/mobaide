@@ -435,6 +435,23 @@ except InvalidSignature:
 PY
 }
 
+resolve_base_python() {
+    # When ``python3`` is itself a venv, ``sys._base_executable`` is the real
+    # (non-venv) interpreter it was created from. Basing the release venv off
+    # that stable interpreter — and clearing any active VIRTUAL_ENV/PYTHONHOME
+    # for the ``-m venv`` call — keeps the release venv's interpreter from
+    # symlinking into a transient/relocatable venv that, once moved or removed,
+    # would leave a 'bad interpreter' shebang on pip / mobaide-agent. A no-op in
+    # the normal case (system python3: ``_base_executable == executable``).
+    local base
+    base="$(python3 -c 'import sys; print(sys._base_executable or sys.executable)' 2>/dev/null || true)"
+    if [ -n "$base" ] && [ -x "$base" ]; then
+        printf '%s' "$base"
+    else
+        command -v python3
+    fi
+}
+
 stage_release() {
     local manifest_path="$1"
     local target_version
@@ -547,11 +564,18 @@ PY
     wheel_path="$(cat "$tmpdir/wheel_path")"
 
     info "Creating venv in $release_dir/venv"
-    python3 -m venv "$release_dir/venv"
+    local base_python
+    base_python="$(resolve_base_python)"
+    env -u VIRTUAL_ENV -u PYTHONHOME "$base_python" -m venv "$release_dir/venv"
     "$release_dir/venv/bin/pip" install --no-cache-dir --upgrade pip
     "$release_dir/venv/bin/pip" install --no-cache-dir "$wheel_path"
 
     rm -rf "$tmpdir"
+
+    # Mark the release complete only after pip + the wheel are installed, so the
+    # launcher self-heal / rollback / prune never select a half-built release.
+    # Keep '.installed' in sync with install_paths.is_release_complete.
+    printf '%s\n' "$target_version" > "$release_dir/.installed"
 
     printf '%s\n' "$target_version" > "${MOBAIDE_AGENT_PREFIX}/current_version.tmp"
     mv "${MOBAIDE_AGENT_PREFIX}/current_version.tmp" "${MOBAIDE_AGENT_PREFIX}/current_version"
@@ -778,8 +802,18 @@ prefix="${MOBAIDE_AGENT_PREFIX:-/usr/local/mobaide}"
 version="$(cat "$prefix/current_version" 2>/dev/null || true)"
 py="$prefix/releases/$version/venv/bin/python"
 
-# Recover when the current release has no runnable interpreter.
-if [ -z "$version" ] || [ ! -x "$py" ]; then
+# A release is runnable only when fully installed. The updater swaps a pip-less
+# venv into place and writes '.installed' only after pip + the wheel land, so
+# gate on the sentinel (or, for releases predating it, the mobaide-agent console
+# script pip writes last). Keep '.installed' in sync with
+# mobaide.agent.install_paths.is_release_complete.
+release_complete() {
+  [ -f "$1/.installed" ] || [ -e "$1/venv/bin/mobaide-agent" ]
+}
+
+# Recover when the current release has no runnable, finalized interpreter.
+if [ -z "$version" ] || [ ! -x "$py" ] \
+   || ! release_complete "$prefix/releases/$version"; then
   best=""
   for d in "$prefix"/releases/*/; do
     [ -d "$d" ] || continue
@@ -789,6 +823,7 @@ if [ -z "$version" ] || [ ! -x "$py" ]; then
     # strict filter the in-venv mobaide.launcher applies to rollback/prune.
     case "$v" in ''|.*|*[!0-9.]*) continue ;; esac
     [ -x "$d/venv/bin/python" ] || continue
+    release_complete "$d" || continue
     if [ -z "$best" ]; then
       best="$v"
     else

@@ -78,6 +78,15 @@ _EXIT_RESTART_REQUESTED = 75
 # the outer reset.
 _MAX_RECOVERY_ATTEMPTS = 5
 
+# Marker the updater/installers drop into a release dir once pip + the wheel
+# are installed. Canonical in ``mobaide.agent.install_paths.is_release_complete``;
+# duplicated here because this supervisor is stdlib-only and importing
+# ``mobaide`` would defeat the "survives a half-staged release" guarantee. Keep
+# in sync. A release predating the sentinel is recognised by its agent console
+# script (pip writes it only after a successful wheel install), so a venv
+# swapped into place but not yet finalized is correctly treated as incomplete.
+_RELEASE_SENTINEL = ".installed"
+
 
 def _default_prefix(cli_prefix: str | None = None) -> Path:
     """Resolve the install prefix.
@@ -107,13 +116,29 @@ def _venv_python_path(release_dir: Path) -> Path:
     return release_dir / "venv" / "Scripts" / "python.exe"
 
 
+def _is_release_complete(release_dir: Path) -> bool:
+    """True once a release is fully installed (pip + wheel done).
+
+    Keep in sync with ``mobaide.agent.install_paths.is_release_complete``. A
+    release predating the sentinel is recognised by its agent console script,
+    which pip writes only after a successful wheel install, so a venv swapped
+    into place but not yet finalized is correctly excluded.
+    """
+    if (release_dir / _RELEASE_SENTINEL).exists():
+        return True
+    return (release_dir / "venv" / "Scripts" / "mobaide-agent.exe").exists()
+
+
 def _resolve_release_python(prefix: Path) -> Path:
     """Read ``current_version`` and return the active release's ``python.exe``.
 
     Raises FileNotFoundError with an operator-friendly message for any of:
     missing/empty ``current_version`` file, missing release dir, missing
-    interpreter. Callers print the message to stderr so it lands in the
-    captured ``agent.err.log``.
+    interpreter, or a release that is not finalized (swapped into place but not
+    yet pip-installed — no ``.installed`` sentinel / console script). Treating
+    an unfinalized current release as unrunnable lets ``_supervise`` recover to
+    a complete sibling instead of exec-ing a half-built venv. Callers print the
+    message to stderr so it lands in the captured ``agent.err.log``.
     """
     version_file = prefix / "current_version"
     try:
@@ -124,10 +149,16 @@ def _resolve_release_python(prefix: Path) -> Path:
         ) from exc
     if not version:
         raise FileNotFoundError(f"empty {version_file}")
-    python = _venv_python_path(prefix / "releases" / version)
+    release_dir = prefix / "releases" / version
+    python = _venv_python_path(release_dir)
     if not python.exists():
         raise FileNotFoundError(
             f"missing release interpreter {python} (current_version={version!r})"
+        )
+    if not _is_release_complete(release_dir):
+        raise FileNotFoundError(
+            f"release {version!r} not finalized (no {_RELEASE_SENTINEL} sentinel "
+            f"or console script); recovering to a complete sibling"
         )
     return python
 
@@ -148,12 +179,14 @@ def _version_key(name: str) -> tuple[int, ...]:
 
 
 def _find_recovery_version(prefix: Path) -> str | None:
-    """Newest sibling release with a runnable ``python.exe``, or ``None``.
+    """Newest sibling release with a runnable, finalized venv, or ``None``.
 
     The Windows counterpart to the POSIX launcher wrapper's self-heal: when the
-    current release's interpreter is gone, roll forward to the newest sibling
-    that still has a venv so the supervisor stops crash-looping instead of
-    exiting straight to Task Scheduler. Stdlib-only — never imports ``mobaide``.
+    current release's interpreter is gone (or it is not finalized), roll forward
+    to the newest sibling that has a complete venv so the supervisor stops
+    crash-looping instead of exiting straight to Task Scheduler. A release
+    swapped into place but not yet pip-installed (``_is_release_complete`` is
+    False) is skipped. Stdlib-only — never imports ``mobaide``.
     """
     releases = prefix / "releases"
     try:
@@ -169,6 +202,8 @@ def _find_recovery_version(prefix: Path) -> str | None:
         if not key:
             continue
         if not _venv_python_path(entry).exists():
+            continue
+        if not _is_release_complete(entry):
             continue
         if best_key is None or key > best_key:
             best_key = key

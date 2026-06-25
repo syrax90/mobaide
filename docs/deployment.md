@@ -127,7 +127,9 @@ The agent runs under a per-user Scheduled Task. The Scheduled Task action points
 ```
 <prefix>\
 ├── current_version              # text file: "X.Y.Z"
-├── releases\<version>\venv\     # per-release venv (mobaide + deps)
+├── releases\<version>\
+│   ├── .installed               # completion sentinel — release is runnable
+│   └── venv\                    # per-release venv (mobaide + deps)
 ├── trust\central_server.pub     # pinned manifest-signing public key
 └── svc\
     └── mobaide_launcher.py      # stdlib-only Scheduled-Task supervisor
@@ -142,7 +144,7 @@ Argument : -u "<prefix>\svc\mobaide_launcher.py" --prefix "<prefix>"
 
 `mobaide_launcher.py` is fetched from `https://get.mobaide.com/windows_launcher.py` during install. It is co-versioned with `install.ps1` itself — the `publish-gh-pages` workflow ships both files in the same push — so installer changes that depend on a new supervisor API can never desync. For self-hosted distributions, override the URL via `MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL`.
 
-On every task start, the supervisor (`mobaide_launcher.py`) is launched by `pythonw.exe` — the GUI-subsystem variant of CPython, which does not allocate a console window. This is what prevents the transient py.exe window from appearing at logon or during `irm install.ps1 | iex`. Because `pythonw.exe` binds its stdio to no-op handles, the supervisor redirects its own `sys.stderr` to `<prefix>\logs\launcher.err.log` at startup so diagnostics (config errors, Python tracebacks) survive. The supervisor then reads `<prefix>\current_version`, resolves the active release's `python.exe`, and spawns `python.exe -m mobaide.launcher` as a subprocess. The launcher does crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable sibling release if the active one crashes 3 times within 60 s. On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv` (which creates a new PID on Windows, breaking the supervisor's `poll()` supervision — Python issue #9148). Every `subprocess.Popen` / `subprocess.run` call in the Windows agent code path also passes `creationflags=CREATE_NO_WINDOW` as defense-in-depth so child processes inherit the no-window behaviour. The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log` (each rotated at 5 MB, one backup kept).
+On every task start, the supervisor (`mobaide_launcher.py`) is launched by `pythonw.exe` — the GUI-subsystem variant of CPython, which does not allocate a console window. This is what prevents the transient py.exe window from appearing at logon or during `irm install.ps1 | iex`. Because `pythonw.exe` binds its stdio to no-op handles, the supervisor redirects its own `sys.stderr` to `<prefix>\logs\launcher.err.log` at startup so diagnostics (config errors, Python tracebacks) survive. The supervisor then reads `<prefix>\current_version`, resolves the active release's `python.exe`, and spawns `python.exe -m mobaide.launcher` as a subprocess. The launcher does crash-loop detection + rollback exactly as on Linux/macOS — it rewrites `<prefix>\current_version` to a stable **complete** sibling release (one carrying the `.installed` sentinel, or the legacy `mobaide-agent.exe` console script) if the active one crashes 3 times within 60 s; an incomplete release swapped into place but not yet finalized is never selected or booted. On Windows, `mobaide.launcher` uses `subprocess.Popen` + a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` instead of `os.execv` (which creates a new PID on Windows, breaking the supervisor's `poll()` supervision — Python issue #9148). Every `subprocess.Popen` / `subprocess.run` call in the Windows agent code path also passes `creationflags=CREATE_NO_WINDOW` as defense-in-depth so child processes inherit the no-window behaviour. The agent's stderr is captured to `<prefix>\logs\agent.err.log` and its stdout (structlog records, uvicorn access logs, every `pairing_monitor.*` and `relay_client.*` event) to `<prefix>\logs\agent.out.log` (each rotated at 5 MB, one backup kept).
 
 > **CPython 3.13.0 caveat:** on CPython 3.13.0, `pythonw.exe` inside a venv still allocates a transient console due to [CPython issue #126084](https://github.com/python/cpython/issues/126084). This was fixed in 3.13.1. The installer's `winget` fast path targets Python 3.12, which is unaffected; if you are using a self-managed 3.13.0 environment and observe a brief window flash, upgrade to 3.13.1+.
 
@@ -189,16 +191,21 @@ curl -fsSL https://get.mobaide.com/install.sh | bash
 
 The script detects the OS, verifies the Ed25519 manifest signature, stages the
 release under `<prefix>/releases/<version>/venv/` (`/opt/mobaide` on
-Linux, `/usr/local/mobaide` on macOS), writes `<prefix>/current_version`,
-and registers the supervisor:
+Linux, `/usr/local/mobaide` on macOS), writes the `releases/<version>/.installed`
+completion sentinel as its last install step, writes `<prefix>/current_version`,
+and registers the supervisor. (The sentinel is the same "complete release"
+contract the auto-updater uses — see
+[versioning-and-updates.md](versioning-and-updates.md#install-layout) — so a
+release is only ever selected once it is fully installed and runnable.)
 
 * **Linux** — installs `mobaide-agent.service` (systemd). `ExecStart` is the
   generated `<prefix>/bin/mobaide-agent-launcher.sh` wrapper (the same wrapper
   macOS launchd already uses), not the older inline
   `bash -c '... python -m mobaide.launcher'`. The wrapper self-heals a
-  missing/corrupt current-release venv by rolling `current_version` forward to
-  the newest sibling release with a runnable venv before exec; the in-venv
-  launcher then does the 3-strike crash-loop rollback. The unit is
+  missing, corrupt, or incomplete current-release venv by rolling
+  `current_version` forward to the newest sibling release that is complete
+  (`.installed` sentinel, or the legacy console-script fallback) before exec;
+  the in-venv launcher then does the 3-strike crash-loop rollback. The unit is
   configured with `StartLimitBurst=10 / StartLimitIntervalSec=600` so those
   recovery paths have room to retry a stable sibling
   release before systemd stops the unit, and `RestartForceExitStatus=75` so
