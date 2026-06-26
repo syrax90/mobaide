@@ -95,6 +95,53 @@ class TestWriteSessionHooks:
         assert b.parent == tmp_path / "mobaide_hooks_9002"
 
 
+class TestWriteSessionHooksExtra:
+    def test_extra_keys_merged_at_top_level_beside_hooks(self):
+        path = hook_settings.write_session_hooks(
+            "sid-1", port=9001, token="tok",
+            extra={"fastMode": True, "ultracode": True},
+        )
+        doc = _load(path)
+        assert doc["fastMode"] is True
+        assert doc["ultracode"] is True
+        # The merge augments the document — it must not displace ``hooks``.
+        assert set(doc["hooks"]) == {"Notification", "Stop", "SessionEnd"}
+
+    def test_single_extra_key_rides_independently(self):
+        path = hook_settings.write_session_hooks(
+            "sid-1", port=9001, token="tok", extra={"fastMode": True},
+        )
+        doc = _load(path)
+        assert doc["fastMode"] is True
+        assert "ultracode" not in doc
+        assert "hooks" in doc
+
+    def test_no_extra_leaves_only_the_hooks_key(self):
+        # Backward-compat: omitting ``extra`` yields the pre-``extra`` shape —
+        # a lone ``hooks`` key with no stray top-level entries.
+        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
+        assert set(_load(path)) == {"hooks"}
+
+    def test_empty_extra_is_a_noop(self):
+        # An empty dict is falsy, so the merge is skipped and the document is
+        # identical to the no-``extra`` shape.
+        path = hook_settings.write_session_hooks(
+            "sid-1", port=9001, token="tok", extra={},
+        )
+        assert set(_load(path)) == {"hooks"}
+
+    def test_merge_preserves_baked_hook_url(self):
+        # The merge must not disturb the session_id / token baked into the hook
+        # URLs (the correlation mechanism the merged settings ride alongside).
+        path = hook_settings.write_session_hooks(
+            "sid-xyz", port=9100, token="tok-abc", extra={"ultracode": True},
+        )
+        doc = _load(path)
+        query = parse_qs(urlsplit(doc["hooks"]["Stop"][0]["hooks"][0]["url"]).query)
+        assert query["session_id"] == ["sid-xyz"]
+        assert query["token"] == ["tok-abc"]
+
+
 class TestRemoveSessionHooks:
     def test_removes_existing_file(self):
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")

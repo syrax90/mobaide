@@ -1,7 +1,7 @@
 {
-  "protocol_version": 5,
-  "min_client_protocol_version": 5,
-  "supported_protocol_versions": [5],
+  "protocol_version": 6,
+  "min_client_protocol_version": 6,
+  "supported_protocol_versions": [6],
   "close_codes": {
     "auth_failed": 4001,
     "protocol_incompatible": 4002,

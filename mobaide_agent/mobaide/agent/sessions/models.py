@@ -10,6 +10,16 @@ from mobaide.core.models import SessionInfo, session_to_wire_dict
 
 
 class ClaudeOptionsModel(BaseModel):
+    """Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).
+
+    ``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at
+    the wire boundary; ``model`` stays free-form (the client curates the alias
+    list). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for
+    the legitimately-named ``model`` field.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
     plan_mode: bool = False
     no_memory: bool = False
     skip_permissions: bool = True
@@ -18,7 +28,11 @@ class ClaudeOptionsModel(BaseModel):
     branch_name: str | None = None
     identifier: str | None = None
     title: str | None = None
-    max_effort: bool = True
+    model: str | None = None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    fast_mode: bool = False
+    ultracode: bool = False
+    append_system_prompt: str | None = None
 
     def to_options(self) -> ClaudeOptions:
         return ClaudeOptions(**self.model_dump())

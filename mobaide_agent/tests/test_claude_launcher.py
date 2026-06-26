@@ -17,9 +17,9 @@ def _make_project(path: str, *, key: str | None = None, conda: str | None = None
 
 @pytest.mark.asyncio
 async def test_argv_minimal_adds_bypass(tmp_path: Path):
-    """Default options now force bypass mode — the mobile client cannot mediate
-    approval dialogs, so sessions always start with permissions skipped. Max
-    effort is also on by default."""
+    """Default options force bypass mode — the mobile client cannot mediate
+    approval dialogs, so sessions always start with permissions skipped. The
+    default effort is ``high`` (the CLI default), so no ``--effort`` flag."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)), ClaudeOptions()
@@ -27,7 +27,6 @@ async def test_argv_minimal_adds_bypass(tmp_path: Path):
     assert spec.argv == [
         "claude", "--debug",
         "--dangerously-skip-permissions",
-        "--effort", "max",
     ]
 
 
@@ -44,7 +43,6 @@ async def test_argv_plan_mode_with_default_skip_permissions(tmp_path: Path):
         "claude", "--debug",
         "--permission-mode", "plan",
         "--allow-dangerously-skip-permissions",
-        "--effort", "max",
     ]
 
 
@@ -59,26 +57,25 @@ async def test_argv_plan_mode_without_skip_permissions(tmp_path: Path):
     assert spec.argv == [
         "claude", "--debug",
         "--permission-mode", "plan",
-        "--effort", "max",
     ]
 
 
 @pytest.mark.asyncio
 async def test_argv_no_plan_no_skip(tmp_path: Path):
-    """Neither plan_mode nor skip_permissions: bare claude --debug plus
-    the default --effort max."""
+    """Neither plan_mode nor skip_permissions: bare claude --debug (the default
+    effort high omits the flag)."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
         ClaudeOptions(plan_mode=False, skip_permissions=False),
     )
-    assert spec.argv == ["claude", "--debug", "--effort", "max"]
+    assert spec.argv == ["claude", "--debug"]
 
 
 @pytest.mark.asyncio
 async def test_argv_no_skip_with_initial_prompt(tmp_path: Path):
     """skip_permissions=False with an initial_prompt: no permission flags,
-    but the ``--`` separator and prompt must still appear after --effort max."""
+    just the ``--`` separator and prompt."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
@@ -86,7 +83,6 @@ async def test_argv_no_skip_with_initial_prompt(tmp_path: Path):
     )
     assert spec.argv == [
         "claude", "--debug",
-        "--effort", "max",
         "--", "run it",
     ]
 
@@ -99,6 +95,9 @@ async def test_argv_all_flags(tmp_path: Path):
         ClaudeOptions(
             plan_mode=True,
             no_memory=True,
+            model="opus",
+            effort="xhigh",
+            append_system_prompt="be terse",
             initial_prompt="hello world",
         ),
     )
@@ -108,8 +107,12 @@ async def test_argv_all_flags(tmp_path: Path):
         "--permission-mode",
         "plan",
         "--allow-dangerously-skip-permissions",
+        "--model",
+        "opus",
         "--effort",
-        "max",
+        "xhigh",
+        "--append-system-prompt",
+        "be terse",
         "--",
         "hello world",
     ]
@@ -117,31 +120,95 @@ async def test_argv_all_flags(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_argv_max_effort_disabled_omits_flag(tmp_path: Path):
-    """When max_effort=False, the --effort flag is not emitted at all, so the
-    CLI falls back to its own default (xhigh for Opus 4.7, high elsewhere)."""
+async def test_argv_model_emitted_when_set(tmp_path: Path):
+    """A curated model alias is passed through as ``--model <alias>``; an unset
+    model emits nothing."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
-        _make_project(str(tmp_path)),
-        ClaudeOptions(max_effort=False),
+        _make_project(str(tmp_path)), ClaudeOptions(model="sonnet"),
     )
-    assert "--effort" not in spec.argv
-    assert "max" not in spec.argv
+    assert spec.argv[spec.argv.index("--model") + 1] == "sonnet"
+
+    bare = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    assert "--model" not in bare.argv
 
 
 @pytest.mark.asyncio
-async def test_argv_max_effort_placed_before_prompt_separator(tmp_path: Path):
-    """Regression guard: --effort max MUST appear before the ``--`` separator,
-    otherwise ``max`` would be interpreted as part of the prompt passthrough."""
+@pytest.mark.parametrize("effort", ["high", None])
+async def test_argv_default_effort_omits_flag(tmp_path: Path, effort):
+    """``None`` and ``high`` both omit ``--effort`` — high is the CLI default."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(effort=effort),
+    )
+    assert "--effort" not in spec.argv
+
+
+@pytest.mark.asyncio
+async def test_argv_non_default_effort_emitted(tmp_path: Path):
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)), ClaudeOptions(effort="max"),
+    )
+    assert spec.argv[spec.argv.index("--effort") + 1] == "max"
+
+
+@pytest.mark.asyncio
+async def test_argv_ultracode_suppresses_effort(tmp_path: Path):
+    """ultracode internally drives xhigh and is redundant with --effort, so an
+    explicit effort is suppressed when ultracode is on."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
-        ClaudeOptions(max_effort=True, initial_prompt="go"),
+        ClaudeOptions(effort="max", ultracode=True),
+    )
+    assert "--effort" not in spec.argv
+
+
+@pytest.mark.asyncio
+async def test_argv_effort_placed_before_prompt_separator(tmp_path: Path):
+    """Regression guard: --effort MUST appear before the ``--`` separator,
+    otherwise the level would be interpreted as part of the prompt passthrough."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(effort="max", initial_prompt="go"),
     )
     effort_idx = spec.argv.index("--effort")
     separator_idx = spec.argv.index("--")
     assert effort_idx < separator_idx
     assert spec.argv[effort_idx + 1] == "max"
+
+
+@pytest.mark.asyncio
+async def test_argv_settings_merges_fast_and_ultracode_inline(tmp_path: Path):
+    """Without a hooks file (no session_id), fast_mode and ultracode are emitted
+    as a single inline ``--settings`` JSON arg — never two ``--settings`` flags."""
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(fast_mode=True, ultracode=True),
+    )
+    assert spec.argv.count("--settings") == 1
+    payload = json.loads(spec.argv[spec.argv.index("--settings") + 1])
+    assert payload == {"fastMode": True, "ultracode": True}
+
+
+@pytest.mark.asyncio
+async def test_argv_no_settings_when_no_fast_or_ultracode(tmp_path: Path):
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
+    assert "--settings" not in spec.argv
+
+
+@pytest.mark.asyncio
+async def test_argv_append_system_prompt_emitted(tmp_path: Path):
+    launcher = ClaudeLauncher()
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(append_system_prompt="stay terse"),
+    )
+    assert spec.argv[spec.argv.index("--append-system-prompt") + 1] == "stay terse"
 
 
 @pytest.mark.asyncio
@@ -668,6 +735,27 @@ async def test_hooks_file_url_bakes_session_id(
     doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
     url = doc["hooks"]["Stop"][0]["hooks"][0]["url"]
     assert "session_id=sid-unique" in url
+
+
+@pytest.mark.asyncio
+async def test_settings_file_merges_fast_and_ultracode(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    """With a hooks file, fast_mode / ultracode merge into that single file
+    (top level, alongside ``hooks``) — still one ``--settings`` flag, no inline
+    duplicate."""
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    spec = await launcher.build(
+        _make_project(str(tmp_path)),
+        ClaudeOptions(fast_mode=True, ultracode=True),
+        session_id="sid-merge",
+    )
+    assert spec.argv.count("--settings") == 1
+    settings_path = spec.argv[spec.argv.index("--settings") + 1]
+    doc = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+    assert doc["fastMode"] is True
+    assert doc["ultracode"] is True
+    assert "hooks" in doc
 
 
 def test_resolve_binary_delegates_to_private_resolver():

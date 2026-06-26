@@ -661,7 +661,7 @@ private fun StandardConfigSection(
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
 ) {
-    ToggleRow("Max effort", state.maxEffort, viewModel::toggleMaxEffort)
+    ClaudeOptionControls(state, viewModel)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
@@ -862,6 +862,156 @@ private fun CodexModelDropdown(
     }
 }
 
+/**
+ * Claude reasoning controls shared by the Standard and Auto Scan config steps:
+ * a model dropdown, a model-conditional effort dropdown, and an "Advanced"
+ * expander (fast mode, ultracode, append-system-prompt). Replaces the old
+ * boolean "Max effort" toggle.
+ */
+@Composable
+private fun ClaudeOptionControls(
+    state: CreateSessionUiState,
+    viewModel: CreateSessionViewModel,
+) {
+    Text("Model", style = MaterialTheme.typography.labelLarge)
+    ClaudeModelDropdown(
+        selected = state.claudeModel,
+        enabled = !state.claudeFastMode,
+        onSelect = viewModel::setClaudeModel,
+    )
+    if (state.claudeFastMode) {
+        Text(
+            text = "Fast mode runs on Opus.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    Text("Effort", style = MaterialTheme.typography.labelLarge)
+    ClaudeEffortDropdown(
+        selected = state.claudeEffort,
+        model = state.claudeModel,
+        enabled = !state.claudeUltracode,
+        onSelect = viewModel::setClaudeEffort,
+    )
+    if (state.claudeUltracode) {
+        Text(
+            text = "ultracode runs at xhigh.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+
+    var advancedExpanded by remember { mutableStateOf(false) }
+    TextButton(
+        onClick = { advancedExpanded = !advancedExpanded },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Icon(
+            imageVector = if (advancedExpanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = null,
+        )
+        Text("Advanced")
+    }
+    if (advancedExpanded) {
+        ToggleRow("Fast mode (Opus only)", state.claudeFastMode, viewModel::toggleClaudeFastMode)
+        ToggleRow("ultracode", state.claudeUltracode, viewModel::toggleClaudeUltracode)
+        OutlinedTextField(
+            value = state.claudeAppendSystemPrompt,
+            onValueChange = viewModel::setClaudeAppendSystemPrompt,
+            label = { Text("Append system prompt (optional)") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 2,
+            maxLines = 6,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ClaudeModelDropdown(
+    selected: String?,
+    enabled: Boolean,
+    onSelect: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded && enabled,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = selected ?: "Default",
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            label = { Text("Model") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded && enabled,
+            onDismissRequest = { expanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Default") },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                },
+            )
+            CreateSessionViewModel.CLAUDE_MODELS.forEach { model ->
+                DropdownMenuItem(
+                    text = { Text(model) },
+                    onClick = {
+                        onSelect(model)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ClaudeEffortDropdown(
+    selected: String,
+    model: String?,
+    enabled: Boolean,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = CreateSessionViewModel.claudeEffortsFor(model)
+    ExposedDropdownMenuBox(
+        expanded = expanded && enabled,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = selected.replaceFirstChar { it.uppercase() },
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            label = { Text("Effort") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded && enabled,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { effort ->
+                DropdownMenuItem(
+                    text = { Text(effort.replaceFirstChar { it.uppercase() }) },
+                    onClick = {
+                        onSelect(effort)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun TerminalConfigSection(
     state: CreateSessionUiState,
@@ -893,7 +1043,7 @@ private fun AutoScanConfigSection(
     state: CreateSessionUiState,
     viewModel: CreateSessionViewModel,
 ) {
-    ToggleRow("Max effort", state.maxEffort, viewModel::toggleMaxEffort)
+    ClaudeOptionControls(state, viewModel)
     ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)

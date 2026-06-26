@@ -3,6 +3,7 @@ package com.mobaide.app.ui.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -79,7 +80,13 @@ data class CreateSessionUiState(
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = true,
-    val maxEffort: Boolean = true,
+    // Claude reasoning controls (replace the old boolean "Max effort"). model is
+    // a curated alias or null (account default); effort "high" == omit the flag.
+    val claudeModel: String? = null,
+    val claudeEffort: String = "high",
+    val claudeFastMode: Boolean = false,
+    val claudeUltracode: Boolean = false,
+    val claudeAppendSystemPrompt: String = "",
     // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
     val codexModel: String? = null,
     val codexSandbox: String = "workspace-write",
@@ -128,6 +135,15 @@ val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
         else -> null
     }
 
+/** Snapshot of the Claude reasoning controls for persistence / re-defaulting. */
+private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
+    model = claudeModel,
+    effort = claudeEffort,
+    fastMode = claudeFastMode,
+    ultracode = claudeUltracode,
+    appendSystemPrompt = claudeAppendSystemPrompt,
+)
+
 /**
  * Mode-picker gate. Only an explicit `false` from the agent disables a card;
  * `null` (unknown / not-yet-probed / probe failed) stays optimistically enabled
@@ -158,6 +174,22 @@ class CreateSessionViewModel @Inject constructor(
     val transientMessages: SharedFlow<String> = _transientMessages.asSharedFlow()
 
     init {
+        viewModelScope.launch {
+            // Pre-fill the Claude reasoning controls from the last successful
+            // launch (mirrors the last-used-project pre-fill below).
+            preferencesStore.getLastUsedClaudeOptions()?.let { saved ->
+                _uiState.update {
+                    it.copy(
+                        claudeModel = saved.model,
+                        claudeEffort = saved.effort,
+                        claudeFastMode = saved.fastMode,
+                        claudeUltracode = saved.ultracode,
+                        claudeAppendSystemPrompt = saved.appendSystemPrompt,
+                    )
+                }
+            }
+        }
+
         viewModelScope.launch {
             val last = preferencesStore.getLastUsedProjectName()
             projectsRepository.observeProjects().collect { projects ->
@@ -368,12 +400,17 @@ class CreateSessionViewModel @Inject constructor(
                     plan_mode = state.planMode,
                     no_memory = state.noMemory,
                     skip_permissions = state.skipPermissions,
-                    max_effort = state.maxEffort,
+                    model = state.claudeModel,
+                    effort = state.claudeEffort,
+                    fast_mode = state.claudeFastMode,
+                    ultracode = state.claudeUltracode,
+                    append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
                     worktree = true,
                     initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
                 )
                 autoScanRepository.startScan(projectName, options)
                 preferencesStore.setLastUsedProjectName(projectName)
+                preferencesStore.setLastUsedClaudeOptions(state.toClaudeLaunchPrefs())
                 _uiState.update { it.copy(autoScanStarting = false) }
                 _navigateToAutoScan.tryEmit(projectName)
             } catch (e: Exception) {
@@ -404,7 +441,24 @@ class CreateSessionViewModel @Inject constructor(
     fun togglePlanMode(v: Boolean) = _uiState.update { it.copy(planMode = v) }
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
-    fun toggleMaxEffort(v: Boolean) = _uiState.update { it.copy(maxEffort = v) }
+    fun setClaudeModel(v: String?) = _uiState.update {
+        // Clamp the effort if the new model doesn't support the current level
+        // (e.g. xhigh/max → high when switching off an xhigh-capable model).
+        val efforts = claudeEffortsFor(v)
+        it.copy(claudeModel = v, claudeEffort = if (it.claudeEffort in efforts) it.claudeEffort else "high")
+    }
+
+    fun setClaudeEffort(v: String) = _uiState.update { it.copy(claudeEffort = v) }
+
+    fun toggleClaudeFastMode(v: Boolean) = _uiState.update {
+        // Fast mode is Opus-only and auto-switches the session to Opus, so lock
+        // the model to opus while it's on (the UI disables the model dropdown).
+        if (v) it.copy(claudeFastMode = true, claudeModel = "opus") else it.copy(claudeFastMode = false)
+    }
+
+    fun toggleClaudeUltracode(v: Boolean) = _uiState.update { it.copy(claudeUltracode = v) }
+
+    fun setClaudeAppendSystemPrompt(v: String) = _uiState.update { it.copy(claudeAppendSystemPrompt = v) }
     fun toggleWorktree(v: Boolean) = _uiState.update { it.copy(worktree = v) }
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }
@@ -435,7 +489,11 @@ class CreateSessionViewModel @Inject constructor(
         val claudeOptions = ClaudeOptionsModel(
             no_memory = state.noMemory,
             skip_permissions = state.skipPermissions,
-            max_effort = state.maxEffort,
+            model = state.claudeModel,
+            effort = state.claudeEffort,
+            fast_mode = state.claudeFastMode,
+            ultracode = state.claudeUltracode,
+            append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },
         )
@@ -598,6 +656,11 @@ class CreateSessionViewModel @Inject constructor(
                     }
                     ProjectSelection.None -> Unit
                 }
+                // Remember the Claude reasoning controls for the next launch
+                // (Claude submits only — Codex/shell carry no claude_options).
+                if (request.claude_options != null) {
+                    preferencesStore.setLastUsedClaudeOptions(_uiState.value.toClaudeLaunchPrefs())
+                }
                 preferencesStore.setLastUsedSessionId(response.session_id)
                 _uiState.update { it.copy(submitting = false) }
                 _navigateToSession.tryEmit(response.session_id)
@@ -672,5 +735,25 @@ class CreateSessionViewModel @Inject constructor(
 
         /** Codex reasoning-effort levels, low→high; "high" is the wizard default. */
         val REASONING_EFFORTS = listOf("minimal", "low", "medium", "high")
+
+        /**
+         * Curated Claude model aliases for the wizard dropdown. Aliases (not full
+         * IDs) resolve to the provider-correct version and respect org
+         * `availableModels` allowlists; "Default" (null) — the account default —
+         * is offered alongside these. Current as of 2026-06.
+         */
+        val CLAUDE_MODELS = listOf("opus", "sonnet", "haiku", "fable")
+
+        /** Claude effort ladder, low→high. xhigh/max only resolve on xhigh-capable
+         *  models (opus / fable); other models silently downshift, so
+         *  [claudeEffortsFor] filters them out. */
+        val CLAUDE_EFFORTS = listOf("low", "medium", "high", "xhigh", "max")
+        private val CLAUDE_EFFORTS_BASE = listOf("low", "medium", "high")
+
+        /** Effort levels offered for [model]: the full ladder for xhigh-capable
+         *  opus/fable, else low/medium/high (also for the null/default model,
+         *  whose resolved capability is unknown — never offer a downshift). */
+        fun claudeEffortsFor(model: String?): List<String> =
+            if (model == "opus" || model == "fable") CLAUDE_EFFORTS else CLAUDE_EFFORTS_BASE
     }
 }

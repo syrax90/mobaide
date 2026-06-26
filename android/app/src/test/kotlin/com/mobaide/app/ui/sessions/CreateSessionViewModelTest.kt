@@ -2,6 +2,7 @@ package com.mobaide.app.ui.sessions
 
 import app.cash.turbine.test
 import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -93,6 +94,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.getLastUsedProjectName() } returns lastUsedProject
         coEvery { prefs.setLastUsedProjectName(any()) } just Runs
         coEvery { prefs.setLastUsedSessionId(any()) } just Runs
+        coEvery { prefs.getLastUsedClaudeOptions() } returns null
+        coEvery { prefs.setLastUsedClaudeOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         every { autoScanRepo.getAutoScanPrompt() } returns autoScanPrompt
@@ -226,16 +229,21 @@ class CreateSessionViewModelTest {
         assertNotNull(opts)
         assertTrue(opts!!.no_memory)
         assertTrue(opts.skip_permissions)
-        assertTrue("max_effort must default to ON", opts.max_effort)
+        assertEquals("effort defaults to high", "high", opts.effort)
+        assertNull("model defaults to the account default (null)", opts.model)
+        assertFalse(opts.fast_mode)
+        assertFalse(opts.ultracode)
+        assertNull(opts.append_system_prompt)
         assertTrue(opts.worktree)
         assertEquals("feature/x", opts.branch_name)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedClaudeOptions(any()) }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-123") }
         assertFalse(vm.uiState.value.submitting)
     }
 
     @Test
-    fun submit_withMaxEffortOff_sendsMaxEffortFalse() = runTest {
+    fun submit_withClaudeReasoningOptions_sendsThem_andPersistsLastUsed() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -243,15 +251,69 @@ class CreateSessionViewModelTest {
         val requestSlot = slot<CreateSessionRequest>()
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
             SessionResponse("sess-m", "starting", "2026-04-21T00:00:00Z")
+        val prefsSlot = slot<ClaudeLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedClaudeOptions(capture(prefsSlot)) } just Runs
 
         vm.selectProject("alpha")
-        vm.toggleMaxEffort(false)
+        vm.setClaudeModel("opus")
+        vm.setClaudeEffort("max")
+        vm.setClaudeAppendSystemPrompt("be terse")
+        vm.toggleClaudeUltracode(true)
         vm.submit()
         advanceUntilIdle()
 
         val opts = requestSlot.captured.claude_options
         assertNotNull(opts)
-        assertFalse("max_effort must propagate as false when toggled off", opts!!.max_effort)
+        assertEquals("opus", opts!!.model)
+        assertEquals("max", opts.effort)
+        assertTrue(opts.ultracode)
+        assertEquals("be terse", opts.append_system_prompt)
+        // The same selections are persisted for the next launch.
+        assertEquals("opus", prefsSlot.captured.model)
+        assertEquals("max", prefsSlot.captured.effort)
+        assertTrue(prefsSlot.captured.ultracode)
+        assertEquals("be terse", prefsSlot.captured.appendSystemPrompt)
+    }
+
+    @Test
+    fun toggleClaudeFastMode_locksModelToOpus() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setClaudeModel("sonnet")
+        vm.toggleClaudeFastMode(true)
+
+        assertEquals("opus", vm.uiState.value.claudeModel)
+        assertTrue(vm.uiState.value.claudeFastMode)
+    }
+
+    @Test
+    fun setClaudeModel_toNonXhighModel_clampsEffortToHigh() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setClaudeModel("opus")
+        vm.setClaudeEffort("max")
+        // sonnet doesn't support xhigh/max, so the invalid level must clamp.
+        vm.setClaudeModel("sonnet")
+
+        assertEquals("high", vm.uiState.value.claudeEffort)
+    }
+
+    @Test
+    fun init_seedsClaudeControlsFromPersistedPrefs() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedClaudeOptions() } returns
+            ClaudeLaunchPrefs(model = "fable", effort = "xhigh", ultracode = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("fable", s.claudeModel)
+        assertEquals("xhigh", s.claudeEffort)
+        assertTrue(s.claudeUltracode)
     }
 
     @Test
@@ -440,16 +502,18 @@ class CreateSessionViewModelTest {
 
         val opts = optsSlot.captured
         assertTrue(opts.skip_permissions)
-        assertTrue("max_effort must default to ON in Auto Scan payload", opts.max_effort)
+        assertEquals("Auto Scan effort defaults to high", "high", opts.effort)
+        assertNull(opts.model)
         assertTrue(opts.worktree)
         assertNull(opts.branch_name)
         assertEquals("seed", opts.initial_prompt)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedClaudeOptions(any()) }
         assertFalse(vm.uiState.value.autoScanStarting)
     }
 
     @Test
-    fun submitAutoScan_withMaxEffortOff_sendsMaxEffortFalse() = runTest {
+    fun submitAutoScan_withClaudeReasoningOptions_sendsThem() = runTest {
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -460,14 +524,13 @@ class CreateSessionViewModelTest {
         vm.selectProject("alpha")
         vm.confirmProject()
         vm.selectAutoScanMode()
-        vm.toggleMaxEffort(false)
+        vm.setClaudeModel("opus")
+        vm.setClaudeEffort("xhigh")
         vm.submitAutoScan()
         advanceUntilIdle()
 
-        assertFalse(
-            "max_effort must propagate as false when toggled off in Auto Scan",
-            optsSlot.captured.max_effort,
-        )
+        assertEquals("opus", optsSlot.captured.model)
+        assertEquals("xhigh", optsSlot.captured.effort)
     }
 
     @Test
@@ -1746,5 +1809,74 @@ class CreateSessionViewModelTest {
         vm.selectCodexMode()
 
         assertEquals(CreateSessionStep.CodexConfig, vm.uiState.value.step)
+    }
+
+    @Test
+    fun claudeEffortsFor_opus_offersFullLadderIncludingXhighAndMax() {
+        val efforts = CreateSessionViewModel.claudeEffortsFor("opus")
+        assertEquals(CreateSessionViewModel.CLAUDE_EFFORTS, efforts)
+        assertTrue("opus is xhigh-capable", efforts.contains("xhigh"))
+        assertTrue("opus is max-capable", efforts.contains("max"))
+    }
+
+    @Test
+    fun claudeEffortsFor_fable_offersFullLadder() {
+        // fable is the other xhigh-capable model; the clamp test only covers
+        // opus, so pin fable's full ladder explicitly.
+        assertEquals(
+            CreateSessionViewModel.CLAUDE_EFFORTS,
+            CreateSessionViewModel.claudeEffortsFor("fable"),
+        )
+    }
+
+    @Test
+    fun claudeEffortsFor_sonnet_capsAtHigh_neverOffersDownshiftLevels() {
+        val efforts = CreateSessionViewModel.claudeEffortsFor("sonnet")
+        assertEquals(listOf("low", "medium", "high"), efforts)
+        assertFalse("sonnet must never be offered xhigh", efforts.contains("xhigh"))
+        assertFalse("sonnet must never be offered max", efforts.contains("max"))
+    }
+
+    @Test
+    fun claudeEffortsFor_haiku_capsAtHigh() {
+        assertEquals(
+            listOf("low", "medium", "high"),
+            CreateSessionViewModel.claudeEffortsFor("haiku"),
+        )
+    }
+
+    @Test
+    fun claudeEffortsFor_nullDefaultModel_capsAtHigh() {
+        // The account-default (null) model's resolved capability is unknown, so
+        // the ladder caps at high — never offer a level that silently downshifts.
+        assertEquals(
+            listOf("low", "medium", "high"),
+            CreateSessionViewModel.claudeEffortsFor(null),
+        )
+    }
+
+    @Test
+    fun claudeEffortsFor_unknownModel_capsAtHigh() {
+        // A model alias outside the curated set defaults to the safe base ladder
+        // rather than optimistically offering xhigh/max.
+        assertEquals(
+            listOf("low", "medium", "high"),
+            CreateSessionViewModel.claudeEffortsFor("gpt-nonsense"),
+        )
+    }
+
+    @Test
+    fun claudeEffortsFor_everyCuratedModel_returnsSubsetOfCanonicalLadder() {
+        // Invariant: whatever a curated model offers is always a subset of the
+        // canonical ladder, so the dropdown can never present a level the ladder
+        // doesn't define. Iterating CLAUDE_MODELS holds any newly-added alias to
+        // this contract automatically.
+        for (model in CreateSessionViewModel.CLAUDE_MODELS) {
+            val efforts = CreateSessionViewModel.claudeEffortsFor(model)
+            assertTrue(
+                "claudeEffortsFor($model) must be a subset of CLAUDE_EFFORTS",
+                CreateSessionViewModel.CLAUDE_EFFORTS.containsAll(efforts),
+            )
+        }
     }
 }

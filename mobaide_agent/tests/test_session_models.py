@@ -42,14 +42,28 @@ def test_options_model_omits_skip_permissions_uses_default():
     assert opts.no_memory is True
 
 
+def test_effort_invalid_value_rejected():
+    """``effort`` is Literal-typed, so an out-of-range level is rejected at the
+    wire boundary (422) rather than producing a broken ``claude`` argv."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        ClaudeOptionsModel.model_validate({"effort": "turbo"})
+
+
+def test_effort_accepts_full_ladder():
+    for level in ("low", "medium", "high", "xhigh", "max"):
+        assert ClaudeOptionsModel.model_validate({"effort": level}).effort == level
+
+
 # ClaudeOptionsModel.to_options — API-DTO → domain-dataclass conversion.
 #
 # This method is the single source of truth for DTO→dataclass translation
 # used by every relay and REST handler. A drift between ``ClaudeOptionsModel``
 # fields and ``ClaudeOptions`` fields — or a silently-dropped field — would
 # reintroduce the exact latent bug that let the relay ``POST /api/sessions``
-# handler forget ``claude_options`` entirely. The round-trip test locks all
-# nine fields down field-by-field so any future addition can't silently slip.
+# handler forget ``claude_options`` entirely. The round-trip test locks every
+# field down field-by-field so any future addition can't silently slip.
 
 
 class TestToOptions:
@@ -69,7 +83,11 @@ class TestToOptions:
             branch_name="feature/abc",
             identifier="CLA-77",
             title="Some title",
-            max_effort=False,
+            model="opus",
+            effort="xhigh",
+            fast_mode=True,
+            ultracode=True,
+            append_system_prompt="be terse",
         )
 
         opts = model.to_options()
@@ -83,7 +101,11 @@ class TestToOptions:
         assert opts.branch_name == "feature/abc"
         assert opts.identifier == "CLA-77"
         assert opts.title == "Some title"
-        assert opts.max_effort is False
+        assert opts.model == "opus"
+        assert opts.effort == "xhigh"
+        assert opts.fast_mode is True
+        assert opts.ultracode is True
+        assert opts.append_system_prompt == "be terse"
 
     def test_round_trip_defaults(self):
         """A bare model (all defaults) must round-trip to the dataclass
@@ -102,7 +124,11 @@ class TestToOptions:
         assert opts.branch_name is None
         assert opts.identifier is None
         assert opts.title is None
-        assert opts.max_effort is True
+        assert opts.model is None
+        assert opts.effort is None
+        assert opts.fast_mode is False
+        assert opts.ultracode is False
+        assert opts.append_system_prompt is None
 
     def test_returned_dataclass_is_frozen(self):
         """``ClaudeOptions`` is ``@dataclass(frozen=True)``; mutating the

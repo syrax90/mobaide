@@ -538,15 +538,15 @@ class TestClaudeBinaryNotFoundHandling:
 
 class TestProcessIssueForwardsClientOptions:
     """The scanner's spawn path merges a ``ClaudeOptions`` from the client's
-    stored preferences with per-issue fields (identifier/title). The
-    ``max_effort`` flag must round-trip so that a user who toggled Max
-    effort OFF on the Auto Scan config screen actually gets a session
-    launched WITHOUT ``--effort max``. Nothing else in the suite asserts
-    what ``launcher.build`` receives, so this class is the regression
-    boundary for that wire-up."""
+    stored preferences with per-issue fields (identifier/title). The Claude
+    reasoning options (model/effort/...) must round-trip so that a user who
+    picked, say, a lower effort on the Auto Scan config screen actually gets a
+    session launched with it. Nothing else in the suite asserts what
+    ``launcher.build`` receives, so this class is the regression boundary for
+    that wire-up."""
 
     @pytest.mark.asyncio
-    async def test_process_issue_propagates_max_effort_false_from_client_options(
+    async def test_process_issue_propagates_effort_from_client_options(
         self, tmp_path,
     ):
         from mobaide.core.claude_launcher import ClaudeOptions
@@ -565,10 +565,10 @@ class TestProcessIssueForwardsClientOptions:
             session_manager=sess_mgr, launcher=launcher,
         )
         # Simulate the Auto Scan config-screen submit path where the user
-        # toggled Max effort OFF. The HTTP router stores the client-supplied
-        # options on ``_client_options``; the scanner reads them when it
-        # spawns a session for a matching issue.
-        inst._client_options = ClaudeOptions(max_effort=False)
+        # picked a non-default model + effort. The HTTP router stores the
+        # client-supplied options on ``_client_options``; the scanner reads them
+        # when it spawns a session for a matching issue.
+        inst._client_options = ClaudeOptions(effort="low", model="opus")
 
         await inst._process_issue(_make_issue(issue_id="uuid-off", identifier="CLA-OFF"))
 
@@ -577,19 +577,20 @@ class TestProcessIssueForwardsClientOptions:
         # keyword.
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
-        assert forwarded.max_effort is False
+        assert forwarded.effort == "low"
+        assert forwarded.model == "opus"
         # And the per-issue fields must still be set correctly.
         assert forwarded.identifier == "CLA-OFF"
         assert forwarded.title == "Test issue"
 
     @pytest.mark.asyncio
-    async def test_process_issue_defaults_max_effort_true_when_no_client_options(
+    async def test_process_issue_defaults_effort_none_when_no_client_options(
         self, tmp_path,
     ):
-        """Covers the ``else True`` branch: when the scanner was started
-        without any stored client options (e.g. server restart before any
-        mobile client submitted), the spawned session must still get the
-        default-ON max-effort behavior."""
+        """Covers the default branch: when the scanner was started without any
+        stored client options (e.g. server restart before any mobile client
+        submitted), the spawned session falls back to ``ClaudeOptions()``
+        defaults (effort None ⇒ no ``--effort`` flag)."""
         client = AsyncMock()
         client.update_issue_state.return_value = True
         client.remove_issue_label.return_value = True
@@ -609,7 +610,7 @@ class TestProcessIssueForwardsClientOptions:
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
-        assert forwarded.max_effort is True
+        assert forwarded.effort is None
         assert forwarded.worktree is True, (
             "scanner must always set worktree=True so the launcher creates "
             "the per-issue worktree — regression guard for the dropped-field bug"
@@ -1275,7 +1276,7 @@ class TestClientOptionsTypeGuard:
         valid case (would break both direct and fixed relay paths)."""
         from mobaide.core.claude_launcher import ClaudeOptions
 
-        opts = ClaudeOptions(plan_mode=True, max_effort=False)
+        opts = ClaudeOptions(plan_mode=True, effort="low")
         inst = self._build_instance(tmp_path, opts)
         assert inst._client_options is opts
 
