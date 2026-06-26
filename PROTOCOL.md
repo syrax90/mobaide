@@ -6,7 +6,39 @@ and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own
 cadence; they do **not** gate compatibility.
 
-## proto-v5 (current)
+## proto-v6 (current)
+
+* Introduced: 2026-06-26
+* App support: ``APP_PROTOCOL_VERSION = 6`` (Android), ``PROTOCOL_VERSION = 6``
+  (Python — both ``mobaide_agent`` and ``central_server``).
+* Change vs proto-v5: **breaking** to the ``claude_options`` shape
+  (pre-production, no compatibility window). Replaces Claude's boolean
+  ``max_effort`` with a rich option set mirroring the Codex precedent (CLA-84).
+  The version is bumped so the three artifacts stay in lockstep and an old client
+  is cleanly rejected (``4002`` + HTTPS-bootstrap auto-update) rather than
+  silently launching with the wrong reasoning level.
+* Wire shape (delta from proto-v5), all on ``CH_CONTROL`` (forwarded verbatim by
+  ``central_server`` — no server logic change):
+  * The ``create_session`` control message (the ``POST /api/sessions`` body
+    proxied over ``CH_CONTROL``, and the Auto Scan ``claude_options``) drops
+    ``max_effort`` (bool) and gains five fields:
+    * ``model`` — str|null: a curated Claude alias (``opus`` | ``sonnet`` |
+      ``haiku`` | ``fable``) or null for the account default. Free-form on the
+      server (the client curates the list); emitted as ``--model <alias>``.
+    * ``effort`` — ``low`` | ``medium`` | ``high`` | ``xhigh`` | ``max`` | null.
+      null / ``high`` emit no ``--effort`` flag (``high`` is the CLI default);
+      suppressed entirely when ``ultracode`` is on.
+    * ``fast_mode`` — bool (Opus-only fast mode) and ``ultracode`` — bool: both
+      emitted through a single merged ``--settings`` dict
+      (``{"fastMode": true, "ultracode": true}``), merged into the per-session
+      attention-hooks settings file when one is written — never two separate
+      ``--settings`` flags.
+    * ``append_system_prompt`` — str|null: emitted as
+      ``--append-system-prompt <text>``.
+  * ``codex_options`` and all other CH_CONTROL / CH_EVENTS / CH_SESSION_IO shapes
+    are unchanged.
+
+## proto-v5 (superseded by proto-v6)
 
 * Introduced: 2026-06-21
 * App support: ``APP_PROTOCOL_VERSION = 5`` (Android), ``PROTOCOL_VERSION = 5``

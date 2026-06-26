@@ -62,8 +62,14 @@ def _build_settings(session_id: str, port: int, token: str) -> dict:
     }
 
 
-def write_session_hooks(session_id: str, port: int, token: str) -> Path:
+def write_session_hooks(
+    session_id: str, port: int, token: str, extra: dict | None = None,
+) -> Path:
     """Write the per-session hook settings file and return its path.
+
+    ``extra`` keys (e.g. ``{"fastMode": True}`` / ``{"ultracode": True}``) are
+    merged into the document at the top level alongside ``hooks`` so a Claude
+    launch carries a single ``--settings`` flag rather than two.
 
     The file embeds the per-agent token in its hook URLs, so it is created
     atomically with owner-only permissions (0600) instead of written then
@@ -84,7 +90,10 @@ def write_session_hooks(session_id: str, port: int, token: str) -> Path:
     except OSError:
         pass  # best-effort (no-op on Windows)
     target = _settings_path(port, session_id)
-    payload = json.dumps(_build_settings(session_id, port, token), indent=2)
+    settings = _build_settings(session_id, port, token)
+    if extra:
+        settings.update(extra)
+    payload = json.dumps(settings, indent=2)
     # O_CREAT|O_TRUNC with an explicit 0600 mode makes the file owner-only from
     # creation (modulo umask), closing the write-then-chmod race on POSIX /tmp.
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

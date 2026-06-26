@@ -1878,7 +1878,11 @@ class TestProxyAutoscanStart:
                 "branch_name": "feature/x",
                 "identifier": "CLA-7",
                 "title": "Some title",
-                "max_effort": False,
+                "model": "opus",
+                "effort": "xhigh",
+                "fast_mode": True,
+                "ultracode": False,
+                "append_system_prompt": "be terse",
             },
         }
 
@@ -1905,7 +1909,11 @@ class TestProxyAutoscanStart:
         assert opts.branch_name == "feature/x"
         assert opts.identifier == "CLA-7"
         assert opts.title == "Some title"
-        assert opts.max_effort is False
+        assert opts.model == "opus"
+        assert opts.effort == "xhigh"
+        assert opts.fast_mode is True
+        assert opts.ultracode is False
+        assert opts.append_system_prompt == "be terse"
 
     async def test_happy_path_without_claude_options_passes_none(
         self, client, mock_app_state,
@@ -2109,7 +2117,11 @@ class TestProxyCreateSessionClaudeOptions:
                 "branch_name": "feature/relay",
                 "identifier": "CLA-8",
                 "title": "Relay fix",
-                "max_effort": False,
+                "model": "sonnet",
+                "effort": "low",
+                "fast_mode": False,
+                "ultracode": True,
+                "append_system_prompt": "relay note",
             },
             "rows": 30,
             "cols": 120,
@@ -2142,7 +2154,11 @@ class TestProxyCreateSessionClaudeOptions:
         assert opts.branch_name == "feature/relay"
         assert opts.identifier == "CLA-8"
         assert opts.title == "Relay fix"
-        assert opts.max_effort is False
+        assert opts.model == "sonnet"
+        assert opts.effort == "low"
+        assert opts.fast_mode is False
+        assert opts.ultracode is True
+        assert opts.append_system_prompt == "relay note"
 
     async def test_no_claude_options_passes_none_in_config(
         self, client, mock_session_manager,

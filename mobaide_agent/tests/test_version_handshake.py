@@ -100,9 +100,9 @@ async def test_get_version_both_clis_missing_still_returns_200(
 
 
 def test_protocol_version_constants() -> None:
-    # proto-v5: additive bump adding the create-session ``cli`` discriminator
-    # and ``codex_options`` for Codex CLI support (see PROTOCOL.md). This is a
+    # proto-v6: breaking bump replacing Claude's boolean ``max_effort`` with the
+    # rich model/effort/fast/ultracode/append-system-prompt option set. This is a
     # deliberate tripwire — bumping the constants must consciously update it.
-    assert PROTOCOL_VERSION == 5
-    assert MIN_CLIENT_PROTOCOL_VERSION == 5
-    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (5,)
+    assert PROTOCOL_VERSION == 6
+    assert MIN_CLIENT_PROTOCOL_VERSION == 6
+    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (6,)

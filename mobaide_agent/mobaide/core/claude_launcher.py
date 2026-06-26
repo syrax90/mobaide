@@ -107,7 +107,15 @@ class ClaudeOptions:
     branch_name: str | None = None
     identifier: str | None = None
     title: str | None = None
-    max_effort: bool = True
+    # Curated model alias (opus / sonnet / haiku / fable) or None for the
+    # account default. effort is one of low/medium/high/xhigh/max; None and
+    # "high" both omit --effort (high is the CLI default). fast_mode / ultracode
+    # are emitted via a merged --settings dict, never an --effort value.
+    model: str | None = None
+    effort: str | None = None
+    fast_mode: bool = False
+    ultracode: bool = False
+    append_system_prompt: str | None = None
 
 
 _LINEAR_MCP_TEMPLATE = {
@@ -185,8 +193,9 @@ class ClaudeLauncher:
         # ``session_id`` is supplied only by the interactive/ad-hoc create path
         # (``SessionManager``); the Auto Scan scanner omits it, so autonomous
         # sessions never get attention hooks and never raise notifications.
-        hooks_path = self._maybe_write_hooks(session_id)
-        argv = self._build_argv(options, hooks_path)
+        cli_settings = self._cli_settings(options)
+        hooks_path = self._maybe_write_hooks(session_id, cli_settings)
+        argv = self._build_argv(options, hooks_path, cli_settings)
         cwd = await self._resolve_cwd(target, options)
         env = self._build_env(target, options, session_id)
         created = self._write_project_files(target, cwd)
@@ -194,17 +203,38 @@ class ClaudeLauncher:
             created.append(str(hooks_path))
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
 
-    def _maybe_write_hooks(self, session_id: str | None) -> Path | None:
+    @staticmethod
+    def _cli_settings(options: ClaudeOptions) -> dict[str, bool]:
+        """The ``--settings`` keys that ride alongside the attention hooks:
+        fast mode and ultracode. Merged into the single hooks settings file when
+        one is written, else emitted as one inline ``--settings`` JSON arg — so a
+        launch never carries two ``--settings`` flags (Claude Code last-wins them).
+        """
+        settings: dict[str, bool] = {}
+        if options.fast_mode:
+            settings["fastMode"] = True
+        if options.ultracode:
+            settings["ultracode"] = True
+        return settings
+
+    def _maybe_write_hooks(
+        self, session_id: str | None, extra: dict | None = None,
+    ) -> Path | None:
         """Write the per-session attention-hook settings file, if configured.
 
-        Returns the file path, or ``None`` when hooks are not configured
-        (no ``session_id``, or the launcher was built without a hook port/token
-        — e.g. the scanner) or the write failed (a hookless session still runs).
+        ``extra`` (the fast-mode / ultracode ``--settings`` keys) is merged into
+        the same file so the launch needs only one ``--settings`` flag. Returns
+        the file path, or ``None`` when hooks are not configured (no
+        ``session_id``, or the launcher was built without a hook port/token —
+        e.g. the scanner) or the write failed (a hookless session still runs; the
+        caller then emits ``extra`` as an inline ``--settings``).
         """
         if not session_id or self._hook_port is None or not self._hook_token:
             return None
         try:
-            return write_session_hooks(session_id, self._hook_port, self._hook_token)
+            return write_session_hooks(
+                session_id, self._hook_port, self._hook_token, extra=extra,
+            )
         except OSError:
             logger.warning(
                 "claude_launcher.hook_settings_write_failed session=%s",
@@ -214,11 +244,18 @@ class ClaudeLauncher:
             return None
 
     def _build_argv(
-        self, options: ClaudeOptions, hooks_path: Path | None = None,
+        self,
+        options: ClaudeOptions,
+        hooks_path: Path | None = None,
+        cli_settings: dict | None = None,
     ) -> list[str]:
         argv: list[str] = [self._resolve_binary(), "--debug"]
+        # Exactly one --settings source: the hooks file (fast/ultracode already
+        # merged in) when hooks were written, else those keys inline.
         if hooks_path is not None:
             argv += ["--settings", str(hooks_path)]
+        elif cli_settings:
+            argv += ["--settings", json.dumps(cli_settings)]
         if options.plan_mode and options.skip_permissions:
             argv += ["--permission-mode", "plan",
                      "--allow-dangerously-skip-permissions"]
@@ -226,8 +263,15 @@ class ClaudeLauncher:
             argv += ["--permission-mode", "plan"]
         elif options.skip_permissions:
             argv.append("--dangerously-skip-permissions")
-        if options.max_effort:
-            argv += ["--effort", "max"]
+        if options.model:
+            argv += ["--model", options.model]
+        # None / "high" omit the flag (high is the CLI default); ultracode
+        # internally drives xhigh and is redundant with --effort (precedence
+        # undocumented), so it suppresses an explicit effort.
+        if options.effort and options.effort != "high" and not options.ultracode:
+            argv += ["--effort", options.effort]
+        if options.append_system_prompt:
+            argv += ["--append-system-prompt", options.append_system_prompt]
         if options.initial_prompt:
             argv += ["--", options.initial_prompt]
         return argv
