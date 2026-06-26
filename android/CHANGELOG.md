@@ -1,5 +1,21 @@
 # Android Changelog
 
+## [2.0.0](https://github.com/syrax90/claude_mobile/compare/android-v1.15.0...android-v2.0.0) (2026-06-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sessions:** wire protocol bumped 5→6. The claude_options envelope field changed shape: dropped max_effort (bool); added model (str), effort (str|null), fast_mode (bool), ultracode (bool), append_system_prompt (str|null). Any relay or client built against proto 5 will fail the version handshake with a proto 6 agent. New sessions default to effort="high" instead of always "max".
+
+### Features
+
+* **sessions:** replace Claude max-effort toggle with model + effort controls (CLA-84) ([3b52a46](https://github.com/syrax90/claude_mobile/commit/3b52a46439d066fc15c95fbd8084d84b79bf195e))
+
+
+### Bug Fixes
+
+* **android:** Replace the boolean Max effort toggle with rich Claude session controls (CLA-84) ([3b052b1](https://github.com/syrax90/claude_mobile/commit/3b052b1cda8438c98b9375128ac378612c97f46c))
+
 ## [1.15.0](https://github.com/syrax90/claude_mobile/compare/android-v1.14.0...android-v1.15.0) (2026-06-25)
 
 
