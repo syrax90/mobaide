@@ -1,11 +1,11 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 24 June 2026
+**Last updated:** 27 June 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android device, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
-Mobaide is a developer tool. It lets you remotely interact with [Claude Code](https://claude.ai/code) CLI sessions running on a "Mobaide agent" that you, the user, install and operate on your own workstation. The mobile app communicates with the agent through a relay (the **central server**) operated by the developer of the app.
+Mobaide is a developer tool. It lets you remotely interact with [Claude Code](https://claude.ai/code) — and, optionally, [OpenAI Codex](https://developers.openai.com/codex/cli) — CLI sessions running on a "Mobaide agent" that you, the user, install and operate on your own workstation. The mobile app communicates with the agent through a relay (the **central server**) operated by the developer of the app.
 
 ---
 
@@ -33,6 +33,7 @@ This policy does **not** cover:
 
 - The **Mobaide agent** software you install on your own workstation. The agent runs locally on hardware that you control, processes data on your machine, and stores its configuration (including any third-party API keys you provide it) on your local file system. You are the data controller for any data the agent processes on your own device.
 - **Claude Code** (provided by Anthropic) and **Claude CLI** sessions. Their data handling is governed by [Anthropic's Privacy Policy](https://www.anthropic.com/legal/privacy). When you send prompts to Claude through Mobaide, those prompts are processed by Anthropic according to Anthropic's terms — Mobaide only relays the bytes.
+- **OpenAI Codex CLI** sessions, if you choose to use the optional Codex integration as an alternative managed agent. Their data handling is governed by [OpenAI's Privacy Policy](https://openai.com/policies/privacy-policy/). When you send prompts to Codex through Mobaide, those prompts are processed by OpenAI according to OpenAI's terms — Mobaide only relays the bytes. If you sign Codex in from inside the app, the OpenAI API key you enter is held only in memory on your phone (never written to your device's storage) and relayed to your own agent, where it is handed to the Codex CLI; it is **never** stored on the Mobaide central server (see Section 3.4). The Codex CLI then saves its own credential file on your own workstation, which is under your control.
 - **Linear** (https://linear.app), when you choose to enable the optional "Auto Scan" integration on your own agent. Linear's handling of your workspace data is governed by [Linear's Privacy Policy](https://linear.app/privacy). Your Linear API key is stored locally on your own workstation by the agent; it is **never** transmitted to or stored on the Mobaide central server.
 
 ---
@@ -72,10 +73,11 @@ When you pair your phone with an agent, the central server stores:
 
 ### 3.4 Real-time traffic that we relay but do **not** store
 
-When you operate a Claude Code session from the app, the following data is transported through the central server but is **not** written to disk on the central server:
+When you operate a Claude Code or OpenAI Codex session from the app, the following data is transported through the central server but is **not** written to disk on the central server:
 
-- Keystrokes you type and terminal output emitted by your agent (Claude Code session I/O).
+- Keystrokes you type and terminal output emitted by your agent (Claude Code or Codex session I/O).
 - Project and session metadata exchanged between the app and your agent over the WebSocket.
+- The OpenAI API key you submit through the in-app Codex sign-in, on its way to your agent. It passes through the server's in-memory routing only and is handed to the Codex CLI on your own workstation; it is never written to the central server's disk, logs, or backups.
 
 The central server acts as a **transit relay** for this traffic. It forwards bytes between your phone and your agent over an authenticated WebSocket. The traffic is encrypted in transit with TLS (WSS), passes through the server's in-memory routing tables, and is then discarded — it is not appended to any database, log file, or backup. Server-side application logs are emitted at the connection-event level (e.g. "agent X connected", "mobile Y subscribed") and **redact** message payloads.
 
@@ -148,6 +150,7 @@ We do **not** sell, rent, or trade your personal data. Your information is share
 - **Google Play services** — for distributing the app, delivering in-app updates, and providing the GMS Code Scanner module used for QR pairing. Google Play's processing of installation telemetry is governed by [Google Play's terms](https://play.google.com/about/play-terms/).
 - **Email-delivery providers** (SMTP transactional email) that send our verification, password-reset, and security-notification emails, and that carry the support emails you send us through the in-app "Email support" action. These providers process the recipient address and the email body strictly to deliver the message.
 - **Anthropic** — when you type a prompt that is routed through your own agent to Claude Code. The content you send to Claude is processed by Anthropic according to [Anthropic's Privacy Policy](https://www.anthropic.com/legal/privacy). Mobaide is not a party to your Anthropic relationship; we merely relay the bytes.
+- **OpenAI** — when you choose to use the optional Codex CLI as your managed agent and type a prompt that is routed through your own agent to Codex. The content you send to Codex is processed by OpenAI according to [OpenAI's Privacy Policy](https://openai.com/policies/privacy-policy/). Mobaide is not a party to your OpenAI relationship; we merely relay the bytes.
 - **GitHub, Inc.** — when you tap "Ask the community", the app opens our public GitHub Discussions page in your browser. The app does not send GitHub any of your data; anything you choose to post there is provided by you and processed by GitHub under [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 - **Public authorities**, if compelled by a valid legal order and only to the extent legally required.
 
@@ -159,7 +162,7 @@ We do **not** share your data with advertisers, data brokers, or analytics aggre
 
 The central server, its database, and its backups are hosted in the **European Union / European Economic Area (EU/EEA)**.
 
-Some of the third parties listed in Section 6 (in particular Google and Anthropic) may process data outside the EU/EEA. Where such processing occurs, those providers rely on the European Commission's Standard Contractual Clauses (SCCs) or on an adequacy decision to safeguard the transfer. Links to those providers' transfer-impact disclosures are included in Section 6.
+Some of the third parties listed in Section 6 (in particular Google, Anthropic, and OpenAI) may process data outside the EU/EEA. Where such processing occurs, those providers rely on the European Commission's Standard Contractual Clauses (SCCs) or on an adequacy decision to safeguard the transfer. Links to those providers' transfer-impact disclosures are included in Section 6.
 
 ---
 
