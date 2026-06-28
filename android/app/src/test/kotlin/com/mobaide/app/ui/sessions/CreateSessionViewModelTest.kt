@@ -3,6 +3,7 @@ package com.mobaide.app.ui.sessions
 import app.cash.turbine.test
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
+import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -96,6 +97,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedSessionId(any()) } just Runs
         coEvery { prefs.getLastUsedClaudeOptions() } returns null
         coEvery { prefs.setLastUsedClaudeOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedCodexOptions() } returns null
+        coEvery { prefs.setLastUsedCodexOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         every { autoScanRepo.getAutoScanPrompt() } returns autoScanPrompt
@@ -314,6 +317,28 @@ class CreateSessionViewModelTest {
         assertEquals("fable", s.claudeModel)
         assertEquals("xhigh", s.claudeEffort)
         assertTrue(s.claudeUltracode)
+    }
+
+    @Test
+    fun init_seedsCodexControlsFromPersistedPrefs() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedCodexOptions() } returns
+            CodexLaunchPrefs(
+                model = "gpt-5.4-mini",
+                sandbox = "read-only",
+                approval = "on-request",
+                fullAuto = false,
+                reasoningEffort = "medium",
+            )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("gpt-5.4-mini", s.codexModel)
+        assertEquals("read-only", s.codexSandbox)
+        assertEquals("medium", s.codexReasoningEffort)
+        // The restored sandbox/approval combo re-derives the preset highlight.
+        assertEquals(CodexAutonomyPreset.ReadOnly, s.codexPreset)
     }
 
     @Test
@@ -1263,7 +1288,39 @@ class CreateSessionViewModelTest {
         assertFalse(opts.full_auto)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-codex") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedCodexOptions(any()) }
         assertFalse(vm.uiState.value.submitting)
+    }
+
+    @Test
+    fun submitCodex_persistsLastUsedCodexOptions_andNotClaude() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } returns
+            SessionResponse("sess-codex-persist", "starting", "2026-06-23T00:00:00Z")
+        val prefsSlot = slot<CodexLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedCodexOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectCodexMode()
+        vm.setCodexModel("gpt-5.4-mini")
+        vm.setCodexReasoningEffort("low")
+        vm.selectCodexPreset(CodexAutonomyPreset.ReadOnly)
+        vm.submitCodex()
+        advanceUntilIdle()
+
+        // The same selections are persisted for the next Codex launch.
+        val saved = prefsSlot.captured
+        assertEquals("gpt-5.4-mini", saved.model)
+        assertEquals("read-only", saved.sandbox)
+        assertEquals("on-request", saved.approval)
+        assertEquals("low", saved.reasoningEffort)
+        assertFalse(saved.fullAuto)
+        // A Codex submit must not write the Claude blob.
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
     }
 
     @Test

@@ -105,8 +105,11 @@ class InputBarPortraitTest {
         // (Ctrl+O/Ctrl+R) are intentionally off-viewport and scrolled into view.
         // Existence in the semantics tree is the right "all 12 keys present"
         // assertion; viewport visibility is the user's scroll concern.
-        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "↑", "↓", "←", "→", "Ctrl+O", "Ctrl+R")
+        // Arrows render as Material icons, so they match on contentDescription (below).
+        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 
     @Test
@@ -296,9 +299,12 @@ class InputBarLandscapeTest {
 
         // Same `assertExists` rationale as portrait: the row is horizontally
         // scrollable; we assert the 12 keys are present in the composition,
-        // not that every one fits on screen at every width.
-        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "↑", "↓", "←", "→", "Ctrl+O", "Ctrl+R")
+        // not that every one fits on screen at every width. Arrows render as
+        // Material icons, so they match on contentDescription (below).
+        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 }
 
@@ -337,8 +343,11 @@ class InputBarCodexTest {
 
         listOf("Approve", "Reject", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "↑", "↓", "←", "→", "Ctrl+O", "Ctrl+R")
+        // Shared Claude tail; arrows render as Material icons (contentDescription below).
+        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 
     @Test
