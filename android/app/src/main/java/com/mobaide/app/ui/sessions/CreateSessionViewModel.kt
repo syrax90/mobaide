@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
+import com.mobaide.app.data.local.CodexLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -144,6 +145,15 @@ private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     appendSystemPrompt = claudeAppendSystemPrompt,
 )
 
+/** Snapshot of the Codex launch controls for persistence / re-defaulting. */
+private fun CreateSessionUiState.toCodexLaunchPrefs() = CodexLaunchPrefs(
+    model = codexModel,
+    sandbox = codexSandbox,
+    approval = codexApproval,
+    fullAuto = codexFullAuto,
+    reasoningEffort = codexReasoningEffort,
+)
+
 /**
  * Mode-picker gate. Only an explicit `false` from the agent disables a card;
  * `null` (unknown / not-yet-probed / probe failed) stays optimistically enabled
@@ -185,6 +195,19 @@ class CreateSessionViewModel @Inject constructor(
                         claudeFastMode = saved.fastMode,
                         claudeUltracode = saved.ultracode,
                         claudeAppendSystemPrompt = saved.appendSystemPrompt,
+                    )
+                }
+            }
+            // Same pre-fill for the Codex launch controls (sandbox/approval/
+            // full-auto restore the autonomy preset highlight via codexPreset).
+            preferencesStore.getLastUsedCodexOptions()?.let { saved ->
+                _uiState.update {
+                    it.copy(
+                        codexModel = saved.model,
+                        codexSandbox = saved.sandbox,
+                        codexApproval = saved.approval,
+                        codexFullAuto = saved.fullAuto,
+                        codexReasoningEffort = saved.reasoningEffort,
                     )
                 }
             }
@@ -656,10 +679,15 @@ class CreateSessionViewModel @Inject constructor(
                     }
                     ProjectSelection.None -> Unit
                 }
-                // Remember the Claude reasoning controls for the next launch
-                // (Claude submits only — Codex/shell carry no claude_options).
+                // Remember the per-CLI launch controls for the next session of
+                // the same kind. The request shape selects which blob to write:
+                // Claude submits carry claude_options, Codex submits carry
+                // codex_options, shell submits carry neither.
                 if (request.claude_options != null) {
                     preferencesStore.setLastUsedClaudeOptions(_uiState.value.toClaudeLaunchPrefs())
+                }
+                if (request.codex_options != null) {
+                    preferencesStore.setLastUsedCodexOptions(_uiState.value.toCodexLaunchPrefs())
                 }
                 preferencesStore.setLastUsedSessionId(response.session_id)
                 _uiState.update { it.copy(submitting = false) }

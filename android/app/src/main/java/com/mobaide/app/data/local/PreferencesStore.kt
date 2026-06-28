@@ -21,6 +21,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastProject = stringPreferencesKey("last_used_project_name")
     private val keyLastSession = stringPreferencesKey("last_used_session_id")
     private val keyLastClaudeOptions = stringPreferencesKey("last_used_claude_options")
+    private val keyLastCodexOptions = stringPreferencesKey("last_used_codex_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
 
@@ -88,6 +89,19 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedClaudeOptions(prefs: ClaudeLaunchPrefs) {
         val payload = cacheJson.encodeToString(ClaudeLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastClaudeOptions] = payload }
+    }
+
+    suspend fun getLastUsedCodexOptions(): CodexLaunchPrefs? {
+        val raw = context.dataStore.data.map { it[keyLastCodexOptions] }.first()
+            ?: return null
+        return runCatching {
+            cacheJson.decodeFromString(CodexLaunchPrefs.serializer(), raw)
+        }.getOrNull()
+    }
+
+    suspend fun setLastUsedCodexOptions(prefs: CodexLaunchPrefs) {
+        val payload = cacheJson.encodeToString(CodexLaunchPrefs.serializer(), prefs)
+        context.dataStore.edit { it[keyLastCodexOptions] = payload }
     }
 
     suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {
