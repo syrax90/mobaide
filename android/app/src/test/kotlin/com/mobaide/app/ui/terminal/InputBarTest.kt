@@ -20,15 +20,15 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * UI tests for [InputBar] covering the buttons-refactor and the CLI-aware control-key bar:
+ * UI tests for [InputBar] covering the CLI-aware control-key bar:
  *   - Orientation-aware layout (portrait stacks; landscape inline).
  *   - For the default/Claude set ([SessionKind.Claude]), the single horizontally
- *     scrollable control-key panel exposes exactly the 9 keys
- *     `Esc, Tab, S+Tab, Enter, Ctrl+C, ↑, ↓, ←, →` — with `Ctrl+L`/`Ctrl-D` removed
- *     and the `Ctrl-C`/`S-Tab` labels renamed.
- *   - Byte payloads for renamed keys are unchanged (display-only rename).
- *   - For [SessionKind.Codex] the panel swaps in the Codex set (Approve/Reject/
- *     Back-Edit/Newline + Ctrl+L/O/R) with the correct raw-byte payloads, and those
+ *     scrollable control-key panel exposes exactly the 12 keys
+ *     `Mode, Rewind, Esc, Ctrl+C, Enter, Tab, ↑, ↓, ←, →, Ctrl+O, Ctrl+R`.
+ *   - Byte payloads for renamed keys are unchanged (display-only rename):
+ *     `S+Tab → Mode` and `Back/Edit → Rewind`; `Newline` was removed.
+ *   - For [SessionKind.Codex] the panel prepends the approval answers `Approve`/`Reject`
+ *     and appends `Ctrl+L` to the Claude set, with the correct raw-byte payloads; those
  *     Codex-only keys never leak into the Claude set ([InputBarCodexTest]).
  *
  * Robolectric SDK pinned to 33 to match existing project precedent
@@ -85,7 +85,7 @@ class InputBarPortraitTest {
     }
 
     @Test
-    fun controlKeyPanel_togglesOpenAndExposesExactly9Keys_inOrder() {
+    fun controlKeyPanel_togglesOpenAndExposesExactly12Keys() {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -101,11 +101,11 @@ class InputBarPortraitTest {
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
         // `assertExists` (not `assertIsDisplayed`) because the keys live in a
-        // horizontalScroll Row — at narrow portrait widths the rightmost
-        // arrow keys are intentionally off-viewport and scrolled into view.
-        // Existence in the semantics tree is the right "all 9 keys present"
+        // horizontalScroll Row — at narrow portrait widths the rightmost keys
+        // (Ctrl+O/Ctrl+R) are intentionally off-viewport and scrolled into view.
+        // Existence in the semantics tree is the right "all 12 keys present"
         // assertion; viewport visibility is the user's scroll concern.
-        listOf("Esc", "Tab", "S+Tab", "Enter", "Ctrl+C", "↑", "↓", "←", "→")
+        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "↑", "↓", "←", "→", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
     }
 
@@ -124,7 +124,7 @@ class InputBarPortraitTest {
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
-        listOf("Ctrl+L", "Ctrl-D", "Ctrl-C", "S-Tab")
+        listOf("S+Tab", "Newline", "Back/Edit", "Ctrl+L", "Ctrl-D", "Ctrl-C", "S-Tab")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 
@@ -150,7 +150,7 @@ class InputBarPortraitTest {
     }
 
     @Test
-    fun sPlusTab_sendsCsiZ_escBracketZ_unchangedByLabelRename() {
+    fun mode_sendsCsiZ_escBracketZ() {
         val captured = mutableListOf<ByteArray>()
         composeRule.setContent {
             Surface {
@@ -164,13 +164,76 @@ class InputBarPortraitTest {
         }
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
-        composeRule.onNodeWithText("S+Tab").performClick()
+        composeRule.onNodeWithText("Mode").performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(
             byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()),
             captured.single(),
         )
+    }
+
+    @Test
+    fun rewind_sendsEscEsc_0x1b_0x1b_inClaudeSet() {
+        val captured = mutableListOf<ByteArray>()
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = { captured += it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+        composeRule.onNodeWithText("Rewind").performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x1b, 0x1b), captured.single())
+    }
+
+    @Test
+    fun ctrlO_sendsShiftOut_0x0f_inClaudeSet() {
+        val captured = mutableListOf<ByteArray>()
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = { captured += it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+        composeRule.onNodeWithText("Ctrl+O").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x0f), captured.single())
+    }
+
+    @Test
+    fun ctrlR_sendsDeviceControl2_0x12_inClaudeSet() {
+        val captured = mutableListOf<ByteArray>()
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = { captured += it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+        composeRule.onNodeWithText("Ctrl+R").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x12), captured.single())
     }
 
     @Test
@@ -217,7 +280,7 @@ class InputBarLandscapeTest {
     }
 
     @Test
-    fun landscape_controlKeyPanel_exposesSame9Keys_asPortrait() {
+    fun landscape_controlKeyPanel_exposesSame12Keys_asPortrait() {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -232,18 +295,19 @@ class InputBarLandscapeTest {
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
         // Same `assertExists` rationale as portrait: the row is horizontally
-        // scrollable; we assert the 9 keys are present in the composition,
+        // scrollable; we assert the 12 keys are present in the composition,
         // not that every one fits on screen at every width.
-        listOf("Esc", "Tab", "S+Tab", "Enter", "Ctrl+C", "↑", "↓", "←", "→")
+        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "↑", "↓", "←", "→", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
     }
 }
 
 /**
- * Codex control-key set: passing `sessionKind = SessionKind.Codex` swaps in the
- * Codex-shaped panel. Verifies the Codex-only keys are present with the correct raw
- * byte payloads (sent via `onSendBytes`, the raw 'i'-frame path — never the submit
- * path), and that those keys do not leak into the default/Claude set.
+ * Codex control-key set: passing `sessionKind = SessionKind.Codex` prepends the approval
+ * answers `Approve`/`Reject` and appends `Ctrl+L` to the shared Claude set. Verifies the
+ * Codex-only keys are present with the correct raw byte payloads (sent via `onSendBytes`,
+ * the raw 'i'-frame path — never the submit path), and that the Codex-only keys do not leak
+ * into the default/Claude set.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
@@ -271,9 +335,9 @@ class InputBarCodexTest {
     fun codexPanel_exposesCodexSpecificKeys_plusSharedKeys() {
         openCodexPanel()
 
-        listOf("Approve", "Reject", "Back/Edit", "Newline", "Ctrl+L", "Ctrl+O", "Ctrl+R")
+        listOf("Approve", "Reject", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("Esc", "Enter", "Ctrl+C", "Tab", "↑", "↓", "←", "→")
+        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "↑", "↓", "←", "→", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
     }
 
@@ -300,22 +364,11 @@ class InputBarCodexTest {
     }
 
     @Test
-    fun newline_sendsRawLineFeed_0x0a() {
+    fun rewind_sendsEscEsc_0x1b_0x1b() {
         val captured = mutableListOf<ByteArray>()
         openCodexPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("Newline").performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x0a), captured.single())
-    }
-
-    @Test
-    fun backEdit_sendsEscEsc_0x1b_0x1b() {
-        val captured = mutableListOf<ByteArray>()
-        openCodexPanel(onSendBytes = { captured += it })
-
-        composeRule.onNodeWithText("Back/Edit").performClick()
+        composeRule.onNodeWithText("Rewind").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x1b, 0x1b), captured.single())
@@ -370,7 +423,7 @@ class InputBarCodexTest {
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
-        listOf("Approve", "Reject", "Back/Edit", "Newline", "Ctrl+L", "Ctrl+O", "Ctrl+R")
+        listOf("Approve", "Reject", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 }

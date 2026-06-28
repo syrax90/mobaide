@@ -50,37 +50,42 @@ private data class ControlKey(val label: String, val bytes: ByteArray)
 
 private val EscKey = ControlKey("Esc", byteArrayOf(0x1b))
 private val TabKey = ControlKey("Tab", byteArrayOf(0x09))
-private val ShiftTabKey = ControlKey("S+Tab", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()))
+private val ModeKey = ControlKey("Mode", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()))
+private val RewindKey = ControlKey("Rewind", byteArrayOf(0x1b, 0x1b))
 private val EnterKey = ControlKey("Enter", byteArrayOf(0x0d))
 private val CtrlCKey = ControlKey("Ctrl+C", byteArrayOf(0x03))
 private val UpKey = ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte()))
 private val DownKey = ControlKey("↓", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte()))
 private val LeftKey = ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte()))
 private val RightKey = ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte()))
+private val CtrlOKey = ControlKey("Ctrl+O", byteArrayOf(0x0f))
+private val CtrlRKey = ControlKey("Ctrl+R", byteArrayOf(0x12))
+private val CtrlLKey = ControlKey("Ctrl+L", byteArrayOf(0x0c))
+private val ApproveKey = ControlKey("Approve", byteArrayOf('y'.code.toByte()))
+private val RejectKey = ControlKey("Reject", byteArrayOf('n'.code.toByte()))
 
-private val CLAUDE_CONTROL_KEYS = listOf(
-    EscKey, TabKey, ShiftTabKey, EnterKey, CtrlCKey, UpKey, DownKey, LeftKey, RightKey,
-)
-
-// Codex-first keys: Approve/Reject answer the frequent approval prompts (bare 'y'/'n',
-// no CR — Enter stays a separate key); Back/Edit is the Esc-Esc backtrack; Newline
-// (Ctrl+J, 0x0a) inserts a newline the server's delayed-CR submit path cannot. Then the
-// shared keys, then power-user extras (Ctrl+L clear / Ctrl+O copy-output / Ctrl+R history).
-private val CODEX_CONTROL_KEYS = listOf(
-    ControlKey("Approve", byteArrayOf('y'.code.toByte())),
-    ControlKey("Reject", byteArrayOf('n'.code.toByte())),
-    ControlKey("Back/Edit", byteArrayOf(0x1b, 0x1b)),
-    ControlKey("Newline", byteArrayOf(0x0a)),
-    EscKey, EnterKey, CtrlCKey, TabKey,
+// Nav/control tail shared by every CLI. Arrows + Enter drive the in-terminal menus (mode
+// picker, approval/selection prompts, history); Ctrl+O toggles the transcript, Ctrl+R
+// searches history. Text editing happens in the input field, so no cursor-only or newline
+// keys belong here.
+private val SHARED_TAIL = listOf(
+    EscKey, CtrlCKey, EnterKey, TabKey,
     UpKey, DownKey, LeftKey, RightKey,
-    ControlKey("Ctrl+L", byteArrayOf(0x0c)),
-    ControlKey("Ctrl+O", byteArrayOf(0x0f)),
-    ControlKey("Ctrl+R", byteArrayOf(0x12)),
+    CtrlOKey, CtrlRKey,
 )
+
+// Claude / shell / auto-scan: Mode (Shift+Tab, CSI Z — cycles plan/accept-edits/normal) and
+// Rewind (Esc-Esc — edits the previous message) lead the shared tail.
+private val CLAUDE_CONTROL_KEYS = listOf(ModeKey, RewindKey) + SHARED_TAIL
+
+// Codex = the Claude set plus its high-frequency approval answers (bare 'y'/'n', no CR —
+// Enter stays a separate key) up front, and Ctrl+L (clear screen) at the end — kept for
+// Codex but dropped from Claude as low-value on mobile.
+private val CODEX_CONTROL_KEYS = listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS + CtrlLKey
 
 private fun controlKeysFor(kind: SessionKind): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
-    else -> CLAUDE_CONTROL_KEYS // Claude, shell and auto-scan share the original set.
+    else -> CLAUDE_CONTROL_KEYS // Claude, shell, and auto-scan share the Mode/nav/control core.
 }
 
 @Composable
