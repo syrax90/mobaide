@@ -105,8 +105,11 @@ class InputBarPortraitTest {
         // arrow keys are intentionally off-viewport and scrolled into view.
         // Existence in the semantics tree is the right "all 9 keys present"
         // assertion; viewport visibility is the user's scroll concern.
-        listOf("Esc", "Tab", "S+Tab", "Enter", "Ctrl+C", "↑", "↓", "←", "→")
+        // Arrows render as icons, so they match on contentDescription.
+        listOf("Esc", "Tab", "S+Tab", "Enter", "Ctrl+C")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 
     @Test
@@ -234,8 +237,10 @@ class InputBarLandscapeTest {
         // Same `assertExists` rationale as portrait: the row is horizontally
         // scrollable; we assert the 9 keys are present in the composition,
         // not that every one fits on screen at every width.
-        listOf("Esc", "Tab", "S+Tab", "Enter", "Ctrl+C", "↑", "↓", "←", "→")
+        listOf("Esc", "Tab", "S+Tab", "Enter", "Ctrl+C")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 }
 
@@ -273,8 +278,10 @@ class InputBarCodexTest {
 
         listOf("Approve", "Reject", "Back/Edit", "Newline", "Ctrl+L", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("Esc", "Enter", "Ctrl+C", "Tab", "↑", "↓", "←", "→")
+        listOf("Esc", "Enter", "Ctrl+C", "Tab")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 
     @Test

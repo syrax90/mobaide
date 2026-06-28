@@ -11,12 +11,17 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.FilledTonalButton
@@ -36,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -46,17 +52,26 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.SessionKind
 
-private data class ControlKey(val label: String, val bytes: ByteArray)
+private data class ControlKey(
+    val label: String,
+    val bytes: ByteArray,
+    val icon: ImageVector? = null,
+)
 
 private val EscKey = ControlKey("Esc", byteArrayOf(0x1b))
 private val TabKey = ControlKey("Tab", byteArrayOf(0x09))
 private val ShiftTabKey = ControlKey("S+Tab", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()))
 private val EnterKey = ControlKey("Enter", byteArrayOf(0x0d))
 private val CtrlCKey = ControlKey("Ctrl+C", byteArrayOf(0x03))
-private val UpKey = ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte()))
-private val DownKey = ControlKey("↓", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte()))
-private val LeftKey = ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte()))
-private val RightKey = ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte()))
+private val UpKey = ControlKey("↑", byteArrayOf(0x1b, '['.code.toByte(), 'A'.code.toByte()), Icons.Filled.KeyboardArrowUp)
+private val DownKey = ControlKey("↓", byteArrayOf(0x1b, '['.code.toByte(), 'B'.code.toByte()), Icons.Filled.KeyboardArrowDown)
+// Non-mirrored Left/Right: a terminal cursor key must point the way it moves the
+// cursor. AutoMirrored would flip the glyph in RTL while the bytes (ESC[D / ESC[C)
+// stay fixed, leaving the arrow pointing the wrong way.
+@Suppress("DEPRECATION")
+private val LeftKey = ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'.code.toByte()), Icons.Filled.KeyboardArrowLeft)
+@Suppress("DEPRECATION")
+private val RightKey = ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte()), Icons.Filled.KeyboardArrowRight)
 
 private val CLAUDE_CONTROL_KEYS = listOf(
     EscKey, TabKey, ShiftTabKey, EnterKey, CtrlCKey, UpKey, DownKey, LeftKey, RightKey,
@@ -209,12 +224,21 @@ fun InputBar(
                             horizontal = 10.dp, vertical = 4.dp,
                         ),
                     ) {
-                        Text(
-                            key.label,
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontFamily = FontFamily.Monospace,
-                            ),
-                        )
+                        val icon = key.icon
+                        if (icon != null) {
+                            Icon(
+                                icon,
+                                contentDescription = key.label,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        } else {
+                            Text(
+                                key.label,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                ),
+                            )
+                        }
                     }
                 }
             }
