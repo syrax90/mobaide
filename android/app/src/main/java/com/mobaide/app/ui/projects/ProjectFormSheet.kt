@@ -315,6 +315,15 @@ private fun AutoScanFilterSection(
             }
         }
 
+        Text(
+            text = "Each matching issue runs in its own git worktree " +
+                "(branched per Linear issue), so its changes stay isolated " +
+                "from your working copy. Projects that aren't git repositories " +
+                "run in the project directory directly.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
         if (state.filterMetadataLoading) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
