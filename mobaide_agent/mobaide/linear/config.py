@@ -12,7 +12,7 @@ __all__ = ["ProjectConfig", "AutoScanConfig"]
 
 _DEFAULT_AUTO_SCAN_PROMPT = (
     "Read the Linear issue matching the identifier in the current worktree name. "
-    "Analyze the issue deeply. Resolve the issue (task). WORK in GOP Development Mode."
+    "Analyze the issue deeply. Resolve the issue (task)."
 )
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
