@@ -1,5 +1,14 @@
 # central_server Changelog
 
+## [0.2.1](https://github.com/syrax90/claude_mobile/compare/server-v0.2.0...server-v0.2.1) (2026-06-29)
+
+
+### Documentation
+
+* **privacy:** disclose OpenAI Codex as a third-party data recipient ([680957b](https://github.com/syrax90/claude_mobile/commit/680957b7a922150b7707cac3718faef9f2ca1bf0))
+* **privacy:** disclose OpenAI Codex data handling in privacy policy ([c9ded5b](https://github.com/syrax90/claude_mobile/commit/c9ded5bb433aa148bba64d8369671fd7f2425a8f))
+* **privacy:** drop "optional" framing for Codex ([144fac2](https://github.com/syrax90/claude_mobile/commit/144fac2f79cd0d92427b4bc00cccc841be64e7bc))
+
 ## [0.2.0](https://github.com/syrax90/claude_mobile/compare/server-v0.1.18...server-v0.2.0) (2026-06-26)
 
 

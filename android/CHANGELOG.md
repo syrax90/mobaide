@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [2.0.1](https://github.com/syrax90/claude_mobile/compare/android-v2.0.0...android-v2.0.1) (2026-06-29)
+
+
+### Bug Fixes
+
+* **android:** persist last-used Codex session settings ([a5a16d6](https://github.com/syrax90/claude_mobile/commit/a5a16d628beb7c0a5b98450f33339b2e6d401304))
+* **android:** render terminal control-key arrows as uniform Material icons ([8b23787](https://github.com/syrax90/claude_mobile/commit/8b237871eda1fe5338c571845e495664bad0b974))
+
 ## [2.0.0](https://github.com/syrax90/claude_mobile/compare/android-v1.15.0...android-v2.0.0) (2026-06-26)
 
 
