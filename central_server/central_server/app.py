@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .agents.service import AgentService
-from .auth.email import EmailSender
+from .auth.email import build_email_sender
 from .auth.rate_limit import ResendRateLimiter
 from .auth.service import AuthService
 from .config import CentralServerConfig
@@ -76,7 +76,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         # request so the synchronous file read never blocks the asyncio
         # event loop after startup.
         app.state.manifest_store.read()
-        email_sender = EmailSender(config)
+        email_sender = build_email_sender(config)
         resend_limiter = ResendRateLimiter(
             cooldown_seconds=config.email_verification_resend_cooldown_seconds,
             hourly_cap=config.email_verification_resend_hourly_cap,
