@@ -104,6 +104,14 @@ this (`tests/conftest.py` sets the flag), so every pre-existing test keeps
 passing. The dedicated `tests/test_email_verification.py` flips the flag back
 on for its own fixtures.
 
+For end-to-end tests that need the verification flow to actually run — so the
+harness can read the OTP back rather than skip it — set `MOBAIDE_ENV=test`
+instead. That swaps the real SMTP `EmailSender` for an in-process capturing
+sink: no SMTP connection is ever attempted, and each message is recorded on
+`app.state.email_sender.messages` for assertions. `MOBAIDE_ENV` defaults to
+`production`; only the exact value `test` opts in, so leaving it unset (or any
+other value) keeps the real-SMTP behaviour described above.
+
 ## Production notes
 
 * Swap `SMTP_HOST` to your real provider (Resend / Postmark / SES). Keep the

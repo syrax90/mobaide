@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from ..config import CentralServerConfig
     from ..db.database import Database
     from ..relay.routing import RoutingTable
-    from .email import EmailSender
+    from .email import EmailSenderLike
     from .rate_limit import ResendRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ class AuthService:
         self,
         config: CentralServerConfig,
         db: Database,
-        email_sender: "EmailSender | None" = None,
+        email_sender: "EmailSenderLike | None" = None,
         resend_limiter: "ResendRateLimiter | None" = None,
         reset_email_limiter: "ResendRateLimiter | None" = None,
         routing: "RoutingTable | None" = None,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 
 
@@ -16,6 +17,12 @@ class CentralServerConfig:
     """Central relay server configuration loaded from environment variables."""
 
     jwt_secret_key: str
+
+    # Deployment environment selector (MOBAIDE_ENV). "production" (the
+    # default) keeps every other field at its production default. "test"
+    # opts a disposable instance into the in-process email sink (no SMTP) and
+    # temp-dir storage; see from_env() and auth.email.build_email_sender().
+    env: str = "production"
 
     # Admin seeding (optional — only takes effect on first startup)
     admin_seed_email: str | None = None
@@ -128,14 +135,39 @@ class CentralServerConfig:
     # When unset, falls back to the Host header from the initiate request.
     public_base_url: str | None = None
 
+    @property
+    def is_test_mode(self) -> bool:
+        """True when MOBAIDE_ENV=test selects the disposable test profile."""
+        return self.env == "test"
+
     @classmethod
     def from_env(cls) -> CentralServerConfig:
         """Build config from environment variables."""
         secret = os.getenv("JWT_SECRET_KEY")
         if not secret:
             raise RuntimeError("JWT_SECRET_KEY environment variable is required")
+
+        env = os.getenv("MOBAIDE_ENV", "production")
+        # In test mode, default DB / manifest storage to a throwaway temp dir
+        # so a disposable MOBAIDE_ENV=test instance never writes
+        # central_server.db* / data/ into the CWD. An explicit DB_PATH /
+        # MANIFEST_STORE_PATH still wins (the E2E harness supplies them), and
+        # production behaviour is unchanged.
+        test_storage: list[str] = []
+
+        def _storage_path(env_var: str, test_name: str, prod_default: str) -> str:
+            explicit = os.getenv(env_var)
+            if explicit is not None:
+                return explicit
+            if env != "test":
+                return prod_default
+            if not test_storage:
+                test_storage.append(tempfile.mkdtemp(prefix="mobaide-test-"))
+            return os.path.join(test_storage[0], test_name)
+
         return cls(
             jwt_secret_key=secret,
+            env=env,
             admin_seed_email=os.getenv("ADMIN_SEED_EMAIL"),
             admin_seed_password=os.getenv("ADMIN_SEED_PASSWORD"),
             google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
@@ -149,7 +181,9 @@ class CentralServerConfig:
             dashboard_token_expire_minutes=int(
                 os.getenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "0"),
             ),
-            db_path=os.getenv("DB_PATH", "central_server.db"),
+            db_path=_storage_path(
+                "DB_PATH", "central_server.db", "central_server.db",
+            ),
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "9000")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -229,8 +263,10 @@ class CentralServerConfig:
             manifest_signing_private_key_b64=(
                 os.getenv("MANIFEST_SIGNING_PRIVATE_KEY") or None
             ),
-            manifest_store_path=os.getenv(
-                "MANIFEST_STORE_PATH", "data/agent_manifest.json",
+            manifest_store_path=_storage_path(
+                "MANIFEST_STORE_PATH",
+                "agent_manifest.json",
+                "data/agent_manifest.json",
             ),
             public_base_url=os.getenv("PUBLIC_BASE_URL") or None,
         )

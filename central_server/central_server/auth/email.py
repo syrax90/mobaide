@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 import ssl
+from dataclasses import dataclass
 from email.message import EmailMessage
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import aiosmtplib
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -31,6 +32,41 @@ _env = Environment(
     autoescape=select_autoescape(["html", "xml"]),
     enable_async=False,
 )
+
+
+class EmailSenderLike(Protocol):
+    """Structural interface ``AuthService`` depends on for outbound email.
+
+    Both the SMTP-backed :class:`EmailSender` and the in-process
+    :class:`TestEmailSink` satisfy it; :func:`build_email_sender` selects the
+    implementation per environment.
+    """
+
+    async def send_verification_email(
+        self, to: str, code: str, ttl_minutes: int
+    ) -> None: ...
+
+    async def send_password_reset_email(
+        self,
+        to: str,
+        code: str,
+        ttl_minutes: int,
+        client_ip: str | None = None,
+    ) -> None: ...
+
+    async def send_password_changed_notification(
+        self, to: str, revoked_session_count: int
+    ) -> None: ...
+
+    async def send_account_deletion_requested(
+        self,
+        to: str,
+        scheduled_for_iso: str,
+        grace_days: int,
+        cancel_url: str,
+    ) -> None: ...
+
+    async def send_account_deletion_completed(self, to: str) -> None: ...
 
 
 class EmailSender:
@@ -244,3 +280,117 @@ class EmailSender:
             text_body=text_body,
             log_prefix="account_deletion_completed",
         )
+
+
+@dataclass(frozen=True)
+class CapturedEmail:
+    """A single email captured by ``TestEmailSink`` instead of being sent.
+
+    ``kind`` names the template ("verification", "password_reset", …);
+    ``params`` carries the call's remaining arguments by name (e.g.
+    ``{"code": "123456", "ttl_minutes": 15}``) so tests and the E2E harness can
+    assert on the OTP without any SMTP round-trip.
+    """
+
+    kind: str
+    to: str
+    params: dict[str, object]
+
+
+class TestEmailSink:
+    """In-process, network-free email sender for ``MOBAIDE_ENV=test``.
+
+    Duck-typed drop-in for :class:`EmailSender`: exposes the same five async
+    ``send_*`` methods ``AuthService`` calls, but appends each call to
+    ``messages`` instead of opening an SMTP connection — no SMTP connection is
+    ever attempted. Surfaced via ``app.state.email_sender`` so tests and the
+    headless E2E client can read delivered mail (notably the verification
+    code). ``config`` is accepted for symmetric construction with
+    ``EmailSender`` and is otherwise unused.
+    """
+
+    # Production class, not a test case — keep pytest from collecting it
+    # (its ``Test`` name prefix otherwise trips PytestCollectionWarning).
+    __test__ = False
+
+    def __init__(self, config: CentralServerConfig | None = None) -> None:
+        self._config = config
+        self.messages: list[CapturedEmail] = []
+
+    async def send_verification_email(
+        self, to: str, code: str, ttl_minutes: int
+    ) -> None:
+        self.messages.append(
+            CapturedEmail(
+                "verification", to, {"code": code, "ttl_minutes": ttl_minutes}
+            )
+        )
+
+    async def send_password_reset_email(
+        self,
+        to: str,
+        code: str,
+        ttl_minutes: int,
+        client_ip: str | None = None,
+    ) -> None:
+        self.messages.append(
+            CapturedEmail(
+                "password_reset",
+                to,
+                {
+                    "code": code,
+                    "ttl_minutes": ttl_minutes,
+                    "client_ip": client_ip,
+                },
+            )
+        )
+
+    async def send_password_changed_notification(
+        self, to: str, revoked_session_count: int
+    ) -> None:
+        self.messages.append(
+            CapturedEmail(
+                "password_changed",
+                to,
+                {"revoked_session_count": revoked_session_count},
+            )
+        )
+
+    async def send_account_deletion_requested(
+        self,
+        to: str,
+        scheduled_for_iso: str,
+        grace_days: int,
+        cancel_url: str,
+    ) -> None:
+        self.messages.append(
+            CapturedEmail(
+                "account_deletion_requested",
+                to,
+                {
+                    "scheduled_for_iso": scheduled_for_iso,
+                    "grace_days": grace_days,
+                    "cancel_url": cancel_url,
+                },
+            )
+        )
+
+    async def send_account_deletion_completed(self, to: str) -> None:
+        self.messages.append(
+            CapturedEmail("account_deletion_completed", to, {})
+        )
+
+
+def build_email_sender(
+    config: CentralServerConfig,
+) -> EmailSenderLike:
+    """Return the email sender for this environment.
+
+    ``MOBAIDE_ENV=test`` selects the in-process :class:`TestEmailSink` (no SMTP
+    is ever attempted); every other environment uses the real SMTP-backed
+    :class:`EmailSender`. This is the single seam shared by ``create_app()``'s
+    lifespan and the tests.
+    """
+    if config.is_test_mode:
+        return TestEmailSink(config)
+    return EmailSender(config)
