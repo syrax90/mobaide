@@ -32,6 +32,10 @@ config/.active
 **/dist/
 **/build/
 **/*.egg-info/
+# pytest-xprocess straggler logs (E2E harness, tests/e2e). Current xprocess+pytest
+# store these under .pytest_cache/ (already ignored above); older/standalone
+# versions write a top-level .xprocess/. Ignore both.
+.xprocess/
 android/release.keystore
 android/signing.properties
 android/app/release/

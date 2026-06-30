@@ -35,6 +35,8 @@ dev = [
     "pytest-asyncio",
     "pytest-timeout",
     "httpx-ws",
+    "pytest-xprocess>=1.0.0",
+    "psutil>=5.9",
 ]
 
 [tool.pytest.ini_options]
