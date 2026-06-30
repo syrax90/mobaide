@@ -62,7 +62,7 @@ class AutoScanDetailViewModel @Inject constructor(
      *           recycled, so it stays unique even after the ring buffer
      *           evicts the oldest entry. Used as the LazyColumn key so
      *           duplicate-text lines (common when idle scans repeat the
-     *           same "no AutoPipeline issues" message) do not collide
+     *           same "no matching issues" message) do not collide
      *           and crash the list.
      */
     data class LogLine(val id: Long, val text: AnnotatedString)
@@ -194,7 +194,7 @@ class AutoScanDetailViewModel @Inject constructor(
                 appendLog("--- Scan #${p.cycleNumber} completed ---", newSeq)
                 if (idle) {
                     appendLog(
-                        "no AutoPipeline issues — skipping remaining stages",
+                        "no matching issues — skipping remaining stages",
                         newSeq,
                     )
                 }
