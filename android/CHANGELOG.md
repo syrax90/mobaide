@@ -1,5 +1,16 @@
 # Android Changelog
 
+## [2.0.2](https://github.com/syrax90/claude_mobile/compare/android-v2.0.1...android-v2.0.2) (2026-06-30)
+
+
+### Bug Fixes
+
+* **android:** grey out Auto Scan mode card instead of hiding it ([dce0ee8](https://github.com/syrax90/claude_mobile/commit/dce0ee8bf9dad0f789f18ed70e71a315e87011f2))
+* **android:** remove hardcoded AutoPipeline from Auto Scan mode label ([0aea911](https://github.com/syrax90/claude_mobile/commit/0aea91183b96d926fa1c2b07137cd07a2ad4e0bf))
+* **ui:** gate Continue button on Auto Scan availability ([0d9b7a2](https://github.com/syrax90/claude_mobile/commit/0d9b7a2ade54a4bc90450c09d2d2d3a9105267a5))
+* **ui:** grey out Auto Scan mode card instead of hiding it ([17245ef](https://github.com/syrax90/claude_mobile/commit/17245ef0595be27c8ff6b48bf8e1e82d306e7014))
+* **ui:** remove hardcoded AutoPipeline from Auto Scan mode label ([7b45a75](https://github.com/syrax90/claude_mobile/commit/7b45a75d8b59b84d668c3282030e763805d273b6))
+
 ## [2.0.1](https://github.com/syrax90/claude_mobile/compare/android-v2.0.0...android-v2.0.1) (2026-06-29)
 
 
