@@ -21,6 +21,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import certifi
 import orjson
@@ -109,11 +110,50 @@ from .envelope import (
 
 logger = logging.getLogger(__name__)
 
-# The agent owns its TLS trust store instead of depending on the host
-# interpreter's default CA bundle: a python.org macOS build whose bundled
-# Install Certificates.command never ran has an empty store and fails to verify
-# a valid public cert. Built once at import; applied to wss:// in _run_connection.
-_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+# Env opt-in permitting a cleartext ws:// relay (loopback / local E2E only).
+# Mirrors the cleartext-refusal precedent in ``install_paths.py`` /
+# ``pairing_monitor.py``. ``MOBAIDE_ENV=test`` implies this opt-in.
+ALLOW_INSECURE_WS_ENV = "MOBAIDE_AGENT_ALLOW_INSECURE_WS"
+
+
+def _build_relay_ssl_context(
+    server_url: str, *, allow_insecure_ws: bool,
+) -> ssl.SSLContext | None:
+    """Return the per-connection TLS context for the relay tunnel.
+
+    The agent owns its TLS trust store instead of depending on the host
+    interpreter's default CA bundle: a python.org macOS build whose bundled
+    *Install Certificates.command* never ran has an empty store and would fail
+    to verify a valid public cert. So ``wss://`` always gets an explicit
+    certifi-backed verifying context.
+
+    ``ws://`` (cleartext) returns ``None`` and is **refused** unless
+    ``allow_insecure_ws`` is set (``MOBAIDE_AGENT_ALLOW_INSECURE_WS=1`` or
+    ``MOBAIDE_ENV=test``) — a misconfigured production relay URL fails loudly at
+    boot instead of silently downgrading to plaintext. A verifying context is
+    never returned for a non-TLS URL (``websockets`` rejects that), and
+    ``CERT_NONE``/insecure never reaches ``wss://``.
+
+    The scheme is matched case-insensitively: ``websockets`` normalizes scheme
+    case (``WS://`` connects plaintext, ``WSS://`` secure), so a case-sensitive
+    check would let an uppercase scheme slip past this gate — connecting
+    ``WS://`` in plaintext without the opt-in, or routing ``WSS://`` through
+    ``websockets``' default system trust store instead of certifi.
+    """
+    scheme = urlsplit(server_url).scheme.lower()
+    if scheme == "wss":
+        return ssl.create_default_context(cafile=certifi.where())
+    if scheme == "ws":
+        if not allow_insecure_ws:
+            raise RuntimeError(
+                f"Relay server_url uses cleartext ws:// ({server_url!r}); refused "
+                f"by default. Set {ALLOW_INSECURE_WS_ENV}=1 or run with "
+                f"MOBAIDE_ENV=test to allow a plaintext relay (loopback / local "
+                f"testing only)."
+            )
+        return None
+    # Any other scheme: no TLS context — websockets surfaces the error itself.
+    return None
 
 # PTY frame type bytes — must stay in sync with agent/ws/session_io.py.
 FRAME_OUTPUT = b"o"
@@ -251,12 +291,19 @@ class RelayClient:
         event_bus: Any,  # EventBus
         broadcaster: Any,  # SessionListBroadcaster
         app_state: Any,  # FastAPI app.state (for fanout access)
+        allow_insecure_ws: bool = False,
     ) -> None:
         self._config = config
         self._session_manager = session_manager
         self._event_bus = event_bus
         self._broadcaster = broadcaster
         self._app_state = app_state
+        # Per-config TLS context, built once here instead of at module import.
+        # wss:// → certifi-verifying context; ws:// → None (refused unless
+        # allow_insecure_ws). Raises now so a bad relay URL fails at boot.
+        self._ssl_context = _build_relay_ssl_context(
+            config.server_url, allow_insecure_ws=allow_insecure_ws,
+        )
 
         self._ws: ClientConnection | None = None
         self._task: asyncio.Task | None = None
@@ -405,9 +452,10 @@ class RelayClient:
     async def _run_connection(self) -> None:
         """Single connection attempt: connect, authenticate, run tunnel."""
         tunnel_url = self._config.server_url.rstrip("/") + "/ws/agent-tunnel"
-        # ssl= must be None for ws:// — websockets raises if a context is passed
-        # to a plaintext URL (e.g. a local dev relay).
-        ssl_ctx = _SSL_CONTEXT if tunnel_url.startswith("wss://") else None
+        # Per-config context built in __init__: an explicit certifi-verifying
+        # context for wss://, or None for an opted-in plaintext ws:// (websockets
+        # raises if a context is passed to a non-TLS URL).
+        ssl_ctx = self._ssl_context
         async with websockets.connect(
             tunnel_url,
             ssl=ssl_ctx,

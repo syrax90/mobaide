@@ -34,6 +34,14 @@ class AgentConfig(BaseSettings):
     classmethod).
     """
 
+    # Deployment environment selector (MOBAIDE_ENV). "production" (the default)
+    # keeps every other field and subsystem at its production behaviour. "test"
+    # opts a disposable instance into the fake PTY backend (no real shells),
+    # plaintext ws:// relay, and temp-dir state isolation. Mirrors the
+    # central_server selector; needs validation_alias because
+    # env_prefix="" would otherwise bind a bare ``env`` field to ``ENV``.
+    env: str = Field(default="production", validation_alias="MOBAIDE_ENV")
+
     jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 0
@@ -113,36 +121,6 @@ class AgentConfig(BaseSettings):
             return value.strip().lower() in _LOG_SAMPLE_WS_TRUTHY
         return False
 
-    @field_validator(
-        "user_store_path", "projects_store_path", "audit_log_path", mode="after"
-    )
-    @classmethod
-    def _anchor_relative_path(cls, value: str | None) -> str | None:
-        """Anchor a relative store/log path to the writable state prefix.
-
-        The defaults (and any relative override) otherwise resolve against the
-        process CWD. launchd/systemd pin CWD to the prefix today, but a launch
-        with CWD=``/`` (a read-only volume on modern macOS) crashes the first
-        store write with ``[Errno 30] Read-only file system: projects.json.tmp``.
-        Anchoring makes the path CWD-independent.
-
-        ``state_prefix()`` resolves to the install prefix for an installed
-        agent (unchanged) but falls back to a per-user data dir when that
-        prefix isn't writable — the source/dev run case, where the OS-wide
-        default (``C:\\Program Files\\MobaideAgent`` / ``/opt/mobaide``) is
-        unwritable by an unprivileged process and the first store write would
-        otherwise die with ``[Errno 13] Permission denied``.
-
-        Explicit absolute paths — and ``audit_log_path=None`` — pass through.
-        """
-        if value is None:
-            return None
-        if Path(value).is_absolute():
-            return value
-        from mobaide.agent.install_paths import state_prefix
-
-        return str(state_prefix() / value)
-
     @model_validator(mode="after")
     def _require_jwt_secret(self) -> "AgentConfig":
         if not self.jwt_secret_key:
@@ -150,6 +128,52 @@ class AgentConfig(BaseSettings):
                 "JWT_SECRET_KEY environment variable is required"
             )
         return self
+
+    @model_validator(mode="after")
+    def _anchor_store_paths(self) -> "AgentConfig":
+        """Anchor relative store/log paths to the writable state prefix.
+
+        Runs as a model validator (not per-field) so it can read ``self.env``:
+        the test-mode prefix decision must come from the *resolved* config, not
+        a raw ``os.environ`` read. Otherwise an agent whose ``MOBAIDE_ENV=test``
+        arrives via an env file (parsed into ``env`` by ``from_env`` but absent
+        from the process environment) would select the fake backend yet still
+        anchor state to the real install prefix — leaking files outside the temp
+        dir. ``state_prefix(test_mode=self.is_test_mode)`` keeps the two in sync.
+
+        The defaults (and any relative override) otherwise resolve against the
+        process CWD. launchd/systemd pin CWD to the prefix today, but a launch
+        with CWD=``/`` (a read-only volume on modern macOS) crashes the first
+        store write with ``[Errno 30] Read-only file system``. Anchoring makes
+        the path CWD-independent; ``state_prefix`` falls back to a per-user data
+        dir when the install prefix isn't writable (the source/dev run case).
+
+        Explicit absolute paths — and ``audit_log_path=None`` — pass through.
+        """
+        from mobaide.agent.install_paths import state_prefix
+
+        # Mutate in place via object.__setattr__: this model is frozen, and a
+        # pydantic-settings ``mode="after"`` model validator must return ``self``
+        # (returning model_copy(...) is silently dropped when validating via
+        # __init__), so the anchored values are written onto ``self`` directly.
+        prefix: Path | None = None
+        for field in ("user_store_path", "projects_store_path", "audit_log_path"):
+            value = getattr(self, field)
+            if value is None or Path(value).is_absolute():
+                continue
+            if prefix is None:
+                prefix = state_prefix(test_mode=self.is_test_mode)
+            object.__setattr__(self, field, str(prefix / value))
+        return self
+
+    @property
+    def is_test_mode(self) -> bool:
+        """True when MOBAIDE_ENV=test selects the disposable test profile.
+
+        Exact-string match (mirrors the central_server selector): only the
+        literal ``test`` opts in — ``TEST``/``staging``/``""`` stay production.
+        """
+        return self.env == "test"
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "AgentConfig":

@@ -30,7 +30,9 @@ _USER_DATA_DIR = "mobaide.agent.install_paths.user_data_dir"
 @pytest.fixture(autouse=True)
 def _clear_layout_env(monkeypatch):
     """Stop host values for the dirs under test from leaking in."""
-    for var in ("MOBAIDE_AGENT_PREFIX", "LOCALAPPDATA", "XDG_DATA_HOME"):
+    for var in (
+        "MOBAIDE_AGENT_PREFIX", "MOBAIDE_ENV", "LOCALAPPDATA", "XDG_DATA_HOME"
+    ):
         monkeypatch.delenv(var, raising=False)
 
 

@@ -29,6 +29,7 @@ from .models import (
     session_to_wire_dict,
 )
 from .projects_store import ProjectsStore, safe_path_exists
+from .pty_backend import PtyBackend, create_pty_backend
 from .session import TerminalSession
 
 if TYPE_CHECKING:
@@ -55,6 +56,7 @@ class SessionManager:
         on_session_created: Callable[[TerminalSession], Awaitable[None] | None] | None = None,
         on_session_removed: Callable[[str], Awaitable[None] | None] | None = None,
         session_dto_factory: Callable[[SessionInfo], dict] | None = None,
+        backend_factory: Callable[[], PtyBackend] = create_pty_backend,
     ) -> None:
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = asyncio.Lock()
@@ -70,6 +72,10 @@ class SessionManager:
         self._on_session_created = on_session_created
         self._on_session_removed = on_session_removed
         self._session_dto_factory = session_dto_factory or session_to_wire_dict
+        # Per-session PTY backend constructor. Defaults to the real
+        # platform backend; ``create_app`` swaps in ``FakePtyBackend`` when
+        # ``MOBAIDE_ENV=test`` so a disposable agent spawns no real shells.
+        self._backend_factory = backend_factory
 
     async def _publish_sessions_changed(self) -> None:
         if self._event_bus is None:
@@ -125,7 +131,7 @@ class SessionManager:
                 raise ValueError(
                     f"Session with id '{config.session_id}' already exists",
                 )
-            session = TerminalSession(config)
+            session = TerminalSession(config, backend=self._backend_factory())
             await session.start()
             self._sessions[config.session_id] = session
             logger.info(

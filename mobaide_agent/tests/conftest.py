@@ -11,6 +11,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from mobaide.core.models import SessionConfig
+from mobaide.core.pty_backend import FakePtyBackend
 from mobaide.agent.app import create_app
 from mobaide.agent.config import AgentConfig
 from mobaide.relay.config import RelayConfig
@@ -145,6 +146,13 @@ def session_config() -> SessionConfig:
 
 
 @pytest.fixture
+def fake_pty_backend() -> FakePtyBackend:
+    """A fresh in-process echo PTY backend for direct ``TerminalSession``
+    injection (no real shell)."""
+    return FakePtyBackend()
+
+
+@pytest.fixture
 def short_lived_config() -> SessionConfig:
     """Config that spawns a process which exits immediately."""
     if IS_WINDOWS:
@@ -168,6 +176,26 @@ def agent_config(tmp_path) -> AgentConfig:
     """Create a test AgentConfig with a temp user store and projects store."""
     return AgentConfig(
         jwt_secret_key=TEST_JWT_SECRET,
+        user_store_path=str(tmp_path / "users.json"),
+        projects_store_path=str(tmp_path / "projects.json"),
+        max_sessions=4,
+        log_level="DEBUG",
+    )
+
+
+@pytest.fixture
+def test_mode_agent_config(tmp_path) -> AgentConfig:
+    """A ``MOBAIDE_ENV=test`` AgentConfig with temp stores.
+
+    Selects the fake PTY backend (``config.is_test_mode``). Temp-path isolation
+    via ``state_prefix()`` additionally requires the ``MOBAIDE_ENV`` env var (see
+    ``install_paths.is_test_mode``); this fixture passes explicit store paths, so
+    a test that wants the auto-temp-dir behaviour must also
+    ``monkeypatch.setenv("MOBAIDE_ENV", "test")``.
+    """
+    return AgentConfig(
+        jwt_secret_key=TEST_JWT_SECRET,
+        env="test",
         user_store_path=str(tmp_path / "users.json"),
         projects_store_path=str(tmp_path / "projects.json"),
         max_sessions=4,

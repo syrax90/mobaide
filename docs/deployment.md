@@ -398,7 +398,7 @@ Common causes:
 
 Check the agent's logs for `relay.connection_failed` entries. Common causes:
 
-- `RELAY_SERVER_URL` scheme wrong (`wss://` for HTTPS central-server, `ws://` for local plain HTTP)
+- `RELAY_SERVER_URL` scheme wrong (`wss://` for HTTPS central-server, `ws://` for local plain HTTP). A cleartext `ws://` URL is refused at boot by default — set `MOBAIDE_AGENT_ALLOW_INSECURE_WS=1` (or run with `MOBAIDE_ENV=test`) to allow a plaintext relay for loopback/local testing; `wss://` is unaffected.
 - `RELAY_AGENT_ID` / `RELAY_AGENT_TOKEN` don't match the bcrypt hash stored in central-server's DB for this agent — re-pair via the app or re-issue the token via the admin API
 - Central-server unreachable — verify with `curl https://mobaide.com/api/health`
 - For a local dev stack: the workstation's OS trust store must include Caddy's root CA (see `start-all.ps1`, which auto-installs it)

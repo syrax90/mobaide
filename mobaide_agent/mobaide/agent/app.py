@@ -19,8 +19,10 @@ from mobaide import __version__
 from mobaide.core import (
     ClaudeLauncher,
     CodexLauncher,
+    FakePtyBackend,
     ProjectsStore,
     SessionManager,
+    create_pty_backend,
 )
 from mobaide.core.cli_launcher import build_cli_capabilities
 from mobaide.core.hook_settings import sweep_hooks_dir
@@ -238,7 +240,7 @@ async def _start_relay_in_process(
     5. Spawn the 60-minute background HTTPS poll so the agent
        reconciles any manifest the relay missed.
     """
-    from mobaide.relay.client import RelayClient
+    from mobaide.relay.client import ALLOW_INSECURE_WS_ENV, RelayClient
 
     updater = _build_updater(app)
     manifest_url = _resolve_manifest_url(relay_cfg) if updater is not None else None
@@ -255,12 +257,20 @@ async def _start_relay_in_process(
             outcome, manifest_url,
         )
 
+    # Allow a cleartext ws:// relay only under an explicit opt-in: MOBAIDE_ENV=test
+    # (disposable local E2E) or MOBAIDE_AGENT_ALLOW_INSECURE_WS=1. Otherwise a
+    # ws:// server_url is refused inside RelayClient(); wss:// is always secure.
+    allow_insecure_ws = (
+        app.state.config.is_test_mode
+        or os.environ.get(ALLOW_INSECURE_WS_ENV) == "1"
+    )
     relay_client = RelayClient(
         config=relay_cfg,
         session_manager=app.state.session_manager,
         event_bus=app.state.event_bus,
         broadcaster=app.state.broadcaster,
         app_state=app.state,
+        allow_insecure_ws=allow_insecure_ws,
     )
     if updater is not None:
         relay_client.set_manifest_update_callback(updater.consider_manifest)
@@ -709,6 +719,9 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,
         on_session_removed=_on_session_removed,
+        # MOBAIDE_ENV=test → in-process echo backend (no real shells); the
+        # default real backend is byte-for-byte unchanged in production.
+        backend_factory=FakePtyBackend if config.is_test_mode else create_pty_backend,
     )
     app.state.jwt_service = JwtService(
         secret_key=config.jwt_secret_key,

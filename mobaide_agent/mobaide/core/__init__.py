@@ -19,7 +19,7 @@ from .projects_store import (
     ProjectUpdatePatch,
     normalize_project_path,
 )
-from .pty_backend import PtyBackend, create_pty_backend
+from .pty_backend import FakePtyBackend, PtyBackend, create_pty_backend
 from .session import TerminalSession
 from .session_manager import MaxSessionsError, SessionManager
 
@@ -30,6 +30,7 @@ __all__ = [
     "SessionInfo",
     "SessionEvent",
     "PtyBackend",
+    "FakePtyBackend",
     "create_pty_backend",
     "TerminalSession",
     "SessionManager",
