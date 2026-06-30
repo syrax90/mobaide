@@ -1,5 +1,12 @@
 # central_server Changelog
 
+## [0.2.2](https://github.com/syrax90/claude_mobile/compare/server-v0.2.1...server-v0.2.2) (2026-06-30)
+
+
+### Features
+
+* **central_server:** add MOBAIDE_ENV=test selector (CLA-76) ([3d25b11](https://github.com/syrax90/claude_mobile/commit/3d25b11af914993ce3093b2e12cb726e79f9006b))
+
 ## [0.2.1](https://github.com/syrax90/claude_mobile/compare/server-v0.2.0...server-v0.2.1) (2026-06-29)
 
 
