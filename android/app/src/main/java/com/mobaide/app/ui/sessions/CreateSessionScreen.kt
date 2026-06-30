@@ -524,14 +524,17 @@ private data class ModeHeader(
     val showAutoScan: Boolean,
 )
 
-/** Continue is enabled only when the chosen mode's CLI is available, so a card
+/** Continue is enabled only when the chosen mode is available (its CLI is
+ *  installed, and for Auto Scan the project also has a Linear key), so a card
  *  that flipped to disabled after selection can't be committed. */
 private fun modeEnabled(
     mode: CreateSessionMode,
     claudeEnabled: Boolean,
     codexEnabled: Boolean,
+    autoScanEnabled: Boolean,
 ): Boolean = when (mode) {
-    CreateSessionMode.Standard, CreateSessionMode.AutoScan -> claudeEnabled
+    CreateSessionMode.Standard -> claudeEnabled
+    CreateSessionMode.AutoScan -> autoScanEnabled
     CreateSessionMode.Codex -> codexEnabled
     CreateSessionMode.CustomShell -> true
 }
@@ -608,24 +611,26 @@ private fun ModePickerSection(
         )
     }
 
-    if (header.showAutoScan) {
-        ElevatedCard(
-            onClick = { if (claudeEnabled) onPickMode(CreateSessionMode.AutoScan) },
-            enabled = claudeEnabled,
-            colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            ListItem(
-                headlineContent = { Text("Auto Scan mode") },
-                supportingContent = {
-                    Text(
-                        if (claudeEnabled) "Scan Linear for matching issues and launch sessions."
-                        else "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
-                    )
-                },
-                colors = if (claudeEnabled) enabledList else disabledList,
-            )
-        }
+    val autoScanEnabled = claudeEnabled && header.showAutoScan
+    ElevatedCard(
+        onClick = { if (autoScanEnabled) onPickMode(CreateSessionMode.AutoScan) },
+        enabled = autoScanEnabled,
+        colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        ListItem(
+            headlineContent = { Text("Auto Scan mode") },
+            supportingContent = {
+                Text(
+                    when {
+                        !claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
+                        !header.showAutoScan -> "Auto Scan needs a Linear API key for this project."
+                        else -> "Scan Linear for matching issues and launch sessions."
+                    },
+                )
+            },
+            colors = if (autoScanEnabled) enabledList else disabledList,
+        )
     }
 
     ElevatedCard(
@@ -648,7 +653,7 @@ private fun ModePickerSection(
 
     Button(
         onClick = onCommit,
-        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled),
+        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled, autoScanEnabled),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")
