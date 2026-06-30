@@ -157,6 +157,29 @@ class TestStatePrefixIsolation:
         monkeypatch.setenv("MOBAIDE_ENV", value)
         assert install_paths.is_test_mode() is False
 
+    def test_env_file_test_mode_isolates_state_paths(self, monkeypatch, tmp_path):
+        # Regression: MOBAIDE_ENV=test arriving via an ENV FILE (not the process
+        # environment) must still anchor state to a temp dir. config.is_test_mode
+        # picks the fake backend; the path-anchoring model validator must agree
+        # (it passes the resolved is_test_mode to state_prefix), otherwise a
+        # test agent started from an env file leaks users.json/projects.json
+        # under the real install prefix.
+        monkeypatch.delenv("MOBAIDE_ENV", raising=False)  # NOT in process env
+        monkeypatch.setattr(install_paths, "_test_state_prefix", None)
+        env_file = tmp_path / "agent.env"
+        env_file.write_text(
+            "JWT_SECRET_KEY=x\nMOBAIDE_ENV=test\n", encoding="utf-8"
+        )
+        cfg = AgentConfig.from_env(env_file=env_file)
+        parent = Path(cfg.projects_store_path).parent
+        try:
+            assert cfg.is_test_mode is True
+            assert parent.name.startswith("mobaide-agent-test-")
+            assert Path(cfg.user_store_path).parent == parent
+        finally:
+            if parent.name.startswith("mobaide-agent-test-"):
+                shutil.rmtree(parent, ignore_errors=True)
+
 
 @pytest.mark.timeout(15)
 class TestFakePtyBackendContract:

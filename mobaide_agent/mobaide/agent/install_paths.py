@@ -125,7 +125,7 @@ def _test_state_dir() -> Path:
     return _test_state_prefix
 
 
-def state_prefix() -> Path:
+def state_prefix(test_mode: bool | None = None) -> Path:
     """Return the writable anchor for the agent's mutable state files.
 
     Equal to :func:`default_prefix` for an installed agent — the installer
@@ -143,11 +143,18 @@ def state_prefix() -> Path:
     silently rerouted elsewhere. Under ``MOBAIDE_ENV=test`` with no explicit
     prefix, state anchors to a disposable temp dir so a test instance never
     writes into the real install/state location.
+
+    ``test_mode`` lets a caller holding a *resolved* config override the env-var
+    read: ``AgentConfig`` built from an env file whose ``MOBAIDE_ENV=test`` the
+    process environment never saw passes ``test_mode=config.is_test_mode`` so
+    path isolation and the fake-backend selection can't disagree. ``None`` (the
+    default) falls back to :func:`is_test_mode` for callers without a config.
     """
+    in_test_mode = is_test_mode() if test_mode is None else test_mode
     prefix = default_prefix()
     if os.environ.get("MOBAIDE_AGENT_PREFIX"):
         return prefix
-    if is_test_mode():
+    if in_test_mode:
         return _test_state_dir()
     if _is_writable_dir(prefix):
         return prefix
