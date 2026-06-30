@@ -6,9 +6,10 @@ macOS framework Python whose bundled *Install Certificates.command* never ran
 has an empty CA store, so a bare ``websockets.connect(wss://...)`` fails with
 ``CERTIFICATE_VERIFY_FAILED``. Pinning
 ``ssl=create_default_context(cafile=certifi.where())`` at the call site fixes it
-on every platform. These tests pin that contract and assert ``ws://`` stays
-plaintext (``ssl`` must be ``None`` — ``websockets`` raises if a context is
-passed to a non-TLS URL, e.g. a local dev relay).
+on every platform. These tests pin that contract and assert that cleartext
+``ws://`` is refused by default (secure-by-default) and only permitted
+under an explicit opt-in (``allow_insecure_ws``), where it then passes
+``ssl=None`` — ``websockets`` raises if a context is passed to a non-TLS URL.
 """
 from __future__ import annotations
 
@@ -54,7 +55,9 @@ def _install_fake_websockets(monkeypatch: pytest.MonkeyPatch) -> dict:
     return captured
 
 
-def _make_client(server_url: str) -> RelayClient:
+def _make_client(
+    server_url: str, *, allow_insecure_ws: bool = False
+) -> RelayClient:
     config = RelayConfig(
         server_url=server_url,
         agent_id="agent-1",
@@ -66,6 +69,7 @@ def _make_client(server_url: str) -> RelayClient:
         event_bus=MagicMock(),
         broadcaster=MagicMock(),
         app_state=MagicMock(),
+        allow_insecure_ws=allow_insecure_ws,
     )
 
 
@@ -92,11 +96,19 @@ class TestRelayConnectSslContext:
         assert ctx.verify_mode == ssl.CERT_REQUIRED
         assert ctx.check_hostname is True
 
-    async def test_ws_passes_no_ssl_context(
+    def test_ws_refused_by_default(self) -> None:
+        # Secure-by-default: a cleartext ws:// relay URL is refused at
+        # RelayClient construction unless an explicit opt-in is supplied, so a
+        # misconfigured production agent fails loudly instead of silently
+        # downgrading to plaintext.
+        with pytest.raises(RuntimeError, match="ws://"):
+            _make_client("ws://localhost:8080")
+
+    async def test_ws_allowed_with_opt_in_passes_no_ssl_context(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured = _install_fake_websockets(monkeypatch)
-        client = _make_client("ws://localhost:8080")
+        client = _make_client("ws://localhost:8080", allow_insecure_ws=True)
 
         with pytest.raises(_StopConnect):
             await client._run_connection()
@@ -105,7 +117,33 @@ class TestRelayConnectSslContext:
         kwargs = captured["connect_kwargs"]
         assert kwargs["url"] == "ws://localhost:8080/ws/agent-tunnel"
         assert kwargs.get("ssl") is None, (
-            "ws:// (plaintext, e.g. a local dev relay) must pass ssl=None — "
-            "websockets raises if a context is given to a non-TLS URL; "
-            f"got ssl={kwargs.get('ssl')!r}"
+            "ws:// (plaintext, opted in via allow_insecure_ws) must pass "
+            "ssl=None — websockets raises if a context is given to a non-TLS "
+            f"URL; got ssl={kwargs.get('ssl')!r}"
         )
+
+    def test_uppercase_ws_scheme_is_also_refused(self) -> None:
+        # websockets normalizes scheme case (WS:// connects plaintext), so the
+        # refusal gate must match case-insensitively — an uppercase scheme must
+        # NOT slip past secure-by-default and open a cleartext connection.
+        with pytest.raises(RuntimeError, match="ws://"):
+            _make_client("WS://localhost:8080")
+
+    async def test_uppercase_wss_scheme_uses_verifying_ssl_context(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An uppercase WSS:// must still get the explicit certifi-verifying
+        # context, not fall through to websockets' default system trust store.
+        captured = _install_fake_websockets(monkeypatch)
+        client = _make_client("WSS://relay.test")
+
+        with pytest.raises(_StopConnect):
+            await client._run_connection()
+
+        ctx = captured["connect_kwargs"].get("ssl")
+        assert isinstance(ctx, ssl.SSLContext), (
+            "WSS:// (uppercase) must still pass an explicit certifi context; "
+            f"got ssl={ctx!r}"
+        )
+        assert ctx.verify_mode == ssl.CERT_REQUIRED
+        assert ctx.check_hostname is True

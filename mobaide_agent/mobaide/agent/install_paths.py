@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -93,6 +94,37 @@ def _is_writable_dir(path: Path) -> bool:
         return False
 
 
+MOBAIDE_ENV_VAR = "MOBAIDE_ENV"
+
+_test_state_prefix: Path | None = None
+
+
+def is_test_mode() -> bool:
+    """True when ``MOBAIDE_ENV=test`` selects the disposable test profile.
+
+    Exact-string match, mirroring ``AgentConfig.is_test_mode`` and the
+    central_server selector, so the file-isolation gate in :func:`state_prefix`
+    and the config-level selector never disagree. Reads ``os.environ`` directly
+    (not the pydantic config) because :func:`state_prefix` is consulted by the
+    ``AgentConfig`` path-anchoring validator *during* construction, before the
+    model exists.
+    """
+    return os.environ.get(MOBAIDE_ENV_VAR, "production") == "test"
+
+
+def _test_state_dir() -> Path:
+    """Lazily create one throwaway temp dir for a ``MOBAIDE_ENV=test`` instance.
+
+    Cached per-process so every state file of a disposable agent lands in the
+    same isolated directory. An explicit ``MOBAIDE_AGENT_PREFIX`` (e.g. one the
+    E2E harness owns and cleans) still wins in :func:`state_prefix`.
+    """
+    global _test_state_prefix
+    if _test_state_prefix is None:
+        _test_state_prefix = Path(tempfile.mkdtemp(prefix="mobaide-agent-test-"))
+    return _test_state_prefix
+
+
 def state_prefix() -> Path:
     """Return the writable anchor for the agent's mutable state files.
 
@@ -108,11 +140,15 @@ def state_prefix() -> Path:
     An explicit ``MOBAIDE_AGENT_PREFIX`` always wins and is never second-
     guessed: an operator who pins the agent to a directory gets exactly that,
     and a real permission problem there surfaces loudly instead of being
-    silently rerouted elsewhere.
+    silently rerouted elsewhere. Under ``MOBAIDE_ENV=test`` with no explicit
+    prefix, state anchors to a disposable temp dir so a test instance never
+    writes into the real install/state location.
     """
     prefix = default_prefix()
     if os.environ.get("MOBAIDE_AGENT_PREFIX"):
         return prefix
+    if is_test_mode():
+        return _test_state_dir()
     if _is_writable_dir(prefix):
         return prefix
     return user_data_dir()

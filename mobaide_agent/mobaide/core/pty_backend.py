@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import subprocess
 import sys
 from typing import Protocol
@@ -265,6 +266,91 @@ class LinuxPtyBackend:
                 self._process.kill()
                 self._process.wait(timeout=3)
             self._process = None
+
+
+# Sentinel enqueued by FakePtyBackend.terminate()/close() to wake a blocked
+# read() with EOF. A dedicated object (not None) keeps the queue element type
+# unambiguous — write() only ever enqueues bytes.
+_FAKE_PTY_EOF = object()
+
+
+class FakePtyBackend:
+    """In-process echo PTY backend for ``MOBAIDE_ENV=test`` — spawns no shell.
+
+    Implements the :class:`PtyBackend` Protocol with deterministic echo
+    semantics: bytes passed to :meth:`write` are queued straight back to
+    :meth:`read`. There is **no** ``winpty``/``pty`` import, so the Windows
+    ``WinptyError`` busy-loop hang the real backend can trigger is impossible.
+
+    The load-bearing invariant: :meth:`read` **blocks** while the session is
+    alive and nothing is queued — exactly like a real PTY's ``os.read``. The
+    session reader loop treats an empty read as EOF (``if not data: break``)
+    and relies on the blocking read to avoid busy-spinning (the real
+    ``is_alive()`` is non-blocking, so a non-blocking read returning ``b""``
+    while alive would spin the loop or instantly mark the session CRASHED).
+    :meth:`terminate` / :meth:`close` flip ``_alive`` and enqueue an EOF
+    sentinel so a blocked reader wakes promptly and teardown never hangs.
+    """
+
+    def __init__(self) -> None:
+        self._queue: queue.Queue[object] = queue.Queue()
+        self._leftover = b""
+        self._alive = False
+        self._closed = False
+
+    def spawn(
+        self,
+        cmd: list[str],
+        cwd: str | None,
+        env: dict[str, str] | None,
+        rows: int,
+        cols: int,
+    ) -> None:
+        # Pure echo: no banner / no unsolicited output. Readiness is signalled
+        # by the session's "started" event; emitting bytes here would race into
+        # the reconnect ring before a client attaches.
+        self._alive = True
+
+    def read(self, size: int = 4096) -> bytes:
+        # Drain any stashed remainder first; then short-circuit to EOF when
+        # dead-and-drained (never block on a terminated PTY); then block
+        # waiting for echoed input.
+        if self._leftover:
+            chunk, self._leftover = self._leftover[:size], self._leftover[size:]
+            return chunk
+        if (self._closed or not self._alive) and self._queue.empty():
+            return b""
+        item = self._queue.get()
+        if item is _FAKE_PTY_EOF:
+            return b""
+        assert isinstance(item, bytes)
+        if len(item) > size:
+            self._leftover = item[size:]
+            return item[:size]
+        return item
+
+    def write(self, data: bytes) -> None:
+        self._queue.put(bytes(data))
+
+    def resize(self, rows: int, cols: int) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return self._alive
+
+    def get_pid(self) -> int | None:
+        return None
+
+    def terminate(self, force: bool = False) -> None:
+        # Flip _alive so the session's is_alive()-gated teardown skips the
+        # graceful-kill grace wait, and wake any blocked read() with EOF.
+        self._alive = False
+        self._queue.put(_FAKE_PTY_EOF)
+
+    def close(self) -> None:
+        self._alive = False
+        self._closed = True
+        self._queue.put(_FAKE_PTY_EOF)
 
 
 def create_pty_backend() -> PtyBackend:

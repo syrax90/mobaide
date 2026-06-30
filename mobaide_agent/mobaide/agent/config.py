@@ -34,6 +34,14 @@ class AgentConfig(BaseSettings):
     classmethod).
     """
 
+    # Deployment environment selector (MOBAIDE_ENV). "production" (the default)
+    # keeps every other field and subsystem at its production behaviour. "test"
+    # opts a disposable instance into the fake PTY backend (no real shells),
+    # plaintext ws:// relay, and temp-dir state isolation. Mirrors the
+    # central_server selector; needs validation_alias because
+    # env_prefix="" would otherwise bind a bare ``env`` field to ``ENV``.
+    env: str = Field(default="production", validation_alias="MOBAIDE_ENV")
+
     jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 0
@@ -150,6 +158,15 @@ class AgentConfig(BaseSettings):
                 "JWT_SECRET_KEY environment variable is required"
             )
         return self
+
+    @property
+    def is_test_mode(self) -> bool:
+        """True when MOBAIDE_ENV=test selects the disposable test profile.
+
+        Exact-string match (mirrors the central_server selector): only the
+        literal ``test`` opts in — ``TEST``/``staging``/``""`` stay production.
+        """
+        return self.env == "test"
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> "AgentConfig":
