@@ -619,7 +619,7 @@ private fun ModePickerSection(
                 headlineContent = { Text("Auto Scan mode") },
                 supportingContent = {
                     Text(
-                        if (claudeEnabled) "Scan Linear for AutoPipeline issues and launch sessions."
+                        if (claudeEnabled) "Scan Linear for matching issues and launch sessions."
                         else "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
                     )
                 },
