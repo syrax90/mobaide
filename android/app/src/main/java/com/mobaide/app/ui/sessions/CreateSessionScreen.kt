@@ -608,24 +608,26 @@ private fun ModePickerSection(
         )
     }
 
-    if (header.showAutoScan) {
-        ElevatedCard(
-            onClick = { if (claudeEnabled) onPickMode(CreateSessionMode.AutoScan) },
-            enabled = claudeEnabled,
-            colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            ListItem(
-                headlineContent = { Text("Auto Scan mode") },
-                supportingContent = {
-                    Text(
-                        if (claudeEnabled) "Scan Linear for matching issues and launch sessions."
-                        else "Auto Scan needs the Claude CLI, which isn't installed on the agent.",
-                    )
-                },
-                colors = if (claudeEnabled) enabledList else disabledList,
-            )
-        }
+    val autoScanEnabled = claudeEnabled && header.showAutoScan
+    ElevatedCard(
+        onClick = { if (autoScanEnabled) onPickMode(CreateSessionMode.AutoScan) },
+        enabled = autoScanEnabled,
+        colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        ListItem(
+            headlineContent = { Text("Auto Scan mode") },
+            supportingContent = {
+                Text(
+                    when {
+                        !claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
+                        !header.showAutoScan -> "Auto Scan needs a Linear API key for this project."
+                        else -> "Scan Linear for matching issues and launch sessions."
+                    },
+                )
+            },
+            colors = if (autoScanEnabled) enabledList else disabledList,
+        )
     }
 
     ElevatedCard(
