@@ -118,6 +118,11 @@ class TestProbeWithRealLaunchers:
 
         assert probe_cli_available(CodexLauncher()) is True
 
+    def test_gemini_launcher_available_with_pinned_resolver(self):
+        from mobaide.core.gemini_launcher import GeminiLauncher
+
+        assert probe_cli_available(GeminiLauncher()) is True
+
     def test_claude_launcher_unavailable_when_resolver_raises(self, monkeypatch):
         from mobaide.core import claude_launcher
         from mobaide.core.claude_launcher import (

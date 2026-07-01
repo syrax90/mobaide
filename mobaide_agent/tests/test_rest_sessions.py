@@ -401,6 +401,134 @@ class TestCreateSessionCodex:
         assert isinstance(detail["detail"], str) and detail["detail"]
 
 
+class TestCreateSessionGemini:
+    """``POST /api/sessions`` with ``cli="gemini"`` threads ``gemini_options``
+    through to a GEMINI session, maps a missing Gemini binary to a clean 503, and
+    a present-but-unauthenticated Gemini to a 409 ``gemini_auth_required`` marker.
+    """
+
+    async def test_cli_gemini_threads_options_and_kind(
+        self, app, client, auth_headers,
+    ):
+        """The router must build a GEMINI ``SessionConfig`` carrying the parsed
+        ``gemini_options`` (and no ``claude_options`` / ``codex_options``), and
+        surface ``kind`` as ``"gemini"`` on the wire. ``create_session`` is
+        captured so the test is independent of whether a real ``gemini`` binary
+        is installed or authenticated."""
+        from datetime import datetime, timezone
+
+        from mobaide.core.models import (
+            SessionInfo,
+            SessionKind,
+            SessionState,
+        )
+
+        captured: dict = {}
+
+        class _FakeSession:
+            def __init__(self, config):
+                self.session_id = config.session_id
+                self._config = config
+
+            def to_info(self):
+                return SessionInfo(
+                    session_id=self.session_id,
+                    state=SessionState.RUNNING,
+                    created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    pid=123,
+                    command=self._config.command,
+                    cwd=self._config.cwd,
+                    kind=self._config.kind,
+                )
+
+        async def _capture(config):
+            captured["config"] = config
+            return _FakeSession(config)
+
+        app.state.session_manager.create_session = _capture
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "gemini",
+                "gemini_options": {"model": "flash", "approval_mode": "plan"},
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["kind"] == "gemini"
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.GEMINI
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert cfg.gemini_options is not None
+        assert cfg.gemini_options.model == "flash"
+        assert cfg.gemini_options.approval_mode == "plan"
+
+    async def test_invalid_gemini_options_returns_422(self, client, auth_headers):
+        """An out-of-range enum value is rejected at the Pydantic boundary."""
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cli": "gemini", "gemini_options": {"approval_mode": "nope"}},
+        )
+        assert resp.status_code == 422
+
+    async def test_gemini_cli_missing_returns_503_with_clean_detail(
+        self, app, client, auth_headers,
+    ):
+        """A missing Gemini binary mirrors the Claude/Codex path: 503 with a
+        detail starting ``Gemini CLI not found:`` and the Gemini-specific install
+        hint."""
+        from mobaide.core import GeminiBinaryNotFoundError
+
+        async def _raise_cli_missing(*args, **kwargs):
+            raise GeminiBinaryNotFoundError(searched_paths=["PATH:gemini"])
+
+        app.state.session_manager.create_session = _raise_cli_missing
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cli": "gemini", "gemini_options": {}},
+        )
+
+        assert resp.status_code == 503
+        detail = resp.json()["detail"]
+        assert detail.startswith("Gemini CLI not found:")
+        assert "npm install -g @google/gemini-cli" in detail
+        assert "MOBAIDE_GEMINI_BIN" in detail
+
+    async def test_gemini_unauthenticated_returns_409_with_auth_marker(
+        self, app, client, auth_headers,
+    ):
+        """A Gemini present-but-unauthenticated spawn (``GeminiAuthRequiredError``)
+        is client-actionable: 409 with a dict detail carrying
+        ``gemini_auth_required: true`` so the app tells the operator to
+        authenticate ``gemini`` on the host. 409 (not 401) so the Android
+        AuthInterceptor's refresh-retry-on-401 can't swallow the marker. Distinct
+        from the 503 missing-binary case above (string detail)."""
+        from mobaide.core import GeminiAuthRequiredError
+
+        async def _raise_auth_required(*args, **kwargs):
+            raise GeminiAuthRequiredError()
+
+        app.state.session_manager.create_session = _raise_auth_required
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={"cli": "gemini", "gemini_options": {}},
+        )
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert detail["gemini_auth_required"] is True
+        assert isinstance(detail["detail"], str) and detail["detail"]
+
+
 class TestCreateSessionAdHoc:
     """``POST /api/sessions`` with ``project_name=None`` and a
     user-supplied ``cwd``: the new ad-hoc (custom-path) launch path.

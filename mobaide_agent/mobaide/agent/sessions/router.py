@@ -84,14 +84,27 @@ async def create_session(
         if body.codex_options is not None
         else None
     )
+    gemini_options = (
+        body.gemini_options.to_options()
+        if body.gemini_options is not None
+        else None
+    )
     # Pre-validate user-supplied custom paths so the error surfaces as a
     # clean 400 from this layer rather than as a FileNotFoundError-mapped
     # 400 from the launcher or PtyBackend further down. Skipped when a
     # stored project is named (server derives cwd from the project).
     if body.project_name is None and body.cwd is not None:
         _validate_adhoc_cwd(body.cwd)
-    kind, spawn_command, spawn_env, claude_options, codex_options = resolve_spawn_args(
-        body.cli, claude_options, codex_options, body.command, body.env, _DEFAULT_SHELL,
+    kind, spawn_command, spawn_env, claude_options, codex_options, gemini_options = (
+        resolve_spawn_args(
+            body.cli,
+            claude_options,
+            codex_options,
+            gemini_options,
+            body.command,
+            body.env,
+            _DEFAULT_SHELL,
+        )
     )
     config = SessionConfig(
         session_id=session_id,
@@ -103,6 +116,7 @@ async def create_session(
         project_name=body.project_name,
         claude_options=claude_options,
         codex_options=codex_options,
+        gemini_options=gemini_options,
         worktree=body.worktree,
         branch_name=body.branch_name,
         kind=kind,

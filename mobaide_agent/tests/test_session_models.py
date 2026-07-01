@@ -169,6 +169,7 @@ class TestSessionToWireDictKind:
         [
             ("CLAUDE", "claude"),
             ("CODEX", "codex"),
+            ("GEMINI", "gemini"),
             ("AUTO_SCAN", "auto_scan"),
             ("SHELL", "shell"),
         ],
@@ -396,6 +397,28 @@ class TestCodexToOptions:
                 CodexOptionsModel.model_validate(bad)
 
 
+class TestGeminiOptionsModel:
+    """``GeminiOptionsModel`` keeps ``model`` free-form (like the Claude/Codex
+    DTOs) but constrains ``approval_mode`` to the CLI's four modes."""
+
+    def test_accepts_preset_alias_and_full_model_id(self):
+        from mobaide.agent.sessions.models import GeminiOptionsModel
+
+        assert GeminiOptionsModel(model="flash").to_options().model == "flash"
+        # A concrete model id (not one of the four aliases) is accepted, not 422:
+        # the launcher forwards ``--model`` verbatim and the real CLI takes ids.
+        full = GeminiOptionsModel(model="gemini-2.5-pro").to_options()
+        assert full.model == "gemini-2.5-pro"
+
+    def test_rejects_invalid_approval_mode(self):
+        import pydantic
+
+        from mobaide.agent.sessions.models import GeminiOptionsModel
+
+        with pytest.raises(pydantic.ValidationError):
+            GeminiOptionsModel.model_validate({"approval_mode": "nope"})
+
+
 class TestResolveSpawnArgs:
     """``resolve_spawn_args`` is the single normaliser the REST + relay create
     paths share: it picks the kind, applies the shell security guard, and
@@ -404,66 +427,98 @@ class TestResolveSpawnArgs:
 
     _SHELL = ["/bin/sh"]
 
-    def _call(self, cli=None, claude=None, codex=None, cmd=None, env=None):
+    def _call(self, cli=None, claude=None, codex=None, gemini=None, cmd=None, env=None):
         from mobaide.core.models import resolve_spawn_args
 
-        return resolve_spawn_args(cli, claude, codex, cmd, env, self._SHELL)
+        return resolve_spawn_args(cli, claude, codex, gemini, cmd, env, self._SHELL)
 
     def test_no_cli_no_options_is_shell_with_clean_env(self):
         from mobaide.core.models import SessionKind
 
-        kind, command, env, claude, codex = self._call(
+        kind, command, env, claude, codex, gemini = self._call(
             cmd=["rm", "-rf"], env={"EVIL": "1"},
         )
         # Security guard: client command/env hints are dropped for shell.
         assert kind is SessionKind.SHELL
         assert command == self._SHELL
         assert env is None
-        assert claude is None and codex is None
+        assert claude is None and codex is None and gemini is None
 
     def test_claude_options_only_infers_claude(self):
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.models import SessionKind
 
-        kind, command, env, claude, codex = self._call(
+        kind, command, env, claude, codex, gemini = self._call(
             claude=ClaudeOptions(), cmd=["claude"], env={"X": "1"},
         )
         assert kind is SessionKind.CLAUDE
         assert command == ["claude"] and env == {"X": "1"}
-        assert isinstance(claude, ClaudeOptions) and codex is None
+        assert isinstance(claude, ClaudeOptions) and codex is None and gemini is None
 
     def test_codex_options_only_infers_codex(self):
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex = self._call(codex=CodexOptions())
+        kind, _command, _env, claude, codex, gemini = self._call(codex=CodexOptions())
         assert kind is SessionKind.CODEX
-        assert isinstance(codex, CodexOptions) and claude is None
+        assert isinstance(codex, CodexOptions) and claude is None and gemini is None
+
+    def test_gemini_options_only_infers_gemini(self):
+        from mobaide.core.gemini_launcher import GeminiOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex, gemini = self._call(gemini=GeminiOptions())
+        assert kind is SessionKind.GEMINI
+        assert isinstance(gemini, GeminiOptions) and claude is None and codex is None
 
     def test_explicit_cli_codex_defaults_options_when_omitted(self):
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex = self._call(cli="codex")
+        kind, _command, _env, claude, codex, gemini = self._call(cli="codex")
         assert kind is SessionKind.CODEX
-        assert isinstance(codex, CodexOptions) and claude is None
+        assert isinstance(codex, CodexOptions) and claude is None and gemini is None
+
+    def test_explicit_cli_gemini_defaults_options_when_omitted(self):
+        from mobaide.core.gemini_launcher import GeminiOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex, gemini = self._call(cli="gemini")
+        assert kind is SessionKind.GEMINI
+        assert isinstance(gemini, GeminiOptions) and claude is None and codex is None
 
     def test_explicit_cli_claude_defaults_options_when_omitted(self):
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex = self._call(cli="claude")
+        kind, _command, _env, claude, codex, gemini = self._call(cli="claude")
         assert kind is SessionKind.CLAUDE
-        assert isinstance(claude, ClaudeOptions) and codex is None
+        assert isinstance(claude, ClaudeOptions) and codex is None and gemini is None
 
     def test_explicit_cli_codex_clears_stray_claude_options(self):
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex = self._call(
+        kind, _command, _env, claude, codex, gemini = self._call(
             cli="codex", claude=ClaudeOptions(), codex=CodexOptions(),
         )
         # Exactly one options object survives, matching the chosen kind.
         assert kind is SessionKind.CODEX
-        assert codex is not None and claude is None
+        assert codex is not None and claude is None and gemini is None
+
+    def test_explicit_cli_gemini_clears_stray_options(self):
+        from mobaide.core.claude_launcher import ClaudeOptions
+        from mobaide.core.codex_launcher import CodexOptions
+        from mobaide.core.gemini_launcher import GeminiOptions
+        from mobaide.core.models import SessionKind
+
+        kind, _command, _env, claude, codex, gemini = self._call(
+            cli="gemini",
+            claude=ClaudeOptions(),
+            codex=CodexOptions(),
+            gemini=GeminiOptions(),
+        )
+        # Exactly one options object survives, matching the chosen kind.
+        assert kind is SessionKind.GEMINI
+        assert gemini is not None and claude is None and codex is None
