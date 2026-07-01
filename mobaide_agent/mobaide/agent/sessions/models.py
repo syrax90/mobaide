@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
+from mobaide.core.gemini_launcher import GeminiOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
 
 
@@ -64,6 +65,30 @@ class CodexOptionsModel(BaseModel):
         return CodexOptions(**self.model_dump())
 
 
+class GeminiOptionsModel(BaseModel):
+    """Wire DTO for Gemini CLI launch options (see :class:`GeminiOptions`).
+
+    ``model`` / ``approval_mode`` are ``Literal``-typed so an invalid value is
+    rejected with a 422 at the wire boundary rather than producing a broken
+    ``gemini`` argv. ``protected_namespaces=()`` silences pydantic's ``model_*``
+    guard for the legitimately-named ``model`` field.
+    """
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    model: Literal["auto", "pro", "flash", "flash-lite"] | None = None
+    approval_mode: Literal["default", "auto_edit", "yolo", "plan"] = "default"
+    include_directories: list[str] = []
+    sandbox: bool = False
+    worktree: bool = False
+    branch_name: str | None = None
+
+    def to_options(self) -> GeminiOptions:
+        data = self.model_dump()
+        data["include_directories"] = tuple(data["include_directories"])
+        return GeminiOptions(**data)
+
+
 class CreateSessionRequest(BaseModel):
     command: list[str] | None = None
     cwd: str | None = None
@@ -73,17 +98,18 @@ class CreateSessionRequest(BaseModel):
     # When set, ``command``/``cwd``/``env`` are ignored and the matching
     # launcher builds them from the project + the CLI options block.
     project_name: str | None = None
-    # Which managed CLI to launch: "claude" | "codex". Optional — when omitted
-    # the kind is inferred from whichever options block is present (a legacy
-    # claude_options-only payload still resolves to Claude). Shell/Terminal
+    # Which managed CLI to launch: "claude" | "codex" | "gemini". Optional — when
+    # omitted the kind is inferred from whichever options block is present (a
+    # legacy claude_options-only payload still resolves to Claude). Shell/Terminal
     # sessions leave this null and send no options block.
     cli: str | None = None
     claude_options: ClaudeOptionsModel | None = None
     codex_options: CodexOptionsModel | None = None
+    gemini_options: GeminiOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
     # (no CLI options) anchored to a stored git project and spawn the shell
-    # inside it. Managed Claude/Codex sessions instead carry worktree intent
-    # inside their own options block (``claude_options``/``codex_options``).
+    # inside it. Managed Claude/Codex/Gemini sessions instead carry worktree
+    # intent inside their own options block.
     worktree: bool = False
     branch_name: str | None = None
 

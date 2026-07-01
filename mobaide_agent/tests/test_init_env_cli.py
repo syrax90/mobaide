@@ -399,3 +399,100 @@ class TestInitEnvCodexBin:
         assert rc == 0
         values = parse_env_file(env_path_for_prefix(tmp_path))
         assert values["MOBAIDE_CODEX_BIN"] == "/new/location/codex"
+
+
+class TestInitEnvGeminiBin:
+    """``--gemini-bin`` writes ``MOBAIDE_GEMINI_BIN`` so the agent always
+    resolves ``gemini.cmd`` even when PATH is non-standard.
+
+    Gemini is the optional third managed CLI. The Windows installer captures
+    the user's ``%APPDATA%\\npm\\gemini.cmd`` before UAC elevation (under the
+    originating user's env), then re-invokes ``init-env --gemini-bin <abs-path>``
+    from the elevated session — exact parity with the Claude / Codex paths. The
+    flag must land an uncommented ``MOBAIDE_GEMINI_BIN=<path>`` line; the
+    template ships the key commented out (``env.template:57``) so
+    ``render_template``'s ``^\\s*#?\\s*KEY=`` matcher must uncomment it.
+    """
+
+    def test_writes_gemini_bin_when_flag_passed_fresh(self, tmp_path):
+        rc = _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--gemini-bin", r"C:\Users\u\AppData\Roaming\npm\gemini.cmd",
+        ])
+
+        assert rc == 0
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        assert values["MOBAIDE_GEMINI_BIN"] == (
+            r"C:\Users\u\AppData\Roaming\npm\gemini.cmd"
+        )
+
+    def test_writes_gemini_bin_uncomments_template_line(self, tmp_path):
+        # The template ships ``# MOBAIDE_GEMINI_BIN=`` commented (see
+        # env.template:57). ``render_template`` must rewrite that line as an
+        # uncommented ``MOBAIDE_GEMINI_BIN=<value>`` — not append a duplicate
+        # alongside the commented form.
+        _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--gemini-bin", "/abs/gemini",
+        ])
+
+        text = env_path_for_prefix(tmp_path).read_text(encoding="utf-8")
+        # Exactly one uncommented line.
+        assert "\nMOBAIDE_GEMINI_BIN=/abs/gemini\n" in text
+        # The commented placeholder is gone — not preserved alongside.
+        assert "# MOBAIDE_GEMINI_BIN=" not in text
+
+    def test_no_flag_leaves_gemini_bin_commented(self, tmp_path):
+        # Default flow (no ``--gemini-bin``): the commented template line
+        # passes through unchanged; ``MOBAIDE_GEMINI_BIN`` does not appear in
+        # ``parse_env_file`` output because comments are skipped. The resolver
+        # then falls back to PATH / npm-global fallbacks.
+        _run(["init-env", "--prefix", str(tmp_path)])
+
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        assert "MOBAIDE_GEMINI_BIN" not in values
+        # The commented placeholder is preserved so the operator can
+        # hand-edit it post-install if needed.
+        text = env_path_for_prefix(tmp_path).read_text(encoding="utf-8")
+        assert "# MOBAIDE_GEMINI_BIN=" in text
+
+    def test_force_preserves_existing_gemini_bin(self, tmp_path):
+        # Re-install path: ``init-env --force`` must preserve a
+        # previously-set ``MOBAIDE_GEMINI_BIN`` exactly like it preserves
+        # ``MOBAIDE_CODEX_BIN``. Operators who hand-edited the path should
+        # never lose it on a stock re-run.
+        _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--gemini-bin", "/originally/written",
+        ])
+        original = parse_env_file(
+            env_path_for_prefix(tmp_path)
+        )["MOBAIDE_GEMINI_BIN"]
+        assert original == "/originally/written"
+
+        rc = _run(["init-env", "--prefix", str(tmp_path), "--force"])
+
+        assert rc == 0
+        preserved = parse_env_file(
+            env_path_for_prefix(tmp_path)
+        )["MOBAIDE_GEMINI_BIN"]
+        assert preserved == "/originally/written"
+
+    def test_force_with_new_gemini_bin_overrides_existing(self, tmp_path):
+        # Re-install where the operator just moved the gemini package to a
+        # new prefix: passing ``--gemini-bin /new`` to a ``--force`` run must
+        # win over the preserved old value (explicit installer value wins,
+        # same precedence as ``--codex-bin``).
+        _run([
+            "init-env", "--prefix", str(tmp_path),
+            "--gemini-bin", "/old/location/gemini",
+        ])
+
+        rc = _run([
+            "init-env", "--prefix", str(tmp_path), "--force",
+            "--gemini-bin", "/new/location/gemini",
+        ])
+
+        assert rc == 0
+        values = parse_env_file(env_path_for_prefix(tmp_path))
+        assert values["MOBAIDE_GEMINI_BIN"] == "/new/location/gemini"

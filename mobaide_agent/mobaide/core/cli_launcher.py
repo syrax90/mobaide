@@ -1,8 +1,9 @@
 """CLI-agnostic launcher primitives shared by every managed CLI integration.
 
-The agent can launch more than one coding CLI (Claude Code, Codex CLI). Each
-gets its own launcher module (``claude_launcher`` / ``codex_launcher``), but the
-generic scaffolding — the ``LaunchSpec`` result shape, the ad-hoc launch target,
+The agent can launch more than one coding CLI (Claude Code, Codex CLI, Gemini
+CLI). Each gets its own launcher module (``claude_launcher`` / ``codex_launcher``
+/ ``gemini_launcher``), but the generic scaffolding — the ``LaunchSpec`` result
+shape, the ad-hoc launch target,
 binary resolution (override → env → PATH → npm fallbacks), and the
 ``CliBinaryNotFoundError`` base — lives here so the per-CLI modules stay thin and
 do not duplicate the platform-probing logic.
@@ -95,9 +96,9 @@ class CliLauncher(Protocol):
     """Structural contract every managed-CLI launcher satisfies.
 
     A launcher turns a :class:`LaunchTarget` plus a CLI-specific options object
-    into a :class:`LaunchSpec` (argv/cwd/env). ``ClaudeLauncher`` and
-    ``CodexLauncher`` both conform; ``SessionManager`` keeps a registry keyed by
-    CLI name and dispatches by ``SessionKind``.
+    into a :class:`LaunchSpec` (argv/cwd/env). ``ClaudeLauncher``,
+    ``CodexLauncher``, and ``GeminiLauncher`` all conform; ``SessionManager``
+    keeps a registry keyed by CLI name and dispatches by ``SessionKind``.
     """
 
     async def build(

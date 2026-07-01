@@ -20,6 +20,7 @@ from mobaide.core import (
     ClaudeLauncher,
     CodexLauncher,
     FakePtyBackend,
+    GeminiLauncher,
     ProjectsStore,
     SessionManager,
     create_pty_backend,
@@ -689,11 +690,20 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         codex_bin_override=config.codex_bin,
         worktree_mgr=worktree_mgr,
     )
+    # Gemini CLI launcher — sibling of Codex; same WorktreeManager sharing, no
+    # hooks. Auth is detection-only (no in-app login), so the operator
+    # pre-authenticates ``gemini`` on the host. Binary resolves lazily.
+    app.state.gemini_launcher = GeminiLauncher(
+        gemini_bin_override=config.gemini_bin,
+        worktree_mgr=worktree_mgr,
+    )
     # Registry keyed by CLI name. SessionManager picks a launcher per session;
-    # the Auto Scan scanner stays Claude-only.
+    # the Auto Scan scanner stays Claude-only. build_cli_capabilities reads this
+    # registry, so a new entry auto-surfaces in /api/version capabilities.
     app.state.cli_launchers = {
         "claude": app.state.claude_launcher,
         "codex": app.state.codex_launcher,
+        "gemini": app.state.gemini_launcher,
     }
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
@@ -715,6 +725,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         projects_store=projects_store,
         launcher=app.state.claude_launcher,
         codex_launcher=app.state.codex_launcher,
+        gemini_launcher=app.state.gemini_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,

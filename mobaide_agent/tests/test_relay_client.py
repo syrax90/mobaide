@@ -41,6 +41,8 @@ from mobaide.core import (
     ClaudeBinaryNotFoundError,
     CodexAuthRequiredError,
     CodexBinaryNotFoundError,
+    GeminiAuthRequiredError,
+    GeminiBinaryNotFoundError,
 )
 from mobaide.core.models import SessionKind, SessionState
 
@@ -3576,3 +3578,336 @@ class TestProxyVersionCapabilities:
         assert body["server_version"] == __version__
         assert body["protocol_versions"] == list(SUPPORTED_PROTOCOL_VERSIONS)
         assert body["min_client_version"] == MIN_CLIENT_PROTOCOL_VERSION
+
+
+class TestHandleCreateSessionGemini:
+    """The control-channel ``create_session`` path (used when a central relay
+    drives the agent directly, not via the HTTP proxy) must support the third
+    managed CLI: parse ``gemini_options``, thread the ``cli`` discriminator into
+    a GEMINI ``SessionConfig``, map a missing Gemini binary to its own
+    ``gemini_cli_missing`` marker, and an unauthenticated Gemini to a
+    ``gemini_auth_required`` marker — the Claude/Codex-only coverage elsewhere
+    never exercises the Gemini branch.
+    """
+
+    async def test_create_session_forwards_gemini_options_and_kind(
+        self, client, mock_session_manager,
+    ):
+        """An explicit ``cli="gemini"`` plus a ``gemini_options`` block must reach
+        ``create_session`` as a GEMINI ``SessionConfig`` carrying the parsed
+        :class:`GeminiOptions` (and no ``claude_options``). Otherwise the model /
+        approval-mode selection is silently dropped on the relay control path."""
+        from mobaide.core.gemini_launcher import GeminiOptions
+        from mobaide.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "gemini-sess"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "gemini-sess",
+            "cli": "gemini",
+            "gemini_options": {
+                "model": "flash",
+                "approval_mode": "plan",
+            },
+        }
+        payload = json.dumps(ctrl).encode()
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(payload, ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.GEMINI
+        assert cfg.claude_options is None
+        assert cfg.codex_options is None
+        assert isinstance(cfg.gemini_options, GeminiOptions)
+        assert cfg.gemini_options.model == "flash"
+        assert cfg.gemini_options.approval_mode == "plan"
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "gemini-sess"
+        assert resp["pid"] == 7
+
+    async def test_gemini_options_without_cli_still_resolves_gemini_kind(
+        self, client, mock_session_manager,
+    ):
+        """Back-compat inference: a payload that carries ``gemini_options`` but
+        omits the ``cli`` discriminator must still resolve to a GEMINI session
+        (mirrors how a ``claude_options``-only payload resolves to Claude)."""
+        from mobaide.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "infer-sess"
+            s.pid = 8
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "infer-sess",
+            "gemini_options": {"approval_mode": "yolo"},
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.GEMINI
+        assert cfg.gemini_options is not None
+        assert cfg.gemini_options.approval_mode == "yolo"
+
+    async def test_invalid_gemini_options_returns_create_failed(
+        self, client, mock_session_manager,
+    ):
+        """An out-of-range enum value in ``gemini_options`` is rejected at the
+        ``GeminiOptionsModel`` boundary, producing ``session_create_failed`` with
+        an ``Invalid gemini_options:`` error — and ``create_session`` is never
+        reached."""
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "bad-gemini",
+            "cli": "gemini",
+            "gemini_options": {"approval_mode": "nope"},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "bad-gemini"
+        assert resp["error"].startswith("Invalid gemini_options:")
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_gemini_cli_missing_emits_gemini_cli_missing_discriminator(
+        self, client, mock_session_manager,
+    ):
+        """``GeminiBinaryNotFoundError`` from the spawn path must map to
+        ``session_create_failed`` with ``gemini_cli_missing: true`` (NOT
+        ``claude_cli_missing``) and the Gemini-specific install hint. The marker
+        key is derived from ``exc.cli_name`` — this proves the Gemini subclass
+        routes through the shared ``except CliBinaryNotFoundError`` branch."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=GeminiBinaryNotFoundError(
+                searched_paths=["PATH:gemini", "/home/test/.npm-global/bin/gemini"]
+            ),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "no-gemini-sess",
+            "cli": "gemini",
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "no-gemini-sess"
+        assert resp["gemini_cli_missing"] is True
+        assert "claude_cli_missing" not in resp
+        assert resp["error"].startswith("Gemini CLI not found:")
+        assert "npm install -g @google/gemini-cli" in resp["error"]
+        assert "MOBAIDE_GEMINI_BIN" in resp["error"]
+        assert resp["searched_paths"] == [
+            "PATH:gemini",
+            "/home/test/.npm-global/bin/gemini",
+        ]
+
+    async def test_gemini_auth_required_emits_gemini_auth_required_marker(
+        self, client, mock_session_manager,
+    ):
+        """``GeminiAuthRequiredError`` from the spawn path maps to
+        ``session_create_failed`` with ``gemini_auth_required: true`` top-level
+        (parallel to ``<cli>_cli_missing``) so the mobile client tells the
+        operator to authenticate ``gemini`` on the host rather than showing the
+        generic error toast."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=GeminiAuthRequiredError(),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "no-auth-gemini",
+            "cli": "gemini",
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "no-auth-gemini"
+        assert resp["gemini_auth_required"] is True
+        assert isinstance(resp["error"], str) and resp["error"]
+
+
+class TestHandleProxyRequestGemini:
+    """``POST /api/sessions`` proxied through the central relay
+    (``proxy_request`` control frame) must thread Gemini the same way the direct
+    HTTP router does: parse ``gemini_options`` into a GEMINI session, map a
+    missing Gemini binary to status 503 with a ``gemini_cli_missing`` body marker,
+    and an unauthenticated Gemini to status 409 with a ``gemini_auth_required``
+    marker.
+    """
+
+    async def test_proxy_post_sessions_threads_gemini_options(
+        self, client, mock_session_manager,
+    ):
+        """A proxied ``POST /api/sessions`` body with ``cli="gemini"`` builds a
+        GEMINI ``SessionConfig`` from ``gemini_options`` and returns a 201
+        ``proxy_response`` whose body reports ``kind == "gemini"``."""
+        from mobaide.core.gemini_launcher import GeminiOptions
+        from mobaide.core.models import SessionConfig
+
+        captured: dict[str, SessionConfig] = {}
+
+        async def _capture(config: SessionConfig):
+            captured["config"] = config
+            s = MagicMock()
+            s.session_id = "proxy-gemini"
+            s.pid = 11
+            info = MagicMock()
+            info.session_id = "proxy-gemini"
+            info.state = SessionState.RUNNING
+            info.created_at = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+            info.pid = 11
+            info.command = ["gemini"]
+            info.cwd = None
+            info.title = None
+            info.project_name = None
+            info.kind = SessionKind.GEMINI
+            info.attention = None
+            info.exit_reason = None
+            s.to_info = MagicMock(return_value=info)
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-gemini",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {
+                "cli": "gemini",
+                "gemini_options": {"model": "flash", "approval_mode": "plan"},
+            },
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg = captured["config"]
+        assert cfg.kind is SessionKind.GEMINI
+        assert cfg.claude_options is None
+        assert isinstance(cfg.gemini_options, GeminiOptions)
+        assert cfg.gemini_options.model == "flash"
+        assert cfg.gemini_options.approval_mode == "plan"
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-gemini"
+        assert resp["status"] == 201
+        assert resp["body"]["kind"] == "gemini"
+
+    async def test_proxy_invalid_gemini_options_returns_422(
+        self, client, mock_session_manager,
+    ):
+        """An out-of-range ``gemini_options`` enum on the proxy path is rejected
+        by ``CreateSessionRequest`` validation, returning a 422 ``proxy_response``
+        without ever reaching ``create_session``."""
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-bad-gemini",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {"cli": "gemini", "gemini_options": {"approval_mode": "nope"}},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-bad-gemini"
+        assert resp["status"] == 422
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_proxy_gemini_cli_missing_returns_503_with_discriminator(
+        self, client, mock_session_manager,
+    ):
+        """A missing Gemini binary on the proxy path must map to status=503
+        (not 400 / not 500) with ``gemini_cli_missing: true`` in the body and the
+        Gemini install hint — the marker key derives from ``exc.cli_name`` so the
+        Gemini subclass and Claude share one 503 handler."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=GeminiBinaryNotFoundError(
+                searched_paths=["PATH:gemini", "/usr/local/bin/gemini"]
+            ),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-gemini-missing",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {"cli": "gemini", "gemini_options": {}},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-gemini-missing"
+        assert resp["status"] == 503
+        assert resp["body"]["gemini_cli_missing"] is True
+        assert "claude_cli_missing" not in resp["body"]
+        assert resp["body"]["detail"].startswith("Gemini CLI not found:")
+        assert "npm install -g @google/gemini-cli" in resp["body"]["detail"]
+        assert resp["body"]["searched_paths"] == [
+            "PATH:gemini",
+            "/usr/local/bin/gemini",
+        ]
+
+    async def test_proxy_gemini_auth_required_returns_409_with_marker(
+        self, client, mock_session_manager,
+    ):
+        """``POST /api/sessions`` proxied through the relay must map
+        ``GeminiAuthRequiredError`` to status=409 (not 401 / not 503 / not 500)
+        with ``gemini_auth_required: true`` in the body so the mobile client
+        renders the auth prompt — 409 (not 401) so the Android AuthInterceptor
+        doesn't refresh-retry and swallow the marker."""
+        mock_session_manager.create_session = AsyncMock(
+            side_effect=GeminiAuthRequiredError(),
+        )
+        ws = AsyncMock()
+        ctrl = {
+            "type": "proxy_request",
+            "request_id": "req-gemini-auth",
+            "method": "POST",
+            "path": "/api/sessions",
+            "body": {"cli": "gemini", "gemini_options": {}},
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "proxy_response"
+        assert resp["request_id"] == "req-gemini-auth"
+        assert resp["status"] == 409
+        assert resp["body"]["gemini_auth_required"] is True
+        assert isinstance(resp["body"]["detail"], str) and resp["body"]["detail"]

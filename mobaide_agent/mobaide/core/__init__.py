@@ -11,6 +11,12 @@ from .codex_launcher import (
     CodexLauncher,
     CodexOptions,
 )
+from .gemini_launcher import (
+    GeminiAuthRequiredError,
+    GeminiBinaryNotFoundError,
+    GeminiLauncher,
+    GeminiOptions,
+)
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .projects_config import AutoScanFilter, ProjectConfig
 from .projects_store import (
@@ -45,6 +51,10 @@ __all__ = [
     "CodexOptions",
     "CodexBinaryNotFoundError",
     "CodexAuthRequiredError",
+    "GeminiLauncher",
+    "GeminiOptions",
+    "GeminiBinaryNotFoundError",
+    "GeminiAuthRequiredError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

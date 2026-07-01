@@ -393,6 +393,14 @@ Common causes:
     Stop-ScheduledTask -TaskName MobaideAgent
     Start-ScheduledTask -TaskName MobaideAgent
     ```
+- Gemini CLI not on the service's `PATH` (only relevant if you use the optional Gemini agent) — the agent returns HTTP 503 with a `gemini_cli_missing` marker and a `searched_paths` list. Gemini auth is detection-only: an installed-but-signed-out `gemini` returns HTTP 409 with a `gemini_auth_required` marker, so authenticate `gemini` on the host (`GEMINI_API_KEY` or interactive sign-in) before launching a session — there is no in-app login route. The agent probes the same npm-global / `PATH` locations as Claude and Codex (`npm install -g @google/gemini-cli`); if `gemini` lives elsewhere, point the agent at it via `MOBAIDE_GEMINI_BIN`: edit `<prefix>\mobaide_agent\.env` directly, or run the `set-env` verb:
+    ```powershell
+    & "$env:ProgramFiles\MobaideAgent\releases\<version>\venv\Scripts\python.exe" `
+      -m mobaide.agent.config set-env --key MOBAIDE_GEMINI_BIN `
+      --value "C:\Users\<you>\AppData\Roaming\npm\gemini.cmd"
+    Stop-ScheduledTask -TaskName MobaideAgent
+    Start-ScheduledTask -TaskName MobaideAgent
+    ```
 
 #### Agent not showing as online in the Android app
 

@@ -37,6 +37,35 @@ cadence; they do **not** gate compatibility.
       ``--append-system-prompt <text>``.
   * ``codex_options`` and all other CH_CONTROL / CH_EVENTS / CH_SESSION_IO shapes
     are unchanged.
+* Managed **Gemini CLI** as a third coding agent (CLA-87 — **additive, no
+  version bump**): Gemini is wired through the same extension points the Codex
+  foundation established, so no JSON shape breaks and the version stays at ``6``.
+  An old proto-v6 client is unaffected (it never sends ``cli:"gemini"``); a new
+  client feature-detects Gemini via the ``capabilities.cli`` advertisement rather
+  than a version gate — the same forward-compat contract that made the Codex
+  auth/login and CLI-availability additions no-bump changes (see proto-v5).
+  * ``create_session`` (``POST /api/sessions`` proxied over ``CH_CONTROL``):
+    ``cli`` gains the value ``"gemini"`` and a new optional ``gemini_options``
+    object — ``model`` (``auto`` | ``pro`` | ``flash`` | ``flash-lite`` | null),
+    ``approval_mode`` (``default`` | ``auto_edit`` | ``yolo`` | ``plan``;
+    ``--approval-mode`` replaces Gemini's deprecated ``--yolo``),
+    ``include_directories`` (array of str), ``sandbox`` (bool), plus the shared
+    ``worktree`` / ``branch_name`` intent. Exactly one of ``claude_options`` /
+    ``codex_options`` / ``gemini_options`` is honoured per session.
+  * ``session_to_wire_dict`` ``kind`` gains the value ``"gemini"`` — the Android
+    client already coerces an unknown ``kind`` forward-compatibly (a typed
+    ``Gemini`` enum member lands with the create-session UI, CLA-88).
+  * Missing binary → ``gemini_cli_missing: true`` + ``searched_paths`` (``503`` /
+    ``session_create_failed``); an unauthenticated host → ``gemini_auth_required:
+    true`` (``409``, non-``401`` for the same app-JWT-interceptor reason as
+    Codex). Auth is **detection-only**: Gemini has no ``login`` /
+    ``--with-api-key`` subcommand and its OAuth needs a browser, so there is
+    **no** ``POST /api/gemini/login`` route — the operator authenticates
+    ``gemini`` on the host (``GEMINI_API_KEY`` / ``GOOGLE_API_KEY`` / Vertex-AI
+    credentials / cached OAuth). In-app API-key entry is deferred (CLA-91).
+  * ``capabilities.cli`` on ``GET /api/version`` gains a ``gemini`` entry from the
+    same registry-driven builder, so the mode-select screen enables Gemini only
+    when its binary resolves on the host.
 
 ## proto-v5 (superseded by proto-v6)
 

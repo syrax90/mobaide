@@ -61,6 +61,24 @@ def _pin_codex_binary(monkeypatch):
     )
     yield
 
+
+@pytest.fixture(autouse=True)
+def _pin_gemini_binary(monkeypatch):
+    """Pin the Gemini resolver to the literal string ``"gemini"`` for every test.
+
+    Parallel of :func:`_pin_codex_binary`: gemini launcher tests assert
+    ``spec.argv[0] == "gemini"`` and REST/relay/capability tests must not hit the
+    real host resolver. Tests exercising the missing-binary path re-patch
+    ``gemini_launcher._resolve_gemini_binary`` to raise inside the test body,
+    which overrides this fixture.
+    """
+    from mobaide.core import gemini_launcher
+
+    monkeypatch.setattr(
+        gemini_launcher, "_resolve_gemini_binary", lambda *_a, **_kw: "gemini"
+    )
+    yield
+
 TEST_JWT_SECRET = "test-secret-key-for-jwt-signing-do-not-use-in-prod"
 TEST_USERNAME = "testuser"
 TEST_PASSWORD = "testpass123"
