@@ -1,0 +1,47 @@
+name: E2E harness (subprocess)
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: e2e-harness-${{ github.ref }}
+  cancel-in-progress: true
+
+# Declare contents:read so actions/checkout's GITHUB_TOKEN reliably has the
+# scope it needs, regardless of the repo's default token policy.
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    # Cross-platform proof: the harness is Python-only (no PowerShell, no Docker).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install both packages with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e 'mobaide_agent[dev]'
+          python -m pip install -e 'central_server[dev]'
+
+      - name: Run cross-process E2E harness
+        run: python -m pytest tests/e2e/ -v
+
+      - name: Kill any straggler subprocesses
+        if: always()
+        continue-on-error: true
+        run: python -m pytest --xkill

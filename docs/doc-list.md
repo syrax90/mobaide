@@ -15,3 +15,4 @@
 - android/CHANGELOG.md — Android app release notes (per android-vX.Y.Z tag).
 - mobaide_agent/CHANGELOG.md — mobaide_agent release notes (per agent-vX.Y.Z tag).
 - central_server/CHANGELOG.md — central_server release notes (per server-vX.Y.Z tag).
+- tests/e2e/README.md — Cross-platform Python E2E harness (CLA-78): boots the real central_server + mobaide agent as subprocesses on ephemeral loopback ports under `MOBAIDE_ENV=test` and drives the full mobile↔server↔agent path with a headless mock-mobile client over the real REST+WebSocket protocol (SHELL session + fake-PTY echo); prerequisites, run/cleanup (`pytest --xkill`), CI matrix, and the Windows event-loop / `127.0.0.1`-bind gotchas.
