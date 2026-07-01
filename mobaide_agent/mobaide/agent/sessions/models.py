@@ -68,15 +68,19 @@ class CodexOptionsModel(BaseModel):
 class GeminiOptionsModel(BaseModel):
     """Wire DTO for Gemini CLI launch options (see :class:`GeminiOptions`).
 
-    ``model`` / ``approval_mode`` are ``Literal``-typed so an invalid value is
-    rejected with a 422 at the wire boundary rather than producing a broken
-    ``gemini`` argv. ``protected_namespaces=()`` silences pydantic's ``model_*``
-    guard for the legitimately-named ``model`` field.
+    ``model`` is free-form ``str`` — like the Claude/Codex DTOs — so it accepts
+    both the preset aliases (``auto`` / ``pro`` / ``flash`` / ``flash-lite``) and
+    any concrete model id (e.g. ``gemini-2.5-pro``) or future alias the real CLI
+    supports; the launcher forwards it verbatim. ``approval_mode`` stays
+    ``Literal`` because those four values are the CLI's entire accepted set, so an
+    invalid one is worth rejecting with a 422 at the wire boundary rather than
+    producing a broken ``gemini`` argv. ``protected_namespaces=()`` silences
+    pydantic's ``model_*`` guard for the legitimately-named ``model`` field.
     """
 
     model_config = ConfigDict(protected_namespaces=())
 
-    model: Literal["auto", "pro", "flash", "flash-lite"] | None = None
+    model: str | None = None
     approval_mode: Literal["default", "auto_edit", "yolo", "plan"] = "default"
     include_directories: list[str] = []
     sandbox: bool = False

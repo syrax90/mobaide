@@ -397,6 +397,28 @@ class TestCodexToOptions:
                 CodexOptionsModel.model_validate(bad)
 
 
+class TestGeminiOptionsModel:
+    """``GeminiOptionsModel`` keeps ``model`` free-form (like the Claude/Codex
+    DTOs) but constrains ``approval_mode`` to the CLI's four modes."""
+
+    def test_accepts_preset_alias_and_full_model_id(self):
+        from mobaide.agent.sessions.models import GeminiOptionsModel
+
+        assert GeminiOptionsModel(model="flash").to_options().model == "flash"
+        # A concrete model id (not one of the four aliases) is accepted, not 422:
+        # the launcher forwards ``--model`` verbatim and the real CLI takes ids.
+        full = GeminiOptionsModel(model="gemini-2.5-pro").to_options()
+        assert full.model == "gemini-2.5-pro"
+
+    def test_rejects_invalid_approval_mode(self):
+        import pydantic
+
+        from mobaide.agent.sessions.models import GeminiOptionsModel
+
+        with pytest.raises(pydantic.ValidationError):
+            GeminiOptionsModel.model_validate({"approval_mode": "nope"})
+
+
 class TestResolveSpawnArgs:
     """``resolve_spawn_args`` is the single normaliser the REST + relay create
     paths share: it picks the kind, applies the shell security guard, and

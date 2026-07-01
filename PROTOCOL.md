@@ -46,7 +46,8 @@ cadence; they do **not** gate compatibility.
   auth/login and CLI-availability additions no-bump changes (see proto-v5).
   * ``create_session`` (``POST /api/sessions`` proxied over ``CH_CONTROL``):
     ``cli`` gains the value ``"gemini"`` and a new optional ``gemini_options``
-    object — ``model`` (``auto`` | ``pro`` | ``flash`` | ``flash-lite`` | null),
+    object — ``model`` (free-form string: a preset alias ``auto`` / ``pro`` /
+    ``flash`` / ``flash-lite``, any concrete model id, or null),
     ``approval_mode`` (``default`` | ``auto_edit`` | ``yolo`` | ``plan``;
     ``--approval-mode`` replaces Gemini's deprecated ``--yolo``),
     ``include_directories`` (array of str), ``sandbox`` (bool), plus the shared

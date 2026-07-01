@@ -359,10 +359,12 @@ def test_real_resolver_raises_with_actionable_message(
 
 @pytest.fixture
 def _unauthenticated_gemini_env(monkeypatch, tmp_path):
-    """Empty GEMINI_HOME (no oauth_creds.json / settings.json) and no credential
-    env vars, so ``gemini_auth_present`` returns False deterministically,
-    independent of the test host's real gemini credentials."""
-    monkeypatch.setenv("GEMINI_HOME", str(tmp_path))
+    """Empty GEMINI_CLI_HOME (no oauth_creds.json / settings.json / .env) and no
+    credential env vars, so ``gemini_auth_present`` returns False deterministically,
+    independent of the test host's real gemini credentials. Pointing the home root
+    at ``tmp_path`` — the same dir the build target uses as its cwd — also bounds
+    the ``.env`` upward search so it never climbs into the real home tree."""
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path))
     for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"):
         monkeypatch.delenv(key, raising=False)
     yield
@@ -398,7 +400,7 @@ async def test_build_auth_guard_runs_before_worktree_creation(
 async def test_build_succeeds_when_env_api_key_present(tmp_path: Path, monkeypatch):
     """A ``GEMINI_API_KEY`` in the inherited env passes the guard and the build
     completes normally."""
-    monkeypatch.setenv("GEMINI_HOME", str(tmp_path))
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(tmp_path))
     monkeypatch.setenv("GEMINI_API_KEY", "test-present")
     spec = await GeminiLauncher().build(_make_project(str(tmp_path)), GeminiOptions())
     assert spec.cwd == str(tmp_path)
@@ -413,10 +415,11 @@ async def test_build_succeeds_when_cached_oauth_creds_present(
     passes the guard — the filesystem branch of detection."""
     for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"):
         monkeypatch.delenv(key, raising=False)
-    home = tmp_path / "gem_home"
-    home.mkdir()
-    (home / "oauth_creds.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setenv("GEMINI_HOME", str(home))
+    root = tmp_path / "gem_home"
+    config = root / ".gemini"
+    config.mkdir(parents=True)
+    (config / "oauth_creds.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("GEMINI_CLI_HOME", str(root))
     spec = await GeminiLauncher().build(_make_project(str(tmp_path)), GeminiOptions())
     assert spec.cwd == str(tmp_path)
 

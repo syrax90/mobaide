@@ -148,11 +148,14 @@ class GeminiLauncher:
         # has no per-session hooks. Build argv (resolves the binary) and verify
         # auth before any cwd work, so a missing CLI (503) or an unauthenticated
         # one (409) aborts before a worktree is created. Detection is a pure
-        # env/filesystem probe (Gemini has no ``login status`` subcommand), so it
-        # reads the built launch env the session would use.
+        # env/filesystem probe (Gemini has no ``login status`` subcommand); it
+        # reads the built launch env plus the target dir, so a project/home
+        # ``.env`` the real ``gemini`` would auto-load is honoured (the worktree
+        # isn't created yet, but a repo ``.env`` lives at the project root anyway).
         argv = self._build_argv(options)
         env = self._build_env(target)
-        if not gemini_auth_present(env):
+        probe_cwd = target.path if isinstance(target, ProjectConfig) else target.cwd
+        if not gemini_auth_present(env, cwd=probe_cwd):
             raise GeminiAuthRequiredError()
         cwd = await self._resolve_cwd(target, options)
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=[])
