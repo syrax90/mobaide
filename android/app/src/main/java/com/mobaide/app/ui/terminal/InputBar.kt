@@ -78,6 +78,8 @@ private val CtrlRKey = ControlKey("Ctrl+R", byteArrayOf(0x12))
 private val CtrlLKey = ControlKey("Ctrl+L", byteArrayOf(0x0c))
 private val ApproveKey = ControlKey("Approve", byteArrayOf('y'.code.toByte()))
 private val RejectKey = ControlKey("Reject", byteArrayOf('n'.code.toByte()))
+private val YoloKey = ControlKey("YOLO", byteArrayOf(0x19))
+private val TodoKey = ControlKey("TODO", byteArrayOf(0x14))
 
 // Nav/control tail shared by every CLI. Arrows + Enter drive the in-terminal menus (mode
 // picker, approval/selection prompts, history); Ctrl+O toggles the transcript, Ctrl+R
@@ -98,8 +100,14 @@ private val CLAUDE_CONTROL_KEYS = listOf(ModeKey, RewindKey) + SHARED_TAIL
 // Codex but dropped from Claude as low-value on mobile.
 private val CODEX_CONTROL_KEYS = listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS + CtrlLKey
 
+// Gemini leads with Mode (Shift+Tab, CSI Z — cycles default/auto_edit/plan), YOLO (Ctrl+Y —
+// toggle auto-approve) and TODO (Ctrl+T — toggle the todo list), then the shared tail, and
+// Ctrl+L (clear screen) at the end like Codex. Bracketed paste is honored, so no newline key.
+private val GEMINI_CONTROL_KEYS = listOf(ModeKey, YoloKey, TodoKey) + SHARED_TAIL + CtrlLKey
+
 private fun controlKeysFor(kind: SessionKind): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
+    SessionKind.Gemini -> GEMINI_CONTROL_KEYS
     else -> CLAUDE_CONTROL_KEYS // Claude, shell, and auto-scan share the Mode/nav/control core.
 }
 

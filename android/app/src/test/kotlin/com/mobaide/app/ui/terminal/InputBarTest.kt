@@ -30,6 +30,10 @@ import org.robolectric.annotation.Config
  *   - For [SessionKind.Codex] the panel prepends the approval answers `Approve`/`Reject`
  *     and appends `Ctrl+L` to the Claude set, with the correct raw-byte payloads; those
  *     Codex-only keys never leak into the Claude set ([InputBarCodexTest]).
+ *   - For [SessionKind.Gemini] the panel leads with `Mode`, `YOLO`, `TODO` and appends
+ *     `Ctrl+L` to the shared tail (no `Rewind`/`Approve`/`Reject`), with the correct
+ *     raw-byte payloads; Gemini-only keys (`YOLO`/`TODO`) never leak into the Claude or
+ *     Codex sets ([InputBarGeminiTest]).
  *
  * Robolectric SDK pinned to 33 to match existing project precedent
  * (`AgentListScreenTest`). The `qualifiers` differ per test class to
@@ -417,7 +421,7 @@ class InputBarCodexTest {
     }
 
     @Test
-    fun claudeSet_doesNotExposeCodexOnlyKeys() {
+    fun claudeSet_doesNotExposeOtherCliOnlyKeys() {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -432,7 +436,136 @@ class InputBarCodexTest {
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
-        listOf("Approve", "Reject", "Ctrl+L")
+        listOf("Approve", "Reject", "Ctrl+L", "YOLO", "TODO")
+            .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
+    }
+
+    @Test
+    fun codexSet_doesNotExposeGeminiOnlyKeys() {
+        openCodexPanel()
+
+        listOf("YOLO", "TODO")
+            .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
+    }
+}
+
+/**
+ * Gemini control-key set: passing `sessionKind = SessionKind.Gemini` leads with `Mode`
+ * (Shift+Tab), `YOLO` (Ctrl+Y) and `TODO` (Ctrl+T), reuses the shared nav/control tail, and
+ * appends `Ctrl+L`. Verifies the Gemini-specific keys are present with the correct raw byte
+ * payloads (sent via `onSendBytes`, the raw 'i'-frame path), that the shared tail matches the
+ * Claude/Codex bars, and that the Claude/Codex-only keys (`Approve`/`Reject`/`Rewind`) do not
+ * leak into the Gemini set.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
+class InputBarGeminiTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    private fun openGeminiPanel(onSendBytes: (ByteArray) -> Unit = {}) {
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = onSendBytes,
+                    sessionKind = SessionKind.Gemini,
+                )
+            }
+        }
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+    }
+
+    @Test
+    fun geminiPanel_exposesGeminiSpecificKeys_plusSharedKeys() {
+        openGeminiPanel()
+
+        listOf("Mode", "YOLO", "TODO", "Ctrl+L")
+            .forEach { composeRule.onNodeWithText(it).assertExists() }
+        // Shared nav/control tail; arrows render as Material icons (contentDescription below).
+        listOf("Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
+            .forEach { composeRule.onNodeWithText(it).assertExists() }
+        listOf("↑", "↓", "←", "→")
+            .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
+    }
+
+    @Test
+    fun yolo_sendsCtrlY_0x19() {
+        val captured = mutableListOf<ByteArray>()
+        openGeminiPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("YOLO").performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x19), captured.single())
+    }
+
+    @Test
+    fun todo_sendsCtrlT_0x14() {
+        val captured = mutableListOf<ByteArray>()
+        openGeminiPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("TODO").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x14), captured.single())
+    }
+
+    @Test
+    fun mode_sendsCsiZ_escBracketZ() {
+        val captured = mutableListOf<ByteArray>()
+        openGeminiPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Mode").performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(
+            byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()),
+            captured.single(),
+        )
+    }
+
+    @Test
+    fun ctrlL_sendsFormFeed_0x0c() {
+        val captured = mutableListOf<ByteArray>()
+        openGeminiPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Ctrl+L").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x0c), captured.single())
+    }
+
+    @Test
+    fun ctrlO_sendsShiftOut_0x0f() {
+        val captured = mutableListOf<ByteArray>()
+        openGeminiPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Ctrl+O").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x0f), captured.single())
+    }
+
+    @Test
+    fun ctrlR_sendsDeviceControl2_0x12() {
+        val captured = mutableListOf<ByteArray>()
+        openGeminiPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Ctrl+R").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x12), captured.single())
+    }
+
+    @Test
+    fun geminiSet_doesNotExposeClaudeOrCodexOnlyKeys() {
+        openGeminiPanel()
+
+        listOf("Approve", "Reject", "Rewind")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 }
