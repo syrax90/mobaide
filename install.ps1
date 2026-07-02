@@ -204,12 +204,20 @@ function Assert-AdminOrElevate {
     if ($codexBin) {
         $env:MOBAIDE_AGENT_CODEX_BIN_HINT = $codexBin
     }
+    # Gemini CLI counterpart: discover the optional gemini binary under the
+    # same originating-user env and carry it across the UAC boundary via
+    # MOBAIDE_AGENT_GEMINI_BIN_HINT, identically to the claude / codex paths.
+    $geminiBin = Find-GeminiBinary
+    if ($geminiBin) {
+        $env:MOBAIDE_AGENT_GEMINI_BIN_HINT = $geminiBin
+    }
     $passthrough = @(
         'MOBAIDE_AGENT_PREFIX', 'MOBAIDE_AGENT_MANIFEST_URL',
         'MOBAIDE_AGENT_TRUST_KEY_B64', 'MOBAIDE_AGENT_ALLOW_INSECURE_TRUST_KEY_FETCH',
         'MOBAIDE_AGENT_INSTALL_URL', 'MOBAIDE_AGENT_WINDOWS_LAUNCHER_URL',
         'MOBAIDE_AGENT_SKIP_INSTALL_QR', 'MOBAIDE_AGENT_SKIP_PYTHON_INSTALL',
-        'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT'
+        'MOBAIDE_AGENT_CLAUDE_BIN_HINT', 'MOBAIDE_AGENT_CODEX_BIN_HINT',
+        'MOBAIDE_AGENT_GEMINI_BIN_HINT'
     )
     $envStmts = foreach ($name in $passthrough) {
         $val = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -368,6 +376,41 @@ function Find-CodexBinary {
     $candidates.Add('C:\ProgramData\npm\codex.cmd')
     if ($env:ProgramFiles) {
         $candidates.Add((Join-Path $env:ProgramFiles 'nodejs\codex.cmd'))
+    }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) {
+            return (Resolve-Path -LiteralPath $c).ProviderPath
+        }
+    }
+    return $null
+}
+
+# Optional Gemini CLI counterpart of Find-ClaudeBinary / Find-CodexBinary.
+# Gemini ships as the npm-global package @google/gemini-cli, so it resolves
+# from the same PATH and %APPDATA%\npm locations; the same WindowsApps App
+# Execution Alias guard applies. Returns the absolute gemini path, or $null
+# if not found. Like Codex, a miss is not warned — Gemini is optional.
+function Find-GeminiBinary {
+    foreach ($name in @('gemini.cmd', 'gemini.exe', 'gemini')) {
+        $hit = Get-Command $name -ErrorAction SilentlyContinue
+        if (-not $hit) { continue }
+        if ($hit.Source -like "*\WindowsApps\*") { continue }
+        return $hit.Source
+    }
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($env:APPDATA) {
+        $candidates.Add((Join-Path $env:APPDATA 'npm\gemini.cmd'))
+        $candidates.Add((Join-Path $env:APPDATA 'npm\gemini.exe'))
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'npm\gemini.cmd'))
+    }
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE 'AppData\Roaming\npm\gemini.cmd'))
+    }
+    $candidates.Add('C:\ProgramData\npm\gemini.cmd')
+    if ($env:ProgramFiles) {
+        $candidates.Add((Join-Path $env:ProgramFiles 'nodejs\gemini.cmd'))
     }
     foreach ($c in $candidates) {
         if (Test-Path -LiteralPath $c) {
@@ -954,6 +997,17 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         Write-Info "Codex CLI not detected; leaving MOBAIDE_CODEX_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use Codex)."
     }
 
+    # Gemini CLI counterpart (optional managed agent): same hint-then-probe
+    # discovery as Codex, and the same soft Info-on-miss — Gemini is optional,
+    # so a miss leaves MOBAIDE_GEMINI_BIN unset until a Gemini session is run.
+    $geminiBin = $env:MOBAIDE_AGENT_GEMINI_BIN_HINT
+    if (-not $geminiBin) { $geminiBin = Find-GeminiBinary }
+    if ($geminiBin) {
+        Write-Info "Detected Gemini CLI at $geminiBin"
+    } else {
+        Write-Info "Gemini CLI not detected; leaving MOBAIDE_GEMINI_BIN unset (set it in $Script:Prefix\mobaide_agent\.env if you use Gemini)."
+    }
+
     $envFile = Join-Path (Join-Path $Script:Prefix "mobaide_agent") ".env"
     $envExists = Test-Path -LiteralPath $envFile
 
@@ -962,17 +1016,18 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
         $extraArgs = @()
         if ($claudeBin) { $extraArgs += @('--claude-bin', $claudeBin) }
         if ($codexBin) { $extraArgs += @('--codex-bin', $codexBin) }
+        if ($geminiBin) { $extraArgs += @('--gemini-bin', $geminiBin) }
         & $releasePython -m mobaide.agent.config init-env --prefix $Script:Prefix @extraArgs
         if ($LASTEXITCODE -ne 0) { Write-Fail "init-env failed (exit $LASTEXITCODE)" }
         return
     }
 
     # Existing .env (re-install over a paired agent): leave credentials
-    # alone. Surgically backfill MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN
-    # only if not already set — an operator's manual edit always wins.
-    # This implements the "Surgical set-env only" policy. Each CLI is
-    # backfilled independently: a missing Claude path must not skip the
-    # Codex backfill (and vice versa).
+    # alone. Surgically backfill MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN /
+    # MOBAIDE_GEMINI_BIN only if not already set — an operator's manual edit
+    # always wins. This implements the "Surgical set-env only" policy. Each
+    # CLI is backfilled independently: a missing Claude path must not skip
+    # the Codex or Gemini backfill (and vice versa).
     Write-Info "Existing $envFile preserved (re-install)."
     if ($claudeBin) {
         $existingClaudeBin = Read-EnvValue -Path $envFile -Key 'MOBAIDE_CLAUDE_BIN'
@@ -995,6 +1050,19 @@ absolute path in $Script:Prefix\mobaide_agent\.env and restart:
             Write-Info "Backfilling MOBAIDE_CODEX_BIN=$codexBin into $envFile"
             & $releasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
                 --key MOBAIDE_CODEX_BIN --value $codexBin
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "set-env failed (exit $LASTEXITCODE); edit $envFile manually and restart $Script:ServiceName."
+            }
+        }
+    }
+    if ($geminiBin) {
+        $existingGeminiBin = Read-EnvValue -Path $envFile -Key 'MOBAIDE_GEMINI_BIN'
+        if ($existingGeminiBin) {
+            Write-Info "MOBAIDE_GEMINI_BIN already set in $envFile; leaving as-is."
+        } else {
+            Write-Info "Backfilling MOBAIDE_GEMINI_BIN=$geminiBin into $envFile"
+            & $releasePython -m mobaide.agent.config set-env --prefix $Script:Prefix `
+                --key MOBAIDE_GEMINI_BIN --value $geminiBin
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn "set-env failed (exit $LASTEXITCODE); edit $envFile manually and restart $Script:ServiceName."
             }
