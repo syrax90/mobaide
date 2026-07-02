@@ -5,11 +5,13 @@ import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
+import com.mobaide.app.data.local.GeminiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.GeminiOptionsModel
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.repository.AutoScanRepository
@@ -34,9 +36,9 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AutoScanConfig, TerminalConfig }
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, GeminiConfig, AutoScanConfig, TerminalConfig }
 
-enum class CreateSessionMode { Standard, Codex, AutoScan, CustomShell }
+enum class CreateSessionMode { Standard, Codex, Gemini, AutoScan, CustomShell }
 
 /**
  * Convenience autonomy presets that collapse Codex's two-axis sandbox×approval
@@ -45,6 +47,14 @@ enum class CreateSessionMode { Standard, Codex, AutoScan, CustomShell }
  * sandbox/approval combination, in which case no preset is highlighted.
  */
 enum class CodexAutonomyPreset { ReadOnly, Auto, FullAccess }
+
+/**
+ * Gemini autonomy presets, each a direct 1:1 with a `--approval-mode` value
+ * ([Plan]→`plan`, [AutoEdit]→`auto_edit`, [Yolo]→`yolo`). [AutoEdit] is the
+ * wizard default; the CLI's raw `default` (fully interactive) mode is
+ * deliberately not surfaced.
+ */
+enum class GeminiAutonomyPreset { Plan, AutoEdit, Yolo }
 
 /**
  * Active selection on the project picker.
@@ -77,6 +87,7 @@ data class CreateSessionUiState(
     // authoritative backstop.
     val claudeAvailable: Boolean? = null,
     val codexAvailable: Boolean? = null,
+    val geminiAvailable: Boolean? = null,
     val cliAvailabilityLoading: Boolean = false,
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
@@ -94,6 +105,9 @@ data class CreateSessionUiState(
     val codexApproval: String = "on-request",
     val codexFullAuto: Boolean = false,
     val codexReasoningEffort: String = "high",
+    // Gemini launch options (GeminiConfig step). Defaults reflect the "Auto-edit" preset.
+    val geminiModel: String? = null,
+    val geminiApprovalMode: String = "auto_edit",
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
@@ -136,6 +150,19 @@ val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
         else -> null
     }
 
+/**
+ * The autonomy preset reflected by the raw Gemini `approval_mode` field. Maps
+ * 1:1 onto the three surfaced presets; `null` only for the CLI's raw `default`
+ * mode, which the wizard never sets (it seeds `auto_edit`).
+ */
+val CreateSessionUiState.geminiPreset: GeminiAutonomyPreset?
+    get() = when (geminiApprovalMode) {
+        "plan" -> GeminiAutonomyPreset.Plan
+        "auto_edit" -> GeminiAutonomyPreset.AutoEdit
+        "yolo" -> GeminiAutonomyPreset.Yolo
+        else -> null
+    }
+
 /** Snapshot of the Claude reasoning controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     model = claudeModel,
@@ -154,6 +181,12 @@ private fun CreateSessionUiState.toCodexLaunchPrefs() = CodexLaunchPrefs(
     reasoningEffort = codexReasoningEffort,
 )
 
+/** Snapshot of the Gemini launch controls for persistence / re-defaulting. */
+private fun CreateSessionUiState.toGeminiLaunchPrefs() = GeminiLaunchPrefs(
+    model = geminiModel,
+    approvalMode = geminiApprovalMode,
+)
+
 /**
  * Mode-picker gate. Only an explicit `false` from the agent disables a card;
  * `null` (unknown / not-yet-probed / probe failed) stays optimistically enabled
@@ -161,6 +194,7 @@ private fun CreateSessionUiState.toCodexLaunchPrefs() = CodexLaunchPrefs(
  */
 val CreateSessionUiState.claudeEnabled: Boolean get() = claudeAvailable != false
 val CreateSessionUiState.codexEnabled: Boolean get() = codexAvailable != false
+val CreateSessionUiState.geminiEnabled: Boolean get() = geminiAvailable != false
 
 @HiltViewModel
 class CreateSessionViewModel @Inject constructor(
@@ -208,6 +242,16 @@ class CreateSessionViewModel @Inject constructor(
                         codexApproval = saved.approval,
                         codexFullAuto = saved.fullAuto,
                         codexReasoningEffort = saved.reasoningEffort,
+                    )
+                }
+            }
+            // Same pre-fill for the Gemini launch controls (approval_mode restores
+            // the autonomy preset highlight via geminiPreset).
+            preferencesStore.getLastUsedGeminiOptions()?.let { saved ->
+                _uiState.update {
+                    it.copy(
+                        geminiModel = saved.model,
+                        geminiApprovalMode = saved.approvalMode,
                     )
                 }
             }
@@ -351,6 +395,7 @@ class CreateSessionViewModel @Inject constructor(
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
                         codexAvailable = version.cliAvailable("codex"),
+                        geminiAvailable = version.cliAvailable("gemini"),
                         cliAvailabilityLoading = false,
                     )
                 }
@@ -370,6 +415,10 @@ class CreateSessionViewModel @Inject constructor(
 
     fun selectCodexMode() = _uiState.update {
         if (it.codexEnabled) it.copy(step = CreateSessionStep.CodexConfig) else it
+    }
+
+    fun selectGeminiMode() = _uiState.update {
+        if (it.geminiEnabled) it.copy(step = CreateSessionStep.GeminiConfig) else it
     }
 
     /**
@@ -451,6 +500,7 @@ class CreateSessionViewModel @Inject constructor(
         when (it.step) {
             CreateSessionStep.StandardConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.CodexConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.GeminiConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.TerminalConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.ModePick -> it.copy(
@@ -503,6 +553,17 @@ class CreateSessionViewModel @Inject constructor(
     fun setCodexReasoningEffort(v: String) = _uiState.update { it.copy(codexReasoningEffort = v) }
     fun setCodexSandbox(v: String) = _uiState.update { it.copy(codexSandbox = v) }
     fun setCodexApproval(v: String) = _uiState.update { it.copy(codexApproval = v) }
+
+    /** Sets the Gemini `approval_mode` from a one-tap autonomy preset. */
+    fun selectGeminiPreset(preset: GeminiAutonomyPreset) = _uiState.update {
+        when (preset) {
+            GeminiAutonomyPreset.Plan -> it.copy(geminiApprovalMode = "plan")
+            GeminiAutonomyPreset.AutoEdit -> it.copy(geminiApprovalMode = "auto_edit")
+            GeminiAutonomyPreset.Yolo -> it.copy(geminiApprovalMode = "yolo")
+        }
+    }
+
+    fun setGeminiModel(v: String?) = _uiState.update { it.copy(geminiModel = v) }
 
     fun consumeDismiss() = _uiState.update { it.copy(dismiss = false) }
 
@@ -573,6 +634,40 @@ class CreateSessionViewModel @Inject constructor(
                         cwd = sel.path,
                         cli = "codex",
                         codex_options = codexOptions.copy(worktree = false, branch_name = null),
+                    ),
+                )
+            }
+            ProjectSelection.None -> Unit
+        }
+    }
+
+    fun submitGemini() {
+        val state = _uiState.value
+        if (state.submitting) return
+        val geminiOptions = GeminiOptionsModel(
+            model = state.geminiModel?.takeIf { it.isNotBlank() },
+            approval_mode = state.geminiApprovalMode,
+            worktree = state.worktree,
+            branch_name = state.branchName.takeIf { it.isNotBlank() },
+        )
+        when (val sel = state.selection) {
+            is ProjectSelection.Stored -> submitSession(
+                selection = sel,
+                request = CreateSessionRequest(
+                    project_name = sel.name,
+                    cli = "gemini",
+                    gemini_options = geminiOptions,
+                ),
+            )
+            is ProjectSelection.CustomPath -> {
+                if (sel.path.isBlank() || state.customPathError != null) return
+                submitSession(
+                    selection = sel,
+                    request = CreateSessionRequest(
+                        project_name = null,
+                        cwd = sel.path,
+                        cli = "gemini",
+                        gemini_options = geminiOptions.copy(worktree = false, branch_name = null),
                     ),
                 )
             }
@@ -682,12 +777,16 @@ class CreateSessionViewModel @Inject constructor(
                 // Remember the per-CLI launch controls for the next session of
                 // the same kind. The request shape selects which blob to write:
                 // Claude submits carry claude_options, Codex submits carry
-                // codex_options, shell submits carry neither.
+                // codex_options, Gemini submits carry gemini_options, shell
+                // submits carry none.
                 if (request.claude_options != null) {
                     preferencesStore.setLastUsedClaudeOptions(_uiState.value.toClaudeLaunchPrefs())
                 }
                 if (request.codex_options != null) {
                     preferencesStore.setLastUsedCodexOptions(_uiState.value.toCodexLaunchPrefs())
+                }
+                if (request.gemini_options != null) {
+                    preferencesStore.setLastUsedGeminiOptions(_uiState.value.toGeminiLaunchPrefs())
                 }
                 preferencesStore.setLastUsedSessionId(response.session_id)
                 _uiState.update { it.copy(submitting = false) }
@@ -701,6 +800,17 @@ class CreateSessionViewModel @Inject constructor(
                     // can't swallow the marker before we read it.
                     _uiState.update {
                         it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
+                    }
+                } else if (e is ApiException && isGeminiAuthRequired(e.errorBody)) {
+                    // Gemini is installed but not signed in. Unlike Codex, its auth is
+                    // browser/OAuth on the host (no in-app key entry yet), so surface a
+                    // host-side instruction instead of an API-key dialog.
+                    _uiState.update {
+                        it.copy(
+                            submitting = false,
+                            error = "Gemini isn't signed in on this agent. " +
+                                "Authenticate the Gemini CLI on the agent host, then try again.",
+                        )
                     }
                 } else {
                     _uiState.update {
@@ -723,6 +833,21 @@ class CreateSessionViewModel @Inject constructor(
 
     private fun JsonObject.hasCodexAuthMarker(): Boolean =
         this["codex_auth_required"]?.jsonPrimitive?.booleanOrNull == true
+
+    /**
+     * True when an error body carries the `gemini_auth_required` marker (Gemini
+     * installed but unauthenticated). Same dual shape as [isCodexAuthRequired] —
+     * top-level on the relay path, nested under `detail` on direct REST. There is
+     * no in-app sign-in for Gemini yet (browser/OAuth on the host), so callers show
+     * a host-side instruction rather than opening a login dialog.
+     */
+    private fun isGeminiAuthRequired(body: String): Boolean = runCatching {
+        val obj = Json.parseToJsonElement(body).jsonObject
+        obj.hasGeminiAuthMarker() || (obj["detail"] as? JsonObject)?.hasGeminiAuthMarker() == true
+    }.getOrDefault(false)
+
+    private fun JsonObject.hasGeminiAuthMarker(): Boolean =
+        this["gemini_auth_required"]?.jsonPrimitive?.booleanOrNull == true
 
     /** Login-failure text that never echoes the submitted key (the agent already
      *  sanitizes its `detail`). */
@@ -763,6 +888,13 @@ class CreateSessionViewModel @Inject constructor(
 
         /** Codex reasoning-effort levels, low→high; "high" is the wizard default. */
         val REASONING_EFFORTS = listOf("minimal", "low", "medium", "high")
+
+        /**
+         * Curated Gemini model quick-picks for the wizard dropdown. The server's
+         * `model` field is free-form, so "Auto" (a null model — the CLI picks
+         * its own default) is always offered alongside these. Current as of 2026-06.
+         */
+        val GEMINI_MODELS = listOf("pro", "flash", "flash-lite")
 
         /**
          * Curated Claude model aliases for the wizard dropdown. Aliases (not full

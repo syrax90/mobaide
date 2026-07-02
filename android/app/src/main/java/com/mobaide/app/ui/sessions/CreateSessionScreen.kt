@@ -140,6 +140,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.ModePick -> "Select mode"
                             CreateSessionStep.StandardConfig -> "Claude code session"
                             CreateSessionStep.CodexConfig -> "Codex session"
+                            CreateSessionStep.GeminiConfig -> "Gemini session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                             CreateSessionStep.TerminalConfig -> "Terminal session"
                         }
@@ -201,11 +202,13 @@ fun CreateSessionScreen(
                     selectedMode = state.selectedMode,
                     claudeEnabled = state.claudeEnabled,
                     codexEnabled = state.codexEnabled,
+                    geminiEnabled = state.geminiEnabled,
                     onPickMode = viewModel::pickMode,
                     onCommit = {
                         when (state.selectedMode) {
                             CreateSessionMode.Standard -> viewModel.selectStandardMode()
                             CreateSessionMode.Codex -> viewModel.selectCodexMode()
+                            CreateSessionMode.Gemini -> viewModel.selectGeminiMode()
                             CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
                             CreateSessionMode.CustomShell -> viewModel.selectTerminalMode()
                             null -> Unit
@@ -219,6 +222,12 @@ fun CreateSessionScreen(
                     viewModel = viewModel,
                 )
                 CreateSessionStep.CodexConfig -> CodexConfigSection(
+                    state = state,
+                    showWorktreeToggle = state.selection is ProjectSelection.Stored &&
+                        storedProject?.is_git == true,
+                    viewModel = viewModel,
+                )
+                CreateSessionStep.GeminiConfig -> GeminiConfigSection(
                     state = state,
                     showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                         storedProject?.is_git == true,
@@ -531,11 +540,13 @@ private fun modeEnabled(
     mode: CreateSessionMode,
     claudeEnabled: Boolean,
     codexEnabled: Boolean,
+    geminiEnabled: Boolean,
     autoScanEnabled: Boolean,
 ): Boolean = when (mode) {
     CreateSessionMode.Standard -> claudeEnabled
     CreateSessionMode.AutoScan -> autoScanEnabled
     CreateSessionMode.Codex -> codexEnabled
+    CreateSessionMode.Gemini -> geminiEnabled
     CreateSessionMode.CustomShell -> true
 }
 
@@ -545,6 +556,7 @@ private fun ModePickerSection(
     selectedMode: CreateSessionMode?,
     claudeEnabled: Boolean,
     codexEnabled: Boolean,
+    geminiEnabled: Boolean,
     onPickMode: (CreateSessionMode) -> Unit,
     onCommit: () -> Unit,
 ) {
@@ -611,6 +623,24 @@ private fun ModePickerSection(
         )
     }
 
+    ElevatedCard(
+        onClick = { if (geminiEnabled) onPickMode(CreateSessionMode.Gemini) },
+        enabled = geminiEnabled,
+        colors = if (selectedMode == CreateSessionMode.Gemini) selectedColors else CardDefaults.elevatedCardColors(),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        ListItem(
+            headlineContent = { Text("Gemini session") },
+            supportingContent = {
+                Text(
+                    if (geminiEnabled) "Configure and launch a Google Gemini session."
+                    else "Gemini CLI is not installed on the agent.",
+                )
+            },
+            colors = if (geminiEnabled) enabledList else disabledList,
+        )
+    }
+
     val autoScanEnabled = claudeEnabled && header.showAutoScan
     ElevatedCard(
         onClick = { if (autoScanEnabled) onPickMode(CreateSessionMode.AutoScan) },
@@ -653,7 +683,7 @@ private fun ModePickerSection(
 
     Button(
         onClick = onCommit,
-        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled, autoScanEnabled),
+        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled, geminiEnabled, autoScanEnabled),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")
@@ -855,6 +885,111 @@ private fun CodexModelDropdown(
                 },
             )
             CreateSessionViewModel.CODEX_MODELS.forEach { model ->
+                DropdownMenuItem(
+                    text = { Text(model) },
+                    onClick = {
+                        onSelect(model)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GeminiConfigSection(
+    state: CreateSessionUiState,
+    showWorktreeToggle: Boolean,
+    viewModel: CreateSessionViewModel,
+) {
+    val preset = state.geminiPreset
+
+    Text("Autonomy", style = MaterialTheme.typography.labelLarge)
+    val presets = listOf(
+        GeminiAutonomyPreset.Plan to "Plan",
+        GeminiAutonomyPreset.AutoEdit to "Auto-edit",
+        GeminiAutonomyPreset.Yolo to "YOLO",
+    )
+    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        presets.forEachIndexed { index, (value, label) ->
+            SegmentedButton(
+                selected = preset == value,
+                onClick = { viewModel.selectGeminiPreset(value) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = presets.size),
+                icon = {},
+            ) { Text(label) }
+        }
+    }
+    Text(
+        text = when (preset) {
+            GeminiAutonomyPreset.Plan -> "Reads and plans only; makes no changes."
+            GeminiAutonomyPreset.AutoEdit -> "Auto-approves file edits; asks before running commands."
+            GeminiAutonomyPreset.Yolo -> "Auto-approves everything, including commands (YOLO)."
+            null -> "Uses the CLI's default approval prompts."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    Text("Model", style = MaterialTheme.typography.labelLarge)
+    GeminiModelDropdown(selected = state.geminiModel, onSelect = viewModel::setGeminiModel)
+
+    if (showWorktreeToggle) {
+        ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
+
+        if (state.worktree) {
+            OutlinedTextField(
+                value = state.branchName,
+                onValueChange = viewModel::setBranchName,
+                label = { Text("Branch name (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+
+    Button(
+        onClick = viewModel::submitGemini,
+        enabled = state.selection !is ProjectSelection.None && !state.submitting,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(if (state.submitting) "Creating…" else "Create session")
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GeminiModelDropdown(
+    selected: String?,
+    onSelect: (String?) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+    ) {
+        OutlinedTextField(
+            value = selected ?: "Auto",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Model") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth(),
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Auto") },
+                onClick = {
+                    onSelect(null)
+                    expanded = false
+                },
+            )
+            CreateSessionViewModel.GEMINI_MODELS.forEach { model ->
                 DropdownMenuItem(
                     text = { Text(model) },
                     onClick = {

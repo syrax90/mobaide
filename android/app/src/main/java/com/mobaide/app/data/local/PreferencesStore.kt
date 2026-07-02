@@ -22,6 +22,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastSession = stringPreferencesKey("last_used_session_id")
     private val keyLastClaudeOptions = stringPreferencesKey("last_used_claude_options")
     private val keyLastCodexOptions = stringPreferencesKey("last_used_codex_options")
+    private val keyLastGeminiOptions = stringPreferencesKey("last_used_gemini_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
 
@@ -102,6 +103,19 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedCodexOptions(prefs: CodexLaunchPrefs) {
         val payload = cacheJson.encodeToString(CodexLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastCodexOptions] = payload }
+    }
+
+    suspend fun getLastUsedGeminiOptions(): GeminiLaunchPrefs? {
+        val raw = context.dataStore.data.map { it[keyLastGeminiOptions] }.first()
+            ?: return null
+        return runCatching {
+            cacheJson.decodeFromString(GeminiLaunchPrefs.serializer(), raw)
+        }.getOrNull()
+    }
+
+    suspend fun setLastUsedGeminiOptions(prefs: GeminiLaunchPrefs) {
+        val payload = cacheJson.encodeToString(GeminiLaunchPrefs.serializer(), prefs)
+        context.dataStore.edit { it[keyLastGeminiOptions] = payload }
     }
 
     suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {
