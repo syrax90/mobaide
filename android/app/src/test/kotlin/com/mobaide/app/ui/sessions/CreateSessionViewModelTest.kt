@@ -4,6 +4,7 @@ import app.cash.turbine.test
 import com.mobaide.app.data.auth.TokenStore
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
+import com.mobaide.app.data.local.GeminiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -99,6 +100,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedClaudeOptions(any()) } just Runs
         coEvery { prefs.getLastUsedCodexOptions() } returns null
         coEvery { prefs.setLastUsedCodexOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedGeminiOptions() } returns null
+        coEvery { prefs.setLastUsedGeminiOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         every { autoScanRepo.getAutoScanPrompt() } returns autoScanPrompt
@@ -1424,6 +1427,217 @@ class CreateSessionViewModelTest {
         assertEquals("read-only", opts!!.sandbox)
         assertEquals("on-request", opts.approval)
         assertFalse(opts.full_auto)
+    }
+
+    // ---- Gemini config + submit --------------------------------------------
+
+    @Test
+    fun wizardFlow_ModePick_to_GeminiConfig_andBack() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Gemini)
+        vm.selectGeminiMode()
+        assertEquals(CreateSessionStep.GeminiConfig, vm.uiState.value.step)
+
+        vm.goBack()
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun defaultGeminiState_derivesAutoEditPreset() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        // Default geminiApprovalMode="auto_edit" -> the segmented control lands
+        // on Auto-edit, mirroring Codex's middle "Auto" default.
+        assertEquals(GeminiAutonomyPreset.AutoEdit, vm.uiState.value.geminiPreset)
+    }
+
+    @Test
+    fun selectGeminiPreset_mapsEachPresetToApprovalMode() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectGeminiPreset(GeminiAutonomyPreset.Plan)
+        assertEquals("plan", vm.uiState.value.geminiApprovalMode)
+        assertEquals(GeminiAutonomyPreset.Plan, vm.uiState.value.geminiPreset)
+
+        // auto_edit carries the underscore the server 422s without.
+        vm.selectGeminiPreset(GeminiAutonomyPreset.AutoEdit)
+        assertEquals("auto_edit", vm.uiState.value.geminiApprovalMode)
+        assertEquals(GeminiAutonomyPreset.AutoEdit, vm.uiState.value.geminiPreset)
+
+        vm.selectGeminiPreset(GeminiAutonomyPreset.Yolo)
+        assertEquals("yolo", vm.uiState.value.geminiApprovalMode)
+        assertEquals(GeminiAutonomyPreset.Yolo, vm.uiState.value.geminiPreset)
+    }
+
+    @Test
+    fun init_seedsGeminiControlsFromPersistedPrefs() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedGeminiOptions() } returns
+            GeminiLaunchPrefs(model = "flash-lite", approvalMode = "yolo")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("flash-lite", s.geminiModel)
+        assertEquals("yolo", s.geminiApprovalMode)
+        // The restored approval_mode re-derives the preset highlight.
+        assertEquals(GeminiAutonomyPreset.Yolo, s.geminiPreset)
+    }
+
+    @Test
+    fun submitGemini_happyPath_sendsCliGemini_andGeminiOptions() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-gemini", "starting", "2026-07-02T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectGeminiMode()
+
+        vm.navigateToSession.test {
+            vm.submitGemini()
+            advanceUntilIdle()
+            assertEquals("sess-gemini", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        val req = requestSlot.captured
+        assertEquals("alpha", req.project_name)
+        assertEquals("gemini", req.cli)
+        assertNull("Gemini must not send claude_options", req.claude_options)
+        assertNull("Gemini must not send codex_options", req.codex_options)
+        val opts = req.gemini_options
+        assertNotNull(opts)
+        assertEquals("approval_mode defaults to the Auto-edit preset", "auto_edit", opts!!.approval_mode)
+        assertNull("model is omitted (null) for the Auto default", opts.model)
+        coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-gemini") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedGeminiOptions(any()) }
+        assertFalse(vm.uiState.value.submitting)
+    }
+
+    @Test
+    fun submitGemini_planPreset_withModel_sendsThem() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-gemini-plan", "starting", "2026-07-02T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectGeminiMode()
+        vm.setGeminiModel("pro")
+        vm.selectGeminiPreset(GeminiAutonomyPreset.Plan)
+        vm.submitGemini()
+        advanceUntilIdle()
+
+        val opts = requestSlot.captured.gemini_options
+        assertNotNull(opts)
+        assertEquals("pro", opts!!.model)
+        assertEquals("plan", opts.approval_mode)
+    }
+
+    @Test
+    fun submitGemini_persistsLastUsedGeminiOptions_andNotCodexOrClaude() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } returns
+            SessionResponse("sess-gemini-persist", "starting", "2026-07-02T00:00:00Z")
+        val prefsSlot = slot<GeminiLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedGeminiOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectGeminiMode()
+        vm.setGeminiModel("flash")
+        vm.selectGeminiPreset(GeminiAutonomyPreset.Yolo)
+        vm.submitGemini()
+        advanceUntilIdle()
+
+        // The same selections are persisted for the next Gemini launch.
+        val saved = prefsSlot.captured
+        assertEquals("flash", saved.model)
+        assertEquals("yolo", saved.approvalMode)
+        // A Gemini submit must write neither the Claude nor the Codex blob.
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedCodexOptions(any()) }
+    }
+
+    @Test
+    fun submitGemini_gitProject_withWorktree_carriesWorktreeAndBranchInGeminiOptions() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-gemini-wt", "starting", "2026-07-02T00:00:00Z")
+
+        vm.selectProject("alpha") // is_git = true
+        vm.confirmProject()
+        vm.selectGeminiMode()
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.submitGemini()
+        advanceUntilIdle()
+
+        val opts = requestSlot.captured.gemini_options
+        assertNotNull(opts)
+        assertTrue("worktree must travel inside gemini_options", opts!!.worktree)
+        assertEquals("feature/x", opts.branch_name)
+        assertFalse(
+            "Gemini worktree travels in gemini_options, not the top-level request field",
+            requestSlot.captured.worktree,
+        )
+    }
+
+    @Test
+    fun submitGemini_customPath_clampsWorktreeAndBranch() = runTest {
+        val fx = newFixture(agentId = "agent-1")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        vm.selectCustomPath()
+        advanceUntilIdle()
+        vm.setCustomPathDraft(hostAbsolutePath)
+
+        // Even with worktree toggled on, the custom-path branch must clamp it.
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-gemini-adhoc", "starting", "2026-07-02T00:00:00Z")
+
+        vm.confirmProject()
+        vm.selectGeminiMode()
+        vm.submitGemini()
+        advanceUntilIdle()
+
+        val req = requestSlot.captured
+        assertNull(req.project_name)
+        assertEquals(hostAbsolutePath, req.cwd)
+        assertEquals("gemini", req.cli)
+        val opts = req.gemini_options
+        assertNotNull(opts)
+        assertFalse("worktree must clamp false for custom path", opts!!.worktree)
+        assertNull("branch_name must be null for custom path", opts.branch_name)
     }
 
     // ---- Codex auth-required login flow (CLA-71) ---------------------------
