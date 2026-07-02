@@ -801,6 +801,17 @@ class CreateSessionViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
                     }
+                } else if (e is ApiException && isGeminiAuthRequired(e.errorBody)) {
+                    // Gemini is installed but not signed in. Unlike Codex, its auth is
+                    // browser/OAuth on the host (no in-app key entry yet), so surface a
+                    // host-side instruction instead of an API-key dialog.
+                    _uiState.update {
+                        it.copy(
+                            submitting = false,
+                            error = "Gemini isn't signed in on this agent. " +
+                                "Authenticate the Gemini CLI on the agent host, then try again.",
+                        )
+                    }
                 } else {
                     _uiState.update {
                         it.copy(submitting = false, error = "Failed to create session: ${e.message}")
@@ -822,6 +833,21 @@ class CreateSessionViewModel @Inject constructor(
 
     private fun JsonObject.hasCodexAuthMarker(): Boolean =
         this["codex_auth_required"]?.jsonPrimitive?.booleanOrNull == true
+
+    /**
+     * True when an error body carries the `gemini_auth_required` marker (Gemini
+     * installed but unauthenticated). Same dual shape as [isCodexAuthRequired] —
+     * top-level on the relay path, nested under `detail` on direct REST. There is
+     * no in-app sign-in for Gemini yet (browser/OAuth on the host), so callers show
+     * a host-side instruction rather than opening a login dialog.
+     */
+    private fun isGeminiAuthRequired(body: String): Boolean = runCatching {
+        val obj = Json.parseToJsonElement(body).jsonObject
+        obj.hasGeminiAuthMarker() || (obj["detail"] as? JsonObject)?.hasGeminiAuthMarker() == true
+    }.getOrDefault(false)
+
+    private fun JsonObject.hasGeminiAuthMarker(): Boolean =
+        this["gemini_auth_required"]?.jsonPrimitive?.booleanOrNull == true
 
     /** Login-failure text that never echoes the submitted key (the agent already
      *  sanitizes its `detail`). */

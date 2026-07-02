@@ -1640,6 +1640,62 @@ class CreateSessionViewModelTest {
         assertNull("branch_name must be null for custom path", opts.branch_name)
     }
 
+    // ---- Gemini auth-required (host-side instruction, no dialog) ------------
+
+    @Test
+    fun submitGemini_authRequired409_nestedDetailMarker_showsHostInstruction_noDialog() = runTest {
+        // Direct-REST shape: the marker is nested under `detail`, status 409.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(409, """{"detail":{"gemini_auth_required":true}}""")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectGeminiMode()
+        vm.submitGemini()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        // Unlike Codex, Gemini auth is browser/OAuth on the host, so the marker
+        // surfaces a host-side instruction rather than opening the API-key dialog.
+        assertNotNull("auth-required 409 must surface an error, not swallow it", s.error)
+        assertTrue(
+            "the Gemini auth error must instruct authenticating on the host",
+            s.error!!.contains("host"),
+        )
+        assertFalse("Gemini must NOT open the Codex login dialog", s.codexLoginVisible)
+        assertFalse(s.submitting)
+    }
+
+    @Test
+    fun submitGemini_authRequired409_topLevelMarker_showsHostInstruction_noDialog() = runTest {
+        // Relay shape: the marker is top-level, status 409.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(409, """{"gemini_auth_required":true,"detail":"Gemini sign-in required."}""")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectGeminiMode()
+        vm.submitGemini()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertNotNull(s.error)
+        assertTrue(
+            "the Gemini auth error must instruct authenticating on the host",
+            s.error!!.contains("host"),
+        )
+        assertFalse("Gemini must NOT open the Codex login dialog", s.codexLoginVisible)
+        assertFalse(s.submitting)
+    }
+
     // ---- Codex auth-required login flow (CLA-71) ---------------------------
 
     @Test
