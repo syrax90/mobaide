@@ -30,10 +30,10 @@ import org.robolectric.annotation.Config
  *   - For [SessionKind.Codex] the panel prepends the approval answers `Approve`/`Reject`
  *     and appends `Ctrl+L` to the Claude set, with the correct raw-byte payloads; those
  *     Codex-only keys never leak into the Claude set ([InputBarCodexTest]).
- *   - For [SessionKind.Gemini] the panel leads with `Mode`, `YOLO`, `TODO` and appends
- *     `Ctrl+L` to the shared tail (no `Rewind`/`Approve`/`Reject`), with the correct
- *     raw-byte payloads; Gemini-only keys (`YOLO`/`TODO`) never leak into the Claude or
- *     Codex sets ([InputBarGeminiTest]).
+ *   - For [SessionKind.Gemini] the panel leads with `Mode`, `Rewind`, `YOLO`, `TODO` and
+ *     appends `Ctrl+L` to the shared tail (no `Approve`/`Reject`), with the correct raw-byte
+ *     payloads; Gemini-only keys (`YOLO`/`TODO`) never leak into the Claude or Codex sets
+ *     ([InputBarGeminiTest]).
  *
  * Robolectric SDK pinned to 33 to match existing project precedent
  * (`AgentListScreenTest`). The `qualifiers` differ per test class to
@@ -451,11 +451,11 @@ class InputBarCodexTest {
 
 /**
  * Gemini control-key set: passing `sessionKind = SessionKind.Gemini` leads with `Mode`
- * (Shift+Tab), `YOLO` (Ctrl+Y) and `TODO` (Ctrl+T), reuses the shared nav/control tail, and
- * appends `Ctrl+L`. Verifies the Gemini-specific keys are present with the correct raw byte
- * payloads (sent via `onSendBytes`, the raw 'i'-frame path), that the shared tail matches the
- * Claude/Codex bars, and that the Claude/Codex-only keys (`Approve`/`Reject`/`Rewind`) do not
- * leak into the Gemini set.
+ * (Shift+Tab), `Rewind` (Esc-Esc), `YOLO` (Ctrl+Y) and `TODO` (Ctrl+T), reuses the shared
+ * nav/control tail, and appends `Ctrl+L`. Verifies the Gemini keys are present with the correct
+ * raw byte payloads (sent via `onSendBytes`, the raw 'i'-frame path), that the shared tail
+ * matches the Claude/Codex bars, and that the Codex-only keys (`Approve`/`Reject`) do not leak
+ * into the Gemini set.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
@@ -483,7 +483,7 @@ class InputBarGeminiTest {
     fun geminiPanel_exposesGeminiSpecificKeys_plusSharedKeys() {
         openGeminiPanel()
 
-        listOf("Mode", "YOLO", "TODO", "Ctrl+L")
+        listOf("Mode", "Rewind", "YOLO", "TODO", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
         // Shared nav/control tail; arrows render as Material icons (contentDescription below).
         listOf("Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
@@ -497,7 +497,7 @@ class InputBarGeminiTest {
         val captured = mutableListOf<ByteArray>()
         openGeminiPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("YOLO").performClick()
+        composeRule.onNodeWithText("YOLO").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x19), captured.single())
@@ -562,10 +562,21 @@ class InputBarGeminiTest {
     }
 
     @Test
-    fun geminiSet_doesNotExposeClaudeOrCodexOnlyKeys() {
+    fun rewind_sendsEscEsc_0x1b_0x1b() {
+        val captured = mutableListOf<ByteArray>()
+        openGeminiPanel(onSendBytes = { captured += it })
+
+        composeRule.onNodeWithText("Rewind").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x1b, 0x1b), captured.single())
+    }
+
+    @Test
+    fun geminiSet_doesNotExposeCodexOnlyKeys() {
         openGeminiPanel()
 
-        listOf("Approve", "Reject", "Rewind")
+        listOf("Approve", "Reject")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 }

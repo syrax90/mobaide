@@ -100,10 +100,12 @@ private val CLAUDE_CONTROL_KEYS = listOf(ModeKey, RewindKey) + SHARED_TAIL
 // Codex but dropped from Claude as low-value on mobile.
 private val CODEX_CONTROL_KEYS = listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS + CtrlLKey
 
-// Gemini leads with Mode (Shift+Tab, CSI Z — cycles default/auto_edit/plan), YOLO (Ctrl+Y —
-// toggle auto-approve) and TODO (Ctrl+T — toggle the todo list), then the shared tail, and
-// Ctrl+L (clear screen) at the end like Codex. Bracketed paste is honored, so no newline key.
-private val GEMINI_CONTROL_KEYS = listOf(ModeKey, YoloKey, TodoKey) + SHARED_TAIL + CtrlLKey
+// Gemini leads with Mode (Shift+Tab, CSI Z — cycles default/auto_edit/plan) and Rewind
+// (Esc-Esc — clears the prompt, else rewinds prior turns), then its YOLO (Ctrl+Y — auto-approve)
+// and TODO (Ctrl+T — todo list) toggles, the shared tail, and Ctrl+L (clear screen) like Codex.
+// Bracketed paste is honored, so no newline key.
+private val GEMINI_CONTROL_KEYS =
+    listOf(ModeKey, RewindKey, YoloKey, TodoKey) + SHARED_TAIL + CtrlLKey
 
 private fun controlKeysFor(kind: SessionKind): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
