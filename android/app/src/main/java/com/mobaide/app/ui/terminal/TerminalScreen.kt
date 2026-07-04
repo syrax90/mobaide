@@ -72,6 +72,7 @@ fun TerminalScreen(
     val inputText by viewModel.inputText.collectAsStateWithLifecycle()
     val requestInputFocus by viewModel.requestInputFocus.collectAsStateWithLifecycle()
     val templates by viewModel.templates.collectAsStateWithLifecycle()
+    val templatesLoading by viewModel.templatesLoading.collectAsStateWithLifecycle()
     val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
     val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
@@ -191,7 +192,10 @@ fun TerminalScreen(
                 requestFocus = requestInputFocus,
                 onFocusHandled = viewModel::consumeFocusRequest,
                 onExpand = { showFullScreenInput = true },
-                onOpenTemplates = { showTemplatesPicker = true },
+                onOpenTemplates = {
+                    viewModel.refreshTemplates()
+                    showTemplatesPicker = true
+                },
                 onSaveAsTemplate = { showSaveTemplateDialog = true },
                 sessionKind = sessionKind,
             )
@@ -214,6 +218,7 @@ fun TerminalScreen(
     if (showTemplatesPicker) {
         TemplatesPickerSheet(
             templates = templates,
+            isLoading = templatesLoading,
             onPick = { template ->
                 viewModel.applyTemplate(template)
                 showTemplatesPicker = false

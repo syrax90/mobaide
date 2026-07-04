@@ -180,6 +180,9 @@ class TerminalViewModel @Inject constructor(
 
     val templates: StateFlow<List<TemplateDto>> = templatesRepository.observeTemplates()
 
+    private val _templatesLoading = MutableStateFlow(false)
+    val templatesLoading: StateFlow<Boolean> = _templatesLoading.asStateFlow()
+
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
 
@@ -349,6 +352,28 @@ class TerminalViewModel @Inject constructor(
     fun copyTextToInput(text: String) {
         _inputText.value = TextFieldValue(text = text, selection = TextRange(text.length))
         _requestInputFocus.value = true
+    }
+
+    /** Deterministic fetch fired when the templates picker opens. The shared
+     *  cache is otherwise only populated best-effort (WS-connect refresh in
+     *  UserEventBus, or a visit to Settings → Templates), so without this the
+     *  picker can render an empty cache as "no templates". */
+    fun refreshTemplates() {
+        if (_templatesLoading.value) return
+        // Set before launch so the guard holds even off Main.immediate
+        // (e.g. StandardTestDispatcher queues the coroutine body).
+        _templatesLoading.value = true
+        viewModelScope.launch {
+            try {
+                templatesRepository.refreshTemplates()
+            } catch (t: Throwable) {
+                _userMessages.tryEmit(
+                    "Failed to load templates: ${t.message ?: "unknown error"}",
+                )
+            } finally {
+                _templatesLoading.value = false
+            }
+        }
     }
 
     /** Load a template body into the input bar with the inserted text fully
