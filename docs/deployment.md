@@ -9,7 +9,7 @@ The **"Production (central server on a VPS)"** section below is the recommended 
 
 ## Production (central server on a VPS)
 
-Deploy the central server only to a remote Ubuntu host (e.g. `mobaide.com`) from your Windows workstation, with a single PowerShell command — no full repo mirror on the VPS, no container registry.
+Deploy the central server only to a remote Ubuntu host (e.g. `mobaide.com`) from your Windows or macOS workstation, with a single Python (3.12+) command — no full repo mirror on the VPS, no container registry.
 
 ### One-time setup
 
@@ -17,17 +17,17 @@ Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md)
 
 1. On the VPS: `mkdir /opt/mobaide`, populate `/opt/mobaide/.env` from `central_server/.env.example`, open ports 80/443.
 2. DNS: `A` record for your domain → VPS public IP. Cloudflare proxy can be on (use `CloudflareOrigin` TLS mode) or off (use `LetsEncrypt`).
-3. On Windows: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
+3. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
 
 ### Deploy
 
-```powershell
-cd D:\ML\Projects\mobaide
-.\deploy\prod\deploy-central.ps1                             # LetsEncrypt (Cloudflare gray cloud)
-.\deploy\prod\deploy-central.ps1 -TlsMode CloudflareOrigin   # CF Origin Cert (orange cloud)
-.\deploy\prod\deploy-central.ps1 -SkipBuild                  # restart without source re-sync
-.\deploy\prod\deploy-central.ps1 -Rollback                   # swap back to previous version
-.\deploy\prod\deploy-central.ps1 -Force                      # allow dirty working tree
+```bash
+cd <repo-root>
+python deploy/prod/deploy_central.py                              # LetsEncrypt (Cloudflare gray cloud)
+python deploy/prod/deploy_central.py --tls-mode CloudflareOrigin  # CF Origin Cert (orange cloud)
+python deploy/prod/deploy_central.py --skip-build                 # restart without source re-sync
+python deploy/prod/deploy_central.py --rollback                   # swap back to previous version
+python deploy/prod/deploy_central.py --force                      # allow dirty working tree
 ```
 
 ### What's on the server
@@ -55,7 +55,7 @@ The deploy script tars `central_server/` with excludes (`.env`, `__pycache__`, `
 ### Rollback
 
 - **Automatic**: if `docker compose up` or the `/api/health` check fails, the script swaps `central_server.prev` back in and rebuilds automatically.
-- **Manual**: `deploy-central.ps1 -Rollback` does the same swap on demand (useful if a regression only surfaces later).
+- **Manual**: `deploy_central.py --rollback` does the same swap on demand (useful if a regression only surfaces later).
 
 ### Verify
 
