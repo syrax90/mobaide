@@ -75,6 +75,15 @@ class DeployError(Exception):
     """Deploy failure. An empty message means the details were already printed."""
 
 
+class CertVerificationError(DeployError):
+    """Local TLS trust failure while polling the health URL.
+
+    Says nothing about server health (the workstation could not verify the
+    certificate), so callers must never auto-rollback on it — and a source
+    rollback could not fix a certificate problem anyway.
+    """
+
+
 class SshResult(NamedTuple):
     exit_code: int
     output: str
@@ -164,6 +173,9 @@ def wait_http(url: str, timeout_sec: int = 90) -> None:
         warn(
             "TLS certificate verification failed. On macOS python.org builds, "
             "run 'Install Certificates.command' or set SSL_CERT_FILE."
+        )
+        raise CertVerificationError(
+            f"could not verify the TLS certificate for {url} within {timeout_sec}s: {cert_error}"
         )
     raise DeployError(f"Timed out after {timeout_sec}s waiting for {url}")
 
@@ -524,6 +536,12 @@ def run(args: argparse.Namespace) -> int:
     try:
         wait_http(HEALTH_URL, 120)
         ok("central-server healthy")
+    except CertVerificationError as e:
+        # Local trust-store problem, not a service failure: the server may be
+        # perfectly healthy, so rolling back would only cause churn.
+        fail(f"Health check inconclusive: {e}")
+        warn(f"NOT rolling back — the server may be healthy. Verify manually: curl {HEALTH_URL}")
+        return 1
     except DeployError as e:
         fail(f"Health check failed: {e}")
         if not args.skip_build:
