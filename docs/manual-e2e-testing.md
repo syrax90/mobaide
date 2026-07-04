@@ -32,10 +32,11 @@ cd android
 ```
 
 Then open the app on the phone, **register or log in** with the credentials
-from the banner (default `dev@test.local` / `DevPass123!`), pick the
-`manual-e2e-agent`, and start testing. `Ctrl+C` stops the stack; state
-persists, so the next `up` reuses the same account, agent, and database — the
-phone stays logged in.
+from the banner (email `dev@test.local`; the password is **generated per
+state dir** and shown only in the banner — pin your own with
+`--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
+`Ctrl+C` stops the stack; state persists, so the next `up` reuses the same
+account, agent, and database — the phone stays logged in.
 
 ## What the script does
 
@@ -158,6 +159,13 @@ session-create time with a `<cli>_cli_missing` marker.
   line first / run `android --revert`.)
 - The test server/agent state is fully isolated under the state dir; a
   co-installed production agent's `.env`, stores, and updater are never touched.
+  Crash recovery kills only processes whose recorded pid **and** create time
+  match a previous run of this script — a recycled pid can never take down
+  another install.
+- The account password is generated randomly per state dir (never a documented
+  constant): the default `up` exposes the server on the LAN, and the owner
+  account fronts a real shell on this machine, so a well-known password would
+  let anyone on the same Wi-Fi open a terminal here.
 - If a shell still exports variables from the old copy-paste recipe
   (`MOBAIDE_ENV`, `RELAY_*`, `JWT_SECRET_KEY`, ...), the script sanitizes them
   out of the child processes and applies its own explicit values.

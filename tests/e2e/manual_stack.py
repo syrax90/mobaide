@@ -54,7 +54,6 @@ STATE_VERSION = 1
 DEFAULT_PORT = 9000
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_EMAIL = "dev@test.local"
-DEFAULT_PASSWORD = "DevPass123!"
 DEFAULT_AGENT_NAME = "manual-e2e-agent"
 DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "mobaide-manual-e2e"
 
@@ -135,11 +134,18 @@ PIP_HINT = (
 
 
 def _import_deps() -> SimpleNamespace:
+    import importlib.util
+
     import httpx
     import psutil
 
     import mock_mobile_client as mmc
 
+    # mock_mobile_client only pulls in the agent package; probe central_server
+    # too (without executing it) so a half-installed env still triggers the
+    # first-run installer instead of dying later inside the server child.
+    if importlib.util.find_spec("central_server") is None:
+        raise ImportError("No module named 'central_server' (editable install missing)")
     return SimpleNamespace(httpx=httpx, psutil=psutil, mmc=mmc)
 
 
@@ -201,11 +207,15 @@ def default_state() -> dict:
         "version": STATE_VERSION,
         "jwt_secret_key": secrets.token_urlsafe(32),
         "email": DEFAULT_EMAIL,
-        "password": DEFAULT_PASSWORD,
+        # Random per state dir, NOT a documented constant: the default `up`
+        # exposes the server on the LAN and the owner account fronts a REAL
+        # shell on this machine. Shown in the READY banner; --password pins one.
+        "password": secrets.token_urlsafe(9),
         "agent_name": DEFAULT_AGENT_NAME,
         "agent_id": None,
         "agent_token": None,
         "server_port": DEFAULT_PORT,
+        "server_host": DEFAULT_HOST,
         "android": {"previous_central_server_url": None, "managed_url": None},
         "runtime": {},
         "updated_at": None,
@@ -228,13 +238,18 @@ def load_or_create_state(state_dir: Path, args: argparse.Namespace) -> dict:
         value = getattr(args, attr.replace("-", "_"), None)
         if value:
             state[attr] = value
-    # Sticky port: an explicit --port wins and is remembered; otherwise reuse
-    # the last-used port so bare re-runs (and `status`) stay consistent.
+    # Sticky port/host: an explicit flag wins and is remembered; otherwise
+    # reuse the last-used value so bare re-runs (and `status`) stay consistent.
     if hasattr(args, "port"):
         if args.port:
             state["server_port"] = args.port
         else:
             args.port = state.get("server_port") or DEFAULT_PORT
+    if hasattr(args, "host"):
+        if args.host:
+            state["server_host"] = args.host
+        else:
+            args.host = state.get("server_host") or DEFAULT_HOST
     return state
 
 
@@ -279,6 +294,15 @@ def check_port_free(host: str, port: int) -> None:
         )
     finally:
         s.close()
+
+
+def local_probe_host(bind_host: str) -> str:
+    """Host the parent (and the co-located agent) should use to reach the server.
+
+    A wildcard bind is reachable on loopback; a specific-interface bind is not,
+    so probe/provision/relay traffic must target that interface instead.
+    """
+    return "127.0.0.1" if bind_host in ("0.0.0.0", "::", "") else bind_host
 
 
 def detect_lan_ips(psutil_mod=None) -> tuple[str, list[str]]:
@@ -396,21 +420,46 @@ def kill_tree(psutil_mod, pid: int | None) -> None:
             pass
 
 
+def record_runtime_process(state: dict, name: str, pid: int, psutil_mod) -> None:
+    """Remember a spawned child's pid AND create_time for later stale reaping."""
+    runtime = state.setdefault("runtime", {})
+    runtime[f"{name}_pid"] = pid
+    try:
+        runtime[f"{name}_create_time"] = psutil_mod.Process(pid).create_time()
+    except psutil_mod.Error:
+        runtime[f"{name}_create_time"] = None
+
+
 def kill_stale_processes(state: dict, psutil_mod) -> None:
-    """Self-heal after a hard kill: reap pids recorded by a previous `up`."""
+    """Self-heal after a hard kill: reap pids recorded by a previous `up`.
+
+    A recorded pid alone is not proof of identity — the OS recycles pids, and
+    after a reboot the number could belong to a co-installed production agent.
+    Kill only when the recorded create_time matches the live process too (the
+    pid + create_time pair is unique per boot); otherwise leave it alone.
+    """
     runtime = state.get("runtime") or {}
-    for key, module_token in (("server_pid", "central_server"), ("agent_pid", "mobaide")):
-        pid = runtime.get(key)
+    for name, module_token in (("server", "central_server"), ("agent", "mobaide")):
+        pid = runtime.get(f"{name}_pid")
+        recorded_created = runtime.get(f"{name}_create_time")
         if not pid:
             continue
         try:
             proc = psutil_mod.Process(pid)
             cmdline = " ".join(proc.cmdline())
+            created = proc.create_time()
         except psutil_mod.Error:
             continue
-        if module_token in cmdline and "python" in (proc.name() or "").lower():
-            log(f"reaping stale {key.removesuffix('_pid')} from a previous run (pid {pid})")
-            kill_tree(psutil_mod, pid)
+        if module_token not in cmdline or "python" not in (proc.name() or "").lower():
+            continue
+        if recorded_created is None or abs(created - recorded_created) > 1.0:
+            log(
+                f"pid {pid} looks like a {name} but its create time does not match "
+                "the recorded run; NOT killing it (recycled pid or another install)"
+            )
+            continue
+        log(f"reaping stale {name} from a previous run (pid {pid})")
+        kill_tree(psutil_mod, pid)
     state["runtime"] = {}
 
 
@@ -459,7 +508,7 @@ def build_agent_env(
             "JWT_SECRET_KEY": state["jwt_secret_key"],
             "HOST": "127.0.0.1",
             "PORT": str(agent_port),
-            "RELAY_SERVER_URL": f"ws://127.0.0.1:{args.port}",
+            "RELAY_SERVER_URL": f"ws://{local_probe_host(args.host)}:{args.port}",
             "RELAY_AGENT_ID": state["agent_id"],
             "RELAY_AGENT_TOKEN": state["agent_token"],
             "MOBAIDE_AGENT_ALLOW_INSECURE_WS": "1",
@@ -571,6 +620,10 @@ def resolve_android_url(args: argparse.Namespace, lan_ip: str) -> str:
             # host's loopback from an emulator, which is the usual reason to
             # bind loopback in the first place.
             return f"http://10.0.2.2:{args.port}"
+        if args.host not in ("0.0.0.0", "::", "", None):
+            # Bound to one specific interface: that address is the only
+            # reachable one, regardless of which NIC auto-detection favors.
+            return f"http://{args.host}:{args.port}"
         return f"http://{lan_ip}:{args.port}"
     if mode == "emulator":
         return f"http://10.0.2.2:{args.port}"
@@ -638,12 +691,23 @@ def sync_android_files(state: dict, url: str, save) -> bool:
         log(f"android/local.properties: unchanged (CENTRAL_SERVER_URL={url})")
     android_state["managed_url"] = url
 
-    if DEBUG_NSC_PATH.exists() and DEBUG_NSC_PATH.read_text(encoding="utf-8") == DEBUG_NSC_CONTENT:
-        log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT)}: unchanged")
+    nsc_rel = DEBUG_NSC_PATH.relative_to(REPO_ROOT)
+    existing_nsc = (
+        DEBUG_NSC_PATH.read_text(encoding="utf-8") if DEBUG_NSC_PATH.exists() else None
+    )
+    if existing_nsc == DEBUG_NSC_CONTENT:
+        log(f"{nsc_rel}: unchanged")
+    elif existing_nsc is not None and NSC_MARKER not in existing_nsc:
+        # Same ownership rule as revert: never clobber a hand-authored file.
+        log(
+            f"WARNING: {nsc_rel} exists but was not generated by this script; "
+            "leaving it as is (make sure it permits cleartext to your stack, "
+            "or delete it and re-run to let the script manage it)"
+        )
     else:
         DEBUG_NSC_PATH.parent.mkdir(parents=True, exist_ok=True)
         DEBUG_NSC_PATH.write_text(DEBUG_NSC_CONTENT, encoding="utf-8", newline="\n")
-        log(f"{DEBUG_NSC_PATH.relative_to(REPO_ROOT)}: written (debug builds only)")
+        log(f"{nsc_rel}: written (debug builds only)")
 
     save()
     return current != url
@@ -810,13 +874,26 @@ def print_ready_banner(
 
 
 def cmd_up(args: argparse.Namespace) -> int:
-    if args.fresh and args.state_dir.exists():
-        log(f"--fresh: wiping state dir {args.state_dir}")
-        shutil.rmtree(args.state_dir, ignore_errors=True)
-
     deps = load_deps(auto_install=True, reinstall=args.reinstall)
 
     state_dir = args.state_dir
+    preserved_android = None
+    if args.fresh and (state_dir / "state.json").exists():
+        # Consume the old state BEFORE deleting it: reap any crashed run's
+        # children (their pids live only here) and carry the Android ownership
+        # metadata over, or a later `android --revert` would mistake our own
+        # generated CENTRAL_SERVER_URL for the user's original value.
+        try:
+            old_state = json.loads((state_dir / "state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            old_state = None
+        if old_state:
+            kill_stale_processes(old_state, deps.psutil)
+            preserved_android = old_state.get("android")
+    if args.fresh and state_dir.exists():
+        log(f"--fresh: wiping state dir {state_dir}")
+        shutil.rmtree(state_dir, ignore_errors=True)
+
     server_dir = state_dir / "server"
     agent_dir = state_dir / "agent"
     logs_dir = state_dir / "logs"
@@ -824,15 +901,20 @@ def cmd_up(args: argparse.Namespace) -> int:
         d.mkdir(parents=True, exist_ok=True)
 
     state = load_or_create_state(state_dir, args)
+    if preserved_android:
+        state["android"] = preserved_android
     save = lambda: save_state(state_dir, state)  # noqa: E731
     save()
 
     kill_stale_processes(state, deps.psutil)
     check_port_free(args.host, args.port)
+    probe_host = local_probe_host(args.host)
 
     lan_ip, all_ips = detect_lan_ips(deps.psutil)
     if args.advertise_ip:
         lan_ip = args.advertise_ip
+    elif args.host not in ("0.0.0.0", "::", "127.0.0.1", "localhost"):
+        lan_ip = args.host  # bound to one interface: that IS the reachable IP
 
     android_synced = False
     android_url = None
@@ -846,7 +928,7 @@ def cmd_up(args: argparse.Namespace) -> int:
 
     if os.name == "nt" and args.host not in ("127.0.0.1", "localhost"):
         log(
-            "binding 0.0.0.0: watch for the Windows Defender Firewall prompt on "
+            f"binding {args.host}: watch for the Windows Defender Firewall prompt on "
             "first run and ALLOW Python on Private networks, or the phone cannot connect"
         )
 
@@ -863,16 +945,17 @@ def cmd_up(args: argparse.Namespace) -> int:
             server_dir,
             logs_dir / "server.log",
         )
-        state["runtime"] = {"server_pid": server.proc.pid, "started_at": _utc_now()}
+        state["runtime"] = {"started_at": _utc_now()}
+        record_runtime_process(state, "server", server.proc.pid, deps.psutil)
         save()
         wait_for_http_ok(
             deps,
-            f"http://127.0.0.1:{args.port}/api/health",
+            f"http://{probe_host}:{args.port}/api/health",
             timeout=90,
             child=server,
         )
 
-        client = deps.mmc.MockMobileClient(f"http://127.0.0.1:{args.port}")
+        client = deps.mmc.MockMobileClient(f"http://{probe_host}:{args.port}")
         provision(deps, client, state, save)
 
         agent_port = free_loopback_port()
@@ -885,7 +968,7 @@ def cmd_up(args: argparse.Namespace) -> int:
             agent_dir,
             logs_dir / "agent.log",
         )
-        state["runtime"]["agent_pid"] = agent.proc.pid
+        record_runtime_process(state, "agent", agent.proc.pid, deps.psutil)
         save()
         wait_for_http_ok(
             deps,
@@ -981,8 +1064,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         log(f"no state at {state_path} (stack never ran with this --state-dir)")
 
     deps = load_deps(auto_install=False)
+    probe = local_probe_host((state or {}).get("server_host") or DEFAULT_HOST)
     try:
-        resp = deps.httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=3)
+        resp = deps.httpx.get(f"http://{probe}:{port}/api/health", timeout=3)
         health = resp.json()
         log(
             f"server:    UP on port {port} -- status={health.get('status')} "
@@ -1070,9 +1154,9 @@ def build_parser() -> argparse.ArgumentParser:
                                    "stream logs until Ctrl+C (default command)")
     _add_common_args(up)
     _add_android_args(up)
-    up.add_argument("--host", default=DEFAULT_HOST,
-                    help=f"server bind address (default {DEFAULT_HOST}; use "
-                         "127.0.0.1 for an emulator-only, no-firewall-prompt run)")
+    up.add_argument("--host", default=None,
+                    help=f"server bind address (default: last used, then {DEFAULT_HOST}; "
+                         "use 127.0.0.1 for an emulator-only, no-firewall-prompt run)")
     up.add_argument("--no-android", action="store_true",
                     help="do not touch android/local.properties or the debug "
                          "network-security override")
@@ -1085,7 +1169,9 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--fresh", action="store_true",
                     help="wipe the state dir first: new secret, account, agent, DB")
     up.add_argument("--email", default=None, help=f"account email (default {DEFAULT_EMAIL})")
-    up.add_argument("--password", default=None, help="account password")
+    up.add_argument("--password", default=None,
+                    help="account password (default: generated once per state dir "
+                         "and shown in the READY banner)")
     up.add_argument("--agent-name", default=None,
                     help=f"agent display name (default {DEFAULT_AGENT_NAME})")
     up.add_argument("--projects", default=None,
@@ -1098,7 +1184,7 @@ def build_parser() -> argparse.ArgumentParser:
                                              "Android files without booting the stack")
     _add_common_args(android)
     _add_android_args(android)
-    android.add_argument("--host", default=DEFAULT_HOST, help=argparse.SUPPRESS)
+    android.add_argument("--host", default=None, help=argparse.SUPPRESS)
     android.add_argument("--revert", action="store_true",
                          help="remove the generated debug override and restore/"
                               "remove the CENTRAL_SERVER_URL line")
