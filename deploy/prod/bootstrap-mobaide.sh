@@ -26,7 +26,7 @@
 #   - Install Docker (use `curl -fsSL https://get.docker.com | sh` if missing).
 #   - Modify /etc/ssh/sshd_config.
 #   - Install the weekly SQLite backup cron (see bootstrap-mobaide.md step 5).
-#   - Write TLS cert files or deploy the service (deploy-central.ps1 does that).
+#   - Write TLS cert files or deploy the service (deploy_central.py does that).
 #
 set -euo pipefail
 
@@ -188,7 +188,7 @@ else
 JWT_SECRET_KEY=${JWT_SECRET}
 
 # Seed a first admin so you can log in to the dashboard.
-# Uncomment and fill in before running deploy-central.ps1.
+# Uncomment and fill in before running deploy_central.py.
 # ADMIN_SEED_EMAIL=you@example.com
 # ADMIN_SEED_PASSWORD=change-me
 
@@ -228,5 +228,5 @@ echo "Install dir:"
 ls -la "$INSTALL_DIR" | sed 's/^/  /'
 echo
 ok "Bootstrap complete. Next, on your workstation:"
-echo "      .\\deploy\\prod\\deploy-central.ps1"
+echo "      python deploy/prod/deploy_central.py"
 echo

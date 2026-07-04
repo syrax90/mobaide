@@ -61,5 +61,5 @@ jobs:
         run: |
           echo "Deploy of central_server ${VERSION} approved."
           echo "Image: ${IMAGE_TAG}"
-          echo "Operator must roll out via deploy/prod/deploy-central.ps1 or"
+          echo "Operator must roll out via deploy/prod/deploy_central.py or"
           echo "by running: docker compose -f deploy/prod/docker-compose.prod.yml pull && up -d"

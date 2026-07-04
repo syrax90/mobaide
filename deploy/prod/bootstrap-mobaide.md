@@ -1,13 +1,13 @@
 # One-time bootstrap for mobaide.com
 
-Run these steps **once** before `deploy-central.ps1` will work. Repeat only if you rebuild the VPS from scratch.
+Run these steps **once** before `deploy/prod/deploy_central.py` will work. Repeat only if you rebuild the VPS from scratch.
 
 ## Automated path (recommended)
 
-Steps 1, 3, and the directory setup part of step 2 are automated by `deploy/prod/bootstrap-mobaide.sh`. Root SSH is **not** required — the script only needs to run as root *on* the VPS, which `sudo` inside the SSH session handles. From your Windows workstation:
+Steps 1, 3, and the directory setup part of step 2 are automated by `deploy/prod/bootstrap-mobaide.sh`. Root SSH is **not** required — the script only needs to run as root *on* the VPS, which `sudo` inside the SSH session handles. From your workstation:
 
-```powershell
-scp deploy\prod\bootstrap-mobaide.sh mobaide:/tmp/
+```bash
+scp deploy/prod/bootstrap-mobaide.sh mobaide:/tmp/
 ssh -t mobaide "sudo bash /tmp/bootstrap-mobaide.sh"
 ```
 
@@ -36,16 +36,17 @@ The manual steps below remain the authoritative reference if you prefer to do ev
 - Ports **22**, **80**, **443** reachable from the public internet.
 - DNS `A` record `mobaide.com` → VPS public IP (see the TLS section below for Cloudflare proxy settings).
 
-## Prerequisites on your Windows workstation
+## Prerequisites on your workstation (Windows or macOS)
 
-- OpenSSH client (bundled with Windows 10+) and an entry in `~/.ssh/config` that lets `ssh mobaide` connect with key-based auth:
+- OpenSSH client (bundled with Windows 10+ and macOS) and an entry in `~/.ssh/config` that lets `ssh mobaide` connect with key-based auth:
   ```
   Host mobaide
       HostName mobaide.com
       User <your-user>
       IdentityFile ~/.ssh/id_ed25519
   ```
-- `tar`, `scp`, `git` on PATH (all bundled with Windows 10+ except git, which you almost certainly have).
+- `tar`, `scp`, `git` on PATH (all bundled with Windows 10+ and macOS except git, which you almost certainly have).
+- Python 3.12+ (runs the deploy script, `deploy/prod/deploy_central.py`).
 
 ## 1. Prepare the server layout
 
@@ -150,7 +151,7 @@ nano /opt/mobaide/.env
 chmod 600 /opt/mobaide/.env
 ```
 
-**Never commit `.env` to any repo, and never rsync/scp it from your local machine.** The PowerShell deploy script explicitly excludes it.
+**Never commit `.env` to any repo, and never rsync/scp it from your local machine.** The deploy script (`deploy/prod/deploy_central.py`) explicitly excludes it.
 
 ## 3. Firewall (if ufw is enabled)
 
@@ -206,20 +207,20 @@ Add:
 
 ## 6. First deploy
 
-Back on Windows:
+Back on your workstation:
 
-```powershell
-cd D:\ML\Projects\mobaide
-.\deploy\prod\deploy-central.ps1                             # LetsEncrypt
+```bash
+cd <repo-root>
+python deploy/prod/deploy_central.py                              # LetsEncrypt
 # or
-.\deploy\prod\deploy-central.ps1 -TlsMode CloudflareOrigin
+python deploy/prod/deploy_central.py --tls-mode CloudflareOrigin
 ```
 
 ## Operational notes
 
 - **Persistent state**: the SQLite DB lives in the named volume `central-server-data`. `docker compose up -d --build` replaces the container but keeps the volume. Never run `docker compose down -v` on the server.
-- **Rollback**: `.\deploy\prod\deploy-central.ps1 -Rollback` swaps `central_server.prev` back in and rebuilds.
-- **Quick restart** (no source changes): `.\deploy\prod\deploy-central.ps1 -SkipBuild`.
+- **Rollback**: `python deploy/prod/deploy_central.py --rollback` swaps `central_server.prev` back in and rebuilds.
+- **Quick restart** (no source changes): `python deploy/prod/deploy_central.py --skip-build`.
 - **Manual inspection**:
   ```bash
   ssh mobaide

@@ -1,5 +1,5 @@
 # Production compose for mobaide.com — central-server + Caddy (TLS) only.
-# Deployed to /opt/mobaide/ on the server by deploy-central.ps1.
+# Deployed to /opt/mobaide/ on the server by deploy_central.py.
 #
 # Companion files expected in the same directory on the server:
 #   ./central_server/      source tree (synced from repo; Dockerfile lives here)

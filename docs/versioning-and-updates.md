@@ -24,7 +24,7 @@ dedicated workflow under `.github/workflows/`:
 |------------|-----------|----------|------------------|
 | `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is derived from the `android/CHANGELOG.md` section release-please just generated for this tag (any breaking change → 5, else any `### Bug Fixes` → 3, else → 1). It is **not** read from the tagged commit subject — the tag sits on release-please's `chore: release main` commit, which is never a `feat`/`fix`. |
 | `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release **published into the public sibling repo `$RELEASES_REPO`** (the source repo is private, so anonymous installs cannot reach release URLs there), an anonymous reachability gate (1-byte ranged GET, with retries to absorb CDN-propagation lag) over every URL in the manifest, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. |
-| `server-vX.Y.Z` | `central_server` | `release-server.yml` | Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). No GitHub Release object is created on this repo — the GHCR image is the only artifact. A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy-central.ps1` or `docker compose pull && up -d` against the prod compose file). |
+| `server-vX.Y.Z` | `central_server` | `release-server.yml` | Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). No GitHub Release object is created on this repo — the GHCR image is the only artifact. A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy_central.py` or `docker compose pull && up -d` against the prod compose file). |
 | `proto-vN` | Wire contract | _(none)_ | Hand-pushed by a developer alongside the lockstep `PROTOCOL.md` + `envelope.py` bump. Serves as a changelog/anchor tag — no workflow fires on tag push and no Release object is created. Lockstep enforcement that **both** `mobaide_agent/.../envelope.py` AND `central_server/.../envelope.py` move together lives in `protocol-integrity.yml`, which runs on every PR and every push to `main`. |
 
 ### Cutting a release
@@ -250,7 +250,7 @@ second `deploy` job runs in the `production` environment. Configure
 required reviewers under repo Settings → Environments → production so the
 job blocks on a manual click before recording the rollout. The job itself
 does not SSH to the host — host-side rollout is operator-driven via
-`deploy/prod/deploy-central.ps1` (which preserves the previous image for
+`deploy/prod/deploy_central.py` (which preserves the previous image for
 one-step rollback) or, for the polling pattern, a watchtower-style
 container on the prod host that pulls `ghcr.io/<repo>-server:latest` on a
 timer.
