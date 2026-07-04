@@ -11,9 +11,13 @@ This catches integration regressions that the in-process ASGI tests
 routing, binary envelope framing, and the Windows `WindowsSelectorEventLoop`
 requirement (only the subprocess path exercises it).
 
+For hands-on **manual** testing of the same stack from a real phone or emulator,
+see [manual-e2e-testing.md](manual-e2e-testing.md) — `tests/e2e/manual_stack.py`
+reuses this harness's recipe outside pytest.
+
 ## What it does
 
-`conftest.py`'s session-scoped `e2e_stack` fixture:
+`tests/e2e/conftest.py`'s session-scoped `e2e_stack` fixture:
 
 1. picks two free loopback ports and a per-run temp dir,
 2. boots `python -m central_server` (test mode, tmp DB/manifest, email off),
@@ -24,7 +28,7 @@ requirement (only the subprocess path exercises it).
 5. gates readiness on `GET /api/health` → `agents_online >= 1` (not bare HTTP 200,
    which races into WS close 4012), then yields a `MockMobileClient`.
 
-`test_e2e_session_echo.py` then mints a mobile token, creates a **SHELL** session
+`tests/e2e/test_e2e_session_echo.py` then mints a mobile token, creates a **SHELL** session
 via `POST /proxy/{agent_id}/api/sessions` (the agent's `FakePtyBackend` — no real
 shell, no `claude`/`codex` CLI), attaches the relay session WebSocket, and asserts
 a sent marker is echoed back through the binary `o` (output) frame.
