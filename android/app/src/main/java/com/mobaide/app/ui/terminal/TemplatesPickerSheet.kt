@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -78,6 +79,7 @@ private fun groupTemplates(
 @Composable
 fun TemplatesPickerSheet(
     templates: List<TemplateDto>,
+    isLoading: Boolean = false,
     onPick: (TemplateDto) -> Unit,
     onToggleFavorite: (TemplateDto) -> Unit,
     onDelete: (TemplateDto) -> Unit,
@@ -118,7 +120,16 @@ fun TemplatesPickerSheet(
                 placeholder = { Text("Search templates") },
                 singleLine = true,
             )
-            if (templates.isEmpty()) {
+            if (templates.isEmpty() && isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            } else if (templates.isEmpty()) {
                 Text(
                     text = "You haven't saved any templates yet. Type a prompt and tap the bookmark icon to save it.",
                     style = MaterialTheme.typography.bodyMedium,
