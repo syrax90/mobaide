@@ -32,11 +32,14 @@ cd android
 ```
 
 Then open the app on the phone, **register or log in** with the credentials
-from the banner (email `dev@test.local`; the password is **generated per
-state dir** and shown only in the banner — pin your own with
-`--email`/`--password`), pick the `manual-e2e-agent`, and start testing.
-`Ctrl+C` stops the stack; state persists, so the next `up` reuses the same
-account, agent, and database — the phone stays logged in.
+from the banner (email `dev@test.local`, password `Qwe>123` — both fixed,
+easy dev-testing defaults; override with `--email`/`--password`), pick the
+`manual-e2e-agent`, and start testing.
+`Ctrl+C` stops the stack and **restores `android/local.properties`** to its
+previous `CENTRAL_SERVER_URL` (e.g. `https://mobaide.com`), so the checkout is
+left as it was found; state persists, so the next `up` reuses the same account,
+agent, and database — the phone stays logged in. Pass `--keep-android` to leave
+the test URL in place across restarts instead.
 
 ## What the script does
 
@@ -56,6 +59,8 @@ account, agent, and database — the phone stays logged in.
 6. Syncs the two **gitignored** Android files (next section) and prints the
    READY banner, then streams `[server]` / `[agent]` logs until `Ctrl+C`
    (logs are also written under the state dir).
+7. On stop, restores `local.properties` to its previous `CENTRAL_SERVER_URL`
+   and removes the debug override (skip with `--keep-android`).
 
 State lives in `<system-temp>/mobaide-manual-e2e` by default (`--state-dir` to
 move it): `state.json` (JWT secret, account, agent id + token, last-used port),
@@ -94,7 +99,14 @@ DEBUG build reach `http://<your-PC>:9000`. After any URL change (new Wi-Fi
 lease, different `--port`), **rebuild + reinstall the app**; the banner warns
 when that is needed.
 
-Undo both at any time:
+**Both are undone automatically when the stack stops** — the previous
+`CENTRAL_SERVER_URL` is put back and the debug override removed, so the checkout
+returns to its pre-test state with nothing to revert by hand. The rebuild
+prompt still tracks the URL the app was last built with, so restoring on stop
+does **not** make the next `up` nag for a rebuild the installed app does not
+need. Pass `--keep-android` to `up` to leave the test URL in place across
+restarts. To undo manually at any other time (e.g. after `--keep-android` or a
+hard kill that skipped teardown):
 
 ```
 python tests/e2e/manual_stack.py android --revert
@@ -120,8 +132,9 @@ WSL adapters); the banner lists all candidate IPs to try.
 | `up --fake-pty [--smoke]` | echo-backend infra check (no shells/CLIs needed) |
 | `up --install-app` / `android --install-app` | also run `gradlew :app:installDebug` |
 | `up --projects <paths>` | seed the agent's project list with real directories |
+| `up --keep-android` | on stop, leave the test URL in `local.properties` (default: restore it) |
 | `android` | (re)sync the two Android files without booting the stack |
-| `android --revert` | remove the debug override, restore/remove `CENTRAL_SERVER_URL` |
+| `android --revert` | manually undo now (also runs automatically on every `up` stop) |
 | `status` | probe `/api/health`, show persisted identity |
 | `clean` | kill stale processes, revert Android files, delete the state dir |
 
@@ -154,18 +167,23 @@ session-create time with a `<cli>_cli_missing` marker.
   gitignored.
 - Release builds never include the `src/debug` source set, and release CI
   provides `CENTRAL_SERVER_URL` via environment variable, which outranks
-  `local.properties`. (Corollary: don't build a **local release APK** for other
-  purposes while `local.properties` points at your test stack, or unset the
-  line first / run `android --revert`.)
+  `local.properties`. `local.properties` points at the test stack only **while
+  the stack is running** — it is restored on stop — so the earlier footgun is
+  mostly closed; it can still linger with `--keep-android` or after a hard kill
+  that skipped teardown, so if you build a **local release APK** then, unset the
+  line first / run `android --revert`.
 - The test server/agent state is fully isolated under the state dir; a
   co-installed production agent's `.env`, stores, and updater are never touched.
   Crash recovery kills only processes whose recorded pid **and** create time
   match a previous run of this script — a recycled pid can never take down
   another install.
-- The account password is generated randomly per state dir (never a documented
-  constant): the default `up` exposes the server on the LAN, and the owner
-  account fronts a real shell on this machine, so a well-known password would
-  let anyone on the same Wi-Fi open a terminal here.
+- The account password is a fixed, trivial dev-testing value (`Qwe>123`),
+  chosen for tester convenience over secrecy. Because the default `up` exposes
+  the server on the LAN and the owner account fronts a real shell on this
+  machine, this well-known password lets anyone on the same Wi-Fi open a
+  terminal here — so keep the stack on a trusted network, bind loopback
+  (`--host 127.0.0.1`, e.g. the emulator flow), or pin your own `--password`
+  when that matters.
 - If a shell still exports variables from the old copy-paste recipe
   (`MOBAIDE_ENV`, `RELAY_*`, `JWT_SECRET_KEY`, ...), the script sanitizes them
   out of the child processes and applies its own explicit values.

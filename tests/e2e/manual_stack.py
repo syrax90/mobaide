@@ -54,6 +54,7 @@ STATE_VERSION = 1
 DEFAULT_PORT = 9000
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_EMAIL = "dev@test.local"
+DEFAULT_PASSWORD = "Qwe>123"
 DEFAULT_AGENT_NAME = "manual-e2e-agent"
 DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "mobaide-manual-e2e"
 
@@ -70,7 +71,7 @@ DEBUG_NSC_CONTENT = """<?xml version="1.0" encoding="utf-8"?>
      cleartext HTTP so a DEBUG build can reach the local manual E2E stack
      (LAN IP, 10.0.2.2 emulator alias, or 127.0.0.1 via adb reverse).
      Release builds never merge src/debug and keep cleartext disabled.
-     Remove with: python tests/e2e/manual_stack.py android --revert -->
+     Remove it with the manual_stack.py "android" revert flag (see docs/manual-e2e-testing.md). -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
@@ -207,16 +208,17 @@ def default_state() -> dict:
         "version": STATE_VERSION,
         "jwt_secret_key": secrets.token_urlsafe(32),
         "email": DEFAULT_EMAIL,
-        # Random per state dir, NOT a documented constant: the default `up`
-        # exposes the server on the LAN and the owner account fronts a REAL
-        # shell on this machine. Shown in the READY banner; --password pins one.
-        "password": secrets.token_urlsafe(9),
+        "password": DEFAULT_PASSWORD,
         "agent_name": DEFAULT_AGENT_NAME,
         "agent_id": None,
         "agent_token": None,
         "server_port": DEFAULT_PORT,
         "server_host": DEFAULT_HOST,
-        "android": {"previous_central_server_url": None, "managed_url": None},
+        "android": {
+            "previous_central_server_url": None,
+            "managed_url": None,
+            "baked_url": None,
+        },
         "runtime": {},
         "updated_at": None,
     }
@@ -657,11 +659,19 @@ def _write_local_properties_lines(lines: list[str]) -> None:
 
 
 def sync_android_files(state: dict, url: str, save) -> bool:
-    """Write both gitignored artifacts; returns True when the URL changed
-    (meaning the installed app is stale and must be rebuilt + reinstalled)."""
+    """Write both gitignored artifacts; returns True when the app must be
+    rebuilt + reinstalled because the URL baked into the last build changed.
+
+    The rebuild verdict is measured against ``baked_url`` (the URL this script
+    last wrote for a build), not the live ``local.properties`` — so restoring
+    the file on shutdown does not make every later `up` nag for a rebuild the
+    installed app does not actually need.
+    """
     android_state = state.setdefault(
-        "android", {"previous_central_server_url": None, "managed_url": None}
+        "android",
+        {"previous_central_server_url": None, "managed_url": None, "baked_url": None},
     )
+    prior_baked = android_state.get("baked_url")
     lines = _read_local_properties_lines()
     current = _current_central_url(lines)
     if current != android_state.get("managed_url"):
@@ -690,6 +700,7 @@ def sync_android_files(state: dict, url: str, save) -> bool:
     else:
         log(f"android/local.properties: unchanged (CENTRAL_SERVER_URL={url})")
     android_state["managed_url"] = url
+    android_state["baked_url"] = url
 
     nsc_rel = DEBUG_NSC_PATH.relative_to(REPO_ROOT)
     existing_nsc = (
@@ -710,7 +721,7 @@ def sync_android_files(state: dict, url: str, save) -> bool:
         log(f"{nsc_rel}: written (debug builds only)")
 
     save()
-    return current != url
+    return prior_baked != url
 
 
 def revert_android_files(state: dict, save) -> None:
@@ -854,6 +865,11 @@ def print_ready_banner(
         else:
             lines.append("      to (re)install the debug app:")
         lines.append(f"      {gradle_cmd}")
+        restore_note = (
+            "kept on stop (--keep-android)" if args.keep_android
+            else "restored to its previous value on stop"
+        )
+        lines.append(f"      local.properties {restore_note}")
     else:
         lines.append("  Android files:      NOT synced (--no-android); run "
                      "`python tests/e2e/manual_stack.py android` when needed")
@@ -1010,11 +1026,29 @@ def cmd_up(args: argparse.Namespace) -> int:
         if client is not None:
             client.close()
         state["runtime"] = {}
-        if (state_dir / "state.json").exists():
+        state_exists = (state_dir / "state.json").exists()
+        # Restore the checkout to its pre-test state so a normal or release
+        # build is not left pointing at the throwaway stack. The installed debug
+        # app keeps its baked-in URL, so this neither disconnects the phone nor
+        # triggers a spurious rebuild prompt on the next `up` (see baked_url).
+        # Skipped when state.json is gone (a concurrent `clean` already reverted,
+        # and revert_android_files would re-create the deleted state dir).
+        android_restored = False
+        if android_synced and not args.keep_android and state_exists:
+            try:
+                revert_android_files(state, save)
+                android_restored = True
+            except OSError as exc:
+                log(f"could not restore android/local.properties on stop ({exc}); "
+                    "run `python tests/e2e/manual_stack.py android --revert` manually")
+        if state_exists:
             # Skip the save when `clean` removed the state dir mid-run --
             # rewriting it here would resurrect a directory the user deleted.
             save()
-        log(f"stack stopped; state kept in {state_dir} (next `up` reuses it)")
+        stop_msg = f"stack stopped; state kept in {state_dir} (next `up` reuses it)"
+        if android_restored:
+            stop_msg += "; android/local.properties restored"
+        log(stop_msg)
 
 
 def cmd_android(args: argparse.Namespace) -> int:
@@ -1160,6 +1194,10 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--no-android", action="store_true",
                     help="do not touch android/local.properties or the debug "
                          "network-security override")
+    up.add_argument("--keep-android", action="store_true",
+                    help="on stop, leave the test CENTRAL_SERVER_URL in "
+                         "android/local.properties instead of restoring the "
+                         "previous value (e.g. https://mobaide.com)")
     up.add_argument("--fake-pty", action="store_true",
                     help="run the agent in MOBAIDE_ENV=test: fake echo PTY, no "
                          "real shells/CLIs (infra check mode)")
@@ -1170,8 +1208,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="wipe the state dir first: new secret, account, agent, DB")
     up.add_argument("--email", default=None, help=f"account email (default {DEFAULT_EMAIL})")
     up.add_argument("--password", default=None,
-                    help="account password (default: generated once per state dir "
-                         "and shown in the READY banner)")
+                    help=f"account password (default: {DEFAULT_PASSWORD}, shown in "
+                         "the READY banner)")
     up.add_argument("--agent-name", default=None,
                     help=f"agent display name (default {DEFAULT_AGENT_NAME})")
     up.add_argument("--projects", default=None,
