@@ -1,5 +1,23 @@
 # mobaide_agent Changelog
 
+## [0.3.1](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.0...agent-v0.3.1) (2026-07-05)
+
+
+### Features
+
+* **agent,android:** replace Gemini CLI with Antigravity CLI (agy) [CLA-95] ([ca777e1](https://github.com/syrax90/claude_mobile/commit/ca777e15a5a06b6bb54df3d037c8367d8348925f))
+* **agent,android:** replace Gemini CLI with Antigravity CLI (agy) [CLA-95] ([0dadd0f](https://github.com/syrax90/claude_mobile/commit/0dadd0ffc514f63f3523a7b787181c70af7b3379))
+* **agent:** add Gemini CLI as a managed CLI agent (CLA-87) ([c3d69be](https://github.com/syrax90/claude_mobile/commit/c3d69be5efec781c5b679c5eb94e32213a396bdc))
+* **mobaide_agent:** add Gemini CLI as a managed CLI agent (CLA-87) ([df27b50](https://github.com/syrax90/claude_mobile/commit/df27b50a8896949024fd5435ca3e4dffa9ed53ae))
+* **mobaide_agent:** add MOBAIDE_ENV=test agent test-mode (CLA-77) ([1fd9fbf](https://github.com/syrax90/claude_mobile/commit/1fd9fbf9e75a925499189bb6f0e8db9ace26dba3))
+* **mobaide_agent:** add MOBAIDE_ENV=test agent test-mode (CLA-77) ([ec1c41c](https://github.com/syrax90/claude_mobile/commit/ec1c41c7453f1164c976dac3a4ac0b177ada786f))
+
+
+### Bug Fixes
+
+* **mobaide_agent:** address Codex review — Gemini .env auth detection, GEMINI_CLI_HOME, free-form model (CLA-87) ([d6420a1](https://github.com/syrax90/claude_mobile/commit/d6420a1e971f371dd206760a07d01e090faa17a0))
+* **mobaide_agent:** anchor test-mode state from resolved config, not os.environ ([2466a39](https://github.com/syrax90/claude_mobile/commit/2466a39df227a9e6e1506ecfb1572ec42a6f3aff))
+
 ## [0.3.0](https://github.com/syrax90/claude_mobile/compare/agent-v0.2.19...agent-v0.3.0) (2026-06-26)
 
 
