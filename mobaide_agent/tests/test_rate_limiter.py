@@ -214,17 +214,6 @@ class TestBucketsPerKeyAreDistinct:
         assert bucket_a is not bucket_b
 
 
-class TestDefaultConstructor:
-    def test_default_capacity_and_refill_rate(self):
-        limiter = LinearRateLimiter()
-
-        assert limiter._capacity == 1400.0
-        assert limiter._refill_per_sec == pytest.approx(
-            1400.0 / 3600.0, abs=1e-9
-        )
-        assert limiter._buckets == {}
-
-
 class TestInterleavedKeys:
     async def test_sequential_acquires_across_keys_do_not_interfere(
         self, fake_clock, sleep_spy

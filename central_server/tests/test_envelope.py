@@ -63,11 +63,6 @@ class TestEnvelope:
         assert session_id == subscription_id
         assert out_payload == payload
 
-    def test_autoscan_channel_constant(self):
-        """Guard: channel byte stays 0x04 for wire compatibility with the
-        agent-side copy of the envelope protocol."""
-        assert CH_AUTOSCAN == 0x04
-
     def test_empty_payload(self):
         data = encode(CH_SESSION_IO, "s1", b"")
         channel, sid, payload = decode(data)

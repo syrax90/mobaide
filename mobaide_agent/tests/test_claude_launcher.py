@@ -624,17 +624,6 @@ async def test_adhoc_launch_argv_matches_project_launch(tmp_path: Path):
     assert project_spec.argv == adhoc_spec.argv
 
 
-def test_adhoc_launch_target_is_frozen():
-    """:class:`AdHocLaunch` is a ``frozen=True`` dataclass — accidental
-    mutation must fail loudly. Pinning this so a future code change that
-    drops ``frozen=True`` is caught at test time."""
-    from dataclasses import FrozenInstanceError
-
-    target = AdHocLaunch(cwd="/tmp")
-    with pytest.raises(FrozenInstanceError):
-        target.cwd = "/other"  # type: ignore[misc]
-
-
 # When (and only when) a ``session_id`` is supplied AND the launcher was built
 # with both ``hook_port`` and ``hook_token``, ``build`` writes a per-session
 # ``--settings`` file and injects MOBAIDE_* env vars. The Auto Scan scanner

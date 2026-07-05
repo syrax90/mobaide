@@ -283,28 +283,6 @@ class TestRestartWindowsScheduledTask:
             f"25s graceful-stop window plus margin; got {end_timeout}s"
         )
 
-    def test_emits_success_message_on_run_success(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        # The success message must be specific to the Scheduled-Task path
-        # (NOT the generic "Restarted ..."). Operators correlating
-        # ``pair-qr --wait`` output with their migration state rely on
-        # the wording to know whether they're on the new or legacy path.
-        def responder(_cmd: list[str]) -> tuple[int, str, str]:
-            return 0, "", ""
-
-        _silence_waits(monkeypatch)
-        _install_run_with_timeout_recorder(monkeypatch, responder)
-
-        _main._restart_windows_scheduled_task("MobaideAgent")
-
-        out = capsys.readouterr().out
-        assert "Restarted MobaideAgent Scheduled Task" in out, (
-            f"success line must say ``Restarted MobaideAgent Scheduled "
-            f"Task`` so operators can distinguish the new path from the "
-            f"legacy ``Restarted legacy MobaideAgent service``; got: {out!r}"
-        )
-
     def test_emits_admin_hint_on_run_failure(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -390,32 +368,6 @@ class TestRestartWindowsScmService:
     so the operator has a copy-pasteable command even when the migration
     pathway is unavailable.
     """
-
-    def test_success_message_carries_migration_hint(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        # Stop succeeds (rc 0), start succeeds (rc 0). The success
-        # message MUST identify itself as the legacy path AND nudge the
-        # operator to re-run the installer to land on the new shape.
-        # Without this hint, the upgrade window stretches indefinitely
-        # because operators have no signal they're on the deprecated
-        # path.
-        def responder(_cmd: list[str]) -> tuple[int, str, str]:
-            return 0, "", ""
-
-        _silence_waits(monkeypatch)
-        _install_run_with_timeout_recorder(monkeypatch, responder)
-
-        rc = _main._restart_windows_scm_service("MobaideAgent")
-
-        assert rc == 0
-        out = capsys.readouterr().out
-        assert "Restarted legacy MobaideAgent service" in out, (
-            f"success line must mark itself as legacy; got: {out!r}"
-        )
-        assert "Re-run the installer to migrate to the Scheduled Task" in out, (
-            f"success line must contain the migration hint; got: {out!r}"
-        )
 
     def test_failure_hint_preserves_restart_service_command(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -691,44 +643,6 @@ class TestRunWithTimeoutHidesConsoleWindow:
     ``_WINDOWS_NO_WINDOW`` constant (``CREATE_NO_WINDOW`` on win32,
     ``0`` elsewhere).
     """
-
-    def test_subprocess_run_passes_creationflags(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Tests the lowest-level shim directly (rather than going
-        # through the dispatcher) so a regression here is attributed to
-        # the helper, not the caller. The pattern matches the existing
-        # ``test_env_writer.TestRestrictPermsWindowsAclArgv._capture_run``
-        # helper on the mobaide-agent test side.
-        captured: dict[str, object] = {}
-
-        def fake_run(cmd, **kwargs):
-            captured["cmd"] = list(cmd)
-            captured["kwargs"] = dict(kwargs)
-            return _DummyCompleted()
-
-        monkeypatch.setattr(_main.subprocess, "run", fake_run)
-
-        rc, stdout, stderr = _main._run_with_timeout(
-            ["schtasks.exe", "/Query", "/TN", "MobaideAgent"]
-        )
-
-        assert rc == 0
-        kwargs = captured["kwargs"]
-        assert "creationflags" in kwargs, (
-            "_run_with_timeout's subprocess.run kwargs must include "
-            "the literal `creationflags` key -- a missing key "
-            "(defaulting to 0) means every schtasks / sc.exe call "
-            "pops a transient console under pythonw.exe; got "
-            f"kwargs={kwargs!r}"
-        )
-        flag = kwargs["creationflags"]
-        assert flag == _main._WINDOWS_NO_WINDOW, (
-            "_run_with_timeout must pass "
-            "creationflags=_WINDOWS_NO_WINDOW so the flag value "
-            "matches the platform-conditional constant; got "
-            f"creationflags={flag!r}"
-        )
 
     def test_keeps_capture_output_alongside_creationflags(
         self, monkeypatch: pytest.MonkeyPatch

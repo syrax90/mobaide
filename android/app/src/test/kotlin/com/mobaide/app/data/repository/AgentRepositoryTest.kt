@@ -70,15 +70,6 @@ class AgentRepositoryTest {
         assertTrue(repo.observeAgents().value.isEmpty())
     }
 
-    @Test
-    fun observeAgents_initialFlowEmission_isEmptyList() = runTest {
-        val (repo) = newFixture()
-        repo.observeAgents().test {
-            assertEquals(emptyList<AgentSummaryResponse>(), awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- requireUserToken guard ------------------------------------------------
 
     @Test

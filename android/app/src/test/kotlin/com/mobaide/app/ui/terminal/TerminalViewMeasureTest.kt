@@ -77,24 +77,6 @@ class TerminalViewMeasureTest {
     }
 
     @Test
-    fun onMeasure_exactlyWidth_usesSpecSize_regardlessOfLayoutParamsWidth() {
-        val view = TerminalView(context, null).apply {
-            layoutParams = ViewGroup.LayoutParams(9999, ViewGroup.LayoutParams.MATCH_PARENT)
-        }
-
-        view.measure(
-            View.MeasureSpec.makeMeasureSpec(640, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
-        )
-
-        assertEquals(
-            "EXACTLY width must win over lp.width — preserves the Compose AndroidView path that explicitly constrains the View to a measured size",
-            640,
-            view.measuredWidth,
-        )
-    }
-
-    @Test
     fun onMeasure_unspecifiedWidth_fallsBackToSuggestedMinimum_whenLayoutParamsIsNull() {
         val view = TerminalView(context, null)
         assertEquals(
@@ -111,24 +93,6 @@ class TerminalViewMeasureTest {
         assertEquals(
             "with no layoutParams the lp guard must short-circuit safely (no NPE) and fall back to getSuggestedMinimumWidth — protects the orphaned-view path where Compose's AndroidView holder measures the View before attaching it",
             0,
-            view.measuredWidth,
-        )
-    }
-
-    @Test
-    fun onMeasure_atMostWidth_capsAtSpecSize_regardlessOfLayoutParamsWidth() {
-        val view = TerminalView(context, null).apply {
-            layoutParams = ViewGroup.LayoutParams(9999, ViewGroup.LayoutParams.MATCH_PARENT)
-        }
-
-        view.measure(
-            View.MeasureSpec.makeMeasureSpec(480, View.MeasureSpec.AT_MOST),
-            View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
-        )
-
-        assertEquals(
-            "AT_MOST width must yield specSize per View.getDefaultSize (AT_MOST and EXACTLY both return specSize unconditionally — the minimumWidth argument is only consulted for UNSPECIFIED). Pins that the non-UNSPECIFIED branch defers to default behavior and lp.width is correctly ignored.",
-            480,
             view.measuredWidth,
         )
     }

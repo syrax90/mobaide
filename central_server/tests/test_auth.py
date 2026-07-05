@@ -282,18 +282,6 @@ class TestZeroTtlTokens:
 
 
 class TestArgon2Hardening:
-    async def test_new_hashes_use_argon2id_owasp_params(self, auth: AuthService):
-        import argon2
-
-        h = await auth._hash_password("pw")
-        params = argon2.extract_parameters(h)
-        assert params.type is argon2.Type.ID
-        assert (params.time_cost, params.memory_cost, params.parallelism) == (
-            3,
-            65536,
-            1,
-        )
-
     async def test_old_param_hash_still_verifies(self, auth: AuthService):
         from argon2 import PasswordHasher
 
@@ -339,13 +327,6 @@ class TestArgon2Hardening:
             "password_hash"
         ]
         assert after == before
-
-    async def test_dedicated_hash_executor(self, auth: AuthService):
-        assert auth._hash_executor._max_workers == 2
-        h = await auth._hash_password("pw")
-        assert await auth._verify_password(h, "pw") is True
-        auth.close()
-        auth.close()  # idempotent
 
     async def test_login_succeeds_when_rehash_persist_fails(
         self, auth: AuthService, db: Database

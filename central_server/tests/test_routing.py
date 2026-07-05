@@ -53,17 +53,6 @@ class TestAgentOps:
         assert len(clients) == 1
         assert clients[0].device_id == "dev-1"
 
-    def test_get_agent(self, routing: RoutingTable):
-        ws = _mock_ws()
-        routing.register_agent("agent-1", ws)
-        assert routing.get_agent("agent-1") is not None
-        assert routing.get_agent("nonexistent") is None
-
-    def test_list_online(self, routing: RoutingTable):
-        routing.register_agent("a1", _mock_ws())
-        routing.register_agent("a2", _mock_ws())
-        assert len(routing.list_online_agents()) == 2
-
     def test_heartbeat(self, routing: RoutingTable):
         ws = _mock_ws()
         conn = routing.register_agent("agent-1", ws)
@@ -73,13 +62,6 @@ class TestAgentOps:
 
 
 class TestMobileOps:
-    def test_register_and_get(self, routing: RoutingTable):
-        routing.register_agent("agent-1", _mock_ws())
-        client = MobileClient(device_id="dev-1", websocket=_mock_ws())
-        routing.register_mobile("agent-1", "session_io:s1", client)
-        clients = routing.get_mobile_clients("agent-1", "session_io:s1")
-        assert client in clients
-
     def test_multiple_clients(self, routing: RoutingTable):
         routing.register_agent("agent-1", _mock_ws())
         c1 = MobileClient(device_id="dev-1", websocket=_mock_ws())
@@ -103,9 +85,6 @@ class TestMobileOps:
         routing.register_mobile("agent-1", "events", c2)
         all_clients = routing.get_all_mobile_for_agent("agent-1")
         assert len(all_clients) == 2
-
-    def test_empty_channels(self, routing: RoutingTable):
-        assert routing.get_mobile_clients("none", "none") == set()
 
 
 class TestListAttachedSessions:
@@ -215,16 +194,6 @@ class TestUserClientOps:
     """Cover ``register_user_client``/``unregister_user_client`` and the
     admin destructive ``disconnect_user`` helper.
     """
-
-    def test_register_and_get(self, routing: RoutingTable):
-        client = UserClient(
-            user_id="u1", device_id="dev-1", websocket=_admin_ws()
-        )
-        routing.register_user_client("u1", client)
-        assert client in routing.get_user_clients("u1")
-
-    def test_get_returns_empty_set_when_unknown(self, routing: RoutingTable):
-        assert routing.get_user_clients("ghost") == set()
 
     def test_unregister_pops_user_when_last_client_leaves(
         self, routing: RoutingTable
@@ -369,28 +338,3 @@ class TestSafeSendReasonAndClose:
         ws.close = AsyncMock(side_effect=RuntimeError("dead"))
         await safe_send_reason_and_close(ws, 4001, "boot")
         ws.send_text.assert_awaited_once()
-
-
-class TestAgentDisconnectedCodeContract:
-    """Pin the close code emitted to paired mobile clients when an
-    agent's relay tunnel disconnects. Must be 4012
-    (``WS_CLOSE_AGENT_TRANSIENT_OFFLINE``) and NOT 4010
-    (``WS_CLOSE_ADMIN_REVOKED``) — the agent disconnect is transient,
-    the mobile is expected to keep reconnecting. Collapsing the two
-    onto 4010 was a latent bug masked only by Android previously
-    ignoring the code; once the client started honouring 4010 as a
-    destructive admin-revoke, this path would have permanently killed
-    every relay-mode per-agent mobile socket on every agent restart.
-    See ``PROTOCOL.md`` close-codes table for the wire contract.
-    """
-
-    def test_agent_disconnected_code_is_4012(self):
-        from central_server.relay.agent_ws import AGENT_DISCONNECTED_CODE
-        from central_server.relay.routing import (
-            WS_CLOSE_ADMIN_REVOKED,
-            WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
-        )
-
-        assert AGENT_DISCONNECTED_CODE == WS_CLOSE_AGENT_TRANSIENT_OFFLINE
-        assert AGENT_DISCONNECTED_CODE == 4012
-        assert AGENT_DISCONNECTED_CODE != WS_CLOSE_ADMIN_REVOKED

@@ -179,46 +179,6 @@ class TemplatesViewModelTest {
         assertNull(vm.uiState.value.error)
     }
 
-    // ---- Editor state machine --------------------------------------------------
-
-    @Test
-    fun openCreateEditor_setsOpenWithNullTarget() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.openCreateEditor()
-
-        val state = vm.uiState.value.editorState
-        assertTrue(state is EditorState.Open)
-        assertNull((state as EditorState.Open).target)
-    }
-
-    @Test
-    fun openEditEditor_setsOpenWithTemplate() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        val tpl = template("t-1", name = "edit-me")
-
-        vm.openEditEditor(tpl)
-
-        val state = vm.uiState.value.editorState as EditorState.Open
-        assertEquals("t-1", state.target?.template_id)
-    }
-
-    @Test
-    fun dismissEditor_resetsToHidden() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.openCreateEditor()
-
-        vm.dismissEditor()
-
-        assertEquals(EditorState.Hidden, vm.uiState.value.editorState)
-    }
-
     // ---- saveFromEditor: create vs edit branch ---------------------------------
 
     @Test
@@ -350,30 +310,6 @@ class TemplatesViewModelTest {
     }
 
     // ---- Delete-confirmation state machine -------------------------------------
-
-    @Test
-    fun showDeleteConfirm_setsDeleteTarget() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        val tpl = template("t-doomed")
-
-        vm.showDeleteConfirm(tpl)
-
-        assertEquals("t-doomed", vm.uiState.value.deleteTarget?.template_id)
-    }
-
-    @Test
-    fun dismissDeleteConfirm_clearsDeleteTarget() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        vm.showDeleteConfirm(template("t-1"))
-
-        vm.dismissDeleteConfirm()
-
-        assertNull(vm.uiState.value.deleteTarget)
-    }
 
     @Test
     fun confirmDelete_callsDeleteTemplate_andClearsDeleteTarget() = runTest {

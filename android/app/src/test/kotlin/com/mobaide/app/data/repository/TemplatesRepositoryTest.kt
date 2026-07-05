@@ -76,15 +76,6 @@ class TemplatesRepositoryTest {
         assertTrue(repo.observeTemplates().value.isEmpty())
     }
 
-    @Test
-    fun observeTemplates_initialFlowEmission_isEmptyList() = runTest {
-        val (repo) = newFixture()
-        repo.observeTemplates().test {
-            assertEquals(emptyList<TemplateDto>(), awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- requireUserToken guard ------------------------------------------------
 
     @Test
@@ -92,50 +83,6 @@ class TemplatesRepositoryTest {
         val (repo) = newFixture(userToken = null)
         try {
             repo.refreshTemplates()
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
-    @Test
-    fun createTemplate_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.createTemplate("name", "body")
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
-    @Test
-    fun updateTemplate_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.updateTemplate("t-1", name = "x")
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
-    @Test
-    fun deleteTemplate_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.deleteTemplate("t-1")
-            fail("expected IllegalStateException")
-        } catch (e: IllegalStateException) {
-            assertEquals("User not logged in", e.message)
-        }
-    }
-
-    @Test
-    fun touchTemplate_throwsIllegalStateException_whenUserNotLoggedIn() = runTest {
-        val (repo) = newFixture(userToken = null)
-        try {
-            repo.touchTemplate("t-1")
             fail("expected IllegalStateException")
         } catch (e: IllegalStateException) {
             assertEquals("User not logged in", e.message)

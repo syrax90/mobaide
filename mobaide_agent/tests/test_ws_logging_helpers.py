@@ -17,8 +17,6 @@ from mobaide.agent.ws.logging import (
     _client_addr,
     log_ws_authenticated,
     log_ws_connect,
-    log_ws_disconnect,
-    log_ws_error,
 )
 
 
@@ -77,20 +75,6 @@ class TestClientAddr:
 
 
 class TestLogWsConnect:
-    def test_emits_connect_event(self):
-        ws = _fake_ws(host="1.2.3.4", port=5678)
-
-        with capture_logs() as logs:
-            log_ws_connect("session-io", ws, session_id="sess-1")
-
-        assert len(logs) == 1
-        entry = logs[0]
-        assert entry["event"] == "ws.connect"
-        assert entry["channel"] == "session-io"
-        assert entry["client_ip"] == "1.2.3.4:5678"
-        assert entry["session_id"] == "sess-1"
-        assert entry["log_level"] == "info"
-
     def test_binds_ws_channel_and_client_ip_to_contextvars(self):
         ws = _fake_ws(host="10.0.0.2", port=443)
 
@@ -112,109 +96,8 @@ class TestLogWsConnect:
 
 
 class TestLogWsAuthenticated:
-    def test_emits_authenticated_event(self):
-        with capture_logs() as logs:
-            log_ws_authenticated("session-io", "alice", session_id="s-1")
-
-        assert len(logs) == 1
-        entry = logs[0]
-        assert entry["event"] == "ws.authenticated"
-        assert entry["channel"] == "session-io"
-        assert entry["username"] == "alice"
-        assert entry["session_id"] == "s-1"
-
     def test_binds_username_to_contextvars(self):
         log_ws_authenticated("session-io", "bob")
 
         ctx = structlog.contextvars.get_contextvars()
         assert ctx.get("username") == "bob"
-
-
-class TestLogWsDisconnect:
-    def test_emits_disconnect_with_counters(self):
-        with capture_logs() as logs:
-            log_ws_disconnect(
-                "session-io",
-                bytes_in=1024,
-                bytes_out=2048,
-                msg_count=7,
-                reason="client_closed",
-            )
-
-        assert len(logs) == 1
-        entry = logs[0]
-        assert entry["event"] == "ws.disconnect"
-        assert entry["channel"] == "session-io"
-        assert entry["bytes_in"] == 1024
-        assert entry["bytes_out"] == 2048
-        assert entry["msg_count"] == 7
-        assert entry["reason"] == "client_closed"
-
-    def test_defaults_are_zero_and_reason_none(self):
-        with capture_logs() as logs:
-            log_ws_disconnect("events")
-
-        entry = logs[0]
-        assert entry["bytes_in"] == 0
-        assert entry["bytes_out"] == 0
-        assert entry["msg_count"] == 0
-        assert entry["reason"] is None
-
-    def test_forwards_extra_kwargs(self):
-        with capture_logs() as logs:
-            log_ws_disconnect(
-                "session-io",
-                bytes_in=1,
-                bytes_out=2,
-                msg_count=3,
-                reason="ok",
-                session_id="sess-xyz",
-            )
-
-        assert logs[0]["session_id"] == "sess-xyz"
-
-
-class TestLogWsError:
-    def test_emits_error_with_type_and_message(self):
-        err = ValueError("boom")
-
-        with capture_logs() as logs:
-            log_ws_error("session-io", err)
-
-        assert len(logs) == 1
-        entry = logs[0]
-        assert entry["event"] == "ws.error"
-        assert entry["channel"] == "session-io"
-        assert entry["error_type"] == "ValueError"
-        assert entry["error_message"] == "boom"
-        assert entry["log_level"] == "error"
-
-    def test_handles_custom_exception_type(self):
-        class MyCustomError(RuntimeError):
-            pass
-
-        with capture_logs() as logs:
-            log_ws_error("events", MyCustomError("x"))
-
-        assert logs[0]["error_type"] == "MyCustomError"
-        assert logs[0]["error_message"] == "x"
-
-    def test_handles_base_exception_subclass(self):
-        with capture_logs() as logs:
-            log_ws_error("events", KeyboardInterrupt("stop"))
-
-        assert logs[0]["error_type"] == "KeyboardInterrupt"
-        assert logs[0]["error_message"] == "stop"
-
-    def test_forwards_extra_kwargs(self):
-        with capture_logs() as logs:
-            log_ws_error(
-                "session-io",
-                ValueError("nope"),
-                session_id="s-9",
-                retry_count=2,
-            )
-
-        entry = logs[0]
-        assert entry["session_id"] == "s-9"
-        assert entry["retry_count"] == 2

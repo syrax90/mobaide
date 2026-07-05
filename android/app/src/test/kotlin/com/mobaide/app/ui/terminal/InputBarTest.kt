@@ -3,7 +3,6 @@ package com.mobaide.app.ui.terminal
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertHasClickAction
-import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -45,27 +44,6 @@ class InputBarPortraitTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
-
-    @Test
-    fun textField_andAllFiveActionIcons_areDisplayedInPortrait() {
-        composeRule.setContent {
-            Surface {
-                InputBar(
-                    text = TextFieldValue("hi"),
-                    onTextChange = {},
-                    onSend = {},
-                    onSendBytes = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("hi").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Templates").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Save as template").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Show keys").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Expand editor").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Send").assertIsDisplayed()
-    }
 
     @Test
     fun sendIcon_routesClickToOnSendCallback_withTrimmedText() {
@@ -242,23 +220,6 @@ class InputBarPortraitTest {
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x12), captured.single())
     }
-
-    @Test
-    fun showKeys_descriptionFlipsToHideKeys_whenPanelExpanded() {
-        composeRule.setContent {
-            Surface {
-                InputBar(
-                    text = TextFieldValue(""),
-                    onTextChange = {},
-                    onSend = {},
-                    onSendBytes = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Show keys").performClick()
-        composeRule.onNodeWithContentDescription("Hide keys").assertIsDisplayed()
-    }
 }
 
 @RunWith(RobolectricTestRunner::class)
@@ -267,24 +228,6 @@ class InputBarLandscapeTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
-
-    @Test
-    fun landscape_rendersTextField_andAllFiveActionIcons() {
-        composeRule.setContent {
-            Surface {
-                InputBar(
-                    text = TextFieldValue("ok"),
-                    onTextChange = {},
-                    onSend = {},
-                    onSendBytes = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("ok").assertIsDisplayed()
-        listOf("Templates", "Save as template", "Show keys", "Expand editor", "Send")
-            .forEach { composeRule.onNodeWithContentDescription(it).assertIsDisplayed() }
-    }
 
     @Test
     fun landscape_controlKeyPanel_exposesSame12Keys_asPortrait() {

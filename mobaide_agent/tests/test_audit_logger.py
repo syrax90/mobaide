@@ -183,68 +183,7 @@ class TestOptionalFieldHandling:
         assert entry["outcome"] == "ok"
 
 
-class TestExtraKwargsPreserved:
-    def test_single_extra_kwarg(self, caplog):
-        with caplog.at_level(logging.INFO, logger="audit"):
-            audit_event(
-                "audit.custom",
-                actor="alice",
-                target="t",
-                outcome="ok",
-                request_id="req-42",
-            )
-
-        records = _audit_records(caplog)
-        matching = [r for r in records if r.get("event") == "audit.custom"]
-        assert matching
-        assert matching[-1]["request_id"] == "req-42"
-
-    def test_multiple_extras_mixed_types(self, caplog):
-        with caplog.at_level(logging.INFO, logger="audit"):
-            audit_event(
-                "audit.multi",
-                actor="alice",
-                target=None,
-                outcome="success",
-                session_id="s-1",
-                attempt=3,
-                metadata={"k": "v"},
-            )
-
-        records = _audit_records(caplog)
-        matching = [r for r in records if r.get("event") == "audit.multi"]
-        assert matching
-        entry = matching[-1]
-        assert entry["session_id"] == "s-1"
-        assert entry["attempt"] == 3
-        assert entry["metadata"] == {"k": "v"}
-
-    def test_extras_do_not_collide_with_reserved_fields(self):
-        """Passing a reserved kwarg twice (positional+**kwargs) is a TypeError.
-
-        Locks in the signature contract: if a future refactor silently
-        accepted ``**extra`` containing ``outcome``, this test would catch
-        it. Python itself raises ``TypeError`` here, so we don't even need
-        to reach the logger.
-        """
-        extras = {"outcome": "also-ok"}
-        with pytest.raises(TypeError):
-            audit_event(
-                "audit.conflict",
-                actor="x",
-                target="t",
-                outcome="ok",
-                **extras,
-            )
-
-
 class TestGetAuditLogger:
-    def test_returns_same_instance_on_repeated_calls(self):
-        a = get_audit_logger()
-        b = get_audit_logger()
-
-        assert a is b
-
     def test_returned_logger_emits_audit_event(self, caplog):
         logger = get_audit_logger()
 

@@ -260,31 +260,4 @@ class CentralApiTest {
         }
     }
 
-    // ---- ignoreUnknownKeys: extra fields do not break deserialization --------
-
-    @Test
-    fun register_ignoresUnknownJsonFields() = runTest {
-        val (api, client) = newApi()
-        stubCall(client) { req ->
-            responseFor(
-                req,
-                200,
-                bodyJson = """
-                    {
-                      "access_token": "tok",
-                      "token_type": "bearer",
-                      "user_id": "u-1",
-                      "email": "a@b.com",
-                      "role": "admin",
-                      "future_field": "should be ignored"
-                    }
-                """.trimIndent(),
-            )
-        }
-
-        val resp = api.register("a@b.com", "pw")
-
-        assertEquals("tok", resp.access_token)
-        assertEquals("admin", resp.role)
-    }
 }

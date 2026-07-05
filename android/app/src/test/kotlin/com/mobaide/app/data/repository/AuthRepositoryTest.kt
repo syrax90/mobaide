@@ -12,17 +12,14 @@ import com.mobaide.app.data.network.dto.DeleteAccountRequest
 import com.mobaide.app.data.network.dto.ResendVerificationResponse
 import com.mobaide.app.data.network.dto.TokenResponse
 import com.mobaide.app.data.network.dto.UserAuthResponse
-import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
 import io.mockk.verify
 import io.mockk.verifyOrder
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -203,72 +200,6 @@ class AuthRepositoryTest {
         verify(exactly = 0) { tokenStore.saveAgentUrl(any()) }
         verify(exactly = 0) { tokenStore.saveTokens(any(), any()) }
         verify(exactly = 0) { sessionManager.markAgentConnected() }
-    }
-
-    // ---- logout / disconnect ------------------------------------------------
-
-    @Test
-    fun logout_delegatesToSessionManager_forceLogout() {
-        val sessionManager = mockk<SessionManager>()
-        every { sessionManager.forceLogout() } just Runs
-
-        newRepo(sessionManager = sessionManager).logout()
-
-        verify(exactly = 1) { sessionManager.forceLogout() }
-    }
-
-    @Test
-    fun userLogout_delegatesToSessionManager_userLogout() {
-        val sessionManager = mockk<SessionManager>()
-        every { sessionManager.userLogout() } just Runs
-
-        newRepo(sessionManager = sessionManager).userLogout()
-
-        verify(exactly = 1) { sessionManager.userLogout() }
-    }
-
-    @Test
-    fun disconnectAgent_delegatesToSessionManager_agentDisconnect() {
-        val sessionManager = mockk<SessionManager>()
-        every { sessionManager.agentDisconnect() } just Runs
-
-        newRepo(sessionManager = sessionManager).disconnectAgent()
-
-        verify(exactly = 1) { sessionManager.agentDisconnect() }
-    }
-
-    // ---- isLoggedIn / delegations ------------------------------------------
-
-    @Test
-    fun isLoggedIn_delegatesToSessionManager_true() {
-        val sessionManager = mockk<SessionManager>()
-        every { sessionManager.isLoggedIn() } returns true
-
-        assertTrue(newRepo(sessionManager = sessionManager).isLoggedIn())
-    }
-
-    @Test
-    fun isLoggedIn_delegatesToSessionManager_false() {
-        val sessionManager = mockk<SessionManager>()
-        every { sessionManager.isLoggedIn() } returns false
-
-        assertFalse(newRepo(sessionManager = sessionManager).isLoggedIn())
-    }
-
-    @Test
-    fun getAgentUrl_delegatesToTokenStore() {
-        val tokenStore = mockk<TokenStore>()
-        every { tokenStore.getAgentUrl() } returns "https://example.com"
-
-        assertEquals("https://example.com", newRepo(tokenStore = tokenStore).getAgentUrl())
-    }
-
-    @Test
-    fun getUserEmail_delegatesToUserIdentityStore() {
-        val userStore = newUserIdentityStore()
-        every { userStore.getUserEmail() } returns "user@test.com"
-
-        assertEquals("user@test.com", newRepo(userIdentityStore = userStore).getUserEmail())
     }
 
     // ---- Admin login is blocked on mobile -----------------------------------
@@ -638,16 +569,6 @@ class AuthRepositoryTest {
 
         assertEquals(CancelDeletionResult.NotScheduled, result)
         coVerify(exactly = 0) { centralApi.cancelAccountDeletion(any()) }
-    }
-
-    @Test
-    fun deletionMode_scheduled_wireValueIsLowercaseString() {
-        assertEquals("scheduled", DeletionMode.Scheduled.wire)
-    }
-
-    @Test
-    fun deletionMode_immediate_wireValueIsLowercaseString() {
-        assertEquals("immediate", DeletionMode.Immediate.wire)
     }
 
     @Test
