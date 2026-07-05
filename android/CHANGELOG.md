@@ -1,5 +1,26 @@
 # Android Changelog
 
+## [2.1.0](https://github.com/syrax90/claude_mobile/compare/android-v2.0.2...android-v2.1.0) (2026-07-05)
+
+
+### Features
+
+* **agent,android:** replace Gemini CLI with Antigravity CLI (agy) [CLA-95] ([ca777e1](https://github.com/syrax90/claude_mobile/commit/ca777e15a5a06b6bb54df3d037c8367d8348925f))
+* **agent,android:** replace Gemini CLI with Antigravity CLI (agy) [CLA-95] ([0dadd0f](https://github.com/syrax90/claude_mobile/commit/0dadd0ffc514f63f3523a7b787181c70af7b3379))
+* **android:** add Gemini control-key bar to the terminal InputBar (CLA-89) ([2437a01](https://github.com/syrax90/claude_mobile/commit/2437a016511cfbfbb5d38da4fb5e2731f8e7604a))
+* **android:** add Gemini control-key bar to the terminal InputBar (CLA-89) ([0b968d6](https://github.com/syrax90/claude_mobile/commit/0b968d62d64d40f64025639168c5ba61f10dc5e4))
+* **android:** add Gemini to the create-session wizard + autonomy presets (CLA-88) ([47706ca](https://github.com/syrax90/claude_mobile/commit/47706cab72441bd9d655669ff99e81936ce69ebf))
+* **android:** add Gemini to the create-session wizard + autonomy presets (CLA-88) ([1728695](https://github.com/syrax90/claude_mobile/commit/172869541446b1e8a67526feace2acf3a058fc37))
+
+
+### Bug Fixes
+
+* **android:** keep Rewind (Esc-Esc) in the Gemini InputBar control keys (CLA-89) ([bb44c9d](https://github.com/syrax90/claude_mobile/commit/bb44c9d914c8b791c2bdbbde29e7a34d7dfd9aa5))
+* **android:** refresh templates cache before opening prompt picker ([fcf6d7d](https://github.com/syrax90/claude_mobile/commit/fcf6d7dc543b9a06fa6d0016efd7426242c86a59))
+* **android:** show host-side auth message on gemini_auth_required (CLA-88) ([f4f294a](https://github.com/syrax90/claude_mobile/commit/f4f294a70d454d780e4df392d4a73b3468f947b9))
+* **android:** show unavailability reason text in error red ([e1247f7](https://github.com/syrax90/claude_mobile/commit/e1247f7b7f22a1b1600e59a4fef4682f6dbf01a7))
+* **android:** show unavailability reason text in error red ([7b88f83](https://github.com/syrax90/claude_mobile/commit/7b88f830624f11c1342111c1db1ce5320a4372e3))
+
 ## [2.0.2](https://github.com/syrax90/claude_mobile/compare/android-v2.0.1...android-v2.0.2) (2026-06-30)
 
 
