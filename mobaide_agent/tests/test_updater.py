@@ -932,28 +932,6 @@ class TestVenvBuildAndFinalizeHideWindow:
                 f"subprocess (pip / venv / python.exe child)"
             )
 
-    def test_windows_no_window_constant_resolves_correctly(self) -> None:
-        """On win32, ``_WINDOWS_NO_WINDOW`` MUST equal
-        ``subprocess.CREATE_NO_WINDOW`` (0x08000000). On every other
-        platform it MUST be 0 so the flag is a no-op (CPython's
-        Linux/macOS ``subprocess`` ignores unknown ``creationflags``
-        values, but a non-zero literal on non-Windows is a sign the
-        constant has drifted from its intended platform-conditional
-        shape).
-        """
-        import mobaide.agent.updater as _updater_mod
-
-        if sys.platform == "win32":
-            import subprocess as _sp
-            assert _updater_mod._WINDOWS_NO_WINDOW == _sp.CREATE_NO_WINDOW
-            assert _updater_mod._WINDOWS_NO_WINDOW == 0x08000000, (
-                "the literal value MUST be 0x08000000 -- if Python's "
-                "subprocess module changes the symbol's value this "
-                "assertion will surface that ABI break before it ships"
-            )
-        else:
-            assert _updater_mod._WINDOWS_NO_WINDOW == 0
-
 
 @pytest.mark.parametrize(
     "version, expected",

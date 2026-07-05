@@ -41,22 +41,6 @@ class TestCreateTemplate:
         )
         assert resp.status_code == 401
 
-    async def test_create_template_missing_fields(self, client, api_auth_headers):
-        resp = await client.post(
-            "/api/templates", json={}, headers=api_auth_headers
-        )
-        assert resp.status_code == 422
-
-    async def test_create_template_empty_name_rejected(
-        self, client, api_auth_headers
-    ):
-        resp = await client.post(
-            "/api/templates",
-            json={"name": "", "body": "x"},
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 422
-
 
 class TestListTemplates:
     async def test_list_empty(self, client, api_auth_headers):

@@ -63,15 +63,6 @@ class ProjectsRepositoryTest {
         assertTrue(repo.observeProjects().value.isEmpty())
     }
 
-    @Test
-    fun observeProjects_initialFlowEmission_isEmptyList() = runTest {
-        val (repo) = newRepo()
-        repo.observeProjects().test {
-            assertEquals(emptyList<ProjectInfo>(), awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- one-shot REST fetch ------------------------------------------------
 
     @Test

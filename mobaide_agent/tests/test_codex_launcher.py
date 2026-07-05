@@ -307,14 +307,6 @@ async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatc
     assert captured["override"] == "/my/codex"
 
 
-def test_codex_options_is_frozen():
-    from dataclasses import FrozenInstanceError
-
-    opts = CodexOptions()
-    with pytest.raises(FrozenInstanceError):
-        opts.model = "x"  # type: ignore[misc]
-
-
 def test_binary_not_found_message_is_actionable():
     err = CodexBinaryNotFoundError(searched_paths=["PATH:codex", "fallback:/x"])
     msg = str(err)

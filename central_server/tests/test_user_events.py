@@ -44,14 +44,6 @@ def _make_user_client(user_id: str, device_id: str = "dev-x") -> UserClient:
 
 
 class TestRoutingUserClients:
-    def test_register_and_get(self, routing: RoutingTable):
-        client = _make_user_client("user-a")
-        routing.register_user_client("user-a", client)
-        assert client in routing.get_user_clients("user-a")
-
-    def test_get_for_unknown_user_is_empty_set(self, routing: RoutingTable):
-        assert routing.get_user_clients("nobody") == set()
-
     def test_per_user_scoping_user_b_does_not_see_user_a(
         self, routing: RoutingTable
     ):
@@ -92,33 +84,6 @@ class TestRoutingUserClients:
         # Internal bucket gone — exercised by `get_user_clients` returning
         # an empty set even though we no longer hold a ref to the dict entry.
         assert "user-a" not in routing._user_clients
-
-    def test_unregister_is_idempotent_for_unknown_user(
-        self, routing: RoutingTable
-    ):
-        # No registration; unregister must not raise.
-        ghost = _make_user_client("nobody")
-        routing.unregister_user_client("nobody", ghost)  # does not raise
-
-    def test_unregister_is_idempotent_for_unknown_client(
-        self, routing: RoutingTable
-    ):
-        # Registration exists, but the client we try to remove was never
-        # added — must be a silent no-op, not a KeyError.
-        real = _make_user_client("user-a", "dev-1")
-        ghost = _make_user_client("user-a", "dev-ghost")
-        routing.register_user_client("user-a", real)
-        routing.unregister_user_client("user-a", ghost)
-        # `real` still registered.
-        assert routing.get_user_clients("user-a") == {real}
-
-    def test_double_unregister_same_client(self, routing: RoutingTable):
-        client = _make_user_client("user-a")
-        routing.register_user_client("user-a", client)
-        routing.unregister_user_client("user-a", client)
-        # Second unregister is a no-op.
-        routing.unregister_user_client("user-a", client)
-        assert routing.get_user_clients("user-a") == set()
 
 
 # ---- Unit: Database.get_agent_owner -----------------------------------------

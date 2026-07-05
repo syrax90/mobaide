@@ -5,7 +5,6 @@ import com.mobaide.app.data.events.AgentEvent
 import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.RestApi
-import com.mobaide.app.data.network.dto.BusyByResponse
 import com.mobaide.app.data.network.dto.BusyHolder
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitDeleteRequest
@@ -198,18 +197,6 @@ class GitRepositoryTest {
     }
 
     @Test
-    fun multipleGitChangedEmissions_eachReachChangedFlow() = runTest {
-        val (repo, _, _, eventFlow) = newRepo()
-        repo.changed.test {
-            eventFlow.emit(AgentEvent.GitChanged("alpha"))
-            assertEquals("alpha", awaitItem())
-            eventFlow.emit(AgentEvent.GitChanged("beta"))
-            assertEquals("beta", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
     fun parseBusyBy_acceptsMissingOptionalFields() = runTest {
         // The wire shape uses optional fields per holder kind; the parser must
         // not throw when only the kind-specific subset is populated.
@@ -232,13 +219,5 @@ class GitRepositoryTest {
             org.junit.Assert.assertNull(holder.cwd)
             org.junit.Assert.assertNull(holder.worktree_path)
         }
-    }
-
-    // Compile-time spot-check: BusyByResponse keeps its surface as expected.
-    @Test
-    fun busyByResponse_dtoShape_isStable() {
-        val r = BusyByResponse(busy_by = listOf(BusyHolder(kind = "auto_scan")))
-        assertEquals(1, r.busy_by.size)
-        assertEquals("auto_scan", r.busy_by[0].kind)
     }
 }

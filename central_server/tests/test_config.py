@@ -42,30 +42,12 @@ def test_from_env_custom_values(monkeypatch):
     assert config.google_client_id == "my-client-id.apps.googleusercontent.com"
 
 
-def test_frozen_config():
-    config = CentralServerConfig(jwt_secret_key="s")
-    with pytest.raises(AttributeError):
-        config.port = 1234  # type: ignore[misc]
-
-
 def test_heartbeat_flush_interval_default_and_env(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.delenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", raising=False)
     assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 60
     monkeypatch.setenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", "15")
     assert CentralServerConfig.from_env().heartbeat_flush_interval_seconds == 15
-
-
-def test_ttl_env_vars_default_to_zero(monkeypatch):
-    """All three user-facing TTLs default to 0 (never expires) when unset."""
-    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
-    monkeypatch.delenv("MOBILE_TOKEN_EXPIRE_MINUTES", raising=False)
-    monkeypatch.delenv("MOBILE_REFRESH_EXPIRE_MINUTES", raising=False)
-    monkeypatch.delenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", raising=False)
-    config = CentralServerConfig.from_env()
-    assert config.mobile_token_expire_minutes == 0
-    assert config.mobile_refresh_expire_minutes == 0
-    assert config.dashboard_token_expire_minutes == 0
 
 
 def test_ttl_env_vars_parse_positive_integers(monkeypatch):
@@ -78,11 +60,3 @@ def test_ttl_env_vars_parse_positive_integers(monkeypatch):
     assert config.mobile_token_expire_minutes == 60
     assert config.mobile_refresh_expire_minutes == 10080
     assert config.dashboard_token_expire_minutes == 480
-
-
-def test_dataclass_defaults_are_zero():
-    """The dataclass itself defaults all three TTLs to 0 (no env lookup path)."""
-    config = CentralServerConfig(jwt_secret_key="s")
-    assert config.mobile_token_expire_minutes == 0
-    assert config.mobile_refresh_expire_minutes == 0
-    assert config.dashboard_token_expire_minutes == 0

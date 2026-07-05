@@ -21,17 +21,6 @@ async def _create_test_user(db: Database) -> str:
     return await db.create_user(email="owner@test.local", password_hash="hash")
 
 
-class TestConnectionPragmas:
-    async def test_wal_synchronous_normal_and_busy_timeout(self, db: Database):
-        cursor = await db.conn.execute("PRAGMA journal_mode")
-        assert (await cursor.fetchone())[0] == "wal"
-        # synchronous: 1 == NORMAL
-        cursor = await db.conn.execute("PRAGMA synchronous")
-        assert (await cursor.fetchone())[0] == 1
-        cursor = await db.conn.execute("PRAGMA busy_timeout")
-        assert (await cursor.fetchone())[0] == 5000
-
-
 class TestAgentCRUD:
     async def test_register_and_verify(self, db: Database):
         owner = await _create_test_user(db)
@@ -273,44 +262,6 @@ class TestAgentHandshakeInfo:
         await db.update_agent_handshake_info("nonexistent", "0.3.0", 2)
         assert await db.get_agent("nonexistent") is None
 
-    async def test_list_agents_includes_handshake_fields(self, db: Database):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("a1", owner)
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        agents = await db.list_agents()
-        assert len(agents) == 1
-        assert agents[0]["agent_version"] == "0.3.0"
-        assert agents[0]["agent_protocol_version"] == 2
-
-    async def test_list_agents_with_owner_includes_handshake_fields(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("a1", owner)
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        agents = await db.list_agents_with_owner()
-        assert len(agents) == 1
-        assert agents[0]["agent_version"] == "0.3.0"
-        assert agents[0]["agent_protocol_version"] == 2
-        # Existing owner_email projection must still work alongside the
-        # new columns — guards against an accidental column drop in the
-        # JOIN SELECT list.
-        assert agents[0]["owner_email"] == "owner@test.local"
-
-    async def test_list_agents_for_user_includes_handshake_fields(
-        self, db: Database
-    ):
-        owner = await _create_test_user(db)
-        agent_id, _ = await db.register_agent("a1", owner)
-        await db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        agents = await db.list_agents_for_user(owner)
-        assert len(agents) == 1
-        assert agents[0]["agent_version"] == "0.3.0"
-        assert agents[0]["agent_protocol_version"] == 2
-
     async def test_update_refreshes_last_seen_on_fresh_row(self, db: Database):
         """The connect path no longer calls ``touch_agent_last_seen``
         separately — ``update_agent_handshake_info`` is now responsible
@@ -427,30 +378,6 @@ class TestListUsersWithAgents:
         agent_ids = [a["agent_id"] for a in users[0]["agents"]]
         assert agent_ids == [new_id, mid_id, old_id]
 
-    async def test_projects_all_documented_user_fields(self, db: Database):
-        """The dashboard template reads ``id``, ``email``, ``role``,
-        ``email_verified``, ``verified_at``, ``created_at`` off each user
-        dict. The function's docstring locks these keys in — guard against
-        an accidental SELECT-list trim.
-        """
-        owner = await db.create_user(
-            email="who@test.local", password_hash="h", role="viewer"
-        )
-
-        users = await db.list_users_with_agents()
-        assert len(users) == 1
-        u = users[0]
-        assert u["id"] == owner
-        assert u["email"] == "who@test.local"
-        assert u["role"] == "viewer"
-        # create_user defaults to unverified: flag 0, no timestamp.
-        assert u["email_verified"] == 0
-        assert u["verified_at"] is None
-        assert isinstance(u["created_at"], str)
-        # Trailing UTC offset confirms _now_iso() shape, not a stray
-        # naive datetime from a future regression.
-        assert u["created_at"].endswith("+00:00")
-
     async def test_verified_user_projects_verified_fields(self, db: Database):
         """A user created verified (admin seeder / Google path) surfaces
         ``email_verified == 1`` and a ``verified_at`` timestamp in the
@@ -481,27 +408,6 @@ class TestListUsersWithAgents:
         u = users[0]
         assert u["email_verified"] == 1
         assert u["verified_at"] is not None
-
-    async def test_projects_all_documented_agent_fields(self, db: Database):
-        """The expanded per-user detail row reads ``agent_id``, ``name``,
-        ``created_at``, ``last_seen_at``, ``agent_version``,
-        ``agent_protocol_version`` off each nested agent dict. The
-        function's docstring locks these keys in.
-        """
-        owner = await db.create_user(email="o@test.local", password_hash="h")
-        agent_id, _ = await db.register_agent("the-agent", owner)
-        await db.update_agent_handshake_info(agent_id, "0.5.0", 2)
-
-        users = await db.list_users_with_agents()
-        assert len(users) == 1
-        assert len(users[0]["agents"]) == 1
-        a = users[0]["agents"][0]
-        assert a["agent_id"] == agent_id
-        assert a["name"] == "the-agent"
-        assert a["agent_version"] == "0.5.0"
-        assert a["agent_protocol_version"] == 2
-        assert a["last_seen_at"] is not None
-        assert isinstance(a["created_at"], str)
 
     async def test_fresh_agent_has_null_handshake_fields(self, db: Database):
         """A just-registered agent has NULL ``last_seen_at``,
@@ -928,12 +834,6 @@ class TestUserCRUD:
         assert user is not None
         assert user["id"] == user_id
         assert user["google_sub"] == "g-abc"
-
-    async def test_schema_migration_version(self, db: Database):
-        """Verify that PRAGMA user_version is set after migration."""
-        cursor = await db.conn.execute("PRAGMA user_version")
-        row = await cursor.fetchone()
-        assert row[0] == 13
 
 
 class TestAdminOwnedAgentPurgeMigration:

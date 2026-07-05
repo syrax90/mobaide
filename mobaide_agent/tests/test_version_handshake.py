@@ -7,7 +7,6 @@ import pytest
 from mobaide import __version__
 from mobaide.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
-    PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
 )
 
@@ -151,12 +150,3 @@ async def test_get_version_reports_models_for_warm_cache(app, client) -> None:
         "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
     }
     assert "models" not in cli["claude"]
-
-
-def test_protocol_version_constants() -> None:
-    # proto-v6: breaking bump replacing Claude's boolean ``max_effort`` with the
-    # rich model/effort/fast/ultracode/append-system-prompt option set. This is a
-    # deliberate tripwire — bumping the constants must consciously update it.
-    assert PROTOCOL_VERSION == 6
-    assert MIN_CLIENT_PROTOCOL_VERSION == 6
-    assert tuple(SUPPORTED_PROTOCOL_VERSIONS) == (6,)

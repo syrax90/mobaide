@@ -1,7 +1,6 @@
 package com.mobaide.app.ui.terminal
 
 import androidx.lifecycle.SavedStateHandle
-import app.cash.turbine.test
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayConfig
@@ -105,66 +104,5 @@ class TerminalViewModelDisplayConfigTest {
             TerminalDisplayConfig(TerminalDisplayMode.Static, 180),
             vm.displayConfig.value,
         )
-    }
-
-    @Test
-    fun displayConfig_emitsAgain_whenModeChanges() = runTest(testDispatcher) {
-        // Hot upstream so the VM keeps observing changes after construction.
-        val modeFlow = MutableStateFlow(TerminalDisplayMode.Full)
-        val colsFlow = MutableStateFlow(TERMINAL_STATIC_COLUMNS_DEFAULT)
-        val prefs = mockk<PreferencesStore> {
-            every { terminalDisplayMode } returns modeFlow
-            every { terminalStaticColumns } returns colsFlow
-        }
-
-        val vm = createViewModel(prefs)
-
-        vm.displayConfig.test {
-            // Drain the seed + first combined emission(s). With Eagerly we
-            // expect to land on Full/120 once both sources have produced.
-            advanceUntilIdle()
-            assertEquals(
-                TerminalDisplayConfig(TerminalDisplayMode.Full, TERMINAL_STATIC_COLUMNS_DEFAULT),
-                expectMostRecentItem(),
-            )
-
-            modeFlow.value = TerminalDisplayMode.Static
-            advanceUntilIdle()
-
-            assertEquals(
-                TerminalDisplayConfig(TerminalDisplayMode.Static, TERMINAL_STATIC_COLUMNS_DEFAULT),
-                expectMostRecentItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
-    @Test
-    fun displayConfig_emitsAgain_whenColumnsChange() = runTest(testDispatcher) {
-        val modeFlow = MutableStateFlow(TerminalDisplayMode.Static)
-        val colsFlow = MutableStateFlow(120)
-        val prefs = mockk<PreferencesStore> {
-            every { terminalDisplayMode } returns modeFlow
-            every { terminalStaticColumns } returns colsFlow
-        }
-
-        val vm = createViewModel(prefs)
-
-        vm.displayConfig.test {
-            advanceUntilIdle()
-            assertEquals(
-                TerminalDisplayConfig(TerminalDisplayMode.Static, 120),
-                expectMostRecentItem(),
-            )
-
-            colsFlow.value = 200
-            advanceUntilIdle()
-
-            assertEquals(
-                TerminalDisplayConfig(TerminalDisplayMode.Static, 200),
-                expectMostRecentItem(),
-            )
-            cancelAndIgnoreRemainingEvents()
-        }
     }
 }

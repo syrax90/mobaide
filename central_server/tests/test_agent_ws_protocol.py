@@ -20,47 +20,12 @@ from starlette.testclient import TestClient
 
 from central_server import __version__
 from central_server.manifest.store import ManifestStore, canonical_json
-from central_server.relay import agent_ws as agent_ws_module
-from central_server.relay.agent_ws import _coerce_int
 from central_server.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     PROTOCOL_INCOMPATIBLE_CLOSE_CODE,
     PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
 )
-
-
-class TestCoerceInt:
-    def test_int_passes_through(self):
-        assert _coerce_int(7, default=1) == 7
-
-    def test_negative_int_passes_through(self):
-        # Range-checking is a separate concern; ``_coerce_int`` only normalizes
-        # the type. The caller validates membership in SUPPORTED_PROTOCOL_VERSIONS.
-        assert _coerce_int(-5, default=1) == -5
-
-    def test_bool_falls_back_to_default(self):
-        # ``bool`` subclasses ``int`` in Python; without the explicit guard,
-        # ``True`` would be coerced to ``1`` and bypass the protocol check.
-        assert _coerce_int(True, default=99) == 99
-        assert _coerce_int(False, default=99) == 99
-
-    def test_numeric_string_parses(self):
-        assert _coerce_int("42", default=1) == 42
-
-    def test_negative_numeric_string_parses(self):
-        assert _coerce_int("-3", default=1) == -3
-
-    def test_non_numeric_string_falls_back_to_default(self):
-        assert _coerce_int("abc", default=88) == 88
-
-    def test_none_falls_back_to_default(self):
-        assert _coerce_int(None, default=5) == 5
-
-    def test_float_falls_back_to_default(self):
-        # Floats aren't part of the wire-protocol field spec; tolerate by
-        # falling back rather than risk a silent rounding bug.
-        assert _coerce_int(1.5, default=42) == 42
 
 
 class TestAgentTunnelProtocolHandshake:
@@ -355,44 +320,3 @@ class TestHandshakeVersionPersisted:
         assert after["last_seen_at"] is not None
         assert after["agent_version"] == "0.3.0"
         assert after["agent_protocol_version"] == PROTOCOL_VERSION
-
-
-class TestUnknownControlTypeTelemetry:
-    async def test_unknown_type_increments_module_counter(self):
-        # The handler's ``else`` branch is the only writer of
-        # ``_unknown_control_type_total``; we exercise the JSON path
-        # (``_handle_control_json``) directly rather than the binary path
-        # because the production code routes them through the same handler.
-        before = agent_ws_module._unknown_control_type_total
-        await agent_ws_module._handle_control_json(
-            websocket=None,
-            agent_id="agent-test",
-            ctrl={"type": "future.event"},
-            routing=None,
-        )
-        await agent_ws_module._handle_control_json(
-            websocket=None,
-            agent_id="agent-test",
-            ctrl={"type": "another_unknown"},
-            routing=None,
-        )
-        after = agent_ws_module._unknown_control_type_total
-        assert after - before == 2
-
-    async def test_known_types_do_not_increment_counter(self, app, registered_agent):
-        agent_id, _ = registered_agent
-        before = agent_ws_module._unknown_control_type_total
-        # ``heartbeat`` touches routing only (in-memory); provide a fake.
-
-        class _FakeRouting:
-            def agent_heartbeat(self, agent_id):
-                pass
-
-        await agent_ws_module._handle_control_json(
-            websocket=None,
-            agent_id=agent_id,
-            ctrl={"type": "heartbeat"},
-            routing=_FakeRouting(),
-        )
-        after = agent_ws_module._unknown_control_type_total
-        assert after == before

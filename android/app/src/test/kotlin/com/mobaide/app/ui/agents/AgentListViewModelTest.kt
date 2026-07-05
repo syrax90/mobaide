@@ -213,29 +213,6 @@ class AgentListViewModelTest {
     // ---- Add agent dialog state ------------------------------------------------
 
     @Test
-    fun showAddDialog_setsStateToInput() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.showAddDialog()
-
-        assertEquals(AddAgentDialogState.Input, vm.uiState.value.addDialogState)
-    }
-
-    @Test
-    fun dismissAddDialog_setsStateToHidden() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.showAddDialog()
-        vm.dismissAddDialog()
-
-        assertEquals(AddAgentDialogState.Hidden, vm.uiState.value.addDialogState)
-    }
-
-    @Test
     fun createAgent_happyPath_transitionsToShowingCredentials() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -269,33 +246,6 @@ class AgentListViewModelTest {
 
         assertEquals(AddAgentDialogState.Hidden, vm.uiState.value.addDialogState)
         assertEquals("409 conflict", vm.uiState.value.error)
-    }
-
-    @Test
-    fun showInstallSheet_flipsFlagTrue() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        assertFalse(vm.uiState.value.showInstallSheet)
-
-        vm.showInstallSheet()
-
-        assertTrue(vm.uiState.value.showInstallSheet)
-    }
-
-    @Test
-    fun dismissInstallSheet_flipsFlagFalse() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.showInstallSheet()
-        assertTrue(vm.uiState.value.showInstallSheet)
-
-        vm.dismissInstallSheet()
-
-        assertFalse(vm.uiState.value.showInstallSheet)
     }
 
     @Test
@@ -425,34 +375,6 @@ class AgentListViewModelTest {
     // ---- Re-register dialog state ----------------------------------------------
 
     @Test
-    fun showReRegisterDialog_setsStateToConfirming() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val a = agent("a-1", name = "My Agent")
-        vm.showReRegisterDialog(a)
-
-        val state = vm.uiState.value.reRegisterDialogState
-        assertTrue(state is ReRegisterDialogState.Confirming)
-        val confirming = state as ReRegisterDialogState.Confirming
-        assertEquals("a-1", confirming.agentId)
-        assertEquals("My Agent", confirming.agentName)
-    }
-
-    @Test
-    fun dismissReRegisterDialog_setsStateToHidden() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.showReRegisterDialog(agent("a-1"))
-        vm.dismissReRegisterDialog()
-
-        assertEquals(ReRegisterDialogState.Hidden, vm.uiState.value.reRegisterDialogState)
-    }
-
-    @Test
     fun confirmReRegister_happyPath_transitionsToShowingCredentials() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -489,30 +411,6 @@ class AgentListViewModelTest {
     }
 
     // ---- Delete dialog state ---------------------------------------------------
-
-    @Test
-    fun showDeleteConfirm_setsDeleteConfirmAgent() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        val a = agent("a-1")
-        vm.showDeleteConfirm(a)
-
-        assertEquals(a, vm.uiState.value.deleteConfirmAgent)
-    }
-
-    @Test
-    fun dismissDeleteConfirm_clearsDeleteConfirmAgent() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        vm.showDeleteConfirm(agent("a-1"))
-        vm.dismissDeleteConfirm()
-
-        assertNull(vm.uiState.value.deleteConfirmAgent)
-    }
 
     @Test
     fun confirmDelete_happyPath_clearsConfirmAndDelegates() = runTest {

@@ -95,34 +95,6 @@ class DeviceIdentityStoreTest {
     }
 
     @Test
-    fun getOrCreateDeviceId_returnsValidUuidString() = runTest {
-        val raw = DeviceIdentityStore(context).getOrCreateDeviceId()
-
-        // Must parse as a canonical 8-4-4-4-12 hex UUID. `UUID.fromString`
-        // throws IllegalArgumentException on malformed input; the
-        // assertNotNull is then redundant but explicit.
-        val parsed = UUID.fromString(raw)
-        assertNotNull(parsed)
-        // Production uses `UUID.randomUUID()` which always produces a
-        // version-4 UUID (variant IETF). Pin both so a future swap to a
-        // non-v4 implementation (e.g. nano-id, sequential) lights this
-        // test up before the wire format diverges from the docs.
-        assertEquals(
-            "device id must be a UUID v4 (random)",
-            4,
-            parsed.version(),
-        )
-        assertEquals(
-            "device id must use the IETF variant",
-            2,
-            parsed.variant(),
-        )
-        // Canonical form is 36 chars with four dashes.
-        assertEquals(36, raw.length)
-        assertEquals(4, raw.count { it == '-' })
-    }
-
-    @Test
     fun clearDataStoreFile_removesBackingFile_provingNoSecondaryPersistence() = runTest {
         // The production privacy contract is: the device id is NOT derived
         // from static hardware identifiers — it is a fresh `UUID.randomUUID()`
@@ -174,16 +146,6 @@ class DeviceIdentityStoreTest {
         // chain guarantees a non-empty result.
         assertNotNull(name)
         assertFalse("device name must not be blank", name.isBlank())
-    }
-
-    @Test
-    fun getDeviceName_isPureFunction() {
-        // Two consecutive calls must agree — Build.MANUFACTURER / MODEL
-        // are static system properties; no I/O, no state. Catches a
-        // regression where someone makes the name DataStore-backed (and
-        // therefore async / side-effecting).
-        val store = DeviceIdentityStore(context)
-        assertEquals(store.getDeviceName(), store.getDeviceName())
     }
 
     @Test

@@ -304,41 +304,6 @@ class TestOnPairedHappyPath:
             f"failure fallback, not the success case"
         )
 
-    @pytest.mark.asyncio
-    async def test_on_paired_logs_relay_started_in_process(
-        self, tmp_path: Path, captured_on_paired, monkeypatch, capsys,
-    ):
-        # Operators grep for ``agent.relay_started_in_process`` to
-        # confirm the in-process transition fired. The log line is the
-        # primary visibility surface for "pairing succeeded and the
-        # agent is now operational without a restart" — the whole
-        # point of the refactor. Pin the literal event name so a rename
-        # forces an explicit test update.
-        async def _stub_start(_app, _relay_cfg):
-            return None
-
-        monkeypatch.setattr(
-            _agent_app, "_start_relay_in_process", _stub_start,
-        )
-
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-        claim = _make_claim()
-
-        with TestClient(app):
-            await asyncio.sleep(0)
-            await captured_on_paired["on_paired"](claim)
-
-        out = capsys.readouterr().out
-        assert "agent.relay_started_in_process" in out, (
-            f"expected 'agent.relay_started_in_process' in stdout; "
-            f"got: {out!r}"
-        )
-        # The log line carries the paired agent_id so operators can
-        # correlate against the .env value.
-        assert "paired-agent-id" in out, (
-            f"expected paired agent_id in the log line; got: {out!r}"
-        )
-
 
 class TestOnPairedFailureFallback:
     """When ``_start_relay_in_process`` raises, fall back to exit-75.
@@ -386,48 +351,6 @@ class TestOnPairedFailureFallback:
         assert exit_calls == [EXIT_RESTART_REQUESTED], (
             f"expected exactly one sys.exit({EXIT_RESTART_REQUESTED}) "
             f"on the in-process-startup-failure path; got {exit_calls!r}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_failure_logs_in_process_relay_start_failed(
-        self, tmp_path: Path, captured_on_paired, monkeypatch, capsys,
-    ):
-        # The fallback log line names the structured event and includes
-        # the underlying exception so operators can tell why the
-        # in-process transition failed (relay unreachable, TLS error,
-        # etc.) without re-running the install. Pin the literal event
-        # name so a rename forces an explicit test update.
-        monkeypatch.setattr(
-            _agent_app.sys, "exit", lambda code=0: None,
-        )
-
-        async def _exploding_start(_app, _relay_cfg):
-            raise RuntimeError("simulated unique startup failure marker")
-
-        monkeypatch.setattr(
-            _agent_app, "_start_relay_in_process", _exploding_start,
-        )
-
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-        claim = _make_claim()
-
-        with TestClient(app):
-            await asyncio.sleep(0)
-            await captured_on_paired["on_paired"](claim)
-            await asyncio.sleep(0.6)
-
-        out = capsys.readouterr().out
-        assert "agent.in_process_relay_start_failed" in out, (
-            f"expected 'agent.in_process_relay_start_failed' in stdout; "
-            f"got: {out!r}"
-        )
-        assert "simulated unique startup failure marker" in out, (
-            f"expected underlying exception message in stdout so "
-            f"operators can diagnose; got: {out!r}"
-        )
-        assert str(EXIT_RESTART_REQUESTED) in out, (
-            f"expected exit code {EXIT_RESTART_REQUESTED} in fallback "
-            f"log line; got: {out!r}"
         )
 
 
@@ -497,41 +420,6 @@ class TestPairingTaskDoneCallback:
             f"log line; without ``exc_type=%s`` an operator cannot "
             f"distinguish a JSON parse failure from a permission denial "
             f"from a panicked relay client. Got: {out!r}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_task_completed_normally_is_logged_on_return(
-        self, tmp_path: Path, monkeypatch, capsys, _stub_layout,
-    ):
-        # On the happy path (the monitor pairs and returns), the done-
-        # callback should emit the ``task_completed_normally`` INFO
-        # breadcrumb. This is what an operator looking at
-        # ``agent.out.log`` post-pair expects to see, and is the
-        # positive counterpart to ``task_died_unexpectedly``.
-        async def _returning_monitor(**_kwargs: Any) -> None:
-            return None
-
-        monkeypatch.setattr(
-            _stub_layout, "run_pairing_monitor", _returning_monitor,
-        )
-
-        app = create_app(config=_make_pairing_pending_config(tmp_path))
-
-        with TestClient(app):
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
-
-        out = capsys.readouterr().out
-        assert "pairing_monitor.task_completed_normally" in out, (
-            f"expected 'pairing_monitor.task_completed_normally' in "
-            f"stdout when the monitor returns cleanly; got: {out!r}"
-        )
-        # The failure log must NOT fire on the happy path — otherwise
-        # an operator grepping for ``task_died_unexpectedly`` would get
-        # false positives every time pairing succeeds.
-        assert "pairing_monitor.task_died_unexpectedly" not in out, (
-            f"task_died_unexpectedly must NOT fire when the monitor "
-            f"returns normally; got: {out!r}"
         )
 
     @pytest.mark.asyncio

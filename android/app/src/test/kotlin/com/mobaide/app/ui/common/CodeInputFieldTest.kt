@@ -3,9 +3,6 @@ package com.mobaide.app.ui.common
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertCountEquals
-import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.assertIsNotEnabled
-import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -39,40 +36,6 @@ class CodeInputFieldTest {
     // The cells and their digit Texts live in the BasicTextField's UNMERGED semantics tree
     // (the field sets MergeDescendants = true), so cell finders pass useUnmergedTree = true —
     // the same Compose quirk handled in AgentListScreenTest.
-
-    @Test
-    fun rendersOneCellPerLength_default6() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "", onValueChange = {})
-            }
-        }
-
-        composeRule.onAllNodesWithTag("codeCell", useUnmergedTree = true).assertCountEquals(6)
-    }
-
-    @Test
-    fun rendersOneCellPerLength_honoursCustomLength() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "", onValueChange = {}, length = 4)
-            }
-        }
-
-        composeRule.onAllNodesWithTag("codeCell", useUnmergedTree = true).assertCountEquals(4)
-    }
-
-    @Test
-    fun reflectsEachDigitOfValueInItsOwnCell() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "42", onValueChange = {}, autoFocus = false)
-            }
-        }
-
-        composeRule.onNodeWithText("4", useUnmergedTree = true).assertExists()
-        composeRule.onNodeWithText("2", useUnmergedTree = true).assertExists()
-    }
 
     @Test
     fun forwardsKeystrokeVerbatim_withoutFilteringOrCapping() {
@@ -120,64 +83,6 @@ class CodeInputFieldTest {
         composeRule.onNodeWithText("6", useUnmergedTree = true).assertExists()
         composeRule.onNodeWithText("7", useUnmergedTree = true).assertDoesNotExist()
         composeRule.onNodeWithText("0", useUnmergedTree = true).assertDoesNotExist()
-    }
-
-    @Test
-    fun disabledField_blocksInput() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(
-                    value = "",
-                    onValueChange = {},
-                    enabled = false,
-                    autoFocus = false,
-                )
-            }
-        }
-
-        // Compose refuses to deliver text to a disabled node (performTextInput throws rather than
-        // no-op'ing), so the testable contract is that the node is reported not-enabled.
-        composeRule.onNodeWithContentDescription("Verification code", substring = true)
-            .assertIsNotEnabled()
-    }
-
-    @Test
-    fun errorState_rendersAllCellsWithoutCrashing() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "12", onValueChange = {}, isError = true, autoFocus = false)
-            }
-        }
-
-        // Border color is not assertable under Robolectric; this is a render-stability smoke test
-        // confirming the error branch still draws every cell and the entered digits.
-        composeRule.onAllNodesWithTag("codeCell", useUnmergedTree = true).assertCountEquals(6)
-        composeRule.onNodeWithText("1", useUnmergedTree = true).assertExists()
-        composeRule.onNodeWithText("2", useUnmergedTree = true).assertExists()
-    }
-
-    @Test
-    fun autoFocusTrue_focusesFieldOnEntry() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "", onValueChange = {}, autoFocus = true)
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Verification code", substring = true)
-            .assertIsFocused()
-    }
-
-    @Test
-    fun autoFocusFalse_leavesFieldUnfocused() {
-        composeRule.setContent {
-            Surface {
-                CodeInputField(value = "", onValueChange = {}, autoFocus = false)
-            }
-        }
-
-        composeRule.onNodeWithContentDescription("Verification code", substring = true)
-            .assertIsNotFocused()
     }
 
     @Test

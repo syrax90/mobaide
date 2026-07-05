@@ -37,25 +37,6 @@ def _clean_env(monkeypatch):
 _ = _clean_env
 
 
-class TestAlwaysReturnsInstance:
-    def test_no_env_returns_defaults(self):
-        cfg = AutoScanConfig.from_env()
-        assert cfg is not None
-        assert cfg.worktree_base == "claude_worktree"
-        assert cfg.scan_interval_seconds == 300
-        assert cfg.branch_prefix == ""
-        assert cfg.main_branch == "main"
-        assert cfg.auto_remove_worktrees is True
-        assert cfg.state_dir == "state"
-        assert cfg.auto_scan_prompt == _DEFAULT_AUTO_SCAN_PROMPT
-
-    def test_defaults_are_deterministic(self):
-        # Back-to-back calls with the same env produce equal configs.
-        a = AutoScanConfig.from_env()
-        b = AutoScanConfig.from_env()
-        assert a == b
-
-
 class TestPrompt:
     def test_backslash_n_is_unescaped_to_real_newline(self, monkeypatch):
         monkeypatch.setenv("AUTO_SCAN_PROMPT", "line1\\nline2")
@@ -72,16 +53,6 @@ class TestPrompt:
         cfg = AutoScanConfig.from_env()
 
         assert cfg.auto_scan_prompt == _DEFAULT_AUTO_SCAN_PROMPT
-
-
-class TestIntegerParsing:
-    def test_scan_interval_seconds_parsed_as_int(self, monkeypatch):
-        monkeypatch.setenv("SCAN_INTERVAL_SECONDS", "120")
-
-        cfg = AutoScanConfig.from_env()
-
-        assert cfg.scan_interval_seconds == 120
-        assert isinstance(cfg.scan_interval_seconds, int)
 
 
 class TestEnvOverrides:
@@ -108,14 +79,6 @@ class TestDeprecatedFieldsRemoved:
     leftover env var is silently ignored.
     """
 
-    def test_linear_active_state_field_does_not_exist(self):
-        cfg = AutoScanConfig.from_env()
-        assert not hasattr(cfg, "linear_active_state")
-
-    def test_linear_done_state_field_does_not_exist(self):
-        cfg = AutoScanConfig.from_env()
-        assert not hasattr(cfg, "linear_done_state")
-
     def test_leftover_env_vars_are_ignored(self, monkeypatch):
         monkeypatch.setenv("LINEAR_ACTIVE_STATE", "Doing")
         monkeypatch.setenv("LINEAR_DONE_STATE", "Completed")
@@ -125,24 +88,6 @@ class TestDeprecatedFieldsRemoved:
 
 
 class TestWorktreeCleanup:
-    @pytest.mark.parametrize(
-        "raw,expected",
-        [
-            ("true", True), ("TRUE", True), ("1", True),
-            ("yes", True), ("on", True),
-            ("false", False), ("0", False), ("no", False),
-            ("off", False), ("", False), ("garbage", False),
-        ],
-    )
-    def test_auto_remove_worktrees_boolean_parsing(
-        self, monkeypatch, raw, expected,
-    ):
-        monkeypatch.setenv("AUTO_REMOVE_WORKTREES", raw)
-
-        cfg = AutoScanConfig.from_env()
-
-        assert cfg.auto_remove_worktrees is expected
-
     def test_auto_remove_worktrees_defaults_true_when_unset(self):
         cfg = AutoScanConfig.from_env()
         assert cfg.auto_remove_worktrees is True

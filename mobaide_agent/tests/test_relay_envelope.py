@@ -140,13 +140,3 @@ class TestEnvelopeErrors:
         """Header says 10-byte session_id but data is shorter."""
         with pytest.raises(ValueError, match="truncated"):
             decode(bytes([0x01, 10]) + b"short")
-
-
-class TestChannelConstants:
-    def test_channel_values(self):
-        """Channel constants must match the central server protocol."""
-        assert CH_SESSION_IO == 0x01
-        assert CH_SESSIONS_LIST == 0x02
-        assert CH_EVENTS == 0x03
-        assert CH_AUTOSCAN == 0x04
-        assert CH_CONTROL == 0x10

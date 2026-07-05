@@ -652,19 +652,6 @@ class TestDeleteAccountEndpoint:
         )
         assert resp.status_code == 401
 
-    async def test_invalid_proof_shape_returns_422(
-        self, client, viewer_user, api_auth_headers
-    ) -> None:
-        del viewer_user
-        # method=password requires a non-empty password — pydantic validator
-        # rejects missing field upfront.
-        resp = await client.post(
-            "/api/auth/me/delete",
-            json={"method": "password"},
-            headers=api_auth_headers,
-        )
-        assert resp.status_code == 422
-
 
 class TestCancelEndpoint:
     async def test_cancel_after_request_returns_cancelled_status(

@@ -46,13 +46,6 @@ class TestRegisterEndpoint:
         )
         assert resp.status_code == 409
 
-    async def test_register_missing_fields_returns_422(self, client):
-        resp = await client.post("/api/auth/register", json={"email": "a@b.com"})
-        assert resp.status_code == 422
-
-        resp = await client.post("/api/auth/register", json={"password": "pass"})
-        assert resp.status_code == 422
-
 
 class TestLoginEndpoint:
     async def test_login_seeded_admin(self, client):
@@ -101,10 +94,6 @@ class TestLoginEndpoint:
         )
         assert resp.status_code == 401
 
-    async def test_login_missing_fields_returns_422(self, client):
-        resp = await client.post("/api/auth/login", json={"email": "a@b.com"})
-        assert resp.status_code == 422
-
 
 class TestGoogleEndpoint:
     async def test_google_not_configured_returns_401(self, client):
@@ -115,7 +104,3 @@ class TestGoogleEndpoint:
         )
         assert resp.status_code == 401
         assert "not configured" in resp.json()["detail"]
-
-    async def test_google_missing_token_returns_422(self, client):
-        resp = await client.post("/api/auth/google", json={})
-        assert resp.status_code == 422

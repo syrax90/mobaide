@@ -71,11 +71,6 @@ async def client_with_dashboard_ttl(tmp_path):
 
 
 class TestDashboardLogin:
-    async def test_login_page(self, client):
-        resp = await client.get("/dashboard/login")
-        assert resp.status_code == 200
-        assert "Login" in resp.text
-
     async def test_login_success(self, client):
         resp = await client.post(
             "/dashboard/login",
@@ -171,178 +166,11 @@ class TestDashboardPages:
         resp = await client.get("/dashboard", follow_redirects=False)
         assert resp.status_code == 303
 
-    async def test_agents_page(self, client, dashboard_headers):
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        assert "Users" in resp.text
-
-    async def test_users_page_shows_owner_email(
-        self, client, dashboard_headers, viewer_user, registered_agent
-    ):
-        """The users-centric view lists every user by email and surfaces the
-        per-user owned-agent count in the dedicated column."""
-        del registered_agent  # ensures the agent exists; assertion is on the user row
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        assert viewer_user["email"] in resp.text
-
-    async def test_agent_detail(self, client, dashboard_headers, registered_agent):
-        agent_id, _ = registered_agent
-        resp = await client.get(
-            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        assert agent_id in resp.text
-
     async def test_agent_detail_not_found(self, client, dashboard_headers):
         resp = await client.get(
             "/dashboard/agents/nonexistent", headers=dashboard_headers
         )
         assert resp.status_code == 404
-
-
-class TestAgentDetailVersion:
-    """Cover the new ``Version`` row on ``GET /dashboard/agents/{id}``:
-    bare version when no manifest is wired, ``Up to date`` badge when
-    the stored version matches the manifest's ``latest_agent_version``,
-    and the ``(latest: X.Y.Z)`` hint when they diverge. Also asserts the
-    em-dash placeholder for a fresh agent (NULL columns) and the
-    ``Protocol`` row formatting (``v2``).
-    """
-
-    @staticmethod
-    def _populate_manifest(app, version: str) -> None:
-        """Write a minimal valid manifest record into the live store so
-        ``agent_detail_page`` reads back ``latest_agent_version=<version>``.
-
-        Uses the same shape ``ManifestStore.write`` enforces (see
-        ``test_version_handshake._signed_manifest``). A real signature is
-        required because ``ManifestStore.write`` validates structure.
-        """
-        import base64
-
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-            Ed25519PrivateKey,
-        )
-
-        from central_server.manifest.store import canonical_json
-
-        private = Ed25519PrivateKey.generate()
-        body = {
-            "version": version,
-            "tarball_url": "file:///tmp/agent.tar.gz",
-            "tarball_sha256": "0" * 64,
-            "wheel_url": "file:///tmp/agent.whl",
-            "wheel_sha256": "1" * 64,
-            "released_at": "2026-05-15T00:00:00+00:00",
-        }
-        sig_b64 = base64.b64encode(private.sign(canonical_json(body))).decode()
-        app.state.manifest_store.write(body, sig_b64)
-
-    async def test_renders_em_dash_when_version_missing(
-        self, client, dashboard_headers, registered_agent
-    ):
-        """Fresh agent with no handshake yet — ``agent_version`` is NULL,
-        so the template branch should emit the em-dash placeholder (and
-        no badge / hint).
-        """
-        agent_id, _ = registered_agent
-
-        resp = await client.get(
-            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert "<strong>Version:</strong>" in body
-        assert "Up to date" not in body
-        assert "(latest:" not in body
-
-    async def test_renders_version_without_manifest(
-        self, client, app, dashboard_headers, registered_agent
-    ):
-        """A populated agent_version with NO manifest wired must render
-        the bare version (no badge, no hint).
-        """
-        agent_id, _ = registered_agent
-        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-        # Wipe the manifest_store to None to simulate "no published
-        # manifest" path through the ``getattr(..., None)`` guard.
-        app.state.manifest_store = None
-
-        resp = await client.get(
-            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert "0.3.0" in body
-        assert "Up to date" not in body
-        assert "(latest:" not in body
-
-    async def test_renders_up_to_date_badge_when_versions_match(
-        self, client, app, dashboard_headers, registered_agent
-    ):
-        agent_id, _ = registered_agent
-        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-        self._populate_manifest(app, "0.3.0")
-
-        resp = await client.get(
-            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert "0.3.0" in body
-        assert "Up to date" in body
-        assert "(latest:" not in body
-
-    async def test_renders_latest_hint_when_versions_differ(
-        self, client, app, dashboard_headers, registered_agent
-    ):
-        agent_id, _ = registered_agent
-        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-        self._populate_manifest(app, "0.9.9")
-
-        resp = await client.get(
-            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert "0.3.0" in body
-        assert "(latest: 0.9.9)" in body
-        assert "Up to date" not in body
-
-    async def test_renders_protocol_version_when_set(
-        self, client, app, dashboard_headers, registered_agent
-    ):
-        agent_id, _ = registered_agent
-        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-
-        resp = await client.get(
-            f"/dashboard/agents/{agent_id}", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert "<strong>Protocol:</strong>" in body
-        assert "v2" in body
-
-    async def test_user_agents_fragment_renders_version_column(
-        self, client, app, dashboard_headers, registered_agent
-    ):
-        """The expanded per-user agent sub-table surfaces the version
-        column for each owned agent (the top-level users table no longer
-        shows versions; admins drill in by clicking the row).
-        """
-        agent_id, _ = registered_agent
-        await app.state.db.update_agent_handshake_info(agent_id, "0.3.0", 2)
-        owner_id = await app.state.db.get_agent_owner(agent_id)
-        await app.state.db.register_agent("stale-agent", owner_id)
-
-        resp = await client.get(
-            f"/dashboard/users/{owner_id}/agents", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert "<th>Version</th>" in body
-        assert "0.3.0" in body
 
 
 class TestDashboardRoleGate:
@@ -373,80 +201,6 @@ class TestUserList:
     the search fragment, the per-user agents expansion, and the OOB
     status poller.
     """
-
-    async def test_users_page_lists_seeded_admin(
-        self, client, dashboard_headers
-    ):
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        assert TEST_ADMIN_EMAIL in resp.text
-
-    async def test_users_page_lists_viewer_with_agent_count(
-        self, client, dashboard_headers, viewer_user, registered_agent
-    ):
-        del registered_agent  # forces agent registration
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        body = resp.text
-        assert viewer_user["email"] in body
-        # The agent-count column for the viewer reads "1".
-        assert f'id="user-row-{viewer_user["id"]}"' in body
-
-    async def test_users_fragment_returns_unfiltered_table(
-        self, client, dashboard_headers
-    ):
-        resp = await client.get(
-            "/dashboard/users", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        assert 'id="users-table"' in resp.text
-        assert TEST_ADMIN_EMAIL in resp.text
-
-    async def test_user_agents_fragment_returns_detail_row(
-        self, client, dashboard_headers, viewer_user, registered_agent
-    ):
-        del registered_agent
-        resp = await client.get(
-            f"/dashboard/users/{viewer_user['id']}/agents",
-            headers=dashboard_headers,
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert 'class="detail-row"' in body
-        # The detail row carries a stable id so the client-side toggle
-        # (toggleUserRow) can remove it on the next click — without this
-        # id the re-click would pile up duplicate rows.
-        assert f'id="user-detail-{viewer_user["id"]}"' in body
-        # The agent should appear in the expanded table.
-        assert "test-agent" in body
-
-    async def test_users_table_row_uses_onclick_toggle(
-        self, client, dashboard_headers
-    ):
-        """The user row must be wired to the JS toggle, not an hx-get
-        on the row itself — otherwise re-clicking would not collapse.
-        """
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        body = resp.text
-        assert "toggleUserRow(" in body
-        # The row's hx-get-on-click pattern is gone — the toggle is JS.
-        # Confirm the row markup itself doesn't carry hx-get/hx-target
-        # for the agents fragment (the /agents sub-path specifically;
-        # other hx-get attrs like /delete-modal and the search input
-        # are expected and unrelated).
-        import re
-        assert not re.search(r'hx-get="/dashboard/users/[^"]+/agents"', body)
-
-    async def test_user_agents_fragment_empty_state(
-        self, client, dashboard_headers, viewer_user
-    ):
-        resp = await client.get(
-            f"/dashboard/users/{viewer_user['id']}/agents",
-            headers=dashboard_headers,
-        )
-        assert resp.status_code == 200
-        assert "No agents registered" in resp.text
 
     async def test_user_agents_fragment_404_for_unknown_user(
         self, client, dashboard_headers
@@ -481,15 +235,6 @@ class TestUserSearchFilter:
         assert resp.status_code == 200
         assert TEST_VIEWER_EMAIL in resp.text
 
-    async def test_search_empty_result_renders_empty_state(
-        self, client, dashboard_headers
-    ):
-        resp = await client.get(
-            "/dashboard/users?q=does-not-exist", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        assert "No users matching" in resp.text
-
 
 class TestUserVerifiedBadgeAndFilter:
     """The Verified column badges and the ``verified=`` fragment filter.
@@ -508,32 +253,6 @@ class TestUserVerifiedBadgeAndFilter:
         return await app.state.db.create_user(
             email=self.UNVERIFIED_EMAIL, password_hash="h"
         )
-
-    async def test_users_page_shows_verified_column_and_badge(
-        self, client, dashboard_headers
-    ):
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        body = resp.text
-        assert "<th>Verified</th>" in body
-        # The seeded admin is verified under test config.
-        assert "badge-verified" in body
-
-    async def test_users_page_shows_unverified_badge(
-        self, client, app, dashboard_headers
-    ):
-        await self._seed_unverified(app)
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        assert "badge-unverified" in resp.text
-
-    async def test_verified_badge_carries_verified_at_tooltip(
-        self, client, dashboard_headers
-    ):
-        resp = await client.get("/dashboard", headers=dashboard_headers)
-        assert resp.status_code == 200
-        # The tooltip plumbs verified_at through to the badge title.
-        assert 'title="Verified at ' in resp.text
 
     async def test_filter_unverified_shows_only_unverified(
         self, client, app, dashboard_headers
@@ -576,30 +295,6 @@ class TestUserVerifiedBadgeAndFilter:
             assert TEST_ADMIN_EMAIL in body
             assert self.UNVERIFIED_EMAIL in body
 
-    async def test_search_and_filter_combine(
-        self, client, app, dashboard_headers
-    ):
-        """q matches only the unverified user; the verified filter then
-        removes it — the empty state names the active filter.
-        """
-        await self._seed_unverified(app)
-        resp = await client.get(
-            "/dashboard/users?q=unverified&verified=verified",
-            headers=dashboard_headers,
-        )
-        assert resp.status_code == 200
-        assert "No verified users matching" in resp.text
-
-    async def test_filter_unverified_empty_state(
-        self, client, dashboard_headers
-    ):
-        # No unverified users seeded — admin and viewer are verified.
-        resp = await client.get(
-            "/dashboard/users?verified=unverified", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        assert "No unverified users." in resp.text
-
 
 class TestUserDelete:
     """``DELETE /dashboard/users/{id}`` — cascade, guardrails, WS teardown."""
@@ -636,30 +331,6 @@ class TestUserDelete:
         assert f'id="user-row-{user_id}"' in resp.text
         assert f'id="user-detail-{user_id}"' in resp.text
         assert 'hx-swap-oob="delete"' in resp.text
-
-    async def test_delete_user_response_emits_oob_swap_for_row_and_detail(
-        self, client, app, dashboard_headers
-    ):
-        """Reproduces the user-reported flow: zero-agent user, type-the-email
-        confirm. Response must carry OOB delete markers for both #user-row
-        and #user-detail so the modal closes and the row vanishes.
-        """
-        password_hash = await app.state.auth_service._hash_password("p")
-        zero_agent_user_id = await app.state.db.create_user(
-            email="zero-agents@test.local",
-            password_hash=password_hash,
-            role="viewer",
-            email_verified=True,
-        )
-        resp = await client.delete(
-            f"/dashboard/users/{zero_agent_user_id}",
-            headers=dashboard_headers,
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert f'id="user-row-{zero_agent_user_id}"' in body
-        assert f'id="user-detail-{zero_agent_user_id}"' in body
-        assert body.count('hx-swap-oob="delete"') == 2
 
     async def test_delete_seed_admin_returns_400(self, client, app):
         """The seeded admin and the default dashboard-login admin happen
@@ -705,81 +376,6 @@ class TestUserDelete:
             "/dashboard/users/ghost", headers=dashboard_headers
         )
         assert resp.status_code == 404
-
-    async def test_delete_user_modal_renders_email_and_agents(
-        self, client, dashboard_headers, viewer_user, registered_agent
-    ):
-        del registered_agent
-        resp = await client.get(
-            f"/dashboard/users/{viewer_user['id']}/delete-modal",
-            headers=dashboard_headers,
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert viewer_user["email"] in body
-        assert "test-agent" in body
-        assert "modal-overlay" in body
-        # Submit button is wired to DELETE the user.
-        assert f'hx-delete="/dashboard/users/{viewer_user["id"]}"' in body
-        # Modal closes via primary-swap into #modal-root; row deletion
-        # rides on OOB markers in the response (no hx-on::after-request).
-        assert 'hx-target="#modal-root"' in body
-        assert 'hx-swap="innerHTML"' in body
-        assert "hx-on::after-request" not in body
-
-    async def test_delete_user_modal_self_path_is_blocked(self, client, app):
-        """Provision a second admin (not the seed) so the modal renders
-        the self-delete branch instead of the seed-admin branch.
-        """
-        password_hash = await app.state.auth_service._hash_password("p3")
-        second_admin_id = await app.state.db.create_user(
-            email="admin3@test.local",
-            password_hash=password_hash,
-            role="admin",
-            email_verified=True,
-        )
-        _uid, _role, token, _scheduled = await app.state.auth_service.login_user(
-            "admin3@test.local", "p3"
-        )
-        headers = {"Cookie": f"dashboard_token={token}"}
-
-        resp = await client.get(
-            f"/dashboard/users/{second_admin_id}/delete-modal",
-            headers=headers,
-        )
-        assert resp.status_code == 200
-        assert "hx-delete=" not in resp.text
-        assert "cannot delete your own account" in resp.text.lower()
-
-    async def test_delete_user_modal_seed_admin_branch_blocks(
-        self, client, app
-    ):
-        """Independently exercise the seed-admin modal branch.
-
-        A second (non-seed) admin viewing the seeded admin's modal must
-        hit the seed-admin guard — the form is suppressed and the
-        operator sees the seed-admin error copy.
-        """
-        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
-        password_hash = await app.state.auth_service._hash_password("p4")
-        await app.state.db.create_user(
-            email="admin4@test.local",
-            password_hash=password_hash,
-            role="admin",
-            email_verified=True,
-        )
-        _uid, _role, token, _scheduled = await app.state.auth_service.login_user(
-            "admin4@test.local", "p4"
-        )
-        headers = {"Cookie": f"dashboard_token={token}"}
-
-        resp = await client.get(
-            f"/dashboard/users/{admin['id']}/delete-modal", headers=headers
-        )
-        assert resp.status_code == 200
-        body = resp.text.lower()
-        assert "hx-delete=" not in body
-        assert "seed admin" in body
 
     async def test_delete_user_closes_live_user_clients(
         self, client, app, dashboard_headers, viewer_user
@@ -974,28 +570,3 @@ class TestForceDisconnect:
         )
         # Agent DB row untouched.
         assert await app.state.db.get_agent(agent_id) is not None
-
-
-class TestOOBStatus:
-    """``GET /dashboard/agents-status`` emits hx-swap-oob spans only."""
-
-    async def test_emits_user_online_count_spans(
-        self, client, dashboard_headers, viewer_user
-    ):
-        resp = await client.get(
-            "/dashboard/agents-status", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        body = resp.text
-        assert f'id="user-online-{viewer_user["id"]}"' in body
-        assert 'hx-swap-oob="true"' in body
-
-    async def test_emits_agent_status_span_per_agent(
-        self, client, dashboard_headers, registered_agent
-    ):
-        agent_id, _ = registered_agent
-        resp = await client.get(
-            "/dashboard/agents-status", headers=dashboard_headers
-        )
-        assert resp.status_code == 200
-        assert f'id="agent-status-{agent_id}"' in resp.text

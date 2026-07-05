@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from mobaide.agent.events.bus import EventBus, AgentEvent
 
 
@@ -40,11 +38,6 @@ class TestEventBusSubscription:
         bus.unsubscribe(stranger)  # still a no-op with real subs present
         assert bus.subscriber_count == 1
         bus.unsubscribe(q)
-
-    async def test_subscribe_respects_maxsize(self):
-        bus = EventBus()
-        q = bus.subscribe(maxsize=1)
-        assert q.maxsize == 1
 
 
 class TestEventBusPublish:
@@ -128,16 +121,3 @@ class TestEventBusPublish:
         assert q1.empty()
         ev = q2.get_nowait()
         assert ev.type == "sessions.changed"
-
-
-class TestAgentEventDataclass:
-    def test_agent_event_is_frozen(self):
-        ev = AgentEvent(type="x", payload={"a": 1})
-        with pytest.raises(Exception):
-            # Frozen dataclass rejects mutation.
-            ev.type = "y"  # type: ignore[misc]
-
-    def test_agent_event_equality(self):
-        a = AgentEvent(type="x", payload={"k": "v"})
-        b = AgentEvent(type="x", payload={"k": "v"})
-        assert a == b

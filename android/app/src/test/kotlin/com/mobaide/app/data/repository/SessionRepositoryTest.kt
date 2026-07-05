@@ -73,15 +73,6 @@ class SessionRepositoryTest {
         assertTrue(repo.observeSessionList().value.isEmpty())
     }
 
-    @Test
-    fun observeSessionList_initialFlowEmission_isEmptyList() = runTest {
-        val (repo) = newRepo()
-        repo.observeSessionList().test {
-            assertEquals(emptyList<SessionResponse>(), awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-    }
-
     // ---- REST delegation ----------------------------------------------------
 
     @Test

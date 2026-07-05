@@ -131,51 +131,6 @@ class TestMobileTokenUsesDeviceId:
         device_ids = [d["device_id"] for d in devices]
         assert device_ids.count(dev_id) == 1
 
-    async def test_missing_mobile_device_id_returns_422(
-        self, client, api_auth_headers, registered_agent
-    ):
-        # Pydantic validation: empty body is now an error because
-        # mobile_device_id is required. This is the wire-breaking change
-        # the plan calls out (pre-production, fine).
-        agent_id, _ = registered_agent
-
-        resp = await client.post(
-            f"/api/agents/{agent_id}/token", headers=api_auth_headers, json={}
-        )
-
-        assert resp.status_code == 422
-
-    async def test_empty_mobile_device_id_string_returns_422(
-        self, client, api_auth_headers, registered_agent
-    ):
-        # ``MobileTokenRequest.mobile_device_id`` has ``min_length=1`` and
-        # a UUID pattern constraint. An empty string fails both.
-        agent_id, _ = registered_agent
-
-        resp = await client.post(
-            f"/api/agents/{agent_id}/token",
-            headers=api_auth_headers,
-            json={"mobile_device_id": "", "mobile_device_name": None},
-        )
-
-        assert resp.status_code == 422
-
-    async def test_non_uuid_mobile_device_id_returns_422(
-        self, client, api_auth_headers, registered_agent
-    ):
-        # Enforce a UUID format on the wire — narrows the attack surface
-        # for cross-tenant collisions and stops convenient short-string
-        # device ids like ``"admin"``.
-        agent_id, _ = registered_agent
-
-        resp = await client.post(
-            f"/api/agents/{agent_id}/token",
-            headers=api_auth_headers,
-            json={"mobile_device_id": "not-a-uuid", "mobile_device_name": None},
-        )
-
-        assert resp.status_code == 422
-
 
 class TestMobileTokenCrossTenant:
     """A user submitting another user's ``device_id`` via

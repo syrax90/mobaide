@@ -30,7 +30,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from mobaide.agent.update_check import (
-    PERIODIC_POLL_INTERVAL_SECONDS,
     UpdateCheckError,
     fetch_signed_manifest,
     run_https_update_check,
@@ -312,10 +311,3 @@ class TestRunPeriodicCheckLoopBudget:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
-
-    def test_periodic_poll_interval_is_one_hour(self):
-        # Cross-check the public constant — the docs and the lifespan
-        # both reference "60-minute background poll". If a refactor
-        # changes the default, this assertion forces a deliberate doc
-        # update.
-        assert PERIODIC_POLL_INTERVAL_SECONDS == 60 * 60

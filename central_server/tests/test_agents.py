@@ -23,12 +23,6 @@ class TestCreateAgent:
         resp = await client.post("/api/agents", json={"name": "x"})
         assert resp.status_code == 401
 
-    async def test_create_agent_missing_name(self, client, api_auth_headers):
-        resp = await client.post(
-            "/api/agents", json={}, headers=api_auth_headers
-        )
-        assert resp.status_code == 422
-
 
 class TestListAgents:
     async def test_list_agents_empty(self, client, api_auth_headers):

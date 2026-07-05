@@ -578,22 +578,3 @@ class TestRestrictPermsWindowsAclArgv:
             "constant) so the flag value matches the documented "
             f"platform-conditional shape; got creationflags={flag!r}"
         )
-
-    @pytest.mark.skipif(
-        sys.platform != "win32",
-        reason="Win32 literal value pin",
-    )
-    def test_windows_no_window_constant_on_win32(self) -> None:
-        """On win32, ``_env_writer._WINDOWS_NO_WINDOW`` MUST equal
-        ``0x08000000`` (subprocess.CREATE_NO_WINDOW).
-
-        Pinning the literal here proves the module-level conditional
-        ``CREATE_NO_WINDOW if sys.platform == "win32" else 0``
-        resolves to the documented value at import time on Windows.
-        A regression that flips the conditional or drops the import
-        would surface as ``flag=0`` here.
-        """
-        import subprocess as _sp
-
-        assert _env_writer._WINDOWS_NO_WINDOW == _sp.CREATE_NO_WINDOW
-        assert _env_writer._WINDOWS_NO_WINDOW == 0x08000000

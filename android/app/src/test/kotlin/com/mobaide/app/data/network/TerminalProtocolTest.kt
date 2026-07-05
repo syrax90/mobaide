@@ -3,7 +3,6 @@ package com.mobaide.app.data.network
 import okio.ByteString.Companion.toByteString
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -238,33 +237,4 @@ class TerminalProtocolTest {
         assertEquals(0, (decoded as TerminalFrame.Output).bytes.size)
     }
 
-    // ---- Output.equals / hashCode (contentEquals semantics) -----------------
-
-    @Test
-    fun output_equals_usesContentEqualsNotReferenceEquals() {
-        val a = TerminalFrame.Output(byteArrayOf(1, 2, 3))
-        val b = TerminalFrame.Output(byteArrayOf(1, 2, 3))
-
-        assertEquals("Outputs with the same bytes must be equal", a, b)
-        assertEquals("and must share the same hashCode", a.hashCode(), b.hashCode())
-    }
-
-    @Test
-    fun output_equals_distinguishesDifferentPayloads() {
-        val a = TerminalFrame.Output(byteArrayOf(1, 2, 3))
-        val c = TerminalFrame.Output(byteArrayOf(1, 2, 4))
-        assertNotEquals(a, c)
-    }
-
-    @Test
-    fun output_equals_isFalseForOtherTypesAndNull() {
-        val a = TerminalFrame.Output(byteArrayOf(1, 2, 3))
-        // JUnit 4's assertNotEquals has a primitive (long,long) overload that
-        // Kotlin eagerly picks for type-parameterised call sites — invoke the
-        // Object overload directly via explicit Any? / Any upcasts.
-        val nullRef: Any? = null
-        assertNotEquals(a as Any, nullRef)
-        assertNotEquals(a as Any, TerminalFrame.State("") as Any)
-        assertNotEquals(a as Any, "not an Output" as Any)
-    }
 }

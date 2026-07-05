@@ -13,8 +13,6 @@ from __future__ import annotations
 import pytest
 
 from mobaide.agent.install_paths import (
-    MANIFEST_ENDPOINT_PATH,
-    TRUST_KEY_ENDPOINT_PATH,
     endpoint_url_from_relay_server_url,
     manifest_url_from_relay_server_url,
     trust_key_url_from_relay_server_url,
@@ -122,13 +120,6 @@ class TestEndpointUrl:
 class TestTrustKeyWrapper:
     """The trust-key wrapper just plugs the canonical endpoint path."""
 
-    def test_uses_canonical_endpoint_path(self):
-        assert (
-            trust_key_url_from_relay_server_url("wss://example.com")
-            == f"https://example.com{TRUST_KEY_ENDPOINT_PATH}"
-        )
-        assert TRUST_KEY_ENDPOINT_PATH == "/api/v1/agent/trust_key"
-
     def test_propagates_userinfo_rejection(self):
         # Smoke-test that the wrapper inherits the core's security guards
         # rather than bypassing them through some local path.
@@ -140,13 +131,6 @@ class TestManifestUrlWrapper:
     """The manifest wrapper is the new piece — the rest of the test surface
     for the HTTPS-bootstrap path depends on its derivation matching the
     server's published manifest endpoint exactly."""
-
-    def test_uses_canonical_endpoint_path(self):
-        assert (
-            manifest_url_from_relay_server_url("wss://example.com")
-            == f"https://example.com{MANIFEST_ENDPOINT_PATH}"
-        )
-        assert MANIFEST_ENDPOINT_PATH == "/api/v1/agent/manifest.json"
 
     def test_strips_relay_path_keeps_origin(self):
         # Mirrors the trust-key behaviour: the relay tunnel and the

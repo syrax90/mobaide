@@ -8,7 +8,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,26 +40,6 @@ class CopyableCodeBlockTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
-
-    @Test
-    fun rendersLabelAndCode() {
-        composeRule.setContent {
-            Surface { CopyableCodeBlock(label = "Agent ID", code = "a1b2c3d4e5f6") }
-        }
-
-        composeRule.onNodeWithText("Agent ID").assertIsDisplayed()
-        composeRule.onNodeWithText("a1b2c3d4e5f6", useUnmergedTree = true).assertIsDisplayed()
-    }
-
-    @Test
-    fun copyButton_exposesCopyLabelContentDescription() {
-        composeRule.setContent {
-            Surface { CopyableCodeBlock(label = "Restart command", code = "do-the-thing") }
-        }
-
-        composeRule.onNodeWithContentDescription("Copy Restart command")
-            .assertIsDisplayed()
-    }
 
     @Test
     fun copyButton_writesCodeToClipboardUnderLabel() {

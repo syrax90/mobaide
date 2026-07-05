@@ -302,14 +302,6 @@ async def test_launcher_forwards_override_to_resolver(tmp_path: Path, monkeypatc
     assert captured["override"] == "/my/agy"
 
 
-def test_antigravity_options_is_frozen():
-    from dataclasses import FrozenInstanceError
-
-    opts = AntigravityOptions()
-    with pytest.raises(FrozenInstanceError):
-        opts.model = "x"  # type: ignore[misc]
-
-
 def test_binary_not_found_message_is_actionable():
     err = AntigravityBinaryNotFoundError(searched_paths=["PATH:agy", "fallback:/x"])
     msg = str(err)

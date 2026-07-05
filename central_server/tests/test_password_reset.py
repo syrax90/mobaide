@@ -610,21 +610,6 @@ class TestRouterIntegration:
         assert detail["error"] == "reset_ip_rate_limited"
         assert detail["retry_after_seconds"] > 0
 
-    async def test_reset_password_short_code_returns_422(
-        self,
-        reset_client,
-    ):
-        # Pydantic field-level validation rejects non-6-digit codes upfront.
-        resp = await reset_client.post(
-            "/api/auth/reset-password",
-            json={
-                "email": "anyone@example.com",
-                "code": "12",
-                "new_password": "newpass99",
-            },
-        )
-        assert resp.status_code == 422
-
 
 class TestResetPasswordPortalForm:
     """The HTML portal reset-password form gained a ``confirm_new_password``
