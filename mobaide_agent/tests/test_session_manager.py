@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from mobaide.core.antigravity_launcher import AntigravityOptions
 from mobaide.core.claude_launcher import AdHocLaunch, ClaudeOptions, LaunchSpec
 from mobaide.core.codex_launcher import CodexOptions
-from mobaide.core.gemini_launcher import GeminiOptions
 from mobaide.core.models import SessionConfig, SessionKind, SessionState
 from mobaide.core.session_manager import MaxSessionsError, SessionManager
 from mobaide.linear.worktree import WorktreeResult
@@ -350,13 +350,16 @@ class TestCodexLaunchBranching:
 
 
 @pytest.mark.timeout(20)
-class TestGeminiLaunchBranching:
-    """``create_session`` routes a ``gemini_options`` session to the Gemini
-    launcher (not the Claude or Codex one), for both project and ad-hoc targets,
-    and raises a clear error when no Gemini launcher is wired.
+class TestAntigravityLaunchBranching:
+    """``create_session`` routes an ``antigravity_options`` session to the
+    Antigravity launcher (not the Claude or Codex one), for both project and
+    ad-hoc targets, and raises a clear error when no Antigravity launcher is
+    wired.
     """
 
-    async def test_project_gemini_options_invokes_gemini_launcher(self, tmp_path) -> None:
+    async def test_project_antigravity_options_invokes_antigravity_launcher(
+        self, tmp_path,
+    ) -> None:
         project = MagicMock()
         project.name = "proj"
         project.path = str(tmp_path)
@@ -365,12 +368,12 @@ class TestGeminiLaunchBranching:
 
         claude_launcher = MagicMock()
         claude_launcher.build = AsyncMock()
-        gemini_launcher = MagicMock()
+        antigravity_launcher = MagicMock()
         # The returned argv must be a real spawnable command so the PTY start
-        # succeeds on a host without ``gemini`` installed; the dispatch (which
+        # succeeds on a host without ``agy`` installed; the dispatch (which
         # launcher / which options) is what this test pins, not the argv — that
-        # is covered by ``test_gemini_launcher``.
-        gemini_launcher.build = AsyncMock(
+        # is covered by ``test_antigravity_launcher``.
+        antigravity_launcher.build = AsyncMock(
             return_value=LaunchSpec(
                 argv=default_shell(),
                 cwd=str(tmp_path),
@@ -381,80 +384,87 @@ class TestGeminiLaunchBranching:
         mgr = SessionManager(
             projects_store=store,
             launcher=claude_launcher,
-            gemini_launcher=gemini_launcher,
+            antigravity_launcher=antigravity_launcher,
         )
         try:
             config = SessionConfig(
-                session_id="gemini-sess",
+                session_id="antigravity-sess",
                 command=default_shell(),
                 rows=24, cols=80, scrollback_size=50,
                 project_name="proj",
-                gemini_options=GeminiOptions(),
-                kind=SessionKind.GEMINI,
+                antigravity_options=AntigravityOptions(),
+                kind=SessionKind.ANTIGRAVITY,
             )
             await mgr.create_session(config)
 
-            gemini_launcher.build.assert_awaited_once()
+            antigravity_launcher.build.assert_awaited_once()
             claude_launcher.build.assert_not_awaited()
             assert config.env == {"X": "Y"}
-            # The Gemini launcher received the project target + a GeminiOptions.
-            call = gemini_launcher.build.await_args
+            # The Antigravity launcher received the project target + an
+            # AntigravityOptions.
+            call = antigravity_launcher.build.await_args
             assert call.args[0] is project
-            assert isinstance(call.args[1], GeminiOptions)
-            assert mgr.list_sessions()[0].kind == SessionKind.GEMINI
+            assert isinstance(call.args[1], AntigravityOptions)
+            assert mgr.list_sessions()[0].kind == SessionKind.ANTIGRAVITY
         finally:
             await mgr.shutdown()
 
-    async def test_adhoc_gemini_dispatch_uses_adhoc_target_and_skips_store(
+    async def test_adhoc_antigravity_dispatch_uses_adhoc_target_and_skips_store(
         self, tmp_path,
     ) -> None:
         store = MagicMock()
         store.get = MagicMock()
-        gemini_launcher = MagicMock()
-        gemini_launcher.build = AsyncMock(
+        antigravity_launcher = MagicMock()
+        antigravity_launcher.build = AsyncMock(
             return_value=LaunchSpec(argv=default_shell(), cwd=str(tmp_path), env={}),
         )
 
         mgr = SessionManager(
             projects_store=store,
             launcher=MagicMock(),
-            gemini_launcher=gemini_launcher,
+            antigravity_launcher=antigravity_launcher,
         )
         try:
             config = SessionConfig(
-                session_id="adhoc-gemini",
+                session_id="adhoc-antigravity",
                 command=default_shell(),
                 cwd=str(tmp_path),
                 rows=24, cols=80, scrollback_size=50,
-                gemini_options=GeminiOptions(),
-                kind=SessionKind.GEMINI,
+                antigravity_options=AntigravityOptions(),
+                kind=SessionKind.ANTIGRAVITY,
             )
             await mgr.create_session(config)
 
-            gemini_launcher.build.assert_awaited_once()
+            antigravity_launcher.build.assert_awaited_once()
             store.get.assert_not_called()
-            assert isinstance(gemini_launcher.build.await_args.args[0], AdHocLaunch)
+            assert isinstance(
+                antigravity_launcher.build.await_args.args[0], AdHocLaunch,
+            )
         finally:
             await mgr.shutdown()
 
-    async def test_gemini_options_without_gemini_launcher_raises_value_error(
+    async def test_antigravity_options_without_launcher_raises_value_error(
         self, tmp_path,
     ) -> None:
         project = MagicMock()
         project.path = str(tmp_path)
         store = MagicMock()
         store.get = MagicMock(return_value=project)
-        # Claude launcher wired, but no Gemini launcher.
+        # Claude launcher wired, but no Antigravity launcher.
         mgr = SessionManager(projects_store=store, launcher=MagicMock())
         try:
             config = SessionConfig(
-                session_id="no-gemini",
+                session_id="no-antigravity",
                 command=default_shell(),
                 project_name="proj",
-                gemini_options=GeminiOptions(),
-                kind=SessionKind.GEMINI,
+                antigravity_options=AntigravityOptions(),
+                kind=SessionKind.ANTIGRAVITY,
             )
-            with pytest.raises(ValueError, match="Gemini launcher"):
+            with pytest.raises(
+                ValueError,
+                match="antigravity session requested but agent has no "
+                      "Antigravity launcher",
+            ):
                 await mgr.create_session(config)
         finally:
             await mgr.shutdown()

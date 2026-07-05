@@ -23,13 +23,15 @@ async def test_get_version(client) -> None:
     assert body["latest_agent_version"] is None
     # capabilities.cli now reports per-CLI binary availability so the Android
     # mode-picker can gray out a CLI that isn't installed. The autouse
-    # _pin_claude_binary / _pin_codex_binary / _pin_gemini_binary fixtures make
-    # all three resolve, so all report available.
+    # _pin_claude_binary / _pin_codex_binary / _pin_antigravity_binary fixtures
+    # make all three resolve, so all report available. The entries stay bare
+    # {"available": bool} because the ASGITransport fixtures never run the app
+    # lifespan, so the model-cache warm task never fires.
     assert body["capabilities"] == {
         "cli": {
             "claude": {"available": True},
             "codex": {"available": True},
-            "gemini": {"available": True},
+            "antigravity": {"available": True},
         }
     }
     # The signed manifest body now travels inline over the relay WebSocket
@@ -56,7 +58,7 @@ async def test_get_version_claude_missing_reports_unavailable(
     cli = response.json()["capabilities"]["cli"]
     assert cli["claude"] == {"available": False}
     assert cli["codex"] == {"available": True}
-    assert cli["gemini"] == {"available": True}
+    assert cli["antigravity"] == {"available": True}
 
 
 async def test_get_version_codex_missing_reports_unavailable(
@@ -74,26 +76,26 @@ async def test_get_version_codex_missing_reports_unavailable(
     cli = response.json()["capabilities"]["cli"]
     assert cli["codex"] == {"available": False}
     assert cli["claude"] == {"available": True}
-    assert cli["gemini"] == {"available": True}
+    assert cli["antigravity"] == {"available": True}
 
 
-async def test_get_version_gemini_missing_reports_unavailable(
+async def test_get_version_antigravity_missing_reports_unavailable(
     client, monkeypatch
 ) -> None:
-    """When the Gemini binary can't be resolved, ``capabilities.cli.gemini``
+    """When the ``agy`` binary can't be resolved, ``capabilities.cli.antigravity``
     flips to ``available: false`` while Claude/Codex stay available — the gate is
     per-CLI, not all-or-nothing."""
-    from mobaide.core import gemini_launcher
+    from mobaide.core import antigravity_launcher
 
     def _raise(*_a, **_kw):
-        raise gemini_launcher.GeminiBinaryNotFoundError(["PATH:gemini"])
+        raise antigravity_launcher.AntigravityBinaryNotFoundError(["PATH:agy"])
 
-    monkeypatch.setattr(gemini_launcher, "_resolve_gemini_binary", _raise)
+    monkeypatch.setattr(antigravity_launcher, "_resolve_agy_binary", _raise)
 
     response = await client.get("/api/version")
     assert response.status_code == 200
     cli = response.json()["capabilities"]["cli"]
-    assert cli["gemini"] == {"available": False}
+    assert cli["antigravity"] == {"available": False}
     assert cli["claude"] == {"available": True}
     assert cli["codex"] == {"available": True}
 
@@ -104,7 +106,7 @@ async def test_get_version_all_clis_missing_still_returns_200(
     """A host with no managed CLI installed must not error the version endpoint —
     all report unavailable and the client falls back to its optimistic default
     plus the create-time 503 backstop."""
-    from mobaide.core import claude_launcher, codex_launcher, gemini_launcher
+    from mobaide.core import antigravity_launcher, claude_launcher, codex_launcher
 
     def _claude_raise(*_a, **_kw):
         raise claude_launcher.ClaudeBinaryNotFoundError(["PATH:claude"])
@@ -112,20 +114,43 @@ async def test_get_version_all_clis_missing_still_returns_200(
     def _codex_raise(*_a, **_kw):
         raise codex_launcher.CodexBinaryNotFoundError(["PATH:codex"])
 
-    def _gemini_raise(*_a, **_kw):
-        raise gemini_launcher.GeminiBinaryNotFoundError(["PATH:gemini"])
+    def _antigravity_raise(*_a, **_kw):
+        raise antigravity_launcher.AntigravityBinaryNotFoundError(["PATH:agy"])
 
     monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _claude_raise)
     monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _codex_raise)
-    monkeypatch.setattr(gemini_launcher, "_resolve_gemini_binary", _gemini_raise)
+    monkeypatch.setattr(
+        antigravity_launcher, "_resolve_agy_binary", _antigravity_raise
+    )
 
     response = await client.get("/api/version")
     assert response.status_code == 200
     assert response.json()["capabilities"]["cli"] == {
         "claude": {"available": False},
         "codex": {"available": False},
-        "gemini": {"available": False},
+        "antigravity": {"available": False},
     }
+
+
+async def test_get_version_reports_models_for_warm_cache(app, client) -> None:
+    """A launcher whose model cache was warmed carries ``models`` in its
+    capability entry, while cold-cache launchers keep the bare
+    ``{"available": bool}`` shape. The cache is seeded directly because the
+    ASGITransport fixtures never run the lifespan ``warm_cli_model_caches``
+    task."""
+    app.state.antigravity_launcher._cached_models = (
+        "Gemini 3.1 Pro (Low)",
+        "GPT-OSS 120B (Medium)",
+    )
+
+    response = await client.get("/api/version")
+    assert response.status_code == 200
+    cli = response.json()["capabilities"]["cli"]
+    assert cli["antigravity"] == {
+        "available": True,
+        "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
+    }
+    assert "models" not in cli["claude"]
 
 
 def test_protocol_version_constants() -> None:

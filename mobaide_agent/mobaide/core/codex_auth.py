@@ -21,6 +21,8 @@ import subprocess
 import sys
 from collections.abc import Mapping
 
+from .cli_launcher import shim_safe_argv
+
 _AUTH_FILE = "auth.json"
 # Kept below the mobile OkHttp read timeout (30s) and the relay
 # MobileProxy.forward timeout (30s): the agent must turn a hung login into the
@@ -88,17 +90,6 @@ async def codex_auth_present(
     return os.path.isfile(os.path.join(codex_home(env), _AUTH_FILE))
 
 
-def _codex_argv(codex_bin: str, *args: str) -> list[str]:
-    """``codex <args>`` argv, wrapping a Windows ``.cmd``/``.bat`` shim in
-    ``cmd /c`` (a shim is not directly CreateProcess-able). Shared by the login
-    and ``login status`` invocations; secrets are never passed as argv elements.
-    """
-    base = [codex_bin, *args]
-    if sys.platform == "win32" and codex_bin.lower().endswith((".cmd", ".bat")):
-        return ["cmd", "/c", *base]
-    return base
-
-
 async def _codex_login_status(
     codex_bin: str, env: Mapping[str, str], *, timeout: float,
 ) -> bool | None:
@@ -115,7 +106,7 @@ async def _codex_login_status(
     try:
         completed = await asyncio.to_thread(
             subprocess.run,
-            _codex_argv(codex_bin, "login", "status"),
+            shim_safe_argv(codex_bin, "login", "status"),
             capture_output=True,
             timeout=timeout,
             env=dict(env),
@@ -172,7 +163,7 @@ async def codex_login_with_api_key(
     try:
         completed = await asyncio.to_thread(
             subprocess.run,
-            _codex_argv(codex_bin, "login", "--with-api-key"),
+            shim_safe_argv(codex_bin, "login", "--with-api-key"),
             input=api_key.encode() + b"\n",
             capture_output=True,
             timeout=timeout,

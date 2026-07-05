@@ -78,8 +78,11 @@ private val CtrlRKey = ControlKey("Ctrl+R", byteArrayOf(0x12))
 private val CtrlLKey = ControlKey("Ctrl+L", byteArrayOf(0x0c))
 private val ApproveKey = ControlKey("Approve", byteArrayOf('y'.code.toByte()))
 private val RejectKey = ControlKey("Reject", byteArrayOf('n'.code.toByte()))
-private val YoloKey = ControlKey("YOLO", byteArrayOf(0x19))
-private val TodoKey = ControlKey("TODO", byteArrayOf(0x14))
+// Antigravity (agy) TUI controls: Ctrl+K fast-approves the pending action,
+// Ctrl+G opens the tool-confirmation view, Ctrl+D exits the CLI.
+private val CtrlKKey = ControlKey("Ctrl+K", byteArrayOf(0x0b))
+private val CtrlGKey = ControlKey("Ctrl+G", byteArrayOf(0x07))
+private val CtrlDKey = ControlKey("Ctrl+D", byteArrayOf(0x04))
 
 // Nav/control tail shared by every CLI. Arrows + Enter drive the in-terminal menus (mode
 // picker, approval/selection prompts, history); Ctrl+O toggles the transcript, Ctrl+R
@@ -92,24 +95,23 @@ private val SHARED_TAIL = listOf(
 )
 
 // Claude / shell / auto-scan: Mode (Shift+Tab, CSI Z — cycles plan/accept-edits/normal) and
-// Rewind (Esc-Esc — edits the previous message) lead the shared tail.
-private val CLAUDE_CONTROL_KEYS = listOf(ModeKey, RewindKey) + SHARED_TAIL
+// Rewind (Esc-Esc — edits the previous message) lead the shared tail; Ctrl+L (clear screen)
+// closes the set.
+private val CLAUDE_CONTROL_KEYS = listOf(ModeKey, RewindKey) + SHARED_TAIL + CtrlLKey
 
 // Codex = the Claude set plus its high-frequency approval answers (bare 'y'/'n', no CR —
-// Enter stays a separate key) up front, and Ctrl+L (clear screen) at the end — kept for
-// Codex but dropped from Claude as low-value on mobile.
-private val CODEX_CONTROL_KEYS = listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS + CtrlLKey
+// Enter stays a separate key) up front. Ctrl+L arrives via the embedded Claude set.
+private val CODEX_CONTROL_KEYS = listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS
 
-// Gemini leads with Mode (Shift+Tab, CSI Z — cycles default/auto_edit/plan) and Rewind
-// (Esc-Esc — clears the prompt, else rewinds prior turns), then its YOLO (Ctrl+Y — auto-approve)
-// and TODO (Ctrl+T — todo list) toggles, the shared tail, and Ctrl+L (clear screen) like Codex.
-// Bracketed paste is honored, so no newline key.
-private val GEMINI_CONTROL_KEYS =
-    listOf(ModeKey, RewindKey, YoloKey, TodoKey) + SHARED_TAIL + CtrlLKey
+// Antigravity (agy) leads with its own TUI controls — Ctrl+K (fast-approve pending action),
+// Ctrl+G (tool confirmation view), Ctrl+D (exit) — then the shared tail and Ctrl+L
+// (clear screen). Bracketed paste is honored, so no newline key.
+private val ANTIGRAVITY_CONTROL_KEYS =
+    listOf(CtrlKKey, CtrlGKey, CtrlDKey) + SHARED_TAIL + CtrlLKey
 
 private fun controlKeysFor(kind: SessionKind): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
-    SessionKind.Gemini -> GEMINI_CONTROL_KEYS
+    SessionKind.Antigravity -> ANTIGRAVITY_CONTROL_KEYS
     else -> CLAUDE_CONTROL_KEYS // Claude, shell, and auto-scan share the Mode/nav/control core.
 }
 

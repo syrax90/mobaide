@@ -63,19 +63,44 @@ def _pin_codex_binary(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _pin_gemini_binary(monkeypatch):
-    """Pin the Gemini resolver to the literal string ``"gemini"`` for every test.
+def _pin_antigravity_binary(monkeypatch):
+    """Pin the Antigravity resolver to the literal string ``"agy"`` for every test.
 
-    Parallel of :func:`_pin_codex_binary`: gemini launcher tests assert
-    ``spec.argv[0] == "gemini"`` and REST/relay/capability tests must not hit the
+    Parallel of :func:`_pin_codex_binary`: antigravity launcher tests assert
+    ``spec.argv[0] == "agy"`` and REST/relay/capability tests must not hit the
     real host resolver. Tests exercising the missing-binary path re-patch
-    ``gemini_launcher._resolve_gemini_binary`` to raise inside the test body,
+    ``antigravity_launcher._resolve_agy_binary`` to raise inside the test body,
     which overrides this fixture.
     """
-    from mobaide.core import gemini_launcher
+    from mobaide.core import antigravity_launcher
 
     monkeypatch.setattr(
-        gemini_launcher, "_resolve_gemini_binary", lambda *_a, **_kw: "gemini"
+        antigravity_launcher, "_resolve_agy_binary", lambda *_a, **_kw: "agy"
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _pin_model_enumeration(monkeypatch):
+    """Pin the model-enumeration subprocess seams to canned failures.
+
+    ``list_models()``'s module-level runners exec the real CLI, and the binary
+    pins above resolve to bare names that DO exist on some dev hosts (e.g. a
+    real ``agy`` on PATH) — so any test that triggers enumeration (the
+    lifespan warm task, or a direct ``list_models()`` call) must never reach
+    the real subprocess. Note the capability dicts' bare ``{"available":
+    bool}`` shape is guaranteed separately: the httpx ``ASGITransport``
+    fixtures never run the app lifespan, so the warm task doesn't fire and
+    caches stay empty. Tests exercising enumeration re-patch these seams in
+    their test body.
+    """
+    from mobaide.core import antigravity_launcher, codex_launcher
+
+    monkeypatch.setattr(
+        antigravity_launcher, "_run_agy_models", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        codex_launcher, "_run_codex_models_json", lambda *_a, **_kw: None
     )
     yield
 

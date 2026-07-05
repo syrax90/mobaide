@@ -2,9 +2,9 @@ package com.mobaide.app.ui.sessions
 
 import app.cash.turbine.test
 import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
-import com.mobaide.app.data.local.GeminiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
@@ -100,8 +100,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedClaudeOptions(any()) } just Runs
         coEvery { prefs.getLastUsedCodexOptions() } returns null
         coEvery { prefs.setLastUsedCodexOptions(any()) } just Runs
-        coEvery { prefs.getLastUsedGeminiOptions() } returns null
-        coEvery { prefs.setLastUsedGeminiOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedAntigravityOptions() } returns null
+        coEvery { prefs.setLastUsedAntigravityOptions(any()) } just Runs
         coEvery { prefs.getRecentCustomPaths(any()) } returns recentCustomPaths
         coEvery { prefs.addRecentCustomPath(any(), any()) } just Runs
         every { autoScanRepo.getAutoScanPrompt() } returns autoScanPrompt
@@ -1429,187 +1429,265 @@ class CreateSessionViewModelTest {
         assertFalse(opts.full_auto)
     }
 
-    // ---- Gemini config + submit --------------------------------------------
+    // ---- Antigravity config + submit ----------------------------------------
 
     @Test
-    fun wizardFlow_ModePick_to_GeminiConfig_andBack() = runTest {
+    fun wizardFlow_ModePick_to_AntigravityConfig_andBack() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         vm.selectProject("alpha")
         vm.confirmProject()
-        vm.pickMode(CreateSessionMode.Gemini)
-        vm.selectGeminiMode()
-        assertEquals(CreateSessionStep.GeminiConfig, vm.uiState.value.step)
+        vm.pickMode(CreateSessionMode.Antigravity)
+        vm.selectAntigravityMode()
+        assertEquals(CreateSessionStep.AntigravityConfig, vm.uiState.value.step)
 
         vm.goBack()
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
     }
 
     @Test
-    fun defaultGeminiState_derivesAutoEditPreset() = runTest {
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-        // Default geminiApprovalMode="auto_edit" -> the segmented control lands
-        // on Auto-edit, mirroring Codex's middle "Auto" default.
-        assertEquals(GeminiAutonomyPreset.AutoEdit, vm.uiState.value.geminiPreset)
-    }
-
-    @Test
-    fun selectGeminiPreset_mapsEachPresetToApprovalMode() = runTest {
+    fun setAntigravitySkipPermissions_forcesSandboxOff() = runTest {
+        // Skip-permissions and Sandbox are mutually exclusive (the server
+        // rejects the pair with a 422), so enabling either must force-disable
+        // the other.
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
-        vm.selectGeminiPreset(GeminiAutonomyPreset.Plan)
-        assertEquals("plan", vm.uiState.value.geminiApprovalMode)
-        assertEquals(GeminiAutonomyPreset.Plan, vm.uiState.value.geminiPreset)
+        vm.setAntigravitySandbox(true)
+        assertTrue(vm.uiState.value.antigravitySandbox)
 
-        // auto_edit carries the underscore the server 422s without.
-        vm.selectGeminiPreset(GeminiAutonomyPreset.AutoEdit)
-        assertEquals("auto_edit", vm.uiState.value.geminiApprovalMode)
-        assertEquals(GeminiAutonomyPreset.AutoEdit, vm.uiState.value.geminiPreset)
+        vm.setAntigravitySkipPermissions(true)
 
-        vm.selectGeminiPreset(GeminiAutonomyPreset.Yolo)
-        assertEquals("yolo", vm.uiState.value.geminiApprovalMode)
-        assertEquals(GeminiAutonomyPreset.Yolo, vm.uiState.value.geminiPreset)
+        val s = vm.uiState.value
+        assertTrue(s.antigravitySkipPermissions)
+        assertFalse("enabling skip-permissions must clear sandbox", s.antigravitySandbox)
     }
 
     @Test
-    fun init_seedsGeminiControlsFromPersistedPrefs() = runTest {
+    fun setAntigravitySandbox_forcesSkipPermissionsOff() = runTest {
         val fx = newFixture()
-        coEvery { fx.prefs.getLastUsedGeminiOptions() } returns
-            GeminiLaunchPrefs(model = "flash-lite", approvalMode = "yolo")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setAntigravitySkipPermissions(true)
+        assertTrue(vm.uiState.value.antigravitySkipPermissions)
+
+        vm.setAntigravitySandbox(true)
+
+        val s = vm.uiState.value
+        assertTrue(s.antigravitySandbox)
+        assertFalse("enabling sandbox must clear skip-permissions", s.antigravitySkipPermissions)
+    }
+
+    @Test
+    fun setAntigravityToggles_disablingOne_leavesTheOtherUntouched() = runTest {
+        // Only ENABLING a toggle clears its sibling; turning one off must
+        // never flip the other on or off.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setAntigravitySandbox(true)
+        vm.setAntigravitySkipPermissions(false)
+        assertTrue(
+            "disabling skip-permissions must leave sandbox as-is",
+            vm.uiState.value.antigravitySandbox,
+        )
+
+        vm.setAntigravitySkipPermissions(true)
+        vm.setAntigravitySandbox(false)
+        assertTrue(
+            "disabling sandbox must leave skip-permissions as-is",
+            vm.uiState.value.antigravitySkipPermissions,
+        )
+    }
+
+    @Test
+    fun init_seedsAntigravityControlsFromPersistedPrefs() = runTest {
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedAntigravityOptions() } returns
+            AntigravityLaunchPrefs(
+                model = "Gemini 3.1 Pro (High)",
+                skipPermissions = false,
+                sandbox = true,
+            )
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         val s = vm.uiState.value
-        assertEquals("flash-lite", s.geminiModel)
-        assertEquals("yolo", s.geminiApprovalMode)
-        // The restored approval_mode re-derives the preset highlight.
-        assertEquals(GeminiAutonomyPreset.Yolo, s.geminiPreset)
+        assertEquals("Gemini 3.1 Pro (High)", s.antigravityModel)
+        assertFalse(s.antigravitySkipPermissions)
+        assertTrue(s.antigravitySandbox)
     }
 
     @Test
-    fun submitGemini_happyPath_sendsCliGemini_andGeminiOptions() = runTest {
+    fun init_seedsAntigravityPrefs_conflictingBlob_dropsSandbox() = runTest {
+        // A cached blob carrying both toggles (older build / hand-edited
+        // store) must seed mutually-exclusively: skip-permissions wins and
+        // sandbox is dropped (seeded as saved.sandbox && !saved.skipPermissions).
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedAntigravityOptions() } returns
+            AntigravityLaunchPrefs(skipPermissions = true, sandbox = true)
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.antigravitySkipPermissions)
+        assertFalse(
+            "a conflicting saved pair must never seed both toggles on",
+            s.antigravitySandbox,
+        )
+    }
+
+    @Test
+    fun submitAntigravity_happyPath_sendsCliAntigravity_andAntigravityOptions() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         val requestSlot = slot<CreateSessionRequest>()
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-gemini", "starting", "2026-07-02T00:00:00Z")
+            SessionResponse("sess-agy", "starting", "2026-07-02T00:00:00Z")
 
         vm.selectProject("alpha")
         vm.confirmProject()
-        vm.selectGeminiMode()
+        vm.selectAntigravityMode()
 
         vm.navigateToSession.test {
-            vm.submitGemini()
+            vm.submitAntigravity()
             advanceUntilIdle()
-            assertEquals("sess-gemini", awaitItem())
+            assertEquals("sess-agy", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
 
         val req = requestSlot.captured
         assertEquals("alpha", req.project_name)
-        assertEquals("gemini", req.cli)
-        assertNull("Gemini must not send claude_options", req.claude_options)
-        assertNull("Gemini must not send codex_options", req.codex_options)
-        val opts = req.gemini_options
+        assertEquals("antigravity", req.cli)
+        assertNull("Antigravity must not send claude_options", req.claude_options)
+        assertNull("Antigravity must not send codex_options", req.codex_options)
+        val opts = req.antigravity_options
         assertNotNull(opts)
-        assertEquals("approval_mode defaults to the Auto-edit preset", "auto_edit", opts!!.approval_mode)
-        assertNull("model is omitted (null) for the Auto default", opts.model)
+        assertNull("model is omitted (null) for the Auto default", opts!!.model)
+        assertFalse("skip_permissions defaults off", opts.skip_permissions)
+        assertFalse("sandbox defaults off", opts.sandbox)
+        assertTrue("add_dirs defaults empty", opts.add_dirs.isEmpty())
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
-        coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-gemini") }
-        coVerify(exactly = 1) { fx.prefs.setLastUsedGeminiOptions(any()) }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedSessionId("sess-agy") }
+        coVerify(exactly = 1) { fx.prefs.setLastUsedAntigravityOptions(any()) }
         assertFalse(vm.uiState.value.submitting)
     }
 
     @Test
-    fun submitGemini_planPreset_withModel_sendsThem() = runTest {
+    fun submitAntigravity_withModelAndSkipPermissions_sendsThem() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         val requestSlot = slot<CreateSessionRequest>()
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-gemini-plan", "starting", "2026-07-02T00:00:00Z")
+            SessionResponse("sess-agy-model", "starting", "2026-07-02T00:00:00Z")
 
         vm.selectProject("alpha")
         vm.confirmProject()
-        vm.selectGeminiMode()
-        vm.setGeminiModel("pro")
-        vm.selectGeminiPreset(GeminiAutonomyPreset.Plan)
-        vm.submitGemini()
+        vm.selectAntigravityMode()
+        vm.setAntigravityModel("Gemini 3.1 Pro (High)")
+        vm.setAntigravitySkipPermissions(true)
+        vm.submitAntigravity()
         advanceUntilIdle()
 
-        val opts = requestSlot.captured.gemini_options
+        val opts = requestSlot.captured.antigravity_options
         assertNotNull(opts)
-        assertEquals("pro", opts!!.model)
-        assertEquals("plan", opts.approval_mode)
+        assertEquals("Gemini 3.1 Pro (High)", opts!!.model)
+        assertTrue(opts.skip_permissions)
+        assertFalse("the mutually-exclusive sandbox must stay off", opts.sandbox)
     }
 
     @Test
-    fun submitGemini_persistsLastUsedGeminiOptions_andNotCodexOrClaude() = runTest {
+    fun submitAntigravity_parsesAddDirsDraft_onNewlinesAndCommas() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-agy-dirs", "starting", "2026-07-02T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAntigravityMode()
+        vm.setAntigravityAddDirsDraft("/a\n/b, /c\n\n")
+        vm.submitAntigravity()
+        advanceUntilIdle()
+
+        assertEquals(
+            "the draft must split on newlines and commas, trim, and drop blanks",
+            listOf("/a", "/b", "/c"),
+            requestSlot.captured.antigravity_options?.add_dirs,
+        )
+    }
+
+    @Test
+    fun submitAntigravity_persistsLastUsedAntigravityOptions_andNotCodexOrClaude() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         coEvery { fx.sessionRepo.createSession(any()) } returns
-            SessionResponse("sess-gemini-persist", "starting", "2026-07-02T00:00:00Z")
-        val prefsSlot = slot<GeminiLaunchPrefs>()
-        coEvery { fx.prefs.setLastUsedGeminiOptions(capture(prefsSlot)) } just Runs
+            SessionResponse("sess-agy-persist", "starting", "2026-07-02T00:00:00Z")
+        val prefsSlot = slot<AntigravityLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedAntigravityOptions(capture(prefsSlot)) } just Runs
 
         vm.selectProject("alpha")
         vm.confirmProject()
-        vm.selectGeminiMode()
-        vm.setGeminiModel("flash")
-        vm.selectGeminiPreset(GeminiAutonomyPreset.Yolo)
-        vm.submitGemini()
+        vm.selectAntigravityMode()
+        vm.setAntigravityModel("Claude Sonnet 4.6 (Thinking)")
+        vm.setAntigravitySandbox(true)
+        vm.submitAntigravity()
         advanceUntilIdle()
 
-        // The same selections are persisted for the next Gemini launch.
+        // The same selections are persisted for the next Antigravity launch.
         val saved = prefsSlot.captured
-        assertEquals("flash", saved.model)
-        assertEquals("yolo", saved.approvalMode)
-        // A Gemini submit must write neither the Claude nor the Codex blob.
+        assertEquals("Claude Sonnet 4.6 (Thinking)", saved.model)
+        assertTrue(saved.sandbox)
+        assertFalse(saved.skipPermissions)
+        // An Antigravity submit must write neither the Claude nor the Codex blob.
         coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
         coVerify(exactly = 0) { fx.prefs.setLastUsedCodexOptions(any()) }
     }
 
     @Test
-    fun submitGemini_gitProject_withWorktree_carriesWorktreeAndBranchInGeminiOptions() = runTest {
+    fun submitAntigravity_gitProject_withWorktree_carriesWorktreeAndBranchInAntigravityOptions() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
 
         val requestSlot = slot<CreateSessionRequest>()
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-gemini-wt", "starting", "2026-07-02T00:00:00Z")
+            SessionResponse("sess-agy-wt", "starting", "2026-07-02T00:00:00Z")
 
         vm.selectProject("alpha") // is_git = true
         vm.confirmProject()
-        vm.selectGeminiMode()
+        vm.selectAntigravityMode()
         vm.toggleWorktree(true)
         vm.setBranchName("feature/x")
-        vm.submitGemini()
+        vm.submitAntigravity()
         advanceUntilIdle()
 
-        val opts = requestSlot.captured.gemini_options
+        val opts = requestSlot.captured.antigravity_options
         assertNotNull(opts)
-        assertTrue("worktree must travel inside gemini_options", opts!!.worktree)
+        assertTrue("worktree must travel inside antigravity_options", opts!!.worktree)
         assertEquals("feature/x", opts.branch_name)
         assertFalse(
-            "Gemini worktree travels in gemini_options, not the top-level request field",
+            "Antigravity worktree travels in antigravity_options, not the top-level request field",
             requestSlot.captured.worktree,
         )
     }
 
     @Test
-    fun submitGemini_customPath_clampsWorktreeAndBranch() = runTest {
+    fun submitAntigravity_customPath_clampsWorktreeAndBranch() = runTest {
         val fx = newFixture(agentId = "agent-1")
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -1623,77 +1701,21 @@ class CreateSessionViewModelTest {
 
         val requestSlot = slot<CreateSessionRequest>()
         coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
-            SessionResponse("sess-gemini-adhoc", "starting", "2026-07-02T00:00:00Z")
+            SessionResponse("sess-agy-adhoc", "starting", "2026-07-02T00:00:00Z")
 
         vm.confirmProject()
-        vm.selectGeminiMode()
-        vm.submitGemini()
+        vm.selectAntigravityMode()
+        vm.submitAntigravity()
         advanceUntilIdle()
 
         val req = requestSlot.captured
         assertNull(req.project_name)
         assertEquals(hostAbsolutePath, req.cwd)
-        assertEquals("gemini", req.cli)
-        val opts = req.gemini_options
+        assertEquals("antigravity", req.cli)
+        val opts = req.antigravity_options
         assertNotNull(opts)
         assertFalse("worktree must clamp false for custom path", opts!!.worktree)
         assertNull("branch_name must be null for custom path", opts.branch_name)
-    }
-
-    // ---- Gemini auth-required (host-side instruction, no dialog) ------------
-
-    @Test
-    fun submitGemini_authRequired409_nestedDetailMarker_showsHostInstruction_noDialog() = runTest {
-        // Direct-REST shape: the marker is nested under `detail`, status 409.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(409, """{"detail":{"gemini_auth_required":true}}""")
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectGeminiMode()
-        vm.submitGemini()
-        advanceUntilIdle()
-
-        val s = vm.uiState.value
-        // Unlike Codex, Gemini auth is browser/OAuth on the host, so the marker
-        // surfaces a host-side instruction rather than opening the API-key dialog.
-        assertNotNull("auth-required 409 must surface an error, not swallow it", s.error)
-        assertTrue(
-            "the Gemini auth error must instruct authenticating on the host",
-            s.error!!.contains("host"),
-        )
-        assertFalse("Gemini must NOT open the Codex login dialog", s.codexLoginVisible)
-        assertFalse(s.submitting)
-    }
-
-    @Test
-    fun submitGemini_authRequired409_topLevelMarker_showsHostInstruction_noDialog() = runTest {
-        // Relay shape: the marker is top-level, status 409.
-        val fx = newFixture()
-        val vm = fx.buildVm()
-        advanceUntilIdle()
-
-        coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(409, """{"gemini_auth_required":true,"detail":"Gemini sign-in required."}""")
-
-        vm.selectProject("alpha")
-        vm.confirmProject()
-        vm.selectGeminiMode()
-        vm.submitGemini()
-        advanceUntilIdle()
-
-        val s = vm.uiState.value
-        assertNotNull(s.error)
-        assertTrue(
-            "the Gemini auth error must instruct authenticating on the host",
-            s.error!!.contains("host"),
-        )
-        assertFalse("Gemini must NOT open the Codex login dialog", s.codexLoginVisible)
-        assertFalse(s.submitting)
     }
 
     // ---- Codex auth-required login flow (CLA-71) ---------------------------
@@ -1903,18 +1925,31 @@ class CreateSessionViewModelTest {
 
     /**
      * Builds a [VersionInfoResponse] whose `capabilities.cli` carries the given
-     * per-CLI availability flags, mirroring the agent's wire shape. A `null`
-     * flag omits that id (the "key absent" case); the whole `cli` map is omitted
-     * when both are null so the response models an old agent's `capabilities:{}`.
+     * per-CLI availability flags and model lists, mirroring the agent's wire
+     * shape. A `null` flag/list omits that field (the "key absent" case); an id
+     * with neither field is omitted entirely, and the whole `cli` map is omitted
+     * when every id is empty so the response models an old agent's
+     * `capabilities:{}`.
      */
     private fun versionResponse(
         claude: Boolean? = null,
         codex: Boolean? = null,
+        antigravity: Boolean? = null,
+        codexModels: List<String>? = null,
+        antigravityModels: List<String>? = null,
     ): VersionInfoResponse {
-        val entries = buildList {
-            if (claude != null) add("\"claude\":{\"available\":$claude}")
-            if (codex != null) add("\"codex\":{\"available\":$codex}")
+        fun cliEntry(id: String, available: Boolean?, models: List<String>? = null): String? {
+            val fields = buildList {
+                if (available != null) add("\"available\":$available")
+                if (models != null) add("\"models\":[${models.joinToString(",") { "\"$it\"" }}]")
+            }
+            return if (fields.isEmpty()) null else "\"$id\":{${fields.joinToString(",")}}"
         }
+        val entries = listOfNotNull(
+            cliEntry("claude", claude),
+            cliEntry("codex", codex, codexModels),
+            cliEntry("antigravity", antigravity, antigravityModels),
+        )
         val capabilitiesJson =
             if (entries.isEmpty()) "{}"
             else "{\"cli\":{${entries.joinToString(",")}}}"
@@ -2037,6 +2072,76 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun refreshCliAvailability_capturesPerCliModelLists() = runTest {
+        // The probe also captures the agent's dynamic model enumeration
+        // (capabilities.cli.<id>.models) so the wizard dropdowns can offer
+        // live lists instead of the hardcoded companion constants.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns versionResponse(
+            claude = true,
+            codex = true,
+            antigravity = true,
+            codexModels = listOf("gpt-5.5", "gpt-5.4"),
+            antigravityModels = listOf("Gemini 3.5 Flash (Medium)", "Claude Sonnet 4.6 (Thinking)"),
+        )
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals(true, s.antigravityAvailable)
+        assertEquals(listOf("gpt-5.5", "gpt-5.4"), s.codexModels)
+        assertEquals(
+            listOf("Gemini 3.5 Flash (Medium)", "Claude Sonnet 4.6 (Thinking)"),
+            s.antigravityModels,
+        )
+    }
+
+    @Test
+    fun refreshCliAvailability_modelsAbsent_leavesModelListsNull() = runTest {
+        // An agent without enumeration (older agent / failed probe) omits the
+        // models arrays -> cliModels returns null, and null must land in the
+        // state so the dropdowns fall back to the hardcoded constants.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true, antigravity = true)
+
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertNull("absent codex models array must map to null", s.codexModels)
+        assertNull("absent antigravity models array must map to null", s.antigravityModels)
+    }
+
+    @Test
+    fun refreshCliAvailability_whileInFlight_dedupes_probesAgentOnce() = runTest {
+        // Under the StandardTestDispatcher the launched probe body stays queued
+        // until advanceUntilIdle(), but the loading flag is set synchronously
+        // BEFORE the launch — so a second call while the first is in flight
+        // must bail on the guard instead of double-probing.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true)
+
+        vm.refreshCliAvailability()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.sessionRepo.getAgentVersion() }
+        assertFalse("loading flag must reset after the deduped probe", vm.uiState.value.cliAvailabilityLoading)
+    }
+
+    @Test
     fun selectStandardMode_claudeUnavailable_isNoop_staysOnModePick() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()
@@ -2073,6 +2178,25 @@ class CreateSessionViewModelTest {
         advanceUntilIdle()
 
         vm.selectCodexMode()
+
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+    }
+
+    @Test
+    fun selectAntigravityMode_antigravityUnavailable_isNoop_staysOnModePick() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = true, antigravity = false)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.selectAntigravityMode()
 
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
     }

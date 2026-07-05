@@ -9,12 +9,16 @@ Standard mode does (``create_standard_worktree``). Flags are verified against
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from .cli_launcher import (
+    WINDOWS_NO_WINDOW,
     CliAuthRequiredError,
     CliBinaryNotFoundError,
     LaunchSpec,
@@ -24,6 +28,7 @@ from .cli_launcher import (
     prepend_path_dir,
     resolve_cli_binary,
     resolve_standard_worktree_cwd,
+    shim_safe_argv,
     windows_npm_fallbacks,
 )
 from .codex_auth import codex_auth_present
@@ -33,6 +38,14 @@ if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
 
 _CODEX_BIN_ENV_VAR = "MOBAIDE_CODEX_BIN"
+# ``codex debug models --json`` is a fast local listing; bound it so a wedged
+# probe can never stall the startup model-cache warm task indefinitely.
+_MODELS_TIMEOUT = 10.0
+# Served when enumeration fails for any reason (missing binary, non-zero exit,
+# unparseable JSON): ``debug models`` has no stability contract (a stable
+# top-level listing was declined in openai/codex#8871), so a new agent always
+# reports Codex models — at worst this curated set.
+_CODEX_FALLBACK_MODELS = ("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark")
 
 
 class CodexBinaryNotFoundError(CliBinaryNotFoundError):
@@ -87,6 +100,57 @@ def _resolve_codex_binary(override: str | None = None) -> str:
     )
 
 
+def _run_codex_models_json(binary: str) -> str | None:
+    """Run ``codex debug models --json`` and return stdout, ``None`` on non-zero
+    exit. Module-level so tests can monkeypatch the subprocess seam (mirrors
+    ``_resolve_codex_binary``). Blocking — callers offload via
+    ``asyncio.to_thread`` (see ``codex_auth`` for the Windows-event-loop
+    rationale).
+    """
+    completed = subprocess.run(
+        shim_safe_argv(binary, "debug", "models", "--json"),
+        capture_output=True,
+        timeout=_MODELS_TIMEOUT,
+        creationflags=WINDOWS_NO_WINDOW,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.decode(errors="replace") if completed.stdout else ""
+
+
+def _parse_codex_models(output: str) -> list[str] | None:
+    """Best-effort parse of ``codex debug models --json`` output.
+
+    A debug-namespace command carries no output-stability promise, so every
+    plausible shape is accepted: a bare JSON list of strings, a list of objects
+    (first of ``id``/``name``/``model``/``slug`` wins), or an object wrapping
+    either under ``"models"``. Anything else yields ``None`` and the caller
+    serves the curated fallback list.
+    """
+    try:
+        payload = json.loads(output)
+    except ValueError:
+        return None
+    if isinstance(payload, dict):
+        payload = payload.get("models")
+    if not isinstance(payload, list):
+        return None
+    models: list[str] = []
+    for item in payload:
+        name = ""
+        if isinstance(item, str):
+            name = item.strip()
+        elif isinstance(item, dict):
+            for key in ("id", "name", "model", "slug"):
+                value = item.get(key)
+                if isinstance(value, str) and value.strip():
+                    name = value.strip()
+                    break
+        if name:
+            models.append(name)
+    return models or None
+
+
 @dataclass(frozen=True)
 class CodexOptions:
     """Codex CLI launch options.
@@ -122,6 +186,7 @@ class CodexLauncher:
         self._codex_bin_override = codex_bin_override
         self._worktree_mgr = worktree_mgr
         self._resolved_binary: str | None = None
+        self._cached_models: tuple[str, ...] | None = None
 
     def _resolve_binary(self) -> str:
         if self._resolved_binary is None:
@@ -134,6 +199,37 @@ class CodexLauncher:
         """Public access to the resolved Codex binary (honours the configured
         override) so the login endpoint runs the same ``codex`` sessions use."""
         return self._resolve_binary()
+
+    @property
+    def cached_models(self) -> tuple[str, ...] | None:
+        """Model names enumerated by a prior :meth:`list_models` — never spawns."""
+        return self._cached_models
+
+    async def list_models(self) -> list[str]:
+        """Enumerate Codex models once and memoize the result.
+
+        Run from the startup warm task (``warm_cli_model_caches``) — never from
+        the ``/api/version`` request path. ANY failure (missing binary,
+        non-zero exit, timeout, unparseable output) memoizes the curated
+        ``_CODEX_FALLBACK_MODELS`` instead, so capabilities from a new agent
+        always carry a Codex model list.
+        """
+        if self._cached_models is not None:
+            return list(self._cached_models)
+        models: list[str] | None = None
+        try:
+            binary = self._resolve_binary()
+        except CliBinaryNotFoundError:
+            binary = None
+        if binary is not None:
+            try:
+                output = await asyncio.to_thread(_run_codex_models_json, binary)
+            except (OSError, subprocess.SubprocessError):
+                output = None
+            if output is not None:
+                models = _parse_codex_models(output)
+        self._cached_models = tuple(models) if models else _CODEX_FALLBACK_MODELS
+        return list(self._cached_models)
 
     async def build(
         self,

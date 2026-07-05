@@ -17,15 +17,15 @@ from fastapi.responses import JSONResponse
 
 from mobaide import __version__
 from mobaide.core import (
+    AntigravityLauncher,
     ClaudeLauncher,
     CodexLauncher,
     FakePtyBackend,
-    GeminiLauncher,
     ProjectsStore,
     SessionManager,
     create_pty_backend,
 )
-from mobaide.core.cli_launcher import build_cli_capabilities
+from mobaide.core.cli_launcher import build_cli_capabilities, warm_cli_model_caches
 from mobaide.core.hook_settings import sweep_hooks_dir
 from mobaide.core.macos_access import full_disk_access
 from mobaide.linear.config import AutoScanConfig
@@ -392,6 +392,13 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         # never reach the SessionEnd delete). Scoped to this agent's port.
         sweep_hooks_dir(config.port)
         await app.state.session_manager.start_liveness_monitor()
+        # Warm the per-CLI model-list caches off the request path: /api/version
+        # only ever reads the in-memory caches, so a slow `agy models` /
+        # `codex debug models` can neither delay boot nor add request latency.
+        app.state.cli_models_warmup = asyncio.create_task(
+            warm_cli_model_caches(app.state.cli_launchers),
+            name="cli-models-warmup",
+        )
         app.state.pairing_task = None
         if relay_cfg is not None and not pairing_pending:
             await _start_relay_in_process(app, relay_cfg)
@@ -527,6 +534,15 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
             app.state.https_poll_task = None
         yield
         logger.info("agent.shutting_down")
+        models_warmup = getattr(app.state, "cli_models_warmup", None)
+        if models_warmup is not None and not models_warmup.done():
+            models_warmup.cancel()
+            try:
+                await models_warmup
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning("agent.cli_models_warmup_failed: %s", exc)
         pairing_task = getattr(app.state, "pairing_task", None)
         if pairing_task is not None and not pairing_task.done():
             pairing_task.cancel()
@@ -592,6 +608,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
                 err.get("input")
             ):
                 err = {k: v for k, v in err.items() if k != "input"}
+            ctx = err.get("ctx")
+            if isinstance(ctx, dict):
+                # A model_validator's `raise ValueError(...)` surfaces here as
+                # the raw exception instance under ctx["error"], which
+                # JSONResponse cannot serialize — stringify every ctx value.
+                err = {**err, "ctx": {k: str(v) for k, v in ctx.items()}}
             scrubbed.append(err)
         return JSONResponse(status_code=422, content={"detail": scrubbed})
 
@@ -690,11 +712,12 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         codex_bin_override=config.codex_bin,
         worktree_mgr=worktree_mgr,
     )
-    # Gemini CLI launcher — sibling of Codex; same WorktreeManager sharing, no
-    # hooks. Auth is detection-only (no in-app login), so the operator
-    # pre-authenticates ``gemini`` on the host. Binary resolves lazily.
-    app.state.gemini_launcher = GeminiLauncher(
-        gemini_bin_override=config.gemini_bin,
+    # Antigravity CLI launcher — sibling of Codex; same WorktreeManager sharing,
+    # no hooks and no auth probe (``agy`` signs in via Google/keyring with no
+    # detectable marker; its login prompt renders in the PTY when needed).
+    # Binary resolves lazily.
+    app.state.antigravity_launcher = AntigravityLauncher(
+        agy_bin_override=config.agy_bin,
         worktree_mgr=worktree_mgr,
     )
     # Registry keyed by CLI name. SessionManager picks a launcher per session;
@@ -703,7 +726,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     app.state.cli_launchers = {
         "claude": app.state.claude_launcher,
         "codex": app.state.codex_launcher,
-        "gemini": app.state.gemini_launcher,
+        "antigravity": app.state.antigravity_launcher,
     }
 
     # event_bus / broadcaster / fanouts must exist before SessionManager
@@ -725,7 +748,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         projects_store=projects_store,
         launcher=app.state.claude_launcher,
         codex_launcher=app.state.codex_launcher,
-        gemini_launcher=app.state.gemini_launcher,
+        antigravity_launcher=app.state.antigravity_launcher,
         worktree_mgr=worktree_mgr,
         event_bus=app.state.event_bus,
         on_session_created=_on_session_created,

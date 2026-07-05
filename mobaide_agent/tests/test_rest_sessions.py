@@ -401,20 +401,24 @@ class TestCreateSessionCodex:
         assert isinstance(detail["detail"], str) and detail["detail"]
 
 
-class TestCreateSessionGemini:
-    """``POST /api/sessions`` with ``cli="gemini"`` threads ``gemini_options``
-    through to a GEMINI session, maps a missing Gemini binary to a clean 503, and
-    a present-but-unauthenticated Gemini to a 409 ``gemini_auth_required`` marker.
+class TestCreateSessionAntigravity:
+    """``POST /api/sessions`` with ``cli="antigravity"`` threads
+    ``antigravity_options`` through to an ANTIGRAVITY session, maps a missing
+    ``agy`` binary to a clean 503, and rejects the mutually exclusive
+    ``skip_permissions`` + ``sandbox`` pair with a 422. No 409 auth case:
+    ``agy`` has no pre-spawn auth probe, so the ``<cli>_auth_required`` path
+    can never fire for Antigravity — an unauthenticated CLI renders its login
+    prompt inside the PTY instead.
     """
 
-    async def test_cli_gemini_threads_options_and_kind(
+    async def test_cli_antigravity_threads_options_and_kind(
         self, app, client, auth_headers,
     ):
-        """The router must build a GEMINI ``SessionConfig`` carrying the parsed
-        ``gemini_options`` (and no ``claude_options`` / ``codex_options``), and
-        surface ``kind`` as ``"gemini"`` on the wire. ``create_session`` is
-        captured so the test is independent of whether a real ``gemini`` binary
-        is installed or authenticated."""
+        """The router must build an ANTIGRAVITY ``SessionConfig`` carrying the
+        parsed ``antigravity_options`` (and no ``claude_options`` /
+        ``codex_options``), and surface ``kind`` as ``"antigravity"`` on the
+        wire. ``create_session`` is captured so the test is independent of
+        whether a real ``agy`` binary is installed."""
         from datetime import datetime, timezone
 
         from mobaide.core.models import (
@@ -451,82 +455,90 @@ class TestCreateSessionGemini:
             "/api/sessions",
             headers=auth_headers,
             json={
-                "cli": "gemini",
-                "gemini_options": {"model": "flash", "approval_mode": "plan"},
+                "cli": "antigravity",
+                "antigravity_options": {
+                    "model": "Gemini 3.1 Pro (Low)",
+                    "sandbox": True,
+                    "add_dirs": ["/extra/dir"],
+                },
             },
         )
 
         assert resp.status_code == 201
-        assert resp.json()["kind"] == "gemini"
+        assert resp.json()["kind"] == "antigravity"
 
         cfg = captured["config"]
-        assert cfg.kind is SessionKind.GEMINI
+        assert cfg.kind is SessionKind.ANTIGRAVITY
         assert cfg.claude_options is None
         assert cfg.codex_options is None
-        assert cfg.gemini_options is not None
-        assert cfg.gemini_options.model == "flash"
-        assert cfg.gemini_options.approval_mode == "plan"
+        assert cfg.antigravity_options is not None
+        assert cfg.antigravity_options.model == "Gemini 3.1 Pro (Low)"
+        assert cfg.antigravity_options.sandbox is True
+        assert cfg.antigravity_options.add_dirs == ("/extra/dir",)
 
-    async def test_invalid_gemini_options_returns_422(self, client, auth_headers):
-        """An out-of-range enum value is rejected at the Pydantic boundary."""
-        resp = await client.post(
-            "/api/sessions",
-            headers=auth_headers,
-            json={"cli": "gemini", "gemini_options": {"approval_mode": "nope"}},
-        )
-        assert resp.status_code == 422
-
-    async def test_gemini_cli_missing_returns_503_with_clean_detail(
+    async def test_skip_permissions_with_sandbox_returns_422(
         self, app, client, auth_headers,
     ):
-        """A missing Gemini binary mirrors the Claude/Codex path: 503 with a
-        detail starting ``Gemini CLI not found:`` and the Gemini-specific install
-        hint."""
-        from mobaide.core import GeminiBinaryNotFoundError
+        """``skip_permissions`` and ``sandbox`` together are rejected by the
+        ``AntigravityOptionsModel`` validator at the FastAPI body boundary —
+        422, and no session is ever created."""
+        captured: dict = {}
 
-        async def _raise_cli_missing(*args, **kwargs):
-            raise GeminiBinaryNotFoundError(searched_paths=["PATH:gemini"])
+        async def _capture(config):
+            captured["config"] = config
 
-        app.state.session_manager.create_session = _raise_cli_missing
+        app.state.session_manager.create_session = _capture
 
         resp = await client.post(
             "/api/sessions",
             headers=auth_headers,
-            json={"cli": "gemini", "gemini_options": {}},
+            json={
+                "cli": "antigravity",
+                "antigravity_options": {
+                    "skip_permissions": True,
+                    "sandbox": True,
+                },
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "mutually exclusive" in resp.text
+        assert not captured
+
+    async def test_antigravity_cli_missing_returns_503_with_clean_detail(
+        self, client, auth_headers, monkeypatch, tmp_path,
+    ):
+        """A missing ``agy`` binary mirrors the Claude/Codex path: 503 with a
+        detail starting ``Antigravity CLI not found:`` and the Antigravity-
+        specific install hint. The resolver seam is re-patched to raise
+        (overriding the autouse ``_pin_antigravity_binary`` pin) so the real
+        spawn path surfaces the error."""
+        from mobaide.core import antigravity_launcher
+
+        def _raise_cli_missing(*_a, **_kw):
+            raise antigravity_launcher.AntigravityBinaryNotFoundError(
+                searched_paths=["PATH:agy"]
+            )
+
+        monkeypatch.setattr(
+            antigravity_launcher, "_resolve_agy_binary", _raise_cli_missing
+        )
+
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "antigravity",
+                "antigravity_options": {},
+                "cwd": str(tmp_path),
+            },
         )
 
         assert resp.status_code == 503
         detail = resp.json()["detail"]
-        assert detail.startswith("Gemini CLI not found:")
-        assert "npm install -g @google/gemini-cli" in detail
-        assert "MOBAIDE_GEMINI_BIN" in detail
-
-    async def test_gemini_unauthenticated_returns_409_with_auth_marker(
-        self, app, client, auth_headers,
-    ):
-        """A Gemini present-but-unauthenticated spawn (``GeminiAuthRequiredError``)
-        is client-actionable: 409 with a dict detail carrying
-        ``gemini_auth_required: true`` so the app tells the operator to
-        authenticate ``gemini`` on the host. 409 (not 401) so the Android
-        AuthInterceptor's refresh-retry-on-401 can't swallow the marker. Distinct
-        from the 503 missing-binary case above (string detail)."""
-        from mobaide.core import GeminiAuthRequiredError
-
-        async def _raise_auth_required(*args, **kwargs):
-            raise GeminiAuthRequiredError()
-
-        app.state.session_manager.create_session = _raise_auth_required
-
-        resp = await client.post(
-            "/api/sessions",
-            headers=auth_headers,
-            json={"cli": "gemini", "gemini_options": {}},
-        )
-
-        assert resp.status_code == 409
-        detail = resp.json()["detail"]
-        assert detail["gemini_auth_required"] is True
-        assert isinstance(detail["detail"], str) and detail["detail"]
+        assert detail.startswith("Antigravity CLI not found:")
+        assert "https://antigravity.google/docs/cli" in detail
+        assert "MOBAIDE_AGY_BIN" in detail
 
 
 class TestCreateSessionAdHoc:

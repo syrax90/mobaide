@@ -80,10 +80,10 @@ from mobaide.agent.autoscan.models import StartScanRequest
 from mobaide.agent.autoscan.stream import run_autoscan_stream
 from mobaide.agent.codex.models import CodexLoginRequest
 from mobaide.agent.sessions.models import (
+    AntigravityOptionsModel,
     ClaudeOptionsModel,
     CodexOptionsModel,
     CreateSessionRequest,
-    GeminiOptionsModel,
 )
 from mobaide.agent.ws.session_list import (
     _serialize_sessions as _list_session_dicts,
@@ -211,6 +211,12 @@ def _scrub_validation_errors(exc: "ValidationError") -> list[dict[str, object]]:
             err.get("input"), _SECRET_VALIDATION_FIELDS
         ):
             cleaned.pop("input", None)
+        ctx = cleaned.get("ctx")
+        if isinstance(ctx, dict):
+            # A model_validator's `raise ValueError(...)` surfaces here as the
+            # raw exception instance under ctx["error"], which json.dumps on
+            # the proxy-response path cannot serialize — stringify every value.
+            cleaned["ctx"] = {k: str(v) for k, v in ctx.items()}
         scrubbed.append(cleaned)
     return scrubbed
 
@@ -948,22 +954,22 @@ class RelayClient:
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
 
-        gemini_options = None
-        raw_gemini_options = ctrl.get("gemini_options")
-        if raw_gemini_options is not None:
+        antigravity_options = None
+        raw_antigravity_options = ctrl.get("antigravity_options")
+        if raw_antigravity_options is not None:
             try:
-                gemini_options = GeminiOptionsModel.model_validate(
-                    raw_gemini_options
+                antigravity_options = AntigravityOptionsModel.model_validate(
+                    raw_antigravity_options
                 ).to_options()
             except ValidationError as exc:
                 logger.warning(
-                    "relay.create_session_invalid_gemini_options session_id=%s: %s",
+                    "relay.create_session_invalid_antigravity_options session_id=%s: %s",
                     session_id, exc,
                 )
                 resp = {
                     "type": "session_create_failed",
                     "session_id": session_id,
-                    "error": f"Invalid gemini_options: {exc}",
+                    "error": f"Invalid antigravity_options: {exc}",
                 }
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
@@ -984,16 +990,21 @@ class RelayClient:
                 }
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
-        kind, spawn_command, spawn_env, claude_options, codex_options, gemini_options = (
-            resolve_spawn_args(
-                ctrl.get("cli"),
-                claude_options,
-                codex_options,
-                gemini_options,
-                ctrl.get("command"),
-                ctrl.get("env"),
-                _DEFAULT_SHELL,
-            )
+        (
+            kind,
+            spawn_command,
+            spawn_env,
+            claude_options,
+            codex_options,
+            antigravity_options,
+        ) = resolve_spawn_args(
+            ctrl.get("cli"),
+            claude_options,
+            codex_options,
+            antigravity_options,
+            ctrl.get("command"),
+            ctrl.get("env"),
+            _DEFAULT_SHELL,
         )
         config = SessionConfig(
             session_id=session_id,
@@ -1005,7 +1016,7 @@ class RelayClient:
             project_name=ctrl_project_name,
             claude_options=claude_options,
             codex_options=codex_options,
-            gemini_options=gemini_options,
+            antigravity_options=antigravity_options,
             worktree=bool(ctrl.get("worktree", False)),
             branch_name=ctrl.get("branch_name"),
             kind=kind,
@@ -1332,21 +1343,26 @@ class RelayClient:
                 if parsed.codex_options is not None
                 else None
             )
-            gemini_options = (
-                parsed.gemini_options.to_options()
-                if parsed.gemini_options is not None
+            antigravity_options = (
+                parsed.antigravity_options.to_options()
+                if parsed.antigravity_options is not None
                 else None
             )
-            kind, spawn_command, spawn_env, claude_options, codex_options, gemini_options = (
-                resolve_spawn_args(
-                    parsed.cli,
-                    claude_options,
-                    codex_options,
-                    gemini_options,
-                    parsed.command,
-                    parsed.env,
-                    _DEFAULT_SHELL,
-                )
+            (
+                kind,
+                spawn_command,
+                spawn_env,
+                claude_options,
+                codex_options,
+                antigravity_options,
+            ) = resolve_spawn_args(
+                parsed.cli,
+                claude_options,
+                codex_options,
+                antigravity_options,
+                parsed.command,
+                parsed.env,
+                _DEFAULT_SHELL,
             )
             config = SessionConfig(
                 session_id=session_id,
@@ -1358,7 +1374,7 @@ class RelayClient:
                 project_name=parsed.project_name,
                 claude_options=claude_options,
                 codex_options=codex_options,
-                gemini_options=gemini_options,
+                antigravity_options=antigravity_options,
                 worktree=parsed.worktree,
                 branch_name=parsed.branch_name,
                 kind=kind,

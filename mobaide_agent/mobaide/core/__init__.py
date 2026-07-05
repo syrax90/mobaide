@@ -1,3 +1,8 @@
+from .antigravity_launcher import (
+    AntigravityBinaryNotFoundError,
+    AntigravityLauncher,
+    AntigravityOptions,
+)
 from .claude_launcher import (
     ClaudeBinaryNotFoundError,
     ClaudeLauncher,
@@ -10,12 +15,6 @@ from .codex_launcher import (
     CodexBinaryNotFoundError,
     CodexLauncher,
     CodexOptions,
-)
-from .gemini_launcher import (
-    GeminiAuthRequiredError,
-    GeminiBinaryNotFoundError,
-    GeminiLauncher,
-    GeminiOptions,
 )
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionKind, SessionState
 from .projects_config import AutoScanFilter, ProjectConfig
@@ -51,10 +50,9 @@ __all__ = [
     "CodexOptions",
     "CodexBinaryNotFoundError",
     "CodexAuthRequiredError",
-    "GeminiLauncher",
-    "GeminiOptions",
-    "GeminiBinaryNotFoundError",
-    "GeminiAuthRequiredError",
+    "AntigravityLauncher",
+    "AntigravityOptions",
+    "AntigravityBinaryNotFoundError",
     "LaunchSpec",
     "AutoScanFilter",
     "ProjectConfig",

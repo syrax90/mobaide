@@ -84,9 +84,9 @@ async def create_session(
         if body.codex_options is not None
         else None
     )
-    gemini_options = (
-        body.gemini_options.to_options()
-        if body.gemini_options is not None
+    antigravity_options = (
+        body.antigravity_options.to_options()
+        if body.antigravity_options is not None
         else None
     )
     # Pre-validate user-supplied custom paths so the error surfaces as a
@@ -95,16 +95,21 @@ async def create_session(
     # stored project is named (server derives cwd from the project).
     if body.project_name is None and body.cwd is not None:
         _validate_adhoc_cwd(body.cwd)
-    kind, spawn_command, spawn_env, claude_options, codex_options, gemini_options = (
-        resolve_spawn_args(
-            body.cli,
-            claude_options,
-            codex_options,
-            gemini_options,
-            body.command,
-            body.env,
-            _DEFAULT_SHELL,
-        )
+    (
+        kind,
+        spawn_command,
+        spawn_env,
+        claude_options,
+        codex_options,
+        antigravity_options,
+    ) = resolve_spawn_args(
+        body.cli,
+        claude_options,
+        codex_options,
+        antigravity_options,
+        body.command,
+        body.env,
+        _DEFAULT_SHELL,
     )
     config = SessionConfig(
         session_id=session_id,
@@ -116,7 +121,7 @@ async def create_session(
         project_name=body.project_name,
         claude_options=claude_options,
         codex_options=codex_options,
-        gemini_options=gemini_options,
+        antigravity_options=antigravity_options,
         worktree=body.worktree,
         branch_name=body.branch_name,
         kind=kind,

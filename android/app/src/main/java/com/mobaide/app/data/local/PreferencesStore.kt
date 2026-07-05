@@ -22,7 +22,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastSession = stringPreferencesKey("last_used_session_id")
     private val keyLastClaudeOptions = stringPreferencesKey("last_used_claude_options")
     private val keyLastCodexOptions = stringPreferencesKey("last_used_codex_options")
-    private val keyLastGeminiOptions = stringPreferencesKey("last_used_gemini_options")
+    private val keyLastAntigravityOptions = stringPreferencesKey("last_used_antigravity_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
 
@@ -105,17 +105,17 @@ class PreferencesStore(private val context: Context) {
         context.dataStore.edit { it[keyLastCodexOptions] = payload }
     }
 
-    suspend fun getLastUsedGeminiOptions(): GeminiLaunchPrefs? {
-        val raw = context.dataStore.data.map { it[keyLastGeminiOptions] }.first()
+    suspend fun getLastUsedAntigravityOptions(): AntigravityLaunchPrefs? {
+        val raw = context.dataStore.data.map { it[keyLastAntigravityOptions] }.first()
             ?: return null
         return runCatching {
-            cacheJson.decodeFromString(GeminiLaunchPrefs.serializer(), raw)
+            cacheJson.decodeFromString(AntigravityLaunchPrefs.serializer(), raw)
         }.getOrNull()
     }
 
-    suspend fun setLastUsedGeminiOptions(prefs: GeminiLaunchPrefs) {
-        val payload = cacheJson.encodeToString(GeminiLaunchPrefs.serializer(), prefs)
-        context.dataStore.edit { it[keyLastGeminiOptions] = payload }
+    suspend fun setLastUsedAntigravityOptions(prefs: AntigravityLaunchPrefs) {
+        val payload = cacheJson.encodeToString(AntigravityLaunchPrefs.serializer(), prefs)
+        context.dataStore.edit { it[keyLastAntigravityOptions] = payload }
     }
 
     suspend fun setTerminalDisplayMode(mode: TerminalDisplayMode) {
