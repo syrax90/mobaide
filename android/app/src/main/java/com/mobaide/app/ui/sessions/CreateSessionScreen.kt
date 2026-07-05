@@ -586,6 +586,11 @@ private fun ModePickerSection(
         headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         supportingColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
     )
+    val disabledReasonList = ListItemDefaults.colors(
+        containerColor = Color.Transparent,
+        headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        supportingColor = MaterialTheme.colorScheme.error,
+    )
 
     ElevatedCard(
         onClick = { if (claudeEnabled) onPickMode(CreateSessionMode.Standard) },
@@ -601,7 +606,7 @@ private fun ModePickerSection(
                     else "Claude CLI is not installed on the agent.",
                 )
             },
-            colors = if (claudeEnabled) enabledList else disabledList,
+            colors = if (claudeEnabled) enabledList else disabledReasonList,
         )
     }
 
@@ -619,7 +624,7 @@ private fun ModePickerSection(
                     else "Codex CLI is not installed on the agent.",
                 )
             },
-            colors = if (codexEnabled) enabledList else disabledList,
+            colors = if (codexEnabled) enabledList else disabledReasonList,
         )
     }
 
@@ -637,7 +642,7 @@ private fun ModePickerSection(
                     else "Gemini CLI is not installed on the agent.",
                 )
             },
-            colors = if (geminiEnabled) enabledList else disabledList,
+            colors = if (geminiEnabled) enabledList else disabledReasonList,
         )
     }
 
@@ -659,7 +664,7 @@ private fun ModePickerSection(
                     },
                 )
             },
-            colors = if (autoScanEnabled) enabledList else disabledList,
+            colors = if (autoScanEnabled) enabledList else disabledReasonList,
         )
     }
 
