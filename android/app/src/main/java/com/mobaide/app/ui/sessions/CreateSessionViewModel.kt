@@ -3,17 +3,18 @@ package com.mobaide.app.ui.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mobaide.app.data.auth.TokenStore
+import com.mobaide.app.data.local.AntigravityLaunchPrefs
 import com.mobaide.app.data.local.ClaudeLaunchPrefs
 import com.mobaide.app.data.local.CodexLaunchPrefs
-import com.mobaide.app.data.local.GeminiLaunchPrefs
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.ApiException
+import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
-import com.mobaide.app.data.network.dto.GeminiOptionsModel
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.cliAvailable
+import com.mobaide.app.data.network.dto.cliModels
 import com.mobaide.app.data.repository.AutoScanRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
@@ -36,9 +37,9 @@ import java.nio.file.InvalidPathException
 import java.nio.file.Paths
 import javax.inject.Inject
 
-enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, GeminiConfig, AutoScanConfig, TerminalConfig }
+enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, AutoScanConfig, TerminalConfig }
 
-enum class CreateSessionMode { Standard, Codex, Gemini, AutoScan, CustomShell }
+enum class CreateSessionMode { Standard, Codex, Antigravity, AutoScan, CustomShell }
 
 /**
  * Convenience autonomy presets that collapse Codex's two-axis sandbox×approval
@@ -47,14 +48,6 @@ enum class CreateSessionMode { Standard, Codex, Gemini, AutoScan, CustomShell }
  * sandbox/approval combination, in which case no preset is highlighted.
  */
 enum class CodexAutonomyPreset { ReadOnly, Auto, FullAccess }
-
-/**
- * Gemini autonomy presets, each a direct 1:1 with a `--approval-mode` value
- * ([Plan]→`plan`, [AutoEdit]→`auto_edit`, [Yolo]→`yolo`). [AutoEdit] is the
- * wizard default; the CLI's raw `default` (fully interactive) mode is
- * deliberately not surfaced.
- */
-enum class GeminiAutonomyPreset { Plan, AutoEdit, Yolo }
 
 /**
  * Active selection on the project picker.
@@ -87,8 +80,14 @@ data class CreateSessionUiState(
     // authoritative backstop.
     val claudeAvailable: Boolean? = null,
     val codexAvailable: Boolean? = null,
-    val geminiAvailable: Boolean? = null,
+    val antigravityAvailable: Boolean? = null,
     val cliAvailabilityLoading: Boolean = false,
+    // Per-CLI model lists from the agent's capabilities (capabilities.cli.<id>
+    // .models), captured alongside the availability flags. null/empty = agent
+    // too old or enumeration unavailable → dropdowns fall back to the hardcoded
+    // companion constants.
+    val codexModels: List<String>? = null,
+    val antigravityModels: List<String>? = null,
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = true,
@@ -105,9 +104,14 @@ data class CreateSessionUiState(
     val codexApproval: String = "on-request",
     val codexFullAuto: Boolean = false,
     val codexReasoningEffort: String = "high",
-    // Gemini launch options (GeminiConfig step). Defaults reflect the "Auto-edit" preset.
-    val geminiModel: String? = null,
-    val geminiApprovalMode: String = "auto_edit",
+    // Antigravity launch options (AntigravityConfig step). The two booleans are
+    // mutually exclusive (server rejects the pair with a 422); the setters
+    // enforce it. addDirsDraft is the raw text of the additional-directories
+    // field, parsed into add_dirs at submit.
+    val antigravityModel: String? = null,
+    val antigravitySkipPermissions: Boolean = false,
+    val antigravitySandbox: Boolean = false,
+    val antigravityAddDirsDraft: String = "",
     val initialPrompt: String = "",
     val worktree: Boolean = false,
     val branchName: String = "",
@@ -150,19 +154,6 @@ val CreateSessionUiState.codexPreset: CodexAutonomyPreset?
         else -> null
     }
 
-/**
- * The autonomy preset reflected by the raw Gemini `approval_mode` field. Maps
- * 1:1 onto the three surfaced presets; `null` only for the CLI's raw `default`
- * mode, which the wizard never sets (it seeds `auto_edit`).
- */
-val CreateSessionUiState.geminiPreset: GeminiAutonomyPreset?
-    get() = when (geminiApprovalMode) {
-        "plan" -> GeminiAutonomyPreset.Plan
-        "auto_edit" -> GeminiAutonomyPreset.AutoEdit
-        "yolo" -> GeminiAutonomyPreset.Yolo
-        else -> null
-    }
-
 /** Snapshot of the Claude reasoning controls for persistence / re-defaulting. */
 private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     model = claudeModel,
@@ -181,10 +172,11 @@ private fun CreateSessionUiState.toCodexLaunchPrefs() = CodexLaunchPrefs(
     reasoningEffort = codexReasoningEffort,
 )
 
-/** Snapshot of the Gemini launch controls for persistence / re-defaulting. */
-private fun CreateSessionUiState.toGeminiLaunchPrefs() = GeminiLaunchPrefs(
-    model = geminiModel,
-    approvalMode = geminiApprovalMode,
+/** Snapshot of the Antigravity launch controls for persistence / re-defaulting. */
+private fun CreateSessionUiState.toAntigravityLaunchPrefs() = AntigravityLaunchPrefs(
+    model = antigravityModel,
+    skipPermissions = antigravitySkipPermissions,
+    sandbox = antigravitySandbox,
 )
 
 /**
@@ -194,7 +186,7 @@ private fun CreateSessionUiState.toGeminiLaunchPrefs() = GeminiLaunchPrefs(
  */
 val CreateSessionUiState.claudeEnabled: Boolean get() = claudeAvailable != false
 val CreateSessionUiState.codexEnabled: Boolean get() = codexAvailable != false
-val CreateSessionUiState.geminiEnabled: Boolean get() = geminiAvailable != false
+val CreateSessionUiState.antigravityEnabled: Boolean get() = antigravityAvailable != false
 
 @HiltViewModel
 class CreateSessionViewModel @Inject constructor(
@@ -245,13 +237,13 @@ class CreateSessionViewModel @Inject constructor(
                     )
                 }
             }
-            // Same pre-fill for the Gemini launch controls (approval_mode restores
-            // the autonomy preset highlight via geminiPreset).
-            preferencesStore.getLastUsedGeminiOptions()?.let { saved ->
+            // Same pre-fill for the Antigravity launch controls.
+            preferencesStore.getLastUsedAntigravityOptions()?.let { saved ->
                 _uiState.update {
                     it.copy(
-                        geminiModel = saved.model,
-                        geminiApprovalMode = saved.approvalMode,
+                        antigravityModel = saved.model,
+                        antigravitySkipPermissions = saved.skipPermissions,
+                        antigravitySandbox = saved.sandbox && !saved.skipPermissions,
                     )
                 }
             }
@@ -387,15 +379,21 @@ class CreateSessionViewModel @Inject constructor(
      * CLI that slips through still falls back to the create-time 503 handling.
      */
     fun refreshCliAvailability() {
+        // In-flight dedup: set the flag before launch so the guard holds even
+        // when the coroutine body is queued (StandardTestDispatcher) — same
+        // discipline as TerminalViewModel.refreshTemplates().
+        if (_uiState.value.cliAvailabilityLoading) return
+        _uiState.update { it.copy(cliAvailabilityLoading = true) }
         viewModelScope.launch {
-            _uiState.update { it.copy(cliAvailabilityLoading = true) }
             try {
                 val version = sessionRepository.getAgentVersion()
                 _uiState.update {
                     it.copy(
                         claudeAvailable = version.cliAvailable("claude"),
                         codexAvailable = version.cliAvailable("codex"),
-                        geminiAvailable = version.cliAvailable("gemini"),
+                        antigravityAvailable = version.cliAvailable("antigravity"),
+                        codexModels = version.cliModels("codex"),
+                        antigravityModels = version.cliModels("antigravity"),
                         cliAvailabilityLoading = false,
                     )
                 }
@@ -417,8 +415,8 @@ class CreateSessionViewModel @Inject constructor(
         if (it.codexEnabled) it.copy(step = CreateSessionStep.CodexConfig) else it
     }
 
-    fun selectGeminiMode() = _uiState.update {
-        if (it.geminiEnabled) it.copy(step = CreateSessionStep.GeminiConfig) else it
+    fun selectAntigravityMode() = _uiState.update {
+        if (it.antigravityEnabled) it.copy(step = CreateSessionStep.AntigravityConfig) else it
     }
 
     /**
@@ -500,7 +498,7 @@ class CreateSessionViewModel @Inject constructor(
         when (it.step) {
             CreateSessionStep.StandardConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.CodexConfig -> it.copy(step = CreateSessionStep.ModePick)
-            CreateSessionStep.GeminiConfig -> it.copy(step = CreateSessionStep.ModePick)
+            CreateSessionStep.AntigravityConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.AutoScanConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.TerminalConfig -> it.copy(step = CreateSessionStep.ModePick)
             CreateSessionStep.ModePick -> it.copy(
@@ -554,16 +552,26 @@ class CreateSessionViewModel @Inject constructor(
     fun setCodexSandbox(v: String) = _uiState.update { it.copy(codexSandbox = v) }
     fun setCodexApproval(v: String) = _uiState.update { it.copy(codexApproval = v) }
 
-    /** Sets the Gemini `approval_mode` from a one-tap autonomy preset. */
-    fun selectGeminiPreset(preset: GeminiAutonomyPreset) = _uiState.update {
-        when (preset) {
-            GeminiAutonomyPreset.Plan -> it.copy(geminiApprovalMode = "plan")
-            GeminiAutonomyPreset.AutoEdit -> it.copy(geminiApprovalMode = "auto_edit")
-            GeminiAutonomyPreset.Yolo -> it.copy(geminiApprovalMode = "yolo")
-        }
+    fun setAntigravityModel(v: String?) = _uiState.update { it.copy(antigravityModel = v) }
+
+    fun setAntigravityAddDirsDraft(v: String) =
+        _uiState.update { it.copy(antigravityAddDirsDraft = v) }
+
+    /**
+     * Skip-permissions and Sandbox are mutually exclusive (the pair enables a
+     * sandbox escape; the server rejects it with a 422), so enabling either
+     * force-disables the other — same state-mutating-toggle precedent as
+     * [toggleClaudeFastMode].
+     */
+    fun setAntigravitySkipPermissions(v: Boolean) = _uiState.update {
+        if (v) it.copy(antigravitySkipPermissions = true, antigravitySandbox = false)
+        else it.copy(antigravitySkipPermissions = false)
     }
 
-    fun setGeminiModel(v: String?) = _uiState.update { it.copy(geminiModel = v) }
+    fun setAntigravitySandbox(v: Boolean) = _uiState.update {
+        if (v) it.copy(antigravitySandbox = true, antigravitySkipPermissions = false)
+        else it.copy(antigravitySandbox = false)
+    }
 
     fun consumeDismiss() = _uiState.update { it.copy(dismiss = false) }
 
@@ -641,12 +649,14 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun submitGemini() {
+    fun submitAntigravity() {
         val state = _uiState.value
         if (state.submitting) return
-        val geminiOptions = GeminiOptionsModel(
-            model = state.geminiModel?.takeIf { it.isNotBlank() },
-            approval_mode = state.geminiApprovalMode,
+        val antigravityOptions = AntigravityOptionsModel(
+            model = state.antigravityModel?.takeIf { it.isNotBlank() },
+            skip_permissions = state.antigravitySkipPermissions,
+            sandbox = state.antigravitySandbox,
+            add_dirs = parseAddDirs(state.antigravityAddDirsDraft),
             worktree = state.worktree,
             branch_name = state.branchName.takeIf { it.isNotBlank() },
         )
@@ -655,8 +665,8 @@ class CreateSessionViewModel @Inject constructor(
                 selection = sel,
                 request = CreateSessionRequest(
                     project_name = sel.name,
-                    cli = "gemini",
-                    gemini_options = geminiOptions,
+                    cli = "antigravity",
+                    antigravity_options = antigravityOptions,
                 ),
             )
             is ProjectSelection.CustomPath -> {
@@ -666,8 +676,8 @@ class CreateSessionViewModel @Inject constructor(
                     request = CreateSessionRequest(
                         project_name = null,
                         cwd = sel.path,
-                        cli = "gemini",
-                        gemini_options = geminiOptions.copy(worktree = false, branch_name = null),
+                        cli = "antigravity",
+                        antigravity_options = antigravityOptions.copy(worktree = false, branch_name = null),
                     ),
                 )
             }
@@ -777,16 +787,16 @@ class CreateSessionViewModel @Inject constructor(
                 // Remember the per-CLI launch controls for the next session of
                 // the same kind. The request shape selects which blob to write:
                 // Claude submits carry claude_options, Codex submits carry
-                // codex_options, Gemini submits carry gemini_options, shell
-                // submits carry none.
+                // codex_options, Antigravity submits carry antigravity_options,
+                // shell submits carry none.
                 if (request.claude_options != null) {
                     preferencesStore.setLastUsedClaudeOptions(_uiState.value.toClaudeLaunchPrefs())
                 }
                 if (request.codex_options != null) {
                     preferencesStore.setLastUsedCodexOptions(_uiState.value.toCodexLaunchPrefs())
                 }
-                if (request.gemini_options != null) {
-                    preferencesStore.setLastUsedGeminiOptions(_uiState.value.toGeminiLaunchPrefs())
+                if (request.antigravity_options != null) {
+                    preferencesStore.setLastUsedAntigravityOptions(_uiState.value.toAntigravityLaunchPrefs())
                 }
                 preferencesStore.setLastUsedSessionId(response.session_id)
                 _uiState.update { it.copy(submitting = false) }
@@ -800,17 +810,6 @@ class CreateSessionViewModel @Inject constructor(
                     // can't swallow the marker before we read it.
                     _uiState.update {
                         it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
-                    }
-                } else if (e is ApiException && isGeminiAuthRequired(e.errorBody)) {
-                    // Gemini is installed but not signed in. Unlike Codex, its auth is
-                    // browser/OAuth on the host (no in-app key entry yet), so surface a
-                    // host-side instruction instead of an API-key dialog.
-                    _uiState.update {
-                        it.copy(
-                            submitting = false,
-                            error = "Gemini isn't signed in on this agent. " +
-                                "Authenticate the Gemini CLI on the agent host, then try again.",
-                        )
                     }
                 } else {
                     _uiState.update {
@@ -834,20 +833,9 @@ class CreateSessionViewModel @Inject constructor(
     private fun JsonObject.hasCodexAuthMarker(): Boolean =
         this["codex_auth_required"]?.jsonPrimitive?.booleanOrNull == true
 
-    /**
-     * True when an error body carries the `gemini_auth_required` marker (Gemini
-     * installed but unauthenticated). Same dual shape as [isCodexAuthRequired] —
-     * top-level on the relay path, nested under `detail` on direct REST. There is
-     * no in-app sign-in for Gemini yet (browser/OAuth on the host), so callers show
-     * a host-side instruction rather than opening a login dialog.
-     */
-    private fun isGeminiAuthRequired(body: String): Boolean = runCatching {
-        val obj = Json.parseToJsonElement(body).jsonObject
-        obj.hasGeminiAuthMarker() || (obj["detail"] as? JsonObject)?.hasGeminiAuthMarker() == true
-    }.getOrDefault(false)
-
-    private fun JsonObject.hasGeminiAuthMarker(): Boolean =
-        this["gemini_auth_required"]?.jsonPrimitive?.booleanOrNull == true
+    /** Splits the additional-directories draft on newlines/commas into a clean list. */
+    private fun parseAddDirs(draft: String): List<String> =
+        draft.split('\n', ',').map { it.trim() }.filter { it.isNotEmpty() }
 
     /** Login-failure text that never echoes the submitted key (the agent already
      *  sanitizes its `detail`). */
@@ -879,22 +867,36 @@ class CreateSessionViewModel @Inject constructor(
         private val WINDOWS_ABS_REGEX = Regex("^[A-Za-z]:[\\\\/]")
 
         /**
-         * Curated Codex model quick-picks for the wizard dropdown. The server's
-         * `model` field is free-form, so "Default" (a null model, Codex's account
-         * default) is always offered alongside these and the list is trivially
-         * extended. Current as of 2026-06.
+         * Fallback Codex model quick-picks for the wizard dropdown, used when the
+         * agent's dynamic `capabilities.cli.codex.models` list is absent/empty
+         * (older agent). Matches the agent's own enumeration fallback. The
+         * server's `model` field is free-form, so "Default" (a null model,
+         * Codex's account default) is always offered alongside these. Current as
+         * of 2026-07.
          */
-        val CODEX_MODELS = listOf("gpt-5.5", "gpt-5.4-mini")
+        val CODEX_MODELS = listOf("gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark")
 
         /** Codex reasoning-effort levels, low→high; "high" is the wizard default. */
         val REASONING_EFFORTS = listOf("minimal", "low", "medium", "high")
 
         /**
-         * Curated Gemini model quick-picks for the wizard dropdown. The server's
-         * `model` field is free-form, so "Auto" (a null model — the CLI picks
-         * its own default) is always offered alongside these. Current as of 2026-06.
+         * Fallback Antigravity model quick-picks for the wizard dropdown, used
+         * when the agent's dynamic `capabilities.cli.antigravity.models` list is
+         * absent/empty (older agent or failed `agy models` probe). Entries are
+         * the full display names `agy models` prints — passed verbatim to
+         * `--model`. "Auto" (a null model — the CLI picks its own default) is
+         * always offered alongside these. Current as of 2026-07.
          */
-        val GEMINI_MODELS = listOf("pro", "flash", "flash-lite")
+        val ANTIGRAVITY_MODELS = listOf(
+            "Gemini 3.5 Flash (Medium)",
+            "Gemini 3.5 Flash (High)",
+            "Gemini 3.5 Flash (Low)",
+            "Gemini 3.1 Pro (Low)",
+            "Gemini 3.1 Pro (High)",
+            "Claude Sonnet 4.6 (Thinking)",
+            "Claude Opus 4.6 (Thinking)",
+            "GPT-OSS 120B (Medium)",
+        )
 
         /**
          * Curated Claude model aliases for the wizard dropdown. Aliases (not full

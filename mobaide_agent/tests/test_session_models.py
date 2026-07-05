@@ -169,7 +169,7 @@ class TestSessionToWireDictKind:
         [
             ("CLAUDE", "claude"),
             ("CODEX", "codex"),
-            ("GEMINI", "gemini"),
+            ("ANTIGRAVITY", "antigravity"),
             ("AUTO_SCAN", "auto_scan"),
             ("SHELL", "shell"),
         ],
@@ -397,26 +397,92 @@ class TestCodexToOptions:
                 CodexOptionsModel.model_validate(bad)
 
 
-class TestGeminiOptionsModel:
-    """``GeminiOptionsModel`` keeps ``model`` free-form (like the Claude/Codex
-    DTOs) but constrains ``approval_mode`` to the CLI's four modes."""
+class TestAntigravityOptionsModel:
+    """``AntigravityOptionsModel`` keeps ``model`` free-form (like the
+    Claude/Codex DTOs) — it carries the full display name ``agy models`` prints
+    — and rejects the ``skip_permissions``+``sandbox`` pair at the wire boundary
+    (skip-permissions auto-approves ``bypassSandbox`` actions)."""
 
-    def test_accepts_preset_alias_and_full_model_id(self):
-        from mobaide.agent.sessions.models import GeminiOptionsModel
+    def test_accepts_full_display_name_verbatim(self):
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
 
-        assert GeminiOptionsModel(model="flash").to_options().model == "flash"
-        # A concrete model id (not one of the four aliases) is accepted, not 422:
-        # the launcher forwards ``--model`` verbatim and the real CLI takes ids.
-        full = GeminiOptionsModel(model="gemini-2.5-pro").to_options()
-        assert full.model == "gemini-2.5-pro"
+        # Spaces and parens included — the launcher forwards ``--model``
+        # verbatim as a single argv element, so nothing is normalised here.
+        opts = AntigravityOptionsModel(model="Gemini 3.1 Pro (Low)").to_options()
+        assert opts.model == "Gemini 3.1 Pro (Low)"
 
-    def test_rejects_invalid_approval_mode(self):
+    def test_defaults_match_dataclass_defaults(self):
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
+        from mobaide.core.antigravity_launcher import AntigravityOptions
+
+        opts = AntigravityOptionsModel().to_options()
+
+        assert isinstance(opts, AntigravityOptions)
+        assert opts.model is None
+        assert opts.skip_permissions is False
+        assert opts.sandbox is False
+        assert opts.add_dirs == ()
+        assert opts.worktree is False
+        assert opts.branch_name is None
+
+    def test_rejects_skip_permissions_with_sandbox(self):
         import pydantic
 
-        from mobaide.agent.sessions.models import GeminiOptionsModel
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
 
         with pytest.raises(pydantic.ValidationError):
-            GeminiOptionsModel.model_validate({"approval_mode": "nope"})
+            AntigravityOptionsModel(skip_permissions=True, sandbox=True)
+
+    def test_each_flag_alone_is_accepted(self):
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
+
+        assert (
+            AntigravityOptionsModel(skip_permissions=True).skip_permissions is True
+        )
+        assert AntigravityOptionsModel(sandbox=True).sandbox is True
+
+    def test_to_options_converts_add_dirs_list_to_tuple(self):
+        # The wire DTO carries ``add_dirs`` as a JSON list; the frozen
+        # dataclass wants an immutable tuple — ``to_options`` must convert or
+        # ``AntigravityOptions(**data)`` would smuggle a mutable list into a
+        # frozen instance.
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
+
+        opts = AntigravityOptionsModel(add_dirs=["/a", "/b"]).to_options()
+        assert opts.add_dirs == ("/a", "/b")
+        assert isinstance(opts.add_dirs, tuple)
+
+    def test_rejects_flag_shaped_add_dirs(self):
+        # Guards the mutual-exclusion check: a flag-shaped add_dirs entry could
+        # otherwise smuggle ``--dangerously-skip-permissions`` into argv while
+        # ``sandbox=True`` passed the pair check.
+        import pydantic
+
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
+
+        with pytest.raises(pydantic.ValidationError):
+            AntigravityOptionsModel(
+                sandbox=True, add_dirs=["--dangerously-skip-permissions"]
+            )
+
+    def test_rejects_flag_shaped_model(self):
+        import pydantic
+
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
+
+        with pytest.raises(pydantic.ValidationError):
+            AntigravityOptionsModel(model="--sandbox")
+
+    def test_accepts_ordinary_paths_and_names(self):
+        # The flag guard must not reject legitimate values: model display names
+        # start with a letter, directories with ``/`` (or a drive letter).
+        from mobaide.agent.sessions.models import AntigravityOptionsModel
+
+        opts = AntigravityOptionsModel(
+            model="Gemini 3.1 Pro (Low)", add_dirs=["/srv/x", "C:/y"]
+        ).to_options()
+        assert opts.model == "Gemini 3.1 Pro (Low)"
+        assert opts.add_dirs == ("/srv/x", "C:/y")
 
 
 class TestResolveSpawnArgs:
@@ -427,98 +493,132 @@ class TestResolveSpawnArgs:
 
     _SHELL = ["/bin/sh"]
 
-    def _call(self, cli=None, claude=None, codex=None, gemini=None, cmd=None, env=None):
+    def _call(
+        self, cli=None, claude=None, codex=None, antigravity=None, cmd=None, env=None,
+    ):
         from mobaide.core.models import resolve_spawn_args
 
-        return resolve_spawn_args(cli, claude, codex, gemini, cmd, env, self._SHELL)
+        return resolve_spawn_args(
+            cli, claude, codex, antigravity, cmd, env, self._SHELL,
+        )
 
     def test_no_cli_no_options_is_shell_with_clean_env(self):
         from mobaide.core.models import SessionKind
 
-        kind, command, env, claude, codex, gemini = self._call(
+        kind, command, env, claude, codex, antigravity = self._call(
             cmd=["rm", "-rf"], env={"EVIL": "1"},
         )
         # Security guard: client command/env hints are dropped for shell.
         assert kind is SessionKind.SHELL
         assert command == self._SHELL
         assert env is None
-        assert claude is None and codex is None and gemini is None
+        assert claude is None and codex is None and antigravity is None
 
     def test_claude_options_only_infers_claude(self):
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.models import SessionKind
 
-        kind, command, env, claude, codex, gemini = self._call(
+        kind, command, env, claude, codex, antigravity = self._call(
             claude=ClaudeOptions(), cmd=["claude"], env={"X": "1"},
         )
         assert kind is SessionKind.CLAUDE
         assert command == ["claude"] and env == {"X": "1"}
-        assert isinstance(claude, ClaudeOptions) and codex is None and gemini is None
+        assert (
+            isinstance(claude, ClaudeOptions)
+            and codex is None
+            and antigravity is None
+        )
 
     def test_codex_options_only_infers_codex(self):
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, gemini = self._call(codex=CodexOptions())
+        kind, _command, _env, claude, codex, antigravity = self._call(
+            codex=CodexOptions(),
+        )
         assert kind is SessionKind.CODEX
-        assert isinstance(codex, CodexOptions) and claude is None and gemini is None
+        assert (
+            isinstance(codex, CodexOptions)
+            and claude is None
+            and antigravity is None
+        )
 
-    def test_gemini_options_only_infers_gemini(self):
-        from mobaide.core.gemini_launcher import GeminiOptions
+    def test_antigravity_options_only_infers_antigravity(self):
+        from mobaide.core.antigravity_launcher import AntigravityOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, gemini = self._call(gemini=GeminiOptions())
-        assert kind is SessionKind.GEMINI
-        assert isinstance(gemini, GeminiOptions) and claude is None and codex is None
+        kind, _command, _env, claude, codex, antigravity = self._call(
+            antigravity=AntigravityOptions(),
+        )
+        assert kind is SessionKind.ANTIGRAVITY
+        assert (
+            isinstance(antigravity, AntigravityOptions)
+            and claude is None
+            and codex is None
+        )
 
     def test_explicit_cli_codex_defaults_options_when_omitted(self):
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, gemini = self._call(cli="codex")
+        kind, _command, _env, claude, codex, antigravity = self._call(cli="codex")
         assert kind is SessionKind.CODEX
-        assert isinstance(codex, CodexOptions) and claude is None and gemini is None
+        assert (
+            isinstance(codex, CodexOptions)
+            and claude is None
+            and antigravity is None
+        )
 
-    def test_explicit_cli_gemini_defaults_options_when_omitted(self):
-        from mobaide.core.gemini_launcher import GeminiOptions
+    def test_explicit_cli_antigravity_defaults_options_when_omitted(self):
+        from mobaide.core.antigravity_launcher import AntigravityOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, gemini = self._call(cli="gemini")
-        assert kind is SessionKind.GEMINI
-        assert isinstance(gemini, GeminiOptions) and claude is None and codex is None
+        kind, _command, _env, claude, codex, antigravity = self._call(
+            cli="antigravity",
+        )
+        assert kind is SessionKind.ANTIGRAVITY
+        assert (
+            isinstance(antigravity, AntigravityOptions)
+            and claude is None
+            and codex is None
+        )
 
     def test_explicit_cli_claude_defaults_options_when_omitted(self):
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, gemini = self._call(cli="claude")
+        kind, _command, _env, claude, codex, antigravity = self._call(cli="claude")
         assert kind is SessionKind.CLAUDE
-        assert isinstance(claude, ClaudeOptions) and codex is None and gemini is None
+        assert (
+            isinstance(claude, ClaudeOptions)
+            and codex is None
+            and antigravity is None
+        )
 
     def test_explicit_cli_codex_clears_stray_claude_options(self):
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.codex_launcher import CodexOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, gemini = self._call(
+        kind, _command, _env, claude, codex, antigravity = self._call(
             cli="codex", claude=ClaudeOptions(), codex=CodexOptions(),
         )
         # Exactly one options object survives, matching the chosen kind.
         assert kind is SessionKind.CODEX
-        assert codex is not None and claude is None and gemini is None
+        assert codex is not None and claude is None and antigravity is None
 
-    def test_explicit_cli_gemini_clears_stray_options(self):
+    def test_explicit_cli_antigravity_clears_stray_options(self):
+        from mobaide.core.antigravity_launcher import AntigravityOptions
         from mobaide.core.claude_launcher import ClaudeOptions
         from mobaide.core.codex_launcher import CodexOptions
-        from mobaide.core.gemini_launcher import GeminiOptions
         from mobaide.core.models import SessionKind
 
-        kind, _command, _env, claude, codex, gemini = self._call(
-            cli="gemini",
+        kind, _command, _env, claude, codex, antigravity = self._call(
+            cli="antigravity",
             claude=ClaudeOptions(),
             codex=CodexOptions(),
-            gemini=GeminiOptions(),
+            antigravity=AntigravityOptions(),
         )
         # Exactly one options object survives, matching the chosen kind.
-        assert kind is SessionKind.GEMINI
-        assert gemini is not None and claude is None and codex is None
+        assert kind is SessionKind.ANTIGRAVITY
+        assert antigravity is not None and claude is None and codex is None

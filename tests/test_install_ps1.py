@@ -3515,8 +3515,9 @@ def test_write_agent_env_invokes_set_env_for_codex_reinstall_backfill() -> None:
 
 def test_write_agent_env_reinstall_backfills_are_independent_no_early_return() -> None:
     """``Write-AgentEnv``'s re-install section must NOT short-circuit with
-    an early ``return`` before the Codex or Gemini backfill — the Claude,
-    Codex, and Gemini backfills must be independent sibling ``if`` blocks.
+    an early ``return`` before the Codex or Antigravity backfill — the
+    Claude, Codex, and Antigravity backfills must be independent sibling
+    ``if`` blocks.
 
     This pins the one load-bearing control-flow change this introduces to
     *existing* Claude code. The re-install path previously opened with::
@@ -3540,8 +3541,8 @@ def test_write_agent_env_reinstall_backfills_are_independent_no_early_return() -
 
     Strategy: the entire re-install section lives after the
     ``"Existing ... preserved (re-install)."`` log line and consists of
-    three guard-only ``if`` blocks (Claude / Codex / Gemini; no loops, no
-    nested functions, no other early exits). A bare ``return`` anywhere in
+    three guard-only ``if`` blocks (Claude / Codex / Antigravity; no loops,
+    no nested functions, no other early exits). A bare ``return`` anywhere in
     that comment-stripped slice is therefore the regression. The
     fresh-install ``return`` (the
     ``if (-not $envExists) { ... return }`` arm) sits *above* the marker
@@ -3570,15 +3571,15 @@ def test_write_agent_env_reinstall_backfills_are_independent_no_early_return() -
         "the MOBAIDE_CODEX_BIN backfill; not found. Section:\n"
         + repr(reinstall_section)
     )
-    assert "MOBAIDE_GEMINI_BIN" in reinstall_section, (
+    assert "MOBAIDE_AGY_BIN" in reinstall_section, (
         "The re-install section (after the 'preserved' marker) must contain "
-        "the MOBAIDE_GEMINI_BIN backfill; not found. Section:\n"
+        "the MOBAIDE_AGY_BIN backfill; not found. Section:\n"
         + repr(reinstall_section)
     )
     early_return = re.search(r"\breturn\b", reinstall_section)
     assert early_return is None, (
         "Write-AgentEnv's re-install section must NOT contain an early "
-        "`return` — it makes the Claude, Codex, and Gemini backfills "
+        "`return` — it makes the Claude, Codex, and Antigravity backfills "
         "independent sibling `if` blocks. A `return` here (e.g. a re-introduced "
         "`if (-not $claudeBin) { return }`) short-circuits before the Codex "
         "backfill, silently re-breaking codex auto-detection on hosts where "
@@ -3614,87 +3615,90 @@ def test_write_agent_env_prefers_codex_hint_then_falls_back_to_find() -> None:
     )
 
 
-# Find-GeminiBinary / MOBAIDE_AGENT_GEMINI_BIN_HINT / Write-AgentEnv pins
+# Find-AgyBinary / MOBAIDE_AGENT_AGY_BIN_HINT / Write-AgentEnv pins
 #
-# Mirror the claude.cmd / codex.cmd auto-detection for the optional Gemini
-# CLI (the third managed agent). The installer must discover the user's
-# gemini path BEFORE the UAC relaunch (under the originating user's env),
-# carry it across the boundary via the ``MOBAIDE_AGENT_GEMINI_BIN_HINT``
-# passthrough, and write it into ``<prefix>\mobaide_agent\.env`` as
-# ``MOBAIDE_GEMINI_BIN`` using either ``init-env --gemini-bin`` (fresh
-# install) or ``set-env --key MOBAIDE_GEMINI_BIN`` (re-install backfill).
-# These are the Gemini analogue of the Find-CodexBinary pins above; each
-# leg is the difference between the agent resolving gemini on a
-# non-standard PATH and failing silently at Gemini-session-create time.
+# Mirror the claude.cmd / codex.cmd auto-detection for the optional
+# Antigravity CLI (``agy``, the third managed agent). The installer must
+# discover the user's agy path BEFORE the UAC relaunch (under the
+# originating user's env), carry it across the boundary via the
+# ``MOBAIDE_AGENT_AGY_BIN_HINT`` passthrough, and write it into
+# ``<prefix>\mobaide_agent\.env`` as ``MOBAIDE_AGY_BIN`` using either
+# ``init-env --agy-bin`` (fresh install) or ``set-env --key
+# MOBAIDE_AGY_BIN`` (re-install backfill). These are the Antigravity
+# analogue of the Find-CodexBinary pins above; each leg is the difference
+# between the agent resolving agy on a non-standard PATH and failing
+# silently at Antigravity-session-create time.
 
 
-def test_find_gemini_binary_is_defined() -> None:
-    """The ``Find-GeminiBinary`` helper must exist as a real function.
+def test_find_agy_binary_is_defined() -> None:
+    """The ``Find-AgyBinary`` helper must exist as a real function.
 
     Called by both ``Assert-AdminOrElevate`` (pre-UAC discovery) and
     ``Write-AgentEnv`` (post-UAC fallback), exactly like
     ``Find-ClaudeBinary`` / ``Find-CodexBinary``. If it is renamed or
-    deleted, both callsites silently lose gemini auto-detection on hosts
-    where gemini is installed outside the runtime PATH.
+    deleted, both callsites silently lose agy auto-detection on hosts
+    where agy is installed outside the runtime PATH.
     """
     funcs = _list_function_names()
-    assert "Find-GeminiBinary" in funcs, (
-        f"expected function 'Find-GeminiBinary' in {_DEPLOY_INSTALL_PS1}; "
+    assert "Find-AgyBinary" in funcs, (
+        f"expected function 'Find-AgyBinary' in {_DEPLOY_INSTALL_PS1}; "
         f"found functions: {funcs!r}."
     )
 
 
-def test_find_gemini_binary_probes_appdata_npm() -> None:
-    """``Find-GeminiBinary`` must probe ``%APPDATA%\\npm\\gemini.cmd``.
+def test_find_agy_binary_probes_userprofile_local_bin() -> None:
+    """``Find-AgyBinary`` must probe ``%USERPROFILE%\\.local\\bin\\agy.exe``.
 
-    Gemini ships as the npm-global package ``@google/gemini-cli``, so its
-    default landing site is the same ``%APPDATA%\\npm`` prefix Claude and
-    Codex use. A regression to a PATH-only check re-opens the resolve gap
-    on relocated-npm / chocolatey hosts.
+    Unlike Claude/Codex, agy is a standalone binary (not an npm-global
+    package): its installer lands it in ``%USERPROFILE%\\.local\\bin``, so
+    the PATH-miss fallbacks probe that directory instead of the npm dirs.
+    A regression to a PATH-only check (or a copy-paste of the npm probes)
+    re-opens the resolve gap on hosts where ``.local\\bin`` is not on the
+    runtime PATH.
     """
-    body = _function_body_text("Find-GeminiBinary")
-    assert "APPDATA" in body, (
-        "Find-GeminiBinary must read $env:APPDATA to probe the user's "
-        "npm prefix; not found in body:\n" + repr(body)
+    body = _function_body_text("Find-AgyBinary")
+    assert "USERPROFILE" in body, (
+        "Find-AgyBinary must read $env:USERPROFILE to probe the user's "
+        "standalone-install prefix; not found in body:\n" + repr(body)
     )
-    assert "npm" in body and "gemini.cmd" in body, (
-        "Find-GeminiBinary must reference both 'npm' and 'gemini.cmd' "
-        "(default Windows install path: %APPDATA%\\npm\\gemini.cmd). "
+    assert ".local\\bin" in body and "agy.exe" in body, (
+        "Find-AgyBinary must reference both '.local\\bin' and 'agy.exe' "
+        "(default Windows install path: %USERPROFILE%\\.local\\bin\\agy.exe). "
         "Body:\n" + repr(body)
     )
 
 
-def test_find_gemini_binary_skips_windowsapps_stub() -> None:
-    """``Find-GeminiBinary`` must filter out the WindowsApps reparse stub.
+def test_find_agy_binary_skips_windowsapps_stub() -> None:
+    """``Find-AgyBinary`` must filter out the WindowsApps reparse stub.
 
     Mirrors the same guard ``Find-ClaudeBinary`` / ``Find-CodexBinary`` /
     ``Find-Python`` apply: the App Execution Alias under ``WindowsApps`` is
-    a reparse-point trampoline that never runs a real gemini binary.
+    a reparse-point trampoline that never runs a real agy binary.
     """
-    body = _function_body_text("Find-GeminiBinary")
+    body = _function_body_text("Find-AgyBinary")
     assert "WindowsApps" in body, (
-        "Find-GeminiBinary must filter out the WindowsApps App Execution "
+        "Find-AgyBinary must filter out the WindowsApps App Execution "
         "Alias stub (same protection as Find-CodexBinary); not found in "
         "body:\n" + repr(body)
     )
 
 
-def test_assert_admin_or_elevate_captures_gemini_bin_pre_uac() -> None:
-    """``Assert-AdminOrElevate`` must call ``Find-GeminiBinary`` BEFORE
+def test_assert_admin_or_elevate_captures_agy_bin_pre_uac() -> None:
+    """``Assert-AdminOrElevate`` must call ``Find-AgyBinary`` BEFORE
     starting the elevated child, so the lookup runs under the originating
-    user's env (where ``%APPDATA%\\npm\\gemini.cmd`` resolves to a real
-    path).
+    user's env (where ``%USERPROFILE%\\.local\\bin\\agy.exe`` resolves to a
+    real path).
 
     Same cross-account-elevation rationale as the Claude / Codex pins:
     discovery that runs AFTER ``Start-Process`` would execute inside an
-    already-elevated session whose profile may lack gemini.cmd, so the
+    already-elevated session whose profile may lack agy.exe, so the
     hint never lands for a ``Run as different user`` consent.
     """
     body = _function_body_text("Assert-AdminOrElevate")
-    find_at = body.find("Find-GeminiBinary")
+    find_at = body.find("Find-AgyBinary")
     start_at = body.find("Start-Process")
     assert find_at != -1, (
-        "Assert-AdminOrElevate must call Find-GeminiBinary; not found "
+        "Assert-AdminOrElevate must call Find-AgyBinary; not found "
         "in body:\n" + repr(body)
     )
     assert start_at != -1, (
@@ -3702,88 +3706,88 @@ def test_assert_admin_or_elevate_captures_gemini_bin_pre_uac() -> None:
         "relaunch. Body:\n" + repr(body)
     )
     assert find_at < start_at, (
-        f"Assert-AdminOrElevate must call Find-GeminiBinary BEFORE "
+        f"Assert-AdminOrElevate must call Find-AgyBinary BEFORE "
         f"Start-Process (pre-UAC discovery under the originating user's "
-        f"env). Found Find-GeminiBinary at offset {find_at}, Start-Process "
+        f"env). Found Find-AgyBinary at offset {find_at}, Start-Process "
         f"at offset {start_at}. Body:\n" + repr(body)
     )
 
 
-def test_gemini_bin_hint_is_preserved_across_uac_elevation() -> None:
-    """``MOBAIDE_AGENT_GEMINI_BIN_HINT`` must be in the elevation
+def test_agy_bin_hint_is_preserved_across_uac_elevation() -> None:
+    """``MOBAIDE_AGENT_AGY_BIN_HINT`` must be in the elevation
     passthrough array literal inside ``Assert-AdminOrElevate``.
 
     Without it the elevated child re-fetches without the pre-UAC
-    discovery and falls back to its own ``Find-GeminiBinary`` from inside
+    discovery and falls back to its own ``Find-AgyBinary`` from inside
     the elevated session — defeating the pre-UAC capture on a
     ``Run as different user`` consent.
     """
     body = _function_body_text("Assert-AdminOrElevate")
     assert re.search(
-        r"['\"]MOBAIDE_AGENT_GEMINI_BIN_HINT['\"]", body
+        r"['\"]MOBAIDE_AGENT_AGY_BIN_HINT['\"]", body
     ), (
-        "MOBAIDE_AGENT_GEMINI_BIN_HINT must appear in the $passthrough "
+        "MOBAIDE_AGENT_AGY_BIN_HINT must appear in the $passthrough "
         "array inside Assert-AdminOrElevate so the pre-UAC-discovered "
-        "gemini.cmd path survives the UAC re-launch. Function body:\n"
+        "agy path survives the UAC re-launch. Function body:\n"
         + repr(body)
     )
 
 
-def test_write_agent_env_passes_gemini_bin_to_init_env_fresh_install() -> None:
-    """``Write-AgentEnv`` must pass ``--gemini-bin <path>`` to ``init-env``
+def test_write_agent_env_passes_agy_bin_to_init_env_fresh_install() -> None:
+    """``Write-AgentEnv`` must pass ``--agy-bin <path>`` to ``init-env``
     on the fresh-install path.
 
-    Mirrors ``--claude-bin`` / ``--codex-bin``: the discovered gemini path
+    Mirrors ``--claude-bin`` / ``--codex-bin``: the discovered agy path
     is wired into the one-shot ``init-env`` so the freshly rendered .env
-    lands an uncommented ``MOBAIDE_GEMINI_BIN=<path>`` line in a single
+    lands an uncommented ``MOBAIDE_AGY_BIN=<path>`` line in a single
     step.
     """
     body = _function_body_text("Write-AgentEnv")
     assert "init-env" in body, (
         "Write-AgentEnv must invoke init-env. Body:\n" + repr(body)
     )
-    assert "--gemini-bin" in body, (
-        "Write-AgentEnv must pass `--gemini-bin` to init-env so the fresh "
-        ".env carries MOBAIDE_GEMINI_BIN. Body:\n" + repr(body)
+    assert "--agy-bin" in body, (
+        "Write-AgentEnv must pass `--agy-bin` to init-env so the fresh "
+        ".env carries MOBAIDE_AGY_BIN. Body:\n" + repr(body)
     )
 
 
-def test_write_agent_env_invokes_set_env_for_gemini_reinstall_backfill() -> None:
-    """``Write-AgentEnv`` must invoke ``set-env --key MOBAIDE_GEMINI_BIN``
+def test_write_agent_env_invokes_set_env_for_agy_reinstall_backfill() -> None:
+    """``Write-AgentEnv`` must invoke ``set-env --key MOBAIDE_AGY_BIN``
     on the re-install path (``.env`` already exists).
 
     Surgical single-key backfill, mirroring the MOBAIDE_CODEX_BIN
     re-install pin — ``init-env --force`` would clobber operator-edited
-    keys, so the installer uses ``set-env`` for gemini too.
+    keys, so the installer uses ``set-env`` for agy too.
     """
     body = _function_body_text("Write-AgentEnv")
-    assert re.search(r"--key\s+MOBAIDE_GEMINI_BIN", body), (
-        "Write-AgentEnv must pass `--key MOBAIDE_GEMINI_BIN` to set-env "
+    assert re.search(r"--key\s+MOBAIDE_AGY_BIN", body), (
+        "Write-AgentEnv must pass `--key MOBAIDE_AGY_BIN` to set-env "
         "on the re-install path; not found in body:\n" + repr(body)
     )
 
 
-def test_write_agent_env_prefers_gemini_hint_then_falls_back_to_find() -> None:
-    """``Write-AgentEnv`` must read ``$env:MOBAIDE_AGENT_GEMINI_BIN_HINT``
-    first and only fall back to ``Find-GeminiBinary`` if the hint is empty.
+def test_write_agent_env_prefers_agy_hint_then_falls_back_to_find() -> None:
+    """``Write-AgentEnv`` must read ``$env:MOBAIDE_AGENT_AGY_BIN_HINT``
+    first and only fall back to ``Find-AgyBinary`` if the hint is empty.
 
     Same hint-then-fallback ordering as the Claude / Codex paths: the
     pre-UAC hint carries the originating-user discovery across the UAC
     boundary; the fallback covers already-elevated invocations.
     """
     body = _function_body_text("Write-AgentEnv")
-    hint_at = body.find("MOBAIDE_AGENT_GEMINI_BIN_HINT")
-    find_at = body.find("Find-GeminiBinary")
+    hint_at = body.find("MOBAIDE_AGENT_AGY_BIN_HINT")
+    find_at = body.find("Find-AgyBinary")
     assert hint_at != -1, (
-        "Write-AgentEnv must read $env:MOBAIDE_AGENT_GEMINI_BIN_HINT "
+        "Write-AgentEnv must read $env:MOBAIDE_AGENT_AGY_BIN_HINT "
         "(the pre-UAC discovery). Body:\n" + repr(body)
     )
     assert find_at != -1, (
-        "Write-AgentEnv must call Find-GeminiBinary as a fallback. "
+        "Write-AgentEnv must call Find-AgyBinary as a fallback. "
         "Body:\n" + repr(body)
     )
     assert hint_at < find_at, (
-        f"Write-AgentEnv must check MOBAIDE_AGENT_GEMINI_BIN_HINT BEFORE "
-        f"falling back to Find-GeminiBinary. Hint at offset {hint_at}, "
-        f"Find-GeminiBinary at offset {find_at}. Body:\n" + repr(body)
+        f"Write-AgentEnv must check MOBAIDE_AGENT_AGY_BIN_HINT BEFORE "
+        f"falling back to Find-AgyBinary. Hint at offset {hint_at}, "
+        f"Find-AgyBinary at offset {find_at}. Body:\n" + repr(body)
     )

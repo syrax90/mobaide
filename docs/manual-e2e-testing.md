@@ -3,7 +3,7 @@
 `tests/e2e/manual_stack.py` boots the **real** central_server + **real** mobaide
 agent on your PC and wires the **real Android app** to them, so a human tester
 can exercise the full mobile ↔ server ↔ agent path hands-on: registration,
-login, agent list, SHELL terminals and managed claude/codex/gemini sessions.
+login, agent list, SHELL terminals and managed claude/codex/antigravity sessions.
 It is the manual-testing counterpart of the automated pytest harness documented
 in [e2e-harness.md](e2e-harness.md) and reuses the same recipe
 (`tests/e2e/conftest.py` + `tests/e2e/mock_mobile_client.py`) outside pytest.
@@ -50,7 +50,7 @@ the test URL in place across restarts instead.
 3. Registers (or logs back into) the tester account and creates (or reuses) the
    agent over the real REST flow, exactly like the Android app would.
 4. Boots `python -m mobaide` in **production mode** — a **real PTY**, so SHELL
-   sessions run a real shell and claude/codex/gemini sessions run the real
+   sessions run a real shell and claude/codex/antigravity sessions run the real
    CLIs — pointed at the local relay over `ws://127.0.0.1:9000`
    (`MOBAIDE_AGENT_ALLOW_INSECURE_WS=1`), with all agent state isolated under a
    throwaway `MOBAIDE_AGENT_PREFIX`.
@@ -138,9 +138,9 @@ WSL adapters); the banner lists all candidate IPs to try.
 | `status` | probe `/api/health`, show persisted identity |
 | `clean` | kill stale processes, revert Android files, delete the state dir |
 
-CLI sessions: SHELL sessions need nothing extra. claude / codex / gemini
+CLI sessions: SHELL sessions need nothing extra. claude / codex / antigravity
 sessions need that CLI installed on the PC (on `PATH`, or via
-`MOBAIDE_CLAUDE_BIN` / `MOBAIDE_CODEX_BIN` / `MOBAIDE_GEMINI_BIN`, which the
+`MOBAIDE_CLAUDE_BIN` / `MOBAIDE_CODEX_BIN` / `MOBAIDE_AGY_BIN`, which the
 script deliberately inherits from your shell). A missing CLI fails only at
 session-create time with a `<cli>_cli_missing` marker.
 

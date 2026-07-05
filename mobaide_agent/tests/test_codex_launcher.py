@@ -494,3 +494,128 @@ def test_auth_required_error_discriminator_and_hint():
     msg = str(err)
     assert "not authenticated" in msg.lower()
     assert "codex login" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# list_models (memoized ``codex debug models --json`` enumeration)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ('["gpt-5.5", "gpt-5.4"]', ["gpt-5.5", "gpt-5.4"]),
+        ('{"models": ["gpt-5.5"]}', ["gpt-5.5"]),
+        (
+            '[{"id": "a"}, {"name": "b"}, {"model": "c"}, {"slug": "d"}]',
+            ["a", "b", "c", "d"],
+        ),
+        # ``id`` outranks the other keys when several are present.
+        ('[{"name": "display", "id": "canonical"}]', ["canonical"]),
+        # Unusable entries are dropped, salvaging whatever parses.
+        ('["ok", 42, {"id": "  "}, {}]', ["ok"]),
+        ('[" padded "]', ["padded"]),
+    ],
+)
+def test_parse_codex_models_accepts_plausible_shapes(output, expected):
+    """``debug models`` has no output-stability contract (openai/codex#8871),
+    so the parser must accept every plausible JSON shape."""
+    assert codex_launcher._parse_codex_models(output) == expected
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "not json at all",
+        '"a bare string"',
+        "42",
+        '{"other": ["gpt-5.5"]}',
+        "[]",
+        "[42, {}, null]",
+        "",
+    ],
+)
+def test_parse_codex_models_rejects_unusable_output(output):
+    assert codex_launcher._parse_codex_models(output) is None
+
+
+@pytest.mark.asyncio
+async def test_list_models_parses_json_and_memoizes(monkeypatch):
+    """A successful enumeration memoizes the parsed list and never re-invokes
+    the runner on a warm cache — ``cached_models`` is the non-spawning
+    capability view."""
+    calls = {"n": 0}
+
+    def _runner(_binary):
+        calls["n"] += 1
+        return '["gpt-x", "gpt-y"]'
+
+    monkeypatch.setattr(codex_launcher, "_run_codex_models_json", _runner)
+    launcher = CodexLauncher()
+    assert launcher.cached_models is None
+
+    first = await launcher.list_models()
+    second = await launcher.list_models()
+
+    assert first == ["gpt-x", "gpt-y"]
+    assert second == ["gpt-x", "gpt-y"]
+    assert launcher.cached_models == ("gpt-x", "gpt-y")
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_models_failed_run_memoizes_fallback(monkeypatch):
+    """A failed run (non-zero exit → runner returns None) memoizes the curated
+    fallback — unlike Antigravity, Codex capabilities must always carry a model
+    list, so the fallback is served without retrying the runner."""
+    calls = {"n": 0}
+
+    def _runner(_binary):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(codex_launcher, "_run_codex_models_json", _runner)
+    launcher = CodexLauncher()
+
+    first = await launcher.list_models()
+    second = await launcher.list_models()
+
+    assert first == list(codex_launcher._CODEX_FALLBACK_MODELS)
+    assert second == first
+    assert launcher.cached_models == codex_launcher._CODEX_FALLBACK_MODELS
+    assert calls["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_models_unparseable_output_serves_fallback(monkeypatch):
+    monkeypatch.setattr(
+        codex_launcher, "_run_codex_models_json", lambda _b: "not json"
+    )
+    launcher = CodexLauncher()
+    assert await launcher.list_models() == list(codex_launcher._CODEX_FALLBACK_MODELS)
+
+
+@pytest.mark.asyncio
+async def test_list_models_runner_exception_serves_fallback(monkeypatch):
+    def _raise(_binary):
+        raise OSError("exec failed")
+
+    monkeypatch.setattr(codex_launcher, "_run_codex_models_json", _raise)
+    launcher = CodexLauncher()
+    assert await launcher.list_models() == list(codex_launcher._CODEX_FALLBACK_MODELS)
+
+
+@pytest.mark.asyncio
+async def test_list_models_missing_binary_serves_fallback_without_running(monkeypatch):
+    def _raise(*_a, **_kw):
+        raise CodexBinaryNotFoundError(searched_paths=["PATH:codex"])
+
+    def _boom(_binary):
+        raise AssertionError("runner must not be invoked when the binary is missing")
+
+    monkeypatch.setattr(codex_launcher, "_resolve_codex_binary", _raise)
+    monkeypatch.setattr(codex_launcher, "_run_codex_models_json", _boom)
+    launcher = CodexLauncher()
+
+    assert await launcher.list_models() == list(codex_launcher._CODEX_FALLBACK_MODELS)
+    assert launcher.cached_models == codex_launcher._CODEX_FALLBACK_MODELS

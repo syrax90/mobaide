@@ -23,17 +23,17 @@ import org.robolectric.annotation.Config
  * UI tests for [InputBar] covering the CLI-aware control-key bar:
  *   - Orientation-aware layout (portrait stacks; landscape inline).
  *   - For the default/Claude set ([SessionKind.Claude]), the single horizontally
- *     scrollable control-key panel exposes exactly the 12 keys
- *     `Mode, Rewind, Esc, Ctrl+C, Enter, Tab, ↑, ↓, ←, →, Ctrl+O, Ctrl+R`.
+ *     scrollable control-key panel exposes exactly the 13 keys
+ *     `Mode, Rewind, Esc, Ctrl+C, Enter, Tab, ↑, ↓, ←, →, Ctrl+O, Ctrl+R, Ctrl+L`.
  *   - Byte payloads for renamed keys are unchanged (display-only rename):
  *     `S+Tab → Mode` and `Back/Edit → Rewind`; `Newline` was removed.
  *   - For [SessionKind.Codex] the panel prepends the approval answers `Approve`/`Reject`
- *     and appends `Ctrl+L` to the Claude set, with the correct raw-byte payloads; those
- *     Codex-only keys never leak into the Claude set ([InputBarCodexTest]).
- *   - For [SessionKind.Gemini] the panel leads with `Mode`, `Rewind`, `YOLO`, `TODO` and
- *     appends `Ctrl+L` to the shared tail (no `Approve`/`Reject`), with the correct raw-byte
- *     payloads; Gemini-only keys (`YOLO`/`TODO`) never leak into the Claude or Codex sets
- *     ([InputBarGeminiTest]).
+ *     to the Claude set (which already closes with `Ctrl+L`), with the correct raw-byte
+ *     payloads; those Codex-only keys never leak into the Claude set ([InputBarCodexTest]).
+ *   - For [SessionKind.Antigravity] the panel leads with `Ctrl+K`, `Ctrl+G`, `Ctrl+D`
+ *     and appends `Ctrl+L` to the shared tail (no `Mode`/`Rewind`, no `Approve`/`Reject`),
+ *     with the correct raw-byte payloads; Antigravity-only keys never leak into the
+ *     Claude or Codex sets ([InputBarAntigravityTest]).
  *
  * Robolectric SDK pinned to 33 to match existing project precedent
  * (`AgentListScreenTest`). The `qualifiers` differ per test class to
@@ -89,7 +89,7 @@ class InputBarPortraitTest {
     }
 
     @Test
-    fun controlKeyPanel_togglesOpenAndExposesExactly12Keys() {
+    fun controlKeyPanel_togglesOpenAndExposesExactly13Keys() {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -106,11 +106,11 @@ class InputBarPortraitTest {
 
         // `assertExists` (not `assertIsDisplayed`) because the keys live in a
         // horizontalScroll Row — at narrow portrait widths the rightmost keys
-        // (Ctrl+O/Ctrl+R) are intentionally off-viewport and scrolled into view.
-        // Existence in the semantics tree is the right "all 12 keys present"
+        // (Ctrl+O/Ctrl+R/Ctrl+L) are intentionally off-viewport and scrolled into
+        // view. Existence in the semantics tree is the right "all 13 keys present"
         // assertion; viewport visibility is the user's scroll concern.
         // Arrows render as Material icons, so they match on contentDescription (below).
-        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
+        listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
         listOf("↑", "↓", "←", "→")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
@@ -131,7 +131,7 @@ class InputBarPortraitTest {
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
-        listOf("S+Tab", "Newline", "Back/Edit", "Ctrl+L", "Ctrl-D", "Ctrl-C", "S-Tab")
+        listOf("S+Tab", "Newline", "Back/Edit", "Ctrl-D", "Ctrl-C", "S-Tab")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 
@@ -314,10 +314,10 @@ class InputBarLandscapeTest {
 
 /**
  * Codex control-key set: passing `sessionKind = SessionKind.Codex` prepends the approval
- * answers `Approve`/`Reject` and appends `Ctrl+L` to the shared Claude set. Verifies the
- * Codex-only keys are present with the correct raw byte payloads (sent via `onSendBytes`,
- * the raw 'i'-frame path — never the submit path), and that the Codex-only keys do not leak
- * into the default/Claude set.
+ * answers `Approve`/`Reject` to the shared Claude set (which already closes with `Ctrl+L`).
+ * Verifies the Codex-only keys are present with the correct raw byte payloads (sent via
+ * `onSendBytes`, the raw 'i'-frame path — never the submit path), and that the Codex-only
+ * keys do not leak into the default/Claude set.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
@@ -436,35 +436,36 @@ class InputBarCodexTest {
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
-        listOf("Approve", "Reject", "Ctrl+L", "YOLO", "TODO")
+        listOf("Approve", "Reject", "Ctrl+K", "Ctrl+G", "Ctrl+D", "YOLO", "TODO")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 
     @Test
-    fun codexSet_doesNotExposeGeminiOnlyKeys() {
+    fun codexSet_doesNotExposeAntigravityOnlyKeys() {
         openCodexPanel()
 
-        listOf("YOLO", "TODO")
+        listOf("Ctrl+K", "Ctrl+G", "Ctrl+D")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 }
 
 /**
- * Gemini control-key set: passing `sessionKind = SessionKind.Gemini` leads with `Mode`
- * (Shift+Tab), `Rewind` (Esc-Esc), `YOLO` (Ctrl+Y) and `TODO` (Ctrl+T), reuses the shared
- * nav/control tail, and appends `Ctrl+L`. Verifies the Gemini keys are present with the correct
- * raw byte payloads (sent via `onSendBytes`, the raw 'i'-frame path), that the shared tail
- * matches the Claude/Codex bars, and that the Codex-only keys (`Approve`/`Reject`) do not leak
- * into the Gemini set.
+ * Antigravity control-key set: passing `sessionKind = SessionKind.Antigravity` leads with
+ * `Ctrl+K` (fast-approve pending action), `Ctrl+G` (tool confirmation view) and `Ctrl+D`
+ * (exit), reuses the shared nav/control tail, and appends `Ctrl+L`. Verifies the Antigravity
+ * keys are present with the correct raw byte payloads (sent via `onSendBytes`, the raw
+ * 'i'-frame path), that the shared tail matches the Claude/Codex bars, and that neither the
+ * Codex-only keys (`Approve`/`Reject`) nor the Claude-only leads (`Mode`/`Rewind`) leak into
+ * the Antigravity set.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
-class InputBarGeminiTest {
+class InputBarAntigravityTest {
 
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun openGeminiPanel(onSendBytes: (ByteArray) -> Unit = {}) {
+    private fun openAntigravityPanel(onSendBytes: (ByteArray) -> Unit = {}) {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -472,7 +473,7 @@ class InputBarGeminiTest {
                     onTextChange = {},
                     onSend = {},
                     onSendBytes = onSendBytes,
-                    sessionKind = SessionKind.Gemini,
+                    sessionKind = SessionKind.Antigravity,
                 )
             }
         }
@@ -480,10 +481,10 @@ class InputBarGeminiTest {
     }
 
     @Test
-    fun geminiPanel_exposesGeminiSpecificKeys_plusSharedKeys() {
-        openGeminiPanel()
+    fun antigravityPanel_exposesAntigravitySpecificKeys_plusSharedKeys() {
+        openAntigravityPanel()
 
-        listOf("Mode", "Rewind", "YOLO", "TODO", "Ctrl+L")
+        listOf("Ctrl+K", "Ctrl+G", "Ctrl+D", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
         // Shared nav/control tail; arrows render as Material icons (contentDescription below).
         listOf("Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
@@ -493,45 +494,42 @@ class InputBarGeminiTest {
     }
 
     @Test
-    fun yolo_sendsCtrlY_0x19() {
+    fun ctrlK_sendsVerticalTab_0x0b() {
         val captured = mutableListOf<ByteArray>()
-        openGeminiPanel(onSendBytes = { captured += it })
+        openAntigravityPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("YOLO").performScrollTo().performClick()
+        composeRule.onNodeWithText("Ctrl+K").performClick()
 
         assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x19), captured.single())
+        assertArrayEquals(byteArrayOf(0x0b), captured.single())
     }
 
     @Test
-    fun todo_sendsCtrlT_0x14() {
+    fun ctrlG_sendsBell_0x07() {
         val captured = mutableListOf<ByteArray>()
-        openGeminiPanel(onSendBytes = { captured += it })
+        openAntigravityPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("TODO").performScrollTo().performClick()
+        composeRule.onNodeWithText("Ctrl+G").performClick()
 
         assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x14), captured.single())
+        assertArrayEquals(byteArrayOf(0x07), captured.single())
     }
 
     @Test
-    fun mode_sendsCsiZ_escBracketZ() {
+    fun ctrlD_sendsEndOfTransmission_0x04() {
         val captured = mutableListOf<ByteArray>()
-        openGeminiPanel(onSendBytes = { captured += it })
+        openAntigravityPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("Mode").performClick()
+        composeRule.onNodeWithText("Ctrl+D").performClick()
 
         assertEquals(1, captured.size)
-        assertArrayEquals(
-            byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()),
-            captured.single(),
-        )
+        assertArrayEquals(byteArrayOf(0x04), captured.single())
     }
 
     @Test
     fun ctrlL_sendsFormFeed_0x0c() {
         val captured = mutableListOf<ByteArray>()
-        openGeminiPanel(onSendBytes = { captured += it })
+        openAntigravityPanel(onSendBytes = { captured += it })
 
         composeRule.onNodeWithText("Ctrl+L").performScrollTo().performClick()
 
@@ -542,7 +540,7 @@ class InputBarGeminiTest {
     @Test
     fun ctrlO_sendsShiftOut_0x0f() {
         val captured = mutableListOf<ByteArray>()
-        openGeminiPanel(onSendBytes = { captured += it })
+        openAntigravityPanel(onSendBytes = { captured += it })
 
         composeRule.onNodeWithText("Ctrl+O").performScrollTo().performClick()
 
@@ -553,7 +551,7 @@ class InputBarGeminiTest {
     @Test
     fun ctrlR_sendsDeviceControl2_0x12() {
         val captured = mutableListOf<ByteArray>()
-        openGeminiPanel(onSendBytes = { captured += it })
+        openAntigravityPanel(onSendBytes = { captured += it })
 
         composeRule.onNodeWithText("Ctrl+R").performScrollTo().performClick()
 
@@ -562,21 +560,10 @@ class InputBarGeminiTest {
     }
 
     @Test
-    fun rewind_sendsEscEsc_0x1b_0x1b() {
-        val captured = mutableListOf<ByteArray>()
-        openGeminiPanel(onSendBytes = { captured += it })
+    fun antigravitySet_doesNotExposeCodexOrClaudeOnlyKeys() {
+        openAntigravityPanel()
 
-        composeRule.onNodeWithText("Rewind").performScrollTo().performClick()
-
-        assertEquals(1, captured.size)
-        assertArrayEquals(byteArrayOf(0x1b, 0x1b), captured.single())
-    }
-
-    @Test
-    fun geminiSet_doesNotExposeCodexOnlyKeys() {
-        openGeminiPanel()
-
-        listOf("Approve", "Reject")
+        listOf("Approve", "Reject", "Mode", "Rewind", "YOLO", "TODO")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
     }
 }

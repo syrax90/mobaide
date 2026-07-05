@@ -1,13 +1,15 @@
 """Tests for the CLI-availability probe primitives in ``core.cli_launcher``.
 
 Covers ``probe_cli_available`` (resolve-success → True, ``CliBinaryNotFoundError``
-→ False, never spawns a subprocess) and ``build_cli_capabilities`` (the shared
+→ False, never spawns a subprocess), ``build_cli_capabilities`` (the shared
 ``GET /api/version`` builder that drives the Android mode-picker gate and must
-report identical availability over both the direct and relay transports).
+report identical availability over both the direct and relay transports —
+plus the cache-only ``models`` key), ``warm_cli_model_caches`` (the duck-typed
+startup warm task), and the ``shim_safe_argv`` Windows-shim wrapper.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -15,7 +17,10 @@ from mobaide.core.cli_launcher import (
     CliBinaryNotFoundError,
     build_cli_capabilities,
     probe_cli_available,
+    shim_safe_argv,
+    warm_cli_model_caches,
 )
+from tests.conftest import skip_if_not_linux, skip_if_not_windows
 
 
 class _MissingError(CliBinaryNotFoundError):
@@ -23,13 +28,17 @@ class _MissingError(CliBinaryNotFoundError):
     _INSTALL_HINT = "fake CLI not found."
 
 
-def _launcher(resolves_to: str | None):
+def _launcher(resolves_to: str | None, models=None):
     """A minimal ``CliLauncher`` stand-in.
 
     ``resolves_to=None`` makes ``resolve_binary`` raise ``CliBinaryNotFoundError``
-    (the binary-missing case); a string makes it return that path.
+    (the binary-missing case); a string makes it return that path. ``models``
+    seeds ``cached_models``; the ``None`` default mirrors a launcher whose model
+    cache is cold (or that never enumerates) — pinned explicitly because a bare
+    ``MagicMock`` attribute would read as truthy.
     """
     launcher = MagicMock(name="launcher")
+    launcher.cached_models = models
     if resolves_to is None:
         launcher.resolve_binary.side_effect = _MissingError(["PATH:fake"])
     else:
@@ -97,15 +106,134 @@ class TestBuildCliCapabilities:
         caps = build_cli_capabilities({"future-cli": _launcher("/bin/future")})
         assert caps == {"future-cli": {"available": True}}
 
+    def test_models_key_added_when_cached_models_truthy(self):
+        """A launcher with a warm ``cached_models`` additionally carries the
+        ``models`` list — as a fresh copy, so a caller mutating the capability
+        payload can never corrupt the launcher's cache."""
+        cached = ["Gemini 3.1 Pro (Low)", "Gemini 3.1 Flash"]
+        launcher = _launcher("/bin/agy", models=cached)
+
+        caps = build_cli_capabilities({"antigravity": launcher})
+
+        assert caps == {
+            "antigravity": {
+                "available": True,
+                "models": ["Gemini 3.1 Pro (Low)", "Gemini 3.1 Flash"],
+            }
+        }
+        assert caps["antigravity"]["models"] is not cached
+
+    def test_models_key_omitted_when_cached_models_none(self):
+        """A cold cache (``cached_models is None``) yields the bare
+        ``{"available": ...}`` shape — the key is omitted, never ``null``."""
+        caps = build_cli_capabilities({"codex": _launcher("/bin/codex", models=None)})
+        assert caps == {"codex": {"available": True}}
+
+    def test_models_key_omitted_when_cached_models_empty(self):
+        """An empty tuple is falsy: the key must be omitted — never emitted as
+        an empty list — so clients fall back to their hardcoded lists on the
+        same absent signal for old and new agents alike."""
+        caps = build_cli_capabilities({"codex": _launcher("/bin/codex", models=())})
+        assert caps == {"codex": {"available": True}}
+
+    def test_models_key_omitted_when_launcher_lacks_attribute(self):
+        """Model enumeration is duck-typed: a launcher without ``cached_models``
+        at all (e.g. Claude's) is reported with availability only."""
+        launcher = _launcher("/bin/claude")
+        del launcher.cached_models  # getattr now raises AttributeError
+        caps = build_cli_capabilities({"claude": launcher})
+        assert caps == {"claude": {"available": True}}
+
+
+class TestWarmCliModelCaches:
+    """``warm_cli_model_caches`` populates each launcher's model cache once at
+    startup, off the request path. Support is duck-typed via ``list_models``,
+    and each probe is isolated so one broken CLI can't stop the others.
+    """
+
+    async def test_calls_list_models_on_supporting_launchers(self):
+        codex = _launcher("/bin/codex")
+        codex.list_models = AsyncMock(return_value=["gpt-5.5"])
+        antigravity = _launcher("/bin/agy")
+        antigravity.list_models = AsyncMock(return_value=["Gemini 3.1 Flash"])
+
+        await warm_cli_model_caches({"codex": codex, "antigravity": antigravity})
+
+        codex.list_models.assert_awaited_once()
+        antigravity.list_models.assert_awaited_once()
+
+    async def test_skips_launchers_without_list_models(self):
+        """A launcher that never enumerates (e.g. Claude's) is skipped — the
+        warm task widens by duck-typing, not by changing the Protocol."""
+        claude = _launcher("/bin/claude")
+        del claude.list_models  # getattr now raises AttributeError
+        codex = _launcher("/bin/codex")
+        codex.list_models = AsyncMock(return_value=["gpt-5.5"])
+
+        await warm_cli_model_caches({"claude": claude, "codex": codex})
+
+        codex.list_models.assert_awaited_once()
+
+    async def test_one_failing_launcher_does_not_stop_others(self):
+        """A raising ``list_models`` is caught and logged per launcher; the
+        remaining registry entries must still be warmed."""
+        broken = _launcher("/bin/broken")
+        broken.list_models = AsyncMock(side_effect=RuntimeError("boom"))
+        healthy = _launcher("/bin/agy")
+        healthy.list_models = AsyncMock(return_value=["Gemini 3.1 Flash"])
+
+        await warm_cli_model_caches({"broken": broken, "healthy": healthy})
+
+        broken.list_models.assert_awaited_once()
+        healthy.list_models.assert_awaited_once()
+
+    async def test_none_registry_is_tolerated(self):
+        """Mirrors ``build_cli_capabilities``: a partially-built app state may
+        carry no registry; the warm task must no-op rather than raise."""
+        await warm_cli_model_caches(None)  # type: ignore[arg-type]
+        await warm_cli_model_caches({})
+
+
+class TestShimSafeArgv:
+    """``shim_safe_argv`` wraps a Windows ``.cmd``/``.bat`` shim in ``cmd /c``
+    (a shim is not directly CreateProcess-able); everything else — including
+    ``.cmd``-suffixed paths on POSIX — passes through untouched.
+    """
+
+    def test_plain_binary_passes_through(self):
+        assert shim_safe_argv("/usr/local/bin/agy", "models") == [
+            "/usr/local/bin/agy", "models",
+        ]
+
+    def test_no_extra_args(self):
+        assert shim_safe_argv("codex") == ["codex"]
+
+    @skip_if_not_windows
+    def test_cmd_shim_wrapped_on_windows(self):
+        argv = shim_safe_argv(r"C:\npm\codex.cmd", "debug", "models", "--json")
+        assert argv == ["cmd", "/c", r"C:\npm\codex.cmd", "debug", "models", "--json"]
+
+    @skip_if_not_windows
+    def test_bat_shim_wrapped_case_insensitively_on_windows(self):
+        argv = shim_safe_argv(r"C:\npm\agy.BAT", "models")
+        assert argv == ["cmd", "/c", r"C:\npm\agy.BAT", "models"]
+
+    @skip_if_not_linux
+    def test_cmd_suffix_not_wrapped_on_posix(self):
+        """The wrap is win32-only: a POSIX file that merely ends in ``.cmd``
+        must not be routed through a (nonexistent) ``cmd`` builtin."""
+        assert shim_safe_argv("/opt/fake.cmd", "models") == ["/opt/fake.cmd", "models"]
+
 
 class TestProbeWithRealLaunchers:
     """``probe_cli_available`` over the production launchers: the verdict must
     follow the same override → env → PATH resolution a real spawn uses, so an
     'enabled' mode in the UI implies a spawnable CLI.
 
-    The autouse ``_pin_claude_binary`` / ``_pin_codex_binary`` fixtures pin the
-    module-level resolvers to a literal name, so a default launcher resolves
-    'installed' here; the missing-binary cases re-patch the resolver to raise.
+    The autouse ``_pin_claude_binary`` / ``_pin_codex_binary`` /
+    ``_pin_antigravity_binary`` fixtures pin the module-level resolvers to a
+    literal name, so a default launcher resolves 'installed' here; the
+    missing-binary cases re-patch the resolver to raise.
     """
 
     def test_claude_launcher_available_with_pinned_resolver(self):
@@ -118,10 +246,10 @@ class TestProbeWithRealLaunchers:
 
         assert probe_cli_available(CodexLauncher()) is True
 
-    def test_gemini_launcher_available_with_pinned_resolver(self):
-        from mobaide.core.gemini_launcher import GeminiLauncher
+    def test_antigravity_launcher_available_with_pinned_resolver(self):
+        from mobaide.core.antigravity_launcher import AntigravityLauncher
 
-        assert probe_cli_available(GeminiLauncher()) is True
+        assert probe_cli_available(AntigravityLauncher()) is True
 
     def test_claude_launcher_unavailable_when_resolver_raises(self, monkeypatch):
         from mobaide.core import claude_launcher

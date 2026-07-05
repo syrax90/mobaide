@@ -88,14 +88,14 @@ class AgentConfig(BaseSettings):
         default=None, validation_alias="MOBAIDE_CODEX_BIN",
     )
 
-    # Operator override pointing at the absolute path of the Gemini CLI
-    # executable (``gemini.cmd`` on Windows, ``gemini`` on POSIX). Mirrors
+    # Operator override pointing at the absolute path of the Antigravity CLI
+    # executable (``agy.exe`` on Windows, ``agy`` on POSIX). Mirrors
     # ``codex_bin`` and needs its own typed field for the same reason —
     # pydantic-settings populates this from .env without mutating
-    # ``os.environ``, so the resolver in ``gemini_launcher.py`` would never see
-    # a ``MOBAIDE_GEMINI_BIN`` line in .env (``extra="ignore"`` drops it).
-    gemini_bin: str | None = Field(
-        default=None, validation_alias="MOBAIDE_GEMINI_BIN",
+    # ``os.environ``, so the resolver in ``antigravity_launcher.py`` would never
+    # see a ``MOBAIDE_AGY_BIN`` line in .env (``extra="ignore"`` drops it).
+    agy_bin: str | None = Field(
+        default=None, validation_alias="MOBAIDE_AGY_BIN",
     )
 
     auto_scan_config: AutoScanConfig | None = Field(default=None, exclude=True)
@@ -269,19 +269,19 @@ def _cmd_init_env(args: argparse.Namespace) -> int:
             overrides["MOBAIDE_CLAUDE_BIN"] = existing["MOBAIDE_CLAUDE_BIN"]
         if existing.get("MOBAIDE_CODEX_BIN"):
             overrides["MOBAIDE_CODEX_BIN"] = existing["MOBAIDE_CODEX_BIN"]
-        if existing.get("MOBAIDE_GEMINI_BIN"):
-            overrides["MOBAIDE_GEMINI_BIN"] = existing["MOBAIDE_GEMINI_BIN"]
+        if existing.get("MOBAIDE_AGY_BIN"):
+            overrides["MOBAIDE_AGY_BIN"] = existing["MOBAIDE_AGY_BIN"]
 
-    # An explicit --claude-bin / --codex-bin / --gemini-bin from the installer
+    # An explicit --claude-bin / --codex-bin / --agy-bin from the installer
     # wins over a preserved existing value: a re-install where the operator just
-    # moved the claude/codex/gemini package to a new prefix needs the new path
+    # moved the claude/codex/agy binary to a new prefix needs the new path
     # to land.
     if args.claude_bin:
         overrides["MOBAIDE_CLAUDE_BIN"] = args.claude_bin
     if args.codex_bin:
         overrides["MOBAIDE_CODEX_BIN"] = args.codex_bin
-    if args.gemini_bin:
-        overrides["MOBAIDE_GEMINI_BIN"] = args.gemini_bin
+    if args.agy_bin:
+        overrides["MOBAIDE_AGY_BIN"] = args.agy_bin
 
     rendered = render_template(template, overrides=overrides)
     atomic_write(target, rendered)
@@ -302,7 +302,7 @@ def _cmd_set_env(args: argparse.Namespace) -> int:
     """Set a single ``KEY=value`` in an existing ``.env`` in-place.
 
     Used by ``install.ps1`` to surgically backfill ``MOBAIDE_CLAUDE_BIN``
-    / ``MOBAIDE_CODEX_BIN`` / ``MOBAIDE_GEMINI_BIN`` on a re-install over an
+    / ``MOBAIDE_CODEX_BIN`` / ``MOBAIDE_AGY_BIN`` on a re-install over an
     already-paired agent without touching ``JWT_SECRET_KEY`` /
     ``RELAY_AGENT_TOKEN``.
     ``init-env --force`` preserves those keys explicitly, but it's
@@ -369,11 +369,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     init.add_argument(
-        "--gemini-bin",
-        dest="gemini_bin",
+        "--agy-bin",
+        dest="agy_bin",
         help=(
-            "Absolute path to gemini.cmd / gemini executable; written as "
-            "MOBAIDE_GEMINI_BIN. Used by install.ps1 on Windows."
+            "Absolute path to agy.exe / agy executable; written as "
+            "MOBAIDE_AGY_BIN. Used by install.ps1 on Windows."
         ),
     )
     init.set_defaults(func=_cmd_init_env)
@@ -383,7 +383,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Set a single KEY=value in an existing .env (in-place; preserves "
             "all other keys). Used by install.ps1 to backfill "
-            "MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN / MOBAIDE_GEMINI_BIN."
+            "MOBAIDE_CLAUDE_BIN / MOBAIDE_CODEX_BIN / MOBAIDE_AGY_BIN."
         ),
     )
     set_env.add_argument(

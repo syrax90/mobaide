@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
+from mobaide.core.antigravity_launcher import AntigravityOptions
 from mobaide.core.claude_launcher import ClaudeOptions
 from mobaide.core.codex_launcher import CodexOptions
-from mobaide.core.gemini_launcher import GeminiOptions
 from mobaide.core.models import SessionInfo, session_to_wire_dict
 
 
@@ -65,32 +65,52 @@ class CodexOptionsModel(BaseModel):
         return CodexOptions(**self.model_dump())
 
 
-class GeminiOptionsModel(BaseModel):
-    """Wire DTO for Gemini CLI launch options (see :class:`GeminiOptions`).
+class AntigravityOptionsModel(BaseModel):
+    """Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`).
 
-    ``model`` is free-form ``str`` — like the Claude/Codex DTOs — so it accepts
-    both the preset aliases (``auto`` / ``pro`` / ``flash`` / ``flash-lite``) and
-    any concrete model id (e.g. ``gemini-2.5-pro``) or future alias the real CLI
-    supports; the launcher forwards it verbatim. ``approval_mode`` stays
-    ``Literal`` because those four values are the CLI's entire accepted set, so an
-    invalid one is worth rejecting with a 422 at the wire boundary rather than
-    producing a broken ``gemini`` argv. ``protected_namespaces=()`` silences
-    pydantic's ``model_*`` guard for the legitimately-named ``model`` field.
+    ``model`` is free-form ``str`` — like the Claude/Codex DTOs — carrying the
+    full display name ``agy models`` prints (e.g. ``Gemini 3.1 Pro (Low)``);
+    the launcher forwards it verbatim as a single argv element.
+    ``skip_permissions`` (``--dangerously-skip-permissions``) and ``sandbox``
+    are mutually exclusive — skip-permissions auto-approves ``bypassSandbox``
+    actions, silently defeating the sandbox (google-antigravity/antigravity-cli
+    #36) — so the combination is rejected with a 422 at the wire boundary. To
+    keep that guard airtight, ``model`` and each ``add_dirs`` entry (both
+    forwarded verbatim as argv elements) are rejected when they look like a CLI
+    flag (leading ``-``): otherwise a value such as
+    ``add_dirs=["--dangerously-skip-permissions"]`` could smuggle the blocked
+    flag past the pair check. No legitimate value is affected — model names
+    start with a letter and directories with ``/`` or a drive letter.
+    ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the
+    legitimately-named ``model`` field.
     """
 
     model_config = ConfigDict(protected_namespaces=())
 
     model: str | None = None
-    approval_mode: Literal["default", "auto_edit", "yolo", "plan"] = "default"
-    include_directories: list[str] = []
+    skip_permissions: bool = False
     sandbox: bool = False
+    add_dirs: list[str] = []
     worktree: bool = False
     branch_name: str | None = None
 
-    def to_options(self) -> GeminiOptions:
+    @model_validator(mode="after")
+    def _reject_sandboxed_skip_permissions(self) -> "AntigravityOptionsModel":
+        if self.skip_permissions and self.sandbox:
+            raise ValueError(
+                "skip_permissions and sandbox are mutually exclusive: "
+                "--dangerously-skip-permissions auto-approves sandbox escapes"
+            )
+        if self.model is not None and self.model.startswith("-"):
+            raise ValueError("model must not look like a CLI flag (leading '-')")
+        if any(d.startswith("-") for d in self.add_dirs):
+            raise ValueError("add_dirs entries must not look like CLI flags (leading '-')")
+        return self
+
+    def to_options(self) -> AntigravityOptions:
         data = self.model_dump()
-        data["include_directories"] = tuple(data["include_directories"])
-        return GeminiOptions(**data)
+        data["add_dirs"] = tuple(data["add_dirs"])
+        return AntigravityOptions(**data)
 
 
 class CreateSessionRequest(BaseModel):
@@ -102,17 +122,17 @@ class CreateSessionRequest(BaseModel):
     # When set, ``command``/``cwd``/``env`` are ignored and the matching
     # launcher builds them from the project + the CLI options block.
     project_name: str | None = None
-    # Which managed CLI to launch: "claude" | "codex" | "gemini". Optional — when
-    # omitted the kind is inferred from whichever options block is present (a
+    # Which managed CLI to launch: "claude" | "codex" | "antigravity". Optional —
+    # when omitted the kind is inferred from whichever options block is present (a
     # legacy claude_options-only payload still resolves to Claude). Shell/Terminal
     # sessions leave this null and send no options block.
     cli: str | None = None
     claude_options: ClaudeOptionsModel | None = None
     codex_options: CodexOptionsModel | None = None
-    gemini_options: GeminiOptionsModel | None = None
+    antigravity_options: AntigravityOptionsModel | None = None
     # Terminal-mode worktree: create a git worktree for a SHELL session
     # (no CLI options) anchored to a stored git project and spawn the shell
-    # inside it. Managed Claude/Codex/Gemini sessions instead carry worktree
+    # inside it. Managed Claude/Codex/Antigravity sessions instead carry worktree
     # intent inside their own options block.
     worktree: bool = False
     branch_name: str | None = None

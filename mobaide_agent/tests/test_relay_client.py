@@ -38,11 +38,10 @@ from mobaide.relay.envelope import (
 )
 from mobaide.agent.events.bus import AgentEvent
 from mobaide.core import (
+    AntigravityBinaryNotFoundError,
     ClaudeBinaryNotFoundError,
     CodexAuthRequiredError,
     CodexBinaryNotFoundError,
-    GeminiAuthRequiredError,
-    GeminiBinaryNotFoundError,
 )
 from mobaide.core.models import SessionKind, SessionState
 
@@ -3489,8 +3488,14 @@ class TestProxyVersionCapabilities:
     field: the two handlers are hand-maintained and must not drift.
     """
 
-    def _launcher(self, resolves: bool):
+    def _launcher(
+        self, resolves: bool, cached_models: tuple[str, ...] | None = None,
+    ):
         launcher = MagicMock(name="launcher")
+        # Explicit ``cached_models`` (default None): a bare MagicMock would
+        # auto-create a truthy attribute and make ``build_cli_capabilities``
+        # emit a spurious ``models`` key.
+        launcher.cached_models = cached_models
         if resolves:
             launcher.resolve_binary.return_value = "/bin/cli"
         else:
@@ -3500,10 +3505,11 @@ class TestProxyVersionCapabilities:
         return launcher
 
     async def test_reports_cli_availability(self, client, mock_app_state):
-        # claude resolves, codex raises → claude available, codex not.
+        # claude/antigravity resolve, codex raises → the gate is per-CLI.
         mock_app_state.cli_launchers = {
             "claude": self._launcher(resolves=True),
             "codex": self._launcher(resolves=False),
+            "antigravity": self._launcher(resolves=True),
         }
         ws = AsyncMock()
 
@@ -3515,6 +3521,34 @@ class TestProxyVersionCapabilities:
         assert result["body"]["capabilities"]["cli"] == {
             "claude": {"available": True},
             "codex": {"available": False},
+            "antigravity": {"available": True},
+        }
+
+    async def test_warm_model_cache_adds_models_key(self, client, mock_app_state):
+        """A launcher whose model cache is warm (truthy ``cached_models``)
+        carries ``models`` in its capability entry on the relay path too;
+        launchers with a cold cache keep the bare ``{"available": bool}``
+        shape — same omitted-key contract as the direct handler."""
+        mock_app_state.cli_launchers = {
+            "claude": self._launcher(resolves=True),
+            "antigravity": self._launcher(
+                resolves=True,
+                cached_models=("Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"),
+            ),
+        }
+        ws = AsyncMock()
+
+        result = await client._dispatch_proxy(
+            "GET", "/api/version", None, None, ws,
+        )
+
+        assert result["status"] == 200
+        assert result["body"]["capabilities"]["cli"] == {
+            "claude": {"available": True},
+            "antigravity": {
+                "available": True,
+                "models": ["Gemini 3.1 Pro (Low)", "GPT-OSS 120B (Medium)"],
+            },
         }
 
     async def test_capabilities_equal_shared_builder_locks_direct_relay_parity(
@@ -3530,6 +3564,7 @@ class TestProxyVersionCapabilities:
         mock_app_state.cli_launchers = {
             "claude": self._launcher(resolves=True),
             "codex": self._launcher(resolves=False),
+            "antigravity": self._launcher(resolves=True),
         }
         ws = AsyncMock()
 
@@ -3580,30 +3615,32 @@ class TestProxyVersionCapabilities:
         assert body["min_client_version"] == MIN_CLIENT_PROTOCOL_VERSION
 
 
-class TestHandleCreateSessionGemini:
+class TestHandleCreateSessionAntigravity:
     """The control-channel ``create_session`` path (used when a central relay
     drives the agent directly, not via the HTTP proxy) must support the third
-    managed CLI: parse ``gemini_options``, thread the ``cli`` discriminator into
-    a GEMINI ``SessionConfig``, map a missing Gemini binary to its own
-    ``gemini_cli_missing`` marker, and an unauthenticated Gemini to a
-    ``gemini_auth_required`` marker — the Claude/Codex-only coverage elsewhere
-    never exercises the Gemini branch.
+    managed CLI: parse ``antigravity_options``, thread the ``cli`` discriminator
+    into an ANTIGRAVITY ``SessionConfig``, and map a missing ``agy`` binary to
+    its own ``antigravity_cli_missing`` marker — the Claude/Codex-only coverage
+    elsewhere never exercises the Antigravity branch. No auth case: ``agy`` has
+    no pre-spawn auth probe, so ``antigravity_auth_required`` can never fire —
+    an unauthenticated CLI renders its login prompt inside the PTY instead.
     """
 
-    async def test_create_session_forwards_gemini_options_and_kind(
+    async def test_create_session_forwards_antigravity_options_and_kind(
         self, client, mock_session_manager,
     ):
-        """An explicit ``cli="gemini"`` plus a ``gemini_options`` block must reach
-        ``create_session`` as a GEMINI ``SessionConfig`` carrying the parsed
-        :class:`GeminiOptions` (and no ``claude_options``). Otherwise the model /
-        approval-mode selection is silently dropped on the relay control path."""
-        from mobaide.core.gemini_launcher import GeminiOptions
+        """An explicit ``cli="antigravity"`` plus an ``antigravity_options``
+        block must reach ``create_session`` as an ANTIGRAVITY ``SessionConfig``
+        carrying the parsed :class:`AntigravityOptions` (and no
+        ``claude_options``). Otherwise the model / sandbox selection is silently
+        dropped on the relay control path."""
+        from mobaide.core.antigravity_launcher import AntigravityOptions
         from mobaide.core.models import SessionConfig
 
         async def _capture(config: SessionConfig):
             _capture.config = config  # type: ignore[attr-defined]
             s = MagicMock()
-            s.session_id = "gemini-sess"
+            s.session_id = "agy-sess"
             s.pid = 7
             return s
 
@@ -3612,11 +3649,11 @@ class TestHandleCreateSessionGemini:
         ws = AsyncMock()
         ctrl = {
             "type": "create_session",
-            "session_id": "gemini-sess",
-            "cli": "gemini",
-            "gemini_options": {
-                "model": "flash",
-                "approval_mode": "plan",
+            "session_id": "agy-sess",
+            "cli": "antigravity",
+            "antigravity_options": {
+                "model": "Gemini 3.1 Pro (Low)",
+                "sandbox": True,
             },
         }
         payload = json.dumps(ctrl).encode()
@@ -3625,24 +3662,25 @@ class TestHandleCreateSessionGemini:
             await client._handle_control(payload, ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
-        assert cfg.kind is SessionKind.GEMINI
+        assert cfg.kind is SessionKind.ANTIGRAVITY
         assert cfg.claude_options is None
         assert cfg.codex_options is None
-        assert isinstance(cfg.gemini_options, GeminiOptions)
-        assert cfg.gemini_options.model == "flash"
-        assert cfg.gemini_options.approval_mode == "plan"
+        assert isinstance(cfg.antigravity_options, AntigravityOptions)
+        assert cfg.antigravity_options.model == "Gemini 3.1 Pro (Low)"
+        assert cfg.antigravity_options.sandbox is True
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_created"
-        assert resp["session_id"] == "gemini-sess"
+        assert resp["session_id"] == "agy-sess"
         assert resp["pid"] == 7
 
-    async def test_gemini_options_without_cli_still_resolves_gemini_kind(
+    async def test_antigravity_options_without_cli_still_resolves_antigravity_kind(
         self, client, mock_session_manager,
     ):
-        """Back-compat inference: a payload that carries ``gemini_options`` but
-        omits the ``cli`` discriminator must still resolve to a GEMINI session
-        (mirrors how a ``claude_options``-only payload resolves to Claude)."""
+        """Back-compat inference: a payload that carries ``antigravity_options``
+        but omits the ``cli`` discriminator must still resolve to an ANTIGRAVITY
+        session (mirrors how a ``claude_options``-only payload resolves to
+        Claude)."""
         from mobaide.core.models import SessionConfig
 
         async def _capture(config: SessionConfig):
@@ -3658,118 +3696,96 @@ class TestHandleCreateSessionGemini:
         ctrl = {
             "type": "create_session",
             "session_id": "infer-sess",
-            "gemini_options": {"approval_mode": "yolo"},
+            "antigravity_options": {"sandbox": True},
         }
 
         with patch.object(client, "_bridge_session"):
             await client._handle_control(json.dumps(ctrl).encode(), ws)
 
         cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
-        assert cfg.kind is SessionKind.GEMINI
-        assert cfg.gemini_options is not None
-        assert cfg.gemini_options.approval_mode == "yolo"
+        assert cfg.kind is SessionKind.ANTIGRAVITY
+        assert cfg.antigravity_options is not None
+        assert cfg.antigravity_options.sandbox is True
 
-    async def test_invalid_gemini_options_returns_create_failed(
+    async def test_invalid_antigravity_options_returns_create_failed(
         self, client, mock_session_manager,
     ):
-        """An out-of-range enum value in ``gemini_options`` is rejected at the
-        ``GeminiOptionsModel`` boundary, producing ``session_create_failed`` with
-        an ``Invalid gemini_options:`` error — and ``create_session`` is never
-        reached."""
+        """The mutually exclusive ``skip_permissions`` + ``sandbox`` pair is
+        rejected at the ``AntigravityOptionsModel`` boundary, producing
+        ``session_create_failed`` with an ``Invalid antigravity_options:`` error
+        — and ``create_session`` is never reached."""
         ws = AsyncMock()
         ctrl = {
             "type": "create_session",
-            "session_id": "bad-gemini",
-            "cli": "gemini",
-            "gemini_options": {"approval_mode": "nope"},
+            "session_id": "bad-agy",
+            "cli": "antigravity",
+            "antigravity_options": {"skip_permissions": True, "sandbox": True},
         }
 
         await client._handle_control(json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
-        assert resp["session_id"] == "bad-gemini"
-        assert resp["error"].startswith("Invalid gemini_options:")
+        assert resp["session_id"] == "bad-agy"
+        assert resp["error"].startswith("Invalid antigravity_options:")
+        assert "mutually exclusive" in resp["error"]
         mock_session_manager.create_session.assert_not_awaited()
 
-    async def test_gemini_cli_missing_emits_gemini_cli_missing_discriminator(
+    async def test_antigravity_cli_missing_emits_antigravity_cli_missing_discriminator(
         self, client, mock_session_manager,
     ):
-        """``GeminiBinaryNotFoundError`` from the spawn path must map to
-        ``session_create_failed`` with ``gemini_cli_missing: true`` (NOT
-        ``claude_cli_missing``) and the Gemini-specific install hint. The marker
-        key is derived from ``exc.cli_name`` — this proves the Gemini subclass
-        routes through the shared ``except CliBinaryNotFoundError`` branch."""
+        """``AntigravityBinaryNotFoundError`` from the spawn path must map to
+        ``session_create_failed`` with ``antigravity_cli_missing: true`` (NOT
+        ``claude_cli_missing``) and the Antigravity-specific install hint. The
+        marker key is derived from ``exc.cli_name`` — this proves the
+        Antigravity subclass routes through the shared
+        ``except CliBinaryNotFoundError`` branch."""
         mock_session_manager.create_session = AsyncMock(
-            side_effect=GeminiBinaryNotFoundError(
-                searched_paths=["PATH:gemini", "/home/test/.npm-global/bin/gemini"]
+            side_effect=AntigravityBinaryNotFoundError(
+                searched_paths=["PATH:agy", "/home/test/.local/bin/agy"]
             ),
         )
         ws = AsyncMock()
         ctrl = {
             "type": "create_session",
-            "session_id": "no-gemini-sess",
-            "cli": "gemini",
+            "session_id": "no-agy-sess",
+            "cli": "antigravity",
         }
 
         await client._handle_control(json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "session_create_failed"
-        assert resp["session_id"] == "no-gemini-sess"
-        assert resp["gemini_cli_missing"] is True
+        assert resp["session_id"] == "no-agy-sess"
+        assert resp["antigravity_cli_missing"] is True
         assert "claude_cli_missing" not in resp
-        assert resp["error"].startswith("Gemini CLI not found:")
-        assert "npm install -g @google/gemini-cli" in resp["error"]
-        assert "MOBAIDE_GEMINI_BIN" in resp["error"]
+        assert resp["error"].startswith("Antigravity CLI not found:")
+        assert "https://antigravity.google/docs/cli" in resp["error"]
+        assert "MOBAIDE_AGY_BIN" in resp["error"]
         assert resp["searched_paths"] == [
-            "PATH:gemini",
-            "/home/test/.npm-global/bin/gemini",
+            "PATH:agy",
+            "/home/test/.local/bin/agy",
         ]
 
-    async def test_gemini_auth_required_emits_gemini_auth_required_marker(
-        self, client, mock_session_manager,
-    ):
-        """``GeminiAuthRequiredError`` from the spawn path maps to
-        ``session_create_failed`` with ``gemini_auth_required: true`` top-level
-        (parallel to ``<cli>_cli_missing``) so the mobile client tells the
-        operator to authenticate ``gemini`` on the host rather than showing the
-        generic error toast."""
-        mock_session_manager.create_session = AsyncMock(
-            side_effect=GeminiAuthRequiredError(),
-        )
-        ws = AsyncMock()
-        ctrl = {
-            "type": "create_session",
-            "session_id": "no-auth-gemini",
-            "cli": "gemini",
-        }
 
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "session_create_failed"
-        assert resp["session_id"] == "no-auth-gemini"
-        assert resp["gemini_auth_required"] is True
-        assert isinstance(resp["error"], str) and resp["error"]
-
-
-class TestHandleProxyRequestGemini:
+class TestHandleProxyRequestAntigravity:
     """``POST /api/sessions`` proxied through the central relay
-    (``proxy_request`` control frame) must thread Gemini the same way the direct
-    HTTP router does: parse ``gemini_options`` into a GEMINI session, map a
-    missing Gemini binary to status 503 with a ``gemini_cli_missing`` body marker,
-    and an unauthenticated Gemini to status 409 with a ``gemini_auth_required``
-    marker.
+    (``proxy_request`` control frame) must thread Antigravity the same way the
+    direct HTTP router does: parse ``antigravity_options`` into an ANTIGRAVITY
+    session and map a missing ``agy`` binary to status 503 with an
+    ``antigravity_cli_missing`` body marker. No 409 auth case: ``agy`` has no
+    pre-spawn auth probe, so the ``<cli>_auth_required`` path can never fire
+    for Antigravity.
     """
 
-    async def test_proxy_post_sessions_threads_gemini_options(
+    async def test_proxy_post_sessions_threads_antigravity_options(
         self, client, mock_session_manager,
     ):
-        """A proxied ``POST /api/sessions`` body with ``cli="gemini"`` builds a
-        GEMINI ``SessionConfig`` from ``gemini_options`` and returns a 201
-        ``proxy_response`` whose body reports ``kind == "gemini"``."""
-        from mobaide.core.gemini_launcher import GeminiOptions
+        """A proxied ``POST /api/sessions`` body with ``cli="antigravity"``
+        builds an ANTIGRAVITY ``SessionConfig`` from ``antigravity_options`` and
+        returns a 201 ``proxy_response`` whose body reports
+        ``kind == "antigravity"``."""
+        from mobaide.core.antigravity_launcher import AntigravityOptions
         from mobaide.core.models import SessionConfig
 
         captured: dict[str, SessionConfig] = {}
@@ -3777,18 +3793,18 @@ class TestHandleProxyRequestGemini:
         async def _capture(config: SessionConfig):
             captured["config"] = config
             s = MagicMock()
-            s.session_id = "proxy-gemini"
+            s.session_id = "proxy-agy"
             s.pid = 11
             info = MagicMock()
-            info.session_id = "proxy-gemini"
+            info.session_id = "proxy-agy"
             info.state = SessionState.RUNNING
             info.created_at = datetime(2026, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
             info.pid = 11
-            info.command = ["gemini"]
+            info.command = ["agy"]
             info.cwd = None
             info.title = None
             info.project_name = None
-            info.kind = SessionKind.GEMINI
+            info.kind = SessionKind.ANTIGRAVITY
             info.attention = None
             info.exit_reason = None
             s.to_info = MagicMock(return_value=info)
@@ -3799,12 +3815,15 @@ class TestHandleProxyRequestGemini:
         ws = AsyncMock()
         ctrl = {
             "type": "proxy_request",
-            "request_id": "req-gemini",
+            "request_id": "req-agy",
             "method": "POST",
             "path": "/api/sessions",
             "body": {
-                "cli": "gemini",
-                "gemini_options": {"model": "flash", "approval_mode": "plan"},
+                "cli": "antigravity",
+                "antigravity_options": {
+                    "model": "Gemini 3.1 Pro (Low)",
+                    "sandbox": True,
+                },
             },
         }
 
@@ -3812,102 +3831,81 @@ class TestHandleProxyRequestGemini:
             await client._handle_control(json.dumps(ctrl).encode(), ws)
 
         cfg = captured["config"]
-        assert cfg.kind is SessionKind.GEMINI
+        assert cfg.kind is SessionKind.ANTIGRAVITY
         assert cfg.claude_options is None
-        assert isinstance(cfg.gemini_options, GeminiOptions)
-        assert cfg.gemini_options.model == "flash"
-        assert cfg.gemini_options.approval_mode == "plan"
+        assert isinstance(cfg.antigravity_options, AntigravityOptions)
+        assert cfg.antigravity_options.model == "Gemini 3.1 Pro (Low)"
+        assert cfg.antigravity_options.sandbox is True
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
-        assert resp["request_id"] == "req-gemini"
+        assert resp["request_id"] == "req-agy"
         assert resp["status"] == 201
-        assert resp["body"]["kind"] == "gemini"
+        assert resp["body"]["kind"] == "antigravity"
 
-    async def test_proxy_invalid_gemini_options_returns_422(
+    async def test_proxy_invalid_antigravity_options_returns_422(
         self, client, mock_session_manager,
     ):
-        """An out-of-range ``gemini_options`` enum on the proxy path is rejected
-        by ``CreateSessionRequest`` validation, returning a 422 ``proxy_response``
-        without ever reaching ``create_session``."""
+        """The mutually exclusive ``skip_permissions`` + ``sandbox`` pair on the
+        proxy path is rejected by ``CreateSessionRequest`` validation, returning
+        a 422 ``proxy_response`` without ever reaching ``create_session``."""
         ws = AsyncMock()
         ctrl = {
             "type": "proxy_request",
-            "request_id": "req-bad-gemini",
+            "request_id": "req-bad-agy",
             "method": "POST",
             "path": "/api/sessions",
-            "body": {"cli": "gemini", "gemini_options": {"approval_mode": "nope"}},
+            "body": {
+                "cli": "antigravity",
+                "antigravity_options": {
+                    "skip_permissions": True,
+                    "sandbox": True,
+                },
+            },
         }
 
         await client._handle_control(json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
-        assert resp["request_id"] == "req-bad-gemini"
+        assert resp["request_id"] == "req-bad-agy"
         assert resp["status"] == 422
         mock_session_manager.create_session.assert_not_awaited()
 
-    async def test_proxy_gemini_cli_missing_returns_503_with_discriminator(
+    async def test_proxy_antigravity_cli_missing_returns_503_with_discriminator(
         self, client, mock_session_manager,
     ):
-        """A missing Gemini binary on the proxy path must map to status=503
-        (not 400 / not 500) with ``gemini_cli_missing: true`` in the body and the
-        Gemini install hint — the marker key derives from ``exc.cli_name`` so the
-        Gemini subclass and Claude share one 503 handler."""
+        """A missing ``agy`` binary on the proxy path must map to status=503
+        (not 400 / not 500) with ``antigravity_cli_missing: true`` in the body
+        and the Antigravity install hint — the marker key derives from
+        ``exc.cli_name`` so the Antigravity subclass and Claude share one 503
+        handler."""
         mock_session_manager.create_session = AsyncMock(
-            side_effect=GeminiBinaryNotFoundError(
-                searched_paths=["PATH:gemini", "/usr/local/bin/gemini"]
+            side_effect=AntigravityBinaryNotFoundError(
+                searched_paths=["PATH:agy", "/usr/local/bin/agy"]
             ),
         )
         ws = AsyncMock()
         ctrl = {
             "type": "proxy_request",
-            "request_id": "req-gemini-missing",
+            "request_id": "req-agy-missing",
             "method": "POST",
             "path": "/api/sessions",
-            "body": {"cli": "gemini", "gemini_options": {}},
+            "body": {"cli": "antigravity", "antigravity_options": {}},
         }
 
         await client._handle_control(json.dumps(ctrl).encode(), ws)
 
         resp = json.loads(decode(ws.send.call_args[0][0])[2])
         assert resp["type"] == "proxy_response"
-        assert resp["request_id"] == "req-gemini-missing"
+        assert resp["request_id"] == "req-agy-missing"
         assert resp["status"] == 503
-        assert resp["body"]["gemini_cli_missing"] is True
+        assert resp["body"]["antigravity_cli_missing"] is True
         assert "claude_cli_missing" not in resp["body"]
-        assert resp["body"]["detail"].startswith("Gemini CLI not found:")
-        assert "npm install -g @google/gemini-cli" in resp["body"]["detail"]
+        assert resp["body"]["detail"].startswith("Antigravity CLI not found:")
+        assert "https://antigravity.google/docs/cli" in resp["body"]["detail"]
         assert resp["body"]["searched_paths"] == [
-            "PATH:gemini",
-            "/usr/local/bin/gemini",
+            "PATH:agy",
+            "/usr/local/bin/agy",
         ]
-
-    async def test_proxy_gemini_auth_required_returns_409_with_marker(
-        self, client, mock_session_manager,
-    ):
-        """``POST /api/sessions`` proxied through the relay must map
-        ``GeminiAuthRequiredError`` to status=409 (not 401 / not 503 / not 500)
-        with ``gemini_auth_required: true`` in the body so the mobile client
-        renders the auth prompt — 409 (not 401) so the Android AuthInterceptor
-        doesn't refresh-retry and swallow the marker."""
-        mock_session_manager.create_session = AsyncMock(
-            side_effect=GeminiAuthRequiredError(),
-        )
-        ws = AsyncMock()
-        ctrl = {
-            "type": "proxy_request",
-            "request_id": "req-gemini-auth",
-            "method": "POST",
-            "path": "/api/sessions",
-            "body": {"cli": "gemini", "gemini_options": {}},
-        }
-
-        await client._handle_control(json.dumps(ctrl).encode(), ws)
-
-        resp = json.loads(decode(ws.send.call_args[0][0])[2])
-        assert resp["type"] == "proxy_response"
-        assert resp["request_id"] == "req-gemini-auth"
-        assert resp["status"] == 409
-        assert resp["body"]["gemini_auth_required"] is True
         assert isinstance(resp["body"]["detail"], str) and resp["body"]["detail"]

@@ -140,7 +140,7 @@ fun CreateSessionScreen(
                             CreateSessionStep.ModePick -> "Select mode"
                             CreateSessionStep.StandardConfig -> "Claude code session"
                             CreateSessionStep.CodexConfig -> "Codex session"
-                            CreateSessionStep.GeminiConfig -> "Gemini session"
+                            CreateSessionStep.AntigravityConfig -> "Antigravity session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
                             CreateSessionStep.TerminalConfig -> "Terminal session"
                         }
@@ -202,13 +202,13 @@ fun CreateSessionScreen(
                     selectedMode = state.selectedMode,
                     claudeEnabled = state.claudeEnabled,
                     codexEnabled = state.codexEnabled,
-                    geminiEnabled = state.geminiEnabled,
+                    antigravityEnabled = state.antigravityEnabled,
                     onPickMode = viewModel::pickMode,
                     onCommit = {
                         when (state.selectedMode) {
                             CreateSessionMode.Standard -> viewModel.selectStandardMode()
                             CreateSessionMode.Codex -> viewModel.selectCodexMode()
-                            CreateSessionMode.Gemini -> viewModel.selectGeminiMode()
+                            CreateSessionMode.Antigravity -> viewModel.selectAntigravityMode()
                             CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
                             CreateSessionMode.CustomShell -> viewModel.selectTerminalMode()
                             null -> Unit
@@ -227,7 +227,7 @@ fun CreateSessionScreen(
                         storedProject?.is_git == true,
                     viewModel = viewModel,
                 )
-                CreateSessionStep.GeminiConfig -> GeminiConfigSection(
+                CreateSessionStep.AntigravityConfig -> AntigravityConfigSection(
                     state = state,
                     showWorktreeToggle = state.selection is ProjectSelection.Stored &&
                         storedProject?.is_git == true,
@@ -540,13 +540,13 @@ private fun modeEnabled(
     mode: CreateSessionMode,
     claudeEnabled: Boolean,
     codexEnabled: Boolean,
-    geminiEnabled: Boolean,
+    antigravityEnabled: Boolean,
     autoScanEnabled: Boolean,
 ): Boolean = when (mode) {
     CreateSessionMode.Standard -> claudeEnabled
     CreateSessionMode.AutoScan -> autoScanEnabled
     CreateSessionMode.Codex -> codexEnabled
-    CreateSessionMode.Gemini -> geminiEnabled
+    CreateSessionMode.Antigravity -> antigravityEnabled
     CreateSessionMode.CustomShell -> true
 }
 
@@ -556,7 +556,7 @@ private fun ModePickerSection(
     selectedMode: CreateSessionMode?,
     claudeEnabled: Boolean,
     codexEnabled: Boolean,
-    geminiEnabled: Boolean,
+    antigravityEnabled: Boolean,
     onPickMode: (CreateSessionMode) -> Unit,
     onCommit: () -> Unit,
 ) {
@@ -629,20 +629,20 @@ private fun ModePickerSection(
     }
 
     ElevatedCard(
-        onClick = { if (geminiEnabled) onPickMode(CreateSessionMode.Gemini) },
-        enabled = geminiEnabled,
-        colors = if (selectedMode == CreateSessionMode.Gemini) selectedColors else CardDefaults.elevatedCardColors(),
+        onClick = { if (antigravityEnabled) onPickMode(CreateSessionMode.Antigravity) },
+        enabled = antigravityEnabled,
+        colors = if (selectedMode == CreateSessionMode.Antigravity) selectedColors else CardDefaults.elevatedCardColors(),
         modifier = Modifier.fillMaxWidth(),
     ) {
         ListItem(
-            headlineContent = { Text("Gemini session") },
+            headlineContent = { Text("Antigravity session") },
             supportingContent = {
                 Text(
-                    if (geminiEnabled) "Configure and launch a Google Gemini session."
-                    else "Gemini CLI is not installed on the agent.",
+                    if (antigravityEnabled) "Configure and launch a Google Antigravity session."
+                    else "Antigravity CLI (agy) is not installed on the agent.",
                 )
             },
-            colors = if (geminiEnabled) enabledList else disabledReasonList,
+            colors = if (antigravityEnabled) enabledList else disabledReasonList,
         )
     }
 
@@ -688,7 +688,7 @@ private fun ModePickerSection(
 
     Button(
         onClick = onCommit,
-        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled, geminiEnabled, autoScanEnabled),
+        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled, antigravityEnabled, autoScanEnabled),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")
@@ -765,7 +765,13 @@ private fun CodexConfigSection(
     )
 
     Text("Model", style = MaterialTheme.typography.labelLarge)
-    CodexModelDropdown(selected = state.codexModel, onSelect = viewModel::setCodexModel)
+    CliModelDropdown(
+        models = state.codexModels?.takeIf { it.isNotEmpty() }
+            ?: CreateSessionViewModel.CODEX_MODELS,
+        selected = state.codexModel,
+        defaultLabel = "Default",
+        onSelect = viewModel::setCodexModel,
+    )
 
     Text("Reasoning effort", style = MaterialTheme.typography.labelLarge)
     val efforts = CreateSessionViewModel.REASONING_EFFORTS
@@ -859,10 +865,18 @@ private fun CodexConfigSection(
     }
 }
 
+/**
+ * Model dropdown shared by the Codex and Antigravity config sections: a list of
+ * quick-pick model names plus a leading null item ([defaultLabel]) that clears
+ * the selection to the CLI's own default. Both sections pass a dynamic list
+ * (falling back to a hardcoded constant when the agent doesn't enumerate).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CodexModelDropdown(
+private fun CliModelDropdown(
+    models: List<String>,
     selected: String?,
+    defaultLabel: String,
     onSelect: (String?) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -871,7 +885,7 @@ private fun CodexModelDropdown(
         onExpandedChange = { expanded = !expanded },
     ) {
         OutlinedTextField(
-            value = selected ?: "Default",
+            value = selected ?: defaultLabel,
             onValueChange = {},
             readOnly = true,
             label = { Text("Model") },
@@ -883,13 +897,13 @@ private fun CodexModelDropdown(
             onDismissRequest = { expanded = false },
         ) {
             DropdownMenuItem(
-                text = { Text("Default") },
+                text = { Text(defaultLabel) },
                 onClick = {
                     onSelect(null)
                     expanded = false
                 },
             )
-            CreateSessionViewModel.CODEX_MODELS.forEach { model ->
+            models.forEach { model ->
                 DropdownMenuItem(
                     text = { Text(model) },
                     onClick = {
@@ -904,42 +918,54 @@ private fun CodexModelDropdown(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GeminiConfigSection(
+private fun AntigravityConfigSection(
     state: CreateSessionUiState,
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
 ) {
-    val preset = state.geminiPreset
-
-    Text("Autonomy", style = MaterialTheme.typography.labelLarge)
-    val presets = listOf(
-        GeminiAutonomyPreset.Plan to "Plan",
-        GeminiAutonomyPreset.AutoEdit to "Auto-edit",
-        GeminiAutonomyPreset.Yolo to "YOLO",
+    Text("Model", style = MaterialTheme.typography.labelLarge)
+    CliModelDropdown(
+        models = state.antigravityModels?.takeIf { it.isNotEmpty() }
+            ?: CreateSessionViewModel.ANTIGRAVITY_MODELS,
+        selected = state.antigravityModel,
+        defaultLabel = "Auto",
+        onSelect = viewModel::setAntigravityModel,
     )
-    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-        presets.forEachIndexed { index, (value, label) ->
-            SegmentedButton(
-                selected = preset == value,
-                onClick = { viewModel.selectGeminiPreset(value) },
-                shape = SegmentedButtonDefaults.itemShape(index = index, count = presets.size),
-                icon = {},
-            ) { Text(label) }
-        }
-    }
+
+    Text("Permissions", style = MaterialTheme.typography.labelLarge)
+    ToggleRow(
+        label = "Skip permissions (dangerous)",
+        checked = state.antigravitySkipPermissions,
+        onChange = viewModel::setAntigravitySkipPermissions,
+        enabled = !state.antigravitySandbox,
+    )
+    ToggleRow(
+        label = "Sandbox",
+        checked = state.antigravitySandbox,
+        onChange = viewModel::setAntigravitySandbox,
+        enabled = !state.antigravitySkipPermissions,
+    )
     Text(
-        text = when (preset) {
-            GeminiAutonomyPreset.Plan -> "Reads and plans only; makes no changes."
-            GeminiAutonomyPreset.AutoEdit -> "Auto-approves file edits; asks before running commands."
-            GeminiAutonomyPreset.Yolo -> "Auto-approves everything, including commands (YOLO)."
-            null -> "Uses the CLI's default approval prompts."
+        text = when {
+            state.antigravitySkipPermissions ->
+                "Auto-approves every tool permission request (--dangerously-skip-permissions)."
+            state.antigravitySandbox ->
+                "Runs with terminal restrictions enabled (--sandbox)."
+            else ->
+                "Interactive approvals (agy default). Skip permissions and Sandbox " +
+                    "are mutually exclusive — together they would allow a sandbox escape."
         },
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 
-    Text("Model", style = MaterialTheme.typography.labelLarge)
-    GeminiModelDropdown(selected = state.geminiModel, onSelect = viewModel::setGeminiModel)
+    OutlinedTextField(
+        value = state.antigravityAddDirsDraft,
+        onValueChange = viewModel::setAntigravityAddDirsDraft,
+        label = { Text("Additional directories (one per line, optional)") },
+        supportingText = { Text("Each is added to the workspace via --add-dir.") },
+        modifier = Modifier.fillMaxWidth(),
+    )
 
     if (showWorktreeToggle) {
         ToggleRow("Create worktree", state.worktree, viewModel::toggleWorktree)
@@ -956,54 +982,11 @@ private fun GeminiConfigSection(
     }
 
     Button(
-        onClick = viewModel::submitGemini,
+        onClick = viewModel::submitAntigravity,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text(if (state.submitting) "Creating…" else "Create session")
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun GeminiModelDropdown(
-    selected: String?,
-    onSelect: (String?) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
-    ) {
-        OutlinedTextField(
-            value = selected ?: "Auto",
-            onValueChange = {},
-            readOnly = true,
-            label = { Text("Model") },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
-        )
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            DropdownMenuItem(
-                text = { Text("Auto") },
-                onClick = {
-                    onSelect(null)
-                    expanded = false
-                },
-            )
-            CreateSessionViewModel.GEMINI_MODELS.forEach { model ->
-                DropdownMenuItem(
-                    text = { Text(model) },
-                    onClick = {
-                        onSelect(model)
-                        expanded = false
-                    },
-                )
-            }
-        }
     }
 }
 
@@ -1212,12 +1195,22 @@ private fun AutoScanConfigSection(
 }
 
 @Composable
-private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun ToggleRow(
+    label: String,
+    checked: Boolean,
+    onChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = label, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange)
+        Text(
+            text = label,
+            color = if (enabled) Color.Unspecified
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
     }
 }

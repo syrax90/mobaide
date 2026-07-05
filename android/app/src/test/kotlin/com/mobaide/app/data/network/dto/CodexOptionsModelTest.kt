@@ -67,7 +67,7 @@ class CodexOptionsModelTest {
     fun unknownSessionKind_coercesToDefault_insteadOfThrowing() {
         // Forward-compat: a kind added by a newer server (without a major proto
         // bump) must not break decoding of the whole session snapshot. Uses a
-        // still-unknown wire value ("grok") — "gemini" is now a real kind.
+        // still-unknown wire value ("grok") — "antigravity" is now a real kind.
         val dto = json.decodeFromString(
             SessionResponse.serializer(),
             """{"session_id":"s1","state":"running","created_at":"t","kind":"grok"}""",

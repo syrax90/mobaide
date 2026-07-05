@@ -6,7 +6,7 @@ Cross-platform (Windows / macOS / Linux). Reuses the automated harness recipe
 
 * central_server on 0.0.0.0:9000 in MOBAIDE_ENV=test (throwaway DB, in-process
   email sink, verification off) so a phone on the same LAN can reach it;
-* mobaide agent in REAL mode (real PTY; claude/codex/gemini sessions work) with
+* mobaide agent in REAL mode (real PTY; claude/codex/antigravity sessions work) with
   all state isolated under a throwaway MOBAIDE_AGENT_PREFIX;
 * a persisted account + agent (state.json) so the phone stays logged in across
   restarts;
@@ -85,7 +85,7 @@ DEBUG_NSC_CONTENT = """<?xml version="1.0" encoding="utf-8"?>
 # Vars a shell may still export from the old copy-paste recipe (or a dev .env
 # may define). Children get them popped, then the script's explicit values --
 # a leftover MOBAIDE_ENV=test would otherwise silently flip the real-mode agent
-# onto the fake echo PTY. MOBAIDE_CLAUDE_BIN/CODEX/GEMINI are deliberately kept:
+# onto the fake echo PTY. MOBAIDE_CLAUDE_BIN/CODEX/AGY are deliberately kept:
 # inheriting the operator's CLI paths is what makes managed sessions work.
 SANITIZED_ENV_VARS = (
     "MOBAIDE_ENV",
@@ -855,7 +855,7 @@ def print_ready_banner(
         lines.append("  Sessions:           FAKE echo PTY (--fake-pty): terminals only "
                      "echo bytes back")
     else:
-        lines.append("  Sessions:           real PTY -- shell + claude/codex/gemini "
+        lines.append("  Sessions:           real PTY -- shell + claude/codex/antigravity "
                      "(CLIs resolve from PATH or MOBAIDE_*_BIN)")
     lines.append(f"  State dir:          {args.state_dir}")
     if android_synced:

@@ -1,9 +1,9 @@
 """CLI-agnostic launcher primitives shared by every managed CLI integration.
 
-The agent can launch more than one coding CLI (Claude Code, Codex CLI, Gemini
-CLI). Each gets its own launcher module (``claude_launcher`` / ``codex_launcher``
-/ ``gemini_launcher``), but the generic scaffolding — the ``LaunchSpec`` result
-shape, the ad-hoc launch target,
+The agent can launch more than one coding CLI (Claude Code, Codex CLI,
+Antigravity CLI). Each gets its own launcher module (``claude_launcher`` /
+``codex_launcher`` / ``antigravity_launcher``), but the generic scaffolding —
+the ``LaunchSpec`` result shape, the ad-hoc launch target,
 binary resolution (override → env → PATH → npm fallbacks), and the
 ``CliBinaryNotFoundError`` base — lives here so the per-CLI modules stay thin and
 do not duplicate the platform-probing logic.
@@ -15,6 +15,8 @@ import logging
 import os
 import platform
 import shutil
+import subprocess
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +28,21 @@ if TYPE_CHECKING:
     from mobaide.linear.worktree import WorktreeManager
 
 logger = logging.getLogger(__name__)
+
+# CREATE_NO_WINDOW on Windows so one-shot CLI probes never flash a console.
+WINDOWS_NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def shim_safe_argv(cli_bin: str, *args: str) -> list[str]:
+    """``<cli> <args>`` argv, wrapping a Windows ``.cmd``/``.bat`` shim in
+    ``cmd /c`` (a shim is not directly CreateProcess-able). Shared by the Codex
+    auth/login probes and the per-CLI model-enumeration probes; secrets are
+    never passed as argv elements.
+    """
+    base = [cli_bin, *args]
+    if sys.platform == "win32" and cli_bin.lower().endswith((".cmd", ".bat")):
+        return ["cmd", "/c", *base]
+    return base
 
 
 class CliBinaryNotFoundError(RuntimeError):
@@ -97,8 +114,12 @@ class CliLauncher(Protocol):
 
     A launcher turns a :class:`LaunchTarget` plus a CLI-specific options object
     into a :class:`LaunchSpec` (argv/cwd/env). ``ClaudeLauncher``,
-    ``CodexLauncher``, and ``GeminiLauncher`` all conform; ``SessionManager``
-    keeps a registry keyed by CLI name and dispatches by ``SessionKind``.
+    ``CodexLauncher``, and ``AntigravityLauncher`` all conform;
+    ``SessionManager`` keeps a registry keyed by CLI name and dispatches by
+    ``SessionKind``. Launchers MAY additionally expose model enumeration
+    (``list_models()`` + a non-spawning ``cached_models``) — discovered by
+    duck-typing in :func:`warm_cli_model_caches` / :func:`build_cli_capabilities`
+    rather than widening this Protocol, so launchers without it stay untouched.
     """
 
     async def build(
@@ -319,8 +340,16 @@ def probe_cli_available(launcher: CliLauncher) -> bool:
 
 def build_cli_capabilities(
     launchers: Mapping[str, CliLauncher],
-) -> dict[str, dict[str, bool]]:
-    """Map each registered CLI launcher to ``{"available": <bool>}``.
+) -> dict[str, dict[str, object]]:
+    """Map each registered CLI launcher to its capability entry.
+
+    Every entry carries ``{"available": <bool>}``. Launchers whose model list
+    has been enumerated (see :func:`warm_cli_model_caches`) additionally carry
+    ``{"models": [...]}``; the key is omitted — never emitted empty — when
+    enumeration is unsupported or produced nothing, so clients fall back to
+    their hardcoded lists on the same absent/empty signal for old and new
+    agents alike. Reads only in-memory caches: never spawns a subprocess, so
+    ``GET /api/version`` latency is unaffected.
 
     Shared by both transports that answer ``GET /api/version`` — the FastAPI
     handler (direct) and the relay client's proxy branch (relay) — so they
@@ -329,10 +358,33 @@ def build_cli_capabilities(
     ``cli_launchers`` registry, so a newly registered CLI is reported with no
     further change.
     """
-    return {
-        cli_id: {"available": probe_cli_available(launcher)}
-        for cli_id, launcher in (launchers or {}).items()
-    }
+    capabilities: dict[str, dict[str, object]] = {}
+    for cli_id, launcher in (launchers or {}).items():
+        entry: dict[str, object] = {"available": probe_cli_available(launcher)}
+        models = getattr(launcher, "cached_models", None)
+        if models:
+            entry["models"] = list(models)
+        capabilities[cli_id] = entry
+    return capabilities
+
+
+async def warm_cli_model_caches(launchers: Mapping[str, CliLauncher]) -> None:
+    """Populate each launcher's model-list cache once, off the request path.
+
+    Kicked as a background task at agent startup so
+    :func:`build_cli_capabilities` (and therefore ``GET /api/version``) only
+    ever reads a warm in-memory cache. Duck-typed: launchers advertise support
+    by exposing ``list_models()``; each probe is isolated so one broken CLI
+    cannot stop the others from warming.
+    """
+    for cli_id, launcher in (launchers or {}).items():
+        list_models = getattr(launcher, "list_models", None)
+        if list_models is None:
+            continue
+        try:
+            await list_models()
+        except Exception:
+            logger.warning("model enumeration failed for %s", cli_id, exc_info=True)
 
 
 def prepend_path_dir(env: dict[str, str], directory: str) -> None:
