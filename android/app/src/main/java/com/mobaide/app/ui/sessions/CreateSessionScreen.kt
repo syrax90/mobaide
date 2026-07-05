@@ -66,6 +66,7 @@ import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
 import com.mobaide.app.ui.projects.ProjectsViewModel
+import com.mobaide.app.ui.theme.WarningYellow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -589,7 +590,7 @@ private fun ModePickerSection(
     val disabledReasonList = ListItemDefaults.colors(
         containerColor = Color.Transparent,
         headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-        supportingColor = MaterialTheme.colorScheme.error,
+        supportingColor = WarningYellow,
     )
 
     ElevatedCard(

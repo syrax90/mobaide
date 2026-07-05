@@ -45,3 +45,6 @@ val StateStopped = Color(0xFF9E9E9E)
 val StateCrashed = Color(0xFFF44336)
 val StateStarting = Color(0xFFFFC107)
 val StateStopping = Color(0xFFFF9800)
+
+// Warning colors
+val WarningYellow = Color(0xFFF9A825)
