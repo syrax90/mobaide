@@ -36,18 +36,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pin the toolchain instead of trusting the image default so an image
-      # rotation that drops this Xcode fails loudly here rather than silently
-      # floating to a different compiler. macos-latest (macos-26 images)
-      # ships only Xcode 26.x; 26.6 matches the local development toolchain.
-      - name: Pin Xcode 26.6
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      # Pin the Xcode major, float the minor: macos-latest currently serves a
+      # mixed pool (macos-15 images carry Xcode 26.0–26.3 alongside 16.x;
+      # macos-26 images carry only 26.x), so an exact-version pin fails on
+      # whichever snapshot lacks it. Selecting the newest installed 26.x works
+      # on every pool image and still fails loudly if the major disappears.
+      - name: Select newest Xcode 26
+        run: |
+          xcode="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then
+            echo "::error::No Xcode 26.x on this runner; installed: $(ls -d /Applications/Xcode*.app | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "Selected $xcode"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
 
-      # The macos-26 image pre-creates only current-generation simulator
-      # devices (iPhone 17…), but the iPhone 16 device type still exists in
-      # the SDK — create it so the acceptance command below runs verbatim.
-      - name: Create iPhone 16 simulator
-        run: xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16
+      # macos-26 images pre-create only current-generation simulator devices
+      # (iPhone 17…) while the iPhone 16 device type still exists in the SDK;
+      # macos-15 images already have the device. Create it only when missing
+      # so the acceptance command below runs verbatim on either image.
+      - name: Ensure iPhone 16 simulator exists
+        run: |
+          xcrun simctl list devices available | grep -q "iPhone 16 (" \
+            || xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16
 
       - name: Build and run unit tests
         run: |

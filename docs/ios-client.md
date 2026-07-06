@@ -46,13 +46,14 @@ com.apple.CoreSimulator.SimDeviceType.iPhone-16`. If the first run fails with
 xcrun simctl bootstatus <udid> -b` and retry.
 
 CI: `.github/workflows/ios-build.yml` runs the same command on `macos-latest`
-pinned to Xcode 26.6 (matching the local toolchain; `macos-latest` images ship
-only Xcode 26.x), creating the iPhone 16 simulator device first since the
-image pre-creates only current-generation devices. The pbxproj stays at
-`objectVersion = 70` (the minimum for synchronized folder groups) so any
-Xcode ≥ 16 can still open the project. `protocol-integrity.yml` additionally
-asserts the xcconfig protocol constants match Android's `build.gradle.kts`
-values.
+with the newest installed Xcode 26.x selected at runtime (the runner pool
+currently mixes macos-15 and macos-26 image snapshots whose 26.x minors
+differ; the major is pinned and the job fails loudly if 26.x disappears),
+creating the iPhone 16 simulator device when the image doesn't pre-create
+it. The pbxproj stays at `objectVersion = 70` (the minimum for synchronized
+folder groups) so any Xcode ≥ 16 can still open the project.
+`protocol-integrity.yml` additionally asserts the xcconfig protocol constants
+match Android's `build.gradle.kts` values.
 
 ## Protocol-parity approach
 
