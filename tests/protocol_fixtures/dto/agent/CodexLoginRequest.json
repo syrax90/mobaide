@@ -1,0 +1,6 @@
+{
+  "type": "CodexLoginRequest",
+  "cases": [
+    { "name": "full", "wire": { "api_key": "sk-test-123" } }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "type": "ProjectInfo",
+  "cases": [
+    {
+      "name": "full_heterogeneous_flags",
+      "wire": {
+        "name": "proj",
+        "path": "/home/user/proj",
+        "has_linear_key": true,
+        "is_git": true,
+        "default_flags": { "plan_mode": true, "effort_level": 3, "temperature": 1.5, "model": "opus" },
+        "conda_env": "ml",
+        "order": 2,
+        "path_exists": true,
+        "auto_scan_filter": {
+          "state_names": ["Proposals", "Backlog"],
+          "label_names": ["AutoPipeline"],
+          "active_state": "In Progress",
+          "done_state": "Done",
+          "removal_label": "AutoPipeline"
+        },
+        "auto_scan_prompt": "scan it"
+      }
+    },
+    {
+      "name": "minimal_defaults_materialize",
+      "wire": { "name": "p", "path": "/x" },
+      "decoded_canonical": {
+        "name": "p",
+        "path": "/x",
+        "has_linear_key": false,
+        "is_git": false,
+        "default_flags": {},
+        "order": 0,
+        "path_exists": true,
+        "auto_scan_filter": {
+          "state_names": ["Proposals"],
+          "label_names": ["AutoPipeline"],
+          "active_state": "In Progress",
+          "done_state": "Done",
+          "removal_label": "AutoPipeline"
+        }
+      }
+    },
+    {
+      "name": "partial_filter_fills_defaults",
+      "wire": { "name": "p", "path": "/x", "auto_scan_filter": { "active_state": "Doing" } },
+      "decoded_canonical": {
+        "name": "p",
+        "path": "/x",
+        "has_linear_key": false,
+        "is_git": false,
+        "default_flags": {},
+        "order": 0,
+        "path_exists": true,
+        "auto_scan_filter": {
+          "state_names": ["Proposals"],
+          "label_names": ["AutoPipeline"],
+          "active_state": "Doing",
+          "done_state": "Done",
+          "removal_label": "AutoPipeline"
+        }
+      }
+    }
+  ]
+}

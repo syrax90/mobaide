@@ -1,0 +1,27 @@
+{
+  "type": "ProjectWrite",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "name": "p",
+        "path": "/x",
+        "linear_api_key": "lin_api_123",
+        "conda_env": "ml",
+        "default_flags": { "plan_mode": false, "count": 2 },
+        "auto_scan_filter": {
+          "state_names": ["Proposals"],
+          "label_names": ["AutoPipeline"],
+          "active_state": "In Progress",
+          "done_state": "Done",
+          "removal_label": "AutoPipeline"
+        }
+      }
+    },
+    {
+      "name": "minimal_keeps_empty_default_flags",
+      "wire": { "name": "p", "path": "/x" },
+      "decoded_canonical": { "name": "p", "path": "/x", "default_flags": {} }
+    }
+  ]
+}

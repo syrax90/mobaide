@@ -1,0 +1,6 @@
+{
+  "type": "CreateAgentRequest",
+  "cases": [
+    { "name": "full", "wire": { "name": "workstation" } }
+  ]
+}

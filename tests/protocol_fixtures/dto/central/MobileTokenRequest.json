@@ -1,0 +1,7 @@
+{
+  "type": "MobileTokenRequest",
+  "cases": [
+    { "name": "full", "wire": { "mobile_device_id": "d1", "mobile_device_name": "Pixel 9" } },
+    { "name": "no_name", "wire": { "mobile_device_id": "d1" } }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "type": "ResendVerificationResponse",
+  "cases": [
+    { "name": "full", "wire": { "status": "sent", "cooldown_seconds_remaining": 60 } },
+    {
+      "name": "cooldown_defaults_zero",
+      "wire": { "status": "sent" },
+      "decoded_canonical": { "status": "sent", "cooldown_seconds_remaining": 0 }
+    }
+  ]
+}

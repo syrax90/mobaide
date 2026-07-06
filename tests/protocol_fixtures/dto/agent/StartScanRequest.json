@@ -1,0 +1,13 @@
+{
+  "type": "StartScanRequest",
+  "cases": [
+    { "name": "minimal", "wire": { "project_name": "p" } },
+    {
+      "name": "with_claude_options",
+      "wire": {
+        "project_name": "p",
+        "claude_options": { "plan_mode": false, "no_memory": false, "skip_permissions": true, "worktree": false, "fast_mode": false, "ultracode": false, "model": "opus" }
+      }
+    }
+  ]
+}

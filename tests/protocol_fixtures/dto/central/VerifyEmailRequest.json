@@ -1,0 +1,6 @@
+{
+  "type": "VerifyEmailRequest",
+  "cases": [
+    { "name": "full", "wire": { "email": "e@x.com", "code": "123456" } }
+  ]
+}

@@ -51,3 +51,11 @@ central_server/data/agent_manifest.json
 /data/agent_manifest.json
 .github/release.keystore
 *.DS_Store
+
+# iOS (Xcode): per-user state and build artifacts, never sources
+ios/**/xcuserdata/
+*.xcuserstate
+DerivedData/
+ios/.build/
+ios/.swiftpm/
+*.ipa

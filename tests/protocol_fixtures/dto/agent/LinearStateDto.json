@@ -1,0 +1,11 @@
+{
+  "type": "LinearStateDto",
+  "cases": [
+    { "name": "full", "wire": { "name": "In Progress", "type": "started" } },
+    {
+      "name": "type_defaults_to_empty",
+      "wire": { "name": "Proposals" },
+      "decoded_canonical": { "name": "Proposals", "type": "" }
+    }
+  ]
+}

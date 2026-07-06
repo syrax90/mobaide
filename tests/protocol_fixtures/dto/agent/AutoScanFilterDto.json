@@ -1,0 +1,26 @@
+{
+  "type": "AutoScanFilterDto",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "state_names": ["Proposals", "Todo"],
+        "label_names": ["AutoPipeline", "Bot"],
+        "active_state": "Doing",
+        "done_state": "Merged",
+        "removal_label": "Bot"
+      }
+    },
+    {
+      "name": "empty_fills_nonempty_defaults",
+      "wire": {},
+      "decoded_canonical": {
+        "state_names": ["Proposals"],
+        "label_names": ["AutoPipeline"],
+        "active_state": "In Progress",
+        "done_state": "Done",
+        "removal_label": "AutoPipeline"
+      }
+    }
+  ]
+}

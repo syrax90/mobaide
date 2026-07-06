@@ -1,0 +1,7 @@
+{
+  "type": "GitDeleteResultItem",
+  "cases": [
+    { "name": "ok", "wire": { "kind": "branch_only", "target": "b", "ok": true } },
+    { "name": "failed_with_detail", "wire": { "kind": "orphan_worktree", "target": "/wt/x", "ok": false, "error": "busy", "error_detail": "session s1 is running in it" } }
+  ]
+}

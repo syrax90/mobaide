@@ -1,0 +1,8 @@
+{
+  "type": "UpdateTemplateRequest",
+  "cases": [
+    { "name": "empty_patch", "wire": {} },
+    { "name": "favorite_only", "wire": { "is_favorite": true } },
+    { "name": "rename_and_body", "wire": { "name": "New", "body": "New body" } }
+  ]
+}

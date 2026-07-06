@@ -41,6 +41,7 @@ jobs:
             agent
             server
             android
+            ios
             protocol
             infra
             docs

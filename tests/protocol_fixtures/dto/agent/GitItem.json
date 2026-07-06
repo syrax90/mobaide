@@ -1,0 +1,37 @@
+{
+  "type": "GitItem",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "kind": "branch_with_worktree",
+        "branch": "feature/x",
+        "worktree_path": "/wt/x",
+        "is_current": true,
+        "upstream": "origin/feature/x",
+        "ahead": 2,
+        "behind": 1,
+        "gone": false,
+        "locked": true,
+        "locked_reason": "manual lock",
+        "detached": false,
+        "prunable": false
+      }
+    },
+    {
+      "name": "minimal_defaults_materialize",
+      "wire": { "kind": "branch_only", "branch": "main" },
+      "decoded_canonical": {
+        "kind": "branch_only",
+        "branch": "main",
+        "is_current": false,
+        "ahead": 0,
+        "behind": 0,
+        "gone": false,
+        "locked": false,
+        "detached": false,
+        "prunable": false
+      }
+    }
+  ]
+}

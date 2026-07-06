@@ -1,0 +1,6 @@
+{
+  "type": "UserLoginRequest",
+  "cases": [
+    { "name": "full", "wire": { "email": "e@x.com", "password": "pw" } }
+  ]
+}

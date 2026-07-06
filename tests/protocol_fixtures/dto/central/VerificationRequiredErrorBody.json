@@ -1,0 +1,6 @@
+{
+  "type": "VerificationRequiredErrorBody",
+  "cases": [
+    { "name": "fastapi_detail_wrapper", "wire": { "detail": { "error": "verification_required", "email": "e@x.com" } } }
+  ]
+}

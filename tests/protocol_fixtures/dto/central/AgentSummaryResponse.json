@@ -1,0 +1,7 @@
+{
+  "type": "AgentSummaryResponse",
+  "cases": [
+    { "name": "full", "wire": { "agent_id": "A1", "name": "workstation", "online": true, "created_at": "2026-07-01T00:00:00Z", "last_seen_at": "2026-07-06T09:00:00Z" } },
+    { "name": "never_seen", "wire": { "agent_id": "A2", "name": "laptop", "online": false, "created_at": "2026-07-01T00:00:00Z" } }
+  ]
+}

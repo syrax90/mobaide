@@ -1,0 +1,6 @@
+{
+  "type": "GitDeleteRequest",
+  "cases": [
+    { "name": "full", "wire": { "items": [ { "kind": "branch_only", "branch": "b", "force": false } ] } }
+  ]
+}

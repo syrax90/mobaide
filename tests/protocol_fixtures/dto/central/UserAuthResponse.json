@@ -1,0 +1,24 @@
+{
+  "type": "UserAuthResponse",
+  "cases": [
+    {
+      "name": "verified_ok",
+      "wire": { "access_token": "jwt", "token_type": "bearer", "user_id": "u1", "email": "e@x.com", "role": "user", "status": "ok" }
+    },
+    {
+      "name": "verification_required_no_token",
+      "wire": { "user_id": "u1", "email": "e@x.com", "role": "user", "status": "verification_required" },
+      "decoded_canonical": { "token_type": "bearer", "user_id": "u1", "email": "e@x.com", "role": "user", "status": "verification_required" }
+    },
+    {
+      "name": "defaults_materialize",
+      "wire": { "access_token": "jwt", "user_id": "u1", "email": "e@x.com", "role": "admin" },
+      "decoded_canonical": { "access_token": "jwt", "token_type": "bearer", "user_id": "u1", "email": "e@x.com", "role": "admin", "status": "ok" }
+    },
+    {
+      "name": "scheduled_deletion_banner",
+      "wire": { "access_token": "jwt", "user_id": "u1", "email": "e@x.com", "role": "user", "scheduled_deletion_at": "2026-07-20T00:00:00Z" },
+      "decoded_canonical": { "access_token": "jwt", "token_type": "bearer", "user_id": "u1", "email": "e@x.com", "role": "user", "status": "ok", "scheduled_deletion_at": "2026-07-20T00:00:00Z" }
+    }
+  ]
+}

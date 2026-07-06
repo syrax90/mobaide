@@ -1,0 +1,27 @@
+{
+  "type": "VersionInfoResponse",
+  "cases": [
+    {
+      "name": "full_heterogeneous_capabilities",
+      "wire": {
+        "name": "mobaide-agent",
+        "server_version": "0.2.1",
+        "protocol_versions": [6],
+        "min_client_version": 6,
+        "capabilities": {
+          "cli": {
+            "claude": { "available": true, "models": ["opus", "sonnet"] },
+            "codex": { "available": false, "models": [] }
+          },
+          "extra": [1, "two", null, { "nested": true }]
+        },
+        "latest_agent_version": "0.2.2"
+      }
+    },
+    {
+      "name": "missing_capabilities_defaults_to_empty_object",
+      "wire": { "name": "central", "server_version": "1.0.0", "protocol_versions": [6], "min_client_version": 6 },
+      "decoded_canonical": { "name": "central", "server_version": "1.0.0", "protocol_versions": [6], "min_client_version": 6, "capabilities": {} }
+    }
+  ]
+}

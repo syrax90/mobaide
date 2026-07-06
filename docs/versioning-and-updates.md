@@ -844,7 +844,13 @@ The Android client has three distinct update paths that work together:
    between the two, and (b) compares the live wire shape against
    `tests/protocol_golden.json`. Any handshake-shape change **must** update
    the golden file in the same commit.
-2. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
+2. **iOS constants check:** extracts `APP_PROTOCOL_VERSION` and
+   `MIN_SERVER_PROTOCOL_VERSION` from `ios/Config/Protocol.xcconfig` and
+   asserts they equal the `buildConfigField` values in
+   `android/app/build.gradle.kts`, so a proto bump that misses `ios/`
+   fails here. The comparison is version-agnostic and needs no update on
+   bumps.
+3. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
    files, it must modify the other. Comparison uses
    `${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}`
    so the check is base-branch-agnostic.

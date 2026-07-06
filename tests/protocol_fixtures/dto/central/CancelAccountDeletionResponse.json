@@ -1,0 +1,7 @@
+{
+  "type": "CancelAccountDeletionResponse",
+  "cases": [
+    { "name": "full", "wire": { "status": "cancelled", "scheduled_deletion_at": null }, "decoded_canonical": { "status": "cancelled" } },
+    { "name": "status_defaults_cancelled", "wire": {}, "decoded_canonical": { "status": "cancelled" } }
+  ]
+}

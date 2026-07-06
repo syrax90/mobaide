@@ -1,0 +1,11 @@
+{
+  "type": "ResetIpRateLimitedDetail",
+  "cases": [
+    { "name": "full", "wire": { "error": "ip_rate_limited", "retry_after_seconds": 30 } },
+    {
+      "name": "retry_defaults_zero",
+      "wire": { "error": "ip_rate_limited" },
+      "decoded_canonical": { "error": "ip_rate_limited", "retry_after_seconds": 0 }
+    }
+  ]
+}

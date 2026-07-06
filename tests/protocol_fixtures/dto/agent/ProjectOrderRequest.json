@@ -1,0 +1,7 @@
+{
+  "type": "ProjectOrderRequest",
+  "cases": [
+    { "name": "full", "wire": { "names": ["b", "a", "c"] } },
+    { "name": "empty", "wire": { "names": [] } }
+  ]
+}

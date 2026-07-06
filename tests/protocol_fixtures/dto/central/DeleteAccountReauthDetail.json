@@ -1,0 +1,6 @@
+{
+  "type": "DeleteAccountReauthDetail",
+  "cases": [
+    { "name": "full", "wire": { "error": "reauth_required", "message": "Re-enter your password" } }
+  ]
+}

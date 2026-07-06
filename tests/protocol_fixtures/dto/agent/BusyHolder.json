@@ -1,0 +1,7 @@
+{
+  "type": "BusyHolder",
+  "cases": [
+    { "name": "full", "wire": { "kind": "session", "session_id": "s1", "project_name": "p", "cwd": "/wt/x", "worktree_path": "/wt/x" } },
+    { "name": "minimal", "wire": { "kind": "autoscan" } }
+  ]
+}

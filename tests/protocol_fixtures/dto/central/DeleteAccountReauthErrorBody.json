@@ -1,0 +1,6 @@
+{
+  "type": "DeleteAccountReauthErrorBody",
+  "cases": [
+    { "name": "fastapi_detail_wrapper", "wire": { "detail": { "error": "reauth_required", "message": "Re-enter your password" } } }
+  ]
+}

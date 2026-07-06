@@ -1,0 +1,69 @@
+name: iOS build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "tests/protocol_fixtures/**"
+      - ".github/workflows/ios-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "tests/protocol_fixtures/**"
+      - ".github/workflows/ios-build.yml"
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+# Without an explicit permissions block, the workflow inherits the repo
+# default, which can leave actions/checkout's GITHUB_TOKEN without the
+# contents:read scope it needs to embed a usable Basic-auth header into
+# the cloned remote's URL — surfacing as
+#   fatal: could not read Username for 'https://github.com': terminal prompts disabled
+# on the very first fetch. Declaring contents:read explicitly is the
+# documented mitigation and is also the least-privilege envelope this job
+# needs (it builds and runs unit tests; no writes).
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin the Xcode major, float the minor: macos-latest currently serves a
+      # mixed pool (macos-15 images carry Xcode 26.0–26.3 alongside 16.x;
+      # macos-26 images carry only 26.x), so an exact-version pin fails on
+      # whichever snapshot lacks it. Selecting the newest installed 26.x works
+      # on every pool image and still fails loudly if the major disappears.
+      - name: Select newest Xcode 26
+        run: |
+          xcode="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$xcode" ]; then
+            echo "::error::No Xcode 26.x on this runner; installed: $(ls -d /Applications/Xcode*.app | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "Selected $xcode"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      # macos-26 images pre-create only current-generation simulator devices
+      # (iPhone 17…) while the iPhone 16 device type still exists in the SDK;
+      # macos-15 images already have the device. Create it only when missing
+      # so the acceptance command below runs verbatim on either image.
+      - name: Ensure iPhone 16 simulator exists
+        run: |
+          xcrun simctl list devices available | grep -q "iPhone 16 (" \
+            || xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16
+
+      - name: Build and run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/Mobaide.xcodeproj -scheme Mobaide \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO test

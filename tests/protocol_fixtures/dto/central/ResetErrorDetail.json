@@ -1,0 +1,7 @@
+{
+  "type": "ResetErrorDetail",
+  "cases": [
+    { "name": "invalid_code", "wire": { "error": "invalid_code" } },
+    { "name": "same_password", "wire": { "error": "password_unchanged" } }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "type": "AntigravityOptionsModel",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "model": "antigravity-1",
+        "skip_permissions": true,
+        "sandbox": false,
+        "add_dirs": ["/extra", "/more"],
+        "worktree": true,
+        "branch_name": "b"
+      }
+    },
+    {
+      "name": "empty_defaults_materialize",
+      "wire": {},
+      "decoded_canonical": { "skip_permissions": false, "sandbox": false, "add_dirs": [], "worktree": false }
+    }
+  ]
+}

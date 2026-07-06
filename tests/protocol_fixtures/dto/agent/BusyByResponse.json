@@ -1,0 +1,7 @@
+{
+  "type": "BusyByResponse",
+  "cases": [
+    { "name": "full", "wire": { "busy_by": [ { "kind": "session", "session_id": "s1" } ] } },
+    { "name": "empty", "wire": { "busy_by": [] } }
+  ]
+}

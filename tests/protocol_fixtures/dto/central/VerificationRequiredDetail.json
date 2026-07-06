@@ -1,0 +1,7 @@
+{
+  "type": "VerificationRequiredDetail",
+  "cases": [
+    { "name": "full", "wire": { "error": "verification_required", "email": "e@x.com" } },
+    { "name": "no_email", "wire": { "error": "verification_required" } }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "type": "ClaudeOptionsModel",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "plan_mode": true,
+        "no_memory": true,
+        "skip_permissions": false,
+        "initial_prompt": "fix the bug",
+        "worktree": true,
+        "branch_name": "feature/claude/x",
+        "identifier": "CLA-97",
+        "title": "Fix",
+        "model": "opus",
+        "effort": "high",
+        "fast_mode": true,
+        "ultracode": true,
+        "append_system_prompt": "be careful"
+      }
+    },
+    {
+      "name": "empty_defaults_materialize_skip_permissions_true",
+      "wire": {},
+      "decoded_canonical": {
+        "plan_mode": false,
+        "no_memory": false,
+        "skip_permissions": true,
+        "worktree": false,
+        "fast_mode": false,
+        "ultracode": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "type": "StopScanRequest",
+  "cases": [
+    { "name": "full", "wire": { "project_name": "p" } }
+  ]
+}

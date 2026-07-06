@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>AppProtocolVersion</key>
+	<string>$(APP_PROTOCOL_VERSION)</string>
+	<key>MinServerProtocolVersion</key>
+	<string>$(MIN_SERVER_PROTOCOL_VERSION)</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Mobaide connects directly to your agent on your local network when direct connection mode is used.</string>
+</dict>
+</plist>

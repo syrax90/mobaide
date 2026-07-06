@@ -1,0 +1,23 @@
+{
+  "description": "Relay path rewrite + WS URL construction golden table. Mirrors WebSocketManager.mapToRelayPath and URL assembly; token is appended raw (never percent-encoded).",
+  "path_cases": [
+    { "path": "ws/session/s1", "agent_id": "A1", "expect": "relay/ws/session/A1/s1" },
+    { "path": "ws/events", "agent_id": "A1", "expect": "relay/ws/events/A1" },
+    { "path": "ws/sessions", "agent_id": "A1", "expect": "relay/ws/sessions/A1" },
+    { "path": "ws/autoscan", "agent_id": "A1", "expect": "relay/ws/autoscan/A1" },
+    { "path": "ws/other/x", "agent_id": "A1", "expect": "relay/ws/other/x/A1" }
+  ],
+  "url_cases": [
+    { "name": "direct_http_is_ws", "base": "http://192.168.1.5:8000", "mode": "direct", "path": "ws/events", "token": "t", "expect": "ws://192.168.1.5:8000/ws/events?token=t" },
+    { "name": "direct_https_is_wss", "base": "https://agent.example.com", "mode": "direct", "path": "ws/session/s1", "token": "tok", "expect": "wss://agent.example.com/ws/session/s1?token=tok" },
+    { "name": "relay_session_rewrite_raw_token", "base": "https://relay.example.com", "mode": "relay", "path": "ws/session/s1", "agent_id": "A1", "token": "ab+c/d=", "expect": "wss://relay.example.com/relay/ws/session/A1/s1?token=ab+c/d=" },
+    { "name": "relay_fallback_path", "base": "https://relay.example.com", "mode": "relay", "path": "ws/user-events", "agent_id": "A1", "token": "t", "expect": "wss://relay.example.com/relay/ws/user-events/A1?token=t" },
+    { "name": "existing_query_appends_ampersand", "base": "https://host", "mode": "direct", "path": "ws/events?foo=1", "token": "t", "expect": "wss://host/ws/events?foo=1&token=t" },
+    { "name": "user_events_no_rewrite_on_relay_base", "base": "https://relay.example.com", "mode": "direct", "path": "ws/user-events", "token": "u", "expect": "wss://relay.example.com/ws/user-events?token=u" }
+  ],
+  "rest_base_cases": [
+    { "name": "direct_uses_agent_url", "mode": "direct", "agent_url": "http://192.168.1.5:8000", "relay_url": "https://relay.example.com", "agent_id": "A1", "expect": "http://192.168.1.5:8000" },
+    { "name": "relay_uses_proxy_path", "mode": "relay", "agent_url": null, "relay_url": "https://relay.example.com", "agent_id": "A1", "expect": "https://relay.example.com/proxy/A1" },
+    { "name": "relay_without_agent_id_is_null", "mode": "relay", "agent_url": null, "relay_url": "https://relay.example.com", "agent_id": null, "expect": null }
+  ]
+}

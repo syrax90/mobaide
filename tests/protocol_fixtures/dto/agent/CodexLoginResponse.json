@@ -1,0 +1,7 @@
+{
+  "type": "CodexLoginResponse",
+  "cases": [
+    { "name": "authenticated", "wire": { "authenticated": true } },
+    { "name": "not_authenticated", "wire": { "authenticated": false } }
+  ]
+}

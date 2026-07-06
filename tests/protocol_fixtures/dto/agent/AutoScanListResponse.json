@@ -1,0 +1,22 @@
+{
+  "type": "AutoScanListResponse",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "scans": [
+          { "project_name": "p", "status": "idle", "started_at": 1751800000.5, "last_activity_at": 1751800000.5, "processed_count": 0, "scan_interval_seconds": 300, "cycle_number": 0, "current_seq": 1 }
+        ],
+        "capacity": 4,
+        "max_scans": 5,
+        "available_projects": ["p", "q"],
+        "auto_scan_prompt": "default prompt"
+      }
+    },
+    {
+      "name": "empty_defaults_materialize",
+      "wire": {},
+      "decoded_canonical": { "scans": [], "capacity": 0, "max_scans": 5, "available_projects": [] }
+    }
+  ]
+}

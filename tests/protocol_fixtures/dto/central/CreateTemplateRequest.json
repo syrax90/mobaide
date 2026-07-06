@@ -1,0 +1,6 @@
+{
+  "type": "CreateTemplateRequest",
+  "cases": [
+    { "name": "full", "wire": { "name": "Fix bug", "body": "Fix the bug" } }
+  ]
+}

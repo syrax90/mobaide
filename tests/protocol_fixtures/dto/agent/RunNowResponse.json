@@ -1,0 +1,7 @@
+{
+  "type": "RunNowResponse",
+  "cases": [
+    { "name": "full", "wire": { "ok": true, "project_name": "p", "next_scan_at": "2026-07-06T10:00:00Z" } },
+    { "name": "no_next_scan", "wire": { "ok": false, "project_name": "p" } }
+  ]
+}
