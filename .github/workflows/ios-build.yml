@@ -1,0 +1,51 @@
+name: iOS build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "tests/protocol_fixtures/**"
+      - ".github/workflows/ios-build.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "tests/protocol_fixtures/**"
+      - ".github/workflows/ios-build.yml"
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+# Without an explicit permissions block, the workflow inherits the repo
+# default, which can leave actions/checkout's GITHUB_TOKEN without the
+# contents:read scope it needs to embed a usable Basic-auth header into
+# the cloned remote's URL — surfacing as
+#   fatal: could not read Username for 'https://github.com': terminal prompts disabled
+# on the very first fetch. Declaring contents:read explicitly is the
+# documented mitigation and is also the least-privilege envelope this job
+# needs (it builds and runs unit tests; no writes).
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin the toolchain instead of trusting the image default: the project
+      # format (objectVersion 70, synchronized folder groups) must stay
+      # readable by Xcode 16.x, and an image migration that drops 16.4 should
+      # fail loudly here rather than silently float to a newer major.
+      - name: Pin Xcode 16.4
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+
+      - name: Build and run unit tests
+        run: |
+          set -o pipefail
+          xcodebuild -project ios/Mobaide.xcodeproj -scheme Mobaide \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO test

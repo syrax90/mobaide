@@ -1,0 +1,4 @@
+// Wire-protocol constants shared with android/app/build.gradle.kts and the
+// server envelope.py copies. Bump together with PROTOCOL.md ("How to bump").
+APP_PROTOCOL_VERSION = 6
+MIN_SERVER_PROTOCOL_VERSION = 6

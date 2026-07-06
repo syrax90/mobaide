@@ -1,0 +1,26 @@
+{
+  "description": "Golden binary terminal-frame samples. bytes_hex is the full wire frame (type byte + payload). Mirrors android TerminalProtocol.kt.",
+  "encode": [
+    { "name": "resize_40x120", "frame": { "kind": "resize", "rows": 40, "cols": 120 }, "bytes_hex": "7200280078" },
+    { "name": "resize_24x80", "frame": { "kind": "resize", "rows": 24, "cols": 80 }, "bytes_hex": "7200180050" },
+    { "name": "resize_max_u16", "frame": { "kind": "resize", "rows": 65535, "cols": 65535 }, "bytes_hex": "72ffffffff" },
+    { "name": "input_hello", "frame": { "kind": "input", "text": "hello" }, "bytes_hex": "6968656c6c6f" },
+    { "name": "input_empty", "frame": { "kind": "input", "text": "" }, "bytes_hex": "69" },
+    { "name": "input_utf8", "frame": { "kind": "input", "text": "é" }, "bytes_hex": "69c3a9" },
+    { "name": "execute_ls", "frame": { "kind": "execute", "text": "ls" }, "bytes_hex": "786c73" },
+    { "name": "submit_empty", "frame": { "kind": "submit", "text": "" }, "bytes_hex": "6d" },
+    { "name": "submit_command", "frame": { "kind": "submit", "text": "git status" }, "bytes_hex": "6d67697420737461747573" }
+  ],
+  "decode": [
+    { "name": "output_hi_newline", "bytes_hex": "6f68690a", "expect": { "kind": "output", "payload_hex": "68690a" } },
+    { "name": "output_empty", "bytes_hex": "6f", "expect": { "kind": "output", "payload_hex": "" } },
+    { "name": "state_running_pid", "bytes_hex": "737b22737461747573223a2272756e6e696e67222c22706964223a34327d", "expect": { "kind": "state", "status": "running", "pid": 42 } },
+    { "name": "state_stopped_no_pid", "bytes_hex": "737b22737461747573223a2273746f70706564227d", "expect": { "kind": "state", "status": "stopped" } },
+    { "name": "replay_start", "bytes_hex": "62", "expect": { "kind": "replay_start" } },
+    { "name": "replay_end", "bytes_hex": "65", "expect": { "kind": "replay_end" } },
+    { "name": "empty_frame_is_nil", "bytes_hex": "", "expect": null },
+    { "name": "unknown_type_is_nil", "bytes_hex": "7a00", "expect": null },
+    { "name": "inbound_input_byte_is_nil", "bytes_hex": "6968", "expect": null },
+    { "name": "inbound_resize_byte_is_nil", "bytes_hex": "7200280078", "expect": null }
+  ]
+}
