@@ -83,7 +83,7 @@ enum RelayRouting {
         return trimTrailingSlashes(host)
     }
 
-    private static func trimTrailingSlashes(_ url: String) -> String {
+    static func trimTrailingSlashes(_ url: String) -> String {
         var trimmed = url
         while trimmed.hasSuffix("/") {
             trimmed.removeLast()

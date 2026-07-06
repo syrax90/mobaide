@@ -1,0 +1,50 @@
+import XCTest
+@testable import Mobaide
+
+@MainActor
+final class RouterTests: XCTestCase {
+    func testNavigatePopAndPopToRoot() {
+        let router = Router()
+        router.navigate(to: .sessionList)
+        router.navigate(to: .sessionDetail(sessionId: "s1"))
+        XCTAssertEqual(router.path, [.sessionList, .sessionDetail(sessionId: "s1")])
+
+        router.pop()
+        XCTAssertEqual(router.path, [.sessionList])
+
+        router.navigate(to: .settings)
+        router.popToRoot()
+        XCTAssertEqual(router.path, [])
+    }
+
+    func testTransitionToUnauthenticatedClearsPath() {
+        let router = Router()
+        router.navigate(to: .settings)
+        router.handleTransition(from: .userOnly, to: .unauthenticated)
+        XCTAssertEqual(router.path, [])
+    }
+
+    func testAgentDisconnectClearsPath() {
+        let router = Router()
+        router.navigate(to: .sessionList)
+        router.handleTransition(from: .fullyConnected, to: .userOnly)
+        XCTAssertEqual(router.path, [])
+    }
+
+    func testPromotionPreservesPath() {
+        let router = Router()
+        router.navigate(to: .connections)
+        router.handleTransition(from: .userOnly, to: .fullyConnected)
+        XCTAssertEqual(router.path, [.connections])
+    }
+
+    func testIncompatibleServerTransitionPreservesPath() {
+        let router = Router()
+        router.navigate(to: .settings)
+        let info = AuthState.IncompatibleServer(
+            reason: "r", minClientVersion: 1, storeUrl: "", storeFallbackUrl: ""
+        )
+        router.handleTransition(from: .fullyConnected, to: .incompatibleServer(info))
+        XCTAssertEqual(router.path, [.settings], "the takeover renders above the stack; no reset needed")
+    }
+}
