@@ -41,12 +41,15 @@ struct AgentAPI: Sendable {
     /// effective base (used before a connection is configured).
     func login(agentUrl: String, username: String, password: String) async throws -> TokenResponse {
         let base = trimTrailingSlashes(agentUrl)
-        let body = try WireJSON.encoder().encode(TokenRequest(username: username, password: password))
-        return try await execute(method: "POST", url: "\(base)/api/auth/token", body: body)
+        return try await execute(
+            method: "POST",
+            url: "\(base)/api/auth/token",
+            body: TokenRequest(username: username, password: password)
+        )
     }
 
     func forceAgentUpdate() async throws -> ForceUpdateResponse {
-        try await execute(method: "POST", url: "\(try await base())/api/agent/update/force_now", body: Data())
+        try await execute(method: "POST", url: "\(try await base())/api/agent/update/force_now", rawBody: Data())
     }
 
     func getAgentVersion() async throws -> VersionInfoResponse {
@@ -54,8 +57,7 @@ struct AgentAPI: Sendable {
     }
 
     func createSession(_ request: CreateSessionRequest) async throws -> SessionResponse {
-        let body = try WireJSON.encoder().encode(request)
-        return try await execute(method: "POST", url: "\(try await base())/api/sessions", body: body)
+        try await execute(method: "POST", url: "\(try await base())/api/sessions", body: request)
     }
 
     func listSessions() async throws -> [SessionResponse] {
@@ -63,8 +65,7 @@ struct AgentAPI: Sendable {
     }
 
     func codexLogin(apiKey: String) async throws -> CodexLoginResponse {
-        let body = try WireJSON.encoder().encode(CodexLoginRequest(api_key: apiKey))
-        return try await execute(method: "POST", url: "\(try await base())/api/codex/login", body: body)
+        try await execute(method: "POST", url: "\(try await base())/api/codex/login", body: CodexLoginRequest(api_key: apiKey))
     }
 
     func deleteSession(sessionId: String, force: Bool = false) async throws {
@@ -81,14 +82,12 @@ struct AgentAPI: Sendable {
     }
 
     func createProject(_ project: ProjectWrite) async throws -> ProjectInfo {
-        let body = try WireJSON.encoder().encode(project)
-        return try await execute(method: "POST", url: "\(try await base())/api/projects", body: body)
+        try await execute(method: "POST", url: "\(try await base())/api/projects", body: project)
     }
 
     func updateProject(currentName: String, update: ProjectUpdate) async throws -> ProjectInfo {
-        let body = try WireJSON.encoder().encode(update)
         let name = Self.encodePathSegment(currentName)
-        return try await execute(method: "PUT", url: "\(try await base())/api/projects/\(name)", body: body)
+        return try await execute(method: "PUT", url: "\(try await base())/api/projects/\(name)", body: update)
     }
 
     func deleteProject(name: String) async throws {
@@ -97,8 +96,7 @@ struct AgentAPI: Sendable {
     }
 
     func reorderProjects(_ order: ProjectOrderRequest) async throws -> [ProjectInfo] {
-        let body = try WireJSON.encoder().encode(order)
-        return try await execute(method: "PATCH", url: "\(try await base())/api/projects/order", body: body)
+        try await execute(method: "PATCH", url: "\(try await base())/api/projects/order", body: order)
     }
 
     func getLinearLabels(projectName: String) async throws -> [LinearLabelDto] {
@@ -117,9 +115,8 @@ struct AgentAPI: Sendable {
     }
 
     func deleteGitItems(projectName: String, request: GitDeleteRequest) async throws -> GitDeleteResponse {
-        let body = try WireJSON.encoder().encode(request)
         let name = Self.encodePathSegment(projectName)
-        return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/items:delete", body: body)
+        return try await execute(method: "POST", url: "\(try await base())/api/projects/\(name)/git/items:delete", body: request)
     }
 
     func getAutoScanList() async throws -> AutoScanListResponse {
@@ -127,18 +124,19 @@ struct AgentAPI: Sendable {
     }
 
     func startAutoScan(projectName: String, claudeOptions: ClaudeOptionsModel? = nil) async throws {
-        let body = try WireJSON.encoder().encode(StartScanRequest(project_name: projectName, claude_options: claudeOptions))
-        try await executeRaw(method: "POST", url: "\(try await base())/api/autoscan/start", body: body)
+        try await executeRaw(
+            method: "POST",
+            url: "\(try await base())/api/autoscan/start",
+            body: StartScanRequest(project_name: projectName, claude_options: claudeOptions)
+        )
     }
 
     func stopAutoScan(projectName: String) async throws {
-        let body = try WireJSON.encoder().encode(StopScanRequest(project_name: projectName))
-        try await executeRaw(method: "POST", url: "\(try await base())/api/autoscan/stop", body: body)
+        try await executeRaw(method: "POST", url: "\(try await base())/api/autoscan/stop", body: StopScanRequest(project_name: projectName))
     }
 
     func runAutoScanNow(projectName: String) async throws -> RunNowResponse {
-        let body = try WireJSON.encoder().encode(RunNowRequest(project_name: projectName))
-        return try await execute(method: "POST", url: "\(try await base())/api/autoscan/run-now", body: body)
+        try await execute(method: "POST", url: "\(try await base())/api/autoscan/run-now", body: RunNowRequest(project_name: projectName))
     }
 
     // MARK: - Plumbing
@@ -167,16 +165,26 @@ struct AgentAPI: Sendable {
         return trimmed
     }
 
-    private func execute<T: Decodable>(method: String, url: String, body: Data? = nil) async throws -> T {
-        let (data, response) = try await send(method: method, url: url, body: body)
+    private func execute<T: Decodable>(method: String, url: String, rawBody: Data? = nil) async throws -> T {
+        let (data, response) = try await send(method: method, url: url, body: rawBody)
         guard !data.isEmpty else {
             throw APIError(code: response.statusCode, errorBody: "Empty response body")
         }
         return try WireJSON.decoder().decode(T.self, from: data)
     }
 
-    private func executeRaw(method: String, url: String, body: Data? = nil) async throws {
-        _ = try await send(method: method, url: url, body: body)
+    private func execute<T: Decodable, Body: Encodable>(method: String, url: String, body: Body) async throws -> T {
+        let encoded = try WireJSON.encoder().encode(body)
+        return try await execute(method: method, url: url, rawBody: encoded)
+    }
+
+    private func executeRaw(method: String, url: String, rawBody: Data? = nil) async throws {
+        _ = try await send(method: method, url: url, body: rawBody)
+    }
+
+    private func executeRaw<Body: Encodable>(method: String, url: String, body: Body) async throws {
+        let encoded = try WireJSON.encoder().encode(body)
+        try await executeRaw(method: method, url: url, rawBody: encoded)
     }
 
     private func send(method: String, url: String, body: Data?) async throws -> (Data, HTTPURLResponse) {

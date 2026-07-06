@@ -167,9 +167,7 @@ final class NWWebSocketConnection: WebSocketTransportConnection, @unchecked Send
                 self?.sendPing()
             }
         }
-        lock.lock()
-        pingTask = task
-        lock.unlock()
+        lock.withLock { pingTask = task }
     }
 
     private func sendPing() {
@@ -180,41 +178,39 @@ final class NWWebSocketConnection: WebSocketTransportConnection, @unchecked Send
     }
 
     private func cancelPing() {
-        lock.lock()
-        pingTask?.cancel()
-        pingTask = nil
-        lock.unlock()
+        lock.withLock {
+            pingTask?.cancel()
+            pingTask = nil
+        }
     }
 
     private func emitCloseAndFinish(code: UInt16, reason: String) {
-        lock.lock()
-        let alreadyFinished = finished
-        finished = true
-        lock.unlock()
-        guard !alreadyFinished else { return }
+        guard markFinished() else { return }
         continuation.yield(.closed(code: code, reason: reason))
         continuation.finish()
         cancelPing()
     }
 
     private func emitFailureAndFinish(_ error: NWError) {
-        lock.lock()
-        let alreadyFinished = finished
-        finished = true
-        lock.unlock()
-        guard !alreadyFinished else { return }
+        guard markFinished() else { return }
         continuation.yield(.failed(.network(String(describing: error))))
         continuation.finish()
         cancelPing()
     }
 
     private func finish() {
-        lock.lock()
-        let alreadyFinished = finished
-        finished = true
-        lock.unlock()
-        guard !alreadyFinished else { return }
+        guard markFinished() else { return }
         continuation.finish()
         cancelPing()
+    }
+
+    /// Exactly-one-terminal-event guard across the receive-metadata close and
+    /// connection-failure races; true only for the first caller.
+    private func markFinished() -> Bool {
+        lock.withLock {
+            let wasFinished = finished
+            finished = true
+            return !wasFinished
+        }
     }
 }
