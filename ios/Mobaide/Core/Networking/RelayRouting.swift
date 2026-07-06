@@ -69,17 +69,25 @@ enum RelayRouting {
             return agentURL
         case .relay:
             guard let relayServerURL, let agentId else { return nil }
-            return "\(relayServerURL)/proxy/\(agentId)"
+            return "\(trimTrailingSlashes(relayServerURL))/proxy/\(agentId)"
         }
     }
 
     private static func stripHTTPScheme(_ base: String) -> String {
-        if base.hasPrefix("https://") {
-            return String(base.dropFirst("https://".count))
+        var host = base
+        if host.hasPrefix("https://") {
+            host = String(host.dropFirst("https://".count))
+        } else if host.hasPrefix("http://") {
+            host = String(host.dropFirst("http://".count))
         }
-        if base.hasPrefix("http://") {
-            return String(base.dropFirst("http://".count))
+        return trimTrailingSlashes(host)
+    }
+
+    private static func trimTrailingSlashes(_ url: String) -> String {
+        var trimmed = url
+        while trimmed.hasSuffix("/") {
+            trimmed.removeLast()
         }
-        return base
+        return trimmed
     }
 }

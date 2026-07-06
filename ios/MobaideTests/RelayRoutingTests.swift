@@ -87,6 +87,29 @@ final class RelayRoutingTests: XCTestCase {
         )
     }
 
+    func testTrailingSlashBaseDoesNotDoubleSlashWebSocketURL() {
+        let url = RelayRouting.webSocketURLString(
+            baseURL: "https://relay.example.com/",
+            path: "ws/events",
+            mode: .relay,
+            agentId: "A1",
+            token: "t"
+        )
+        XCTAssertEqual(url, "wss://relay.example.com/relay/ws/events/A1?token=t")
+    }
+
+    func testTrailingSlashRelayURLDoesNotDoubleSlashRESTBase() {
+        XCTAssertEqual(
+            RelayRouting.agentRESTBaseURL(
+                mode: .relay,
+                agentURL: nil,
+                relayServerURL: "https://relay.example.com//",
+                agentId: "A1"
+            ),
+            "https://relay.example.com/proxy/A1"
+        )
+    }
+
     func testAgentRESTBaseURLRelayRequiresAgentId() {
         XCTAssertNil(
             RelayRouting.agentRESTBaseURL(

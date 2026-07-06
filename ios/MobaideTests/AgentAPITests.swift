@@ -187,6 +187,14 @@ final class AgentAPITests: XCTestCase {
         }
     }
 
+    func testTrailingSlashBaseURLDoesNotDoubleSlashRoutes() async throws {
+        StubURLProtocol.enqueue(status: 200, body: "[]")
+        _ = try await makeAPI(base: "http://agent.example.com/").listSessions()
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "http://agent.example.com/api/sessions")
+    }
+
     func testNilBaseURLThrowsNotConfigured() async {
         do {
             _ = try await makeAPI(base: nil).listSessions()

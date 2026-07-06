@@ -154,7 +154,7 @@ struct AgentAPI: Sendable {
         guard let base = await baseURL() else {
             throw AgentURLNotConfiguredError()
         }
-        return base
+        return trimTrailingSlashes(base)
     }
 
     private func trimTrailingSlashes(_ url: String) -> String {
