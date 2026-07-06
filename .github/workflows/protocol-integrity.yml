@@ -44,6 +44,26 @@ jobs:
       - name: Run protocol integrity tests
         run: python -m pytest tests/test_protocol_integrity.py -v
 
+      # The iOS client carries its own copy of the protocol constants in an
+      # xcconfig (surfaced to Swift via Info.plist). Extract both sides by
+      # regex and compare, so a proto bump that misses ios/ fails here — the
+      # check is version-agnostic and needs no update on bumps.
+      - name: iOS protocol constants must match Android
+        run: |
+          android_app=$(sed -n 's/.*buildConfigField("int", "APP_PROTOCOL_VERSION", "\([0-9]*\)").*/\1/p' android/app/build.gradle.kts)
+          android_min=$(sed -n 's/.*buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "\([0-9]*\)").*/\1/p' android/app/build.gradle.kts)
+          ios_app=$(sed -n 's/^APP_PROTOCOL_VERSION *= *\([0-9][0-9]*\) *$/\1/p' ios/Config/Protocol.xcconfig)
+          ios_min=$(sed -n 's/^MIN_SERVER_PROTOCOL_VERSION *= *\([0-9][0-9]*\) *$/\1/p' ios/Config/Protocol.xcconfig)
+          if [ -z "$android_app" ] || [ -z "$ios_app" ] || [ "$android_app" != "$ios_app" ]; then
+            echo "::error::APP_PROTOCOL_VERSION mismatch: android='${android_app}' ios='${ios_app}' — bump ios/Config/Protocol.xcconfig together with android/app/build.gradle.kts (see PROTOCOL.md 'How to bump')."
+            exit 1
+          fi
+          if [ -z "$android_min" ] || [ -z "$ios_min" ] || [ "$android_min" != "$ios_min" ]; then
+            echo "::error::MIN_SERVER_PROTOCOL_VERSION mismatch: android='${android_min}' ios='${ios_min}' — bump ios/Config/Protocol.xcconfig together with android/app/build.gradle.kts (see PROTOCOL.md 'How to bump')."
+            exit 1
+          fi
+          echo "iOS protocol constants match Android (APP=${ios_app}, MIN_SERVER=${ios_min})."
+
       - name: Diff guard — both envelope.py files must move together
         if: ${{ github.event_name == 'pull_request' }}
         env:
