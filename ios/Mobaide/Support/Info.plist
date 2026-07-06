@@ -6,5 +6,7 @@
 	<string>$(APP_PROTOCOL_VERSION)</string>
 	<key>MinServerProtocolVersion</key>
 	<string>$(MIN_SERVER_PROTOCOL_VERSION)</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Mobaide connects directly to your agent on your local network when direct connection mode is used.</string>
 </dict>
 </plist>
