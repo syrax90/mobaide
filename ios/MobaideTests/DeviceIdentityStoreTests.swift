@@ -24,4 +24,23 @@ final class DeviceIdentityStoreTests: XCTestCase {
         let store = DeviceIdentityStore(keychain: InMemoryKeychainStore())
         XCTAssertTrue(store.getDeviceName().hasPrefix("Apple"))
     }
+
+    func testConcurrentFirstCallsAgreeOnOnePersistedId() async {
+        let keychain = InMemoryKeychainStore(accessibility: .afterFirstUnlockThisDeviceOnly)
+        let store = DeviceIdentityStore(keychain: keychain)
+
+        let ids = await withTaskGroup(of: String.self, returning: Set<String>.self) { group in
+            for _ in 0..<20 {
+                group.addTask { store.getOrCreateDeviceId() }
+            }
+            var collected = Set<String>()
+            for await id in group {
+                collected.insert(id)
+            }
+            return collected
+        }
+
+        XCTAssertEqual(ids.count, 1, "check-then-create must be race-free")
+        XCTAssertEqual(keychain.string(forKey: DeviceIdentityStore.keyDeviceUuid), ids.first)
+    }
 }

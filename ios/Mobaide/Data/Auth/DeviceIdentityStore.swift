@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Mirror of Android `DeviceIdentityStore`: a stable per-install device
 /// UUID used for device management and pairing. Stored in the keychain
@@ -11,17 +12,24 @@ struct DeviceIdentityStore: Sendable {
 
     let keychain: any KeychainStoring
 
+    // Serializes the check-then-create sequence so concurrent first-run
+    // callers all get the one persisted UUID (Android parity: DataStore
+    // `edit` transaction).
+    private let creationLock = OSAllocatedUnfairLock()
+
     init(keychain: any KeychainStoring) {
         self.keychain = keychain
     }
 
     func getOrCreateDeviceId() -> String {
-        if let existing = keychain.string(forKey: Self.keyDeviceUuid) {
-            return existing
+        creationLock.withLock {
+            if let existing = keychain.string(forKey: Self.keyDeviceUuid) {
+                return existing
+            }
+            let fresh = UUID().uuidString
+            keychain.set(fresh, forKey: Self.keyDeviceUuid)
+            return fresh
         }
-        let fresh = UUID().uuidString
-        keychain.set(fresh, forKey: Self.keyDeviceUuid)
-        return keychain.string(forKey: Self.keyDeviceUuid) ?? fresh
     }
 
     /// Human-readable device name shown in device management, e.g.

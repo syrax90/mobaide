@@ -11,6 +11,20 @@ final class MiscAuthTests: XCTestCase {
         XCTAssertNotEqual(first, second)
     }
 
+    func testCentralServerURLResolution() {
+        XCTAssertEqual(AppConfig.resolveCentralServerURL(nil), AppConfig.defaultCentralServerURL)
+        XCTAssertEqual(AppConfig.resolveCentralServerURL(""), AppConfig.defaultCentralServerURL)
+        XCTAssertEqual(
+            AppConfig.resolveCentralServerURL("$(CENTRAL_SERVER_URL)"),
+            AppConfig.defaultCentralServerURL,
+            "an unresolved Info.plist placeholder must not be treated as a configured URL"
+        )
+        XCTAssertEqual(
+            AppConfig.resolveCentralServerURL("https://custom.example.com"),
+            "https://custom.example.com"
+        )
+    }
+
     func testForegroundSessionTrackerCompareAndSetClear() {
         let tracker = ForegroundSessionTracker()
         XCTAssertNil(tracker.visibleSessionId)

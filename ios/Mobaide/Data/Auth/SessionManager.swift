@@ -80,8 +80,13 @@ enum InvalidationReason: Equatable, Sendable {
 ///   callers coalesce onto exactly one network request. Caching only the
 ///   result would double-fire under actor reentrancy.
 /// - A terminal refresh clears agent tokens only (`userOnly` if a user
-///   identity remains); a success is discarded when the session was killed
-///   mid-flight (`unauthenticated` at apply time).
+///   identity remains).
+/// - Every refresh outcome is generation-gated: a competing transition
+///   (`invalidateUserSession`, `agentDisconnect`, `markIncompatibleServer`)
+///   bumps the generation when it cancels the in-flight task, so a stale
+///   result landing after the transition can neither re-promote the state
+///   to `fullyConnected` nor demote an `incompatibleServer` takeover — it
+///   surfaces to its awaiting callers as `.terminal` with no side effects.
 actor SessionManager {
     typealias RefreshTransport = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
 
@@ -205,7 +210,7 @@ actor SessionManager {
         let generation = refreshGeneration
         let task = Task { () -> RefreshResult in
             defer { clearInFlightRefresh(ifGeneration: generation) }
-            return await performRefresh()
+            return await performRefresh(generation: generation)
         }
         inFlightRefresh = task
         return await task.value
@@ -223,18 +228,22 @@ actor SessionManager {
         inFlightRefresh = nil
     }
 
-    private func performRefresh() async -> RefreshResult {
+    private func performRefresh(generation: Int) async -> RefreshResult {
         guard let refreshToken = tokenStore.getRefreshToken() else {
-            return terminalAgentOnly()
+            return terminalAgentOnly(generation: generation)
         }
 
         let refreshUrl: String
         switch tokenStore.getConnectionMode() {
         case .direct:
-            guard let agentUrl = tokenStore.getAgentUrl() else { return terminalAgentOnly() }
+            guard let agentUrl = tokenStore.getAgentUrl() else {
+                return terminalAgentOnly(generation: generation)
+            }
             refreshUrl = "\(agentUrl)/api/auth/refresh"
         case .relay:
-            guard let serverUrl = tokenStore.getRelayServerUrl() else { return terminalAgentOnly() }
+            guard let serverUrl = tokenStore.getRelayServerUrl() else {
+                return terminalAgentOnly(generation: generation)
+            }
             refreshUrl = "\(serverUrl)/api/mobile/refresh"
         }
 
@@ -259,10 +268,14 @@ actor SessionManager {
                 else {
                     return .transient
                 }
-                return applyRefreshSuccess(access: dto.access_token, refresh: dto.refresh_token)
+                return applyRefreshSuccess(
+                    access: dto.access_token,
+                    refresh: dto.refresh_token,
+                    generation: generation
+                )
             }
             if response.statusCode == 401 {
-                return terminalAgentOnly()
+                return terminalAgentOnly(generation: generation)
             }
             return .transient
         } catch {
@@ -276,10 +289,11 @@ actor SessionManager {
         }
     }
 
-    /// Atomically apply a successful refresh — unless the session was
-    /// killed while the request was in flight.
-    private func applyRefreshSuccess(access: String, refresh: String) -> RefreshResult {
-        if state == .unauthenticated {
+    /// Atomically apply a successful refresh — unless a competing
+    /// transition superseded this refresh while the request was in flight
+    /// (stale generation, or the session was killed outright).
+    private func applyRefreshSuccess(access: String, refresh: String, generation: Int) -> RefreshResult {
+        if refreshGeneration != generation || state == .unauthenticated {
             return .terminal
         }
         tokenStore.saveTokens(accessToken: access, refreshToken: refresh)
@@ -288,8 +302,13 @@ actor SessionManager {
     }
 
     /// Terminal refresh outcome: drop the agent connection, keep the user
-    /// identity when still valid.
-    private func terminalAgentOnly() -> RefreshResult {
+    /// identity when still valid. A stale (superseded) refresh must not
+    /// mutate anything — e.g. a late 401 landing after
+    /// `markIncompatibleServer` would otherwise demote the takeover state.
+    private func terminalAgentOnly(generation: Int) -> RefreshResult {
+        if refreshGeneration != generation {
+            return .terminal
+        }
         tokenStore.clear()
         setState(userIdentityStore.isUserLoggedIn() ? .userOnly : .unauthenticated)
         return .terminal

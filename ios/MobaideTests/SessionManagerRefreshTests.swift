@@ -141,6 +141,51 @@ final class SessionManagerRefreshTests: XCTestCase {
         XCTAssertEqual(state, .unauthenticated)
     }
 
+    func testStaleSuccessAfterAgentDisconnectDoesNotRepromote() async {
+        let transport = FakeRefreshTransport()
+        let gate = AsyncGate()
+        transport.gate = gate
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true, transport: transport)
+
+        let refreshTask = Task { await harness.sessionManager.refresh() }
+        while transport.callCount == 0 {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        await harness.sessionManager.agentDisconnect()
+        gate.open()
+
+        let result = await refreshTask.value
+        XCTAssertEqual(result, .terminal, "a superseded refresh surfaces as terminal")
+        let state = await harness.sessionManager.currentAuthState
+        XCTAssertEqual(state, .userOnly, "a stale 2xx must not re-promote past an intentional disconnect")
+        XCTAssertNil(harness.tokenStore.getAccessToken(), "stale tokens must not be re-saved")
+    }
+
+    func testStaleTerminalAfterIncompatibleServerKeepsTakeoverState() async {
+        let transport = FakeRefreshTransport(behavior: .respond(status: 401, body: ""))
+        let gate = AsyncGate()
+        transport.gate = gate
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true, transport: transport)
+        let info = AuthState.IncompatibleServer(
+            reason: "protocol too old",
+            minClientVersion: 7,
+            storeUrl: "",
+            storeFallbackUrl: ""
+        )
+
+        let refreshTask = Task { await harness.sessionManager.refresh() }
+        while transport.callCount == 0 {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        await harness.sessionManager.markIncompatibleServer(info)
+        gate.open()
+
+        let result = await refreshTask.value
+        XCTAssertEqual(result, .terminal)
+        let state = await harness.sessionManager.currentAuthState
+        XCTAssertEqual(state, .incompatibleServer(info), "a stale 401 must not demote the upgrade takeover")
+    }
+
     func testDirectModeUsesAgentRefreshPath() async {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         _ = await harness.sessionManager.refresh()
