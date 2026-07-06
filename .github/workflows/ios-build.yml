@@ -36,12 +36,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Pin the toolchain instead of trusting the image default: the project
-      # format (objectVersion 70, synchronized folder groups) must stay
-      # readable by Xcode 16.x, and an image migration that drops 16.4 should
-      # fail loudly here rather than silently float to a newer major.
-      - name: Pin Xcode 16.4
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+      # Pin the toolchain instead of trusting the image default so an image
+      # rotation that drops this Xcode fails loudly here rather than silently
+      # floating to a different compiler. macos-latest (macos-26 images)
+      # ships only Xcode 26.x; 26.6 matches the local development toolchain.
+      - name: Pin Xcode 26.6
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+
+      # The macos-26 image pre-creates only current-generation simulator
+      # devices (iPhone 17…), but the iPhone 16 device type still exists in
+      # the SDK — create it so the acceptance command below runs verbatim.
+      - name: Create iPhone 16 simulator
+        run: xcrun simctl create 'iPhone 16' com.apple.CoreSimulator.SimDeviceType.iPhone-16
 
       - name: Build and run unit tests
         run: |
