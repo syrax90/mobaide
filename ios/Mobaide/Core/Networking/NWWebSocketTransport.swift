@@ -24,9 +24,14 @@ struct NWWebSocketTransportFactory: WebSocketTransportFactory {
 ///   (`opcode == .close`) or as a connection failure; both paths emit exactly
 ///   one terminal event on the stream.
 /// - A rejected HTTP upgrade surfaces as an NW error without the HTTP status,
-///   so it maps to `.network` (status unknown) rather than `.upgradeRejected` —
-///   the server's primary auth-rejection path is accept-then-close-4001,
-///   which arrives via close metadata and keeps its code.
+///   so it maps to `.network` (status unknown) rather than `.upgradeRejected`.
+///   The backend rejects unauthenticated handshakes *before* accepting (the
+///   ASGI server collapses the 4001/4010 close into a plain HTTP rejection),
+///   which OkHttp on Android also sees as a non-401 failure — both platforms
+///   route it to the reconnect path, and terminal auth handling happens in
+///   the token-refreshing URL provider. `.upgradeRejected(statusCode:)`
+///   exists for transports/intermediaries that do surface a real 401
+///   (PROTOCOL.md: HTTP 401 at upgrade ≡ token rejected).
 final class NWWebSocketConnection: WebSocketTransportConnection, @unchecked Sendable {
     let events: AsyncStream<WebSocketTransportEvent>
 

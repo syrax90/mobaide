@@ -26,11 +26,12 @@
       }
     },
     {
-      "name": "explicit_null_reasoning_effort_stays_nil",
+      "name": "explicit_null_reasoning_effort_round_trips_as_null",
       "wire": { "reasoning_effort": null },
       "decoded_canonical": {
         "sandbox": "workspace-write",
         "approval": "never",
+        "reasoning_effort": null,
         "full_auto": false,
         "worktree": false
       }

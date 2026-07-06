@@ -4,8 +4,12 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
     let model: String?
     let sandbox: String
     let approval: String
-    /// Nullable on the wire but defaults to "high" when the key is absent;
-    /// an explicit JSON null stays nil (three-state, unlike `?? default`).
+    /// Three-state on the wire in both directions: an absent key means the
+    /// server default ("high"), an explicit JSON null means "no
+    /// reasoning-effort override" (the agent drops the CLI flag), and a value
+    /// overrides. Decode keeps null distinct from absent; encode emits an
+    /// explicit null for nil (the synthesized encoder would omit it and
+    /// silently re-enable "high").
     let reasoning_effort: String?
     let full_auto: Bool
     let initial_prompt: String?
@@ -34,6 +38,29 @@ struct CodexOptionsModel: Codable, Equatable, Sendable {
 }
 
 extension CodexOptionsModel {
+    private enum CodingKeys: String, CodingKey {
+        case model
+        case sandbox
+        case approval
+        case reasoning_effort
+        case full_auto
+        case initial_prompt
+        case worktree
+        case branch_name
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(model, forKey: .model)
+        try container.encode(sandbox, forKey: .sandbox)
+        try container.encode(approval, forKey: .approval)
+        try container.encode(reasoning_effort, forKey: .reasoning_effort)
+        try container.encode(full_auto, forKey: .full_auto)
+        try container.encodeIfPresent(initial_prompt, forKey: .initial_prompt)
+        try container.encode(worktree, forKey: .worktree)
+        try container.encodeIfPresent(branch_name, forKey: .branch_name)
+    }
+
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         model = try container.decodeIfPresent(String.self, forKey: .model)

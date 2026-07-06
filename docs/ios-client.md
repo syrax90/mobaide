@@ -89,9 +89,14 @@ Known deliberate deviations from Android's bytes (server-verified safe):
   `1`. Avoid `x.0` literals in fixtures; use fractional values to exercise
   doubles.
 - Network.framework cannot surface the HTTP status of a rejected WS upgrade,
-  so a relay-edge 401 at upgrade time surfaces as a generic transport failure
-  (reconnect path) rather than `tokenRejected`; the server's primary
-  auth-rejection path — accept then close 4001 — keeps its exact semantics.
+  so upgrade-time rejections surface as generic transport failures (reconnect
+  path) rather than `tokenRejected`. This matches Android in practice: the
+  backend closes unauthenticated handshakes before accepting, the ASGI server
+  collapses that into a non-401 HTTP rejection, and OkHttp's 401-only check
+  falls through to reconnect too — terminal auth handling lives in the
+  token-refreshing URL provider on both platforms. The 401≡tokenRejected
+  mapping stays in `WebSocketCore` (fake-tested) for transports and
+  intermediaries that do surface a real 401.
 - `AgentAPI`'s auth skip-list matches the percent-decoded URL path where
   Android matches the encoded path. Divergence is reachable only via a
   project name embedding an encoded auth suffix (e.g. `x%2Fapi%2Fauth%2Flogin`)
