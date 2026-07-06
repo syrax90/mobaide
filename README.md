@@ -25,7 +25,7 @@ Mobaide bridges this gap with a client-agent architecture:
 - **Auto Scan Mode** — Polls Linear for matching issues using a per-project configurable filter (trigger labels, trigger states, active/done state, removal label), auto-creates git worktrees, and launches Claude sessions to work on them. Each project remembers the last-applied initial prompt (persisted as `auto_scan_prompt` in `projects.json` and surfaced read-only on `GET /api/projects`), so starting a new scan pre-seeds it in the create-session wizard instead of resetting to the engine-wide default; the prompt is preserve-last-applied only and is not writable via the project form
 - **Reconnection** — Scrollback buffer (10K lines) per session ensures seamless reconnect after network drops
 - **Secure Access** — JWT authentication end-to-end between Android, central-server, and agent; agent↔central-server relay is secured with a per-agent bearer token over WSS
-- **Cross-Platform** — Agent runs on both Windows and Linux out of the box via PTY abstraction (pywinpty / stdlib pty). iOS client planned via Kotlin Multiplatform shared layer.
+- **Cross-Platform** — Agent runs on both Windows and Linux out of the box via PTY abstraction (pywinpty / stdlib pty). Native iOS client (SwiftUI, iOS 17+) in progress under `ios/` — the wire layer is ported and contract-locked to Android's by CI (see [docs/ios-client.md](docs/ios-client.md)).
 - **Git Management** — In-app screen (reachable from Edit Project on git-backed projects) lists local branches and worktrees; supports long-press multi-select and batch delete with undo Snackbar and force-delete confirmation
 - **Prompt Templates** — Save frequently used inputs as named templates (with optional favorites). An in-terminal picker bottom-sheet (recents / favorites / all sections, with search) inserts a template into the input bar; a save-as-template dialog captures the current input. Templates are stored server-side per user and sync across sessions via `template.created/updated/deleted` push events on the user-events WebSocket
 - **1-hour Prompt Cache** — Every spawned Claude session runs with `ENABLE_PROMPT_CACHING_1H=1` preset, so the 1-hour prompt-cache TTL ([claude-code ≥ v2.1.108](https://github.com/anthropics/claude-code/releases/tag/v2.1.108)) is always on — lower cost and lower latency on long sessions
@@ -70,6 +70,7 @@ Mobaide bridges this gap with a client-agent architecture:
 | `mobaide/agent/` | FastAPI | WebSocket endpoints, JWT auth, REST API |
 | `mobaide/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
+| `ios/` | Swift / SwiftUI | iOS app (in progress) — wire DTOs, REST clients, reconnecting WebSocket core, terminal framing |
 | `central_server/` | Python 3.12+ / FastAPI | Multi-tenant relay hub; auth, projects, and agent↔client WebSocket broker |
 
 ## Configuration Profiles

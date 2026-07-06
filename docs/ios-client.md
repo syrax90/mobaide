@@ -89,6 +89,16 @@ Known deliberate deviations from Android's bytes (server-verified safe):
   so a relay-edge 401 at upgrade time surfaces as a generic transport failure
   (reconnect path) rather than `tokenRejected`; the server's primary
   auth-rejection path — accept then close 4001 — keeps its exact semantics.
+- `AgentAPI`'s auth skip-list matches the percent-decoded URL path where
+  Android matches the encoded path. Divergence is reachable only via a
+  project name embedding an encoded auth suffix (e.g. `x%2Fapi%2Fauth%2Flogin`)
+  and fails closed (Bearer withheld → 401). Known, deliberately left as-is;
+  fix if it ever matters: `url.path(percentEncoded: true)`.
+- `WebSocketCore.events` is an unbounded `AsyncStream` where Android bounds
+  its flow at 101 events with drop-newest. Attach exactly one prompt consumer
+  to `events` before `connect()`. The backpressure decision (bounded parity
+  vs documented unbounded contract) is deferred to CLA-98, where the real
+  terminal consumer lands.
 
 ## Golden fixtures (`tests/protocol_fixtures/`)
 

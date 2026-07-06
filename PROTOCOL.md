@@ -323,7 +323,11 @@ and apply to every current proto-v revision.
    ``central_server/central_server/relay/envelope.py``. The CI
    ``protocol-integrity`` workflow rejects any commit that drifts the two.
 2. Update the ``BuildConfig.APP_PROTOCOL_VERSION`` field in
-   ``android/app/build.gradle.kts`` to match.
+   ``android/app/build.gradle.kts`` to match, and the
+   ``APP_PROTOCOL_VERSION`` / ``MIN_SERVER_PROTOCOL_VERSION`` values in
+   ``ios/Config/Protocol.xcconfig``. The ``protocol-integrity`` workflow
+   asserts the iOS constants equal Android's, so a bump that misses
+   either client fails CI.
 3. Update ``tests/protocol_golden.json`` to match the new shape; any change
    must update the golden file or CI fails.
 4. Add a new section to this file documenting the change.
