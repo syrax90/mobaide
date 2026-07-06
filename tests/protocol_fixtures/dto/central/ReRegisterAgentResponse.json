@@ -1,0 +1,6 @@
+{
+  "type": "ReRegisterAgentResponse",
+  "cases": [
+    { "name": "full", "wire": { "agent_id": "A1", "token": "rotated-token" } }
+  ]
+}

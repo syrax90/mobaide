@@ -1,0 +1,11 @@
+{
+  "type": "GitDeleteItem",
+  "cases": [
+    { "name": "full", "wire": { "kind": "branch_with_worktree", "branch": "b", "worktree_path": "/wt/b", "force": true } },
+    {
+      "name": "force_defaults_false",
+      "wire": { "kind": "branch_only", "branch": "b" },
+      "decoded_canonical": { "kind": "branch_only", "branch": "b", "force": false }
+    }
+  ]
+}

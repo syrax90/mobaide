@@ -1,0 +1,11 @@
+{
+  "type": "LinearLabelDto",
+  "cases": [
+    { "name": "full", "wire": { "name": "Bug", "color": "#ff0000" } },
+    {
+      "name": "color_defaults_to_empty",
+      "wire": { "name": "Bug" },
+      "decoded_canonical": { "name": "Bug", "color": "" }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "type": "ResendRateLimitedDetail",
+  "cases": [
+    { "name": "full", "wire": { "error": "rate_limited", "cooldown_seconds_remaining": 42 } },
+    {
+      "name": "cooldown_defaults_zero",
+      "wire": { "error": "rate_limited" },
+      "decoded_canonical": { "error": "rate_limited", "cooldown_seconds_remaining": 0 }
+    }
+  ]
+}

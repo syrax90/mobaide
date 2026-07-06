@@ -1,0 +1,6 @@
+{
+  "type": "ResetErrorBody",
+  "cases": [
+    { "name": "fastapi_detail_wrapper", "wire": { "detail": { "error": "invalid_code" } } }
+  ]
+}

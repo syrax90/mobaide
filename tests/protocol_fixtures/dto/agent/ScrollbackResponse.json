@@ -1,0 +1,7 @@
+{
+  "type": "ScrollbackResponse",
+  "cases": [
+    { "name": "full", "wire": { "session_id": "s1", "lines": ["$ ls", "README.md"], "total": 2 } },
+    { "name": "empty", "wire": { "session_id": "s1", "lines": [], "total": 0 } }
+  ]
+}

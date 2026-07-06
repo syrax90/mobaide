@@ -1,0 +1,54 @@
+{
+  "type": "SessionResponse",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "session_id": "s1",
+        "state": "running",
+        "created_at": "2026-07-06T09:00:00Z",
+        "pid": 42,
+        "command": ["claude", "--continue"],
+        "cwd": "/home/user/proj",
+        "title": "fix bug",
+        "project_name": "proj",
+        "kind": "codex",
+        "attention": "awaiting_permission",
+        "exit_reason": null
+      },
+      "decoded_canonical": {
+        "session_id": "s1",
+        "state": "running",
+        "created_at": "2026-07-06T09:00:00Z",
+        "pid": 42,
+        "command": ["claude", "--continue"],
+        "cwd": "/home/user/proj",
+        "title": "fix bug",
+        "project_name": "proj",
+        "kind": "codex",
+        "attention": "awaiting_permission"
+      }
+    },
+    {
+      "name": "minimal_defaults_materialize",
+      "wire": { "session_id": "s2", "state": "stopped", "created_at": "2026-07-06T09:00:00Z" },
+      "decoded_canonical": {
+        "session_id": "s2",
+        "state": "stopped",
+        "created_at": "2026-07-06T09:00:00Z",
+        "command": [],
+        "kind": "claude"
+      }
+    },
+    {
+      "name": "unknown_kind_coerces",
+      "wire": { "session_id": "s3", "state": "running", "created_at": "c", "kind": "quantum" },
+      "decoded_canonical": { "session_id": "s3", "state": "running", "created_at": "c", "command": [], "kind": "claude" }
+    },
+    {
+      "name": "null_kind_coerces",
+      "wire": { "session_id": "s4", "state": "running", "created_at": "c", "kind": null },
+      "decoded_canonical": { "session_id": "s4", "state": "running", "created_at": "c", "command": [], "kind": "claude" }
+    }
+  ]
+}

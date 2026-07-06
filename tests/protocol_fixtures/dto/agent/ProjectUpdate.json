@@ -1,0 +1,23 @@
+{
+  "type": "ProjectUpdate",
+  "cases": [
+    { "name": "empty_patch_stays_empty", "wire": {} },
+    { "name": "clear_with_empty_string", "wire": { "linear_api_key": "" } },
+    { "name": "rename_only", "wire": { "name": "new-name" } },
+    { "name": "clear_flags_with_empty_object", "wire": { "default_flags": {} } },
+    { "name": "replace_flags", "wire": { "default_flags": { "a": 1, "b": true } } },
+    {
+      "name": "replace_filter_fills_defaults_on_decode",
+      "wire": { "auto_scan_filter": { "done_state": "Merged" } },
+      "decoded_canonical": {
+        "auto_scan_filter": {
+          "state_names": ["Proposals"],
+          "label_names": ["AutoPipeline"],
+          "active_state": "In Progress",
+          "done_state": "Merged",
+          "removal_label": "AutoPipeline"
+        }
+      }
+    }
+  ]
+}

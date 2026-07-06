@@ -1,0 +1,14 @@
+{
+  "type": "GitItemsResponse",
+  "cases": [
+    {
+      "name": "one_item",
+      "wire": {
+        "items": [
+          { "kind": "orphan_worktree", "worktree_path": "/wt/orphan", "is_current": false, "ahead": 0, "behind": 0, "gone": false, "locked": false, "detached": true, "prunable": true }
+        ]
+      }
+    },
+    { "name": "empty", "wire": { "items": [] } }
+  ]
+}

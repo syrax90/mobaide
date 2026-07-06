@@ -1,0 +1,6 @@
+{
+  "type": "TokenRequest",
+  "cases": [
+    { "name": "full", "wire": { "username": "admin", "password": "pw" } }
+  ]
+}

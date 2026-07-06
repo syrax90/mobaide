@@ -1,0 +1,11 @@
+{
+  "type": "SessionKind",
+  "cases": [
+    { "name": "claude", "wire": "claude" },
+    { "name": "codex", "wire": "codex" },
+    { "name": "antigravity", "wire": "antigravity" },
+    { "name": "auto_scan", "wire": "auto_scan" },
+    { "name": "shell", "wire": "shell" },
+    { "name": "unknown_coerces_to_claude", "wire": "some_future_kind", "decoded_canonical": "claude" }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "type": "CodexOptionsModel",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "model": "gpt-5",
+        "sandbox": "read-only",
+        "approval": "on-request",
+        "reasoning_effort": "low",
+        "full_auto": true,
+        "initial_prompt": "hi",
+        "worktree": true,
+        "branch_name": "b"
+      }
+    },
+    {
+      "name": "empty_defaults_materialize",
+      "wire": {},
+      "decoded_canonical": {
+        "sandbox": "workspace-write",
+        "approval": "never",
+        "reasoning_effort": "high",
+        "full_auto": false,
+        "worktree": false
+      }
+    },
+    {
+      "name": "explicit_null_reasoning_effort_stays_nil",
+      "wire": { "reasoning_effort": null },
+      "decoded_canonical": {
+        "sandbox": "workspace-write",
+        "approval": "never",
+        "full_auto": false,
+        "worktree": false
+      }
+    }
+  ]
+}

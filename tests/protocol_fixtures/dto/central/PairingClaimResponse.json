@@ -1,0 +1,8 @@
+{
+  "type": "PairingClaimResponse",
+  "cases": [
+    { "name": "ws_delivered_true", "wire": { "agent_id": "A1", "agent_friendly_name": "Workstation", "ws_delivered": true } },
+    { "name": "ws_staged_false", "wire": { "agent_id": "A1", "agent_friendly_name": "Workstation", "ws_delivered": false } },
+    { "name": "old_server_omits_tristate_field", "wire": { "agent_id": "A1", "agent_friendly_name": "Workstation" } }
+  ]
+}

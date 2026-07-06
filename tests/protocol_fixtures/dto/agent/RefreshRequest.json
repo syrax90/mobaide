@@ -1,0 +1,6 @@
+{
+  "type": "RefreshRequest",
+  "cases": [
+    { "name": "full", "wire": { "refresh_token": "r.s.t" } }
+  ]
+}

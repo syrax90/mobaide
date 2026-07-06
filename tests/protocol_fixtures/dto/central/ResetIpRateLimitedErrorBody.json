@@ -1,0 +1,6 @@
+{
+  "type": "ResetIpRateLimitedErrorBody",
+  "cases": [
+    { "name": "fastapi_detail_wrapper", "wire": { "detail": { "error": "ip_rate_limited", "retry_after_seconds": 30 } } }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "type": "ResendVerificationRequest",
+  "cases": [
+    { "name": "full", "wire": { "email": "e@x.com" } }
+  ]
+}

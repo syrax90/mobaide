@@ -1,0 +1,6 @@
+{
+  "type": "GitDeleteResponse",
+  "cases": [
+    { "name": "full", "wire": { "results": [ { "kind": "branch_only", "target": "b", "ok": true } ] } }
+  ]
+}

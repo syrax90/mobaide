@@ -1,0 +1,11 @@
+{
+  "type": "MobileTokenResponse",
+  "cases": [
+    { "name": "full", "wire": { "access_token": "a", "refresh_token": "r", "token_type": "bearer" } },
+    {
+      "name": "token_type_defaults_to_bearer",
+      "wire": { "access_token": "a", "refresh_token": "r" },
+      "decoded_canonical": { "access_token": "a", "refresh_token": "r", "token_type": "bearer" }
+    }
+  ]
+}

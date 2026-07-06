@@ -1,0 +1,6 @@
+{
+  "type": "GoogleAuthRequest",
+  "cases": [
+    { "name": "full", "wire": { "id_token": "google-id-token" } }
+  ]
+}

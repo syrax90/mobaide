@@ -1,0 +1,8 @@
+{
+  "type": "DeleteAccountRequest",
+  "cases": [
+    { "name": "password_user_scheduled", "wire": { "method": "password", "password": "pw" } },
+    { "name": "password_user_immediate", "wire": { "method": "password", "mode": "immediate", "password": "pw" } },
+    { "name": "google_user", "wire": { "method": "google", "id_token": "idt", "nonce": "n" } }
+  ]
+}

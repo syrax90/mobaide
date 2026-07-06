@@ -1,0 +1,7 @@
+{
+  "type": "ForceUpdateResponse",
+  "cases": [
+    { "name": "staged", "wire": { "outcome": "staged" } },
+    { "name": "signature_failed", "wire": { "outcome": "signature_failed" } }
+  ]
+}

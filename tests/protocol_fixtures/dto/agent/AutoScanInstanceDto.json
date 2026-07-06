@@ -1,0 +1,34 @@
+{
+  "type": "AutoScanInstanceDto",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "project_name": "proj",
+        "status": "scanning",
+        "started_at": 1751800000.5,
+        "last_activity_at": 1751800100.25,
+        "processed_count": 7,
+        "last_scan_time": 1751800050.75,
+        "scan_interval_seconds": 600,
+        "next_scan_at": "2026-07-06T10:00:00Z",
+        "cycle_number": 3,
+        "current_seq": 9007199254740993
+      }
+    },
+    {
+      "name": "minimal_defaults_materialize",
+      "wire": { "project_name": "p", "status": "idle", "started_at": 1751800000.5, "last_activity_at": 1751800000.5 },
+      "decoded_canonical": {
+        "project_name": "p",
+        "status": "idle",
+        "started_at": 1751800000.5,
+        "last_activity_at": 1751800000.5,
+        "processed_count": 0,
+        "scan_interval_seconds": 300,
+        "cycle_number": 0,
+        "current_seq": 0
+      }
+    }
+  ]
+}

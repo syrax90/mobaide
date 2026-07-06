@@ -1,0 +1,6 @@
+{
+  "type": "ResendRateLimitedErrorBody",
+  "cases": [
+    { "name": "fastapi_detail_wrapper", "wire": { "detail": { "error": "rate_limited", "cooldown_seconds_remaining": 42 } } }
+  ]
+}
