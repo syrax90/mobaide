@@ -49,19 +49,6 @@ struct AgentListScreen: View {
     }
 }
 
-struct SessionListScreen: View {
-    var body: some View { PlaceholderScreen(title: "Sessions") }
-}
-
-struct SessionDetailScreen: View {
-    let sessionId: String
-    var body: some View { PlaceholderScreen(title: "Session", params: ["sessionId": sessionId]) }
-}
-
-struct CreateSessionScreen: View {
-    var body: some View { PlaceholderScreen(title: "Create Session") }
-}
-
 struct SettingsScreen: View {
     var body: some View { PlaceholderScreen(title: "Settings") }
 }
