@@ -116,6 +116,22 @@ final class TerminalSessionModelTests: XCTestCase {
         XCTAssertEqual(resizes.first, Data([0x72, 0x00, 0x28, 0x00, 0x78])) // 40 rows, 120 cols
     }
 
+    func testResizeResentOnReconnect() async throws {
+        let (model, connection) = try await connectedModel()
+        model.resize(rows: 40, cols: 120)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(connection.sentBinaries.filter { $0.first == 0x72 }.count, 1, "initial debounced resize")
+
+        connection.emit(.opened) // reconnect → .connected → resend last known size
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline, connection.sentBinaries.filter({ $0.first == 0x72 }).count < 2 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let resizes = connection.sentBinaries.filter { $0.first == 0x72 }
+        XCTAssertEqual(resizes.count, 2, "the last size is re-sent on reconnect")
+        XCTAssertEqual(resizes.last, Data([0x72, 0x00, 0x28, 0x00, 0x78]))
+    }
+
     // MARK: - Replay state machine
 
     func testReplaySequenceDrivesConnectionState() async throws {

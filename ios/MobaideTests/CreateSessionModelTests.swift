@@ -109,6 +109,12 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.claude_options?.worktree, false)
     }
 
+    func testCustomPathTrimmedInRequest() {
+        let model = makeModel()
+        model.setCustomPath("  /abs/path  ")
+        XCTAssertEqual(model.buildRequest(mode: .standard).cwd, "/abs/path")
+    }
+
     // MARK: - Validation / helpers
 
     func testValidateCustomPath() {

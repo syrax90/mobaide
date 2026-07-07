@@ -65,6 +65,7 @@ final class TerminalSessionModel {
     private var inReplay = false
     private var started = false
     private var isTornDown = false
+    private var hasConnectedBefore = false
     private var lastResizeRows = 0
     private var lastResizeCols = 0
 
@@ -128,7 +129,12 @@ final class TerminalSessionModel {
     private func handle(_ event: WebSocketEvent) {
         switch event {
         case .connected:
-            break
+            // The first connect's size is sent by the normal layout→resize flow;
+            // only a genuine reconnect needs the last size re-sent.
+            if hasConnectedBefore {
+                resendResizeAfterReconnect()
+            }
+            hasConnectedBefore = true
         case .binary(let data):
             handleBinary(data)
         case .disconnected:
@@ -223,6 +229,14 @@ final class TerminalSessionModel {
 
     private func enqueue(_ frame: TerminalOutboundFrame) {
         outboundContinuation.yield(frame.encoded)
+    }
+
+    /// A resize enqueued while the socket was down is dropped by the transport
+    /// and then suppressed by `resize`'s dedupe guard, so re-send the last known
+    /// size on every (re)connect to keep the PTY dimensions correct.
+    private func resendResizeAfterReconnect() {
+        guard lastResizeRows > 0, lastResizeCols > 0 else { return }
+        enqueue(.resize(rows: UInt16(clamping: lastResizeRows), cols: UInt16(clamping: lastResizeCols)))
     }
 
     // MARK: - Follow mode

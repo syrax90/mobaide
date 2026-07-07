@@ -34,7 +34,12 @@ final class MobaideTerminalView: TerminalView {
         guard let line = terminal.getLine(row: viewportRow) else { return nil }
         guard let command = Self.promptCommand(line.translateToString(trimRight: true)) else { return nil }
         let (_, cursorY) = terminal.getCursorLocation()
-        return (command, viewportRow == cursorY)
+        // `getCursorLocation()` is relative to the active region (yBase) while
+        // `viewportRow` is relative to the scrolled viewport (yDisp); they only
+        // share a frame at the bottom. So a tapped row can be the current input
+        // only when following — scrolled into history, every prompt is historical.
+        let isCurrentInput = scrollPosition >= 0.999 && viewportRow == cursorY
+        return (command, isCurrentInput)
     }
 
     /// Android `getPromptPrefixLength`: `❯` + NBSP, `❯` + space, or ASCII `> `.

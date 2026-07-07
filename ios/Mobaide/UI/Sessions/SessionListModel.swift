@@ -15,7 +15,10 @@ final class SessionListModel {
     private let repository: SessionRepository
     private let agentEventBus: AgentEventBus
     private let preferencesStore: PreferencesStore
-    private let navBroadcaster = Broadcaster<String>(replay: .none)
+    // `.latest` so the one-shot auto-resume id survives the race where
+    // `observeSessions` emits before the screen's `autoResumeEvents` task
+    // subscribes; it fires at most once per model instance (didAttemptAutoResume).
+    private let navBroadcaster = Broadcaster<String>(replay: .latest)
     private var didAttemptAutoResume = false
 
     init(repository: SessionRepository, agentEventBus: AgentEventBus, preferencesStore: PreferencesStore) {
@@ -27,7 +30,7 @@ final class SessionListModel {
 
     var isEmpty: Bool { sessions.isEmpty && !isReconnecting }
 
-    func autoResumeEvents() -> AsyncStream<String> { navBroadcaster.subscribe(replayLatest: false) }
+    func autoResumeEvents() -> AsyncStream<String> { navBroadcaster.subscribe() }
 
     func observeSessions() async {
         for await list in repository.sessions() {
