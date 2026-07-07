@@ -4,8 +4,10 @@ Native iOS client (SwiftUI, iOS 17+) with feature parity to the Android app as
 the goal of the iOS series (CLA-97…CLA-106). The backend (`central_server/`
 relay + `mobaide_agent/`) and the wire protocol (v6, see `PROTOCOL.md`) are
 frozen — iOS conforms to them byte for byte. CLA-97 bootstrapped the project
-and ported the networking spine; UI, auth/session logic, and event buses land
-in later issues.
+and ported the networking spine; CLA-98 added the auth/session core (Keychain
+stores, SessionManager, the two WebSocket event buses) and a navigable
+placeholder UI shell — the app boots to Login (or Agents when a session
+exists). Real feature screens land in later issues.
 
 ## Layout
 
@@ -14,12 +16,18 @@ ios/
 ├── Config/Protocol.xcconfig      # APP_PROTOCOL_VERSION / MIN_SERVER_PROTOCOL_VERSION
 ├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups
 ├── Mobaide/
-│   ├── App/                      # SwiftUI entry point (placeholder until iOS-02+)
+│   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel
+│   ├── Core/Concurrency/         # Broadcaster (StateFlow/SharedFlow replay parity)
 │   ├── Core/Protocol/            # TerminalFrame, JSONValue, WireJSON, ProtocolVersion
 │   ├── Core/Networking/          # WebSocketCore, NWWebSocketTransport, RelayRouting,
 │   │                             # AgentAPI, CentralAPI, HTTPClient, TokenProviding
+│   ├── Core/Storage/             # KeychainStoring, SecItemKeychainStore
+│   ├── Data/                     # Auth (SessionManager, token/identity stores), Events
+│   │                             # (AgentEventBus, UserEventBus), Local, Security, Repository
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
-│   └── Support/Info.plist        # only the two protocol keys (merged with the generated plist)
+│   ├── Notifications/            # ForegroundSessionTracker
+│   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Placeholders
+│   └── Support/Info.plist        # the two protocol keys + CentralServerURL (merged with the generated plist)
 └── MobaideTests/                 # unit tests + fixture round-trip suites
 tests/protocol_fixtures/          # language-neutral golden fixtures (see below)
 ```
@@ -105,9 +113,10 @@ Known deliberate deviations from Android's bytes (server-verified safe):
   fix if it ever matters: `url.path(percentEncoded: true)`.
 - `WebSocketCore.events` is an unbounded `AsyncStream` where Android bounds
   its flow at 101 events with drop-newest. Attach exactly one prompt consumer
-  to `events` before `connect()`. The backpressure decision (bounded parity
-  vs documented unbounded contract) is deferred to CLA-98, where the real
-  terminal consumer lands.
+  to `events` before `connect()`. CLA-98 resolved the backpressure decision:
+  `events` stays unbounded — each event bus is the sole, promptly-draining
+  consumer of a fresh core per connection cycle. The terminal channel
+  decision remains with iOS-04.
 
 ## Golden fixtures (`tests/protocol_fixtures/`)
 

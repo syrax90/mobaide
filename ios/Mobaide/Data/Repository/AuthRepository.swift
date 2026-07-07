@@ -1,0 +1,255 @@
+import Foundation
+
+/// Port of Android `AuthRepository`: orchestrates the central-server user
+/// auth flows and the agent connect flow. Persists identity/tokens to the
+/// stores first, then flips `SessionManager` state — an observer racing on
+/// `fullyConnected` must never see a half-initialised session.
+/// `SessionManager` owns state + refresh + logout atomicity; this type owns
+/// REST calls and HTTP-error → result-type mapping.
+struct AuthRepository: Sendable {
+    static let roleAdmin = "admin"
+    static let statusVerificationRequired = "verification_required"
+    static let verificationRequiredError = "verification_required"
+
+    let agentAPI: AgentAPI
+    let centralAPI: CentralAPI
+    let tokenStore: TokenStore
+    let userIdentityStore: UserIdentityStore
+    let sessionManager: SessionManager
+    let connectionStore: ConnectionStore
+
+    // MARK: - Central-server user auth
+
+    func register(email: String, password: String) async throws -> AuthResult {
+        let response = try await centralAPI.register(email: email, password: password)
+        return try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+    }
+
+    func loginWithPassword(email: String, password: String) async throws -> AuthResult {
+        let response: UserAuthResponse
+        do {
+            response = try await centralAPI.login(email: email, password: password)
+        } catch let error as APIError {
+            if let pendingEmail = parseVerificationRequired(error) {
+                return .verificationRequired(email: pendingEmail)
+            }
+            throw error
+        }
+        return try await finaliseOrFlagVerification(requestedEmail: email, response: response)
+    }
+
+    func loginWithGoogle(idToken: String) async throws -> AuthResult {
+        let response = try await centralAPI.loginWithGoogle(idToken: idToken)
+        // Google OAuth always returns a verified user server-side; any
+        // VerificationRequired here is unexpected and surfaces generically.
+        return try await finaliseOrFlagVerification(requestedEmail: response.email, response: response)
+    }
+
+    func verifyEmail(email: String, code: String) async throws -> AuthResult {
+        let response = try await centralAPI.verifyEmail(email: email, code: code)
+        if response.role == Self.roleAdmin { throw AdminLoginNotSupported() }
+        guard let token = response.access_token else {
+            throw APIError(code: -1, errorBody: "verify-email response missing access_token")
+        }
+        userIdentityStore.saveUserSession(
+            accessToken: token,
+            email: response.email,
+            userId: response.user_id,
+            role: response.role,
+            scheduledDeletionAt: response.scheduled_deletion_at
+        )
+        await sessionManager.markUserLoggedIn()
+        return .success(email: response.email, scheduledDeletionAt: response.scheduled_deletion_at)
+    }
+
+    func resendVerification(email: String) async throws -> ResendOutcome {
+        do {
+            _ = try await centralAPI.resendVerification(email: email)
+            return .sent
+        } catch let error as APIError where error.code == 429 {
+            return .rateLimited(cooldownSecondsRemaining: parseRateLimitCooldown(error) ?? 60)
+        }
+    }
+
+    func requestPasswordReset(email: String) async throws -> PasswordResetOutcome {
+        do {
+            _ = try await centralAPI.forgotPassword(email: email)
+            return .sent
+        } catch let error as APIError where error.code == 429 {
+            return .rateLimited(retryAfterSeconds: parseResetIpRetryAfter(error) ?? 60)
+        }
+    }
+
+    /// Consume a reset OTP and set a new password. Throws
+    /// `ResetPasswordFailure` with a discriminated reason on any handled
+    /// HTTP error.
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        do {
+            _ = try await centralAPI.resetPassword(email: email, code: code, newPassword: newPassword)
+        } catch let error as APIError {
+            throw ResetPasswordFailure(reason: mapResetError(error))
+        }
+    }
+
+    // MARK: - Agent connection
+
+    func connectAgent(agentUrl: String, username: String, password: String) async throws {
+        let response = try await agentAPI.login(agentUrl: agentUrl, username: username, password: password)
+        // Clear any relay-mode keys from a previous session so that
+        // getConnectionMode() returns DIRECT after a direct login.
+        tokenStore.clear()
+        tokenStore.saveAgentUrl(agentUrl)
+        tokenStore.saveTokens(accessToken: response.access_token, refreshToken: response.refresh_token)
+        await sessionManager.markAgentConnected()
+
+        connectionStore.captureActiveProfile(tokenStore: tokenStore, label: "Direct: \(agentUrl)")
+    }
+
+    func disconnectAgent() async {
+        await sessionManager.agentDisconnect()
+    }
+
+    // MARK: - Session pass-throughs
+
+    func isUserAuthenticated() async -> Bool { await sessionManager.isUserAuthenticated() }
+
+    func isLoggedIn() async -> Bool { await sessionManager.isLoggedIn() }
+
+    func userLogout() async { await sessionManager.userLogout() }
+
+    func logout() async { await sessionManager.forceLogout() }
+
+    func getUserEmail() -> String? { userIdentityStore.getUserEmail() }
+
+    func getAgentUrl() -> String? { tokenStore.getAgentUrl() }
+
+    func getScheduledDeletionAt() -> String? { userIdentityStore.getScheduledDeletionAt() }
+
+    // MARK: - Account deletion
+
+    /// Delete with a current password as re-auth proof. On success the
+    /// WS-4010 close drives the `accountRemoved` session teardown; no extra
+    /// plumbing here.
+    func deleteAccountWithPassword(password: String, mode: DeletionMode) async throws -> DeleteAccountResult {
+        guard let token = userIdentityStore.getUserAccessToken() else {
+            return .reauthFailed(message: "Not signed in")
+        }
+        return try await submitDelete(
+            userToken: token,
+            mode: mode,
+            body: DeleteAccountRequest(method: "password", mode: mode.rawValue, password: password)
+        )
+    }
+
+    /// Delete with a fresh Google ID token + the nonce it was fetched with
+    /// (the server validates freshness, nonce match, and google_sub).
+    func deleteAccountWithGoogle(idToken: String, nonce: String, mode: DeletionMode) async throws -> DeleteAccountResult {
+        guard let token = userIdentityStore.getUserAccessToken() else {
+            return .reauthFailed(message: "Not signed in")
+        }
+        return try await submitDelete(
+            userToken: token,
+            mode: mode,
+            body: DeleteAccountRequest(method: "google", mode: mode.rawValue, id_token: idToken, nonce: nonce)
+        )
+    }
+
+    /// Cancel a pending scheduled deletion. Idempotent; `notScheduled` when
+    /// the server reports no pending deletion. Clears the local marker so
+    /// the grace banner disappears immediately.
+    func cancelAccountDeletion() async throws -> CancelDeletionResult {
+        guard let token = userIdentityStore.getUserAccessToken() else {
+            return .notScheduled
+        }
+        let response = try await centralAPI.cancelAccountDeletion(userToken: token)
+        userIdentityStore.setScheduledDeletionAt(nil)
+        return response.scheduled_deletion_at == nil ? .notScheduled : .cancelled
+    }
+
+    // MARK: - Error mapping
+
+    private func submitDelete(
+        userToken: String,
+        mode: DeletionMode,
+        body: DeleteAccountRequest
+    ) async throws -> DeleteAccountResult {
+        do {
+            try await centralAPI.requestAccountDeletion(userToken: userToken, request: body)
+            return .submitted(mode)
+        } catch let error as APIError {
+            switch error.code {
+            case 400: return .forbidden
+            case 403: return .reauthFailed(message: parseDeleteReauthMessage(error))
+            default: throw error
+            }
+        }
+    }
+
+    private func finaliseOrFlagVerification(
+        requestedEmail: String,
+        response: UserAuthResponse
+    ) async throws -> AuthResult {
+        if response.role == Self.roleAdmin { throw AdminLoginNotSupported() }
+        guard response.status != Self.statusVerificationRequired, let token = response.access_token else {
+            return .verificationRequired(email: response.email.isEmpty ? requestedEmail : response.email)
+        }
+        userIdentityStore.saveUserSession(
+            accessToken: token,
+            email: response.email,
+            userId: response.user_id,
+            role: response.role,
+            scheduledDeletionAt: response.scheduled_deletion_at
+        )
+        await sessionManager.markUserLoggedIn()
+        return .success(email: response.email, scheduledDeletionAt: response.scheduled_deletion_at)
+    }
+
+    private func mapResetError(_ error: APIError) -> ResetPasswordError {
+        let errorTag = decodeErrorBody(ResetErrorBody.self, from: error)?.detail.error
+        switch (error.code, errorTag) {
+        case (410, _):
+            return .expiredCode
+        case (429, "reset_ip_rate_limited"):
+            return .ipRateLimited(retryAfterSeconds: parseResetIpRetryAfter(error) ?? 60)
+        case (429, _):
+            return .attemptsExhausted
+        case (400, "new_password_same_as_old"):
+            return .sameAsOld
+        case (400, _):
+            return .invalidCode
+        default:
+            return .unknown(code: error.code, message: error.errorBody)
+        }
+    }
+
+    private func parseVerificationRequired(_ error: APIError) -> String? {
+        guard error.code == 403 else { return nil }
+        guard let detail = decodeErrorBody(VerificationRequiredErrorBody.self, from: error)?.detail,
+              detail.error == Self.verificationRequiredError
+        else { return nil }
+        return detail.email
+    }
+
+    private func parseRateLimitCooldown(_ error: APIError) -> Int? {
+        guard let cooldown = decodeErrorBody(ResendRateLimitedErrorBody.self, from: error)?
+            .detail.cooldown_seconds_remaining, cooldown > 0
+        else { return nil }
+        return cooldown
+    }
+
+    private func parseResetIpRetryAfter(_ error: APIError) -> Int? {
+        guard let wait = decodeErrorBody(ResetIpRateLimitedErrorBody.self, from: error)?
+            .detail.retry_after_seconds, wait > 0
+        else { return nil }
+        return wait
+    }
+
+    private func parseDeleteReauthMessage(_ error: APIError) -> String {
+        decodeErrorBody(DeleteAccountReauthErrorBody.self, from: error)?.detail.message
+            ?? "Re-authentication failed"
+    }
+
+    private func decodeErrorBody<T: Decodable>(_ type: T.Type, from error: APIError) -> T? {
+        try? WireJSON.decoder().decode(T.self, from: Data(error.errorBody.utf8))
+    }
+}

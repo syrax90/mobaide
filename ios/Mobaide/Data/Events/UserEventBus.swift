@@ -1,0 +1,217 @@
+import Foundation
+
+/// Port of Android `UserEventBus`: the user-scoped `ws/user-events`
+/// channel, routing template/agent-presence events straight into
+/// repository hooks (no public event stream — the repositories' state is
+/// the observable surface).
+///
+/// Lifecycle invariants:
+/// - Runs while `userOnly` OR `fullyConnected`; stops on
+///   `unauthenticated` / `incompatibleServer`.
+/// - Reacts to auth-state **changes only** (Android `authState.drop(1)`):
+///   the replayed initial value is ignored, and the initial start comes
+///   from the explicit `start()` call at app launch.
+/// - Terminal socket closures drive the session: 4001/HTTP-401 →
+///   `invalidateUserSession(.tokenRejected)`, 4010 → `.accountRemoved`,
+///   4002 → `markIncompatibleServer`.
+/// - On every (re)connect it best-effort reconciles agents + templates via
+///   REST, recovering events missed while the socket was down (unlike the
+///   agent bus, which relies on the server re-pushing a snapshot).
+actor UserEventBus {
+    private let webSocketFactory: WebSocketCoreFactory
+    private let sessionManager: SessionManager
+    private let userIdentityStore: UserIdentityStore
+    private let tokenStore: TokenStore
+    private let agentStatusApplier: any AgentStatusApplying
+    private let templateSync: any TemplateSyncApplying
+
+    private let connectionBroadcaster = Broadcaster<BusConnectionState>.stateFlow()
+
+    private var core: WebSocketCore?
+    private var consumeTask: Task<Void, Never>?
+    private var lifecycleTask: Task<Void, Never>?
+
+    init(
+        webSocketFactory: WebSocketCoreFactory,
+        sessionManager: SessionManager,
+        userIdentityStore: UserIdentityStore,
+        tokenStore: TokenStore,
+        agentStatusApplier: any AgentStatusApplying = NoOpAgentStatusApplier(),
+        templateSync: any TemplateSyncApplying = NoOpTemplateSyncApplier()
+    ) {
+        self.webSocketFactory = webSocketFactory
+        self.sessionManager = sessionManager
+        self.userIdentityStore = userIdentityStore
+        self.tokenStore = tokenStore
+        self.agentStatusApplier = agentStatusApplier
+        self.templateSync = templateSync
+        connectionBroadcaster.emit(.disconnected)
+    }
+
+    nonisolated func connectionStates() -> AsyncStream<BusConnectionState> {
+        connectionBroadcaster.subscribe()
+    }
+
+    /// Idempotent. Performs the initial connection attempt directly and
+    /// binds subsequent starts/stops to auth-state *changes* only.
+    func start() async {
+        bindLifecycleIfNeeded()
+        await startConnection()
+    }
+
+    private func bindLifecycleIfNeeded() {
+        guard lifecycleTask == nil else { return }
+        let stream = sessionManager.authStateChanges()
+        lifecycleTask = Task { [weak self] in
+            for await state in stream {
+                guard let self else { return }
+                switch state {
+                case .userOnly, .fullyConnected:
+                    await self.startConnection()
+                case .unauthenticated, .incompatibleServer:
+                    await self.stopConnection()
+                }
+            }
+        }
+    }
+
+    private func startConnection() async {
+        guard core == nil else { return }
+        guard userIdentityStore.isUserLoggedIn() else {
+            connectionBroadcaster.emit(.disconnected)
+            return
+        }
+
+        connectionBroadcaster.emit(.connecting)
+        let core = webSocketFactory.make(
+            Self.urlProvider(tokenStore: tokenStore, userIdentityStore: userIdentityStore),
+            { [userIdentityStore] in userIdentityStore.isUserLoggedIn() }
+        )
+        self.core = core
+        consumeTask = Task { [weak self] in
+            for await event in core.events {
+                guard let self else { return }
+                await self.handle(event)
+            }
+        }
+        await core.connect()
+    }
+
+    private func stopConnection() async {
+        consumeTask?.cancel()
+        consumeTask = nil
+        if let core {
+            self.core = nil
+            await core.disconnect()
+        }
+        connectionBroadcaster.emit(.disconnected)
+    }
+
+    private func handle(_ event: WebSocketEvent) async {
+        switch event {
+        case .connected:
+            connectionBroadcaster.emit(.connected)
+            await reconcileAfterConnect()
+        case .disconnected, .error:
+            connectionBroadcaster.emit(.connecting)
+        case .message(let text):
+            await route(text)
+        case .binary:
+            break
+        case .tokenRejected:
+            await sessionManager.invalidateUserSession(.tokenRejected)
+        case .accountRemoved:
+            await sessionManager.invalidateUserSession(.accountRemoved)
+        case .incompatibleServer(let reason):
+            await sessionManager.markIncompatibleServer(
+                AuthState.IncompatibleServer(
+                    reason: reason,
+                    minClientVersion: 0,
+                    storeUrl: AppConfig.appStoreURL,
+                    storeFallbackUrl: AppConfig.appStoreFallbackURL
+                )
+            )
+        }
+    }
+
+    private func reconcileAfterConnect() async {
+        try? await agentStatusApplier.refreshAgents()
+        try? await templateSync.refreshTemplates()
+    }
+
+    private func route(_ text: String) async {
+        switch UserEnvelopeDemux.demux(text) {
+        case .agentStatusChanged(let agentId, let online):
+            await agentStatusApplier.updateAgentOnline(agentId: agentId, online: online)
+        case .templateUpserted(let template):
+            await templateSync.applyUpserted(template)
+        case .templateDeleted(let templateId):
+            await templateSync.applyDeleted(templateId: templateId)
+        case .none:
+            break
+        }
+    }
+
+    private static func urlProvider(
+        tokenStore: TokenStore,
+        userIdentityStore: UserIdentityStore
+    ) -> @Sendable () async throws -> String? {
+        {
+            guard let token = userIdentityStore.getUserAccessToken() else { return nil }
+            let base: String?
+            switch tokenStore.getConnectionMode() {
+            case .relay:
+                base = tokenStore.getRelayServerUrl()
+            case .direct:
+                // Single-agent dev fallback: the agent host doubles as the
+                // central server.
+                base = tokenStore.getAgentUrl()
+            }
+            guard let base else { return nil }
+            // mode .direct: the user channel is never relay-path-rewritten.
+            return RelayRouting.webSocketURLString(
+                baseURL: base,
+                path: "ws/user-events",
+                mode: .direct,
+                token: token
+            )
+        }
+    }
+}
+
+/// Demux for the user-scoped channel (Android `UserEventBus.handleMessage`).
+/// Unknown types and malformed/undecodable payloads are silently ignored
+/// (no `UnknownEnvelopeType` counterpart on this channel).
+enum UserEnvelopeDemux {
+    enum Action: Equatable, Sendable {
+        case agentStatusChanged(agentId: String, online: Bool)
+        case templateUpserted(TemplateDto)
+        case templateDeleted(templateId: String)
+        case none
+    }
+
+    static func demux(_ text: String) -> Action {
+        guard let envelope = EventEnvelope(text: text), let data = envelope.payloadData else {
+            return .none
+        }
+        switch envelope.type {
+        case "agent.status_changed":
+            guard let payload = try? WireJSON.decoder().decode(AgentStatusChangedPayload.self, from: data) else {
+                return .none
+            }
+            return .agentStatusChanged(agentId: payload.agent_id, online: payload.online)
+        case "template.created", "template.updated":
+            guard let template = try? WireJSON.decoder().decode(TemplateDto.self, from: data) else {
+                return .none
+            }
+            return .templateUpserted(template)
+        case "template.deleted":
+            guard let payload = try? WireJSON.decoder().decode(TemplateDeletedPayload.self, from: data) else {
+                return .none
+            }
+            return .templateDeleted(templateId: payload.template_id)
+        default:
+            return .none
+        }
+    }
+}
