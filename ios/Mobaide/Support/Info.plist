@@ -10,5 +10,18 @@
 	<string>$(CENTRAL_SERVER_URL)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Mobaide connects directly to your agent on your local network when direct connection mode is used.</string>
+	<key>GoogleClientID</key>
+	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
+	<key>GoogleServerClientID</key>
+	<string>$(GOOGLE_SERVER_CLIENT_ID)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(GOOGLE_REVERSED_CLIENT_ID)</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

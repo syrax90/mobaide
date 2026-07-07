@@ -44,6 +44,13 @@ struct GoogleAuthRequest: Codable, Equatable, Sendable {
     let id_token: String
 }
 
+/// Unlike the Google mobile path, `nonce` is required: the client embeds it
+/// verbatim in the identity token and the server verifies the match.
+struct AppleAuthRequest: Codable, Equatable, Sendable {
+    let id_token: String
+    let nonce: String
+}
+
 /// `status` is "ok" for verified accounts (access_token populated) or
 /// "verification_required" when the client must call /verify-email with the
 /// OTP before receiving a JWT.

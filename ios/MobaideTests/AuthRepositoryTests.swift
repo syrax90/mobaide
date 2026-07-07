@@ -9,30 +9,10 @@ final class AuthRepositoryTests: XCTestCase {
     override func setUp() {
         super.setUp()
         StubURLProtocol.reset()
-        harness = SessionHarness()
-        connectionStore = ConnectionStore(keychain: InMemoryKeychainStore())
-        let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
-        let centralAPI = CentralAPI(
-            centralServerURL: "https://central.example.com",
-            sessionInvalidator: SessionInvalidatorAdapter(sessionManager: harness.sessionManager),
-            client: client
-        )
-        let agentAPI = AgentAPI(
-            baseURL: { [tokenStore = harness.tokenStore] in tokenStore.getEffectiveBaseUrl() },
-            tokens: SessionAgentTokenProvider(
-                tokenStore: harness.tokenStore,
-                sessionManager: harness.sessionManager
-            ),
-            client: client
-        )
-        repository = AuthRepository(
-            agentAPI: agentAPI,
-            centralAPI: centralAPI,
-            tokenStore: harness.tokenStore,
-            userIdentityStore: harness.userIdentityStore,
-            sessionManager: harness.sessionManager,
-            connectionStore: connectionStore
-        )
+        let repositoryHarness = RepositoryHarness()
+        harness = repositoryHarness.session
+        connectionStore = repositoryHarness.connectionStore
+        repository = repositoryHarness.repository
     }
 
     func testLoginSuccessPersistsIdentityBeforeStateFlip() async throws {
@@ -92,6 +72,34 @@ final class AuthRepositoryTests: XCTestCase {
 
         do {
             _ = try await repository.loginWithPassword(email: "admin@example.com", password: "pw")
+            XCTFail("expected AdminLoginNotSupported")
+        } catch is AdminLoginNotSupported {
+            XCTAssertFalse(harness.userIdentityStore.isUserLoggedIn())
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testLoginWithApplePersistsIdentityAndFlipsState() async throws {
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"jwt-apple","user_id":"u3","email":"apple@example.com","role":"user"}
+        """)
+
+        let result = try await repository.loginWithApple(idToken: "apple-token", nonce: "nonce-1")
+
+        XCTAssertEqual(result, .success(email: "apple@example.com", scheduledDeletionAt: nil))
+        XCTAssertEqual(harness.userIdentityStore.getUserAccessToken(), "jwt-apple")
+        let state = await harness.sessionManager.currentAuthState
+        XCTAssertEqual(state, .userOnly)
+    }
+
+    func testLoginWithAppleAdminRoleIsRejected() async {
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"jwt","user_id":"u1","email":"admin@example.com","role":"admin"}
+        """)
+
+        do {
+            _ = try await repository.loginWithApple(idToken: "t", nonce: "n")
             XCTFail("expected AdminLoginNotSupported")
         } catch is AdminLoginNotSupported {
             XCTAssertFalse(harness.userIdentityStore.isUserLoggedIn())

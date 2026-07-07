@@ -31,26 +31,6 @@ struct PlaceholderScreen: View {
     }
 }
 
-struct LoginScreen: View {
-    var body: some View {
-        PlaceholderScreen(title: "Login", links: [
-            ("Register", .register),
-            ("Forgot password", .forgotPassword),
-            ("Reset password", .resetPassword(email: "demo@example.com")),
-            ("Verify email", .verifyEmail(email: "demo@example.com")),
-        ])
-    }
-}
-
-struct RegisterScreen: View {
-    var body: some View { PlaceholderScreen(title: "Register") }
-}
-
-struct VerifyEmailScreen: View {
-    let email: String
-    var body: some View { PlaceholderScreen(title: "Verify Email", params: ["email": email]) }
-}
-
 struct AgentListScreen: View {
     var body: some View {
         PlaceholderScreen(title: "Agents", links: [
@@ -95,10 +75,6 @@ struct AutoScanDetailScreen: View {
     var body: some View { PlaceholderScreen(title: "Auto Scan", params: ["projectName": projectName]) }
 }
 
-struct ConnectionsScreen: View {
-    var body: some View { PlaceholderScreen(title: "Connections") }
-}
-
 struct ProjectsScreen: View {
     var body: some View { PlaceholderScreen(title: "Projects") }
 }
@@ -114,15 +90,6 @@ struct TemplatesScreen: View {
 
 struct DevicesScreen: View {
     var body: some View { PlaceholderScreen(title: "Devices") }
-}
-
-struct ForgotPasswordScreen: View {
-    var body: some View { PlaceholderScreen(title: "Forgot Password") }
-}
-
-struct ResetPasswordScreen: View {
-    let email: String
-    var body: some View { PlaceholderScreen(title: "Reset Password", params: ["email": email]) }
 }
 
 /// Full-screen upgrade takeover (rendered outside the NavigationStack).

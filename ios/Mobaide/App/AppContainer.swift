@@ -21,6 +21,7 @@ final class AppContainer {
     let agentEventBus: AgentEventBus
     let userEventBus: UserEventBus
     let authRepository: AuthRepository
+    let signInService: SignInService
     let foregroundSessionTracker: ForegroundSessionTracker
     let router: Router
     let authStateModel: AuthStateModel
@@ -109,6 +110,11 @@ final class AppContainer {
         self.agentEventBus = agentEventBus
         self.userEventBus = userEventBus
         self.authRepository = authRepository
+        self.signInService = SignInService(
+            google: GoogleSignInClient(),
+            apple: AppleSignInClient(),
+            authRepository: authRepository
+        )
         self.foregroundSessionTracker = ForegroundSessionTracker()
         self.router = Router()
         self.authStateModel = AuthStateModel(initial: initialState)

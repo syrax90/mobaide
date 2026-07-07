@@ -31,6 +31,10 @@ class CentralServerConfig:
     # Google OAuth (optional)
     google_client_id: str | None = None
 
+    # Sign in with Apple (optional) — the iOS app's bundle id, used as the
+    # expected `aud` of Apple identity tokens on /api/auth/apple.
+    apple_client_id: str | None = None
+
     jwt_algorithm: str = "HS256"
     # TTLs are in minutes. 0 = never expires. The zero sentinel is
     # translated in each consumer:
@@ -171,6 +175,7 @@ class CentralServerConfig:
             admin_seed_email=os.getenv("ADMIN_SEED_EMAIL"),
             admin_seed_password=os.getenv("ADMIN_SEED_PASSWORD"),
             google_client_id=os.getenv("GOOGLE_CLIENT_ID"),
+            apple_client_id=os.getenv("APPLE_CLIENT_ID"),
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
             mobile_token_expire_minutes=int(
                 os.getenv("MOBILE_TOKEN_EXPIRE_MINUTES", "0"),

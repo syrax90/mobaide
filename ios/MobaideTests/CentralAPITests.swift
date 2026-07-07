@@ -39,6 +39,34 @@ final class CentralAPITests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
     }
 
+    func testAppleAuthRoutePostsTokenAndNonce() async throws {
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"access_token":"a","user_id":"u1","email":"e@x.com","role":"user"}"#
+        )
+        let response = try await makeAPI().loginWithApple(idToken: "apple-token", nonce: "nonce-1")
+
+        XCTAssertEqual(response.status, "ok")
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.url?.absoluteString, "https://central.example.com/api/auth/apple")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        let body = try WireJSON.decoder().decode(AppleAuthRequest.self, from: StubURLProtocol.bodies[0])
+        XCTAssertEqual(body, AppleAuthRequest(id_token: "apple-token", nonce: "nonce-1"))
+    }
+
+    func test401OnApplePathDoesNotInvalidate() async {
+        StubURLProtocol.enqueue(status: 401, body: "Invalid Apple ID token")
+        do {
+            _ = try await makeAPI().loginWithApple(idToken: "bad", nonce: "n")
+            XCTFail("expected APIError")
+        } catch let error as APIError {
+            XCTAssertEqual(error.code, 401)
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+        XCTAssertEqual(invalidator.invalidationCount, 0)
+    }
+
     func testReactive401InvalidatesUserSession() async {
         StubURLProtocol.enqueue(status: 401, body: "token rejected")
         do {

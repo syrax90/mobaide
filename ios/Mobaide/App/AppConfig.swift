@@ -18,11 +18,38 @@ enum AppConfig {
     /// so unresolved placeholders fall back exactly like missing/empty
     /// values.
     static func resolveCentralServerURL(_ configured: String?) -> String {
+        resolveOptionalSetting(configured) ?? defaultCentralServerURL
+    }
+
+    /// Shared unresolved-`$(…)`-token handling for every Info.plist value
+    /// populated from an optional build setting.
+    static func resolveOptionalSetting(_ configured: String?) -> String? {
         guard let configured, !configured.isEmpty, !configured.contains("$(") else {
-            return defaultCentralServerURL
+            return nil
         }
         return configured
     }
+
+    /// Google OAuth iOS client id (`GOOGLE_IOS_CLIENT_ID` build setting).
+    /// nil when the build is not configured for Google Sign-In.
+    static var googleIOSClientID: String? {
+        resolveOptionalSetting(
+            Bundle.main.object(forInfoDictionaryKey: "GoogleClientID") as? String
+        )
+    }
+
+    /// Google OAuth web/server client id (`GOOGLE_SERVER_CLIENT_ID` build
+    /// setting) — the audience the central server verifies, so it must match
+    /// the server's `GOOGLE_CLIENT_ID` (Android `GOOGLE_WEB_CLIENT_ID`
+    /// parity).
+    static var googleServerClientID: String? {
+        resolveOptionalSetting(
+            Bundle.main.object(forInfoDictionaryKey: "GoogleServerClientID") as? String
+        )
+    }
+
+    /// Android `BuildConfig.PRIVACY_POLICY_URL` default parity.
+    static let privacyPolicyURL = "https://mobaide.com/privacy.html"
 
     /// App Store links for the IncompatibleServer takeover (Android:
     /// Play Store deep links). The real store ids land with the version

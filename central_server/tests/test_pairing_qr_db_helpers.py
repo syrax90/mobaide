@@ -105,8 +105,8 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_first_reopen = (await cur.fetchone())[0]
-        assert version_after_first_reopen == 13, (
-            f"after the v7->v13 migrations run, user_version must be 13; "
+        assert version_after_first_reopen == 14, (
+            f"after the v7->v14 migrations run, user_version must be 14; "
             f"got {version_after_first_reopen}"
         )
         # The seeded row must survive the migration. The relay_url
@@ -122,7 +122,7 @@ class TestSchema:
         )
         await database.close()
 
-        # Second reopen — already at version 13, must be a no-op.
+        # Second reopen — already at version 14, must be a no-op.
         # A non-idempotent migration would error here with
         # ``duplicate column name: relay_url`` or ``duplicate column name:
         # agent_version`` from sqlite, exactly the failure mode the
@@ -134,14 +134,14 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_second_reopen = (await cur.fetchone())[0]
-        assert version_after_second_reopen == 13
+        assert version_after_second_reopen == 14
 
         # The seeded row is still there — second reopen is a no-op,
         # not a destructive rebuild.
         meta2 = await database.lookup_pairing_token_metadata(existing_raw)
         assert meta2 is not None, (
             "the seeded pairing_tokens row vanished on the second "
-            "reopen at user_version=13; the migration is not idempotent"
+            "reopen at user_version=14; the migration is not idempotent"
         )
         await database.close()
 
