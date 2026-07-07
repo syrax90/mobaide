@@ -30,6 +30,14 @@ final class CreateSessionModel {
 
     static let claudeModels = ["opus", "sonnet", "haiku", "fable"]
     static let codexModelsFallback = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+    /// Mirror of Android `ANTIGRAVITY_MODELS` — used until the `agy` capability
+    /// probe supplies a live list, so model selection still works when the probe
+    /// is unavailable ("Auto"/nil is always offered alongside these).
+    static let antigravityModelsFallback = [
+        "Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)", "Gemini 3.5 Flash (Low)",
+        "Gemini 3.1 Pro (Low)", "Gemini 3.1 Pro (High)",
+        "Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)",
+    ]
     static let reasoningEfforts = ["minimal", "low", "medium", "high"]
     static let codexSandboxes = ["read-only", "workspace-write", "danger-full-access"]
     static let codexApprovals = ["untrusted", "on-request", "never"]
@@ -48,7 +56,7 @@ final class CreateSessionModel {
     private(set) var codexAvailable: Bool?
     private(set) var antigravityAvailable: Bool?
     private(set) var codexModels: [String] = codexModelsFallback
-    private(set) var antigravityModels: [String] = []
+    private(set) var antigravityModels: [String] = antigravityModelsFallback
 
     // Claude / Standard
     var claudeModel: String?
@@ -129,6 +137,17 @@ final class CreateSessionModel {
         (model == "opus" || model == "fable")
             ? ["low", "medium", "high", "xhigh", "max"]
             : ["low", "medium", "high"]
+    }
+
+    var effectiveClaudeModel: String? { claudeFastMode ? "opus" : claudeModel }
+
+    /// Ultracode always forces `xhigh` (Android parity). Otherwise the
+    /// user-selected effort is clamped to the set valid for the effective model,
+    /// so switching down from opus/fable (which offer `xhigh`/`max`) to a smaller
+    /// model never submits an unsupported effort. `high` is valid for every model.
+    var effectiveClaudeEffort: String {
+        if claudeUltracode { return "xhigh" }
+        return claudeEfforts(for: effectiveClaudeModel).contains(claudeEffort) ? claudeEffort : "high"
     }
 
     // MARK: - Loading
@@ -281,8 +300,8 @@ final class CreateSessionModel {
                 skip_permissions: skipPermissions,
                 worktree: effectiveWorktree,
                 branch_name: effectiveBranch,
-                model: claudeFastMode ? "opus" : claudeModel,
-                effort: claudeUltracode ? "xhigh" : claudeEffort,
+                model: effectiveClaudeModel,
+                effort: effectiveClaudeEffort,
                 fast_mode: claudeFastMode,
                 ultracode: claudeUltracode,
                 append_system_prompt: claudeAppendSystemPrompt.isEmpty ? nil : claudeAppendSystemPrompt
@@ -327,8 +346,8 @@ final class CreateSessionModel {
         switch mode {
         case .standard:
             preferencesStore.setLastUsedClaudeOptions(ClaudeLaunchPrefs(
-                model: claudeFastMode ? "opus" : claudeModel,
-                effort: claudeUltracode ? "xhigh" : claudeEffort,
+                model: effectiveClaudeModel,
+                effort: effectiveClaudeEffort,
                 fastMode: claudeFastMode,
                 ultracode: claudeUltracode,
                 appendSystemPrompt: claudeAppendSystemPrompt
@@ -395,9 +414,12 @@ final class CreateSessionModel {
     }
 
     static func parseAddDirs(_ input: String) -> [String] {
+        // Scalar-level separator set (not `split(whereSeparator:)`): Swift treats
+        // `\r\n` as one grapheme, so a Character comparison never matches CRLF —
+        // splitting on the CharacterSet handles LF, CR, CRLF, and commas alike.
         input
-            .split(whereSeparator: { $0 == "\n" || $0 == "," })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .components(separatedBy: CharacterSet(charactersIn: "\n\r,"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
 

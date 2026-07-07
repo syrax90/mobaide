@@ -76,6 +76,19 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.buildRequest(mode: .standard).claude_options?.effort, "xhigh")
     }
 
+    func testClaudeEffortClampedWhenModelNarrows() {
+        let model = makeModel()
+        model.selection = .stored("a")
+        model.claudeModel = "opus"
+        model.claudeEffort = "max"
+        XCTAssertEqual(model.buildRequest(mode: .standard).claude_options?.effort, "max")
+        model.claudeModel = "sonnet" // no longer supports "max"
+        XCTAssertEqual(
+            model.buildRequest(mode: .standard).claude_options?.effort, "high",
+            "a stale effort unsupported by the new model clamps to a valid value"
+        )
+    }
+
     func testCodexUsesCliAndStateDefaults() {
         let model = makeModel()
         model.selection = .stored("a")
@@ -167,6 +180,16 @@ final class CreateSessionModelTests: XCTestCase {
 
     func testParseAddDirs() {
         XCTAssertEqual(CreateSessionModel.parseAddDirs("a\nb, c ,,\n d"), ["a", "b", "c", "d"])
+    }
+
+    func testParseAddDirsTrimsCarriageReturns() {
+        XCTAssertEqual(CreateSessionModel.parseAddDirs("/a\r\n/b,\r/c"), ["/a", "/b", "/c"])
+    }
+
+    func testAntigravityModelFallbackPresent() {
+        let model = makeModel()
+        XCTAssertFalse(model.antigravityModels.isEmpty, "a fallback list must exist before the agy probe")
+        XCTAssertEqual(model.antigravityModels, CreateSessionModel.antigravityModelsFallback)
     }
 
     func testProjectContinueGating() {
