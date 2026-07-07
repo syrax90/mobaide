@@ -13,7 +13,12 @@ register, verify-email, forgot/reset password, connection switcher) and the
 shared `SignInService` (Google Sign-In ≥ 9.0 with a custom nonce + Sign in
 with Apple); CLA-100 replaced the three main placeholders with their real
 bodies — the SwiftTerm-backed terminal, the sessions list, and the
-create-session wizard. Remaining feature screens land in later issues.
+create-session wizard; CLA-101 replaced the Projects and Git placeholders
+with the bus-driven Projects management screen (create/edit form sheet,
+swipe-delete Undo, drag-reorder) and the Git branches/worktrees screen
+(long-press multi-select, deferred batch delete with force/busy handling),
+backed by an app-scoped `ProjectsRepository` and a reusable `UndoSnackbar`.
+Remaining feature screens land in later issues.
 
 ## Layout
 

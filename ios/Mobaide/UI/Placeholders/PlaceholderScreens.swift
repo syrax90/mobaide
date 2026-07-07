@@ -62,15 +62,6 @@ struct AutoScanDetailScreen: View {
     var body: some View { PlaceholderScreen(title: "Auto Scan", params: ["projectName": projectName]) }
 }
 
-struct ProjectsScreen: View {
-    var body: some View { PlaceholderScreen(title: "Projects") }
-}
-
-struct GitScreen: View {
-    let projectName: String
-    var body: some View { PlaceholderScreen(title: "Git", params: ["projectName": projectName]) }
-}
-
 struct TemplatesScreen: View {
     var body: some View { PlaceholderScreen(title: "Templates") }
 }

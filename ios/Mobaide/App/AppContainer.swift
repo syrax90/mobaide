@@ -24,6 +24,7 @@ final class AppContainer {
     let signInService: SignInService
     let foregroundSessionTracker: ForegroundSessionTracker
     let sessionRepository: SessionRepository
+    let projectsRepository: ProjectsRepository
     let terminalSessionStore: TerminalSessionStore
     let router: Router
     let authStateModel: AuthStateModel
@@ -133,6 +134,10 @@ final class AppContainer {
             agentEventBus: agentEventBus,
             terminalSessionStore: terminalSessionStore
         )
+        self.projectsRepository = ProjectsRepository(
+            agentAPI: agentAPI,
+            agentEventBus: agentEventBus
+        )
         self.router = Router()
         self.authStateModel = AuthStateModel(initial: initialState)
     }
@@ -145,6 +150,7 @@ final class AppContainer {
         started = true
         authStateModel.bind(to: sessionManager)
         sessionRepository.start()
+        projectsRepository.start()
         await agentEventBus.start()
         await userEventBus.start()
     }
