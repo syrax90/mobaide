@@ -14,8 +14,17 @@ final class GoogleSignInClientTests: XCTestCase {
         XCTAssertTrue(GoogleSignInClient.isClientIdConfigured("123-abc.apps.googleusercontent.com"))
     }
 
+    func testIsReversedClientIdConfigured() {
+        XCTAssertFalse(GoogleSignInClient.isReversedClientIdConfigured(nil))
+        XCTAssertFalse(GoogleSignInClient.isReversedClientIdConfigured(""))
+        XCTAssertFalse(GoogleSignInClient.isReversedClientIdConfigured("   "))
+        XCTAssertFalse(GoogleSignInClient.isReversedClientIdConfigured("$(GOOGLE_REVERSED_CLIENT_ID)"))
+        XCTAssertFalse(GoogleSignInClient.isReversedClientIdConfigured("123-abc.apps.googleusercontent.com"))
+        XCTAssertTrue(GoogleSignInClient.isReversedClientIdConfigured("com.googleusercontent.apps.123-abc"))
+    }
+
     func testSignInWithoutClientIdsReturnsNotConfigured() async {
-        let client = GoogleSignInClient(clientID: nil, serverClientID: nil)
+        let client = GoogleSignInClient(clientID: nil, serverClientID: nil, reversedClientID: nil)
         let result = await client.signIn()
         XCTAssertEqual(result, .notConfigured)
     }
@@ -23,7 +32,20 @@ final class GoogleSignInClientTests: XCTestCase {
     func testSignInWithPlaceholderServerIdReturnsNotConfigured() async {
         let client = GoogleSignInClient(
             clientID: "123-abc.apps.googleusercontent.com",
-            serverClientID: "$(GOOGLE_SERVER_CLIENT_ID)"
+            serverClientID: "$(GOOGLE_SERVER_CLIENT_ID)",
+            reversedClientID: "com.googleusercontent.apps.123-abc"
+        )
+        let result = await client.signIn()
+        XCTAssertEqual(result, .notConfigured)
+    }
+
+    func testSignInWithoutReversedSchemeReturnsNotConfigured() async {
+        // Both client ids set but no redirect URL scheme: the flow could
+        // start but never complete, so the guard must block it.
+        let client = GoogleSignInClient(
+            clientID: "123-abc.apps.googleusercontent.com",
+            serverClientID: "456-web.apps.googleusercontent.com",
+            reversedClientID: "$(GOOGLE_REVERSED_CLIENT_ID)"
         )
         let result = await client.signIn()
         XCTAssertEqual(result, .notConfigured)

@@ -9,18 +9,25 @@ import UIKit
 final class GoogleSignInClient: GoogleSignInProviding {
     private let clientID: String?
     private let serverClientID: String?
+    private let reversedClientID: String?
 
     init(
         clientID: String? = AppConfig.googleIOSClientID,
-        serverClientID: String? = AppConfig.googleServerClientID
+        serverClientID: String? = AppConfig.googleServerClientID,
+        reversedClientID: String? = AppConfig.googleReversedClientID
     ) {
         self.clientID = clientID
         self.serverClientID = serverClientID
+        self.reversedClientID = reversedClientID
     }
 
     func signIn() async -> SignInResult {
+        // All three values are co-required: without the reversed-client-id
+        // URL scheme the OAuth redirect can't be delivered back to the app,
+        // so a partially configured build must not start the flow.
         guard let clientID, Self.isClientIdConfigured(clientID),
-              let serverClientID, Self.isClientIdConfigured(serverClientID)
+              let serverClientID, Self.isClientIdConfigured(serverClientID),
+              Self.isReversedClientIdConfigured(reversedClientID)
         else {
             return .notConfigured
         }
@@ -72,6 +79,15 @@ final class GoogleSignInClient: GoogleSignInProviding {
             return false
         }
         return trimmed.hasSuffix(".apps.googleusercontent.com")
+    }
+
+    /// The reversed iOS client id doubles as the redirect URL scheme; an
+    /// unset or unresolved `$(…)` placeholder means the round trip can never
+    /// complete.
+    static func isReversedClientIdConfigured(_ scheme: String?) -> Bool {
+        guard let scheme else { return false }
+        return scheme.trimmingCharacters(in: .whitespacesAndNewlines)
+            .hasPrefix("com.googleusercontent.apps.")
     }
 
     private static func topViewController() -> UIViewController? {

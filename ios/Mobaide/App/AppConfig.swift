@@ -48,6 +48,15 @@ enum AppConfig {
         )
     }
 
+    /// Reversed iOS client id (`GOOGLE_REVERSED_CLIENT_ID` build setting) —
+    /// also registered as the `CFBundleURLTypes` scheme that delivers the
+    /// OAuth redirect back to the app, so sign-in must not start without it.
+    static var googleReversedClientID: String? {
+        resolveOptionalSetting(
+            Bundle.main.object(forInfoDictionaryKey: "GoogleReversedClientID") as? String
+        )
+    }
+
     /// Android `BuildConfig.PRIVACY_POLICY_URL` default parity.
     static let privacyPolicyURL = "https://mobaide.com/privacy.html"
 
