@@ -77,6 +77,8 @@ private struct TerminalScreenContent: View {
             overlayPill("Reconnecting…", background: MobaideColors.terminalOverlayReconnecting)
         case .replayingBuffer:
             overlayPill("Replaying buffer…", background: MobaideColors.terminalOverlayReplaying)
+        case .closed:
+            overlayPill("Session ended", background: MobaideColors.terminalOverlayReconnecting)
         }
     }
 

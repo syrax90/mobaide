@@ -28,6 +28,9 @@ final class TerminalSessionModel {
         case reconnecting
         case replayingBuffer
         case live
+        /// Terminal teardown — the session was killed or removed and the model
+        /// was evicted; the socket will not reconnect.
+        case closed
     }
 
     /// `ESC[H ESC[2J ESC[3J` — cursor home, erase display, erase scrollback.
@@ -48,7 +51,7 @@ final class TerminalSessionModel {
     private(set) var hasUnread = false
     var inputText = ""
 
-    var isConnected: Bool { connectionState != .reconnecting }
+    var isConnected: Bool { connectionState == .live || connectionState == .replayingBuffer }
     var isRunning: Bool { sessionStatus == "running" }
 
     private let webSocketFactory: WebSocketCoreFactory
@@ -65,7 +68,6 @@ final class TerminalSessionModel {
     private var inReplay = false
     private var started = false
     private var isTornDown = false
-    private var hasConnectedBefore = false
     private var lastResizeRows = 0
     private var lastResizeCols = 0
 
@@ -129,12 +131,7 @@ final class TerminalSessionModel {
     private func handle(_ event: WebSocketEvent) {
         switch event {
         case .connected:
-            // The first connect's size is sent by the normal layout→resize flow;
-            // only a genuine reconnect needs the last size re-sent.
-            if hasConnectedBefore {
-                resendResizeAfterReconnect()
-            }
-            hasConnectedBefore = true
+            resendCachedSize()
         case .binary(let data):
             handleBinary(data)
         case .disconnected:
@@ -233,8 +230,10 @@ final class TerminalSessionModel {
 
     /// A resize enqueued while the socket was down is dropped by the transport
     /// and then suppressed by `resize`'s dedupe guard, so re-send the last known
-    /// size on every (re)connect to keep the PTY dimensions correct.
-    private func resendResizeAfterReconnect() {
+    /// size on every successful connect (including the first, whose initial
+    /// resize may have been dropped by a failed prior attempt) to keep the PTY
+    /// dimensions correct. Re-sending the same size is idempotent.
+    private func resendCachedSize() {
         guard lastResizeRows > 0, lastResizeCols > 0 else { return }
         enqueue(.resize(rows: UInt16(clamping: lastResizeRows), cols: UInt16(clamping: lastResizeCols)))
     }
@@ -316,6 +315,10 @@ final class TerminalSessionModel {
 
     func disconnect() {
         isTornDown = true
+        // Reflect teardown in observable state so the screen disables its send
+        // controls instead of accepting input into the finished outbound stream.
+        connectionState = .closed
+        sessionStatus = nil
         eventTask?.cancel()
         sendTask?.cancel()
         resizeTask?.cancel()

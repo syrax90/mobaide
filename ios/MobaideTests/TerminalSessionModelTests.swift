@@ -112,24 +112,46 @@ final class TerminalSessionModelTests: XCTestCase {
         model.resize(rows: 40, cols: 120)
         try await Task.sleep(for: .milliseconds(200))
         let resizes = connection.sentBinaries.filter { $0.first == 0x72 }
-        XCTAssertEqual(resizes.count, 1, "burst must collapse to a single resize frame")
-        XCTAssertEqual(resizes.first, Data([0x72, 0x00, 0x28, 0x00, 0x78])) // 40 rows, 120 cols
+        XCTAssertFalse(resizes.isEmpty, "the final resize is sent")
+        XCTAssertFalse(
+            resizes.contains(Data([0x72, 0x00, 0x1E, 0x00, 0x64])), // 30 rows, 100 cols
+            "the debounce must drop the intermediate value"
+        )
+        XCTAssertTrue(
+            resizes.allSatisfy { $0 == Data([0x72, 0x00, 0x28, 0x00, 0x78]) }, // 40 rows, 120 cols
+            "only the final size is on the wire"
+        )
     }
 
     func testResizeResentOnReconnect() async throws {
         let (model, connection) = try await connectedModel()
         model.resize(rows: 40, cols: 120)
-        try await Task.sleep(for: .milliseconds(150))
-        XCTAssertEqual(connection.sentBinaries.filter { $0.first == 0x72 }.count, 1, "initial debounced resize")
+        try await Task.sleep(for: .milliseconds(200))
+        let beforeReconnect = connection.sentBinaries.filter { $0.first == 0x72 }.count
+        XCTAssertGreaterThanOrEqual(beforeReconnect, 1, "size sent while connected")
 
-        connection.emit(.opened) // reconnect → .connected → resend last known size
+        connection.emit(.opened) // reconnect → .connected → resend cached size
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
-        while ContinuousClock.now < deadline, connection.sentBinaries.filter({ $0.first == 0x72 }).count < 2 {
+        while ContinuousClock.now < deadline,
+              connection.sentBinaries.filter({ $0.first == 0x72 }).count <= beforeReconnect {
             try await Task.sleep(for: .milliseconds(5))
         }
         let resizes = connection.sentBinaries.filter { $0.first == 0x72 }
-        XCTAssertEqual(resizes.count, 2, "the last size is re-sent on reconnect")
+        XCTAssertGreaterThan(resizes.count, beforeReconnect, "the cached size is re-sent on reconnect")
         XCTAssertEqual(resizes.last, Data([0x72, 0x00, 0x28, 0x00, 0x78]))
+    }
+
+    func testDisconnectClosesAndDisablesInput() async throws {
+        let (model, connection) = try await connectedModel()
+        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(model.isConnected)
+        XCTAssertTrue(model.isRunning)
+
+        model.disconnect()
+        XCTAssertEqual(model.connectionState, .closed)
+        XCTAssertFalse(model.isConnected, "an evicted/closed session must not read as connected")
+        XCTAssertFalse(model.isRunning, "an evicted/closed session must not read as running")
     }
 
     // MARK: - Replay state machine
