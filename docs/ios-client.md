@@ -11,7 +11,9 @@ the two WebSocket event buses) and a navigable placeholder UI shell; CLA-99
 replaced the six onboarding placeholders with the real screens (login,
 register, verify-email, forgot/reset password, connection switcher) and the
 shared `SignInService` (Google Sign-In ≥ 9.0 with a custom nonce + Sign in
-with Apple). Remaining feature screens land in later issues.
+with Apple); CLA-100 replaced the three main placeholders with their real
+bodies — the SwiftTerm-backed terminal, the sessions list, and the
+create-session wizard. Remaining feature screens land in later issues.
 
 ## Layout
 
@@ -21,7 +23,8 @@ ios/
 │                                 # + optional #include of Local.xcconfig (gitignored dev overrides;
 │                                 #   see Config/Local.xcconfig.example)
 ├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups;
-│                                 # SPM: GoogleSignIn-iOS ≥ 9.0 (Package.resolved committed)
+│                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.13.0
+│                                 #   (+ swift-argument-parser transitively; Package.resolved committed)
 ├── Mobaide/
 │   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel
 │   ├── Core/Concurrency/         # Broadcaster (StateFlow/SharedFlow replay parity)
@@ -35,7 +38,9 @@ ios/
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
 │   ├── Notifications/            # ForegroundSessionTracker
 │   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
-│   │                             # Connections, Placeholders (remaining feature screens)
+│   │                             # Connections, Sessions (list + create wizard), Terminal
+│   │                             # (SwiftTerm host, InputBar, session model/store), Placeholders
+│   │                             # (remaining feature screens)
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
 │                                 # reversed-client-id URL scheme) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites
@@ -153,8 +158,9 @@ Known deliberate deviations from Android's bytes (server-verified safe):
   its flow at 101 events with drop-newest. Attach exactly one prompt consumer
   to `events` before `connect()`. CLA-98 resolved the backpressure decision:
   `events` stays unbounded — each event bus is the sole, promptly-draining
-  consumer of a fresh core per connection cycle. The terminal channel
-  decision remains with iOS-04.
+  consumer of a fresh core per connection cycle. CLA-100 extended the same
+  rule to the terminal channel — `TerminalSessionModel` is its sole
+  prompt-draining consumer, so `events` stays unbounded there too.
 
 ## Golden fixtures (`tests/protocol_fixtures/`)
 

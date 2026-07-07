@@ -23,6 +23,8 @@ final class AppContainer {
     let authRepository: AuthRepository
     let signInService: SignInService
     let foregroundSessionTracker: ForegroundSessionTracker
+    let sessionRepository: SessionRepository
+    let terminalSessionStore: TerminalSessionStore
     let router: Router
     let authStateModel: AuthStateModel
 
@@ -115,7 +117,22 @@ final class AppContainer {
             apple: AppleSignInClient(),
             authRepository: authRepository
         )
-        self.foregroundSessionTracker = ForegroundSessionTracker()
+        let foregroundSessionTracker = ForegroundSessionTracker()
+        self.foregroundSessionTracker = foregroundSessionTracker
+        let terminalSessionStore = TerminalSessionStore(
+            webSocketFactory: webSocketFactory,
+            sessionManager: sessionManager,
+            tokenStore: tokenStore,
+            centralAPI: centralAPI,
+            userTokenProvider: userTokenProvider,
+            foregroundSessionTracker: foregroundSessionTracker
+        )
+        self.terminalSessionStore = terminalSessionStore
+        self.sessionRepository = SessionRepository(
+            agentAPI: agentAPI,
+            agentEventBus: agentEventBus,
+            terminalSessionStore: terminalSessionStore
+        )
         self.router = Router()
         self.authStateModel = AuthStateModel(initial: initialState)
     }
@@ -127,6 +144,7 @@ final class AppContainer {
         guard !started else { return }
         started = true
         authStateModel.bind(to: sessionManager)
+        sessionRepository.start()
         await agentEventBus.start()
         await userEventBus.start()
     }

@@ -24,6 +24,10 @@ enum MobaideColors {
     static let terminalBackground = Color(hex: 0x1E1E1E)
     static let terminalForeground = Color(hex: 0xD4D4D4)
 
+    // Terminal connection-overlay pills.
+    static let terminalOverlayReconnecting = Color(hex: 0x202020)
+    static let terminalOverlayReplaying = Color(hex: 0x2A4D6E)
+
     /// The 16 standard ANSI palette entries (indices 0-15).
     static let ansiColors: [Color] = [
         Color(hex: 0x000000), // black
