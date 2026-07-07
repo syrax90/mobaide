@@ -109,4 +109,26 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertTrue(noResume, "a stopped session must not auto-resume")
         XCTAssertNil(prefs.getLastUsedSessionId(), "stale last-used id is cleared")
     }
+
+    func testAutoResumeNotReplayedAfterClear() async throws {
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedSessionId("a")
+        let (model, repo, bus, factory) = makeStack(prefs: prefs)
+        let observe = Task { await model.observeSessions() }
+        defer { observe.cancel() }
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+        connection.emit(.text(snapshot("a", "running")))
+
+        let first = StreamCollector(model.autoResumeEvents())
+        let resumed = try await first.next()
+        XCTAssertEqual(resumed, "a")
+        model.clearAutoResume()
+
+        let second = StreamCollector(model.autoResumeEvents())
+        let noReplay = await second.expectNoElement(within: .milliseconds(200))
+        XCTAssertTrue(noReplay, "a cleared auto-resume id must not replay to a returning list subscriber")
+    }
 }

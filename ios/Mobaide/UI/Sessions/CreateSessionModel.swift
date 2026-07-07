@@ -255,24 +255,24 @@ final class CreateSessionModel {
     func buildRequest(mode: Mode) -> CreateSessionRequest {
         let projectName: String?
         let cwd: String?
-        let isCustomPath: Bool
         switch selection {
         case .stored(let name):
             projectName = name
             cwd = nil
-            isCustomPath = false
         case .customPath(let path):
             projectName = nil
             cwd = path
-            isCustomPath = true
         case .none:
             projectName = nil
             cwd = nil
-            isCustomPath = false
         }
-        let effectiveWorktree = isCustomPath ? false : worktree
-        let effectiveBranch = (isCustomPath || branchName.trimmingCharacters(in: .whitespaces).isEmpty)
-            ? nil : branchName
+        // Worktree/branch apply only to a stored git project (`showsGitOptions`);
+        // a non-git project or a custom path must not leak a stale toggle whose
+        // UI is hidden and therefore unclearable.
+        let gitEligible = showsGitOptions
+        let effectiveWorktree = gitEligible ? worktree : false
+        let effectiveBranch = (gitEligible && !branchName.trimmingCharacters(in: .whitespaces).isEmpty)
+            ? branchName : nil
 
         switch mode {
         case .standard:

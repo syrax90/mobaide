@@ -62,6 +62,7 @@ private struct SessionListContent: View {
             .task {
                 for await id in model.autoResumeEvents() {
                     router.navigate(to: .sessionDetail(sessionId: id))
+                    model.clearAutoResume()
                 }
             }
             .onChange(of: model.error) { _, newValue in

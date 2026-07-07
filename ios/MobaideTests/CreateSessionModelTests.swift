@@ -27,6 +27,23 @@ final class CreateSessionModelTests: XCTestCase {
         return CreateSessionModel(agentAPI: agentAPI, sessionRepository: repo, preferencesStore: prefs ?? isolatedPrefs())
     }
 
+    private func modelWithProjects(_ projectsJSON: String) async -> CreateSessionModel {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: projectsJSON)
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        let bus = AgentEventBus(
+            webSocketFactory: WebSocketCoreFactory.live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
+            sessionManager: harness.sessionManager,
+            tokenStore: harness.tokenStore
+        )
+        let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+        let agentAPI = AgentAPI(baseURL: { "http://agent.example.com" }, tokens: FakeAgentTokens(token: AgentToken(value: "tok")), client: client)
+        let repo = SessionRepository(agentAPI: agentAPI, agentEventBus: bus, terminalSessionStore: TerminalTestSupport.store(harness))
+        let model = CreateSessionModel(agentAPI: agentAPI, sessionRepository: repo, preferencesStore: isolatedPrefs())
+        await model.load()
+        return model
+    }
+
     // MARK: - Request building
 
     func testClaudeStoredProjectDefaults() {
@@ -85,9 +102,11 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.antigravity_options?.skip_permissions, false)
     }
 
-    func testShellCarriesWorktreeOnTopLevel() {
-        let model = makeModel()
-        model.selection = .stored("a")
+    func testShellCarriesWorktreeOnTopLevel() async {
+        // Shell worktree/branch ride the top-level request, but only for a
+        // stored git project (worktree is git-gated).
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("a")
         model.worktree = true
         model.branchName = "feat"
         let request = model.buildRequest(mode: .shell)
@@ -113,6 +132,28 @@ final class CreateSessionModelTests: XCTestCase {
         let model = makeModel()
         model.setCustomPath("  /abs/path  ")
         XCTAssertEqual(model.buildRequest(mode: .standard).cwd, "/abs/path")
+    }
+
+    func testNonGitStoredProjectDropsWorktree() async {
+        let model = await modelWithProjects(#"[{"name":"plain","path":"/p","is_git":false}]"#)
+        model.selectStoredProject("plain")
+        model.worktree = true
+        model.branchName = "x"
+        let request = model.buildRequest(mode: .standard)
+        XCTAssertFalse(model.showsGitOptions)
+        XCTAssertEqual(request.claude_options?.worktree, false, "a non-git project must not send a stale worktree toggle")
+        XCTAssertNil(request.claude_options?.branch_name)
+    }
+
+    func testGitStoredProjectKeepsWorktree() async {
+        let model = await modelWithProjects(#"[{"name":"repo","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("repo")
+        model.worktree = true
+        model.branchName = "feat"
+        let request = model.buildRequest(mode: .standard)
+        XCTAssertTrue(model.showsGitOptions)
+        XCTAssertEqual(request.claude_options?.worktree, true)
+        XCTAssertEqual(request.claude_options?.branch_name, "feat")
     }
 
     // MARK: - Validation / helpers

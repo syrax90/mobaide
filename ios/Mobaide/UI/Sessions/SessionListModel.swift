@@ -15,10 +15,12 @@ final class SessionListModel {
     private let repository: SessionRepository
     private let agentEventBus: AgentEventBus
     private let preferencesStore: PreferencesStore
-    // `.latest` so the one-shot auto-resume id survives the race where
+    // `.latestClearable` so the one-shot auto-resume id survives the race where
     // `observeSessions` emits before the screen's `autoResumeEvents` task
-    // subscribes; it fires at most once per model instance (didAttemptAutoResume).
-    private let navBroadcaster = Broadcaster<String>(replay: .latest)
+    // subscribes, while `clearAutoResume()` (called by the screen after it
+    // navigates) drops the cache so returning to the list does not replay it and
+    // re-navigate. It fires at most once per model instance (didAttemptAutoResume).
+    private let navBroadcaster = Broadcaster<String>(replay: .latestClearable)
     private var didAttemptAutoResume = false
 
     init(repository: SessionRepository, agentEventBus: AgentEventBus, preferencesStore: PreferencesStore) {
@@ -31,6 +33,10 @@ final class SessionListModel {
     var isEmpty: Bool { sessions.isEmpty && !isReconnecting }
 
     func autoResumeEvents() -> AsyncStream<String> { navBroadcaster.subscribe() }
+
+    /// Called by the screen once it has consumed the auto-resume id and
+    /// navigated, so returning to the list does not replay the cached id.
+    func clearAutoResume() { navBroadcaster.clearReplay() }
 
     func observeSessions() async {
         for await list in repository.sessions() {
