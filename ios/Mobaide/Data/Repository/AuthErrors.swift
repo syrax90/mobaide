@@ -55,4 +55,7 @@ enum CancelDeletionResult: Equatable, Sendable {
 }
 
 /// Admin accounts must use the web dashboard, never the mobile client.
-struct AdminLoginNotSupported: Error, Equatable, Sendable {}
+struct AdminLoginNotSupported: Error, Equatable, Sendable {
+    /// Android `ADMIN_LOGIN_USER_MESSAGE` parity.
+    static let userMessage = "This app is for agent owners. Admins should use the web dashboard."
+}

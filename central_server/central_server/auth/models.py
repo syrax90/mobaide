@@ -117,6 +117,18 @@ class GoogleAuthRequest(BaseModel):
     id_token: str
 
 
+class AppleAuthRequest(BaseModel):
+    """Sign in with Apple identity-token exchange.
+
+    ``nonce`` is required (unlike the Google mobile path): the iOS client
+    always embeds its generated nonce verbatim in the identity token, so the
+    server can bind the token to this request and reject replays.
+    """
+
+    id_token: str = Field(..., min_length=1)
+    nonce: str = Field(..., min_length=1)
+
+
 class AuthTokenResponse(BaseModel):
     """Response for register / login / verify-email / google.
 
@@ -179,6 +191,8 @@ class DeleteAccountRequest(BaseModel):
       * ``method="password"`` with a non-empty ``password`` (password users)
       * ``method="google"`` with a fresh ``id_token`` + the ``nonce`` the
         client used when obtaining it (Google-OAuth users)
+      * ``method="apple"`` with a fresh ``id_token`` + ``nonce`` (Sign in
+        with Apple users)
 
     ``mode`` chooses between the soft-delete grace window (``scheduled``,
     default — 14 days, cancellable) and an irreversible cascade purge
@@ -189,7 +203,7 @@ class DeleteAccountRequest(BaseModel):
     for self-delete (Auth0 / Google Identity guidance).
     """
 
-    method: Literal["password", "google"]
+    method: Literal["password", "google", "apple"]
     # Nullable in the wire schema so older Android builds that omitted the
     # field — and any future JSON caller that explicitly sends ``null`` —
     # still parse cleanly. The validator below normalises ``None`` to
@@ -206,10 +220,10 @@ class DeleteAccountRequest(BaseModel):
         if self.method == "password":
             if not self.password:
                 raise ValueError("password is required when method=password")
-        elif self.method == "google":
+        elif self.method in ("google", "apple"):
             if not self.id_token or not self.nonce:
                 raise ValueError(
-                    "id_token and nonce are required when method=google"
+                    f"id_token and nonce are required when method={self.method}"
                 )
         return self
 

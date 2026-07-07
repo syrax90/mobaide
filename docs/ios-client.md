@@ -3,18 +3,25 @@
 Native iOS client (SwiftUI, iOS 17+) with feature parity to the Android app as
 the goal of the iOS series (CLA-97…CLA-106). The backend (`central_server/`
 relay + `mobaide_agent/`) and the wire protocol (v6, see `PROTOCOL.md`) are
-frozen — iOS conforms to them byte for byte. CLA-97 bootstrapped the project
-and ported the networking spine; CLA-98 added the auth/session core (Keychain
-stores, SessionManager, the two WebSocket event buses) and a navigable
-placeholder UI shell — the app boots to Login (or Agents when a session
-exists). Real feature screens land in later issues.
+frozen — iOS conforms to them byte for byte (with one additive exception:
+CLA-99 added `POST /api/auth/apple` to the server, mirroring the Google
+verification path). CLA-97 bootstrapped the project and ported the networking
+spine; CLA-98 added the auth/session core (Keychain stores, SessionManager,
+the two WebSocket event buses) and a navigable placeholder UI shell; CLA-99
+replaced the six onboarding placeholders with the real screens (login,
+register, verify-email, forgot/reset password, connection switcher) and the
+shared `SignInService` (Google Sign-In ≥ 9.0 with a custom nonce + Sign in
+with Apple). Remaining feature screens land in later issues.
 
 ## Layout
 
 ```
 ios/
 ├── Config/Protocol.xcconfig      # APP_PROTOCOL_VERSION / MIN_SERVER_PROTOCOL_VERSION
-├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups
+│                                 # + optional #include of Local.xcconfig (gitignored dev overrides;
+│                                 #   see Config/Local.xcconfig.example)
+├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups;
+│                                 # SPM: GoogleSignIn-iOS ≥ 9.0 (Package.resolved committed)
 ├── Mobaide/
 │   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel
 │   ├── Core/Concurrency/         # Broadcaster (StateFlow/SharedFlow replay parity)
@@ -22,12 +29,15 @@ ios/
 │   ├── Core/Networking/          # WebSocketCore, NWWebSocketTransport, RelayRouting,
 │   │                             # AgentAPI, CentralAPI, HTTPClient, TokenProviding
 │   ├── Core/Storage/             # KeychainStoring, SecItemKeychainStore
-│   ├── Data/                     # Auth (SessionManager, token/identity stores), Events
-│   │                             # (AgentEventBus, UserEventBus), Local, Security, Repository
+│   ├── Data/                     # Auth (SessionManager, token/identity stores, SignInService,
+│   │                             # Google/Apple sign-in clients), Events (AgentEventBus,
+│   │                             # UserEventBus), Local, Security, Repository
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
 │   ├── Notifications/            # ForegroundSessionTracker
-│   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Placeholders
-│   └── Support/Info.plist        # the two protocol keys + CentralServerURL (merged with the generated plist)
+│   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
+│   │                             # Connections, Placeholders (remaining feature screens)
+│   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
+│                                 # reversed-client-id URL scheme) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites
 tests/protocol_fixtures/          # language-neutral golden fixtures (see below)
 ```
@@ -58,10 +68,38 @@ with the newest installed Xcode 26.x selected at runtime (the runner pool
 currently mixes macos-15 and macos-26 image snapshots whose 26.x minors
 differ; the major is pinned and the job fails loudly if 26.x disappears),
 creating the iPhone 16 simulator device when the image doesn't pre-create
-it. The pbxproj stays at `objectVersion = 70` (the minimum for synchronized
-folder groups) so any Xcode ≥ 16 can still open the project.
-`protocol-integrity.yml` additionally asserts the xcconfig protocol constants
-match Android's `build.gradle.kts` values.
+it. SPM dependencies resolve over the network on the runner; the job passes
+`-onlyUsePackageVersionsFromResolvedFile` so the committed `Package.resolved`
+pins the versions and drift fails loudly. The pbxproj stays at
+`objectVersion = 70` (the minimum for synchronized folder groups) so any
+Xcode ≥ 16 can still open the project. `protocol-integrity.yml` additionally
+asserts the xcconfig protocol constants match Android's `build.gradle.kts`
+values.
+
+## Sign-in configuration
+
+The repo ships with no OAuth secrets; unconfigured builds show a "not
+configured" message on the Google button (Android parity), while Sign in with
+Apple needs no client-side config beyond the entitlement.
+
+- **Local overrides** live in `ios/Config/Local.xcconfig` (gitignored,
+  `#include?`-d by `Protocol.xcconfig`; template:
+  `ios/Config/Local.xcconfig.example`): `CENTRAL_SERVER_URL`,
+  `GOOGLE_IOS_CLIENT_ID`, `GOOGLE_SERVER_CLIENT_ID`,
+  `GOOGLE_REVERSED_CLIENT_ID` (the URL scheme for the sign-in round trip).
+  `GOOGLE_SERVER_CLIENT_ID` must equal the server's `GOOGLE_CLIENT_ID` — it
+  becomes the ID token's `aud`.
+- **Apple, server side**: set `APPLE_CLIENT_ID` (the iOS bundle id,
+  `com.mobaide.app`) on `central_server` to enable `POST /api/auth/apple`.
+  The endpoint verifies the identity token against Apple's JWKS (PyJWT,
+  cached keys), checks the client nonce embedded verbatim in the token, and
+  provisions users through the same find-or-create/link-by-verified-email
+  path as Google (`users.apple_sub`, migration `0012` / user_version 14).
+  Account-deletion re-auth accepts `method="apple"` (consumed by iOS-08).
+- **Nonce scheme (both providers)**: `AuthNonce.generateNonce()` (SHA-256 hex
+  of 32 CSPRNG bytes, Android parity) is embedded verbatim in the provider ID
+  token; for Apple the client also POSTs it so the server can verify the
+  match plus `iat` freshness.
 
 ## Protocol-parity approach
 

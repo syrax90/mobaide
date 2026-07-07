@@ -2,10 +2,9 @@ import CryptoKit
 import Foundation
 import Security
 
-/// Result contract of an interactive Google sign-in, consumed by the
-/// onboarding flows. The concrete GoogleSignIn SDK integration lands in
-/// iOS-03 — this issue ships only the contract and the nonce utility.
-enum GoogleAuthResult: Equatable, Sendable {
+/// Result contract of an interactive provider sign-in (Google or Apple),
+/// consumed by the onboarding flows via `SignInService`.
+enum SignInResult: Equatable, Sendable {
     /// `idToken` plus the nonce it was fetched with; both are submitted to
     /// the server together so it can verify freshness and nonce match.
     case success(idToken: String, nonce: String)
@@ -13,7 +12,7 @@ enum GoogleAuthResult: Equatable, Sendable {
     case cancelled
     /// Build-time client id missing or placeholder.
     case notConfigured
-    /// No Google account available after all fallbacks.
+    /// No provider account available after all fallbacks.
     case noAccounts(message: String)
     /// The sign-in provider itself is unavailable on this device.
     case providerUnavailable
@@ -22,12 +21,13 @@ enum GoogleAuthResult: Equatable, Sendable {
 }
 
 protocol GoogleSignInProviding: Sendable {
-    func signIn() async -> GoogleAuthResult
+    func signIn() async -> SignInResult
 }
 
 enum AuthNonce {
     /// SHA-256 of 32 CSPRNG bytes, rendered as 64-char lowercase hex
-    /// (Android `GoogleAuthClient.generateNonce` parity).
+    /// (Android `GoogleAuthClient.generateNonce` parity). Both providers
+    /// embed this string verbatim in the ID token they return.
     static func generateNonce() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {

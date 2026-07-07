@@ -9,6 +9,8 @@ struct CodeInputField: View {
     var enabled: Bool = true
     var isError: Bool = false
     var autoFocus: Bool = true
+    /// Android contentDescription parity: "Verification code" vs "Reset code".
+    var accessibilityLabelText: String = "Verification code"
     var onSubmit: () -> Void = {}
 
     @FocusState private var focused: Bool
@@ -22,7 +24,7 @@ struct CodeInputField: View {
                 .opacity(0.02)
                 .disabled(!enabled)
                 .onSubmit(onSubmit)
-                .accessibilityLabel("Verification code")
+                .accessibilityLabel(accessibilityLabelText)
             HStack(spacing: 8) {
                 ForEach(0..<length, id: \.self) { index in
                     CodeCell(

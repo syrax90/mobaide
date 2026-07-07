@@ -64,6 +64,11 @@ jobs:
       - name: Build and run unit tests
         run: |
           set -o pipefail
+          # -onlyUsePackageVersionsFromResolvedFile: SPM deps (GoogleSignIn-iOS)
+          # resolve over the network on the runner; pin them to the committed
+          # Package.resolved so version drift fails loudly instead of silently
+          # floating.
           xcodebuild -project ios/Mobaide.xcodeproj -scheme Mobaide \
             -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -onlyUsePackageVersionsFromResolvedFile \
             CODE_SIGNING_ALLOWED=NO test

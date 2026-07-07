@@ -45,6 +45,11 @@ struct AuthRepository: Sendable {
         return try await finaliseOrFlagVerification(requestedEmail: response.email, response: response)
     }
 
+    func loginWithApple(idToken: String, nonce: String) async throws -> AuthResult {
+        let response = try await centralAPI.loginWithApple(idToken: idToken, nonce: nonce)
+        return try await finaliseOrFlagVerification(requestedEmail: response.email, response: response)
+    }
+
     func verifyEmail(email: String, code: String) async throws -> AuthResult {
         let response = try await centralAPI.verifyEmail(email: email, code: code)
         if response.role == Self.roleAdmin { throw AdminLoginNotSupported() }

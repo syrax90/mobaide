@@ -146,6 +146,9 @@ class AuthService:
         self._hash_executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="argon2"
         )
+        # Lazily created on first Apple sign-in; caches Apple's JWKS keys
+        # for the process lifetime so each login doesn't refetch them.
+        self._apple_jwk_client: jwt.PyJWKClient | None = None
 
     def close(self) -> None:
         """Release the argon2 worker threads. Idempotent."""
@@ -650,6 +653,136 @@ class AuthService:
         token = self._create_user_token(user_id, email, "viewer")
         return user_id, "viewer", token, True
 
+    _APPLE_ISSUER = "https://appleid.apple.com"
+    _APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
+
+    def _decode_apple_id_token(self, token_str: str) -> dict:
+        """Blocking JWKS fetch + signature/aud/iss/exp verification.
+
+        Kept synchronous and free of policy checks so tests can stub it with
+        a plain claims dict (the Apple analogue of monkeypatching
+        ``google_id_token.verify_oauth2_token``).
+        """
+        if self._apple_jwk_client is None:
+            self._apple_jwk_client = jwt.PyJWKClient(
+                self._APPLE_JWKS_URL, cache_keys=True
+            )
+        signing_key = self._apple_jwk_client.get_signing_key_from_jwt(token_str)
+        return jwt.decode(
+            token_str,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=self._config.apple_client_id,
+            issuer=self._APPLE_ISSUER,
+        )
+
+    async def _verify_apple_id_token(self, token_str: str) -> Mapping[str, Any]:
+        """Verify an Apple identity token's signature + audience.
+
+        Raises ``ValueError`` if Apple auth is unconfigured or the token does
+        not validate. Callers layer nonce/freshness/sub checks on top via
+        ``_verify_apple_token_claims``.
+        """
+        if not self._config.apple_client_id:
+            raise ValueError("Apple authentication is not configured")
+
+        # Default executor on purpose (never queues behind argon2); the JWKS
+        # fetch inside PyJWKClient is blocking urllib.
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(
+                None, self._decode_apple_id_token, token_str
+            )
+        except Exception as exc:
+            raise ValueError(f"Invalid Apple ID token: {exc}")
+
+    def _verify_apple_token_claims(
+        self,
+        idinfo: Mapping[str, Any],
+        *,
+        expected_nonce: str | None = None,
+        expected_sub: str | None = None,
+    ) -> None:
+        """Apple analogue of ``_verify_google_token_claims``.
+
+        The client embeds its generated nonce verbatim in the identity token
+        (same convention as the Google flow), so the comparison is direct —
+        no extra hashing. Freshness reuses the Google re-auth window.
+        """
+        if expected_sub is not None and idinfo.get("sub") != expected_sub:
+            raise ValueError("Apple identity does not match this account")
+        if expected_nonce is not None:
+            id_nonce = idinfo.get("nonce")
+            if not id_nonce or not secrets.compare_digest(id_nonce, expected_nonce):
+                raise ValueError("Nonce mismatch")
+            iat = idinfo.get("iat")
+            if not isinstance(iat, int):
+                raise ValueError("ID token missing iat claim")
+            if int(time.time()) - iat > self._GOOGLE_REAUTH_FRESHNESS_SECONDS:
+                raise ValueError("Apple ID token is too old — re-authenticate")
+
+    async def apple_authenticate(
+        self,
+        token_str: str,
+        *,
+        nonce: str,
+    ) -> tuple[str, str, str, bool]:
+        """Verify an Apple identity token and return/create the user.
+
+        Returns (user_id, role, jwt_token, is_new_user).
+        Raises ValueError if the token is invalid or Apple auth unconfigured.
+
+        Unlike the mobile Google path, ``nonce`` is required: /api/auth/apple
+        is new and its only client always sends the nonce it embedded, so the
+        binding (plus the ``iat`` freshness rider) is enforced at login too.
+        """
+        idinfo = await self._verify_apple_id_token(token_str)
+        self._verify_apple_token_claims(idinfo, expected_nonce=nonce)
+
+        apple_sub: str = idinfo["sub"]
+        # Apple includes `email` only when the user shared it (real or
+        # private-relay address — both stored verbatim); `email_verified`
+        # arrives as bool or the string "true" depending on the flow.
+        email: str | None = idinfo.get("email")
+        raw_verified = idinfo.get("email_verified", False)
+        email_verified = raw_verified is True or str(raw_verified).lower() == "true"
+
+        user = await self._db.get_user_by_apple_sub(apple_sub)
+        if user is not None:
+            if email_verified and not user.get("email_verified"):
+                await self._db.mark_user_verified(user["id"])
+            token = self._create_user_token(user["id"], user["email"], user["role"])
+            return user["id"], user["role"], token, False
+
+        if email is None:
+            raise ValueError("Apple did not provide an email for this account")
+
+        # Link an existing email/password account when Apple confirms the address.
+        if email_verified:
+            user = await self._db.get_user_by_email(email)
+            if user is not None:
+                await self._db.link_apple_to_user(user["id"], apple_sub)
+                if not user.get("email_verified"):
+                    await self._db.mark_user_verified(user["id"])
+                token = self._create_user_token(
+                    user["id"], user["email"], user["role"]
+                )
+                return user["id"], user["role"], token, False
+
+        # Guard: email taken by a different account (unverified Apple email edge case).
+        existing = await self._db.get_user_by_email(email)
+        if existing is not None:
+            raise ValueError("Email already registered with a different account")
+
+        user_id = await self._db.create_user(
+            email=email,
+            apple_sub=apple_sub,
+            role="viewer",
+            email_verified=email_verified,
+        )
+        token = self._create_user_token(user_id, email, "viewer")
+        return user_id, "viewer", token, True
+
     async def seed_admin_user(self) -> None:
         """Seed the admin user from config env vars if no admin exists.
 
@@ -786,6 +919,7 @@ class AuthService:
             ``iat`` (≤5 min old), ``nonce`` (matches the client-supplied
             nonce), and ``sub`` (matches the stored ``google_sub``) all
             validate.
+          * ``method="apple"``: same checks against the stored ``apple_sub``.
         """
         if proof.method == "password":
             if user["password_hash"] is None:
@@ -809,6 +943,25 @@ class AuthService:
             try:
                 idinfo = await self._verify_google_id_token(proof.id_token)
                 self._verify_google_token_claims(
+                    idinfo,
+                    expected_nonce=proof.nonce,
+                    expected_sub=stored_sub,
+                )
+            except ValueError as exc:
+                raise AccountDeletionAuthError(str(exc)) from exc
+            return
+
+        if proof.method == "apple":
+            assert proof.id_token is not None
+            assert proof.nonce is not None
+            stored_sub = user.get("apple_sub")
+            if stored_sub is None:
+                raise AccountDeletionAuthError(
+                    "This account is not linked to an Apple identity"
+                )
+            try:
+                idinfo = await self._verify_apple_id_token(proof.id_token)
+                self._verify_apple_token_claims(
                     idinfo,
                     expected_nonce=proof.nonce,
                     expected_sub=stored_sub,

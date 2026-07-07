@@ -103,6 +103,8 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
    ```
 4. Rebuild the APK. If the client ID is missing or still the placeholder, the app surfaces a clear config error instead of silently pretending no Google account exists on the device.
 
+The iOS app's sign-in setup (a separate **iOS application** OAuth client ID via the gitignored `ios/Config/Local.xcconfig`, plus Sign in with Apple, which requires `APPLE_CLIENT_ID` in the server's `.env`) is covered in the "Sign-in configuration" section of [docs/ios-client.md](docs/ios-client.md).
+
 ## Releases, versioning, and auto-update
 
 Each component (Android, `mobaide_agent`, `central_server`) ships on its own

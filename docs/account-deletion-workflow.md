@@ -58,6 +58,7 @@ accepts a fresh credential proof, validated by `AuthService._verify_fresh_creden
 |---|---|---|
 | `password` | Current password | Argon2id verify against `users.password_hash`. |
 | `google` | Fresh `id_token` + matching `nonce` | `verify_oauth2_token` (signature + audience), then `iat` within last 5 min, `sub` equals stored `google_sub`, and `nonce` claim matches the client-supplied value. |
+| `apple` | Fresh `id_token` + matching `nonce` | Signature verified against Apple's JWKS (audience `APPLE_CLIENT_ID`), then the same `iat` / `nonce` checks with `sub` equal to the stored `apple_sub` (added in CLA-99 for the iOS app). |
 
 This mirrors the Auth0 recommended pattern for destructive-action re-auth.
 

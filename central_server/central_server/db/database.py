@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS users (
     email                   TEXT NOT NULL UNIQUE,
     password_hash           TEXT,
     google_sub              TEXT UNIQUE,
+    -- No inline UNIQUE: upgraded DBs get the column via ALTER TABLE ADD
+    -- COLUMN (which cannot attach UNIQUE), so uniqueness lives in the
+    -- partial index below to keep fresh and upgraded schemas identical.
+    apple_sub               TEXT,
     role                    TEXT NOT NULL DEFAULT 'viewer',
     email_verified          INTEGER NOT NULL DEFAULT 0,
     verified_at             TEXT,
@@ -127,6 +131,8 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub
     ON users(google_sub) WHERE google_sub IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_sub
+    ON users(apple_sub) WHERE apple_sub IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_agents_owner ON agents(owner_user_id);
 CREATE INDEX IF NOT EXISTS idx_mobile_devices_user
     ON mobile_devices(user_id) WHERE revoked_at IS NULL;
@@ -195,6 +201,26 @@ class Database:
         cursor = await self._conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
         version = row[0] if row else 0
+
+        # users.apple_sub must exist before ANY older migration block runs
+        # executescript(_SCHEMA): idx_users_apple_sub in _SCHEMA references
+        # the column, and CREATE INDEX IF NOT EXISTS still validates the
+        # referenced column even when the index already exists (same trap as
+        # the owner_user_id guard below). Hoisted here — not only in the
+        # version<14 block — so a pre-v13 DB whose earlier blocks re-run
+        # _SCHEMA doesn't crash with "no such column: apple_sub".
+        if version < 14:
+            users_cursor = await self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+            )
+            users_exists = await users_cursor.fetchone() is not None
+            if users_exists:
+                col_cursor = await self._conn.execute("PRAGMA table_info(users)")
+                user_cols = {r[1] for r in await col_cursor.fetchall()}
+                if "apple_sub" not in user_cols:
+                    await self._conn.execute(
+                        "ALTER TABLE users ADD COLUMN apple_sub TEXT"
+                    )
 
         if version < 3:
             # Legacy DBs may have an `agents` table WITHOUT the `owner_user_id`
@@ -446,6 +472,18 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 13")
 
+        if version < 14:
+            # Sign in with Apple: additive users.apple_sub column; the unique
+            # partial index comes from _SCHEMA (ALTER TABLE cannot add UNIQUE).
+            col_cursor = await self._conn.execute("PRAGMA table_info(users)")
+            user_cols = {r[1] for r in await col_cursor.fetchall()}
+            if "apple_sub" not in user_cols:
+                await self._conn.execute(
+                    "ALTER TABLE users ADD COLUMN apple_sub TEXT"
+                )
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 14")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -459,7 +497,7 @@ class Database:
         return self._conn
 
     _USER_COLUMNS = (
-        "id, email, password_hash, google_sub, role, "
+        "id, email, password_hash, google_sub, apple_sub, role, "
         "email_verified, verified_at, created_at, updated_at, "
         "scheduled_deletion_at, deletion_requested_at"
     )
@@ -469,28 +507,30 @@ class Database:
         email: str,
         password_hash: str | None = None,
         google_sub: str | None = None,
+        apple_sub: str | None = None,
         role: str = "viewer",
         email_verified: bool = False,
     ) -> str:
         """Create a new user. Returns user_id.
 
         ``email_verified=True`` is used by the admin seeder and by the
-        Google OAuth path (when Google vouches for the address), which both
-        bypass the OTP flow.
+        Google/Apple OAuth paths (when the provider vouches for the address),
+        which all bypass the OTP flow.
         """
         user_id = uuid.uuid4().hex[:12]
         now = _now_iso()
         verified_at = now if email_verified else None
         await self.conn.execute(
             "INSERT INTO users "
-            "(id, email, password_hash, google_sub, role, email_verified, verified_at, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, email, password_hash, google_sub, apple_sub, role, "
+            "email_verified, verified_at, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 email,
                 password_hash,
                 google_sub,
+                apple_sub,
                 role,
                 1 if email_verified else 0,
                 verified_at,
@@ -531,6 +571,23 @@ class Database:
         await self.conn.execute(
             "UPDATE users SET google_sub = ?, updated_at = ? WHERE id = ?",
             (google_sub, now, user_id),
+        )
+        await self.conn.commit()
+
+    async def get_user_by_apple_sub(self, apple_sub: str) -> dict | None:
+        cursor = await self.conn.execute(
+            f"SELECT {self._USER_COLUMNS} FROM users WHERE apple_sub = ?",
+            (apple_sub,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def link_apple_to_user(self, user_id: str, apple_sub: str) -> None:
+        """Link an Apple account to an existing user."""
+        now = _now_iso()
+        await self.conn.execute(
+            "UPDATE users SET apple_sub = ?, updated_at = ? WHERE id = ?",
+            (apple_sub, now, user_id),
         )
         await self.conn.commit()
 

@@ -1,0 +1,19 @@
+// Developer-local build settings — copy to Local.xcconfig (gitignored) and
+// fill in. Unset values leave the app on its production defaults, and the
+// Google sign-in button reports "not configured" (android/local.properties
+// parity).
+//
+// NOTE: xcconfig treats `//` as a comment even inside values. Escape URL
+// slashes with an empty substitution: https:/$()/example.com
+
+// Central server base URL for the sim/device build, e.g. a LAN test stack:
+// CENTRAL_SERVER_URL = http:/$()/192.168.1.10:9000
+
+// Google Sign-In (from the Google Cloud OAuth iOS client):
+// GOOGLE_IOS_CLIENT_ID = 1234567890-abcdef.apps.googleusercontent.com
+// The web/server OAuth client id — must match the server's GOOGLE_CLIENT_ID
+// (it becomes the `aud` of the ID token sent to /api/auth/google):
+// GOOGLE_SERVER_CLIENT_ID = 1234567890-webclient.apps.googleusercontent.com
+// The iOS client id with its dot-components reversed (URL scheme for the
+// sign-in round trip):
+// GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.1234567890-abcdef

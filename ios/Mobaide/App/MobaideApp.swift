@@ -1,3 +1,4 @@
+import GoogleSignIn
 import SwiftUI
 
 @main
@@ -13,6 +14,11 @@ struct MobaideApp: App {
                 .mobaideTheme()
                 .task {
                     await container.start()
+                }
+                .onOpenURL { url in
+                    // Completes the Google sign-in round trip (reversed
+                    // client-id URL scheme).
+                    _ = GIDSignIn.sharedInstance.handle(url)
                 }
         }
     }

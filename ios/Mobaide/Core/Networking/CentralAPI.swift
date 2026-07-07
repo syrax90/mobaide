@@ -9,6 +9,7 @@ struct CentralAPI: Sendable {
         "/api/auth/register",
         "/api/auth/login",
         "/api/auth/google",
+        "/api/auth/apple",
     ]
 
     let centralServerURL: String
@@ -41,6 +42,10 @@ struct CentralAPI: Sendable {
 
     func loginWithGoogle(idToken: String) async throws -> UserAuthResponse {
         try await execute(method: "POST", path: "/api/auth/google", body: GoogleAuthRequest(id_token: idToken))
+    }
+
+    func loginWithApple(idToken: String, nonce: String) async throws -> UserAuthResponse {
+        try await execute(method: "POST", path: "/api/auth/apple", body: AppleAuthRequest(id_token: idToken, nonce: nonce))
     }
 
     func verifyEmail(email: String, code: String) async throws -> UserAuthResponse {

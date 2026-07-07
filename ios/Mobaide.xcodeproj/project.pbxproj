@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		CA9700000000000000000043 /* protocol_fixtures in Resources */ = {isa = PBXBuildFile; fileRef = CA9700000000000000000042 /* protocol_fixtures */; };
+		CA9700000000000000000103 /* GoogleSignIn in Frameworks */ = {isa = PBXBuildFile; productRef = CA9700000000000000000102 /* GoogleSignIn */; };
+		CA9700000000000000000105 /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = CA9700000000000000000104 /* GoogleSignInSwift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +34,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Support/Info.plist,
+				Support/Mobaide.entitlements,
 			);
 			target = CA9700000000000000000011 /* Mobaide */;
 		};
@@ -66,6 +69,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CA9700000000000000000103 /* GoogleSignIn in Frameworks */,
+				CA9700000000000000000105 /* GoogleSignInSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,6 +131,10 @@
 				CA9700000000000000000031 /* Mobaide */,
 			);
 			name = Mobaide;
+			packageProductDependencies = (
+				CA9700000000000000000102 /* GoogleSignIn */,
+				CA9700000000000000000104 /* GoogleSignInSwift */,
+			);
 			productName = Mobaide;
 			productReference = CA9700000000000000000021 /* Mobaide.app */;
 			productType = "com.apple.product-type.application";
@@ -175,6 +184,9 @@
 			);
 			mainGroup = CA9700000000000000000002;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				CA9700000000000000000101 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
+			);
 			productRefGroup = CA9700000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -354,6 +366,7 @@
 		CA9700000000000000000083 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Mobaide/Support/Mobaide.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -379,6 +392,7 @@
 		CA9700000000000000000084 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Mobaide/Support/Mobaide.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -464,6 +478,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		CA9700000000000000000101 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		CA9700000000000000000102 /* GoogleSignIn */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA9700000000000000000101 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignIn;
+		};
+		CA9700000000000000000104 /* GoogleSignInSwift */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = CA9700000000000000000101 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
+			productName = GoogleSignInSwift;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = CA9700000000000000000001 /* Project object */;
 }
