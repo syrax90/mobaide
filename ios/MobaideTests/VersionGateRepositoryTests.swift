@@ -102,4 +102,31 @@ final class VersionGateRepositoryTests: XCTestCase {
         let state = await harness.sessionManager.currentAuthState
         XCTAssertEqual(state, .unauthenticated, "a probe failure must never gate the app")
     }
+
+    func testProbe401DoesNotInvalidateLoggedInSession() async {
+        // A 401 on the unauthenticated /api/version probe must NOT log the user
+        // out — CentralAPI exempts it from 401-invalidation; the gate reports
+        // `.unknown` and the session stays intact (Codex PR #352 review).
+        let loggedIn = SessionHarness(userLoggedIn: true)
+        let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+        let centralAPI = CentralAPI(
+            centralServerURL: "https://central.example.com",
+            sessionInvalidator: SessionInvalidatorAdapter(sessionManager: loggedIn.sessionManager),
+            client: client
+        )
+        let scopedGate = VersionGateRepository(
+            centralAPI: centralAPI,
+            sessionManager: loggedIn.sessionManager,
+            appProtocolVersion: 6
+        )
+        let before = await loggedIn.sessionManager.currentAuthState
+        XCTAssertEqual(before, .userOnly)
+
+        StubURLProtocol.enqueue(status: 401, body: "unauthorized")
+        let outcome = await scopedGate.probe()
+
+        XCTAssertEqual(outcome, .unknown)
+        let after = await loggedIn.sessionManager.currentAuthState
+        XCTAssertEqual(after, .userOnly, "a 401 on /api/version must not invalidate the user session")
+    }
 }

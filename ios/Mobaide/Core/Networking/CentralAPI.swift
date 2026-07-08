@@ -6,6 +6,10 @@ import Foundation
 /// the error propagates — dashboard JWTs have no refresh token.
 struct CentralAPI: Sendable {
     static let noInvalidateSuffixes = [
+        // Unauthenticated pre-connect probe: a 401 here (captive portal /
+        // proxy) must not invalidate a valid user session — the version gate
+        // swallows the failure as `.unknown`, so the logout would be silent.
+        "/api/version",
         "/api/auth/register",
         "/api/auth/login",
         "/api/auth/google",
