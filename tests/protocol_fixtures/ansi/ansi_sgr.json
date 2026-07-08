@@ -1,0 +1,380 @@
+{
+  "description": "Golden ANSI SGR runs. 'input' is a raw log line (ESC as the \\u001b JSON escape; a raw 0x1B byte is invalid JSON). 'runs' are expected AnsiParser.parseRuns output; fg/bg are integer [r,g,b] channels so goldens are Color-free. Base-16 palette mirrors MobaideColors.ansiColors; 256-cube index = 16 + 36r + 6g + b, xterm channel levels {0,95,135,175,215,255}; grayscale = 8 + (n-232)*10.",
+  "cases": [
+    {
+      "name": "plain",
+      "input": "hello",
+      "runs": [
+        {
+          "text": "hello"
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "runs": []
+    },
+    {
+      "name": "fg_red_then_reset",
+      "input": "\u001b[31mred\u001b[0m",
+      "runs": [
+        {
+          "text": "red",
+          "fg": [
+            205,
+            49,
+            49
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fg_default_39_resets",
+      "input": "\u001b[31mA\u001b[39mB",
+      "runs": [
+        {
+          "text": "A",
+          "fg": [
+            205,
+            49,
+            49
+          ]
+        },
+        {
+          "text": "B"
+        }
+      ]
+    },
+    {
+      "name": "bright_fg_91",
+      "input": "\u001b[91mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            241,
+            76,
+            76
+          ]
+        }
+      ]
+    },
+    {
+      "name": "bg_41",
+      "input": "\u001b[41mX",
+      "runs": [
+        {
+          "text": "X",
+          "bg": [
+            205,
+            49,
+            49
+          ]
+        }
+      ]
+    },
+    {
+      "name": "bg_default_49_resets",
+      "input": "\u001b[41mA\u001b[49mB",
+      "runs": [
+        {
+          "text": "A",
+          "bg": [
+            205,
+            49,
+            49
+          ]
+        },
+        {
+          "text": "B"
+        }
+      ]
+    },
+    {
+      "name": "bold_fg_green",
+      "input": "\u001b[1;32mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            13,
+            188,
+            121
+          ],
+          "bold": true
+        }
+      ]
+    },
+    {
+      "name": "bold_then_unbold_22",
+      "input": "\u001b[1mA\u001b[22mB",
+      "runs": [
+        {
+          "text": "A",
+          "bold": true
+        },
+        {
+          "text": "B"
+        }
+      ]
+    },
+    {
+      "name": "italic_underline",
+      "input": "\u001b[3;4mX",
+      "runs": [
+        {
+          "text": "X",
+          "italic": true,
+          "underline": true
+        }
+      ]
+    },
+    {
+      "name": "cube_196_red",
+      "input": "\u001b[38;5;196mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            255,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cube_16_black",
+      "input": "\u001b[38;5;16mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            0,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cube_21_blue",
+      "input": "\u001b[38;5;21mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            0,
+            0,
+            255
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cube_51_cyan",
+      "input": "\u001b[38;5;51mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            0,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cube_231_white",
+      "input": "\u001b[38;5;231mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            255,
+            255,
+            255
+          ]
+        }
+      ]
+    },
+    {
+      "name": "grayscale_232_min",
+      "input": "\u001b[38;5;232mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            8,
+            8,
+            8
+          ]
+        }
+      ]
+    },
+    {
+      "name": "grayscale_244_mid",
+      "input": "\u001b[38;5;244mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            128,
+            128,
+            128
+          ]
+        }
+      ]
+    },
+    {
+      "name": "grayscale_255_max",
+      "input": "\u001b[38;5;255mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            238,
+            238,
+            238
+          ]
+        }
+      ]
+    },
+    {
+      "name": "index_256_bg",
+      "input": "\u001b[48;5;21mX",
+      "runs": [
+        {
+          "text": "X",
+          "bg": [
+            0,
+            0,
+            255
+          ]
+        }
+      ]
+    },
+    {
+      "name": "truecolor_fg",
+      "input": "\u001b[38;2;10;20;30mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            10,
+            20,
+            30
+          ]
+        }
+      ]
+    },
+    {
+      "name": "truecolor_bg",
+      "input": "\u001b[48;2;1;2;3mX",
+      "runs": [
+        {
+          "text": "X",
+          "bg": [
+            1,
+            2,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "truecolor_clamps_over_255",
+      "input": "\u001b[38;2;300;0;0mX",
+      "runs": [
+        {
+          "text": "X",
+          "fg": [
+            255,
+            0,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "name": "multiple_runs",
+      "input": "\u001b[31mA\u001b[32mB\u001b[0mC",
+      "runs": [
+        {
+          "text": "A",
+          "fg": [
+            205,
+            49,
+            49
+          ]
+        },
+        {
+          "text": "B",
+          "fg": [
+            13,
+            188,
+            121
+          ]
+        },
+        {
+          "text": "C"
+        }
+      ]
+    },
+    {
+      "name": "text_before_first_escape",
+      "input": "pre\u001b[31mred",
+      "runs": [
+        {
+          "text": "pre"
+        },
+        {
+          "text": "red",
+          "fg": [
+            205,
+            49,
+            49
+          ]
+        }
+      ]
+    },
+    {
+      "name": "non_sgr_csi_dropped",
+      "input": "\u001b[2JX",
+      "runs": [
+        {
+          "text": "X"
+        }
+      ]
+    },
+    {
+      "name": "unterminated_csi_drops_remainder",
+      "input": "abc\u001b[31",
+      "runs": [
+        {
+          "text": "abc"
+        }
+      ]
+    },
+    {
+      "name": "reset_clears_bold_and_fg",
+      "input": "\u001b[1;31mA\u001b[0mB",
+      "runs": [
+        {
+          "text": "A",
+          "fg": [
+            205,
+            49,
+            49
+          ],
+          "bold": true
+        },
+        {
+          "text": "B"
+        }
+      ]
+    }
+  ]
+}

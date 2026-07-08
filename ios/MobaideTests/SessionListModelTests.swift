@@ -8,6 +8,14 @@ final class SessionListModelTests: XCTestCase {
         func refreshedToken() async -> String? { nil }
     }
 
+    private func idleWsClient() -> AutoScanWsClient {
+        AutoScanWsClient(
+            webSocketFactory: .live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
+            urlProvider: { nil },
+            isAuthenticated: { false }
+        )
+    }
+
     private func makeStack(
         prefs: PreferencesStore
     ) -> (SessionListModel, SessionRepository, AgentEventBus, FakeWebSocketTransportFactory) {
@@ -20,8 +28,37 @@ final class SessionListModelTests: XCTestCase {
         )
         let agentAPI = AgentAPI(baseURL: { "https://agent.test" }, tokens: StubAgentTokens())
         let repo = SessionRepository(agentAPI: agentAPI, agentEventBus: bus, terminalSessionStore: TerminalTestSupport.store(harness))
-        let model = SessionListModel(repository: repo, agentEventBus: bus, preferencesStore: prefs)
+        let autoScanRepo = AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: idleWsClient())
+        let model = SessionListModel(
+            repository: repo,
+            agentEventBus: bus,
+            preferencesStore: prefs,
+            autoScanRepository: autoScanRepo
+        )
         return (model, repo, bus, factory)
+    }
+
+    private func makeRESTModel() -> SessionListModel {
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        let bus = AgentEventBus(
+            webSocketFactory: WebSocketCoreFactory.live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
+            sessionManager: harness.sessionManager,
+            tokenStore: harness.tokenStore
+        )
+        let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
+        let agentAPI = AgentAPI(
+            baseURL: { "http://agent.example.com" },
+            tokens: FakeAgentTokens(token: AgentToken(value: "tok")),
+            client: client
+        )
+        let repo = SessionRepository(agentAPI: agentAPI, agentEventBus: bus, terminalSessionStore: TerminalTestSupport.store(harness))
+        let autoScanRepo = AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: idleWsClient())
+        return SessionListModel(
+            repository: repo,
+            agentEventBus: bus,
+            preferencesStore: isolatedPrefs(),
+            autoScanRepository: autoScanRepo
+        )
     }
 
     private func isolatedPrefs() -> PreferencesStore {
@@ -54,6 +91,22 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertTrue(SessionDisplay.canStop("starting"))
         XCTAssertFalse(SessionDisplay.canStop("stopped"))
         XCTAssertFalse(SessionDisplay.canStop("crashed"))
+    }
+
+    // MARK: - Active auto scans
+
+    func testObserveScansPopulatesActiveScansFromRepository() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"scans":[{"project_name":"p","status":"scanning","started_at":1.5,"last_activity_at":1.5}],"max_scans":5}"#
+        )
+        let model = makeRESTModel()
+        let observe = Task { await model.observeScans() }
+        defer { observe.cancel() }
+
+        await waitUntil { !model.activeScans.isEmpty }
+        XCTAssertEqual(model.activeScans.map(\.project_name), ["p"])
     }
 
     // MARK: - Bus-driven list + auto-resume

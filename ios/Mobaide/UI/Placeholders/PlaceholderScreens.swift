@@ -39,11 +39,6 @@ struct SupportScreen: View {
     var body: some View { PlaceholderScreen(title: "Support") }
 }
 
-struct AutoScanDetailScreen: View {
-    let projectName: String
-    var body: some View { PlaceholderScreen(title: "Auto Scan", params: ["projectName": projectName]) }
-}
-
 /// Full-screen upgrade takeover (rendered outside the NavigationStack).
 struct IncompatibleServerScreen: View {
     let info: AuthState.IncompatibleServer

@@ -1,0 +1,65 @@
+{
+  "description": "Golden ws/autoscan channel frames (Android AutoScanWsClient.parseFrame). 'wire' is the inbound frame object; 'expect' asserts the decoded AutoScanFrame. kind='null' means the frame is dropped (malformed). Covers all six ScanProgressPayload kinds via 'event' frames plus snapshot/caught_up.",
+  "cases": [
+    {
+      "name": "event_phase",
+      "wire": { "type": "event", "project_name": "proj-a", "event": { "seq": 1, "ts": "2026-07-08T12:00:00Z", "type": "phase", "payload": { "phase": "scan_started", "cycle_number": 2, "next_scan_at": "2026-07-08T12:05:00Z", "issues_processed": 0 } } },
+      "expect": { "kind": "event", "project_name": "proj-a", "seq": 1, "payload_type": "phase" }
+    },
+    {
+      "name": "event_issue",
+      "wire": { "type": "event", "project_name": "proj-a", "event": { "seq": 2, "ts": "2026-07-08T12:00:01Z", "type": "issue", "payload": { "identifier": "ISS-1", "title": "Fix bug", "step": "state_update", "status": "started" } } },
+      "expect": { "kind": "event", "project_name": "proj-a", "seq": 2, "payload_type": "issue" }
+    },
+    {
+      "name": "event_worktree",
+      "wire": { "type": "event", "project_name": "proj-a", "event": { "seq": 3, "ts": "2026-07-08T12:00:02Z", "type": "worktree", "payload": { "identifier": "ISS-1", "path": "/w/ISS-1" } } },
+      "expect": { "kind": "event", "project_name": "proj-a", "seq": 3, "payload_type": "worktree" }
+    },
+    {
+      "name": "event_session",
+      "wire": { "type": "event", "project_name": "proj-a", "event": { "seq": 4, "ts": "2026-07-08T12:00:03Z", "type": "session", "payload": { "identifier": "ISS-1", "session_id": "s-1", "pid": 4242 } } },
+      "expect": { "kind": "event", "project_name": "proj-a", "seq": 4, "payload_type": "session" }
+    },
+    {
+      "name": "event_log",
+      "wire": { "type": "event", "project_name": "proj-a", "event": { "seq": 5, "ts": "2026-07-08T12:00:04Z", "type": "log", "payload": { "line": "building", "level": "info", "ansi": false } } },
+      "expect": { "kind": "event", "project_name": "proj-a", "seq": 5, "payload_type": "log" }
+    },
+    {
+      "name": "event_unknown_type",
+      "wire": { "type": "event", "project_name": "proj-a", "event": { "seq": 6, "ts": "2026-07-08T12:00:05Z", "type": "mystery", "payload": {} } },
+      "expect": { "kind": "event", "project_name": "proj-a", "seq": 6, "payload_type": "unknown" }
+    },
+    {
+      "name": "event_missing_project_name_defaults_empty",
+      "wire": { "type": "event", "event": { "seq": 7, "ts": "2026-07-08T12:00:06Z", "type": "worktree", "payload": { "identifier": "ISS-2", "path": "/w/ISS-2" } } },
+      "expect": { "kind": "event", "project_name": "", "seq": 7, "payload_type": "worktree" }
+    },
+    {
+      "name": "caught_up",
+      "wire": { "type": "caught_up" },
+      "expect": { "kind": "caught_up" }
+    },
+    {
+      "name": "snapshot_with_scans_and_events",
+      "wire": { "type": "snapshot", "data": { "scans": [ { "project_name": "proj-a", "status": "scanning", "started_at": 1751800000.5, "last_activity_at": 1751800005.5, "cycle_number": 5, "current_seq": 3 } ], "events": { "proj-a": [ { "seq": 1, "ts": "2026-07-08T12:00:00Z", "type": "phase", "payload": { "phase": "scan_started", "cycle_number": 5 } } ] } } },
+      "expect": { "kind": "snapshot", "scan_count": 1, "event_count": 1 }
+    },
+    {
+      "name": "snapshot_missing_data_is_dropped",
+      "wire": { "type": "snapshot" },
+      "expect": { "kind": "null" }
+    },
+    {
+      "name": "event_missing_inner_event_is_dropped",
+      "wire": { "type": "event", "project_name": "proj-a" },
+      "expect": { "kind": "null" }
+    },
+    {
+      "name": "unknown_frame_type_is_dropped",
+      "wire": { "type": "bogus" },
+      "expect": { "kind": "null" }
+    }
+  ]
+}

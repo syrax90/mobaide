@@ -102,7 +102,7 @@ final class AgentEventBusTests: XCTestCase {
         XCTAssertEqual(projectName, "demo")
         XCTAssertEqual(seq, 9_007_199_254_740_993, "seq is 64-bit, beyond 2^53")
         XCTAssertEqual(ts, "2026-07-06T10:00:00Z")
-        XCTAssertEqual(payload, .unknown(type: "phase"), "parser body is an iOS-07 stub")
+        XCTAssertEqual(payload, .phase(phase: "scan_started", cycleNumber: 0, nextScanAt: nil, issuesProcessed: 0))
     }
 
     func testAutoScanEventWithoutEventObjectIsDropped() {

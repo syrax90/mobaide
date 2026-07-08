@@ -25,6 +25,7 @@ final class AppContainer {
     let foregroundSessionTracker: ForegroundSessionTracker
     let sessionRepository: SessionRepository
     let projectsRepository: ProjectsRepository
+    let autoScanRepository: AutoScanRepository
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
     let deviceRepository: DeviceRepository
@@ -159,6 +160,16 @@ final class AppContainer {
             agentAPI: agentAPI,
             agentEventBus: agentEventBus
         )
+        let autoScanWsClient = AutoScanWsClient(
+            webSocketFactory: webSocketFactory,
+            urlProvider: AutoScanWsClient.liveURLProvider(tokenStore: tokenStore, sessionManager: sessionManager),
+            isAuthenticated: AutoScanWsClient.liveIsAuthenticated(sessionManager: sessionManager)
+        )
+        self.autoScanRepository = AutoScanRepository(
+            agentAPI: agentAPI,
+            agentEventBus: agentEventBus,
+            wsClient: autoScanWsClient
+        )
         self.router = Router()
         self.authStateModel = AuthStateModel(initial: initialState)
     }
@@ -172,6 +183,7 @@ final class AppContainer {
         authStateModel.bind(to: sessionManager)
         sessionRepository.start()
         projectsRepository.start()
+        autoScanRepository.start()
         await agentEventBus.start()
         await userEventBus.start()
     }

@@ -9,12 +9,14 @@ import SwiftUI
 @Observable
 final class SessionListModel {
     private(set) var sessions: [SessionResponse] = []
+    private(set) var activeScans: [AutoScanInstanceDto] = []
     private(set) var isReconnecting = false
     private(set) var error: String?
 
     private let repository: SessionRepository
     private let agentEventBus: AgentEventBus
     private let preferencesStore: PreferencesStore
+    private let autoScanRepository: AutoScanRepository
     // `.latestClearable` so the one-shot auto-resume id survives the race where
     // `observeSessions` emits before the screen's `autoResumeEvents` task
     // subscribes, while `clearAutoResume()` (called by the screen after it
@@ -23,11 +25,18 @@ final class SessionListModel {
     private let navBroadcaster = Broadcaster<String>(replay: .latestClearable)
     private var didAttemptAutoResume = false
 
-    init(repository: SessionRepository, agentEventBus: AgentEventBus, preferencesStore: PreferencesStore) {
+    init(
+        repository: SessionRepository,
+        agentEventBus: AgentEventBus,
+        preferencesStore: PreferencesStore,
+        autoScanRepository: AutoScanRepository
+    ) {
         self.repository = repository
         self.agentEventBus = agentEventBus
         self.preferencesStore = preferencesStore
+        self.autoScanRepository = autoScanRepository
         self.sessions = repository.currentSessions
+        self.activeScans = autoScanRepository.currentScans
     }
 
     var isEmpty: Bool { sessions.isEmpty && !isReconnecting }
@@ -51,8 +60,26 @@ final class SessionListModel {
         }
     }
 
+    /// Seeds the scan list from REST (autoscan may be unconfigured — swallow),
+    /// then mirrors bus-driven updates.
+    func observeScans() async {
+        _ = await autoScanRepository.refresh()
+        for await scans in autoScanRepository.scans() {
+            activeScans = scans
+        }
+    }
+
+    func stopScan(_ projectName: String) async {
+        do {
+            try await autoScanRepository.stopScan(projectName: projectName)
+        } catch {
+            self.error = "Failed to stop auto scan: \(String(describing: error))"
+        }
+    }
+
     func refresh() async {
         await agentEventBus.forceReconnect()
+        _ = await autoScanRepository.refresh()
     }
 
     func deleteSession(_ id: String, force: Bool) async {
