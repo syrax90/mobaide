@@ -7,7 +7,7 @@ final class AuthStateModelTests: XCTestCase {
     /// Deadline-poll on the main actor until `condition` holds (mirrors the
     /// StreamCollector drain cadence).
     @MainActor
-    private func waitUntil(
+    private func waitForState(
         timeout: Duration = .seconds(5),
         _ condition: () -> Bool
     ) async throws {
@@ -28,7 +28,7 @@ final class AuthStateModelTests: XCTestCase {
         let model = AuthStateModel(initial: .unauthenticated)
         model.bind(to: harness.sessionManager)
 
-        try await waitUntil { model.state == .userOnly }
+        try await waitForState { model.state == .userOnly }
     }
 
     @MainActor
@@ -39,9 +39,9 @@ final class AuthStateModelTests: XCTestCase {
         XCTAssertEqual(model.state, .unauthenticated)
 
         await harness.sessionManager.markUserLoggedIn()
-        try await waitUntil { model.state == .userOnly }
+        try await waitForState { model.state == .userOnly }
 
         await harness.sessionManager.markAgentConnected()
-        try await waitUntil { model.state == .fullyConnected }
+        try await waitForState { model.state == .fullyConnected }
     }
 }

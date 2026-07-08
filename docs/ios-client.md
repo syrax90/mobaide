@@ -17,7 +17,14 @@ create-session wizard; CLA-101 replaced the Projects and Git placeholders
 with the bus-driven Projects management screen (create/edit form sheet,
 swipe-delete Undo, drag-reorder) and the Git branches/worktrees screen
 (long-press multi-select, deferred batch delete with force/busy handling),
-backed by an app-scoped `ProjectsRepository` and a reusable `UndoSnackbar`.
+backed by an app-scoped `ProjectsRepository` and a reusable `UndoSnackbar`;
+CLA-102 replaced the Agents, Devices, and Templates placeholders with the
+QR-pairing Agents screen (in-app VisionKit/AVFoundation scanner gated by a
+new `NSCameraUsageDescription`, Trust-On-First-Use trust-key confirmation,
+and add/re-register/delete plus one-time-credentials and install-commands
+sheets), the optimistic-revoke Devices list, and the favorites/all Templates
+screen (create/edit/delete with live sync), backed by app-scoped
+`AgentRepository`/`TemplatesRepository` stores wired to the `UserEventBus`.
 Remaining feature screens land in later issues.
 
 ## Layout

@@ -114,6 +114,61 @@ struct AuthRepository: Sendable {
         await sessionManager.agentDisconnect()
     }
 
+    /// Relay-mode connect (Android `AgentListViewModel.connectToAgent`): mint
+    /// mobile relay credentials for `agentId`, persist them, flip the session to
+    /// `fullyConnected` (which starts both event buses via their auth-state
+    /// collectors — no explicit bus start needed), and capture or refresh the
+    /// agent's connection profile. Disconnects any current agent first.
+    func connectAgentViaRelay(
+        agentId: String,
+        friendlyName: String,
+        deviceId: String,
+        deviceName: String?
+    ) async throws {
+        guard let userToken = userIdentityStore.getUserAccessToken() else {
+            throw APIError(code: -1, errorBody: "Not signed in")
+        }
+        if await sessionManager.isLoggedIn() {
+            await sessionManager.agentDisconnect()
+        }
+        let tokens = try await centralAPI.getMobileTokens(
+            userToken: userToken,
+            agentId: agentId,
+            request: MobileTokenRequest(mobile_device_id: deviceId, mobile_device_name: deviceName)
+        )
+        tokenStore.saveRelayCredentials(
+            serverUrl: AppConfig.centralServerURL,
+            agentId: agentId,
+            pairingId: agentId,
+            deviceId: deviceId,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token
+        )
+        await sessionManager.markAgentConnected()
+
+        if let existing = connectionStore.listProfiles()
+            .first(where: { $0.mode == "relay" && $0.agentId == agentId }) {
+            connectionStore.saveProfile(
+                ConnectionStore.ConnectionProfile(
+                    id: existing.id,
+                    label: existing.label,
+                    mode: existing.mode,
+                    agentUrl: existing.agentUrl,
+                    relayServerUrl: existing.relayServerUrl,
+                    agentId: existing.agentId,
+                    pairingId: existing.pairingId,
+                    deviceId: existing.deviceId,
+                    accessToken: tokens.access_token,
+                    refreshToken: tokens.refresh_token,
+                    createdAt: existing.createdAt
+                )
+            )
+            connectionStore.setActiveProfileId(existing.id)
+        } else {
+            connectionStore.captureActiveProfile(tokenStore: tokenStore, label: "Agent: \(friendlyName)")
+        }
+    }
+
     // MARK: - Session pass-throughs
 
     func isUserAuthenticated() async -> Bool { await sessionManager.isUserAuthenticated() }

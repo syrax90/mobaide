@@ -31,24 +31,6 @@ struct PlaceholderScreen: View {
     }
 }
 
-struct AgentListScreen: View {
-    var body: some View {
-        PlaceholderScreen(title: "Agents", links: [
-            ("Sessions", .sessionList),
-            ("Session detail", .sessionDetail(sessionId: "demo-session")),
-            ("Create session", .createSession),
-            ("Projects", .projects),
-            ("Git management", .gitManagement(projectName: "demo-project")),
-            ("Auto-scan detail", .autoScanDetail(projectName: "demo-project")),
-            ("Connections", .connections),
-            ("Templates", .templates),
-            ("Devices", .devices),
-            ("Settings", .settings),
-            ("Support", .support),
-        ])
-    }
-}
-
 struct SettingsScreen: View {
     var body: some View { PlaceholderScreen(title: "Settings") }
 }
@@ -60,14 +42,6 @@ struct SupportScreen: View {
 struct AutoScanDetailScreen: View {
     let projectName: String
     var body: some View { PlaceholderScreen(title: "Auto Scan", params: ["projectName": projectName]) }
-}
-
-struct TemplatesScreen: View {
-    var body: some View { PlaceholderScreen(title: "Templates") }
-}
-
-struct DevicesScreen: View {
-    var body: some View { PlaceholderScreen(title: "Devices") }
 }
 
 /// Full-screen upgrade takeover (rendered outside the NavigationStack).
