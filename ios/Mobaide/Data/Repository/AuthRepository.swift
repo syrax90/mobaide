@@ -224,6 +224,21 @@ struct AuthRepository: Sendable {
         )
     }
 
+    /// Delete with a fresh Sign in with Apple ID token + its nonce (the server
+    /// validates freshness, nonce match, and apple_sub — the `method="apple"`
+    /// re-auth path landed server-side in CLA-99). Net-new for iOS: Android has
+    /// no Apple delete path, but the flow mirrors the Google branch.
+    func deleteAccountWithApple(idToken: String, nonce: String, mode: DeletionMode) async throws -> DeleteAccountResult {
+        guard let token = userIdentityStore.getUserAccessToken() else {
+            return .reauthFailed(message: "Not signed in")
+        }
+        return try await submitDelete(
+            userToken: token,
+            mode: mode,
+            body: DeleteAccountRequest(method: "apple", mode: mode.rawValue, id_token: idToken, nonce: nonce)
+        )
+    }
+
     /// Cancel a pending scheduled deletion. Idempotent; `notScheduled` when
     /// the server reports no pending deletion. Clears the local marker so
     /// the grace banner disappears immediately.

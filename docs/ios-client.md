@@ -34,6 +34,24 @@ dedicated `AutoScanWsClient` whose live per-project resume cursor and
 two-layer seq dedupe fix the Android duplicate-log replay bug, and a
 256-color `AnsiParser` (a deliberate superset of Android's minimal SGR
 parser).
+CLA-104 replaced the Settings and Support placeholders with their real
+bodies: a `Form`-based Settings screen (account header, My Agents /
+Templates / Devices nav rows, Help & Support, Privacy policy, Logout, and a
+Danger-zone delete-account entry); the multi-step delete-account flow
+(`DeleteAccountModel` — Explain + scheduled/immediate mode → password /
+Google / **Apple** re-auth → typed-email confirmation, clearing the local
+session immediately without waiting for the WS-4010 close); the Support mail
+fallback chain (`MFMailComposeViewController` → `mailto:` → copy-address, via
+a `MailComposing` seam) plus an `SFSafariViewController` web wrapper; and the
+launch-time version gate (`VersionGateRepository.probe()` on
+`AppContainer.start()` and on scene-foreground, driving the enhanced
+`IncompatibleServerScreen` takeover with App Store + "What changed" links).
+The account-deletion grace banner mounts on the authenticated agents list.
+As part of the App Store redesign, iOS-08 **drops** the Android
+`terminal_display_mode` / `terminal_static_columns` preferences (the
+forced-columns workaround iOS-04 already abandoned) — an intentional
+divergence from Android's `PreferencesStore`. The remote-agent-outdated
+banner and the optional iTunes-lookup app-update nudge are deferred (CLA-120).
 Remaining feature screens land in later issues.
 
 ## Layout
@@ -60,8 +78,9 @@ ios/
 │   ├── Notifications/            # ForegroundSessionTracker
 │   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
 │   │                             # Connections, Sessions (list + create wizard), Terminal
-│   │                             # (SwiftTerm host, InputBar, session model/store), Placeholders
-│   │                             # (remaining feature screens)
+│   │                             # (SwiftTerm host, InputBar, session model/store), and the
+│   │                             # feature screens (Agents, Projects, Devices, Templates,
+│   │                             # AutoScan, Settings, Support, Update)
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
 │                                 # reversed-client-id URL scheme) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites

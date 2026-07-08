@@ -11,8 +11,6 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyLastUsedClaudeOptions = "last_used_claude_options"
     static let keyLastUsedCodexOptions = "last_used_codex_options"
     static let keyLastUsedAntigravityOptions = "last_used_antigravity_options"
-    static let keyTerminalDisplayMode = "terminal_display_mode"
-    static let keyTerminalStaticColumns = "terminal_static_columns"
 
     static let maxRecentCustomPaths = 5
 
@@ -68,26 +66,6 @@ struct PreferencesStore: @unchecked Sendable {
         encodeBlob(prefs, forKey: Self.keyLastUsedAntigravityOptions)
     }
 
-    func getTerminalDisplayMode() -> TerminalDisplayMode {
-        guard let raw = defaults.string(forKey: Self.keyTerminalDisplayMode),
-              let mode = TerminalDisplayMode(rawValue: raw)
-        else { return .static }
-        return mode
-    }
-
-    func setTerminalDisplayMode(_ mode: TerminalDisplayMode) {
-        defaults.set(mode.rawValue, forKey: Self.keyTerminalDisplayMode)
-    }
-
-    func getTerminalStaticColumns() -> Int {
-        let stored = defaults.object(forKey: Self.keyTerminalStaticColumns) as? Int
-        return clampColumns(stored ?? TerminalDisplayConstants.staticColumnsDefault)
-    }
-
-    func setTerminalStaticColumns(_ columns: Int) {
-        defaults.set(clampColumns(columns), forKey: Self.keyTerminalStaticColumns)
-    }
-
     func getCachedLinearLabels(projectName: String) -> [LinearLabelDto] {
         decodeBlob(forKey: Self.linearLabelsKey(projectName: projectName)) ?? []
     }
@@ -118,10 +96,6 @@ struct PreferencesStore: @unchecked Sendable {
             Array(paths.prefix(Self.maxRecentCustomPaths)),
             forKey: Self.recentCustomPathsKey(agentKey: agentKey)
         )
-    }
-
-    private func clampColumns(_ columns: Int) -> Int {
-        min(max(columns, TerminalDisplayConstants.staticColumnsMin), TerminalDisplayConstants.staticColumnsMax)
     }
 
     private func setOrRemove(_ value: String?, forKey key: String) {

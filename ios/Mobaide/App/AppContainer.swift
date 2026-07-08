@@ -22,6 +22,8 @@ final class AppContainer {
     let userEventBus: UserEventBus
     let authRepository: AuthRepository
     let signInService: SignInService
+    let versionGate: VersionGateRepository
+    let mailComposer: any MailComposing
     let foregroundSessionTracker: ForegroundSessionTracker
     let sessionRepository: SessionRepository
     let projectsRepository: ProjectsRepository
@@ -140,6 +142,11 @@ final class AppContainer {
             apple: AppleSignInClient(),
             authRepository: authRepository
         )
+        self.versionGate = VersionGateRepository(
+            centralAPI: centralAPI,
+            sessionManager: sessionManager
+        )
+        self.mailComposer = LiveMailComposer()
         let foregroundSessionTracker = ForegroundSessionTracker()
         self.foregroundSessionTracker = foregroundSessionTracker
         let terminalSessionStore = TerminalSessionStore(
@@ -181,6 +188,10 @@ final class AppContainer {
         guard !started else { return }
         started = true
         authStateModel.bind(to: sessionManager)
+        // Launch-time version gate (pre-WebSocket, Android `onResume` parity):
+        // flips to the upgrade takeover when the server speaks a wire protocol
+        // this build cannot. Non-blocking — a network error is a no-op.
+        Task { await versionGate.probe() }
         sessionRepository.start()
         projectsRepository.start()
         autoScanRepository.start()

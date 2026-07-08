@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Agents list (Android `AgentListScreen`) — the authenticated root screen.
 /// Scan-primary FAB for QR pairing; tap a card to connect; overflow menu for
-/// manual add, install commands, and (until Settings/iOS-08 lands) Templates /
-/// Devices navigation.
+/// manual add, install commands, Settings, and Templates / Devices navigation.
+/// Hosts the account-deletion grace banner (Android landing-screen parity).
 struct AgentListScreen: View {
     @Environment(\.appContainer) private var container
 
@@ -37,6 +37,9 @@ private struct AgentListContent: View {
     var body: some View {
         content
             .navigationTitle("Agents")
+            .safeAreaInset(edge: .top, spacing: 0) {
+                GraceBannerSection(authRepository: container.authRepository)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -58,6 +61,10 @@ private struct AgentListContent: View {
                         }
                         Button { router.navigate(to: .projects) } label: {
                             Label("Projects", systemImage: "folder")
+                        }
+                        Divider()
+                        Button { router.navigate(to: .settings) } label: {
+                            Label("Settings", systemImage: "gearshape")
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")

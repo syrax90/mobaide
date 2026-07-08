@@ -53,6 +53,23 @@ final class SignInService {
         return await exchange(provider: .apple, result: mapped)
     }
 
+    // MARK: - Re-authentication (account deletion)
+
+    /// Re-run Google sign-in solely to obtain a fresh `(idToken, nonce)`
+    /// credential for a destructive action (account deletion). Unlike
+    /// `signInWithGoogle`, this does NOT exchange the token or flip the
+    /// session — the caller submits the credential to the delete endpoint.
+    func reauthenticateWithGoogle() async -> SignInResult {
+        await google.signIn()
+    }
+
+    /// Apple `SignInWithAppleButton(onCompletion:)` hook for re-authentication:
+    /// map the authorization to a raw `(idToken, nonce)` credential without
+    /// logging in. Pair with `prepareAppleRequest(_:)` on `onRequest`.
+    func reauthenticateWithApple(_ result: Result<ASAuthorization, any Error>) -> SignInResult {
+        apple.handleCompletion(result)
+    }
+
     func exchange(provider: Provider, result: SignInResult) async -> Outcome {
         switch result {
         case .cancelled:
