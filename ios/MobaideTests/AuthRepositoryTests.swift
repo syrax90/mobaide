@@ -245,4 +245,76 @@ final class AuthRepositoryTests: XCTestCase {
         XCTAssertEqual(profiles.first?.accessToken, "agent-at")
         XCTAssertEqual(connectionStore.getActiveProfileId(), profiles.first?.id)
     }
+
+    func testConnectAgentViaRelayUpdatesExistingProfileInPlace() async throws {
+        let harness = RepositoryHarness(session: SessionHarness(userLoggedIn: true))
+        let existing = ConnectionStore.ConnectionProfile(
+            id: "profile-a1",
+            label: "Agent: Old Name",
+            mode: "relay",
+            relayServerUrl: "https://central.example.com",
+            agentId: "a1",
+            pairingId: "a1",
+            deviceId: "dev-1",
+            accessToken: "stale-at",
+            refreshToken: "stale-rt"
+        )
+        harness.connectionStore.saveProfile(existing)
+
+        StubURLProtocol.enqueue(status: 200, body: """
+        {"access_token":"fresh-at","refresh_token":"fresh-rt","token_type":"bearer"}
+        """)
+        try await harness.repository.connectAgentViaRelay(
+            agentId: "a1", friendlyName: "New Name", deviceId: "dev-1", deviceName: "iPhone"
+        )
+
+        XCTAssertEqual(harness.session.tokenStore.getConnectionMode(), .relay)
+        XCTAssertEqual(harness.session.tokenStore.getAccessToken(), "fresh-at")
+        let state = await harness.session.sessionManager.currentAuthState
+        XCTAssertEqual(state, .fullyConnected)
+
+        let profiles = harness.connectionStore.listProfiles()
+        XCTAssertEqual(profiles.count, 1, "existing relay profile is updated in place, not duplicated")
+        XCTAssertEqual(profiles.first?.id, "profile-a1")
+        XCTAssertEqual(profiles.first?.accessToken, "fresh-at")
+        XCTAssertEqual(profiles.first?.refreshToken, "fresh-rt")
+        XCTAssertEqual(profiles.first?.label, "Agent: Old Name", "label preserved on update")
+        XCTAssertEqual(harness.connectionStore.getActiveProfileId(), "profile-a1")
+    }
+
+    func testConnectAgentViaRelayWithoutUserTokenThrows() async {
+        let harness = RepositoryHarness(session: SessionHarness(userLoggedIn: false))
+        do {
+            try await harness.repository.connectAgentViaRelay(
+                agentId: "a1", friendlyName: "A", deviceId: "d", deviceName: nil
+            )
+            XCTFail("expected APIError")
+        } catch let error as APIError {
+            XCTAssertEqual(error.code, -1)
+            XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no network call without a user token")
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+    }
+
+    func testRemoveRelayProfileDropsOnlyTheMatchingProfile() {
+        let harness = RepositoryHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveRelayCredentials(
+            serverUrl: "https://central.example.com",
+            agentId: "a1",
+            pairingId: "a1",
+            deviceId: "d",
+            accessToken: "at",
+            refreshToken: "rt"
+        )
+        harness.connectionStore.captureActiveProfile(tokenStore: harness.session.tokenStore, label: "Agent: a1")
+        XCTAssertEqual(harness.connectionStore.listProfiles().count, 1)
+
+        harness.repository.removeRelayProfile(agentId: "other")  // no match → unchanged
+        XCTAssertEqual(harness.connectionStore.listProfiles().count, 1)
+
+        harness.repository.removeRelayProfile(agentId: "a1")  // match → removed + active cleared
+        XCTAssertTrue(harness.connectionStore.listProfiles().isEmpty)
+        XCTAssertNil(harness.connectionStore.getActiveProfileId())
+    }
 }

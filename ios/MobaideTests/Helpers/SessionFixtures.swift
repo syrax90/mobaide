@@ -150,9 +150,11 @@ final class RecordingAgentStatusApplier: AgentStatusApplying, @unchecked Sendabl
     private let lock = NSLock()
     private var updatesStorage: [(agentId: String, online: Bool)] = []
     private var refreshCountStorage = 0
+    private var clearCountStorage = 0
 
     var updates: [(agentId: String, online: Bool)] { lock.withLock { updatesStorage } }
     var refreshCount: Int { lock.withLock { refreshCountStorage } }
+    var clearCount: Int { lock.withLock { clearCountStorage } }
 
     func updateAgentOnline(agentId: String, online: Bool) async {
         lock.withLock { updatesStorage.append((agentId, online)) }
@@ -161,6 +163,10 @@ final class RecordingAgentStatusApplier: AgentStatusApplying, @unchecked Sendabl
     func refreshAgents() async throws {
         lock.withLock { refreshCountStorage += 1 }
     }
+
+    func clear() async {
+        lock.withLock { clearCountStorage += 1 }
+    }
 }
 
 final class RecordingTemplateSync: TemplateSyncApplying, @unchecked Sendable {
@@ -168,10 +174,12 @@ final class RecordingTemplateSync: TemplateSyncApplying, @unchecked Sendable {
     private var upsertsStorage: [TemplateDto] = []
     private var deletesStorage: [String] = []
     private var refreshCountStorage = 0
+    private var clearCountStorage = 0
 
     var upserts: [TemplateDto] { lock.withLock { upsertsStorage } }
     var deletes: [String] { lock.withLock { deletesStorage } }
     var refreshCount: Int { lock.withLock { refreshCountStorage } }
+    var clearCount: Int { lock.withLock { clearCountStorage } }
 
     func applyUpserted(_ template: TemplateDto) async {
         lock.withLock { upsertsStorage.append(template) }
@@ -183,6 +191,10 @@ final class RecordingTemplateSync: TemplateSyncApplying, @unchecked Sendable {
 
     func refreshTemplates() async throws {
         lock.withLock { refreshCountStorage += 1 }
+    }
+
+    func clear() async {
+        lock.withLock { clearCountStorage += 1 }
     }
 }
 

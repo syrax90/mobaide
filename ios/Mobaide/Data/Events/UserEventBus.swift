@@ -68,7 +68,14 @@ actor UserEventBus {
                 switch state {
                 case .userOnly, .fullyConnected:
                     await self.startConnection()
-                case .unauthenticated, .incompatibleServer:
+                case .unauthenticated:
+                    await self.stopConnection()
+                    // Cross-account isolation: drop cached agents/templates so a
+                    // different account signing in the same process never sees
+                    // the previous user's data.
+                    await self.agentStatusApplier.clear()
+                    await self.templateSync.clear()
+                case .incompatibleServer:
                     await self.stopConnection()
                 }
             }
@@ -167,10 +174,17 @@ actor UserEventBus {
                 // central server.
                 base = tokenStore.getAgentUrl()
             }
-            guard let base else { return nil }
+            // User-events is a user-scoped central-server channel. Before any
+            // agent is connected (userOnly — connection mode still .direct with
+            // no agent URL), fall back to the central server so
+            // `agent.status_changed` / `template.*` still arrive; this is what
+            // makes first-pair "waiting for online" and userOnly template live
+            // sync work (Android parity: the user socket follows the login).
+            let effectiveBase = base ?? AppConfig.centralServerURL
+            guard !effectiveBase.isEmpty else { return nil }
             // mode .direct: the user channel is never relay-path-rewritten.
             return RelayRouting.webSocketURLString(
-                baseURL: base,
+                baseURL: effectiveBase,
                 path: "ws/user-events",
                 mode: .direct,
                 token: token

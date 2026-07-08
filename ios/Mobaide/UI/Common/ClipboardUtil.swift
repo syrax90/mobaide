@@ -11,13 +11,20 @@ enum Clipboard {
         if isSensitive {
             UIPasteboard.general.setItems(
                 [[UTType.utf8PlainText.identifier: text]],
-                options: [
-                    .localOnly: true,
-                    .expirationDate: Date().addingTimeInterval(60),
-                ]
+                options: sensitiveOptions()
             )
         } else {
             UIPasteboard.general.string = text
         }
+    }
+
+    /// Options for a one-time-secret copy: local-only (no Universal Clipboard
+    /// leak) and auto-expiring after 60 s. Pure so the hygiene invariant is
+    /// unit-testable without touching the shared pasteboard.
+    static func sensitiveOptions(now: Date = Date()) -> [UIPasteboard.OptionsKey: Any] {
+        [
+            .localOnly: true,
+            .expirationDate: now.addingTimeInterval(60),
+        ]
     }
 }

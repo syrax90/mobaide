@@ -25,6 +25,9 @@ final class AppContainer {
     let foregroundSessionTracker: ForegroundSessionTracker
     let sessionRepository: SessionRepository
     let projectsRepository: ProjectsRepository
+    let agentRepository: AgentRepository
+    let templatesRepository: TemplatesRepository
+    let deviceRepository: DeviceRepository
     let terminalSessionStore: TerminalSessionStore
     let router: Router
     let authStateModel: AuthStateModel
@@ -76,6 +79,19 @@ final class AppContainer {
             sessionInvalidator: sessionInvalidator
         )
 
+        let agentRepository = AgentRepository(
+            centralAPI: centralAPI,
+            userIdentityStore: userIdentityStore
+        )
+        let templatesRepository = TemplatesRepository(
+            centralAPI: centralAPI,
+            userIdentityStore: userIdentityStore
+        )
+        let deviceRepository = DeviceRepository(
+            centralAPI: centralAPI,
+            userIdentityStore: userIdentityStore
+        )
+
         let webSocketFactory = WebSocketCoreFactory.live()
         let agentEventBus = AgentEventBus(
             webSocketFactory: webSocketFactory,
@@ -86,7 +102,9 @@ final class AppContainer {
             webSocketFactory: webSocketFactory,
             sessionManager: sessionManager,
             userIdentityStore: userIdentityStore,
-            tokenStore: tokenStore
+            tokenStore: tokenStore,
+            agentStatusApplier: agentRepository,
+            templateSync: templatesRepository
         )
 
         let authRepository = AuthRepository(
@@ -112,6 +130,9 @@ final class AppContainer {
         self.centralAPI = centralAPI
         self.agentEventBus = agentEventBus
         self.userEventBus = userEventBus
+        self.agentRepository = agentRepository
+        self.templatesRepository = templatesRepository
+        self.deviceRepository = deviceRepository
         self.authRepository = authRepository
         self.signInService = SignInService(
             google: GoogleSignInClient(),

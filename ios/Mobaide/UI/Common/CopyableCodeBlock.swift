@@ -36,15 +36,28 @@ struct CopyableCodeBlock: View {
     private var codeText: some View {
         if singleLine {
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(MobaideTypography.code)
-                    .lineLimit(1)
-                    .textSelection(.enabled)
+                if isSensitive {
+                    Text(code)
+                        .font(MobaideTypography.code)
+                        .lineLimit(1)
+                        .textSelection(.disabled)
+                } else {
+                    Text(code)
+                        .font(MobaideTypography.code)
+                        .lineLimit(1)
+                        .textSelection(.enabled)
+                }
             }
         } else {
-            Text(code)
-                .font(MobaideTypography.code)
-                .textSelection(.enabled)
+            if isSensitive {
+                Text(code)
+                    .font(MobaideTypography.code)
+                    .textSelection(.disabled)
+            } else {
+                Text(code)
+                    .font(MobaideTypography.code)
+                    .textSelection(.enabled)
+            }
         }
     }
 }
