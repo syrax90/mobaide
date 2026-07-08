@@ -48,6 +48,10 @@ final class TemplatesRepository: TemplateSyncApplying {
         setTemplates(currentTemplates.filter { $0.template_id != templateId })
     }
 
+    func clear() async {
+        setTemplates([])
+    }
+
     // MARK: - Mutations
 
     @discardableResult

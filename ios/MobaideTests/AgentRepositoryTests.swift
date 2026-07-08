@@ -66,4 +66,21 @@ final class AgentRepositoryTests: XCTestCase {
         XCTAssertEqual(response.agent_id, "a1")
         XCTAssertEqual(repo.currentAgents.first?.online, true)
     }
+
+    func testCreateReturnsTokenEvenWhenRefreshFails() async throws {
+        let repo = makeRepo()
+        StubURLProtocol.enqueue(status: 200, body: #"{"agent_id":"a1","name":"A","token":"tok"}"#)  // create ok
+        StubURLProtocol.enqueue(status: 500, body: "boom")                                            // refresh fails
+        let created = try await repo.createAgent(name: "A")
+        XCTAssertEqual(created.token, "tok")  // one-time token preserved despite refresh failure
+    }
+
+    func testClearEmptiesCache() async throws {
+        let repo = makeRepo()
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))
+        try await repo.refreshAgents()
+        XCTAssertFalse(repo.currentAgents.isEmpty)
+        await repo.clear()
+        XCTAssertTrue(repo.currentAgents.isEmpty)
+    }
 }

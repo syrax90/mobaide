@@ -53,6 +53,9 @@ private struct AgentListContent: View {
                         Button { router.navigate(to: .devices) } label: {
                             Label("Manage devices", systemImage: "iphone")
                         }
+                        Button { router.navigate(to: .connections) } label: {
+                            Label("Manage connections", systemImage: "rectangle.2.swap")
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }

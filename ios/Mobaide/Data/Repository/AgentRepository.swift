@@ -35,6 +35,10 @@ final class AgentRepository: AgentStatusApplying {
         setAgents(list)
     }
 
+    func clear() async {
+        setAgents([])
+    }
+
     /// Patch one agent's `online` flag in place. No-op when the agent is not
     /// cached or the flag is unchanged (Android parity — avoids spurious emits).
     func updateAgentOnline(agentId: String, online: Bool) async {
@@ -58,7 +62,9 @@ final class AgentRepository: AgentStatusApplying {
     @discardableResult
     func createAgent(name: String) async throws -> CreateAgentResponse {
         let response = try await centralAPI.createAgent(userToken: try userToken(), name: name)
-        try await refreshAgents()
+        // Best-effort: a failed list refresh must never discard the one-time
+        // token in `response` (the bus/next refresh reconciles the list).
+        try? await refreshAgents()
         return response
     }
 
@@ -77,7 +83,9 @@ final class AgentRepository: AgentStatusApplying {
     @discardableResult
     func claimAgentByPairing(request: PairingClaimRequest) async throws -> PairingClaimResponse {
         let response = try await centralAPI.claimAgentByPairing(userToken: try userToken(), request: request)
-        try await refreshAgents()
+        // Best-effort: the claim already succeeded server-side and the pairing
+        // watcher refreshes again, so a failed refresh must not fail the claim.
+        try? await refreshAgents()
         return response
     }
 

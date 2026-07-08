@@ -67,4 +67,12 @@ final class TemplatesRepositoryTests: XCTestCase {
         try await repo.deleteTemplate(templateId: "t1")
         XCTAssertTrue(repo.currentTemplates.isEmpty)
     }
+
+    func testClearEmptiesCache() async {
+        let repo = makeRepo()
+        await repo.applyUpserted(makeTemplate(id: "t1", name: "One", favorite: false))
+        XCTAssertFalse(repo.currentTemplates.isEmpty)
+        await repo.clear()
+        XCTAssertTrue(repo.currentTemplates.isEmpty)
+    }
 }

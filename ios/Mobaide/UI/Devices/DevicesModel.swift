@@ -40,14 +40,19 @@ final class DevicesModel {
 
     func confirmRevoke(_ device: DeviceResponse) {
         revokeTarget = nil
-        let snapshot = devices
+        let originalIndex = devices.firstIndex { $0.device_id == device.device_id }
         devices.removeAll { $0.device_id == device.device_id }
         Task { [weak self] in
             guard let self else { return }
             do {
                 try await self.deviceRepository.revokeDevice(deviceId: device.device_id)
             } catch {
-                self.devices = snapshot
+                // Reinsert only the failed row — restoring a whole pre-revoke
+                // snapshot could resurrect a device a concurrent revoke removed.
+                if !self.devices.contains(where: { $0.device_id == device.device_id }) {
+                    let target = min(originalIndex ?? self.devices.count, self.devices.count)
+                    self.devices.insert(device, at: target)
+                }
                 self.message = "Failed to revoke device: \(ErrorText.message(for: error))"
             }
         }
