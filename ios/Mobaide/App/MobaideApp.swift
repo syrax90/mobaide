@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct MobaideApp: App {
     @State private var container = AppContainer()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +15,16 @@ struct MobaideApp: App {
                 .mobaideTheme()
                 .task {
                     await container.start()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // Re-probe the version gate on foreground so a server
+                    // upgraded while backgrounded still triggers the takeover
+                    // (Android `MainActivity.onResume` parity). The initial
+                    // `.active` is not a change, so launch is covered by
+                    // `container.start()` alone.
+                    if phase == .active {
+                        Task { await container.versionGate.probe() }
+                    }
                 }
                 .onOpenURL { url in
                     // Completes the Google sign-in round trip (reversed

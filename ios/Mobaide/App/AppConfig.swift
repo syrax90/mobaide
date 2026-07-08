@@ -60,9 +60,30 @@ enum AppConfig {
     /// Android `BuildConfig.PRIVACY_POLICY_URL` default parity.
     static let privacyPolicyURL = "https://mobaide.com/privacy.html"
 
+    /// Numeric App Store id the takeover store links are built from (Android:
+    /// Play Store deep links keyed by the package id). Placeholder until the
+    /// app is listed on the App Store.
+    // TODO(iOS launch): replace with the real App Store Connect numeric id.
+    static let appStoreID = "0000000000"
+
     /// App Store links for the IncompatibleServer takeover (Android:
-    /// Play Store deep links). The real store ids land with the version
-    /// gate in iOS-08; empty means the takeover hides its store button.
-    static let appStoreURL = ""
-    static let appStoreFallbackURL = ""
+    /// Play Store deep links). `appStoreURL` deep-links into the App Store
+    /// app; `appStoreFallbackURL` is the browser-openable web listing.
+    static let appStoreURL = "itms-apps://apps.apple.com/app/id\(appStoreID)"
+    static let appStoreFallbackURL = "https://apps.apple.com/app/id\(appStoreID)"
+
+    /// "What changed" link on the upgrade takeover (Android parity: the
+    /// protocol-docs URL shown next to the store button).
+    static let whatsChangedURL = "https://mobaide.com/docs/protocol"
+
+    /// Support surfaces (Android `BuildConfig.SUPPORT_EMAIL` /
+    /// `SUPPORT_GITHUB_URL` default parity).
+    static let supportEmail = "support@mobaide.com"
+    static let supportGitHubURL = "https://github.com/syrax90/mobaide-community/discussions"
+
+    /// Human-facing app version (`CFBundleShortVersionString`, i.e. the Xcode
+    /// `MARKETING_VERSION`). Used in the support-email diagnostics block.
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+    }
 }

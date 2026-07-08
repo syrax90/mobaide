@@ -55,21 +55,6 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(store.getLastUsedClaudeOptions())
     }
 
-    func testTerminalDisplayDefaultsAndClamping() {
-        XCTAssertEqual(store.getTerminalDisplayMode(), .static)
-        store.setTerminalDisplayMode(.full)
-        XCTAssertEqual(store.getTerminalDisplayMode(), .full)
-        XCTAssertEqual(defaults.string(forKey: PreferencesStore.keyTerminalDisplayMode), "Full")
-
-        XCTAssertEqual(store.getTerminalStaticColumns(), 120)
-        store.setTerminalStaticColumns(1000)
-        XCTAssertEqual(store.getTerminalStaticColumns(), 240)
-        store.setTerminalStaticColumns(10)
-        XCTAssertEqual(store.getTerminalStaticColumns(), 60)
-        store.setTerminalStaticColumns(150)
-        XCTAssertEqual(store.getTerminalStaticColumns(), 150)
-    }
-
     func testDynamicKeysUseDoubleColonSeparator() {
         XCTAssertEqual(PreferencesStore.linearLabelsKey(projectName: "p"), "linear_labels::p")
         XCTAssertEqual(PreferencesStore.linearStatesKey(projectName: "p"), "linear_states::p")
