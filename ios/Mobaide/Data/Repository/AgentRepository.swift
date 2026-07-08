@@ -77,7 +77,10 @@ final class AgentRepository: AgentStatusApplying {
 
     func deleteAgent(agentId: String) async throws {
         try await centralAPI.deleteAgent(userToken: try userToken(), agentId: agentId)
-        try await refreshAgents()
+        // Best-effort: the delete already succeeded server-side, so a failed
+        // refresh must not surface a false "delete failed" (no agent.deleted
+        // user event self-heals the list).
+        try? await refreshAgents()
     }
 
     @discardableResult

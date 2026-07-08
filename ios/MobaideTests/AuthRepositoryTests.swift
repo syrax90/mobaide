@@ -296,4 +296,25 @@ final class AuthRepositoryTests: XCTestCase {
             XCTFail("unexpected error \(error)")
         }
     }
+
+    func testRemoveRelayProfileDropsOnlyTheMatchingProfile() {
+        let harness = RepositoryHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveRelayCredentials(
+            serverUrl: "https://central.example.com",
+            agentId: "a1",
+            pairingId: "a1",
+            deviceId: "d",
+            accessToken: "at",
+            refreshToken: "rt"
+        )
+        harness.connectionStore.captureActiveProfile(tokenStore: harness.session.tokenStore, label: "Agent: a1")
+        XCTAssertEqual(harness.connectionStore.listProfiles().count, 1)
+
+        harness.repository.removeRelayProfile(agentId: "other")  // no match → unchanged
+        XCTAssertEqual(harness.connectionStore.listProfiles().count, 1)
+
+        harness.repository.removeRelayProfile(agentId: "a1")  // match → removed + active cleared
+        XCTAssertTrue(harness.connectionStore.listProfiles().isEmpty)
+        XCTAssertNil(harness.connectionStore.getActiveProfileId())
+    }
 }

@@ -114,6 +114,16 @@ struct AuthRepository: Sendable {
         await sessionManager.agentDisconnect()
     }
 
+    /// Remove any saved relay connection profile for `agentId`. Called when an
+    /// agent is deleted so its profile is not left orphaned (and marked active)
+    /// in the Connections switcher with no way to remove it.
+    func removeRelayProfile(agentId: String) {
+        for profile in connectionStore.listProfiles()
+        where profile.mode == "relay" && profile.agentId == agentId {
+            connectionStore.removeProfile(id: profile.id)
+        }
+    }
+
     /// Relay-mode connect (Android `AgentListViewModel.connectToAgent`): mint
     /// mobile relay credentials for `agentId`, persist them, flip the session to
     /// `fullyConnected` (which starts both event buses via their auth-state

@@ -196,6 +196,8 @@ final class AgentListModel {
                     self.connectedAgentId = nil
                 }
                 try await self.agentRepository.deleteAgent(agentId: agent.agent_id)
+                // Drop any saved relay profile for the now-deleted agent.
+                self.authRepository.removeRelayProfile(agentId: agent.agent_id)
             } catch {
                 self.message = "Failed to delete agent: \(ErrorText.message(for: error))"
             }
