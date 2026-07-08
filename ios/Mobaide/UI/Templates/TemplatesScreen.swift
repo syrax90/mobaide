@@ -33,9 +33,7 @@ private struct TemplatesContent: View {
             .task { await model.observeTemplates() }
             .task { await model.refresh() }
             .sheet(item: $model.editorTarget) { target in
-                CreateOrEditTemplateSheet(target: target.template) { name, body in
-                    model.saveFromEditor(name: name, body: body)
-                }
+                CreateOrEditTemplateSheet(model: model, target: target.template)
             }
             .alert(
                 "Delete template?",

@@ -83,4 +83,16 @@ final class AgentRepositoryTests: XCTestCase {
         await repo.clear()
         XCTAssertTrue(repo.currentAgents.isEmpty)
     }
+
+    func testDeleteRemovesRowLocallyEvenWhenRefreshFails() async throws {
+        let repo = makeRepo()
+        StubURLProtocol.enqueue(status: 200, body: agentsJSON(id: "a1", online: true))
+        try await repo.refreshAgents()
+        XCTAssertEqual(repo.currentAgents.count, 1)
+
+        StubURLProtocol.enqueue(status: 204, body: "")     // DELETE ok
+        StubURLProtocol.enqueue(status: 500, body: "boom")  // best-effort refresh fails
+        try await repo.deleteAgent(agentId: "a1")
+        XCTAssertTrue(repo.currentAgents.isEmpty)  // removed locally, no stale tappable row
+    }
 }
