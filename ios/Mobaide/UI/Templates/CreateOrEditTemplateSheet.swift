@@ -47,9 +47,11 @@ struct CreateOrEditTemplateSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
+                    // No `dismiss()` here — the model dismisses (clears
+                    // `editorTarget`) only after the save succeeds, so a failed
+                    // save keeps the sheet up with the user's draft intact.
                     Button("Save") {
                         onSave(name.trimmingCharacters(in: .whitespacesAndNewlines), bodyText)
-                        dismiss()
                     }
                     .disabled(!canSave)
                 }

@@ -28,6 +28,7 @@ enum TemplateEditorTarget: Identifiable, Equatable {
 final class TemplatesModel {
     private(set) var templates: [TemplateDto] = []
     private(set) var isLoading = false
+    private(set) var isSavingTemplate = false
     var editorTarget: TemplateEditorTarget?
     var deleteTarget: TemplateDto?
     var message: String?
@@ -70,10 +71,14 @@ final class TemplatesModel {
     func startEdit(_ template: TemplateDto) { editorTarget = .edit(template) }
 
     func saveFromEditor(name: String, body: String) {
-        let target = editorTarget
-        editorTarget = nil
+        // Keep the editor (and the user's draft) until the save succeeds; a
+        // failed save must not discard an in-progress template body. Guard
+        // against a double-tap issuing two saves.
+        guard !isSavingTemplate, let target = editorTarget else { return }
+        isSavingTemplate = true
         Task { [weak self] in
             guard let self else { return }
+            defer { self.isSavingTemplate = false }
             do {
                 switch target {
                 case .edit(let template):
@@ -81,9 +86,10 @@ final class TemplatesModel {
                         templateId: template.template_id,
                         update: UpdateTemplateRequest(name: name, body: body)
                     )
-                case .create, .none:
+                case .create:
                     _ = try await self.repository.createTemplate(name: name, body: body)
                 }
+                self.editorTarget = nil  // dismiss only on success
             } catch {
                 self.message = "Failed to save template: \(ErrorText.message(for: error))"
             }

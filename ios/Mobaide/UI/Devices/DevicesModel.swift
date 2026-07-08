@@ -46,6 +46,9 @@ final class DevicesModel {
             guard let self else { return }
             do {
                 try await self.deviceRepository.revokeDevice(deviceId: device.device_id)
+                // A refresh in flight during the DELETE may have re-added the
+                // row from a pre-revoke server list; keep the revoked row gone.
+                self.devices.removeAll { $0.device_id == device.device_id }
             } catch {
                 // Reinsert only the failed row — restoring a whole pre-revoke
                 // snapshot could resurrect a device a concurrent revoke removed.

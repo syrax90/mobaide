@@ -46,4 +46,28 @@ final class TemplatesModelTests: XCTestCase {
         XCTAssertTrue(CreateOrEditTemplateSheet.isSaveEnabled(name: "n", body: " "))
         XCTAssertTrue(CreateOrEditTemplateSheet.isSaveEnabled(name: "  n  ", body: "x"))
     }
+
+    func testSaveSuccessDismissesEditor() async {
+        let model = TemplatesModel(repository: AgentHarness().templatesRepository)
+        model.startCreate()
+        XCTAssertNotNil(model.editorTarget)
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"template_id":"t1","name":"N","body":"b","is_favorite":false,"created_at":"t","updated_at":"t","version":1}"#
+        )
+        model.saveFromEditor(name: "N", body: "b")
+        await waitUntil { model.editorTarget == nil }
+        XCTAssertNil(model.editorTarget)
+        XCTAssertNil(model.message)
+    }
+
+    func testSaveFailureKeepsEditorOpenWithDraft() async {
+        let model = TemplatesModel(repository: AgentHarness().templatesRepository)
+        model.startCreate()
+        StubURLProtocol.enqueue(status: 500, body: "boom")
+        model.saveFromEditor(name: "N", body: "b")
+        await waitUntil { model.message != nil }
+        XCTAssertNotNil(model.editorTarget)  // editor stays open → draft preserved
+        XCTAssertNotNil(model.message)
+    }
 }
