@@ -24,7 +24,8 @@ private struct SessionListContent: View {
         _model = State(initialValue: SessionListModel(
             repository: container.sessionRepository,
             agentEventBus: container.agentEventBus,
-            preferencesStore: container.preferencesStore
+            preferencesStore: container.preferencesStore,
+            autoScanRepository: container.autoScanRepository
         ))
     }
 
@@ -59,6 +60,7 @@ private struct SessionListContent: View {
             .toast($toast)
             .task { await model.observeSessions() }
             .task { await model.observeConnection() }
+            .task { await model.observeScans() }
             .task {
                 for await id in model.autoResumeEvents() {
                     router.navigate(to: .sessionDetail(sessionId: id))
@@ -75,7 +77,7 @@ private struct SessionListContent: View {
 
     @ViewBuilder
     private var content: some View {
-        if model.sessions.isEmpty {
+        if model.sessions.isEmpty, model.activeScans.isEmpty {
             if model.isReconnecting {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -84,13 +86,30 @@ private struct SessionListContent: View {
             }
         } else {
             List {
-                ForEach(model.sessions, id: \.session_id) { session in
-                    Button {
-                        router.navigate(to: .sessionDetail(sessionId: session.session_id))
-                    } label: {
-                        SessionCardRow(session: session) { pendingKill = session }
+                if !model.activeScans.isEmpty {
+                    Section("Active Auto Scans") {
+                        ForEach(model.activeScans, id: \.project_name) { scan in
+                            AutoScanCard(
+                                scan: scan,
+                                onTap: { router.navigate(to: .autoScanDetail(projectName: scan.project_name)) },
+                                onStop: { Task { await model.stopScan(scan.project_name) } }
+                            )
+                        }
                     }
-                    .buttonStyle(.plain)
+                }
+                Section {
+                    ForEach(model.sessions, id: \.session_id) { session in
+                        Button {
+                            router.navigate(to: .sessionDetail(sessionId: session.session_id))
+                        } label: {
+                            SessionCardRow(session: session) { pendingKill = session }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } header: {
+                    if !model.activeScans.isEmpty, !model.sessions.isEmpty {
+                        Text("Sessions")
+                    }
                 }
             }
             .listStyle(.plain)

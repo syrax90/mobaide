@@ -25,6 +25,15 @@ and add/re-register/delete plus one-time-credentials and install-commands
 sheets), the optimistic-revoke Devices list, and the favorites/all Templates
 screen (create/edit/delete with live sync), backed by app-scoped
 `AgentRepository`/`TemplatesRepository` stores wired to the `UserEventBus`.
+CLA-103 replaced the Auto Scan placeholder with the live autoscan monitor —
+an "Active Auto Scans" card section atop the sessions list and a per-project
+detail screen (phase timeline, auto-following ANSI log, 1 Hz countdown) —
+backed by an app-scoped `AutoScanRepository` (`ws/events`-bus list state plus
+REST seed, optimistic start/stop/run-now with typed 409/429 errors), a
+dedicated `AutoScanWsClient` whose live per-project resume cursor and
+two-layer seq dedupe fix the Android duplicate-log replay bug, and a
+256-color `AnsiParser` (a deliberate superset of Android's minimal SGR
+parser).
 Remaining feature screens land in later issues.
 
 ## Layout
@@ -186,6 +195,13 @@ tests against:
   `decoded_canonical` when decoding materializes defaults or coerces enums.
 - `frames/terminal_frames.json` — binary frame samples as hex strings
   (`encode` and `decode` case lists).
+- `frames/autoscan_frames.json` — `ws/autoscan` channel JSON frames:
+  `cases[]` of `{name, wire, expect}` covering `snapshot` / `caught_up` /
+  `event` (all six `ScanProgressPayload` kinds) plus malformed-drop cases,
+  asserted against the decoded `AutoScanFrame`.
+- `ansi/ansi_sgr.json` — SGR + 256-color ANSI goldens: `cases[]` of
+  `{name, input, runs}` mapping a raw log line (ESC as `\u001b`) to the
+  expected `AnsiParser` runs, with fg/bg as integer `[r,g,b]` channels.
 - `relay/relay_mapping.json` — relay path rewrites, WS URL construction, and
   REST base derivation tables.
 
