@@ -131,4 +131,33 @@ final class AttentionCoordinatorTests: XCTestCase {
         await waitUntil { presenter.removeAllCount == 1 }
         XCTAssertEqual(presenter.removeAllCount, 1)
     }
+
+    func testAgentDisconnectClearsDeliveredNotifications() async {
+        // Agent-scoped teardown: dropping from .fullyConnected to .userOnly
+        // (agent disconnect/switch) clears the previous agent's alerts so they
+        // can't linger or deep-link into a session the next agent can't resolve.
+        let presenter = FakeAttentionPresenter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(presenter: presenter, authStates: authStates)
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        continuation.yield(.userOnly)
+        continuation.finish()
+        await waitUntil { presenter.removeAllCount == 1 }
+        XCTAssertEqual(presenter.removeAllCount, 1)
+    }
+
+    func testConnectingUserOnlyKeepsNotifications() async {
+        // A .userOnly seen while still connecting (cold start) is not a
+        // downgrade and must not wipe cross-launch alerts.
+        let presenter = FakeAttentionPresenter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(presenter: presenter, authStates: authStates)
+        coordinator.start()
+        continuation.yield(.userOnly)
+        continuation.yield(.fullyConnected)
+        continuation.finish()
+        await waitUntil { presenter.authRequestCount == 1 }
+        XCTAssertEqual(presenter.removeAllCount, 0)
+    }
 }

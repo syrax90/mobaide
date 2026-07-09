@@ -17,6 +17,7 @@ final class AttentionCoordinator {
     private var eventSubscription: Task<Void, Never>?
     private var authSubscription: Task<Void, Never>?
     private var didRequestAuthorization = false
+    private var latestAuthState: AuthState?
 
     init(
         eventStream: @escaping @Sendable () -> AsyncStream<AgentEvent>,
@@ -60,20 +61,25 @@ final class AttentionCoordinator {
     }
 
     /// Request provisional authorization once, on the first `.fullyConnected`
-    /// (the agent is live and attention events can start flowing); on logout
-    /// drop every alert so a different account signing in on the same device
-    /// never sees the previous user's session titles (parity with the
-    /// `UserEventBus` cache teardown on `.unauthenticated`).
+    /// (the agent is live and attention events can start flowing). Notifications
+    /// are agent-scoped, so drop every alert whenever the agent connection is
+    /// lost — a logout, or an agent disconnect/switch/takeover that leaves
+    /// `.fullyConnected` — otherwise the previous agent's session alerts linger
+    /// and deep-link to a session the next agent can't resolve. A `.userOnly`
+    /// seen while still connecting (cold start, not a downgrade) keeps any
+    /// cross-launch alerts. Mirrors `Router.handleTransition`'s stack reset.
     private func handleAuth(_ state: AuthState) async {
+        let previous = latestAuthState
+        latestAuthState = state
         switch state {
         case .fullyConnected:
             guard !didRequestAuthorization else { return }
             didRequestAuthorization = true
             await presenter.requestProvisionalAuthorization()
-        case .unauthenticated:
-            presenter.removeAll()
-        default:
-            break
+        case .userOnly, .unauthenticated, .incompatibleServer:
+            if previous == .fullyConnected || state == .unauthenticated {
+                presenter.removeAll()
+            }
         }
     }
 

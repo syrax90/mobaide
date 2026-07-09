@@ -69,6 +69,12 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         switch await center.notificationSettings().authorizationStatus {
         case .authorized, .provisional:
             return true
+        case .notDetermined:
+            // The coordinator's auth task requests provisional authorization on
+            // first `.fullyConnected`, but it and the event loop are unordered,
+            // so the first `.sessionAttention` can arrive here first. Request it
+            // inline (silent, near-instant) so that first alert is never dropped.
+            return (try? await center.requestAuthorization(options: [.alert, .sound, .badge, .provisional])) ?? false
         default:
             return false
         }
