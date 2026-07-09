@@ -17,6 +17,9 @@ struct MobaideApp: App {
                     await container.start()
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    // Background grace (keep the events socket alive ~30 s) +
+                    // foreground reconcile of missed attention (iOS-09).
+                    container.appLifecycleController.handle(phase)
                     // Re-probe the version gate on foreground so a server
                     // upgraded while backgrounded still triggers the takeover
                     // (Android `MainActivity.onResume` parity). The initial
