@@ -52,6 +52,27 @@ As part of the App Store redesign, iOS-08 **drops** the Android
 forced-columns workaround iOS-04 already abandoned) — an intentional
 divergence from Android's `PreferencesStore`. The remote-agent-outdated
 banner and the optional iTunes-lookup app-update nudge are deferred (CLA-120).
+CLA-105 adds local notifications for session attention (iOS-09): an
+`AttentionCoordinator` subscribes to the `AgentEventBus` and posts a
+`UNUserNotificationCenter` alert per `session.attention` (content mirrors
+Android's `AttentionNotifier`, keyed by `session_id` so a re-post replaces in
+place), clearing it when a `session.updated` drops the attention. Foreground
+alerts for the on-screen session are suppressed via `ForegroundSessionTracker`,
+and a tapped alert deep-links to the session's terminal once `.fullyConnected`
+(`DeepLinkCoordinator` stashes the id on a cold start and replays it). Because
+iOS has no foreground-service equivalent, delivery is honest to the platform:
+the events socket lives while the app runs plus a ~30 s `beginBackgroundTask`
+grace (`AppLifecycleController`), and events missed while suspended are
+re-derived from a `GET /api/sessions` snapshot on foregrounding — the
+`attention` field is stamped on every snapshot for exactly this recovery,
+posting the set the client never showed and removing alerts whose attention is
+gone. Authorization is requested silently as `.provisional`, so background
+alerts arrive quietly (no heads-up banner/sound until the user promotes them) —
+a deliberate divergence from Android's loud runtime prompt. Delivery while the
+app is suspended is deferred to iOS-10 / APNs (CLA-106); the documented
+limitation — a suspended or force-quit app may miss the live event, recovered on
+next foreground — mirrors Android's swipe-killed / deep-Doze foreground-service
+caveat.
 Remaining feature screens land in later issues.
 
 ## Layout
@@ -75,7 +96,8 @@ ios/
 │   │                             # Google/Apple sign-in clients), Events (AgentEventBus,
 │   │                             # UserEventBus), Local, Security, Repository
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
-│   ├── Notifications/            # ForegroundSessionTracker
+│   ├── Notifications/            # ForegroundSessionTracker, NotificationService,
+│   │                             # AttentionCoordinator/Content/Suppression (iOS-09)
 │   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
 │   │                             # Connections, Sessions (list + create wizard), Terminal
 │   │                             # (SwiftTerm host, InputBar, session model/store), and the

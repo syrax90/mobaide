@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 /// Manual composition root (no DI framework — Android Hilt's
 /// SingletonComponent becomes explicit wiring). Everything is built once
@@ -34,6 +35,10 @@ final class AppContainer {
     let terminalSessionStore: TerminalSessionStore
     let router: Router
     let authStateModel: AuthStateModel
+    let notificationService: NotificationService
+    let attentionCoordinator: AttentionCoordinator
+    let deepLinkCoordinator: DeepLinkCoordinator
+    let appLifecycleController: AppLifecycleController
 
     private var started = false
 
@@ -179,6 +184,36 @@ final class AppContainer {
         )
         self.router = Router()
         self.authStateModel = AuthStateModel(initial: initialState)
+
+        let deepLinkCoordinator = DeepLinkCoordinator(
+            router: self.router,
+            authStates: { sessionManager.authStates() },
+            initialAuthState: initialState
+        )
+        self.deepLinkCoordinator = deepLinkCoordinator
+        let notificationService = NotificationService(
+            tracker: foregroundSessionTracker,
+            onTap: { [deepLinkCoordinator] sessionId in
+                Task { @MainActor in deepLinkCoordinator.handleTap(sessionId: sessionId) }
+            }
+        )
+        self.notificationService = notificationService
+        let attentionCoordinator = AttentionCoordinator(
+            eventStream: { agentEventBus.events() },
+            authStates: { sessionManager.authStates() },
+            presenter: notificationService,
+            snapshot: { [sessionRepository = self.sessionRepository] in
+                try await sessionRepository.listSessions()
+            }
+        )
+        self.attentionCoordinator = attentionCoordinator
+        self.appLifecycleController = AppLifecycleController(
+            coordinator: attentionCoordinator,
+            agentEventBus: agentEventBus
+        )
+        // Register the delegate in init (not start()) so a cold-start
+        // notification tap, delivered during launch, is not dropped.
+        UNUserNotificationCenter.current().delegate = notificationService
     }
 
     /// Idempotent app-launch bootstrap (Android `MainActivity.onCreate`
@@ -195,6 +230,8 @@ final class AppContainer {
         sessionRepository.start()
         projectsRepository.start()
         autoScanRepository.start()
+        attentionCoordinator.start()
+        deepLinkCoordinator.start()
         await agentEventBus.start()
         await userEventBus.start()
     }
