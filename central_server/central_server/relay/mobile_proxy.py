@@ -100,7 +100,7 @@ class MobileProxy:
 
 @router.api_route(
     "/{agent_id}/{path:path}",
-    methods=["GET", "POST", "PUT", "DELETE"],
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
 )
 async def proxy_to_agent(
     request: Request,
@@ -123,7 +123,7 @@ async def proxy_to_agent(
         )
 
     body = None
-    if request.method in ("POST", "PUT", "DELETE"):
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         raw = await request.body()
         if raw:
             try:

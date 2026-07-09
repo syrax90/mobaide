@@ -142,6 +142,39 @@ class MockMobileClient:
         resp.raise_for_status()
         return resp.json()["session_id"]
 
+    def create_project(
+        self, agent_id: str, mobile_token: str, name: str, path: str
+    ) -> dict:
+        """Create a project on the agent over the server proxy."""
+        resp = self._http.post(
+            f"/proxy/{agent_id}/api/projects",
+            json={"name": name, "path": path},
+            headers=self._bearer(mobile_token),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_projects(self, agent_id: str, mobile_token: str) -> list[dict]:
+        """List the agent's projects over the server proxy."""
+        resp = self._http.get(
+            f"/proxy/{agent_id}/api/projects",
+            headers=self._bearer(mobile_token),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def reorder_projects(
+        self, agent_id: str, mobile_token: str, names: list[str]
+    ) -> list[dict]:
+        """Reorder the agent's projects via ``PATCH`` over the server proxy."""
+        resp = self._http.patch(
+            f"/proxy/{agent_id}/api/projects/order",
+            json={"names": names},
+            headers=self._bearer(mobile_token),
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def _session_ws_url(self, agent_id: str, session_id: str, mobile_token: str) -> str:
         return (
             f"{self.ws_base}/relay/ws/session/{agent_id}/{session_id}?token={mobile_token}"

@@ -81,3 +81,26 @@ def test_sessions_list_channel_lists_session(e2e_stack):
         client.read_sessions_list(e2e_stack.agent_id, mobile_token)
     )
     assert any(s.get("session_id") == session_id for s in sessions)
+
+
+def test_project_reorder_patch_over_proxy(e2e_stack):
+    """PATCH routes through the relay proxy end-to-end.
+
+    The proxy route once allowed only GET/POST/PUT/DELETE, so the project
+    reorder call the mobile apps make in relay mode died with 405 at the
+    central server. Reordering also proves the JSON body survives the trip:
+    a dropped body fails the reorder set check instead of returning 200.
+    """
+    client = e2e_stack.client
+    mobile_token = client.mint_mobile_token(e2e_stack.agent_id)
+
+    first = f"e2e-proj-{uuid.uuid4().hex[:8]}"
+    second = f"e2e-proj-{uuid.uuid4().hex[:8]}"
+    client.create_project(e2e_stack.agent_id, mobile_token, first, f"/tmp/{first}")
+    client.create_project(e2e_stack.agent_id, mobile_token, second, f"/tmp/{second}")
+
+    current = [p["name"] for p in client.list_projects(e2e_stack.agent_id, mobile_token)]
+    desired = list(reversed(current))
+
+    reordered = client.reorder_projects(e2e_stack.agent_id, mobile_token, desired)
+    assert [p["name"] for p in reordered] == desired

@@ -278,3 +278,52 @@ class TestProxyEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["sessions"][0]["id"] == "s1"
+
+    async def test_proxy_patch_forwards_method_and_body(
+        self, client, app, registered_agent
+    ):
+        agent_id, _ = registered_agent
+        owner = await app.state.db.get_user_by_email("viewer@test.local")
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            owner["id"], agent_id, owner["id"]
+        )
+
+        app.state.mobile_proxy = MobileProxy(app.state.routing)
+
+        ws = _mock_ws()
+        app.state.routing.register_agent(agent_id, ws)
+
+        captured: dict = {}
+
+        async def mock_forward(agent_id, method, path, query=None, body=None, timeout=30.0):
+            captured["method"] = method
+            captured["path"] = path
+            captured["body"] = body
+            return {"status": 200, "body": [{"name": "b"}, {"name": "a"}]}
+
+        app.state.mobile_proxy.forward = mock_forward
+
+        resp = await client.patch(
+            f"/proxy/{agent_id}/api/projects/order",
+            json={"names": ["b", "a"]},
+            headers={"Authorization": f"Bearer {access}"},
+        )
+        assert resp.status_code == 200
+        assert captured["method"] == "PATCH"
+        assert captured["path"] == "/api/projects/order"
+        assert captured["body"] == {"names": ["b", "a"]}
+
+    async def test_proxy_route_accepts_all_agent_methods(self):
+        """Every HTTP method used by agent REST routes is accepted by the proxy.
+
+        Inspects the proxy router's own routes rather than ``app.routes``:
+        newer FastAPI wraps included routers in path-less ``_IncludedRouter``
+        objects, so the catch-all APIRoute is not visible on the app directly.
+        """
+        for route in router.routes:
+            if getattr(route, "path", None) == "/proxy/{agent_id}/{path:path}":
+                methods = getattr(route, "methods", set())
+                assert methods >= {"GET", "POST", "PUT", "PATCH", "DELETE"}
+                break
+        else:
+            pytest.fail("proxy catch-all route not found on the router")
