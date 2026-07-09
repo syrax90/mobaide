@@ -21,6 +21,12 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
     var authRequestCount: Int { lock.withLock { authRequestStorage } }
     var removeAllCount: Int { lock.withLock { removeAllStorage } }
 
+    /// Overwrite the reported delivered set (used to simulate a live post
+    /// interleaving during `reconcile()`'s snapshot await).
+    func setDelivered(_ ids: Set<String>) {
+        lock.withLock { deliveredStorage = ids }
+    }
+
     func post(_ session: SessionResponse) async {
         lock.withLock { postedStorage.append(session) }
     }

@@ -60,22 +60,29 @@ final class AttentionCoordinator {
         }
     }
 
-    /// Request provisional authorization once, on the first `.fullyConnected`
-    /// (the agent is live and attention events can start flowing). Notifications
-    /// are agent-scoped, so drop every alert whenever the agent connection is
-    /// lost — a logout, or an agent disconnect/switch/takeover that leaves
-    /// `.fullyConnected` — otherwise the previous agent's session alerts linger
-    /// and deep-link to a session the next agent can't resolve. A `.userOnly`
-    /// seen while still connecting (cold start, not a downgrade) keeps any
-    /// cross-launch alerts. Mirrors `Router.handleTransition`'s stack reset.
+    /// Authorization + agent-scoped notification lifecycle, driven by the auth
+    /// state. On reaching `.fullyConnected`: request provisional authorization
+    /// once, then reconcile — so attention that accrued while the app wasn't
+    /// running (a cold launch after iOS killed a suspended app) or while the
+    /// agent was disconnected is posted, since the `.active` path only
+    /// reconciles a background→foreground resume and the connect snapshot
+    /// (`sessions.changed`) is ignored here. Notifications are agent-scoped, so
+    /// drop every alert whenever the agent connection is lost — a logout, or an
+    /// agent disconnect/switch/takeover leaving `.fullyConnected` — otherwise
+    /// the previous agent's alerts linger and deep-link to a session the next
+    /// agent can't resolve. A `.userOnly` seen while still connecting (cold
+    /// start, not a downgrade) keeps any cross-launch alerts. Mirrors
+    /// `Router.handleTransition`'s stack reset.
     private func handleAuth(_ state: AuthState) async {
         let previous = latestAuthState
         latestAuthState = state
         switch state {
         case .fullyConnected:
-            guard !didRequestAuthorization else { return }
-            didRequestAuthorization = true
-            await presenter.requestProvisionalAuthorization()
+            if !didRequestAuthorization {
+                didRequestAuthorization = true
+                await presenter.requestProvisionalAuthorization()
+            }
+            await reconcile()
         case .userOnly, .unauthenticated, .incompatibleServer:
             if previous == .fullyConnected || state == .unauthenticated {
                 presenter.removeAll()
@@ -87,9 +94,13 @@ final class AttentionCoordinator {
     /// and the delivered set B: post A\B (attention the client never showed)
     /// and remove B\A (alerts whose attention is gone).
     func reconcile() async {
+        // Read the delivered set BEFORE the REST snapshot: a live
+        // `.sessionAttention` that posts during the snapshot await would
+        // otherwise appear "delivered but absent from the older attention set"
+        // and be wrongly removed by the B\A loop below.
+        let delivered = await presenter.deliveredSessionIds()
         guard let sessions = try? await snapshot() else { return }
         let attentionSet = AttentionContent.attentionSessionIds(in: sessions)
-        let delivered = await presenter.deliveredSessionIds()
         for sessionId in attentionSet.subtracting(delivered) {
             guard let session = sessions.first(where: { $0.session_id == sessionId }) else { continue }
             await presenter.post(session)

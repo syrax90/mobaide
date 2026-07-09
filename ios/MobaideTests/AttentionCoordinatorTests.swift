@@ -160,4 +160,39 @@ final class AttentionCoordinatorTests: XCTestCase {
         await waitUntil { presenter.authRequestCount == 1 }
         XCTAssertEqual(presenter.removeAllCount, 0)
     }
+
+    func testReconcilesOnFullyConnected() async {
+        // Cold launch / agent (re)connect: reaching .fullyConnected reconciles
+        // so attention missed while the app wasn't running is posted (the
+        // connect snapshot arrives as sessions.changed, which is ignored).
+        let presenter = FakeAttentionPresenter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: { [makeSessionResponse(id: "x", attention: "awaiting_permission")] }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        continuation.finish()
+        await waitUntil { presenter.postedIds == ["x"] }
+        XCTAssertEqual(presenter.postedIds, ["x"])
+    }
+
+    func testReconcileReadsDeliveredBeforeSnapshot() async {
+        // A live .sessionAttention posting during the snapshot await must not be
+        // removed by the B\A loop: reconcile samples delivered before the
+        // snapshot, so a notification posted mid-snapshot is not yet in B.
+        let presenter = FakeAttentionPresenter(delivered: [])
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            snapshot: {
+                presenter.setDelivered(["live"])
+                return [makeSessionResponse(id: "a", attention: "awaiting_permission")]
+            }
+        )
+        await coordinator.reconcile()
+        XCTAssertFalse(presenter.removed.contains("live"), "a mid-snapshot live post must survive reconcile")
+        XCTAssertEqual(presenter.postedIds, ["a"])
+    }
 }
