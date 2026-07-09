@@ -347,4 +347,30 @@ class TerminalViewModelSendInputTest {
 
         verify(exactly = 0) { connection.sendBinary(any()) }
     }
+
+    @Test
+    fun terminalOriginatedBytes_whenNotLive_areDropped() {
+        val vm = createViewModel()
+
+        // The vendored TerminalView/emulator path (direct IME typing, auto-replies)
+        // funnels through TerminalSession.write → the VM's input listener. Its Live
+        // gate mirrors sendTappedRow: a keyboard raised while the session was running
+        // must not keep feeding a stopped/replaying PTY.
+        vm.session.write("x".toByteArray(Charsets.UTF_8), 0, 1)
+
+        verify(exactly = 0) { connection.sendBinary(any()) }
+    }
+
+    @Test
+    fun terminalOriginatedBytes_whenLive_flowAsInputFrames() = runTest {
+        val vm = createViewModel()
+        goLive()
+        val captured = slot<ByteString>()
+
+        vm.session.write("x".toByteArray(Charsets.UTF_8), 0, 1)
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertEquals('i'.code.toByte(), frameTypeOf(captured.captured))
+        assertArrayEquals("x".toByteArray(Charsets.UTF_8), payloadOf(captured.captured))
+    }
 }

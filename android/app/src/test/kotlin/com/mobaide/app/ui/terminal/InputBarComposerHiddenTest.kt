@@ -4,6 +4,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -43,6 +44,7 @@ class InputBarComposerHiddenTest {
 
     private fun setInputBar(
         composerVisible: Boolean,
+        enabled: Boolean = true,
         showCoachMark: Boolean = false,
         onRevealComposer: () -> Unit = {},
         onRaiseTerminalKeyboard: () -> Unit = {},
@@ -55,6 +57,7 @@ class InputBarComposerHiddenTest {
                     onTextChange = {},
                     onSend = {},
                     onSendBytes = {},
+                    enabled = enabled,
                     composerVisible = composerVisible,
                     onRevealComposer = onRevealComposer,
                     onRaiseTerminalKeyboard = onRaiseTerminalKeyboard,
@@ -110,6 +113,24 @@ class InputBarComposerHiddenTest {
             .performClick()
 
         assertEquals(1, raises)
+    }
+
+    @Test
+    fun composerHidden_keyboardButtonDisabled_dropsClicks() {
+        var raises = 0
+        setInputBar(
+            composerVisible = false,
+            enabled = false,
+            onRaiseTerminalKeyboard = { raises++ },
+        )
+
+        // Same connectivity gate as the composer: while the session cannot accept
+        // input, the button must not raise an IME whose keystrokes would be dropped.
+        composeRule.onNodeWithTag("raise_terminal_keyboard_button")
+            .assertIsNotEnabled()
+            .performClick()
+
+        assertEquals(0, raises)
     }
 
     @Test

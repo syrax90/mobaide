@@ -112,8 +112,15 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 if (mEmulator == null) return;
+                final int resetsBefore = mEmulator.getSynchronizedOutputResets();
                 mEmulator.append(data, length);
-                if (mEmulator.isSynchronizedOutputActive()) {
+                // An ESU inside this chunk means a frame completed even when a following
+                // BSU re-activated the mode (coalesced ESU..BSU writes) — paint it now
+                // rather than hiding the finished frame behind the safety timer; the next
+                // suppressed append re-arms a fresh window for the new frame.
+                final boolean frameCompleted =
+                        mEmulator.getSynchronizedOutputResets() != resetsBefore;
+                if (mEmulator.isSynchronizedOutputActive() && !frameCompleted) {
                     // Synchronized output (DECSET 2026): parsing continues, but the
                     // screen-update fan-out (invalidate + mode sampling) is deferred so a
                     // multi-write TUI frame paints atomically at the ESU chunk. The timer

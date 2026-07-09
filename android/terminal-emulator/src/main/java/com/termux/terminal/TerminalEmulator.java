@@ -141,6 +141,9 @@ public final class TerminalEmulator {
     private static final int DECSET_BIT_SYNCHRONIZED_OUTPUT = 1 << 13;
 
 
+    /** Incremented on every DECSET 2026 reset (ESU) — see {@link #getSynchronizedOutputResets()}. */
+    private int mSynchronizedOutputResets;
+
     private String mTitle;
     private final Stack<String> mTitleStack = new Stack<>();
 
@@ -493,6 +496,12 @@ public final class TerminalEmulator {
     /** DECSET 2026 - synchronized output: defer rendering until reset or a safety timeout. */
     public boolean isSynchronizedOutputActive() {
         return isDecsetInternalBitSet(DECSET_BIT_SYNCHRONIZED_OUTPUT);
+    }
+
+    /** Count of DECSET 2026 resets (ESU). Monotonic; wrap-around is irrelevant since the
+     *  forked {@link TerminalSession} only compares before/after values across one append. */
+    public int getSynchronizedOutputResets() {
+        return mSynchronizedOutputResets;
     }
 
     public boolean isKeypadApplicationMode() {
@@ -1300,8 +1309,11 @@ public final class TerminalEmulator {
                 // Bracketed paste mode - setting bit is enough.
                 break;
             case 2026:
-                // Synchronized output - setting bit is enough; the render-notification
-                // deferral lives in the forked TerminalSession.emitOutput().
+                // Synchronized output - setting the bit is enough; the render-notification
+                // deferral lives in the forked TerminalSession.emitOutput(). Resets are
+                // counted so the session can spot a frame that completed mid-chunk even
+                // when a following BSU in the same chunk re-activates the mode.
+                if (!setting) mSynchronizedOutputResets++;
                 break;
             default:
                 unknownParameter(externalBit);

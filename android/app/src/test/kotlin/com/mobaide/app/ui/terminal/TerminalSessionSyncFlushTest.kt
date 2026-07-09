@@ -98,6 +98,38 @@ class TerminalSessionSyncFlushTest {
     }
 
     @Test
+    fun esuBsuCoalescedInOneChunk_paintsCompletedFrame_promptly() {
+        emit(SYNC_ON + "frame 1 start")
+        assertEquals(0, notifies)
+
+        // A fast TUI's adjacent writes coalesce into one PTY read: frame 1's ESU and
+        // frame 2's BSU arrive in the same chunk. The completed frame must paint now,
+        // not hide behind the safety timer.
+        emit("frame 1 end" + SYNC_OFF + SYNC_ON + "frame 2 start")
+
+        assertEquals("the completed frame must not defer behind the timer", 1, notifies)
+        assertTrue(requireNotNull(session.emulator).isSynchronizedOutputActive)
+
+        emit("frame 2 more") // still mid-frame → suppressed, arms a fresh window
+        assertEquals(1, notifies)
+        advanceTime(SYNC_TIMEOUT_MS)
+        assertEquals("frame 2 gets its own fresh safety window", 2, notifies)
+    }
+
+    @Test
+    fun coalescedEsuBsuFlush_cancelsStaleTimer_noMidFramePaint() {
+        emit(SYNC_ON + "frame 1 start") // arms frame 1's safety timer
+        emit("frame 1 end" + SYNC_OFF + SYNC_ON + "frame 2 start")
+        assertEquals(1, notifies)
+
+        // No further appends: frame 2 is still open. The timer armed by frame 1 must
+        // have died at the coalesced flush — firing now would paint a torn frame 2.
+        advanceTime(SYNC_TIMEOUT_MS * 2)
+
+        assertEquals("stale frame-1 timer must not paint mid-frame 2", 1, notifies)
+    }
+
+    @Test
     fun leadingEdgeTimer_rearmsAcrossALongSyncWindow() {
         emit(SYNC_ON + "stream part 1")
         advanceTime(SYNC_TIMEOUT_MS)

@@ -238,6 +238,7 @@ fun InputBar(
                     // it (tapping the terminal itself does the same).
                     IconButton(
                         onClick = onRaiseTerminalKeyboard,
+                        enabled = enabled,
                         modifier = Modifier.testTag("raise_terminal_keyboard_button"),
                     ) {
                         Icon(

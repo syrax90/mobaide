@@ -189,7 +189,11 @@ fun TerminalScreen(
                         followMode = followMode,
                         requestKeyboard = terminalKeyboardRequest,
                         onKeyboardHandled = { terminalKeyboardRequest = false },
-                        tapToRaiseKeyboard = !composerVisible,
+                        // Same connectivity gate as the composer's `enabled` below: a tap
+                        // must not raise an IME whose keystrokes would feed a stopped or
+                        // disconnected session.
+                        tapToRaiseKeyboard = !composerVisible &&
+                            isConnected && sessionState == "running",
                         onTapToRaiseKeyboard = { terminalKeyboardRequest = true },
                         modifier = Modifier.fillMaxSize(),
                     )
