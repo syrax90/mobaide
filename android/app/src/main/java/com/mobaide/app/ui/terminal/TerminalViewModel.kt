@@ -34,8 +34,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -58,7 +61,7 @@ class TerminalViewModel @Inject constructor(
     private val sessionRepository: SessionRepository,
     private val templatesRepository: TemplatesRepository,
     private val foregroundSessionTracker: ForegroundSessionTracker,
-    preferencesStore: PreferencesStore,
+    private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
 
     val displayConfig: StateFlow<TerminalDisplayConfig> = combine(
@@ -95,7 +98,9 @@ class TerminalViewModel @Inject constructor(
                     _unreadRows.update { (it + rowShift).coerceAtMost(MAX_UNREAD_DISPLAY) }
                 }
             }
+            sampleTerminalModes()
         },
+        onCursorStateChanged = { sampleTerminalModes() },
     )
 
     /** Termux session driving the renderer. Survives recomposition; created once in init. */
@@ -175,6 +180,44 @@ class TerminalViewModel @Inject constructor(
     private val _requestInputFocus = MutableStateFlow(false)
     val requestInputFocus: StateFlow<Boolean> = _requestInputFocus.asStateFlow()
 
+    /**
+     * Debounced "terminal wants input" latch: DECTCEM cursor visible AND bracketed-paste
+     * mode on. Bracketed paste is the strongest client-side proxy for "a program is
+     * reading a line of input" — readline (>= 8.1), vim, and the Ink/ratatui AI-CLI input
+     * boxes enable it while accepting text and disable it while busy. DECTCEM alone
+     * false-positives during TUI redraws, hence the AND plus the [WANTS_INPUT_DEBOUNCE_MS]
+     * stability window on both edges.
+     */
+    private val _wantsInput = MutableStateFlow(false)
+    val wantsInput: StateFlow<Boolean> = _wantsInput.asStateFlow()
+
+    /** Alt-screen TUI owns the input (vim, Codex): typed keys route straight to the PTY. */
+    private val _directInputMode = MutableStateFlow(false)
+    val directInputMode: StateFlow<Boolean> = _directInputMode.asStateFlow()
+
+    /** Composer (text field + action buttons) visibility; auto-hidden in direct-input
+     *  mode unless the user manually revealed it for the current episode. */
+    private val _composerVisible = MutableStateFlow(true)
+    val composerVisible: StateFlow<Boolean> = _composerVisible.asStateFlow()
+
+    private val _showComposerCoachMark = MutableStateFlow(false)
+    val showComposerCoachMark: StateFlow<Boolean> = _showComposerCoachMark.asStateFlow()
+
+    /** One-shot "raise the IME on the terminal surface" signal (direct-input mode). */
+    private val _terminalKeyboardRaise = Channel<Unit>(Channel.BUFFERED)
+    val terminalKeyboardRaise: Flow<Unit> = _terminalKeyboardRaise.receiveAsFlow()
+
+    private var altScreenActive = false
+    private var composerRevealOverride = false
+    private var wantsInputDebounceJob: Job? = null
+
+    /** A wants-input rising edge latched while not Live (replay/reconnect) fires once
+     *  when replay playback actually completes (ReplayEndMarker), so opening a session
+     *  that already sits at a prompt still auto-raises — without raising mid-replay.
+     *  Deliberately survives disconnects: the next genuine replay end releases it
+     *  against the then-current latch. */
+    private var pendingRaiseAfterOverlay = false
+
     private val _userMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val userMessages: SharedFlow<String> = _userMessages.asSharedFlow()
 
@@ -201,7 +244,7 @@ class TerminalViewModel @Inject constructor(
                 when (event) {
                     is WsEvent.Connected -> {
                         _isConnected.value = true
-                        _connectionState.value = ConnectionState.Live
+                        enterLiveState()
                     }
                     is WsEvent.Disconnected -> {
                         _isConnected.value = false
@@ -226,7 +269,7 @@ class TerminalViewModel @Inject constructor(
         // overlay doesn't lie.
         _isConnected.value = true
         if (_connectionState.value == ConnectionState.Reconnecting) {
-            _connectionState.value = ConnectionState.Live
+            enterLiveState()
         }
 
         when (val decoded = TerminalProtocol.decode(frame)) {
@@ -266,7 +309,7 @@ class TerminalViewModel @Inject constructor(
                 // before this case existed).
                 if (inReplay) {
                     inReplay = false
-                    _connectionState.value = ConnectionState.Live
+                    enterLiveState(releasePendingRaise = true)
                 }
             }
             null -> { /* unknown frame type, ignore */ }
@@ -347,11 +390,122 @@ class TerminalViewModel @Inject constructor(
         _requestInputFocus.value = false
     }
 
+    /**
+     * Latch point for wants-input detection, called on every screen update and on every
+     * DECTCEM transition (both run on main). A sample equal to the current latch cancels
+     * any pending commit; a differing sample starts — but never restarts — the debounce
+     * timer, whose expiry re-reads live emulator state instead of committing the stale
+     * sample. This keeps sub-window flicker (TUI redraws hiding the cursor, shells
+     * dropping bracketed paste around a quick command) from ever moving the latch.
+     */
+    private fun sampleTerminalModes() {
+        val emu = session.emulator ?: return
+        val alt = emu.isAlternateBufferActive
+        if (alt != altScreenActive) {
+            altScreenActive = alt
+            recomputeDerivedInputState()
+        }
+        val raw = emu.isCursorEnabled && emu.isBracketedPasteMode
+        if (raw == _wantsInput.value) {
+            wantsInputDebounceJob?.cancel()
+            wantsInputDebounceJob = null
+        } else if (wantsInputDebounceJob == null) {
+            wantsInputDebounceJob = viewModelScope.launch {
+                delay(WANTS_INPUT_DEBOUNCE_MS)
+                wantsInputDebounceJob = null
+                val now = session.emulator?.let { it.isCursorEnabled && it.isBracketedPasteMode }
+                    ?: return@launch
+                if (now != _wantsInput.value) commitWantsInput(now)
+            }
+        }
+    }
+
+    private fun commitWantsInput(value: Boolean) {
+        _wantsInput.value = value
+        if (!value) pendingRaiseAfterOverlay = false
+        recomputeDerivedInputState()
+        if (value) {
+            // Once per rising edge: a user-dismissed keyboard stays dismissed until the
+            // state drops and rises again (the next prompt/question).
+            if (_connectionState.value == ConnectionState.Live) {
+                fireAutoRaise()
+            } else {
+                pendingRaiseAfterOverlay = true
+            }
+        }
+    }
+
+    private fun fireAutoRaise() {
+        if (_directInputMode.value) {
+            _terminalKeyboardRaise.trySend(Unit)
+        } else {
+            _requestInputFocus.value = true
+        }
+    }
+
+    /** Single entry point into [ConnectionState.Live]. A raise deferred by replay is
+     *  released only from the genuine ReplayEndMarker ([releasePendingRaise]) — firing
+     *  it from WsEvent.Connected or the binary Reconnecting-upgrade would, after a drop
+     *  mid-replay, raise under the reconnect overlay using the stale pre-drop latch and
+     *  consume the flag before the new replay actually ends. */
+    private fun enterLiveState(releasePendingRaise: Boolean = false) {
+        val wasLive = _connectionState.value == ConnectionState.Live
+        _connectionState.value = ConnectionState.Live
+        if (releasePendingRaise && !wasLive && pendingRaiseAfterOverlay && _wantsInput.value) {
+            pendingRaiseAfterOverlay = false
+            fireAutoRaise()
+        }
+    }
+
+    private fun recomputeDerivedInputState() {
+        val direct = _wantsInput.value && altScreenActive
+        if (!direct && _directInputMode.value) {
+            // Direct-mode episode ended: the next episode auto-hides again. The IME may
+            // still be focused on the terminal surface from a direct-mode raise — hand
+            // focus back to the composer, or a raised keyboard would keep routing
+            // keystrokes straight into the PTY while the composer is visible again.
+            composerRevealOverride = false
+            _requestInputFocus.value = true
+        }
+        _directInputMode.value = direct
+        val visible = !direct || composerRevealOverride
+        if (_composerVisible.value && !visible) maybeShowCoachMark()
+        _composerVisible.value = visible
+    }
+
+    /** Reveal the auto-hidden composer; the choice sticks until direct mode exits.
+     *  The override is armed only while a direct-mode episode is active — a reveal at
+     *  an ordinary prompt (row copy, template pick) must not suppress the auto-hide
+     *  of a TUI episode that starts later. */
+    fun revealComposer() {
+        if (_directInputMode.value) composerRevealOverride = true
+        _composerVisible.value = true
+        _requestInputFocus.value = true
+        _showComposerCoachMark.value = false
+    }
+
+    private fun maybeShowCoachMark() {
+        viewModelScope.launch {
+            val seen = runCatching { preferencesStore.composerAutoHideCoachSeen.first() }
+                .getOrDefault(true)
+            if (!seen) _showComposerCoachMark.value = true
+        }
+    }
+
+    fun markCoachMarkSeen() {
+        _showComposerCoachMark.value = false
+        viewModelScope.launch {
+            runCatching { preferencesStore.setComposerAutoHideCoachSeen() }
+        }
+    }
+
     /** Replace the input bar's contents with [text] and place the cursor at the
-     *  end. Used for "tap a row to copy into the input" (`onRowCopyToInput`). */
+     *  end. Used for "tap a row to copy into the input" (`onRowCopyToInput`).
+     *  Reveals an auto-hidden composer first — the focus request needs the field
+     *  to be composed, and the user's gesture explicitly targets it. */
     fun copyTextToInput(text: String) {
         _inputText.value = TextFieldValue(text = text, selection = TextRange(text.length))
-        _requestInputFocus.value = true
+        revealComposer()
     }
 
     /** Deterministic fetch fired when the templates picker opens. The shared
@@ -384,7 +538,7 @@ class TerminalViewModel @Inject constructor(
             text = template.body,
             selection = TextRange(0, template.body.length),
         )
-        _requestInputFocus.value = true
+        revealComposer()
         viewModelScope.launch {
             try {
                 templatesRepository.touchTemplate(template.template_id)
@@ -502,6 +656,13 @@ class TerminalViewModel @Inject constructor(
 
     private companion object {
         const val MAX_UNREAD_DISPLAY = 9999
+
+        /**
+         * Stability window for the wants-input latch. TUI redraws hide the cursor for a
+         * frame or two (well under 100 ms); interactive prompts hold DECTCEM+2004 stable
+         * for far longer. 400 ms sits between the two with a wide margin on both sides.
+         */
+        const val WANTS_INPUT_DEBOUNCE_MS = 400L
 
         /**
          * Local emulator transcript size in rows. Sized to comfortably hold

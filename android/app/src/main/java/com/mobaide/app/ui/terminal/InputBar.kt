@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
@@ -24,12 +25,19 @@ import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RichTooltip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,12 +53,16 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.data.network.dto.SessionKind
+import com.mobaide.app.ui.theme.MobaideTheme
 
 private data class ControlKey(
     val label: String,
@@ -60,6 +72,12 @@ private data class ControlKey(
 
 private val EscKey = ControlKey("Esc", byteArrayOf(0x1b))
 private val TabKey = ControlKey("Tab", byteArrayOf(0x09))
+// DEL (0x7f) is the terminal erase byte readline/Claude Code/Codex expect. Direct-input
+// mode has no composer buffer to delete from, and soft keyboards drive delete
+// inconsistently on a bufferless InputConnection — an explicit key is the reliable path.
+// Non-mirrored for the same reason as Left/Right below: the byte always erases leftwards.
+@Suppress("DEPRECATION")
+private val BackspaceKey = ControlKey("Backspace", byteArrayOf(0x7f), Icons.Filled.Backspace)
 private val ModeKey = ControlKey("Mode", byteArrayOf(0x1b, '['.code.toByte(), 'Z'.code.toByte()))
 private val RewindKey = ControlKey("Rewind", byteArrayOf(0x1b, 0x1b))
 private val EnterKey = ControlKey("Enter", byteArrayOf(0x0d))
@@ -86,10 +104,10 @@ private val CtrlDKey = ControlKey("Ctrl+D", byteArrayOf(0x04))
 
 // Nav/control tail shared by every CLI. Arrows + Enter drive the in-terminal menus (mode
 // picker, approval/selection prompts, history); Ctrl+O toggles the transcript, Ctrl+R
-// searches history. Text editing happens in the input field, so no cursor-only or newline
-// keys belong here.
+// searches history; Backspace erases characters typed straight into a TUI (direct-input
+// mode has no composer buffer to delete from).
 private val SHARED_TAIL = listOf(
-    EscKey, CtrlCKey, EnterKey, TabKey,
+    EscKey, CtrlCKey, EnterKey, TabKey, BackspaceKey,
     UpKey, DownKey, LeftKey, RightKey,
     CtrlOKey, CtrlRKey,
 )
@@ -128,9 +146,14 @@ fun InputBar(
     onOpenTemplates: () -> Unit = {},
     onSaveAsTemplate: () -> Unit = {},
     sessionKind: SessionKind = SessionKind.Claude,
+    composerVisible: Boolean = true,
+    onRevealComposer: () -> Unit = {},
+    showCoachMark: Boolean = false,
+    onCoachMarkDismissed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var panelExpanded by remember { mutableStateOf(false) }
     var hasFocus by remember { mutableStateOf(false) }
     val focusRequester = remember { FocusRequester() }
@@ -138,9 +161,14 @@ fun InputBar(
     val isLandscape = LocalConfiguration.current.orientation ==
         Configuration.ORIENTATION_LANDSCAPE
 
-    LaunchedEffect(requestFocus) {
-        if (requestFocus) {
+    // Gated on composerVisible: the ViewModel reveals the composer in the same state
+    // update that requests focus, but the FocusRequester throws if the field is not
+    // composed yet — keying on both defers the request to the frame that mounts it.
+    // The explicit show() covers IMEs that don't raise on programmatic focus alone.
+    LaunchedEffect(requestFocus, composerVisible) {
+        if (requestFocus && composerVisible) {
             focusRequester.requestFocus()
+            keyboardController?.show()
             onFocusHandled()
         }
     }
@@ -154,112 +182,220 @@ fun InputBar(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        if (isLandscape) {
-            // Landscape: text field and action buttons share one row.
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                InputField(
-                    text = text,
-                    onTextChange = onTextChange,
-                    enabled = enabled,
-                    focusRequester = focusRequester,
-                    hasFocus = hasFocus,
-                    onHasFocusChange = { hasFocus = it },
-                    modifier = Modifier.weight(1f),
-                )
-                ActionButtons(
-                    enabled = enabled,
-                    canSend = text.text.isNotEmpty(),
-                    panelExpanded = panelExpanded,
-                    onOpenTemplates = onOpenTemplates,
-                    onSaveAsTemplate = onSaveAsTemplate,
-                    onTogglePanel = { panelExpanded = !panelExpanded },
-                    onExpand = onExpand,
-                    onSend = { send() },
-                )
-            }
-        } else {
-            // Portrait: text field spans full width above the action buttons.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-            ) {
-                InputField(
-                    text = text,
-                    onTextChange = onTextChange,
-                    enabled = enabled,
-                    focusRequester = focusRequester,
-                    hasFocus = hasFocus,
-                    onHasFocusChange = { hasFocus = it },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ActionButtons(
-                        enabled = enabled,
-                        canSend = text.text.isNotEmpty(),
-                        panelExpanded = panelExpanded,
-                        onOpenTemplates = onOpenTemplates,
-                        onSaveAsTemplate = onSaveAsTemplate,
-                        onTogglePanel = { panelExpanded = !panelExpanded },
-                        onExpand = onExpand,
-                        onSend = { send() },
-                    )
-                }
-            }
+        // Composer block (field + action buttons). Auto-hidden in direct-input mode —
+        // the terminal owns typing there — and restored via the reveal chip below.
+        AnimatedVisibility(
+            visible = composerVisible,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+        ) {
+            ComposerBlock(
+                isLandscape = isLandscape,
+                text = text,
+                onTextChange = onTextChange,
+                enabled = enabled,
+                focusRequester = focusRequester,
+                hasFocus = hasFocus,
+                onHasFocusChange = { hasFocus = it },
+                panelExpanded = panelExpanded,
+                onOpenTemplates = onOpenTemplates,
+                onSaveAsTemplate = onSaveAsTemplate,
+                onTogglePanel = { panelExpanded = !panelExpanded },
+                onExpand = onExpand,
+                onSend = { send() },
+            )
         }
 
-        // Control-key panel — single horizontally scrollable row.
+        // Control-key panel — single horizontally scrollable row; forced visible while
+        // the composer is hidden so direct-input mode always keeps Esc/arrows/Backspace
+        // and the reveal chip reachable.
         AnimatedVisibility(
-            visible = panelExpanded,
+            visible = panelExpanded || !composerVisible,
             enter = slideInVertically { it },
             exit = slideOutVertically { it },
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 8.dp, vertical = 2.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                controlKeys.forEach { key ->
-                    FilledTonalButton(
+                if (!composerVisible) {
+                    RevealComposerChip(
+                        showCoachMark = showCoachMark,
+                        onCoachMarkDismissed = onCoachMarkDismissed,
                         onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onSendBytes(key.bytes)
+                            panelExpanded = true
+                            onRevealComposer()
                         },
-                        enabled = enabled,
-                        contentPadding = PaddingValues(
-                            horizontal = 10.dp, vertical = 4.dp,
-                        ),
-                    ) {
-                        val icon = key.icon
-                        if (icon != null) {
-                            Icon(
-                                icon,
-                                contentDescription = key.label,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        } else {
-                            Text(
-                                key.label,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                ),
-                            )
+                    )
+                }
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    controlKeys.forEach { key ->
+                        FilledTonalButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSendBytes(key.bytes)
+                            },
+                            enabled = enabled,
+                            contentPadding = PaddingValues(
+                                horizontal = 10.dp, vertical = 4.dp,
+                            ),
+                        ) {
+                            val icon = key.icon
+                            if (icon != null) {
+                                Icon(
+                                    icon,
+                                    contentDescription = key.label,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            } else {
+                                Text(
+                                    key.label,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                    ),
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ComposerBlock(
+    isLandscape: Boolean,
+    text: TextFieldValue,
+    onTextChange: (TextFieldValue) -> Unit,
+    enabled: Boolean,
+    focusRequester: FocusRequester,
+    hasFocus: Boolean,
+    onHasFocusChange: (Boolean) -> Unit,
+    panelExpanded: Boolean,
+    onOpenTemplates: () -> Unit,
+    onSaveAsTemplate: () -> Unit,
+    onTogglePanel: () -> Unit,
+    onExpand: () -> Unit,
+    onSend: () -> Unit,
+) {
+    if (isLandscape) {
+        // Landscape: text field and action buttons share one row.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            InputField(
+                text = text,
+                onTextChange = onTextChange,
+                enabled = enabled,
+                focusRequester = focusRequester,
+                hasFocus = hasFocus,
+                onHasFocusChange = onHasFocusChange,
+                modifier = Modifier.weight(1f),
+            )
+            ActionButtons(
+                enabled = enabled,
+                canSend = text.text.isNotEmpty(),
+                panelExpanded = panelExpanded,
+                onOpenTemplates = onOpenTemplates,
+                onSaveAsTemplate = onSaveAsTemplate,
+                onTogglePanel = onTogglePanel,
+                onExpand = onExpand,
+                onSend = onSend,
+            )
+        }
+    } else {
+        // Portrait: text field spans full width above the action buttons.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+            InputField(
+                text = text,
+                onTextChange = onTextChange,
+                enabled = enabled,
+                focusRequester = focusRequester,
+                hasFocus = hasFocus,
+                onHasFocusChange = onHasFocusChange,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ActionButtons(
+                    enabled = enabled,
+                    canSend = text.text.isNotEmpty(),
+                    panelExpanded = panelExpanded,
+                    onOpenTemplates = onOpenTemplates,
+                    onSaveAsTemplate = onSaveAsTemplate,
+                    onTogglePanel = onTogglePanel,
+                    onExpand = onExpand,
+                    onSend = onSend,
+                )
+            }
+        }
+    }
+}
+
+/** Labeled affordance that restores the auto-hidden composer; hosts the one-time
+ *  coach mark teaching the hide/reveal mechanic on the first auto-hide. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RevealComposerChip(
+    showCoachMark: Boolean,
+    onCoachMarkDismissed: () -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tooltipState = rememberTooltipState(isPersistent = true)
+    LaunchedEffect(showCoachMark) {
+        if (showCoachMark) {
+            // show() suspends until the tooltip is dismissed (tap outside / back).
+            tooltipState.show()
+            onCoachMarkDismissed()
+        }
+    }
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberRichTooltipPositionProvider(),
+        state = tooltipState,
+        tooltip = {
+            RichTooltip(
+                title = { Text("Command field is tucked away") },
+            ) {
+                Text(
+                    "Typing goes straight into the terminal now. " +
+                        "Tap here to bring the command field back.",
+                )
+            }
+        },
+        modifier = modifier,
+    ) {
+        AssistChip(
+            onClick = onClick,
+            label = { Text("Command field") },
+            leadingIcon = {
+                Icon(
+                    Icons.Outlined.Keyboard,
+                    contentDescription = null,
+                    modifier = Modifier.size(AssistChipDefaults.IconSize),
+                )
+            },
+            modifier = Modifier.testTag("reveal_composer_chip"),
+        )
     }
 }
 
@@ -352,6 +488,43 @@ private fun ActionButtons(
         Icon(
             Icons.AutoMirrored.Filled.Send,
             contentDescription = "Send",
+        )
+    }
+}
+
+@Preview(name = "InputBar light", showBackground = true)
+@Preview(
+    name = "InputBar dark",
+    showBackground = true,
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun InputBarPreview() {
+    MobaideTheme(dynamicColor = false) {
+        InputBar(
+            text = TextFieldValue(""),
+            onTextChange = {},
+            onSend = {},
+            onSendBytes = {},
+        )
+    }
+}
+
+@Preview(name = "InputBar direct mode (composer hidden) light", showBackground = true)
+@Preview(
+    name = "InputBar direct mode (composer hidden) dark",
+    showBackground = true,
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun InputBarComposerHiddenPreview() {
+    MobaideTheme(dynamicColor = false) {
+        InputBar(
+            text = TextFieldValue(""),
+            onTextChange = {},
+            onSend = {},
+            onSendBytes = {},
+            composerVisible = false,
         )
     }
 }

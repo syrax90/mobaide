@@ -22,8 +22,8 @@ import org.robolectric.annotation.Config
  * UI tests for [InputBar] covering the CLI-aware control-key bar:
  *   - Orientation-aware layout (portrait stacks; landscape inline).
  *   - For the default/Claude set ([SessionKind.Claude]), the single horizontally
- *     scrollable control-key panel exposes exactly the 13 keys
- *     `Mode, Rewind, Esc, Ctrl+C, Enter, Tab, ↑, ↓, ←, →, Ctrl+O, Ctrl+R, Ctrl+L`.
+ *     scrollable control-key panel exposes exactly the 14 keys
+ *     `Mode, Rewind, Esc, Ctrl+C, Enter, Tab, Backspace, ↑, ↓, ←, →, Ctrl+O, Ctrl+R, Ctrl+L`.
  *   - Byte payloads for renamed keys are unchanged (display-only rename):
  *     `S+Tab → Mode` and `Back/Edit → Rewind`; `Newline` was removed.
  *   - For [SessionKind.Codex] the panel prepends the approval answers `Approve`/`Reject`
@@ -67,7 +67,7 @@ class InputBarPortraitTest {
     }
 
     @Test
-    fun controlKeyPanel_togglesOpenAndExposesExactly13Keys() {
+    fun controlKeyPanel_togglesOpenAndExposesExactly14Keys() {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -85,13 +85,35 @@ class InputBarPortraitTest {
         // `assertExists` (not `assertIsDisplayed`) because the keys live in a
         // horizontalScroll Row — at narrow portrait widths the rightmost keys
         // (Ctrl+O/Ctrl+R/Ctrl+L) are intentionally off-viewport and scrolled into
-        // view. Existence in the semantics tree is the right "all 13 keys present"
+        // view. Existence in the semantics tree is the right "all 14 keys present"
         // assertion; viewport visibility is the user's scroll concern.
-        // Arrows render as Material icons, so they match on contentDescription (below).
+        // Arrows and Backspace render as Material icons, so they match on
+        // contentDescription (below).
         listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("↑", "↓", "←", "→")
+        listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
+    }
+
+    @Test
+    fun backspace_sendsDel_0x7f() {
+        val captured = mutableListOf<ByteArray>()
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = { captured += it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+        composeRule.onNodeWithContentDescription("Backspace").performScrollTo().performClick()
+
+        assertEquals(1, captured.size)
+        assertArrayEquals(byteArrayOf(0x7f), captured.single())
     }
 
     @Test
@@ -230,7 +252,7 @@ class InputBarLandscapeTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun landscape_controlKeyPanel_exposesSame12Keys_asPortrait() {
+    fun landscape_controlKeyPanel_exposesSame13Keys_asPortrait() {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -245,12 +267,12 @@ class InputBarLandscapeTest {
         composeRule.onNodeWithContentDescription("Show keys").performClick()
 
         // Same `assertExists` rationale as portrait: the row is horizontally
-        // scrollable; we assert the 12 keys are present in the composition,
-        // not that every one fits on screen at every width. Arrows render as
-        // Material icons, so they match on contentDescription (below).
+        // scrollable; we assert the 13 keys are present in the composition,
+        // not that every one fits on screen at every width. Arrows and Backspace
+        // render as Material icons, so they match on contentDescription (below).
         listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("↑", "↓", "←", "→")
+        listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 }
@@ -290,10 +312,11 @@ class InputBarCodexTest {
 
         listOf("Approve", "Reject", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        // Shared Claude tail; arrows render as Material icons (contentDescription below).
+        // Shared Claude tail; arrows and Backspace render as Material icons
+        // (contentDescription below).
         listOf("Mode", "Rewind", "Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("↑", "↓", "←", "→")
+        listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 
@@ -429,10 +452,11 @@ class InputBarAntigravityTest {
 
         listOf("Ctrl+K", "Ctrl+G", "Ctrl+D", "Ctrl+L")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        // Shared nav/control tail; arrows render as Material icons (contentDescription below).
+        // Shared nav/control tail; arrows and Backspace render as Material icons
+        // (contentDescription below).
         listOf("Esc", "Ctrl+C", "Enter", "Tab", "Ctrl+O", "Ctrl+R")
             .forEach { composeRule.onNodeWithText(it).assertExists() }
-        listOf("↑", "↓", "←", "→")
+        listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
     }
 
