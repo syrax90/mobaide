@@ -129,12 +129,17 @@ class TerminalViewModel @Inject constructor(
             it.updateSize(80, 24, 12, 24)
             it.setOnInputListener { data, offset, count ->
                 // Bytes the emulator / view want to send to the (remote) PTY — wrap in an
-                // 'i' frame. Gated on Live (mirrors sendTappedRow): an IME raised on the
-                // terminal surface while the session was running must not keep feeding a
-                // stopped/replaying PTY, and emulator auto-replies (DECRQM/DA) to escape
+                // 'i' frame. Gated on Live AND a running session (mirrors sendTappedRow
+                // plus the visible controls' running gate): an IME raised on the terminal
+                // surface must not keep feeding a PTY that stopped or crashed while the
+                // WS stayed connected, and emulator auto-replies (DECRQM/DA) to escape
                 // sequences re-parsed from the replay ring must not reach the live PTY as
                 // stale duplicates.
-                if (_connectionState.value != ConnectionState.Live) return@setOnInputListener
+                if (_connectionState.value != ConnectionState.Live ||
+                    _sessionState.value != "running"
+                ) {
+                    return@setOnInputListener
+                }
                 val slice = if (offset == 0 && count == data.size) data else data.copyOfRange(offset, offset + count)
                 sendBytes(slice)
             }

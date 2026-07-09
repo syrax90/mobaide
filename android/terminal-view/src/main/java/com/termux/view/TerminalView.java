@@ -149,7 +149,13 @@ public final class TerminalView extends View {
             @Override
             public boolean onUp(MotionEvent event) {
                 mScrollRemainder = 0.0f;
-                if (mEmulator != null && mEmulator.isMouseTrackingActive() && !event.isFromSource(InputDevice.SOURCE_MOUSE) && !isSelectingText() && !scrolledWithFinger) {
+                // Tap-to-raise gate (see docs/terminal-view-fork-changes.md): while the
+                // composer-hidden raise gate is active, skip the mouse-tracking fast path —
+                // it would click the remote TUI immediately, before the confirmed single
+                // tap ever reaches onTerminalTapToRaiseKeyboard() below. Falling through
+                // lets the gesture resolve as a normal tap, which the raise gate consumes.
+                if (mEmulator != null && mEmulator.isMouseTrackingActive() && !event.isFromSource(InputDevice.SOURCE_MOUSE) && !isSelectingText() && !scrolledWithFinger
+                        && !mClient.isTapToRaiseKeyboardActive()) {
                     // Quick event processing when mouse tracking is active - do not wait for check of double tapping
                     // for zooming.
                     sendMouseEventCode(event, TerminalEmulator.MOUSE_LEFT_BUTTON, true);

@@ -5,6 +5,7 @@ import androidx.lifecycle.SavedStateHandle
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
+import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.repository.SessionRepository
@@ -23,10 +24,14 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * Unit tests for [TerminalViewModel]'s send paths.
@@ -47,8 +52,17 @@ import org.junit.Test
  *
  * [TerminalViewModel.sendTappedRow] also no-ops when the socket is not Live, to avoid
  * queueing frames during reconnect / replay-buffer playback.
+ *
+ * Uses Robolectric so [TerminalViewModel]'s `parseStatus` — which parses the `'s'`
+ * (state) frame JSON via `org.json.JSONObject` — resolves through Robolectric's shadow
+ * instead of the stub `android.jar` (which returns defaults under the project's
+ * `unitTests.isReturnDefaultValues = true` config; see `TerminalViewModelConnectTest`).
+ * Needed for [markSessionRunning] to actually drive `sessionState` to `"running"`.
+ * SDK pinned to 33 to match the rest of the JVM/Robolectric suite.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class TerminalViewModelSendInputTest {
 
     @get:Rule
@@ -85,6 +99,18 @@ class TerminalViewModelSendInputTest {
      */
     private suspend fun TestScope.goLive() {
         eventsFlow.emit(WsEvent.Connected)
+        advanceUntilIdle()
+    }
+
+    /** Drive `sessionState` to "running" via the binary state frame the server sends. */
+    private suspend fun TestScope.markSessionRunning() {
+        eventsFlow.emit(
+            WsEvent.Binary(
+                byteArrayOf(TerminalProtocol.TYPE_STATE)
+                    .plus("""{"status":"running","pid":1234}""".toByteArray(Charsets.UTF_8))
+                    .toByteString(),
+            ),
+        )
         advanceUntilIdle()
     }
 
@@ -362,9 +388,10 @@ class TerminalViewModelSendInputTest {
     }
 
     @Test
-    fun terminalOriginatedBytes_whenLive_flowAsInputFrames() = runTest {
+    fun terminalOriginatedBytes_whenLiveAndRunning_flowAsInputFrames() = runTest {
         val vm = createViewModel()
         goLive()
+        markSessionRunning()
         val captured = slot<ByteString>()
 
         vm.session.write("x".toByteArray(Charsets.UTF_8), 0, 1)
@@ -372,5 +399,17 @@ class TerminalViewModelSendInputTest {
         verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
         assertEquals('i'.code.toByte(), frameTypeOf(captured.captured))
         assertArrayEquals("x".toByteArray(Charsets.UTF_8), payloadOf(captured.captured))
+    }
+
+    @Test
+    fun terminalOriginatedBytes_whenLiveButSessionNotRunning_areDropped() = runTest {
+        val vm = createViewModel()
+        goLive() // Live WS, but sessionState still "connecting" — PTY not running
+
+        vm.session.write("x".toByteArray(Charsets.UTF_8), 0, 1)
+
+        // A session that stopped or crashed while the WS stayed Live must not keep
+        // receiving keystrokes from an already-raised terminal IME.
+        verify(exactly = 0) { connection.sendBinary(any()) }
     }
 }

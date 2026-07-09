@@ -189,11 +189,14 @@ fun TerminalScreen(
                         followMode = followMode,
                         requestKeyboard = terminalKeyboardRequest,
                         onKeyboardHandled = { terminalKeyboardRequest = false },
-                        // Same connectivity gate as the composer's `enabled` below: a tap
-                        // must not raise an IME whose keystrokes would feed a stopped or
-                        // disconnected session.
+                        // Same connectivity gate as the composer's `enabled` below, plus
+                        // Live: a tap must not raise an IME whose keystrokes would feed a
+                        // stopped or disconnected session, and during replay/reconnect the
+                        // write path drops terminal bytes — raising a keyboard whose input
+                        // would be silently discarded is worse than not raising it.
                         tapToRaiseKeyboard = !composerVisible &&
-                            isConnected && sessionState == "running",
+                            isConnected && sessionState == "running" &&
+                            connectionState == ConnectionState.Live,
                         onTapToRaiseKeyboard = { terminalKeyboardRequest = true },
                         modifier = Modifier.fillMaxSize(),
                     )

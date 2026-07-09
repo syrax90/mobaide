@@ -250,6 +250,7 @@ private class TerminalViewClientImpl : TerminalViewClient {
         onTapToRaise()
         return true
     }
+    override fun isTapToRaiseKeyboardActive(): Boolean = tapToRaiseActive
     override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) { onRowTapped(text, isCurrentInput) }
     override fun onTerminalRowCopyToInput(text: String, isCurrentInput: Boolean) { onRowCopyToInput(text, isCurrentInput) }
     override fun onCopySelectionToInput(text: String) { onSelectionCopyToInput(text) }

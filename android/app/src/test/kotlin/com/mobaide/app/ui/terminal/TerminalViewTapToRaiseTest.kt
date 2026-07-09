@@ -113,6 +113,49 @@ class TerminalViewTapToRaiseTest {
         )
     }
 
+    @Test
+    fun gateActive_mouseTrackingTui_tapRaisesInsteadOfClickingRemoteUi() {
+        val sentBytes = StringBuilder()
+        session.setOnInputListener { data, offset, count ->
+            sentBytes.append(String(data, offset, count, Charsets.ISO_8859_1))
+        }
+        feed(MOUSE_TRACKING_ON) // e.g. a full-screen TUI with mouse support
+        client.tapToRaise = true
+
+        singleTapTopRow()
+
+        assertEquals("the tap must raise the IME", 1, client.raiseCount)
+        assertEquals(
+            "the ACTION_UP mouse fast path fires before the confirmed single tap — with " +
+                "the gate active it must not click the remote UI",
+            "",
+            sentBytes.toString(),
+        )
+    }
+
+    @Test
+    fun gateInactive_mouseTrackingTui_tapStillSendsMouseClick() {
+        val sentBytes = StringBuilder()
+        session.setOnInputListener { data, offset, count ->
+            sentBytes.append(String(data, offset, count, Charsets.ISO_8859_1))
+        }
+        feed(MOUSE_TRACKING_ON)
+        client.tapToRaise = false
+
+        singleTapTopRow()
+
+        assertEquals(0, client.raiseCount)
+        assertTrue(
+            "without the gate the pre-existing mouse-tracking click contract must hold",
+            sentBytes.isNotEmpty(),
+        )
+    }
+
+    private companion object {
+        /** DECSET 1000 — X11 press/release mouse reporting. */
+        const val MOUSE_TRACKING_ON = "[?1000h"
+    }
+
     /** Full [TerminalViewClient] with recording hooks for the tap paths under test. */
     private class RecordingClient : TerminalViewClient {
         var tapToRaise = false
@@ -124,6 +167,7 @@ class TerminalViewTapToRaiseTest {
             raiseCount++
             return true
         }
+        override fun isTapToRaiseKeyboardActive(): Boolean = tapToRaise
         override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) {
             tappedRows += text
         }
