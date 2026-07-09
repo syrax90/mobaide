@@ -130,6 +130,22 @@ class TerminalViewModelComposerVisibilityTest {
     }
 
     @Test
+    fun directModeExit_handsFocusBackToComposer() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        enterDirectMode(vm)
+        assertFalse(vm.requestInputFocus.value)
+
+        feed(vm, ALT_SCREEN_OFF)
+        runCurrent()
+
+        assertTrue(
+            "a raised IME must retarget the restored composer, not keep feeding the PTY",
+            vm.requestInputFocus.value,
+        )
+    }
+
+    @Test
     fun revealComposer_showsComposer_andRequestsFocus() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()

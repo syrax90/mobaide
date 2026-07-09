@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
+import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.repository.SessionRepository
@@ -281,6 +282,69 @@ class TerminalViewModelWantsInputTest {
     }
 
     @Test
+    fun disconnectMidReplay_pendingRaiseHeldUntilNextReplayEnd() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_MARKER).toByteString()))
+        runCurrent()
+        feed(vm, BRACKETED_PASTE_ON) // rising edge latched mid-replay → raise deferred
+        advanceTimeBy(DEBOUNCE_PLUS)
+        runCurrent()
+        assertFalse(vm.requestInputFocus.value)
+
+        eventsFlow.emit(WsEvent.Disconnected) // drop before the replay end arrives
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        assertFalse(
+            "reconnect's Connected must not fire the deferred raise — the new replay is still ahead",
+            vm.requestInputFocus.value,
+        )
+
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_MARKER).toByteString()))
+        runCurrent()
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_END_MARKER).toByteString()))
+        runCurrent()
+
+        assertTrue(
+            "the held raise fires once the genuine replay end lands",
+            vm.requestInputFocus.value,
+        )
+    }
+
+    @Test
+    fun binaryUpgradeAfterDisconnect_holdsPendingRaise_untilReplayEnd() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_MARKER).toByteString()))
+        runCurrent()
+        feed(vm, BRACKETED_PASTE_ON) // rising edge latched mid-replay → raise deferred
+        advanceTimeBy(DEBOUNCE_PLUS)
+        runCurrent()
+        assertFalse(vm.requestInputFocus.value)
+
+        eventsFlow.emit(WsEvent.Disconnected)
+        runCurrent()
+        // No Connected event: the reconnected socket's first sign of life is the new
+        // replay-begin frame, whose handleBinary Reconnecting→Live upgrade must hold
+        // the deferred raise — the new replay is still ahead.
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_MARKER).toByteString()))
+        runCurrent()
+        assertEquals(ConnectionState.ReplayingBuffer, vm.connectionState.value)
+        assertFalse(
+            "the binary Reconnecting→Live upgrade must not fire the deferred raise",
+            vm.requestInputFocus.value,
+        )
+
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_END_MARKER).toByteString()))
+        runCurrent()
+
+        assertTrue("the held raise fires on the genuine replay end", vm.requestInputFocus.value)
+    }
+
+    @Test
     fun reconnectWithLatchStillTrue_noDuplicateRaiseAfterReplay() = runTest(testDispatcher) {
         val vm = createLiveViewModel()
         feed(vm, BRACKETED_PASTE_ON)
@@ -309,8 +373,8 @@ class TerminalViewModelWantsInputTest {
     private companion object {
         /** Comfortably past the ViewModel's 400 ms stability window. */
         const val DEBOUNCE_PLUS = 500L
-        const val REPLAY_MARKER: Byte = 'b'.code.toByte()
-        const val REPLAY_END_MARKER: Byte = 'e'.code.toByte()
+        const val REPLAY_MARKER: Byte = TerminalProtocol.TYPE_REPLAY
+        const val REPLAY_END_MARKER: Byte = TerminalProtocol.TYPE_REPLAY_END
         const val BRACKETED_PASTE_ON = "[?2004h"
         const val BRACKETED_PASTE_OFF = "[?2004l"
         const val CURSOR_SHOW = "[?25h"

@@ -212,8 +212,10 @@ class TerminalViewModel @Inject constructor(
     private var wantsInputDebounceJob: Job? = null
 
     /** A wants-input rising edge latched while not Live (replay/reconnect) fires once
-     *  when the connection becomes Live, so opening a session that already sits at a
-     *  prompt still auto-raises — without raising mid-replay. */
+     *  when replay playback actually completes (ReplayEndMarker), so opening a session
+     *  that already sits at a prompt still auto-raises — without raising mid-replay.
+     *  Deliberately survives disconnects: the next genuine replay end releases it
+     *  against the then-current latch. */
     private var pendingRaiseAfterOverlay = false
 
     private val _userMessages = MutableSharedFlow<String>(extraBufferCapacity = 4)
@@ -307,7 +309,7 @@ class TerminalViewModel @Inject constructor(
                 // before this case existed).
                 if (inReplay) {
                     inReplay = false
-                    enterLiveState()
+                    enterLiveState(releasePendingRaise = true)
                 }
             }
             null -> { /* unknown frame type, ignore */ }
@@ -441,12 +443,15 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
-    /** Single entry point into [ConnectionState.Live]; fires a raise deferred by
-     *  replay/reconnect exactly once on the non-Live→Live transition. */
-    private fun enterLiveState() {
+    /** Single entry point into [ConnectionState.Live]. A raise deferred by replay is
+     *  released only from the genuine ReplayEndMarker ([releasePendingRaise]) — firing
+     *  it from WsEvent.Connected or the binary Reconnecting-upgrade would, after a drop
+     *  mid-replay, raise under the reconnect overlay using the stale pre-drop latch and
+     *  consume the flag before the new replay actually ends. */
+    private fun enterLiveState(releasePendingRaise: Boolean = false) {
         val wasLive = _connectionState.value == ConnectionState.Live
         _connectionState.value = ConnectionState.Live
-        if (!wasLive && pendingRaiseAfterOverlay && _wantsInput.value) {
+        if (releasePendingRaise && !wasLive && pendingRaiseAfterOverlay && _wantsInput.value) {
             pendingRaiseAfterOverlay = false
             fireAutoRaise()
         }
@@ -455,8 +460,12 @@ class TerminalViewModel @Inject constructor(
     private fun recomputeDerivedInputState() {
         val direct = _wantsInput.value && altScreenActive
         if (!direct && _directInputMode.value) {
-            // Direct-mode episode ended: the next episode auto-hides again.
+            // Direct-mode episode ended: the next episode auto-hides again. The IME may
+            // still be focused on the terminal surface from a direct-mode raise — hand
+            // focus back to the composer, or a raised keyboard would keep routing
+            // keystrokes straight into the PTY while the composer is visible again.
             composerRevealOverride = false
+            _requestInputFocus.value = true
         }
         _directInputMode.value = direct
         val visible = !direct || composerRevealOverride
