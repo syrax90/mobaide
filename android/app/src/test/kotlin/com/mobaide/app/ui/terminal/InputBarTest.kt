@@ -67,6 +67,28 @@ class InputBarPortraitTest {
     }
 
     @Test
+    fun hideComposerButton_routesClickToOnHideComposer() {
+        var hides = 0
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = {},
+                    onHideComposer = { hides++ },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Hide command field")
+            .assertHasClickAction()
+            .performClick()
+
+        assertEquals(1, hides)
+    }
+
+    @Test
     fun controlKeyPanel_togglesOpenAndExposesExactly14Keys() {
         composeRule.setContent {
             Surface {

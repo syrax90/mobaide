@@ -33,12 +33,17 @@ import org.junit.Test
 /**
  * Unit tests for [TerminalViewModel]'s composer hide/reveal state machine.
  *
- * The model: `composerVisible` defaults to true and auto-hides while direct-input
- * mode is active (alt-screen + wants-input) — unless the user manually revealed it
- * via [TerminalViewModel.revealComposer], which wins for the remainder of that
- * direct-mode episode. Exiting direct mode restores the composer and resets the
- * override, so the next episode auto-hides again. The first auto-hide surfaces a
- * one-time coach mark gated by a persisted [PreferencesStore] flag.
+ * The model ([ComposerOverride] layered over the auto-derived value): `composerVisible`
+ * defaults to true and auto-hides while direct-input mode is active (alt-screen +
+ * wants-input) — unless the user manually revealed it via
+ * [TerminalViewModel.revealComposer], which wins for the remainder of that direct-mode
+ * episode (`ForceVisible`). Exiting direct mode restores the composer and resets the
+ * override, so the next episode auto-hides again. A manual collapse via
+ * [TerminalViewModel.hideComposer] (`ForceHidden`) sticks across episodes and
+ * reconnects until the user reveals again, and suppresses the direct-mode-exit focus
+ * hand-back (the terminal deliberately stays the input field). The first auto-hide
+ * surfaces a one-time coach mark gated by a persisted [PreferencesStore] flag; a
+ * manual collapse never does.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelComposerVisibilityTest {
@@ -248,6 +253,138 @@ class TerminalViewModelComposerVisibilityTest {
             vm.composerVisible.value,
         )
         assertTrue(vm.requestInputFocus.value)
+    }
+
+    @Test
+    fun hideComposer_hidesAtOrdinaryPrompt() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        vm.hideComposer()
+
+        assertFalse("manual collapse must work outside direct mode", vm.composerVisible.value)
+        assertFalse(
+            "collapse must not request focus — the keyboard dismisses with the field",
+            vm.requestInputFocus.value,
+        )
+    }
+
+    @Test
+    fun forceHidden_survivesDirectModeEnterAndExit() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.hideComposer()
+
+        enterDirectMode(vm)
+        assertFalse(vm.composerVisible.value)
+
+        feed(vm, ALT_SCREEN_OFF) // episode ends
+        runCurrent()
+
+        assertFalse(vm.directInputMode.value)
+        assertFalse(
+            "a manual collapse must stick across direct-mode episodes",
+            vm.composerVisible.value,
+        )
+    }
+
+    @Test
+    fun directModeExit_withForceHidden_doesNotRequestComposerFocus() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.hideComposer()
+        enterDirectMode(vm)
+        assertFalse(vm.requestInputFocus.value)
+
+        feed(vm, ALT_SCREEN_OFF)
+        runCurrent()
+
+        assertFalse(
+            "no IME hand-back to a force-hidden composer — the terminal stays the input field",
+            vm.requestInputFocus.value,
+        )
+    }
+
+    @Test
+    fun forceHidden_survivesReconnect() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.hideComposer()
+
+        eventsFlow.emit(WsEvent.Disconnected)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+
+        assertFalse("connection churn must not resurrect the composer", vm.composerVisible.value)
+    }
+
+    @Test
+    fun revealAfterManualHide_clearsIt_andNextEpisodeStillAutoHides() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.hideComposer()
+
+        vm.revealComposer() // at an ordinary prompt → back to Auto, not ForceVisible
+        assertTrue(vm.composerVisible.value)
+        assertTrue(vm.requestInputFocus.value)
+
+        enterDirectMode(vm)
+
+        assertFalse(
+            "a reveal at a normal prompt must not suppress the next episode's auto-hide",
+            vm.composerVisible.value,
+        )
+    }
+
+    @Test
+    fun copyTextToInput_whileForceHidden_revealsComposer() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        vm.hideComposer()
+
+        vm.copyTextToInput("git status")
+
+        assertTrue(
+            "a gesture that targets the composer must reveal it even from a manual collapse",
+            vm.composerVisible.value,
+        )
+        assertTrue(vm.requestInputFocus.value)
+    }
+
+    @Test
+    fun manualHide_neverShowsCoachMark() = runTest(testDispatcher) {
+        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(false)
+        val vm = createViewModel()
+        runCurrent()
+
+        vm.hideComposer()
+        runCurrent()
+
+        assertFalse(
+            "the coach mark teaches AUTO-hide; a user's own collapse needs no teaching",
+            vm.showComposerCoachMark.value,
+        )
+    }
+
+    @Test
+    fun manualHide_clearsStaleCoachMarkFromEarlierAutoHide() = runTest(testDispatcher) {
+        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(false)
+        val vm = createViewModel()
+        runCurrent()
+        enterDirectMode(vm) // auto-hide surfaces the coach mark…
+        runCurrent()
+        assertTrue(vm.showComposerCoachMark.value)
+        feed(vm, ALT_SCREEN_OFF) // …but the episode ends before the user dismisses it
+        runCurrent()
+
+        vm.hideComposer()
+        runCurrent()
+
+        assertFalse(
+            "a stale undismissed coach mark must not pop on the chip a manual collapse mounts",
+            vm.showComposerCoachMark.value,
+        )
     }
 
     @Test

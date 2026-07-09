@@ -49,6 +49,8 @@ fun TerminalSurfaceView(
     followMode: Boolean = true,
     requestKeyboard: Boolean = false,
     onKeyboardHandled: () -> Unit = {},
+    tapToRaiseKeyboard: Boolean = false,
+    onTapToRaiseKeyboard: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
@@ -56,6 +58,8 @@ fun TerminalSurfaceView(
     client.onRowCopyToInput = onRowCopyToInput
     client.onSelectionCopyToInput = onSelectionCopyToInput
     client.onScrollSettled = onScrollSettled
+    client.tapToRaiseActive = tapToRaiseKeyboard
+    client.onTapToRaise = onTapToRaiseKeyboard
     val terminalViewRef = remember { mutableStateOf<TerminalView?>(null) }
 
     DisposableEffect(sessionCallback) {
@@ -233,8 +237,19 @@ private class TerminalViewClientImpl : TerminalViewClient {
     var onSelectionCopyToInput: (String) -> Unit = {}
     var onScrollSettled: (Int) -> Unit = {}
 
+    /** While the composer is hidden the terminal is the input field: a single tap raises
+     *  the IME instead of resolving to a `❯`-row submit (tapping the TUI's own input row
+     *  while hunting for the keyboard must never fire a CR/execute). */
+    var tapToRaiseActive = false
+    var onTapToRaise: () -> Unit = {}
+
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: android.view.MotionEvent?) {}
+    override fun onTerminalTapToRaiseKeyboard(): Boolean {
+        if (!tapToRaiseActive) return false
+        onTapToRaise()
+        return true
+    }
     override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) { onRowTapped(text, isCurrentInput) }
     override fun onTerminalRowCopyToInput(text: String, isCurrentInput: Boolean) { onRowCopyToInput(text, isCurrentInput) }
     override fun onCopySelectionToInput(text: String) { onSelectionCopyToInput(text) }

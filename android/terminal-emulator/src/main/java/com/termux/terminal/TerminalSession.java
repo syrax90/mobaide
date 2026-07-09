@@ -38,6 +38,25 @@ public final class TerminalSession extends TerminalOutput {
     private TerminalInputListener mInputListener;
     private boolean mFinished;
 
+    /**
+     * Safety valve for synchronized output (DECSET 2026): if a program holds the mode set
+     * longer than this, the current screen state is rendered anyway (the mode bit stays
+     * set, per spec — only the paint is forced). Chosen above typical BSU..ESU frame times
+     * (a few ms..tens of ms) and below human-noticeable stall (~200 ms).
+     */
+    private static final long SYNC_UPDATE_TIMEOUT_MS = 150;
+
+    /** Whether a deferred sync-mode flush is scheduled; main-thread only. */
+    private boolean mSyncFlushPending;
+
+    private final Runnable mSyncFlushRunnable = new Runnable() {
+        @Override
+        public void run() {
+            mSyncFlushPending = false;
+            notifyScreenUpdate();
+        }
+    };
+
     public interface TerminalInputListener {
         void onInputBytes(byte[] data, int offset, int count);
     }
@@ -94,7 +113,23 @@ public final class TerminalSession extends TerminalOutput {
             public void run() {
                 if (mEmulator == null) return;
                 mEmulator.append(data, length);
-                notifyScreenUpdate();
+                if (mEmulator.isSynchronizedOutputActive()) {
+                    // Synchronized output (DECSET 2026): parsing continues, but the
+                    // screen-update fan-out (invalidate + mode sampling) is deferred so a
+                    // multi-write TUI frame paints atomically at the ESU chunk. The timer
+                    // is leading-edge: a program streaming inside a long sync window still
+                    // paints every SYNC_UPDATE_TIMEOUT_MS instead of being starved.
+                    if (!mSyncFlushPending) {
+                        mSyncFlushPending = true;
+                        mMainThreadHandler.postDelayed(mSyncFlushRunnable, SYNC_UPDATE_TIMEOUT_MS);
+                    }
+                } else {
+                    if (mSyncFlushPending) {
+                        mSyncFlushPending = false;
+                        mMainThreadHandler.removeCallbacks(mSyncFlushRunnable);
+                    }
+                    notifyScreenUpdate();
+                }
             }
         });
     }

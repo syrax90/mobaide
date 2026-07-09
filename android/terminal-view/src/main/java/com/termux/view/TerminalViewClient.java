@@ -29,6 +29,16 @@ public interface TerminalViewClient {
     void onSingleTapUp(MotionEvent e);
 
     /**
+     * Asked on every confirmed single tap, before input-row resolution. Return true when
+     * the host is in composer-hidden direct-typing mode and the tap should raise the IME
+     * instead: the tap is then fully consumed, so it can never resolve to an input-row
+     * submit ({@link #onTerminalRowTapped}) — tapping the TUI's own prompt row while
+     * looking for the keyboard must not fire a CR/execute. Double-tap and long-press
+     * are unaffected. Default keeps existing implementors source-/binary-compatible.
+     */
+    default boolean onTerminalTapToRaiseKeyboard() { return false; }
+
+    /**
      * Called when the user taps a terminal input line (one starting with "> ").
      * The text parameter contains the message content with the prompt prefix
      * stripped and whitespace trimmed.

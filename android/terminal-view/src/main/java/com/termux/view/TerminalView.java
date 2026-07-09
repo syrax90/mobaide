@@ -170,6 +170,11 @@ public final class TerminalView extends View {
                 }
                 mClient.onSingleTapUp(event);
 
+                // Composer-hidden direct typing: consume the tap as an IME raise before any
+                // input-row resolution, so tapping the TUI's own prompt row can never submit.
+                // See docs/terminal-view-fork-changes.md.
+                if (mClient.onTerminalTapToRaiseKeyboard()) return true;
+
                 if (!dispatchInputRowGesture(event, false /* copyToInput */)) {
                     requestFocus();
                 }
