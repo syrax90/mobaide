@@ -10,6 +10,7 @@ from central_server.config import CentralServerConfig
 from central_server.db.database import Database
 from central_server.manifest.store import ManifestStore
 from central_server.pairing.service import PairingService
+from central_server.push import PushDispatcher
 from central_server.relay.routing import RoutingTable
 from central_server.templates.service import TemplateService
 
@@ -74,6 +75,9 @@ async def app(config, db):
     application.state.template_service = TemplateService(
         db, application.state.routing
     )
+    # Disabled dispatcher (no APNs config in tests); push tests swap in a
+    # fake sender.
+    application.state.push_dispatcher = PushDispatcher(db, sender=None)
     # Seed admin user (mirrors lifespan)
     await application.state.auth_service.seed_admin_user()
     yield application

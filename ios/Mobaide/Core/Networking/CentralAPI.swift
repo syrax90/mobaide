@@ -106,6 +106,14 @@ struct CentralAPI: Sendable {
         try await executeNoContent(method: "DELETE", path: "/api/devices/\(deviceId)", bearer: userToken)
     }
 
+    func registerPushToken(userToken: String, deviceId: String, request: RegisterPushTokenRequest) async throws {
+        try await executeNoContent(method: "POST", path: "/api/devices/\(deviceId)/push-token", body: request, bearer: userToken)
+    }
+
+    func unregisterPushToken(userToken: String, deviceId: String) async throws {
+        try await executeNoContent(method: "DELETE", path: "/api/devices/\(deviceId)/push-token", bearer: userToken)
+    }
+
     func claimAgentByPairing(userToken: String, request: PairingClaimRequest) async throws -> PairingClaimResponse {
         try await execute(method: "POST", path: "/api/pairing/claim", body: request, bearer: userToken)
     }

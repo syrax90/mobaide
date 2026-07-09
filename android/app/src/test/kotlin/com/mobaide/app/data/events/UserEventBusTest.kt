@@ -346,6 +346,37 @@ class UserEventBusTest {
         bus.stop()
     }
 
+    @Test
+    fun message_sessionAttentionKind_isIgnored_noRepoCall() = runTest {
+        // `session.attention` is a user-event kind for the iOS APNs
+        // pipeline. Android's attention path stays on the agent events
+        // channel, so this kind must keep falling through `else -> Unit` —
+        // pinned explicitly (not just any unknown type) because the server
+        // now emits it to every connected user socket.
+        val (bus, connEvents, _, _, repo, _) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"session.attention","payload":{"session_id":"s1","reason":"turn_finished","title":"Fix bug","agent_id":"a1"}}""",
+            ),
+        )
+
+        // Synchronize on a valid message, then assert nothing else fired.
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) { repo.updateAgentOnline("sync", true) }
+        verify(exactly = 1) { repo.updateAgentOnline(any(), any()) }
+
+        bus.stop()
+    }
+
     // ---- Non-Message WsEvents: Connected refreshes, Binary is ignored -------
 
     @Test

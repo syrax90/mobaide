@@ -246,7 +246,8 @@ final class AgentListModel {
                 nonce: payload.nonce,
                 trust_key_fp: payload.trustKeyFp,
                 mobile_device_id: self.deviceIdentityStore.getOrCreateDeviceId(),
-                mobile_device_name: self.deviceIdentityStore.getDeviceName()
+                mobile_device_name: self.deviceIdentityStore.getDeviceName(),
+                platform: "ios"
             )
             do {
                 let response = try await self.agentRepository.claimAgentByPairing(request: request)

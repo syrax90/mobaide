@@ -105,8 +105,8 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_first_reopen = (await cur.fetchone())[0]
-        assert version_after_first_reopen == 14, (
-            f"after the v7->v14 migrations run, user_version must be 14; "
+        assert version_after_first_reopen == 15, (
+            f"after the v7->v15 migrations run, user_version must be 15; "
             f"got {version_after_first_reopen}"
         )
         # The seeded row must survive the migration. The relay_url
@@ -122,7 +122,7 @@ class TestSchema:
         )
         await database.close()
 
-        # Second reopen — already at version 14, must be a no-op.
+        # Second reopen — already at version 15, must be a no-op.
         # A non-idempotent migration would error here with
         # ``duplicate column name: relay_url`` or ``duplicate column name:
         # agent_version`` from sqlite, exactly the failure mode the
@@ -134,7 +134,7 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_second_reopen = (await cur.fetchone())[0]
-        assert version_after_second_reopen == 14
+        assert version_after_second_reopen == 15
 
         # The seeded row is still there — second reopen is a no-op,
         # not a destructive rebuild.

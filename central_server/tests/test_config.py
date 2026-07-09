@@ -60,3 +60,33 @@ def test_ttl_env_vars_parse_positive_integers(monkeypatch):
     assert config.mobile_token_expire_minutes == 60
     assert config.mobile_refresh_expire_minutes == 10080
     assert config.dashboard_token_expire_minutes == 480
+
+
+def test_apns_defaults_to_unconfigured(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    for var in (
+        "APNS_KEY_PATH", "APNS_KEY_ID", "APNS_TEAM_ID", "APNS_TOPIC",
+        "APNS_USE_SANDBOX",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    config = CentralServerConfig.from_env()
+    assert config.apns_key_path is None
+    assert config.apns_key_id is None
+    assert config.apns_team_id is None
+    assert config.apns_topic is None
+    assert config.apns_use_sandbox is False
+
+
+def test_apns_env_vars_parse(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("APNS_KEY_PATH", "/secrets/AuthKey_ABC.p8")
+    monkeypatch.setenv("APNS_KEY_ID", "ABC123DEFG")
+    monkeypatch.setenv("APNS_TEAM_ID", "TEAM123456")
+    monkeypatch.setenv("APNS_TOPIC", "com.mobaide.app")
+    monkeypatch.setenv("APNS_USE_SANDBOX", "true")
+    config = CentralServerConfig.from_env()
+    assert config.apns_key_path == "/secrets/AuthKey_ABC.p8"
+    assert config.apns_key_id == "ABC123DEFG"
+    assert config.apns_team_id == "TEAM123456"
+    assert config.apns_topic == "com.mobaide.app"
+    assert config.apns_use_sandbox is True

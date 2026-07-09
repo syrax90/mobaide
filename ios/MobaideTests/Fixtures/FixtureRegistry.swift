@@ -95,6 +95,7 @@ enum FixtureRegistry {
         "CodexOptionsModel": runner(CodexOptionsModel.self),
         // DeviceDto.swift
         "DeviceResponse": runner(DeviceResponse.self),
+        "RegisterPushTokenRequest": runner(RegisterPushTokenRequest.self),
         // ForceUpdateResponse.swift
         "ForceUpdateResponse": runner(ForceUpdateResponse.self),
         // GitDto.swift

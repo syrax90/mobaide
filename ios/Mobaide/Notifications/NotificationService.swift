@@ -25,6 +25,17 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         self.onTap = onTap
     }
 
+    /// Session id carried by a notification. Locally-posted alerts use the
+    /// request `identifier`; a remote APNs alert carries it in the payload's
+    /// custom `session_id` (its `apns-collapse-id` — which iOS surfaces as
+    /// the identifier — also equals the session id, but the explicit field
+    /// doesn't depend on that transport detail).
+    static func sessionId(
+        from userInfo: [AnyHashable: Any], identifier: String
+    ) -> String {
+        (userInfo["session_id"] as? String) ?? identifier
+    }
+
     /// Notification request for a session's attention, or nil when the reason
     /// maps to no content. `identifier` and `threadIdentifier` are both the
     /// `session_id`, so a re-post replaces the previous alert in place (parity
@@ -92,7 +103,10 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         let suppress = AttentionSuppression.shouldSuppress(
             appActive: true,
             visibleSessionId: tracker.visibleSessionId,
-            eventSessionId: notification.request.identifier
+            eventSessionId: Self.sessionId(
+                from: notification.request.content.userInfo,
+                identifier: notification.request.identifier
+            )
         )
         return suppress ? [] : [.banner, .sound, .list]
     }
@@ -104,6 +118,11 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        onTap(response.notification.request.identifier)
+        onTap(
+            Self.sessionId(
+                from: response.notification.request.content.userInfo,
+                identifier: response.notification.request.identifier
+            )
+        )
     }
 }

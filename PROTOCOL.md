@@ -67,6 +67,53 @@ cadence; they do **not** gate compatibility.
   * ``capabilities.cli`` on ``GET /api/version`` gains a ``gemini`` entry from the
     same registry-driven builder, so the mode-select screen enables Gemini only
     when its binary resolves on the host.
+* APNs push pipeline for session attention (CLA-106 — **additive, no version
+  bump**; neither ``envelope.py`` copy changes, so the diff guard is untouched).
+  Fills the iOS-09 gap: a suspended iOS app has no live socket, so the server
+  must be able to *see* attention (today it rides the server-opaque
+  ``CH_EVENTS``) and push it.
+  * **User-scoped events channel** (``/relay/ws/user-events``, documented here
+    for the first time): a one-way server→client text channel authenticated
+    with the dashboard/user JWT. Each frame is a JSON envelope ``{"type":
+    <kind>, "payload": {...}}``. Existing kinds (all server-originated):
+    ``agent.status_changed`` ``{"agent_id", "online"}`` and
+    ``template.created`` / ``template.updated`` (full template row) /
+    ``template.deleted`` ``{"template_id", "version", "updated_at"}``. Clients
+    must ignore unknown kinds (both apps already do — Android
+    ``else -> Unit``, iOS ``default: .none``).
+  * New user-event kind ``session.attention`` — payload ``{"session_id",
+    "reason", "title"?, "project_name"?, "exit_reason"?, "agent_id"}`` (slim,
+    not the full session wire dict; ``reason`` is the proto-v4 attention
+    enum). ``agent_id`` is **stamped by the server** from the authenticated
+    agent tunnel — an agent-supplied value is never trusted.
+  * New agent→server ``CH_CONTROL`` message ``{"type": "user_event", "kind":
+    "session.attention", "payload": {…}}``, sent by the agent alongside (not
+    instead of) the existing opaque ``CH_EVENTS`` ``session.attention``
+    publication, on attention **set** only. The server validates the kind
+    against an allowlist (only ``session.attention``), broadcasts it via the
+    user-events channel, and — **only when the user has zero live user-events
+    sockets** (WebSocket delivery wins) — hands it to the push dispatcher.
+    Back-compat: an old server WARN-counts the unknown control type and drops
+    it; an old agent simply never sends it (no pushes, previous behaviour).
+  * **Push dispatch** (server→APNs, not a wire-protocol surface but recorded
+    for the delivery contract): alert push (never silent), one per registered
+    device of the user, ``apns-collapse-id`` = ``thread-id`` = ``session_id``
+    (matches the clients' notification identifier so replace/suppress/
+    reconcile semantics hold), ``aps.alert`` title/body from the shared
+    attention content map, custom data ``session_id`` + ``agent_id`` for the
+    tap deep link. Requires ``APNS_KEY_PATH`` / ``APNS_KEY_ID`` /
+    ``APNS_TEAM_ID`` / ``APNS_TOPIC`` on the server; unconfigured → dispatch
+    disabled, WebSocket-only delivery (no errors).
+  * **REST**: ``POST /api/devices/{device_id}/push-token`` ``{"platform":
+    "ios", "token": <hex>, "environment": "sandbox"|"production"}`` → ``204``
+    (``404`` when the device isn't the caller's or is revoked); ``DELETE`` on
+    the same path clears the stored token (sign-out). ``mobile_devices``
+    gains nullable ``platform`` / ``push_token`` / ``push_environment``
+    columns; ``MobileTokenRequest`` and the pairing-claim body gain an
+    optional ``platform`` field (iOS sends ``"ios"``; Android sends nothing —
+    server-side optional). A cross-tenant device reassign, a device revoke,
+    and an APNs ``410 Unregistered``/``BadDeviceToken`` result all clear the
+    stored token.
 
 ## proto-v5 (superseded by proto-v6)
 

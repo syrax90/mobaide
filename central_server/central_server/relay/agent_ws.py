@@ -377,6 +377,9 @@ async def _handle_control_json(
             except Exception:
                 pass
 
+    elif msg_type == "user_event":
+        _handle_user_event(websocket, agent_id, ctrl, routing)
+
     else:
         global _unknown_control_type_total
         _unknown_control_type_total += 1
@@ -384,6 +387,62 @@ async def _handle_control_json(
             "agent_tunnel.unknown_control_type agent_id=%s type=%s total=%d",
             agent_id, msg_type, _unknown_control_type_total,
         )
+
+
+# User-event kinds an agent may relay to the owner's user-scoped clients.
+# Everything else is dropped: a compromised or outdated agent must not be
+# able to forge server-originated kinds (agent.status_changed, template.*).
+_AGENT_USER_EVENT_KINDS = frozenset({"session.attention"})
+
+# Optional attention payload fields relayed verbatim when present.
+_ATTENTION_OPTIONAL_FIELDS = ("title", "project_name", "exit_reason")
+
+
+def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
+    """Relay an agent-emitted user event to the owner's user-scoped clients,
+    falling back to an APNs push when none is connected (WS delivery wins)."""
+    kind = ctrl.get("kind")
+    raw = ctrl.get("payload")
+    if kind not in _AGENT_USER_EVENT_KINDS or not isinstance(raw, dict):
+        logger.warning(
+            "agent_tunnel.user_event_dropped agent_id=%s kind=%s reason=%s",
+            agent_id, kind, "unsupported_kind_or_payload",
+        )
+        return
+    session_id = raw.get("session_id")
+    reason = raw.get("reason")
+    if (
+        not isinstance(session_id, str) or not session_id
+        or not isinstance(reason, str) or not reason
+    ):
+        logger.warning(
+            "agent_tunnel.user_event_dropped agent_id=%s kind=%s reason=%s",
+            agent_id, kind, "malformed_payload",
+        )
+        return
+    conn = routing.get_agent(agent_id)
+    owner_user_id = conn.owner_user_id if conn is not None else None
+    if not owner_user_id:
+        logger.warning(
+            "agent_tunnel.user_event_dropped agent_id=%s kind=%s reason=%s",
+            agent_id, kind, "no_owner",
+        )
+        return
+
+    payload: dict = {"session_id": session_id, "reason": reason}
+    for field in _ATTENTION_OPTIONAL_FIELDS:
+        value = raw.get(field)
+        if isinstance(value, str):
+            payload[field] = value
+    # Stamped from the authenticated tunnel — an agent-supplied agent_id is
+    # never trusted.
+    payload["agent_id"] = agent_id
+
+    broadcast_user_event(routing, owner_user_id, kind, payload)
+    if not routing.get_user_clients(owner_user_id):
+        dispatcher = getattr(websocket.app.state, "push_dispatcher", None)
+        if dispatcher is not None:
+            dispatcher.schedule_attention(owner_user_id, payload)
 
 
 def _coerce_int(value: object, *, default: int) -> int:

@@ -113,6 +113,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
         app.state.mobile_proxy = MobileProxy(app.state.routing)
 
+        from .push import PushDispatcher
+
+        app.state.push_dispatcher = PushDispatcher.from_config(db, config)
+
         # Runs every 60 s; interval is not surfaced in the function signature.
         cleanup_task = asyncio.create_task(
             _token_cleanup_loop(db), name="token-cleanup"
@@ -151,6 +155,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             await _flush_agent_heartbeats(db, app.state.routing)
         except Exception as exc:
             logger.exception("heartbeat_flush.shutdown_error: %s", exc)
+        await app.state.push_dispatcher.aclose()
         app.state.auth_service.close()
         await db.close()
         shutdown_logging()

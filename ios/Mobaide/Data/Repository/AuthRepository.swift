@@ -144,7 +144,7 @@ struct AuthRepository: Sendable {
         let tokens = try await centralAPI.getMobileTokens(
             userToken: userToken,
             agentId: agentId,
-            request: MobileTokenRequest(mobile_device_id: deviceId, mobile_device_name: deviceName)
+            request: MobileTokenRequest(mobile_device_id: deviceId, mobile_device_name: deviceName, platform: "ios")
         )
         tokenStore.saveRelayCredentials(
             serverUrl: AppConfig.centralServerURL,

@@ -436,7 +436,7 @@ class TestAppleSubStorage:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 14
+        assert (await cursor.fetchone())[0] == 15
 
         # Column restored by the ALTER, unique index restored by _SCHEMA.
         await db.link_apple_to_user(user_id, "sub-upgraded")
@@ -476,7 +476,7 @@ class TestAppleSubStorage:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 14
+        assert (await cursor.fetchone())[0] == 15
 
         col_cursor = await db.conn.execute("PRAGMA table_info(users)")
         cols = {r[1] for r in await col_cursor.fetchall()}

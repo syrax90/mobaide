@@ -68,11 +68,23 @@ re-derived from a `GET /api/sessions` snapshot on foregrounding — the
 posting the set the client never showed and removing alerts whose attention is
 gone. Authorization is requested silently as `.provisional`, so background
 alerts arrive quietly (no heads-up banner/sound until the user promotes them) —
-a deliberate divergence from Android's loud runtime prompt. Delivery while the
-app is suspended is deferred to iOS-10 / APNs (CLA-106); the documented
-limitation — a suspended or force-quit app may miss the live event, recovered on
-next foreground — mirrors Android's swipe-killed / deep-Doze foreground-service
-caveat.
+a deliberate divergence from Android's loud runtime prompt.
+CLA-106 (iOS-10) closes the suspended-app gap with APNs alert pushes: the
+agent mirrors each `session.attention` as a `user_event` control frame, and
+the central server broadcasts it on `/relay/ws/user-events` — pushing via APNs
+only when the user has **no** live user-events socket (so a foregrounded app
+never double-alerts; see PROTOCOL.md's proto-v6 entry for the full contract).
+On the client, `PushAppDelegate` (a `@UIApplicationDelegateAdaptor`) receives
+the device token, `PushRegistrationCoordinator` registers for remote
+notifications once signed in (`.userOnly`+) and POSTs the hex token to
+`POST /api/devices/{device_id}/push-token` — re-POSTing per launch and on
+rotation, best-effort DELETEing it on explicit sign-out — and
+`PushEnvironment` picks `sandbox` vs `production` from the embedded
+provisioning profile. A remote alert carries `session_id` in its custom data
+and its `apns-collapse-id` equals the session id, so tap deep-links, foreground
+suppression, replace-in-place, and the reconcile loop all reuse the iOS-09
+pipeline unchanged. The entitlements file gains `aps-environment`
+(`development`; signing rewrites it for distribution builds).
 Remaining feature screens land in later issues.
 
 ## Layout
@@ -97,7 +109,9 @@ ios/
 │   │                             # UserEventBus), Local, Security, Repository
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
 │   ├── Notifications/            # ForegroundSessionTracker, NotificationService,
-│   │                             # AttentionCoordinator/Content/Suppression (iOS-09)
+│   │                             # AttentionCoordinator/Content/Suppression (iOS-09),
+│   │                             # PushAppDelegate/PushRegistrationCoordinator/
+│   │                             # PushEnvironment (iOS-10 APNs)
 │   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
 │   │                             # Connections, Sessions (list + create wizard), Terminal
 │   │                             # (SwiftTerm host, InputBar, session model/store), and the
@@ -129,6 +143,21 @@ missing: `xcrun simctl create 'iPhone 16'
 com.apple.CoreSimulator.SimDeviceType.iPhone-16`. If the first run fails with
 "Application failed preflight checks", pre-boot: `xcrun simctl boot <udid> &&
 xcrun simctl bootstatus <udid> -b` and retry.
+
+APNs sandbox testing (iOS-10): the simulator has no real APNs, but the
+notification-handling path (banner, collapse-by-session, tap deep link) can be
+exercised with a payload file — `xcrun simctl push <udid> com.mobaide.app
+payload.apns` where `payload.apns` contains
+`{"aps": {"alert": {"title": "Your move", "body": "proj finished its turn — tap
+to continue"}, "sound": "default", "thread-id": "s1"}, "session_id": "s1",
+"agent_id": "a1"}` (the `Simulator Target Bundle` key or the bundle-id argument
+selects the app). End-to-end delivery needs a real device plus a server
+configured with `APNS_KEY_PATH` / `APNS_KEY_ID` / `APNS_TEAM_ID` /
+`APNS_TOPIC` and `APNS_USE_SANDBOX=true` for Xcode-installed builds
+(`central_server/.env.example`): run the app once signed in (the token POST
+logs `device.push_token_registered` server-side), suspend or force-quit it,
+trigger attention on a session, and the alert should arrive within seconds;
+tapping it must open the session's terminal.
 
 CI: `.github/workflows/ios-build.yml` runs the same command on `macos-latest`
 with the newest installed Xcode 26.x selected at runtime (the runner pool

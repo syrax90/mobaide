@@ -150,6 +150,43 @@ final class CentralAPITests: XCTestCase {
         XCTAssertEqual(body, ["is_favorite": true])
     }
 
+    func testRegisterPushTokenPostsBodyWithBearer() async throws {
+        StubURLProtocol.enqueue(status: 204, body: "")
+        try await makeAPI().registerPushToken(
+            userToken: "user-jwt",
+            deviceId: "dev-1",
+            request: RegisterPushTokenRequest(
+                platform: "ios", token: "a1b2c3", environment: "sandbox"
+            )
+        )
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://central.example.com/api/devices/dev-1/push-token"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt")
+        let body = try WireJSON.decoder().decode(RegisterPushTokenRequest.self, from: StubURLProtocol.bodies[0])
+        XCTAssertEqual(
+            body,
+            RegisterPushTokenRequest(platform: "ios", token: "a1b2c3", environment: "sandbox")
+        )
+    }
+
+    func testUnregisterPushTokenDeletes() async throws {
+        StubURLProtocol.enqueue(status: 204, body: "")
+        try await makeAPI().unregisterPushToken(userToken: "user-jwt", deviceId: "dev-1")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(
+            request.url?.absoluteString,
+            "https://central.example.com/api/devices/dev-1/push-token"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt")
+    }
+
     func testTrailingSlashesTrimmedFromBase() async throws {
         StubURLProtocol.enqueue(
             status: 200,

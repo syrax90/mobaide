@@ -43,12 +43,15 @@ CREATE TABLE IF NOT EXISTS agents (
 );
 
 CREATE TABLE IF NOT EXISTS mobile_devices (
-    device_id    TEXT PRIMARY KEY,
-    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name         TEXT,
-    created_at   TEXT NOT NULL,
-    last_seen_at TEXT,
-    revoked_at   TEXT
+    device_id        TEXT PRIMARY KEY,
+    user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name             TEXT,
+    created_at       TEXT NOT NULL,
+    last_seen_at     TEXT,
+    revoked_at       TEXT,
+    platform         TEXT,
+    push_token       TEXT,
+    push_environment TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pairing_tokens (
@@ -483,6 +486,21 @@ class Database:
                 )
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 14")
+
+        if version < 15:
+            # APNs push: additive mobile_devices columns for the
+            # device platform and its push token/environment.
+            dev_cursor = await self._conn.execute(
+                "PRAGMA table_info(mobile_devices)"
+            )
+            dev_cols = {r[1] for r in await dev_cursor.fetchall()}
+            for column in ("platform", "push_token", "push_environment"):
+                if column not in dev_cols:
+                    await self._conn.execute(
+                        f"ALTER TABLE mobile_devices ADD COLUMN {column} TEXT"
+                    )
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 15")
 
         await self._conn.commit()
 
@@ -1696,6 +1714,7 @@ class Database:
         device_id: str,
         user_id: str,
         name: str | None = None,
+        platform: str | None = None,
     ) -> bool:
         """Register a device on first sight, or refresh/reassign its row.
 
@@ -1725,14 +1744,16 @@ class Database:
         # See SQLite UPSERT spec — https://sqlite.org/lang_upsert.html.
         cursor = await self.conn.execute(
             "INSERT INTO mobile_devices "
-            "(device_id, user_id, name, created_at, last_seen_at, revoked_at) "
-            "VALUES (?, ?, ?, ?, ?, NULL) "
+            "(device_id, user_id, name, created_at, last_seen_at, revoked_at, "
+            " platform) "
+            "VALUES (?, ?, ?, ?, ?, NULL, ?) "
             "ON CONFLICT(device_id) DO UPDATE SET "
             "    name = COALESCE(excluded.name, mobile_devices.name), "
             "    last_seen_at = excluded.last_seen_at, "
-            "    revoked_at = NULL "
+            "    revoked_at = NULL, "
+            "    platform = COALESCE(excluded.platform, mobile_devices.platform) "
             "WHERE mobile_devices.user_id = excluded.user_id",
-            (device_id, user_id, name, now, now),
+            (device_id, user_id, name, now, now, platform),
         )
         await self.conn.commit()
         if cursor.rowcount == 1:
@@ -1751,16 +1772,19 @@ class Database:
         # refresh token (idle ⇒ the prior account no longer uses it). One
         # conditional UPDATE keeps the liveness check and the write atomic;
         # an in-use device is left untouched and the caller gets a 409.
+        # The push token is cleared so the new owner's account can never
+        # keep alerting the prior owner's APNs registration.
         reassigned = await self.conn.execute(
             "UPDATE mobile_devices SET "
             "    user_id = ?, name = ?, created_at = ?, last_seen_at = ?, "
-            "    revoked_at = NULL "
+            "    revoked_at = NULL, platform = COALESCE(?, platform), "
+            "    push_token = NULL, push_environment = NULL "
             "WHERE device_id = ? AND NOT EXISTS ("
             "    SELECT 1 FROM mobile_refresh_tokens "
             "    WHERE mobile_device_id = ? "
             "      AND revoked_at IS NULL AND expires_at > ?"
             ")",
-            (user_id, name, now, now, device_id, device_id, now),
+            (user_id, name, now, now, platform, device_id, device_id, now),
         )
         await self.conn.commit()
         return reassigned.rowcount == 1
@@ -1780,14 +1804,80 @@ class Database:
         self, device_id: str, user_id: str
     ) -> bool:
         """Revoke a device. Returns True iff the device belonged to the user
-        and was previously active."""
+        and was previously active. Clears the push token so a revoked device
+        stops receiving pushes even if it is later re-paired."""
         cursor = await self.conn.execute(
-            "UPDATE mobile_devices SET revoked_at = ? "
+            "UPDATE mobile_devices SET revoked_at = ?, "
+            "    push_token = NULL, push_environment = NULL "
             "WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL",
             (_now_iso(), device_id, user_id),
         )
         await self.conn.commit()
         return cursor.rowcount == 1
+
+    async def set_push_token(
+        self,
+        device_id: str,
+        user_id: str,
+        platform: str,
+        token: str,
+        environment: str,
+    ) -> bool:
+        """Store/replace the push token for a device the user owns.
+
+        Returns ``False`` when the device does not exist, belongs to another
+        user, or is revoked — the caller maps that to HTTP 404.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE mobile_devices SET "
+            "    platform = ?, push_token = ?, push_environment = ? "
+            "WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL",
+            (platform, token, environment, device_id, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def clear_push_token_for_owner(
+        self, device_id: str, user_id: str
+    ) -> bool:
+        """Clear the push token for a device the user owns (sign-out path).
+
+        Returns ``False`` when the device does not exist, belongs to another
+        user, or is revoked — the caller maps that to HTTP 404.
+        """
+        cursor = await self.conn.execute(
+            "UPDATE mobile_devices SET "
+            "    push_token = NULL, push_environment = NULL "
+            "WHERE device_id = ? AND user_id = ? AND revoked_at IS NULL",
+            (device_id, user_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def clear_push_token(self, device_id: str, token: str) -> None:
+        """Drop a dead push token (APNs 410/Unregistered).
+
+        Token-matched so a rotation that lands while a send is in flight
+        never wipes the freshly registered token.
+        """
+        await self.conn.execute(
+            "UPDATE mobile_devices SET "
+            "    push_token = NULL, push_environment = NULL "
+            "WHERE device_id = ? AND push_token = ?",
+            (device_id, token),
+        )
+        await self.conn.commit()
+
+    async def list_push_targets(self, user_id: str) -> list[dict]:
+        """Active devices of a user that registered a push token."""
+        cursor = await self.conn.execute(
+            "SELECT device_id, platform, push_token, push_environment "
+            "FROM mobile_devices "
+            "WHERE user_id = ? AND revoked_at IS NULL "
+            "  AND push_token IS NOT NULL",
+            (user_id,),
+        )
+        return [dict(row) async for row in cursor]
 
     async def touch_mobile_device_last_seen(self, device_id: str) -> None:
         """Bump ``last_seen_at`` on every token mint (best-effort)."""

@@ -1,0 +1,7 @@
+{
+  "type": "RegisterPushTokenRequest",
+  "cases": [
+    { "name": "sandbox", "wire": { "platform": "ios", "token": "a1b2c3d4e5f6", "environment": "sandbox" } },
+    { "name": "production", "wire": { "platform": "ios", "token": "ffee00112233", "environment": "production" } }
+  ]
+}

@@ -782,6 +782,165 @@ class TestMobileDevices:
         assert await db.validate_and_consume_refresh("r-1") is None
 
 
+class TestPushTokens:
+    """Push-token lifecycle on ``mobile_devices``: registration,
+    rotation, owner-scoped and token-matched clears, cross-tenant reassign
+    wipe, and the dispatcher's target listing."""
+
+    async def _register(self, db, owner, device_id="dev-1"):
+        await db.upsert_mobile_device(
+            device_id=device_id, user_id=owner, name="iPhone", platform="ios"
+        )
+
+    async def test_set_and_list_push_targets(self, db: Database):
+        owner = await _create_test_user(db)
+        await self._register(db, owner)
+        assert await db.set_push_token(
+            "dev-1", owner, "ios", "tok-1", "sandbox"
+        ) is True
+
+        targets = await db.list_push_targets(owner)
+        assert targets == [
+            {
+                "device_id": "dev-1",
+                "platform": "ios",
+                "push_token": "tok-1",
+                "push_environment": "sandbox",
+            }
+        ]
+
+    async def test_set_replaces_on_rotation(self, db: Database):
+        owner = await _create_test_user(db)
+        await self._register(db, owner)
+        await db.set_push_token("dev-1", owner, "ios", "tok-old", "sandbox")
+        await db.set_push_token("dev-1", owner, "ios", "tok-new", "production")
+
+        targets = await db.list_push_targets(owner)
+        assert [t["push_token"] for t in targets] == ["tok-new"]
+        assert targets[0]["push_environment"] == "production"
+
+    async def test_set_scoped_to_owner_and_active(self, db: Database):
+        u1 = await db.create_user(email="u1@test.local", password_hash="h")
+        u2 = await db.create_user(email="u2@test.local", password_hash="h")
+        await self._register(db, u1)
+        assert await db.set_push_token(
+            "dev-1", u2, "ios", "tok-x", "sandbox"
+        ) is False
+        assert await db.set_push_token(
+            "dev-missing", u1, "ios", "tok-x", "sandbox"
+        ) is False
+        await db.revoke_mobile_device("dev-1", u1)
+        assert await db.set_push_token(
+            "dev-1", u1, "ios", "tok-x", "sandbox"
+        ) is False
+
+    async def test_clear_push_token_is_token_matched(self, db: Database):
+        owner = await _create_test_user(db)
+        await self._register(db, owner)
+        await db.set_push_token("dev-1", owner, "ios", "tok-old", "sandbox")
+        # A rotation lands while a send with the old token is in flight …
+        await db.set_push_token("dev-1", owner, "ios", "tok-new", "sandbox")
+        # … so the stale 410 cleanup must not wipe the fresh token.
+        await db.clear_push_token("dev-1", "tok-old")
+        assert [
+            t["push_token"] for t in await db.list_push_targets(owner)
+        ] == ["tok-new"]
+
+        await db.clear_push_token("dev-1", "tok-new")
+        assert await db.list_push_targets(owner) == []
+
+    async def test_clear_for_owner_scoped(self, db: Database):
+        u1 = await db.create_user(email="u1@test.local", password_hash="h")
+        u2 = await db.create_user(email="u2@test.local", password_hash="h")
+        await self._register(db, u1)
+        await db.set_push_token("dev-1", u1, "ios", "tok-1", "sandbox")
+
+        assert await db.clear_push_token_for_owner("dev-1", u2) is False
+        assert len(await db.list_push_targets(u1)) == 1
+
+        assert await db.clear_push_token_for_owner("dev-1", u1) is True
+        assert await db.list_push_targets(u1) == []
+        # Idempotent for an owned active device without a token.
+        assert await db.clear_push_token_for_owner("dev-1", u1) is True
+
+    async def test_revoke_clears_push_token(self, db: Database):
+        owner = await _create_test_user(db)
+        await self._register(db, owner)
+        await db.set_push_token("dev-1", owner, "ios", "tok-1", "sandbox")
+        await db.revoke_mobile_device("dev-1", owner)
+
+        # Re-activating under the same owner must not resurrect the token.
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner)
+        assert await db.list_push_targets(owner) == []
+
+    async def test_cross_tenant_reassign_clears_push_token(self, db: Database):
+        u_a = await db.create_user(email="a@test.local", password_hash="h")
+        u_b = await db.create_user(email="b@test.local", password_hash="h")
+        await self._register(db, u_a, "dev-x")
+        await db.set_push_token("dev-x", u_a, "ios", "tok-a", "sandbox")
+        # Idle device (no live refresh token) re-pairs under B.
+        assert await db.upsert_mobile_device(
+            device_id="dev-x", user_id=u_b, name="B's phone"
+        ) is True
+
+        assert await db.list_push_targets(u_a) == []
+        assert await db.list_push_targets(u_b) == []
+
+    async def test_upsert_platform_coalesce(self, db: Database):
+        owner = await _create_test_user(db)
+        await db.upsert_mobile_device(
+            device_id="dev-1", user_id=owner, name="A", platform="ios"
+        )
+        # A later upsert without platform must not wipe the stored value.
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner)
+        await db.set_push_token("dev-1", owner, "ios", "tok-1", "sandbox")
+        targets = await db.list_push_targets(owner)
+        assert targets[0]["platform"] == "ios"
+
+    async def test_list_excludes_revoked_and_tokenless(self, db: Database):
+        owner = await _create_test_user(db)
+        await self._register(db, owner, "dev-token")
+        await self._register(db, owner, "dev-bare")
+        await self._register(db, owner, "dev-revoked")
+        await db.set_push_token("dev-token", owner, "ios", "tok-1", "sandbox")
+        await db.set_push_token("dev-revoked", owner, "ios", "tok-2", "sandbox")
+        await db.revoke_mobile_device("dev-revoked", owner)
+
+        targets = await db.list_push_targets(owner)
+        assert [t["device_id"] for t in targets] == ["dev-token"]
+
+
+class TestPushColumnsMigration:
+    async def test_v15_adds_push_columns_to_existing_db(self, tmp_path):
+        db_path = str(tmp_path / "pre_push.db")
+        db = Database(db_path)
+        await db.connect()
+        owner = await _create_test_user(db)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        # Simulate a pre-v15 on-disk schema: drop the push columns and
+        # roll user_version back so reopening replays the v15 block.
+        for column in ("platform", "push_token", "push_environment"):
+            await db.conn.execute(
+                f"ALTER TABLE mobile_devices DROP COLUMN {column}"
+            )
+        await db.conn.execute("PRAGMA user_version = 14")
+        await db.conn.commit()
+        await db.close()
+
+        db = Database(db_path)
+        await db.connect()
+        cursor = await db.conn.execute("PRAGMA user_version")
+        assert (await cursor.fetchone())[0] == 15
+        cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
+        columns = {r[1] for r in await cursor.fetchall()}
+        assert {"platform", "push_token", "push_environment"} <= columns
+        # Pre-existing rows survive with NULL push columns.
+        assert await db.set_push_token(
+            "dev-1", owner, "ios", "tok-1", "sandbox"
+        ) is True
+        await db.close()
+
+
 class TestUserCRUD:
     async def test_create_and_get_by_email(self, db: Database):
         user_id = await db.create_user(
@@ -891,13 +1050,13 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.conn.commit()
         await db.close()
 
-        # Reopen — should run the v4 migration through to head (v14).
+        # Reopen — should run the v4 migration through to head (v15).
         db = Database(db_path)
         await db.connect()
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 14
+        assert row[0] == 15
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -927,7 +1086,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 14
+        assert row[0] == 15
         await db.close()
 
 

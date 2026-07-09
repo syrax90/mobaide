@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from ..auth.dependencies import get_non_admin_api_user
 from ..auth.models import UserTokenPayload
-from .models import DeviceResponse
+from .models import DeviceResponse, RegisterPushTokenRequest
 
 logger = logging.getLogger(__name__)
 
@@ -52,4 +52,61 @@ async def revoke_device(
         user.sub,
         device_id,
         count,
+    )
+
+
+@router.post(
+    "/{device_id}/push-token", status_code=status.HTTP_204_NO_CONTENT
+)
+async def register_push_token(
+    request: Request,
+    device_id: str,
+    body: RegisterPushTokenRequest,
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
+) -> None:
+    """Store/replace the push token for one of the caller's devices.
+
+    Clients re-POST on every launch and on token rotation. Returns 404 when
+    the device does not belong to the caller or is revoked (same
+    anti-enumeration shape as revoke).
+    """
+    db = request.app.state.db
+    stored = await db.set_push_token(
+        device_id, user.sub, body.platform, body.token, body.environment
+    )
+    if not stored:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found",
+        )
+    logger.info(
+        "device.push_token_registered user_id=%s device_id=%s "
+        "platform=%s environment=%s",
+        user.sub, device_id, body.platform, body.environment,
+    )
+
+
+@router.delete(
+    "/{device_id}/push-token", status_code=status.HTTP_204_NO_CONTENT
+)
+async def unregister_push_token(
+    request: Request,
+    device_id: str,
+    user: UserTokenPayload = Depends(get_non_admin_api_user),
+) -> None:
+    """Clear the push token for one of the caller's devices (sign-out path).
+
+    Idempotent for an owned device with no stored token; 404 when the device
+    does not belong to the caller or is revoked.
+    """
+    db = request.app.state.db
+    cleared = await db.clear_push_token_for_owner(device_id, user.sub)
+    if not cleared:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Device not found",
+        )
+    logger.info(
+        "device.push_token_cleared user_id=%s device_id=%s",
+        user.sub, device_id,
     )
