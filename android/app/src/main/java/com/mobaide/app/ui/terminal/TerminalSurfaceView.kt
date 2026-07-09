@@ -3,9 +3,12 @@ package com.mobaide.app.ui.terminal
 import android.graphics.Typeface
 import android.view.ViewGroup
 import android.view.ViewTreeObserver
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -44,6 +47,8 @@ fun TerminalSurfaceView(
     onSelectionCopyToInput: (text: String) -> Unit = {},
     onScrollSettled: (topRow: Int) -> Unit = {},
     followMode: Boolean = true,
+    requestKeyboard: Boolean = false,
+    onKeyboardHandled: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
@@ -51,11 +56,31 @@ fun TerminalSurfaceView(
     client.onRowCopyToInput = onRowCopyToInput
     client.onSelectionCopyToInput = onSelectionCopyToInput
     client.onScrollSettled = onScrollSettled
+    val terminalViewRef = remember { mutableStateOf<TerminalView?>(null) }
 
     DisposableEffect(sessionCallback) {
         onDispose {
             sessionCallback.onInvalidate = null
             sessionCallback.onCopyToClipboard = null
+        }
+    }
+
+    // Direct-input mode raises the IME on the TerminalView itself: its InputConnection
+    // already routes committed text / IME deletes to the PTY. A plain View never gets
+    // the IME auto-shown on touch focus (only an explicit showSoftInput raises it, which
+    // upstream Termux does in its onSingleTapUp client and ours deliberately does not),
+    // so this programmatic path cannot regress ordinary tap behavior. The post() defers
+    // showSoftInput past the same-frame requestFocus race.
+    LaunchedEffect(requestKeyboard) {
+        if (requestKeyboard) {
+            terminalViewRef.value?.let { view ->
+                view.requestFocus()
+                view.post {
+                    view.context.getSystemService(InputMethodManager::class.java)
+                        ?.showSoftInput(view, 0)
+                }
+            }
+            onKeyboardHandled()
         }
     }
 
@@ -95,6 +120,7 @@ fun TerminalSurfaceView(
                 sessionCallback.onCopyToClipboard = { text -> appCtx.copyToClipboard("Terminal output", text, isSensitive = true) }
                 applyDisplayConfig(isStatic, staticCols)
                 viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
+                terminalViewRef.value = this
             }
             TerminalHorizontalScrollView(ctx).apply {
                 layoutParams = ViewGroup.LayoutParams(
@@ -119,6 +145,7 @@ fun TerminalSurfaceView(
         onRelease = { hsv ->
             val view = hsv.getChildAt(0) as TerminalView
             view.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
+            if (terminalViewRef.value === view) terminalViewRef.value = null
         },
     )
 }
@@ -146,10 +173,12 @@ private fun TerminalView.applyDisplayConfig(isStatic: Boolean, staticCols: Int) 
 
 /**
  * [TerminalSessionClient] that forwards screen-update events to the host ViewModel for prompt
- * detection. All other Termux callbacks (title, bell, clipboard, ...) are no-ops.
+ * detection, and DECTCEM (DECSET 25) cursor show/hide transitions for wants-input detection.
+ * All other Termux callbacks (title, bell, clipboard, ...) are no-ops.
  */
 class TerminalSessionCallback(
     private val onScreenUpdated: () -> Unit = {},
+    private val onCursorStateChanged: (Boolean) -> Unit = {},
 ) : TerminalSessionClient {
     /** Set by the View layer to trigger [TerminalView.onScreenUpdated] → [invalidate]. */
     var onInvalidate: (() -> Unit)? = null
@@ -177,7 +206,7 @@ class TerminalSessionCallback(
     override fun onPasteTextFromClipboard(session: TerminalSession?) {}
     override fun onBell(session: TerminalSession) {}
     override fun onColorsChanged(session: TerminalSession) {}
-    override fun onTerminalCursorStateChange(state: Boolean) {}
+    override fun onTerminalCursorStateChange(state: Boolean) { onCursorStateChanged(state) }
     override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
     override fun getTerminalCursorStyle(): Int? = null
     override fun logError(tag: String?, message: String?) {}

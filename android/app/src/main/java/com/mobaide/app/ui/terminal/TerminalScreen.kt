@@ -75,13 +75,22 @@ fun TerminalScreen(
     val templatesLoading by viewModel.templatesLoading.collectAsStateWithLifecycle()
     val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
     val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
+    val composerVisible by viewModel.composerVisible.collectAsStateWithLifecycle()
+    val showComposerCoachMark by viewModel.showComposerCoachMark.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showTemplatesPicker by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
+    var terminalKeyboardRequest by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
         viewModel.userMessages.collect { snackbarHostState.showSnackbar(it) }
+    }
+
+    // Direct-input mode: the ViewModel asks for the IME to be raised on the terminal
+    // surface itself (its InputConnection routes typing straight to the PTY).
+    LaunchedEffect(Unit) {
+        viewModel.terminalKeyboardRaise.collect { terminalKeyboardRequest = true }
     }
 
     // STOPPED→STARTED edge: screen turned back on, or the user navigated
@@ -170,6 +179,8 @@ fun TerminalScreen(
                         },
                         onScrollSettled = viewModel::onUserScrollSettled,
                         followMode = followMode,
+                        requestKeyboard = terminalKeyboardRequest,
+                        onKeyboardHandled = { terminalKeyboardRequest = false },
                         modifier = Modifier.fillMaxSize(),
                     )
                     ConnectionOverlay(state = connectionState)
@@ -198,6 +209,10 @@ fun TerminalScreen(
                 },
                 onSaveAsTemplate = { showSaveTemplateDialog = true },
                 sessionKind = sessionKind,
+                composerVisible = composerVisible,
+                onRevealComposer = viewModel::revealComposer,
+                showCoachMark = showComposerCoachMark,
+                onCoachMarkDismissed = viewModel::markCoachMarkSeen,
             )
         }
     }

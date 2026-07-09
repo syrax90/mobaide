@@ -24,17 +24,19 @@ do not rely on git blame alone.
 | 2026-05-23 | `terminal-view/.../textselection/TextSelectionCursorController.java::setActionModeCallBacks` + `onActionItemClicked` | [upstream](https://github.com/termux/termux-app/blob/master/terminal-view/src/main/java/com/termux/view/textselection/TextSelectionCursorController.java) | Added `public final int ACTION_SEND_TO_INPUT = 4;`, a leading `menu.add(Menu.NONE, ACTION_SEND_TO_INPUT, Menu.NONE, R.string.send_to_input)` item in `onCreateActionMode` (before Copy), and an `ACTION_SEND_TO_INPUT` case in `onActionItemClicked` calling `terminalView.mClient.onCopySelectionToInput(getSelectedText())` then `stopTextSelectionMode()`. | CLA-63: the long-press selection toolbar gains a leading "Send to Input" action that drops the selected text into the InputBar for editing (no submit, no clipboard write). Reuses the existing `ActionMode.Callback2`; the pre-existing `onGetContentRect` already anchors the toolbar through scroll. |
 | 2026-05-23 | `terminal-view/.../TerminalViewClient.java` | [upstream](https://github.com/termux/termux-app/blob/master/terminal-view/src/main/java/com/termux/view/TerminalViewClient.java) | Added `default void onCopySelectionToInput(String text) {}` to the interface. | CLA-63: view-client seam for the "Send to Input" item, mirroring `onTerminalRowCopyToInput`. Default body keeps existing implementors source-/binary-compatible. |
 | 2026-05-23 | `terminal-view/.../res/values/strings.xml` | [upstream](https://github.com/termux/termux-app/blob/master/terminal-view/src/main/res/values/strings.xml) | Added `<string name="send_to_input">Send to Input</string>`. | CLA-63: label for the new "Send to Input" selection-toolbar item, referenced via `R.string.send_to_input`. |
+| 2026-07-09 | `terminal-emulator/.../TerminalEmulator.java` (new method) | [upstream](https://github.com/termux/termux-app/blob/master/terminal-emulator/src/main/java/com/termux/terminal/TerminalEmulator.java) | Added `public boolean isBracketedPasteMode()` — a read accessor for `DECSET_BIT_BRACKETED_PASTE_MODE` (DECSET 2004), next to the existing mode accessors (`isKeypadApplicationMode` etc.). | CLA-123: the client-side "terminal wants input" heuristic reads DECTCEM (`isCursorEnabled()`, already public) AND bracketed-paste state; the 2004 bit had no public accessor (`isDecsetInternalBitSet` is private). |
 
 > **CLA-63 note (app-side behavior, not a fork edit):** The app now implements the previously-no-op clipboard sink (`TerminalSessionCallback.onCopyTextToClipboard` in `android/app/.../ui/terminal/TerminalSurfaceView.kt`). Besides the ActionMode "Copy" gesture, this sink is also reached by the vendored emulator's **OSC 52** ("Manipulate Selection Data") handler in `terminal-emulator/.../TerminalEmulator.java`, so a program in the PTY (e.g. vim/tmux yank) can now set the system clipboard without a user gesture. Write-direction only — the OSC 52 read/query form is not answered — and the clip is marked sensitive (`EXTRA_IS_SENSITIVE`). Recorded here because a maintainer touching the emulator's OSC-52 path should know a live clipboard sink now exists downstream.
 
 ## How to re-apply on rebase
 
 1. Fetch the upstream Termux master, identify the new `TerminalView.java` /
-   `TerminalViewClient.java`.
+   `TerminalViewClient.java` / `TerminalEmulator.java`.
 2. For each row in the table, find the matching method in the new upstream and
    re-apply the diff. The upstream method signatures rarely change; the line
    numbers cited in commit messages do.
-3. Run `./gradlew :terminal-view:compileDebugJavaWithJavac` then
+3. Run `./gradlew :terminal-view:compileDebugJavaWithJavac` and
+   `./gradlew :terminal-emulator:compileDebugJavaWithJavac`, then
    `./gradlew :app:compileDebugKotlin` to verify no callsites broke.
 4. Run `./gradlew :app:testDebugUnitTest --tests "*TerminalViewModelFollowMode*"`
    to confirm the follow-mode contract still holds end-to-end.

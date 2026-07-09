@@ -473,6 +473,11 @@ public final class TerminalEmulator {
 
 
 
+    /** DECSET 2004 - bracketed paste mode, see {@link #paste(String)}. */
+    public boolean isBracketedPasteMode() {
+        return isDecsetInternalBitSet(DECSET_BIT_BRACKETED_PASTE_MODE);
+    }
+
     public boolean isKeypadApplicationMode() {
         return isDecsetInternalBitSet(DECSET_BIT_APPLICATION_KEYPAD);
     }
