@@ -16,6 +16,7 @@ final class AttentionCoordinator {
 
     private var eventSubscription: Task<Void, Never>?
     private var authSubscription: Task<Void, Never>?
+    private var reconcileTask: Task<Void, Never>?
     private var didRequestAuthorization = false
     private var latestAuthState: AuthState?
 
@@ -82,9 +83,14 @@ final class AttentionCoordinator {
                 didRequestAuthorization = true
                 await presenter.requestProvisionalAuthorization()
             }
-            await reconcile()
+            // Reconcile off the serial auth loop so a subsequent teardown state
+            // (logout / agent switch) isn't blocked behind the network snapshot;
+            // cancel it if the agent leaves before it completes.
+            reconcileTask?.cancel()
+            reconcileTask = Task { [weak self] in await self?.reconcile() }
         case .userOnly, .unauthenticated, .incompatibleServer:
             if previous == .fullyConnected || state == .unauthenticated {
+                reconcileTask?.cancel()
                 presenter.removeAll()
             }
         }
@@ -100,8 +106,14 @@ final class AttentionCoordinator {
         // and be wrongly removed by the B\A loop below.
         let delivered = await presenter.deliveredSessionIds()
         guard let sessions = try? await snapshot() else { return }
+        // A teardown may have cancelled this reconcile while the snapshot was in
+        // flight — don't resurrect the previous agent's alerts after removeAll().
+        if Task.isCancelled { return }
         let attentionSet = AttentionContent.attentionSessionIds(in: sessions)
         for sessionId in attentionSet.subtracting(delivered) {
+            // Re-check per iteration: a teardown landing mid-loop must not keep
+            // posting the previous agent's alerts after removeAll() ran.
+            if Task.isCancelled { return }
             guard let session = sessions.first(where: { $0.session_id == sessionId }) else { continue }
             await presenter.post(session)
         }

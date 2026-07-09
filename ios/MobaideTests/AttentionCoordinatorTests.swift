@@ -195,4 +195,30 @@ final class AttentionCoordinatorTests: XCTestCase {
         XCTAssertFalse(presenter.removed.contains("live"), "a mid-snapshot live post must survive reconcile")
         XCTAssertEqual(presenter.postedIds, ["a"])
     }
+
+    func testTeardownDuringReconcileIsNotBlockedAndDoesNotReLeak() async {
+        // A logout/agent-switch arriving while reconcile's snapshot is in flight
+        // must not block behind it (removeAll runs promptly), and the cancelled
+        // reconcile must not re-post the previous agent's alerts.
+        let presenter = FakeAttentionPresenter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let gate = AsyncGate()
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: {
+                await gate.wait()
+                return [makeSessionResponse(id: "old-agent", attention: "awaiting_permission")]
+            }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)  // spawns reconcile; it blocks on the gate
+        continuation.yield(.userOnly)         // teardown: cancels reconcile + removeAll
+        continuation.finish()
+        await waitUntil { presenter.removeAllCount == 1 }
+        XCTAssertEqual(presenter.removeAllCount, 1, "teardown must not wait on the gated snapshot")
+        gate.open()
+        await waitUntil(timeout: .milliseconds(300)) { !presenter.postedIds.isEmpty }
+        XCTAssertTrue(presenter.postedIds.isEmpty, "a cancelled reconcile must not re-post after teardown")
+    }
 }
