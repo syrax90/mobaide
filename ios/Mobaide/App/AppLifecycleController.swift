@@ -31,7 +31,10 @@ final class AppLifecycleController {
             // app or severed the socket, so re-handshaking there is wasted churn.
             guard didEnterBackground else { return }
             didEnterBackground = false
-            Task { [coordinator] in await coordinator.reconcile() }
+            // Route through the coordinator's cancellable slot so an agent-leave
+            // teardown cancels this reconcile too — otherwise a slow snapshot
+            // could re-post the previous agent's alerts after removeAll().
+            coordinator.reconcileCancellable()
             Task { [agentEventBus] in await agentEventBus.forceReconnect() }
         default:
             break

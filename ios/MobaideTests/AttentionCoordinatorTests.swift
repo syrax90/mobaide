@@ -221,4 +221,22 @@ final class AttentionCoordinatorTests: XCTestCase {
         await waitUntil(timeout: .milliseconds(300)) { !presenter.postedIds.isEmpty }
         XCTAssertTrue(presenter.postedIds.isEmpty, "a cancelled reconcile must not re-post after teardown")
     }
+
+    func testBufferedAttentionAfterTeardownIsNotPosted() async {
+        // The event loop and auth loop are independent tasks: an attention event
+        // processed after an agent-leave teardown must not re-post a stale alert.
+        let presenter = FakeAttentionPresenter()
+        let (events, eventContinuation) = AsyncStream.makeStream(of: AgentEvent.self)
+        let (authStates, authContinuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(presenter: presenter, events: events, authStates: authStates)
+        coordinator.start()
+        authContinuation.yield(.fullyConnected)
+        authContinuation.yield(.userOnly)  // agent leaves; latestAuthState = .userOnly
+        authContinuation.finish()
+        await waitUntil { presenter.removeAllCount == 1 }
+        eventContinuation.yield(.sessionAttention(makeSessionResponse(id: "stale", attention: "turn_finished")))
+        eventContinuation.finish()
+        await waitUntil(timeout: .milliseconds(300)) { !presenter.postedIds.isEmpty }
+        XCTAssertTrue(presenter.postedIds.isEmpty, "attention after agent-leave must not post")
+    }
 }

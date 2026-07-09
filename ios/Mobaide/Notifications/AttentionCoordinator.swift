@@ -53,6 +53,11 @@ final class AttentionCoordinator {
     private func apply(_ event: AgentEvent) async {
         switch event {
         case .sessionAttention(let session):
+            // The event and auth loops are independent tasks: a buffered
+            // attention event processed after an agent-leave teardown must not
+            // re-post the previous agent's alert. (nil = no auth observed yet →
+            // the event itself implies a live connection, so post.)
+            if let latest = latestAuthState, latest != .fullyConnected { return }
             await presenter.post(session)
         case .sessionUpdated(let session) where session.attention == nil:
             presenter.remove(sessionId: session.session_id)
@@ -84,10 +89,8 @@ final class AttentionCoordinator {
                 await presenter.requestProvisionalAuthorization()
             }
             // Reconcile off the serial auth loop so a subsequent teardown state
-            // (logout / agent switch) isn't blocked behind the network snapshot;
-            // cancel it if the agent leaves before it completes.
-            reconcileTask?.cancel()
-            reconcileTask = Task { [weak self] in await self?.reconcile() }
+            // (logout / agent switch) isn't blocked behind the network snapshot.
+            reconcileCancellable()
         case .userOnly, .unauthenticated, .incompatibleServer:
             if previous == .fullyConnected || state == .unauthenticated {
                 reconcileTask?.cancel()
@@ -99,6 +102,14 @@ final class AttentionCoordinator {
     /// Foreground reconciliation between the snapshot-derived attention set A
     /// and the delivered set B: post A\B (attention the client never showed)
     /// and remove B\A (alerts whose attention is gone).
+    /// Run a reconcile through the single cancellable slot, superseding any
+    /// in-flight one, so an agent-leave teardown's `reconcileTask?.cancel()`
+    /// reaches it — used by both the connect path and the foreground resume.
+    func reconcileCancellable() {
+        reconcileTask?.cancel()
+        reconcileTask = Task { [weak self] in await self?.reconcile() }
+    }
+
     func reconcile() async {
         // Read the delivered set BEFORE the REST snapshot: a live
         // `.sessionAttention` that posts during the snapshot await would
