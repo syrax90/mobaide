@@ -4,6 +4,8 @@ import SwiftUI
 @main
 struct MobaideApp: App {
     @State private var container = AppContainer()
+    // APNs token callbacks only reach a UIApplicationDelegate.
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var pushDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -14,6 +16,7 @@ struct MobaideApp: App {
                 .environment(\.appContainer, container)
                 .mobaideTheme()
                 .task {
+                    container.attachPushDelegate(pushDelegate)
                     await container.start()
                 }
                 .onChange(of: scenePhase) { _, phase in

@@ -139,6 +139,17 @@ class CentralServerConfig:
     # When unset, falls back to the Host header from the initiate request.
     public_base_url: str | None = None
 
+    # APNs push. All optional: when any of the four is unset the
+    # push dispatcher is disabled and attention delivery falls back to the
+    # user-events WebSocket only. `apns_use_sandbox` picks the APNs host for
+    # device rows that predate per-device environments (push_environment
+    # NULL); devices registered via the push-token endpoint carry their own.
+    apns_key_path: str | None = None
+    apns_key_id: str | None = None
+    apns_team_id: str | None = None
+    apns_topic: str | None = None
+    apns_use_sandbox: bool = False
+
     @property
     def is_test_mode(self) -> bool:
         """True when MOBAIDE_ENV=test selects the disposable test profile."""
@@ -274,4 +285,9 @@ class CentralServerConfig:
                 "data/agent_manifest.json",
             ),
             public_base_url=os.getenv("PUBLIC_BASE_URL") or None,
+            apns_key_path=os.getenv("APNS_KEY_PATH") or None,
+            apns_key_id=os.getenv("APNS_KEY_ID") or None,
+            apns_team_id=os.getenv("APNS_TEAM_ID") or None,
+            apns_topic=os.getenv("APNS_TOPIC") or None,
+            apns_use_sandbox=_env_bool("APNS_USE_SANDBOX", False),
         )

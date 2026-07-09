@@ -27,10 +27,12 @@ from mobaide.relay.client import (
     RelayClient,
     _EVENT_TO_STATUS,
     _STATE_MAP,
+    _attention_user_event,
     _state_frame,
 )
 from mobaide.relay.envelope import (
     CH_CONTROL,
+    CH_EVENTS,
     CH_SESSION_IO,
     CH_SESSIONS_LIST,
     decode,
@@ -1719,6 +1721,132 @@ class TestWatchSessionChangesInputPumps:
         for task in (watcher, kept_pump):
             task.cancel()
         await asyncio.gather(watcher, kept_pump, return_exceptions=True)
+
+
+def _attention_session_wire(**overrides) -> dict:
+    session = {
+        "session_id": "s1",
+        "state": "running",
+        "created_at": "2026-07-09T10:00:00Z",
+        "pid": 123,
+        "command": "claude",
+        "cwd": "/tmp/proj",
+        "title": "Fix the bug",
+        "project_name": "proj",
+        "kind": "claude",
+        "attention": "awaiting_permission",
+        "exit_reason": None,
+    }
+    session.update(overrides)
+    return session
+
+
+class TestForwardEvents:
+    async def _run_forward(self, client, mock_event_bus, event: AgentEvent):
+        ws = AsyncMock()
+        fwd = asyncio.create_task(client._forward_events(ws))
+        mock_event_bus.subscribe.return_value.put_nowait(event)
+        await _wait_until(lambda: ws.send.await_count >= 1)
+        # Give the loop one extra tick so a (wrong) second send would land.
+        await asyncio.sleep(0)
+        fwd.cancel()
+        await asyncio.gather(fwd, return_exceptions=True)
+        return ws
+
+    async def test_attention_sends_events_frame_and_control_user_event(
+        self, client, mock_event_bus
+    ):
+        session = _attention_session_wire()
+        event = AgentEvent(
+            type="session.attention", payload={"session": session}
+        )
+        ws = AsyncMock()
+        fwd = asyncio.create_task(client._forward_events(ws))
+        mock_event_bus.subscribe.return_value.put_nowait(event)
+        await _wait_until(lambda: ws.send.await_count >= 2)
+        fwd.cancel()
+        await asyncio.gather(fwd, return_exceptions=True)
+
+        ch1, sid1, pl1 = decode(ws.send.call_args_list[0][0][0])
+        assert ch1 == CH_EVENTS
+        assert sid1 == ""
+        events_msg = json.loads(pl1)
+        assert events_msg["type"] == "session.attention"
+        assert events_msg["payload"]["session"] == session
+
+        ch2, sid2, pl2 = decode(ws.send.call_args_list[1][0][0])
+        assert ch2 == CH_CONTROL
+        assert sid2 == ""
+        ctrl = json.loads(pl2)
+        assert ctrl == {
+            "type": "user_event",
+            "kind": "session.attention",
+            "payload": {
+                "session_id": "s1",
+                "reason": "awaiting_permission",
+                "title": "Fix the bug",
+                "project_name": "proj",
+            },
+        }
+
+    async def test_non_attention_event_sends_only_events_frame(
+        self, client, mock_event_bus
+    ):
+        event = AgentEvent(
+            type="session.updated",
+            payload={"session": _attention_session_wire()},
+        )
+        ws = await self._run_forward(client, mock_event_bus, event)
+
+        assert ws.send.await_count == 1
+        ch, _, _ = decode(ws.send.call_args_list[0][0][0])
+        assert ch == CH_EVENTS
+
+    async def test_malformed_attention_sends_only_events_frame(
+        self, client, mock_event_bus
+    ):
+        event = AgentEvent(type="session.attention", payload={"session": 42})
+        ws = await self._run_forward(client, mock_event_bus, event)
+
+        assert ws.send.await_count == 1
+
+
+class TestAttentionUserEvent:
+    def test_extracts_wire_fields_and_drops_null_optionals(self):
+        session = _attention_session_wire(
+            attention="ended", exit_reason="exit code 0", title=None
+        )
+        ctrl = _attention_user_event({"session": session})
+
+        assert ctrl == {
+            "type": "user_event",
+            "kind": "session.attention",
+            "payload": {
+                "session_id": "s1",
+                "reason": "ended",
+                "project_name": "proj",
+                "exit_reason": "exit code 0",
+            },
+        }
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            None,
+            "not a dict",
+            {},
+            {"session": None},
+            {"session": []},
+            {"session": {"attention": "turn_finished"}},
+            {"session": {"session_id": "", "attention": "turn_finished"}},
+            {"session": {"session_id": "s1", "attention": None}},
+            {"session": {"session_id": "s1", "attention": ""}},
+            {"session": {"session_id": 7, "attention": "turn_finished"}},
+            {"session": {"session_id": "s1", "attention": 7}},
+        ],
+    )
+    def test_malformed_payload_returns_none(self, payload):
+        assert _attention_user_event(payload) is None
 
 
 # -- _send_heartbeat ------------------------------------------------------------

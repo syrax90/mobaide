@@ -18,4 +18,28 @@ final class NotificationServiceRequestTests: XCTestCase {
         XCTAssertNil(NotificationService.makeRequest(for: makeSessionResponse(attention: nil)))
         XCTAssertNil(NotificationService.makeRequest(for: makeSessionResponse(attention: "future_reason")))
     }
+
+    func testSessionIdPrefersUserInfoOverIdentifier() {
+        // Remote APNs alerts carry the session id in the payload's custom
+        // data; the request identifier is transport-controlled.
+        let sessionId = NotificationService.sessionId(
+            from: ["session_id": "sess-remote", "agent_id": "a1"],
+            identifier: "apns-collapse-id"
+        )
+        XCTAssertEqual(sessionId, "sess-remote")
+    }
+
+    func testSessionIdFallsBackToIdentifierForLocalAlerts() {
+        XCTAssertEqual(
+            NotificationService.sessionId(from: [:], identifier: "sess-local"),
+            "sess-local"
+        )
+        // A non-string session_id (malformed payload) also falls back.
+        XCTAssertEqual(
+            NotificationService.sessionId(
+                from: ["session_id": 42], identifier: "sess-local"
+            ),
+            "sess-local"
+        )
+    }
 }

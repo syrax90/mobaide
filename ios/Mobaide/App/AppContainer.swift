@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import UserNotifications
 
 /// Manual composition root (no DI framework — Android Hilt's
@@ -39,6 +40,7 @@ final class AppContainer {
     let attentionCoordinator: AttentionCoordinator
     let deepLinkCoordinator: DeepLinkCoordinator
     let appLifecycleController: AppLifecycleController
+    let pushRegistrationCoordinator: PushRegistrationCoordinator
 
     private var started = false
 
@@ -211,9 +213,42 @@ final class AppContainer {
             coordinator: attentionCoordinator,
             agentEventBus: agentEventBus
         )
+        self.pushRegistrationCoordinator = PushRegistrationCoordinator(
+            authStates: { sessionManager.authStates() },
+            requestRegistration: {
+                UIApplication.shared.registerForRemoteNotifications()
+            },
+            register: { [deviceRepository, deviceIdentityStore] tokenHex in
+                try await deviceRepository.registerPushToken(
+                    deviceId: deviceIdentityStore.getOrCreateDeviceId(),
+                    token: tokenHex,
+                    environment: PushEnvironment.detect()
+                )
+            },
+            unregisterRequest: {
+                [centralAPI, userIdentityStore, deviceIdentityStore] in
+                guard let userToken = userIdentityStore.getUserAccessToken()
+                else { return nil }
+                let deviceId = deviceIdentityStore.getOrCreateDeviceId()
+                return {
+                    try await centralAPI.unregisterPushToken(
+                        userToken: userToken, deviceId: deviceId
+                    )
+                }
+            }
+        )
         // Register the delegate in init (not start()) so a cold-start
         // notification tap, delivered during launch, is not dropped.
         UNUserNotificationCenter.current().delegate = notificationService
+    }
+
+    /// Hands the APNs token callbacks to the registration coordinator. Called
+    /// from the app entry point (the adaptor-backed delegate lives there);
+    /// the delegate replays a token that arrived before this wiring.
+    func attachPushDelegate(_ delegate: PushAppDelegate) {
+        delegate.onToken = { [pushRegistrationCoordinator] tokenHex in
+            pushRegistrationCoordinator.tokenReceived(tokenHex)
+        }
     }
 
     /// Idempotent app-launch bootstrap (Android `MainActivity.onCreate`
@@ -232,6 +267,7 @@ final class AppContainer {
         autoScanRepository.start()
         attentionCoordinator.start()
         deepLinkCoordinator.start()
+        pushRegistrationCoordinator.start()
         await agentEventBus.start()
         await userEventBus.start()
     }

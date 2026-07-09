@@ -280,6 +280,38 @@ def _state_frame(status: str, pid: int | None = None) -> bytes:
     return FRAME_STATE + json.dumps(payload).encode("utf-8")
 
 
+def _attention_user_event(payload: object) -> dict[str, object] | None:
+    """Build the CH_CONTROL ``user_event`` message for a ``session.attention``
+    bus event, or ``None`` when the bus payload is malformed.
+
+    CH_EVENTS stays server-opaque; this slim duplicate on the control channel
+    is what lets the central server broadcast the attention as a user-scoped
+    event and fall back to an APNs push when no user socket is live. The
+    server stamps ``agent_id`` itself, so it is deliberately absent here.
+    """
+    if not isinstance(payload, dict):
+        return None
+    session = payload.get("session")
+    if not isinstance(session, dict):
+        return None
+    session_id = session.get("session_id")
+    reason = session.get("attention")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    if not isinstance(reason, str) or not reason:
+        return None
+    slim: dict[str, object] = {"session_id": session_id, "reason": reason}
+    for key in ("title", "project_name", "exit_reason"):
+        value = session.get(key)
+        if value is not None:
+            slim[key] = value
+    return {
+        "type": "user_event",
+        "kind": "session.attention",
+        "payload": slim,
+    }
+
+
 class RelayClient:
     """Manages the outbound WebSocket connection to a Central Server relay.
 
@@ -2128,7 +2160,12 @@ class RelayClient:
             self._broadcaster.unsubscribe(q)
 
     async def _forward_events(self, ws: ClientConnection) -> None:
-        """Forward EventBus events as CH_EVENTS envelopes."""
+        """Forward EventBus events as CH_EVENTS envelopes.
+
+        ``session.attention`` additionally goes out as a CH_CONTROL
+        ``user_event`` so the server can reach devices without a live
+        user-events socket via push (CH_EVENTS is opaque to the server).
+        """
         q = self._event_bus.subscribe()
         try:
             while True:
@@ -2137,6 +2174,12 @@ class RelayClient:
                     {"type": event.type, "payload": event.payload}
                 )
                 await ws.send(encode(CH_EVENTS, "", payload))
+                if event.type == "session.attention":
+                    ctrl = _attention_user_event(event.payload)
+                    if ctrl is not None:
+                        await ws.send(
+                            encode(CH_CONTROL, "", orjson.dumps(ctrl))
+                        )
         except asyncio.CancelledError:
             pass
         finally:

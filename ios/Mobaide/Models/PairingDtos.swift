@@ -5,6 +5,7 @@ struct PairingClaimRequest: Codable, Equatable, Sendable {
     let trust_key_fp: String
     let mobile_device_id: String
     let mobile_device_name: String?
+    let platform: String?
     let hostname_hint: String?
     let friendly_name: String?
 
@@ -13,6 +14,7 @@ struct PairingClaimRequest: Codable, Equatable, Sendable {
         trust_key_fp: String,
         mobile_device_id: String,
         mobile_device_name: String? = nil,
+        platform: String? = nil,
         hostname_hint: String? = nil,
         friendly_name: String? = nil
     ) {
@@ -20,6 +22,7 @@ struct PairingClaimRequest: Codable, Equatable, Sendable {
         self.trust_key_fp = trust_key_fp
         self.mobile_device_id = mobile_device_id
         self.mobile_device_name = mobile_device_name
+        self.platform = platform
         self.hostname_hint = hostname_hint
         self.friendly_name = friendly_name
     }

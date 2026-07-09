@@ -49,9 +49,15 @@ extension MobileTokenResponse {
 struct MobileTokenRequest: Codable, Equatable, Sendable {
     let mobile_device_id: String
     let mobile_device_name: String?
+    let platform: String?
 
-    init(mobile_device_id: String, mobile_device_name: String? = nil) {
+    init(
+        mobile_device_id: String,
+        mobile_device_name: String? = nil,
+        platform: String? = nil
+    ) {
         self.mobile_device_id = mobile_device_id
         self.mobile_device_name = mobile_device_name
+        self.platform = platform
     }
 }

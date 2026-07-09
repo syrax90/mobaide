@@ -105,6 +105,7 @@ async def get_mobile_tokens(
         device_id=body.mobile_device_id,
         user_id=user.sub,
         name=body.mobile_device_name,
+        platform=body.platform,
     )
     if not accepted:
         raise HTTPException(

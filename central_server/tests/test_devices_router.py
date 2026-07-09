@@ -221,3 +221,179 @@ class TestRevokeDevice:
         kept = await app.state.db.validate_and_consume_refresh("r-kept")
         assert kept is not None
         assert kept == ("dev-kept-1", agent_id)
+
+
+class TestRegisterPushToken:
+    async def test_register_persists_token(
+        self, client, app, api_auth_headers, viewer_user
+    ):
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-push", user_id=viewer_user["id"], name="iPhone"
+        )
+
+        resp = await client.post(
+            "/api/devices/dev-push/push-token",
+            headers=api_auth_headers,
+            json={
+                "platform": "ios",
+                "token": "a1b2c3",
+                "environment": "sandbox",
+            },
+        )
+
+        assert resp.status_code == 204
+        targets = await app.state.db.list_push_targets(viewer_user["id"])
+        assert targets == [
+            {
+                "device_id": "dev-push",
+                "platform": "ios",
+                "push_token": "a1b2c3",
+                "push_environment": "sandbox",
+            }
+        ]
+
+    async def test_repost_replaces_token(
+        self, client, app, api_auth_headers, viewer_user
+    ):
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-push", user_id=viewer_user["id"], name="iPhone"
+        )
+        for token in ("tok-old", "tok-new"):
+            resp = await client.post(
+                "/api/devices/dev-push/push-token",
+                headers=api_auth_headers,
+                json={
+                    "platform": "ios",
+                    "token": token,
+                    "environment": "production",
+                },
+            )
+            assert resp.status_code == 204
+
+        targets = await app.state.db.list_push_targets(viewer_user["id"])
+        assert [t["push_token"] for t in targets] == ["tok-new"]
+
+    async def test_foreign_device_404(
+        self, client, app, api_auth_headers
+    ):
+        other = await app.state.db.create_user(
+            email="other-push@test.local", password_hash="hash"
+        )
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-foreign", user_id=other, name="Other"
+        )
+
+        resp = await client.post(
+            "/api/devices/dev-foreign/push-token",
+            headers=api_auth_headers,
+            json={
+                "platform": "ios",
+                "token": "tok-x",
+                "environment": "sandbox",
+            },
+        )
+
+        assert resp.status_code == 404
+        assert await app.state.db.list_push_targets(other) == []
+
+    async def test_revoked_device_404(
+        self, client, app, api_auth_headers, viewer_user
+    ):
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-gone", user_id=viewer_user["id"], name="Old"
+        )
+        await app.state.db.revoke_mobile_device(
+            "dev-gone", viewer_user["id"]
+        )
+
+        resp = await client.post(
+            "/api/devices/dev-gone/push-token",
+            headers=api_auth_headers,
+            json={
+                "platform": "ios",
+                "token": "tok-x",
+                "environment": "sandbox",
+            },
+        )
+
+        assert resp.status_code == 404
+
+    async def test_invalid_platform_or_environment_422(
+        self, client, app, api_auth_headers, viewer_user
+    ):
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-push", user_id=viewer_user["id"], name="iPhone"
+        )
+        for body in (
+            {"platform": "android", "token": "t", "environment": "sandbox"},
+            {"platform": "ios", "token": "t", "environment": "prod"},
+            {"platform": "ios", "token": "", "environment": "sandbox"},
+            {"platform": "ios", "environment": "sandbox"},
+        ):
+            resp = await client.post(
+                "/api/devices/dev-push/push-token",
+                headers=api_auth_headers,
+                json=body,
+            )
+            assert resp.status_code == 422, body
+
+    async def test_requires_auth(self, client):
+        resp = await client.post(
+            "/api/devices/dev-push/push-token",
+            json={
+                "platform": "ios",
+                "token": "tok",
+                "environment": "sandbox",
+            },
+        )
+        assert resp.status_code == 401
+
+
+class TestUnregisterPushToken:
+    async def test_clears_token(
+        self, client, app, api_auth_headers, viewer_user
+    ):
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-push", user_id=viewer_user["id"], name="iPhone"
+        )
+        await app.state.db.set_push_token(
+            "dev-push", viewer_user["id"], "ios", "tok-1", "sandbox"
+        )
+
+        resp = await client.delete(
+            "/api/devices/dev-push/push-token", headers=api_auth_headers
+        )
+
+        assert resp.status_code == 204
+        assert await app.state.db.list_push_targets(viewer_user["id"]) == []
+
+    async def test_idempotent_for_owned_device(
+        self, client, app, api_auth_headers, viewer_user
+    ):
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-push", user_id=viewer_user["id"], name="iPhone"
+        )
+
+        resp = await client.delete(
+            "/api/devices/dev-push/push-token", headers=api_auth_headers
+        )
+
+        assert resp.status_code == 204
+
+    async def test_foreign_device_404(self, client, app, api_auth_headers):
+        other = await app.state.db.create_user(
+            email="other-clear@test.local", password_hash="hash"
+        )
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-foreign", user_id=other, name="Other"
+        )
+        await app.state.db.set_push_token(
+            "dev-foreign", other, "ios", "tok-o", "sandbox"
+        )
+
+        resp = await client.delete(
+            "/api/devices/dev-foreign/push-token", headers=api_auth_headers
+        )
+
+        assert resp.status_code == 404
+        assert len(await app.state.db.list_push_targets(other)) == 1

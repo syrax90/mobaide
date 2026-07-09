@@ -60,6 +60,7 @@ class PairingClaimRequest(BaseModel):
     trust_key_fp: str = Field(min_length=1, max_length=128)
     mobile_device_id: str = Field(pattern=MOBILE_DEVICE_ID_PATTERN)
     mobile_device_name: str | None = Field(default=None, max_length=255)
+    platform: str | None = Field(default=None, max_length=32)
     hostname_hint: str | None = Field(default=None, max_length=255)
     friendly_name: str | None = Field(default=None, max_length=128)
 

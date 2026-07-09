@@ -25,6 +25,8 @@ dependencies = [
     "aiosmtplib>=3.0",
     "cryptography>=43.0",
     "markdown>=3.6",
+    # 4.0 changed `key` semantics to the .p8 file *content* (3.x took a path)
+    "aioapns>=4.0",
 ]
 
 [project.scripts]

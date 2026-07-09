@@ -19,7 +19,12 @@ private struct SettingsContent: View {
     @State private var deleteModel: DeleteAccountModel
 
     init(container: AppContainer) {
-        _model = State(initialValue: SettingsModel(authRepository: container.authRepository))
+        _model = State(initialValue: SettingsModel(
+            authRepository: container.authRepository,
+            onSignOut: { [pushRegistration = container.pushRegistrationCoordinator] in
+                pushRegistration.handleSignOut()
+            }
+        ))
         _deleteModel = State(initialValue: DeleteAccountModel(
             authRepository: container.authRepository,
             signInService: container.signInService,

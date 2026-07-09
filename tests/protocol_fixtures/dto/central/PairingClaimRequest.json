@@ -5,6 +5,7 @@
       "name": "full",
       "wire": { "nonce": "n0nc3", "trust_key_fp": "fp:aa:bb", "mobile_device_id": "d1", "mobile_device_name": "Pixel 9", "hostname_hint": "workstation.local", "friendly_name": "Workstation" }
     },
-    { "name": "minimal", "wire": { "nonce": "n", "trust_key_fp": "fp", "mobile_device_id": "d1" } }
+    { "name": "minimal", "wire": { "nonce": "n", "trust_key_fp": "fp", "mobile_device_id": "d1" } },
+    { "name": "with_platform", "wire": { "nonce": "n", "trust_key_fp": "fp", "mobile_device_id": "d1", "mobile_device_name": "iPhone 16", "platform": "ios" } }
   ]
 }

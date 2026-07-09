@@ -64,6 +64,7 @@ class MobileTokenRequest(BaseModel):
 
     mobile_device_id: str = Field(pattern=MOBILE_DEVICE_ID_PATTERN)
     mobile_device_name: str | None = Field(default=None, max_length=255)
+    platform: str | None = Field(default=None, max_length=32)
 
 
 class MobileTokenResponse(BaseModel):

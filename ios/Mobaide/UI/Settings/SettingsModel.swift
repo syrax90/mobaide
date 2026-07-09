@@ -10,9 +10,14 @@ final class SettingsModel {
     var safariURL: URL?
 
     private let authRepository: AuthRepository
+    private let onSignOut: @MainActor () -> Void
 
-    init(authRepository: AuthRepository) {
+    init(
+        authRepository: AuthRepository,
+        onSignOut: @escaping @MainActor () -> Void = {}
+    ) {
         self.authRepository = authRepository
+        self.onSignOut = onSignOut
         self.email = authRepository.getUserEmail() ?? "—"
     }
 
@@ -21,6 +26,9 @@ final class SettingsModel {
     }
 
     func logout() async {
+        // Best-effort server-side push-token clear; must run before the
+        // logout wipes the credentials it snapshots.
+        onSignOut()
         await authRepository.logout()
     }
 }
