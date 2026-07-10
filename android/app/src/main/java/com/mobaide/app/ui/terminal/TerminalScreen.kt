@@ -1,5 +1,6 @@
 package com.mobaide.app.ui.terminal
 
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -48,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -88,12 +90,6 @@ fun TerminalScreen(
         viewModel.userMessages.collect { snackbarHostState.showSnackbar(it) }
     }
 
-    // Hidden composer: the ViewModel asks for the IME to be raised on the terminal
-    // surface itself (its InputConnection routes typing straight to the PTY).
-    LaunchedEffect(Unit) {
-        viewModel.terminalKeyboardRaise.collect { terminalKeyboardRequest = true }
-    }
-
     // STOPPED→STARTED edge: screen turned back on, or the user navigated
     // back to this terminal from another screen. If the WS dropped while
     // the activity was stopped (Doze restricts network on screen-off), the
@@ -107,9 +103,17 @@ fun TerminalScreen(
     // Tell the notification service which session is on screen so it suppresses
     // a redundant alert for the session the user is already viewing (alerts for
     // other sessions still fire). Cleared when this screen leaves composition.
+    val view = LocalView.current
     DisposableEffect(Unit) {
         viewModel.markScreenVisible()
-        onDispose { viewModel.markScreenHidden() }
+        onDispose {
+            viewModel.markScreenHidden()
+            // Leaving the session dismisses the keyboard. Hiding via the window token
+            // covers both raise paths — the Compose composer and the native terminal
+            // surface's InputConnection — since they share this window.
+            view.context.getSystemService(InputMethodManager::class.java)
+                ?.hideSoftInputFromWindow(view.windowToken, 0)
+        }
     }
 
     val stateColor = when (sessionState) {
@@ -163,9 +167,9 @@ fun TerminalScreen(
         },
     ) { padding ->
         // Shared write-path gate: during replay/reconnect or on a stopped/crashed
-        // session the ViewModel's input listener silently drops terminal bytes, so
-        // affordances that would feed that path (tap-to-raise IME, selection-menu
-        // Paste) are withheld rather than offered and ignored.
+        // session the ViewModel's input listener silently drops terminal bytes, so the
+        // selection-menu Paste affordance that would feed that path is withheld rather
+        // than offered and ignored.
         val sessionInputActive = isConnected && sessionState == "running" &&
             connectionState == ConnectionState.Live
         // Clip host: its top edge is the app bar's bottom, so content panned up by
@@ -207,8 +211,6 @@ fun TerminalScreen(
                             followMode = followMode,
                             requestKeyboard = terminalKeyboardRequest,
                             onKeyboardHandled = { terminalKeyboardRequest = false },
-                            tapToRaiseKeyboard = !composerVisible && sessionInputActive,
-                            onTapToRaiseKeyboard = { terminalKeyboardRequest = true },
                             // Deliberately independent of composerVisible: pasting into the
                             // terminal is valid whether or not the composer is on screen.
                             pasteFromClipboardEnabled = sessionInputActive,
