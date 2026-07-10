@@ -87,6 +87,17 @@ public interface TerminalViewClient {
     default void onCopySelectionToInput(String text) {}
 
     /**
+     * Gate for the "Paste" item in the selection {@link android.view.ActionMode} toolbar,
+     * consulted once when the menu is built. Return true when the host can accept a paste
+     * right now (e.g. a live running session AND a clipboard that advertises text).
+     * Implementations must not read the clipboard <em>contents</em> here — that fires the
+     * Android 12+ clipboard-access toast on merely opening the menu; use description-level
+     * checks ({@link android.content.ClipboardManager#getPrimaryClipDescription()}) only.
+     * Default keeps existing implementors source-/binary-compatible and hides the item.
+     */
+    default boolean canPasteFromClipboard() { return false; }
+
+    /**
      * Called after a manual drag or fling has settled to a new {@code mTopRow} value
      * (0 = pinned to bottom, negative = scrolled up by N rows). Not called for
      * programmatic {@link TerminalView#setTopRow(int)} writes — those would create
