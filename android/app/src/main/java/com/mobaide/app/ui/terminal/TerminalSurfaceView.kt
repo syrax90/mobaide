@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mobaide.app.data.local.TerminalDisplayConfig
@@ -48,6 +50,7 @@ fun TerminalSurfaceView(
     onRowCopyToInput: (text: String, isCurrentInput: Boolean) -> Unit = { _, _ -> },
     onSelectionCopyToInput: (text: String) -> Unit = {},
     onScrollSettled: (topRow: Int) -> Unit = {},
+    onCursorAnchorChanged: (anchorBottomPx: Int) -> Unit = {},
     followMode: Boolean = true,
     requestKeyboard: Boolean = false,
     onKeyboardHandled: () -> Unit = {},
@@ -55,12 +58,35 @@ fun TerminalSurfaceView(
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
+    val terminalViewRef = remember { mutableStateOf<TerminalView?>(null) }
+
+    // The cursor-anchor reporter feeds imeCursorCounterPan (keyboard cursor-follow).
+    // rememberUpdatedState because the reporter is captured by factory-installed hooks
+    // (onInvalidate, the layout listener) that outlive the first composition. The
+    // fontLineSpacing guard covers the renderer-not-yet-created window (getPointY would
+    // NPE) — the global-layout listener re-reports once layout creates the renderer.
+    // The 2-row slack keeps bottom-anchored TUIs (Ink parks the caret a row or two above
+    // its input-box border) at a zero counter-pan, i.e. exactly the full-pan behavior.
+    val currentOnCursorAnchorChanged by rememberUpdatedState(onCursorAnchorChanged)
+    val reportCursorAnchor = remember {
+        { view: TerminalView ->
+            val emulator = view.mTermSession?.emulator
+            if (emulator != null && view.rendererFontLineSpacing > 0) {
+                currentOnCursorAnchorChanged(
+                    view.getPointY(emulator.cursorRow + 1 + CURSOR_ANCHOR_SLACK_ROWS),
+                )
+            }
+        }
+    }
+
     client.onRowTapped = onRowTapped
     client.onRowCopyToInput = onRowCopyToInput
     client.onSelectionCopyToInput = onSelectionCopyToInput
-    client.onScrollSettled = onScrollSettled
+    client.onScrollSettled = { topRow ->
+        onScrollSettled(topRow)
+        terminalViewRef.value?.let(reportCursorAnchor)
+    }
     client.pasteSessionActive = pasteFromClipboardEnabled
-    val terminalViewRef = remember { mutableStateOf<TerminalView?>(null) }
 
     DisposableEffect(sessionCallback) {
         onDispose {
@@ -93,6 +119,9 @@ fun TerminalSurfaceView(
         ViewTreeObserver.OnGlobalLayoutListener {
             val emu = session.emulator
             if (emu != null) onResize(emu.mRows, emu.mColumns)
+            // Layout passes reflow the grid (composer toggle, display-config change,
+            // renderer creation) without necessarily emitting output — re-anchor here.
+            terminalViewRef.value?.let(reportCursorAnchor)
         }
     }
 
@@ -121,7 +150,13 @@ fun TerminalSurfaceView(
                 setTypeface(Typeface.MONOSPACE)
                 setTerminalViewClient(client)
                 attachSession(session)
-                sessionCallback.onInvalidate = { onScreenUpdated() }
+                // onScreenUpdated() first: it normalizes mTopRow (auto-scroll to tail)
+                // before the anchor is read.
+                sessionCallback.onInvalidate = {
+                    onScreenUpdated()
+                    reportCursorAnchor(this)
+                }
+                reportCursorAnchor(this)
                 sessionCallback.onCopyToClipboard = { text -> appCtx.copyToClipboard("Terminal output", text, isSensitive = true) }
                 client.hasClipboardText = { appCtx.hasClipboardText() }
                 // Routing through TerminalEmulator.paste() is load-bearing: it strips
@@ -153,12 +188,19 @@ fun TerminalSurfaceView(
             val view = hsv.getChildAt(0) as TerminalView
             if (view.mTermSession !== session) {
                 view.attachSession(session)
-                sessionCallback.onInvalidate = { view.onScreenUpdated() }
+                sessionCallback.onInvalidate = {
+                    view.onScreenUpdated()
+                    reportCursorAnchor(view)
+                }
+                // Replayed sessions carry content before the first live frame.
+                reportCursorAnchor(view)
             }
             view.applyDisplayConfig(isStatic, staticCols)
             if (followMode && view.topRow != 0) {
+                // Bypasses onScreenUpdated, so re-anchor for the new topRow here.
                 view.topRow = 0
                 view.invalidate()
+                reportCursorAnchor(view)
             }
         },
         onRelease = { hsv ->
@@ -168,6 +210,9 @@ fun TerminalSurfaceView(
         },
     )
 }
+
+/** Rows of slack under the cursor row included in the reported anchor — see the reporter above. */
+private const val CURSOR_ANCHOR_SLACK_ROWS = 2
 
 /** Push the requested display mode into the [TerminalView] without churning when nothing changed. */
 private fun TerminalView.applyDisplayConfig(isStatic: Boolean, staticCols: Int) {
