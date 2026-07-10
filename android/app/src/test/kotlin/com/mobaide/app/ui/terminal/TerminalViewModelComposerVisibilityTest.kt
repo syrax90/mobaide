@@ -166,7 +166,6 @@ class TerminalViewModelComposerVisibilityTest {
         advanceTimeBy(DEBOUNCE_PLUS)
         runCurrent()
 
-        assertTrue(vm.wantsInput.value)
         assertTrue(
             "alt-screen/wants-input must never auto-hide the composer — visibility is user-only",
             vm.composerVisible.value,

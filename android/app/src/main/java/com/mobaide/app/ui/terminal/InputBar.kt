@@ -227,8 +227,7 @@ fun InputBar(
             ) {
                 if (!composerVisible) {
                     // With the composer hidden the terminal is the input field: this
-                    // re-raises the IME on the terminal surface after the user dismissed
-                    // it (tapping the terminal itself does the same).
+                    // re-raises the IME on the terminal surface after the user dismissed it.
                     IconButton(
                         onClick = onRaiseTerminalKeyboard,
                         enabled = enabled,

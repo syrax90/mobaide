@@ -51,8 +51,6 @@ fun TerminalSurfaceView(
     followMode: Boolean = true,
     requestKeyboard: Boolean = false,
     onKeyboardHandled: () -> Unit = {},
-    tapToRaiseKeyboard: Boolean = false,
-    onTapToRaiseKeyboard: () -> Unit = {},
     pasteFromClipboardEnabled: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
@@ -61,8 +59,6 @@ fun TerminalSurfaceView(
     client.onRowCopyToInput = onRowCopyToInput
     client.onSelectionCopyToInput = onSelectionCopyToInput
     client.onScrollSettled = onScrollSettled
-    client.tapToRaiseActive = tapToRaiseKeyboard
-    client.onTapToRaise = onTapToRaiseKeyboard
     client.pasteSessionActive = pasteFromClipboardEnabled
     val terminalViewRef = remember { mutableStateOf<TerminalView?>(null) }
 
@@ -195,13 +191,12 @@ private fun TerminalView.applyDisplayConfig(isStatic: Boolean, staticCols: Int) 
 }
 
 /**
- * [TerminalSessionClient] that forwards screen-update events to the host ViewModel for prompt
- * detection, and DECTCEM (DECSET 25) cursor show/hide transitions for wants-input detection.
- * All other Termux callbacks (title, bell, clipboard, ...) are no-ops.
+ * [TerminalSessionClient] that forwards screen-update events to the host ViewModel (unread-row
+ * tracking) and drives view invalidation, and routes terminal clipboard copy/paste. Cursor-state
+ * and the remaining Termux callbacks (title, bell, ...) are no-ops.
  */
 class TerminalSessionCallback(
     private val onScreenUpdated: () -> Unit = {},
-    private val onCursorStateChanged: (Boolean) -> Unit = {},
 ) : TerminalSessionClient {
     /** Set by the View layer to trigger [TerminalView.onScreenUpdated] → [invalidate]. */
     var onInvalidate: (() -> Unit)? = null
@@ -239,7 +234,7 @@ class TerminalSessionCallback(
     }
     override fun onBell(session: TerminalSession) {}
     override fun onColorsChanged(session: TerminalSession) {}
-    override fun onTerminalCursorStateChange(state: Boolean) { onCursorStateChanged(state) }
+    override fun onTerminalCursorStateChange(state: Boolean) {}
     override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
     override fun getTerminalCursorStyle(): Int? = null
     override fun logError(tag: String?, message: String?) {}
@@ -266,12 +261,6 @@ private class TerminalViewClientImpl : TerminalViewClient {
     var onSelectionCopyToInput: (String) -> Unit = {}
     var onScrollSettled: (Int) -> Unit = {}
 
-    /** While the composer is hidden the terminal is the input field: a single tap raises
-     *  the IME instead of resolving to a `❯`-row submit (tapping the TUI's own input row
-     *  while hunting for the keyboard must never fire a CR/execute). */
-    var tapToRaiseActive = false
-    var onTapToRaise: () -> Unit = {}
-
     /** Session half of the Paste gate (Live + running), pushed by recomposition. */
     var pasteSessionActive = false
 
@@ -281,12 +270,8 @@ private class TerminalViewClientImpl : TerminalViewClient {
 
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: android.view.MotionEvent?) {}
-    override fun onTerminalTapToRaiseKeyboard(): Boolean {
-        if (!tapToRaiseActive) return false
-        onTapToRaise()
-        return true
-    }
-    override fun isTapToRaiseKeyboardActive(): Boolean = tapToRaiseActive
+    override fun onTerminalTapToRaiseKeyboard(): Boolean = false
+    override fun isTapToRaiseKeyboardActive(): Boolean = false
     override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) { onRowTapped(text, isCurrentInput) }
     override fun onTerminalRowCopyToInput(text: String, isCurrentInput: Boolean) { onRowCopyToInput(text, isCurrentInput) }
     override fun onCopySelectionToInput(text: String) { onSelectionCopyToInput(text) }
