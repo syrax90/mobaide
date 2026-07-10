@@ -7,14 +7,13 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.size
@@ -47,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -60,7 +60,7 @@ import com.mobaide.app.ui.theme.StateStopped
 import com.mobaide.app.ui.theme.StateStopping
 import com.mobaide.app.ui.theme.TerminalBackground
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(
     viewModel: TerminalViewModel,
@@ -78,7 +78,6 @@ fun TerminalScreen(
     val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
     val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
     val composerVisible by viewModel.composerVisible.collectAsStateWithLifecycle()
-    val showComposerCoachMark by viewModel.showComposerCoachMark.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showTemplatesPicker by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
@@ -89,7 +88,7 @@ fun TerminalScreen(
         viewModel.userMessages.collect { snackbarHostState.showSnackbar(it) }
     }
 
-    // Direct-input mode: the ViewModel asks for the IME to be raised on the terminal
+    // Hidden composer: the ViewModel asks for the IME to be raised on the terminal
     // surface itself (its InputConnection routes typing straight to the PTY).
     LaunchedEffect(Unit) {
         viewModel.terminalKeyboardRaise.collect { terminalKeyboardRequest = true }
@@ -124,7 +123,15 @@ fun TerminalScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.systemBars,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            SnackbarHost(
+                snackbarHostState,
+                // Scaffold already insets this slot by systemBars; add only the part
+                // of the keyboard that exceeds them so snackbars float above the IME.
+                modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.systemBars)),
+            )
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -161,80 +168,87 @@ fun TerminalScreen(
         // Paste) are withheld rather than offered and ignored.
         val sessionInputActive = isConnected && sessionState == "running" &&
             connectionState == ConnectionState.Live
-        Column(
+        // Clip host: its top edge is the app bar's bottom, so content panned up by
+        // the keyboard is clipped instead of drawing over the app bar.
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                // imeAnimationTarget instead of imePadding: pad by the IME animation's
-                // END state so the terminal resizes in ONE jump instead of animating
-                // through intermediate heights — each intermediate height reflows the
-                // emulator and (after debounce) resizes the remote PTY, which makes the
-                // whole transcript visibly shift while the keyboard animates. At rest
-                // the two insets are identical.
-                .windowInsetsPadding(WindowInsets.imeAnimationTarget),
+                .clipToBounds(),
         ) {
-            BoxWithConstraints(modifier = Modifier.weight(1f)) {
-                Box(modifier = Modifier.fillMaxSize().background(TerminalBackground)) {
-                    TerminalSurfaceView(
-                        session = viewModel.session,
-                        sessionCallback = viewModel.sessionCallback,
-                        displayConfig = displayConfig,
-                        onResize = { rows, cols ->
-                            if (isConnected) viewModel.resize(rows, cols)
-                        },
-                        onRowTapped = { text, isCurrentInput ->
-                            viewModel.sendTappedRow(text, isCurrentInput)
-                        },
-                        onRowCopyToInput = { text, _ ->
-                            viewModel.copyTextToInput(text)
-                        },
-                        onSelectionCopyToInput = { text ->
-                            viewModel.copyTextToInput(text)
-                        },
-                        onScrollSettled = viewModel::onUserScrollSettled,
-                        followMode = followMode,
-                        requestKeyboard = terminalKeyboardRequest,
-                        onKeyboardHandled = { terminalKeyboardRequest = false },
-                        tapToRaiseKeyboard = !composerVisible && sessionInputActive,
-                        onTapToRaiseKeyboard = { terminalKeyboardRequest = true },
-                        // Deliberately independent of composerVisible: pasting into the
-                        // terminal is valid whether or not the composer is on screen.
-                        pasteFromClipboardEnabled = sessionInputActive,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                    ConnectionOverlay(state = connectionState)
-                    JumpToBottomFab(
-                        visible = !followMode,
-                        unreadRows = unreadRows,
-                        onClick = viewModel::jumpToBottom,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(12.dp),
-                    )
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Pan, don't resize: the keyboard never changes the terminal's
+                    // measured size (and thus never the grid or the remote PTY size) —
+                    // the whole column just shifts up so the InputBar rides above the
+                    // IME and the bottom terminal rows stay visible. See imeFloatingPan.
+                    .imeFloatingPan(WindowInsets.ime, WindowInsets.systemBars),
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    Box(modifier = Modifier.fillMaxSize().background(TerminalBackground)) {
+                        TerminalSurfaceView(
+                            session = viewModel.session,
+                            sessionCallback = viewModel.sessionCallback,
+                            displayConfig = displayConfig,
+                            onResize = { rows, cols ->
+                                if (isConnected) viewModel.resize(rows, cols)
+                            },
+                            onRowTapped = { text, isCurrentInput ->
+                                viewModel.sendTappedRow(text, isCurrentInput)
+                            },
+                            onRowCopyToInput = { text, _ ->
+                                viewModel.copyTextToInput(text)
+                            },
+                            onSelectionCopyToInput = { text ->
+                                viewModel.copyTextToInput(text)
+                            },
+                            onScrollSettled = viewModel::onUserScrollSettled,
+                            followMode = followMode,
+                            requestKeyboard = terminalKeyboardRequest,
+                            onKeyboardHandled = { terminalKeyboardRequest = false },
+                            tapToRaiseKeyboard = !composerVisible && sessionInputActive,
+                            onTapToRaiseKeyboard = { terminalKeyboardRequest = true },
+                            // Deliberately independent of composerVisible: pasting into the
+                            // terminal is valid whether or not the composer is on screen.
+                            pasteFromClipboardEnabled = sessionInputActive,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        JumpToBottomFab(
+                            visible = !followMode,
+                            unreadRows = unreadRows,
+                            onClick = viewModel::jumpToBottom,
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(12.dp),
+                        )
+                    }
                 }
+                InputBar(
+                    text = inputText,
+                    onTextChange = viewModel::updateInputText,
+                    onSend = { text -> viewModel.sendInput(text) },
+                    onSendBytes = viewModel::sendBytes,
+                    enabled = isConnected && sessionState == "running",
+                    requestFocus = requestInputFocus,
+                    onFocusHandled = viewModel::consumeFocusRequest,
+                    onExpand = { showFullScreenInput = true },
+                    onOpenTemplates = {
+                        viewModel.refreshTemplates()
+                        showTemplatesPicker = true
+                    },
+                    onSaveAsTemplate = { showSaveTemplateDialog = true },
+                    sessionKind = sessionKind,
+                    composerVisible = composerVisible,
+                    onRevealComposer = viewModel::revealComposer,
+                    onHideComposer = viewModel::hideComposer,
+                    onRaiseTerminalKeyboard = { terminalKeyboardRequest = true },
+                )
             }
-            InputBar(
-                text = inputText,
-                onTextChange = viewModel::updateInputText,
-                onSend = { text -> viewModel.sendInput(text) },
-                onSendBytes = viewModel::sendBytes,
-                enabled = isConnected && sessionState == "running",
-                requestFocus = requestInputFocus,
-                onFocusHandled = viewModel::consumeFocusRequest,
-                onExpand = { showFullScreenInput = true },
-                onOpenTemplates = {
-                    viewModel.refreshTemplates()
-                    showTemplatesPicker = true
-                },
-                onSaveAsTemplate = { showSaveTemplateDialog = true },
-                sessionKind = sessionKind,
-                composerVisible = composerVisible,
-                onRevealComposer = viewModel::revealComposer,
-                onHideComposer = viewModel::hideComposer,
-                onRaiseTerminalKeyboard = { terminalKeyboardRequest = true },
-                showCoachMark = showComposerCoachMark,
-                onCoachMarkDismissed = viewModel::markCoachMarkSeen,
-            )
+            // Stationary sibling of the panned Column: the reconnect/replay pill must
+            // hold its screen position (and stay un-clipped) while the keyboard pans
+            // the content underneath it.
+            ConnectionOverlay(state = connectionState)
         }
     }
 

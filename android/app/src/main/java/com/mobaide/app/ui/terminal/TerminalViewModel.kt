@@ -35,7 +35,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -48,20 +47,6 @@ import javax.inject.Inject
 
 /** Live, reconnecting, replaying — what the UI overlay should show on top of the terminal. */
 enum class ConnectionState { Live, Reconnecting, ReplayingBuffer }
-
-/**
- * User override layered over the auto-derived composer visibility.
- *
- * - [Auto]: composer visible unless direct-input mode auto-hides it.
- * - [ForceVisible]: user revealed it during a direct-mode episode; reset to [Auto]
- *   when the episode ends (a later TUI episode auto-hides again).
- * - [ForceHidden]: user collapsed the composer; sticks across direct-mode episodes
- *   and reconnects until the user reveals it (or the ViewModel is recreated).
- *
- * Whenever the composer is hidden — by auto-hide or [ForceHidden] — the terminal
- * surface IS the input field: auto-raise targets it and typing routes to the PTY.
- */
-enum class ComposerOverride { Auto, ForceVisible, ForceHidden }
 
 /** Ctrl+A (0x01) + Ctrl+K (0x0B) — clears the PTY's current input line via
  *  readline line-edit keys (no SIGINT, unlike Ctrl+C), so a composer send never
@@ -216,24 +201,18 @@ class TerminalViewModel @Inject constructor(
     private val _wantsInput = MutableStateFlow(false)
     val wantsInput: StateFlow<Boolean> = _wantsInput.asStateFlow()
 
-    /** Alt-screen TUI owns the input (vim, Codex): typed keys route straight to the PTY. */
-    private val _directInputMode = MutableStateFlow(false)
-    val directInputMode: StateFlow<Boolean> = _directInputMode.asStateFlow()
-
-    /** Composer (text field + action buttons) visibility; auto-hidden in direct-input
-     *  mode and user-collapsible anywhere — see [ComposerOverride]. */
+    /** Composer (text field + action buttons) visibility. Purely user-controlled:
+     *  the hide button collapses it, the reveal chip brings it back, and the choice
+     *  sticks across TUI episodes and reconnects (until the ViewModel is recreated).
+     *  While hidden, the terminal surface IS the input field: auto-raise targets it
+     *  and typing routes straight to the PTY. */
     private val _composerVisible = MutableStateFlow(true)
     val composerVisible: StateFlow<Boolean> = _composerVisible.asStateFlow()
 
-    private val _showComposerCoachMark = MutableStateFlow(false)
-    val showComposerCoachMark: StateFlow<Boolean> = _showComposerCoachMark.asStateFlow()
-
-    /** One-shot "raise the IME on the terminal surface" signal (direct-input mode). */
+    /** One-shot "raise the IME on the terminal surface" signal (composer hidden). */
     private val _terminalKeyboardRaise = Channel<Unit>(Channel.BUFFERED)
     val terminalKeyboardRaise: Flow<Unit> = _terminalKeyboardRaise.receiveAsFlow()
 
-    private var altScreenActive = false
-    private var composerOverride = ComposerOverride.Auto
     private var wantsInputDebounceJob: Job? = null
 
     /** A wants-input rising edge latched while not Live (replay/reconnect) fires once
@@ -425,11 +404,6 @@ class TerminalViewModel @Inject constructor(
      */
     private fun sampleTerminalModes() {
         val emu = session.emulator ?: return
-        val alt = emu.isAlternateBufferActive
-        if (alt != altScreenActive) {
-            altScreenActive = alt
-            recomputeDerivedInputState()
-        }
         val raw = emu.isCursorEnabled && emu.isBracketedPasteMode
         if (raw == _wantsInput.value) {
             wantsInputDebounceJob?.cancel()
@@ -448,7 +422,6 @@ class TerminalViewModel @Inject constructor(
     private fun commitWantsInput(value: Boolean) {
         _wantsInput.value = value
         if (!value) pendingRaiseAfterOverlay = false
-        recomputeDerivedInputState()
         if (value) {
             // Once per rising edge: a user-dismissed keyboard stays dismissed until the
             // state drops and rises again (the next prompt/question).
@@ -460,10 +433,8 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
-    /** Raise target follows effective composer visibility, not direct mode: a hidden
-     *  composer means the terminal surface is the input field — even at a plain shell
-     *  prompt with a user-collapsed composer. [commitWantsInput] recomputes derived
-     *  state before calling this, so the visibility read here is current. */
+    /** Raise target follows composer visibility: a hidden composer means the terminal
+     *  surface is the input field — even at a plain shell prompt. */
     private fun fireAutoRaise() {
         if (_composerVisible.value) {
             _requestInputFocus.value = true
@@ -486,80 +457,26 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
-    private fun recomputeDerivedInputState() {
-        val direct = _wantsInput.value && altScreenActive
-        val episodeEnded = !direct && _directInputMode.value
-        if (episodeEnded && composerOverride == ComposerOverride.ForceVisible) {
-            // A manual reveal is scoped to its episode: the next TUI auto-hides again.
-            composerOverride = ComposerOverride.Auto
-        }
-        _directInputMode.value = direct
-        val visible = when (composerOverride) {
-            ComposerOverride.ForceVisible -> true
-            ComposerOverride.ForceHidden -> false
-            ComposerOverride.Auto -> !direct
-        }
-        if (episodeEnded && visible) {
-            // Direct-mode episode ended with the composer coming back: the IME may still
-            // be focused on the terminal surface from a direct-mode raise — hand focus
-            // back to the composer, or a raised keyboard would keep routing keystrokes
-            // straight into the PTY while the composer is visible again. Skipped for
-            // ForceHidden: there the terminal deliberately stays the input field.
-            _requestInputFocus.value = true
-        }
-        // Coach mark only on AUTO-hide (direct-mode entry) — a manual collapse is the
-        // user's own gesture and needs no teaching.
-        if (_composerVisible.value && !visible && composerOverride == ComposerOverride.Auto) {
-            maybeShowCoachMark()
-        }
-        _composerVisible.value = visible
-    }
-
-    /** Reveal a hidden composer. During a direct-mode episode the choice sticks until
-     *  the episode exits ([ComposerOverride.ForceVisible]); otherwise it just clears a
-     *  manual collapse back to [ComposerOverride.Auto] — a reveal at an ordinary prompt
-     *  (row copy, template pick) must not suppress the auto-hide of a TUI episode that
-     *  starts later. */
+    /** Reveal a hidden composer and focus its field. The focus request also retargets
+     *  an IME that is still focused on the terminal surface from an earlier raise, so
+     *  keystrokes stop routing straight into the PTY once the field is back. */
     fun revealComposer() {
-        composerOverride = if (_directInputMode.value) {
-            ComposerOverride.ForceVisible
-        } else {
-            ComposerOverride.Auto
-        }
-        recomputeDerivedInputState()
+        _composerVisible.value = true
         _requestInputFocus.value = true
-        _showComposerCoachMark.value = false
     }
 
-    /** Collapse the composer ("hide command field"). Sticks across direct-mode episodes
-     *  until [revealComposer]. No focus or raise side effect: the composer unmounting
-     *  dismisses the IME naturally, and the user resumes typing by tapping the terminal
-     *  (tap-to-raise) or the keyboard button in the control row. */
+    /** Collapse the composer ("hide command field"). Sticks until [revealComposer].
+     *  No focus or raise side effect: the composer unmounting dismisses the IME
+     *  naturally, and the user resumes typing by tapping the terminal (tap-to-raise)
+     *  or the keyboard button in the control row. */
     fun hideComposer() {
-        composerOverride = ComposerOverride.ForceHidden
-        recomputeDerivedInputState()
-        _showComposerCoachMark.value = false
-    }
-
-    private fun maybeShowCoachMark() {
-        viewModelScope.launch {
-            val seen = runCatching { preferencesStore.composerAutoHideCoachSeen.first() }
-                .getOrDefault(true)
-            if (!seen) _showComposerCoachMark.value = true
-        }
-    }
-
-    fun markCoachMarkSeen() {
-        _showComposerCoachMark.value = false
-        viewModelScope.launch {
-            runCatching { preferencesStore.setComposerAutoHideCoachSeen() }
-        }
+        _composerVisible.value = false
     }
 
     /** Replace the input bar's contents with [text] and place the cursor at the
      *  end. Used for "tap a row to copy into the input" (`onRowCopyToInput`).
-     *  Reveals an auto-hidden composer first — the focus request needs the field
-     *  to be composed, and the user's gesture explicitly targets it. */
+     *  Reveals a hidden composer first — the focus request needs the field to be
+     *  composed, and the user's gesture explicitly targets it. */
     fun copyTextToInput(text: String) {
         _inputText.value = TextFieldValue(text = text, selection = TextRange(text.length))
         revealComposer()

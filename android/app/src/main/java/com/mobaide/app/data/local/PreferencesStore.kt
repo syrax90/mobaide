@@ -1,7 +1,6 @@
 package com.mobaide.app.data.local
 
 import android.content.Context
-import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -26,7 +25,6 @@ class PreferencesStore(private val context: Context) {
     private val keyLastAntigravityOptions = stringPreferencesKey("last_used_antigravity_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
-    private val keyComposerAutoHideCoachSeen = booleanPreferencesKey("composer_autohide_coach_seen")
 
     // Lenient (ignore unknown keys) so adding fields server-side later doesn't
     // crash a stale cached blob.
@@ -130,15 +128,6 @@ class PreferencesStore(private val context: Context) {
         val clamped = columns.coerceIn(TERMINAL_STATIC_COLUMNS_MIN, TERMINAL_STATIC_COLUMNS_MAX)
         context.dataStore.edit { prefs ->
             prefs[keyTerminalStaticColumns] = clamped
-        }
-    }
-
-    val composerAutoHideCoachSeen: Flow<Boolean> =
-        context.dataStore.data.map { it[keyComposerAutoHideCoachSeen] ?: false }
-
-    suspend fun setComposerAutoHideCoachSeen() {
-        context.dataStore.edit { prefs ->
-            prefs[keyComposerAutoHideCoachSeen] = true
         }
     }
 

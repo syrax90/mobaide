@@ -28,8 +28,9 @@ import org.junit.Test
 
 /**
  * Unit tests for [TerminalViewModel.resize] — verifies the debounce and
- * deduplication logic added to prevent rapid-fire PTY resize events during
- * keyboard animation.
+ * deduplication logic added to prevent rapid-fire PTY resize events from
+ * rotation, composer show/hide, and display-mode changes (the keyboard no
+ * longer resizes the terminal — it pans over it).
  *
  * Key behaviors:
  * 1. Same dimensions are deduplicated (no frame sent at all).
