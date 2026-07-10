@@ -15,6 +15,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.mobaide.app.data.local.TerminalDisplayConfig
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.ui.common.copyToClipboard
+import com.mobaide.app.ui.common.hasClipboardText
+import com.mobaide.app.ui.common.readClipboardText
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
@@ -51,6 +53,7 @@ fun TerminalSurfaceView(
     onKeyboardHandled: () -> Unit = {},
     tapToRaiseKeyboard: Boolean = false,
     onTapToRaiseKeyboard: () -> Unit = {},
+    pasteFromClipboardEnabled: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val client = remember { TerminalViewClientImpl() }
@@ -60,12 +63,14 @@ fun TerminalSurfaceView(
     client.onScrollSettled = onScrollSettled
     client.tapToRaiseActive = tapToRaiseKeyboard
     client.onTapToRaise = onTapToRaiseKeyboard
+    client.pasteSessionActive = pasteFromClipboardEnabled
     val terminalViewRef = remember { mutableStateOf<TerminalView?>(null) }
 
     DisposableEffect(sessionCallback) {
         onDispose {
             sessionCallback.onInvalidate = null
             sessionCallback.onCopyToClipboard = null
+            sessionCallback.onPasteFromClipboard = null
         }
     }
 
@@ -122,6 +127,20 @@ fun TerminalSurfaceView(
                 attachSession(session)
                 sessionCallback.onInvalidate = { onScreenUpdated() }
                 sessionCallback.onCopyToClipboard = { text -> appCtx.copyToClipboard("Terminal output", text, isSensitive = true) }
+                client.hasClipboardText = { appCtx.hasClipboardText() }
+                // Routing through TerminalEmulator.paste() is load-bearing: it strips
+                // ESC/C1 controls (escape-sequence injection defense), converts LF→CR,
+                // and applies the single canonical ESC[200~/201~ bracketed-paste wrap
+                // when the PTY app enabled DECSET 2004. Its mSession.write output then
+                // flows through the ViewModel's input listener, which drops bytes
+                // unless the session is Live and running. A bracketed paste arrives as
+                // three ordered write calls (open marker, body, close marker) — three
+                // 'i' frames over the FIFO send channel — which the PTY reassembles;
+                // do not merge them here.
+                sessionCallback.onPasteFromClipboard = { pasteSession ->
+                    val text = appCtx.readClipboardText()
+                    if (!text.isNullOrEmpty()) pasteSession.emulator?.paste(text)
+                }
                 applyDisplayConfig(isStatic, staticCols)
                 viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
                 terminalViewRef.value = this
@@ -198,6 +217,14 @@ class TerminalSessionCallback(
      */
     var onCopyToClipboard: ((String) -> Unit)? = null
 
+    /**
+     * Set by the View layer (which owns a [android.content.Context]) so the ActionMode
+     * "Paste" item can read the system clipboard and route it through the emulator's
+     * sanitized [com.termux.terminal.TerminalEmulator.paste] pipeline. Invoked only from
+     * an explicit user gesture — the clipboard read fires the Android 12+ access toast.
+     */
+    var onPasteFromClipboard: ((TerminalSession) -> Unit)? = null
+
     override fun onTextChanged(changedSession: TerminalSession) {
         onScreenUpdated()
         onInvalidate?.invoke()
@@ -207,7 +234,9 @@ class TerminalSessionCallback(
     override fun onCopyTextToClipboard(session: TerminalSession, text: String?) {
         if (!text.isNullOrEmpty()) onCopyToClipboard?.invoke(text)
     }
-    override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+    override fun onPasteTextFromClipboard(session: TerminalSession?) {
+        if (session != null) onPasteFromClipboard?.invoke(session)
+    }
     override fun onBell(session: TerminalSession) {}
     override fun onColorsChanged(session: TerminalSession) {}
     override fun onTerminalCursorStateChange(state: Boolean) { onCursorStateChanged(state) }
@@ -243,6 +272,13 @@ private class TerminalViewClientImpl : TerminalViewClient {
     var tapToRaiseActive = false
     var onTapToRaise: () -> Unit = {}
 
+    /** Session half of the Paste gate (Live + running), pushed by recomposition. */
+    var pasteSessionActive = false
+
+    /** Clipboard half of the Paste gate — description-level check, wired by the
+     *  factory (needs a Context); must never read clip contents (Android 12+ toast). */
+    var hasClipboardText: () -> Boolean = { false }
+
     override fun onScale(scale: Float): Float = scale
     override fun onSingleTapUp(e: android.view.MotionEvent?) {}
     override fun onTerminalTapToRaiseKeyboard(): Boolean {
@@ -254,6 +290,7 @@ private class TerminalViewClientImpl : TerminalViewClient {
     override fun onTerminalRowTapped(text: String, isCurrentInput: Boolean) { onRowTapped(text, isCurrentInput) }
     override fun onTerminalRowCopyToInput(text: String, isCurrentInput: Boolean) { onRowCopyToInput(text, isCurrentInput) }
     override fun onCopySelectionToInput(text: String) { onSelectionCopyToInput(text) }
+    override fun canPasteFromClipboard(): Boolean = pasteSessionActive && hasClipboardText()
     override fun onScrollPositionChanged(topRow: Int) { onScrollSettled(topRow) }
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false
     override fun shouldEnforceCharBasedInput(): Boolean = true

@@ -26,6 +26,7 @@ public class TextSelectionCursorController implements CursorController {
 
     private ActionMode mActionMode;
     public final int ACTION_COPY = 1;
+    public final int ACTION_PASTE = 2;
     public final int ACTION_SEND_TO_INPUT = 4;
 
     public TextSelectionCursorController(TerminalView terminalView) {
@@ -109,6 +110,9 @@ public class TextSelectionCursorController implements CursorController {
 
                 menu.add(Menu.NONE, ACTION_SEND_TO_INPUT, Menu.NONE, R.string.send_to_input).setShowAsAction(show);
                 menu.add(Menu.NONE, ACTION_COPY, Menu.NONE, R.string.copy_text).setShowAsAction(show);
+                if (terminalView.mClient.canPasteFromClipboard()) {
+                    menu.add(Menu.NONE, ACTION_PASTE, Menu.NONE, R.string.paste_text).setShowAsAction(show);
+                }
                 return true;
             }
 
@@ -134,6 +138,10 @@ public class TextSelectionCursorController implements CursorController {
                         String selectedText = getSelectedText();
                         terminalView.mTermSession.onCopyTextToClipboard(selectedText);
                         terminalView.stopTextSelectionMode();
+                        break;
+                    case ACTION_PASTE:
+                        terminalView.stopTextSelectionMode();
+                        terminalView.mTermSession.onPasteTextFromClipboard();
                         break;
                 }
 
