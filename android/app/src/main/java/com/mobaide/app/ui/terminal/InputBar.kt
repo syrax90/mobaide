@@ -2,8 +2,8 @@ package com.mobaide.app.ui.terminal
 
 import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.AssistChip
@@ -148,6 +149,8 @@ fun InputBar(
     sessionKind: SessionKind = SessionKind.Claude,
     composerVisible: Boolean = true,
     onRevealComposer: () -> Unit = {},
+    onHideComposer: () -> Unit = {},
+    onRaiseTerminalKeyboard: () -> Unit = {},
     showCoachMark: Boolean = false,
     onCoachMarkDismissed: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -183,11 +186,18 @@ fun InputBar(
 
     Column(modifier = modifier.fillMaxWidth()) {
         // Composer block (field + action buttons). Auto-hidden in direct-input mode —
-        // the terminal owns typing there — and restored via the reveal chip below.
+        // the terminal owns typing there — user-collapsible via the hide button, and
+        // restored via the reveal chip below.
+        //
+        // Fade-only transitions (here and on the panel below): a vertical slide animates
+        // the InputBar height frame-by-frame, which resizes the terminal view — and
+        // thus the remote PTY — through a burst of intermediate row counts. A fade
+        // changes height in a single frame, so the whole show/hide coalesces into one
+        // PTY resize (with the IME inset jump-cut in TerminalScreen).
         AnimatedVisibility(
             visible = composerVisible,
-            enter = slideInVertically { it },
-            exit = slideOutVertically { it },
+            enter = fadeIn(),
+            exit = fadeOut(),
         ) {
             ComposerBlock(
                 isLandscape = isLandscape,
@@ -203,6 +213,7 @@ fun InputBar(
                 onTogglePanel = { panelExpanded = !panelExpanded },
                 onExpand = onExpand,
                 onSend = { send() },
+                onHideComposer = onHideComposer,
             )
         }
 
@@ -211,8 +222,8 @@ fun InputBar(
         // and the reveal chip reachable.
         AnimatedVisibility(
             visible = panelExpanded || !composerVisible,
-            enter = slideInVertically { it },
-            exit = slideOutVertically { it },
+            enter = fadeIn(),
+            exit = fadeOut(),
         ) {
             Row(
                 modifier = Modifier
@@ -222,6 +233,19 @@ fun InputBar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (!composerVisible) {
+                    // With the composer hidden the terminal is the input field: this
+                    // re-raises the IME on the terminal surface after the user dismissed
+                    // it (tapping the terminal itself does the same).
+                    IconButton(
+                        onClick = onRaiseTerminalKeyboard,
+                        enabled = enabled,
+                        modifier = Modifier.testTag("raise_terminal_keyboard_button"),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Keyboard,
+                            contentDescription = "Show keyboard",
+                        )
+                    }
                     RevealComposerChip(
                         showCoachMark = showCoachMark,
                         onCoachMarkDismissed = onCoachMarkDismissed,
@@ -286,6 +310,7 @@ private fun ComposerBlock(
     onTogglePanel: () -> Unit,
     onExpand: () -> Unit,
     onSend: () -> Unit,
+    onHideComposer: () -> Unit,
 ) {
     if (isLandscape) {
         // Landscape: text field and action buttons share one row.
@@ -313,6 +338,7 @@ private fun ComposerBlock(
                 onTogglePanel = onTogglePanel,
                 onExpand = onExpand,
                 onSend = onSend,
+                onHideComposer = onHideComposer,
             )
         }
     } else {
@@ -345,6 +371,7 @@ private fun ComposerBlock(
                     onTogglePanel = onTogglePanel,
                     onExpand = onExpand,
                     onSend = onSend,
+                    onHideComposer = onHideComposer,
                 )
             }
         }
@@ -378,6 +405,7 @@ private fun RevealComposerChip(
             ) {
                 Text(
                     "Typing goes straight into the terminal now. " +
+                        "Tap the terminal or the keyboard icon to type. " +
                         "Tap here to bring the command field back.",
                 )
             }
@@ -447,7 +475,17 @@ private fun ActionButtons(
     onTogglePanel: () -> Unit,
     onExpand: () -> Unit,
     onSend: () -> Unit,
+    onHideComposer: () -> Unit,
 ) {
+    IconButton(
+        onClick = onHideComposer,
+        modifier = Modifier.testTag("hide_composer_button"),
+    ) {
+        Icon(
+            Icons.Filled.KeyboardHide,
+            contentDescription = "Hide command field",
+        )
+    }
     IconButton(onClick = onOpenTemplates) {
         Icon(
             Icons.AutoMirrored.Filled.LibraryBooks,

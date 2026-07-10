@@ -35,10 +35,11 @@ import org.junit.Test
  * The model: `wantsInput` latches true when the emulator reports DECTCEM cursor
  * visible AND bracketed-paste mode (DECSET 2004) on, after a 400 ms stability window
  * on both edges. A rising edge auto-raises the keyboard exactly once — targeting the
- * composer (`requestInputFocus`) at a main-screen prompt, or the terminal surface
- * (`terminalKeyboardRaise`) when the alt-screen is active (direct-input mode). Raises
- * are suppressed while not [ConnectionState.Live]; an edge latched during replay
- * fires once on Live entry.
+ * composer (`requestInputFocus`) while it is visible, or the terminal surface
+ * (`terminalKeyboardRaise`) while it is hidden (auto-hidden by direct-input mode or
+ * user-collapsed via [TerminalViewModel.hideComposer] — a hidden composer means the
+ * terminal IS the input field). Raises are suppressed while not
+ * [ConnectionState.Live]; an edge latched during replay fires once on Live entry.
  *
  * Escape bytes are fed straight to the JVM-hosted emulator via `emulator.append`
  * plus a manual `sessionCallback.onTextChanged` (what `notifyScreenUpdate` does in
@@ -239,6 +240,53 @@ class TerminalViewModelWantsInputTest {
         assertTrue("alt-screen + wants-input = direct-input mode", vm.directInputMode.value)
         assertEquals("IME must target the terminal surface", 1, raises)
         assertFalse("composer focus must not fire in direct mode", vm.requestInputFocus.value)
+    }
+
+    @Test
+    fun risingEdge_withComposerForceHidden_raisesTerminalKeyboard_atShellPrompt() =
+        runTest(testDispatcher) {
+            val vm = createLiveViewModel()
+            var raises = 0
+            backgroundScope.launch { vm.terminalKeyboardRaise.collect { raises++ } }
+            vm.hideComposer() // user collapsed the composer at an ordinary prompt
+
+            feed(vm, BRACKETED_PASTE_ON) // main screen — no alt-screen involved
+            advanceTimeBy(DEBOUNCE_PLUS)
+            runCurrent()
+
+            assertTrue(vm.wantsInput.value)
+            assertFalse(vm.directInputMode.value)
+            assertEquals(
+                "hidden composer ⇒ the terminal is the input field, raise targets it",
+                1,
+                raises,
+            )
+            assertFalse(
+                "composer focus must not fire while it is force-hidden",
+                vm.requestInputFocus.value,
+            )
+        }
+
+    @Test
+    fun deferredReplayRaise_withComposerForceHidden_targetsTerminal() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+        var raises = 0
+        backgroundScope.launch { vm.terminalKeyboardRaise.collect { raises++ } }
+        vm.hideComposer()
+
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_MARKER).toByteString()))
+        runCurrent()
+        feed(vm, BRACKETED_PASTE_ON) // rising edge latched mid-replay → raise deferred
+        advanceTimeBy(DEBOUNCE_PLUS)
+        runCurrent()
+        assertEquals("no raise while the replay overlay is up", 0, raises)
+
+        eventsFlow.emit(WsEvent.Binary(byteArrayOf(REPLAY_END_MARKER).toByteString()))
+        runCurrent()
+
+        assertEquals("the deferred raise honors the force-hidden composer", 1, raises)
+        assertFalse(vm.requestInputFocus.value)
     }
 
     @Test

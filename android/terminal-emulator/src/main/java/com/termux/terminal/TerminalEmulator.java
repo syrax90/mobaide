@@ -129,7 +129,20 @@ public final class TerminalEmulator {
     private static final int DECSET_BIT_LEFTRIGHT_MARGIN_MODE = 1 << 11;
     /** Not really DECSET bit... - http://www.vt100.net/docs/vt510-rm/DECSACE */
     private static final int DECSET_BIT_RECTANGULAR_CHANGEATTRIBUTE = 1 << 12;
+    /**
+     * DECSET 2026 - synchronized output ("BSU"/"ESU", see
+     * https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036).
+     * Parsing always continues while set; only the host's screen-update notification is
+     * deferred (see the forked {@link TerminalSession#emitOutput}), so multi-write TUI
+     * redraws (Claude Code/Ink frames) paint atomically instead of tearing. Mapping the
+     * bit also makes the generic DECRQM reply advertise support (?2026;1|2$y), which is
+     * what flips such programs' auto-detection on.
+     */
+    private static final int DECSET_BIT_SYNCHRONIZED_OUTPUT = 1 << 13;
 
+
+    /** Incremented on every DECSET 2026 reset (ESU) — see {@link #getSynchronizedOutputResets()}. */
+    private int mSynchronizedOutputResets;
 
     private String mTitle;
     private final Stack<String> mTitleStack = new Stack<>();
@@ -319,6 +332,8 @@ public final class TerminalEmulator {
                 return DECSET_BIT_MOUSE_PROTOCOL_SGR;
             case 2004:
                 return DECSET_BIT_BRACKETED_PASTE_MODE;
+            case 2026:
+                return DECSET_BIT_SYNCHRONIZED_OUTPUT;
             default:
                 return -1;
             // throw new IllegalArgumentException("Unsupported decset: " + decsetBit);
@@ -476,6 +491,17 @@ public final class TerminalEmulator {
     /** DECSET 2004 - bracketed paste mode, see {@link #paste(String)}. */
     public boolean isBracketedPasteMode() {
         return isDecsetInternalBitSet(DECSET_BIT_BRACKETED_PASTE_MODE);
+    }
+
+    /** DECSET 2026 - synchronized output: defer rendering until reset or a safety timeout. */
+    public boolean isSynchronizedOutputActive() {
+        return isDecsetInternalBitSet(DECSET_BIT_SYNCHRONIZED_OUTPUT);
+    }
+
+    /** Count of DECSET 2026 resets (ESU). Monotonic; wrap-around is irrelevant since the
+     *  forked {@link TerminalSession} only compares before/after values across one append. */
+    public int getSynchronizedOutputResets() {
+        return mSynchronizedOutputResets;
     }
 
     public boolean isKeypadApplicationMode() {
@@ -1281,6 +1307,13 @@ public final class TerminalEmulator {
             }
             case 2004:
                 // Bracketed paste mode - setting bit is enough.
+                break;
+            case 2026:
+                // Synchronized output - setting the bit is enough; the render-notification
+                // deferral lives in the forked TerminalSession.emitOutput(). Resets are
+                // counted so the session can spot a frame that completed mid-chunk even
+                // when a following BSU in the same chunk re-activates the mode.
+                if (!setting) mSynchronizedOutputResets++;
                 break;
             default:
                 unknownParameter(externalBit);

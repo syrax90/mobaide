@@ -9,15 +9,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -58,7 +60,7 @@ import com.mobaide.app.ui.theme.StateStopped
 import com.mobaide.app.ui.theme.StateStopping
 import com.mobaide.app.ui.theme.TerminalBackground
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TerminalScreen(
     viewModel: TerminalViewModel,
@@ -157,7 +159,13 @@ fun TerminalScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding(),
+                // imeAnimationTarget instead of imePadding: pad by the IME animation's
+                // END state so the terminal resizes in ONE jump instead of animating
+                // through intermediate heights — each intermediate height reflows the
+                // emulator and (after debounce) resizes the remote PTY, which makes the
+                // whole transcript visibly shift while the keyboard animates. At rest
+                // the two insets are identical.
+                .windowInsetsPadding(WindowInsets.imeAnimationTarget),
         ) {
             BoxWithConstraints(modifier = Modifier.weight(1f)) {
                 Box(modifier = Modifier.fillMaxSize().background(TerminalBackground)) {
@@ -181,6 +189,15 @@ fun TerminalScreen(
                         followMode = followMode,
                         requestKeyboard = terminalKeyboardRequest,
                         onKeyboardHandled = { terminalKeyboardRequest = false },
+                        // Same connectivity gate as the composer's `enabled` below, plus
+                        // Live: a tap must not raise an IME whose keystrokes would feed a
+                        // stopped or disconnected session, and during replay/reconnect the
+                        // write path drops terminal bytes — raising a keyboard whose input
+                        // would be silently discarded is worse than not raising it.
+                        tapToRaiseKeyboard = !composerVisible &&
+                            isConnected && sessionState == "running" &&
+                            connectionState == ConnectionState.Live,
+                        onTapToRaiseKeyboard = { terminalKeyboardRequest = true },
                         modifier = Modifier.fillMaxSize(),
                     )
                     ConnectionOverlay(state = connectionState)
@@ -211,6 +228,8 @@ fun TerminalScreen(
                 sessionKind = sessionKind,
                 composerVisible = composerVisible,
                 onRevealComposer = viewModel::revealComposer,
+                onHideComposer = viewModel::hideComposer,
+                onRaiseTerminalKeyboard = { terminalKeyboardRequest = true },
                 showCoachMark = showComposerCoachMark,
                 onCoachMarkDismissed = viewModel::markCoachMarkSeen,
             )

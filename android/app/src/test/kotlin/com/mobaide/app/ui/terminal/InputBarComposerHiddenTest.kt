@@ -4,6 +4,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -24,7 +25,9 @@ import org.robolectric.annotation.Config
  *     keeping the control-key bar mounted without needing the panel toggle.
  *   - A labeled reveal chip (`reveal_composer_chip`) is docked at the control-key
  *     bar whenever the composer is hidden, and routes taps to `onRevealComposer`.
- *   - The chip is absent while the composer is visible.
+ *   - A "Show keyboard" icon button (`raise_terminal_keyboard_button`) sits beside
+ *     it and routes taps to `onRaiseTerminalKeyboard` (re-raises the terminal IME).
+ *   - Both affordances are absent while the composer is visible.
  *   - A pending `requestFocus` is deferred while the composer is hidden and consumed
  *     on the frame that mounts the field.
  *   - `showCoachMark = true` surfaces the one-time RichTooltip teaching the reveal
@@ -41,8 +44,10 @@ class InputBarComposerHiddenTest {
 
     private fun setInputBar(
         composerVisible: Boolean,
+        enabled: Boolean = true,
         showCoachMark: Boolean = false,
         onRevealComposer: () -> Unit = {},
+        onRaiseTerminalKeyboard: () -> Unit = {},
         onCoachMarkDismissed: () -> Unit = {},
     ) {
         composeRule.setContent {
@@ -52,8 +57,10 @@ class InputBarComposerHiddenTest {
                     onTextChange = {},
                     onSend = {},
                     onSendBytes = {},
+                    enabled = enabled,
                     composerVisible = composerVisible,
                     onRevealComposer = onRevealComposer,
+                    onRaiseTerminalKeyboard = onRaiseTerminalKeyboard,
                     showCoachMark = showCoachMark,
                     onCoachMarkDismissed = onCoachMarkDismissed,
                 )
@@ -66,8 +73,10 @@ class InputBarComposerHiddenTest {
         setInputBar(composerVisible = false)
 
         composeRule.onNodeWithText("Type command...").assertDoesNotExist()
-        listOf("Templates", "Save as template", "Show keys", "Expand editor", "Send")
-            .forEach { composeRule.onNodeWithContentDescription(it).assertDoesNotExist() }
+        listOf(
+            "Hide command field", "Templates", "Save as template", "Show keys",
+            "Expand editor", "Send",
+        ).forEach { composeRule.onNodeWithContentDescription(it).assertDoesNotExist() }
     }
 
     @Test
@@ -94,12 +103,44 @@ class InputBarComposerHiddenTest {
     }
 
     @Test
-    fun composerVisible_hidesRevealChip() {
+    fun composerHidden_showsKeyboardButton_tapInvokesOnRaiseTerminalKeyboard() {
+        var raises = 0
+        setInputBar(composerVisible = false, onRaiseTerminalKeyboard = { raises++ })
+
+        composeRule.onNodeWithTag("raise_terminal_keyboard_button")
+            .assertExists()
+            .assertHasClickAction()
+            .performClick()
+
+        assertEquals(1, raises)
+    }
+
+    @Test
+    fun composerHidden_keyboardButtonDisabled_dropsClicks() {
+        var raises = 0
+        setInputBar(
+            composerVisible = false,
+            enabled = false,
+            onRaiseTerminalKeyboard = { raises++ },
+        )
+
+        // Same connectivity gate as the composer: while the session cannot accept
+        // input, the button must not raise an IME whose keystrokes would be dropped.
+        composeRule.onNodeWithTag("raise_terminal_keyboard_button")
+            .assertIsNotEnabled()
+            .performClick()
+
+        assertEquals(0, raises)
+    }
+
+    @Test
+    fun composerVisible_hidesRevealChipAndKeyboardButton() {
         setInputBar(composerVisible = true)
 
-        // Even with the control panel opened, the chip only exists while hidden.
+        // Even with the control panel opened, both affordances only exist while hidden.
         composeRule.onNodeWithContentDescription("Show keys").performClick()
         composeRule.onNodeWithTag("reveal_composer_chip").assertDoesNotExist()
+        composeRule.onNodeWithTag("raise_terminal_keyboard_button").assertDoesNotExist()
     }
 
     @Test
@@ -137,5 +178,9 @@ class InputBarComposerHiddenTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithText("Command field is tucked away").assertExists()
+        composeRule.onNodeWithText(
+            "Tap the terminal or the keyboard icon to type",
+            substring = true,
+        ).assertExists()
     }
 }
