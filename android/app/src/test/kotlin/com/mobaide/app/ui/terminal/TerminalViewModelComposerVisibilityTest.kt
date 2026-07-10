@@ -10,18 +10,13 @@ import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
-import io.mockk.Runs
-import io.mockk.coEvery
-import io.mockk.coVerify
 import io.mockk.every
-import io.mockk.just
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -33,17 +28,12 @@ import org.junit.Test
 /**
  * Unit tests for [TerminalViewModel]'s composer hide/reveal state machine.
  *
- * The model ([ComposerOverride] layered over the auto-derived value): `composerVisible`
- * defaults to true and auto-hides while direct-input mode is active (alt-screen +
- * wants-input) — unless the user manually revealed it via
- * [TerminalViewModel.revealComposer], which wins for the remainder of that direct-mode
- * episode (`ForceVisible`). Exiting direct mode restores the composer and resets the
- * override, so the next episode auto-hides again. A manual collapse via
- * [TerminalViewModel.hideComposer] (`ForceHidden`) sticks across episodes and
- * reconnects until the user reveals again, and suppresses the direct-mode-exit focus
- * hand-back (the terminal deliberately stays the input field). The first auto-hide
- * surfaces a one-time coach mark gated by a persisted [PreferencesStore] flag; a
- * manual collapse never does.
+ * The model is purely user-controlled: `composerVisible` defaults to true.
+ * [TerminalViewModel.hideComposer] collapses it and the choice sticks across TUI
+ * activity (alt-screen, bracketed paste) and reconnects until
+ * [TerminalViewModel.revealComposer] brings it back — alt-screen/wants-input never
+ * auto-hides it. A gesture that explicitly targets the composer (copy-to-input,
+ * applying a template) reveals it and requests focus even if it was hidden.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelComposerVisibilityTest {
@@ -65,7 +55,6 @@ class TerminalViewModelComposerVisibilityTest {
     private val preferencesStore = mockk<PreferencesStore> {
         every { terminalDisplayMode } returns flowOf(TerminalDisplayMode.Full)
         every { terminalStaticColumns } returns flowOf(TERMINAL_STATIC_COLUMNS_DEFAULT)
-        every { composerAutoHideCoachSeen } returns flowOf(true)
     }
 
     private fun createViewModel(): TerminalViewModel =
@@ -83,14 +72,6 @@ class TerminalViewModelComposerVisibilityTest {
         vm.sessionCallback.onTextChanged(vm.session)
     }
 
-    /** Drive the emulator into direct-input mode (alt-screen + wants-input latched). */
-    private fun TestScope.enterDirectMode(vm: TerminalViewModel) {
-        feed(vm, ALT_SCREEN_ON + BRACKETED_PASTE_ON)
-        advanceTimeBy(DEBOUNCE_PLUS)
-        runCurrent()
-        assertTrue(vm.directInputMode.value)
-    }
-
     @Test
     fun composerVisible_defaultsTrue() {
         val vm = createViewModel()
@@ -98,63 +79,22 @@ class TerminalViewModelComposerVisibilityTest {
     }
 
     @Test
-    fun directMode_altScreenPlusWantsInput_hidesComposer() = runTest(testDispatcher) {
+    fun hideComposer_hidesComposer_andDoesNotRequestFocus() {
         val vm = createViewModel()
-        runCurrent()
 
-        enterDirectMode(vm)
+        vm.hideComposer()
 
-        assertFalse("direct-input mode must auto-hide the composer", vm.composerVisible.value)
-    }
-
-    @Test
-    fun wantsInputOnMainScreen_keepsComposerVisible() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-
-        feed(vm, BRACKETED_PASTE_ON) // shell prompt: no alt-screen
-        advanceTimeBy(DEBOUNCE_PLUS)
-        runCurrent()
-
-        assertTrue(vm.wantsInput.value)
-        assertFalse(vm.directInputMode.value)
-        assertTrue("line-buffered flow keeps the composer", vm.composerVisible.value)
-    }
-
-    @Test
-    fun directModeExit_restoresComposer() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        enterDirectMode(vm)
-
-        feed(vm, ALT_SCREEN_OFF) // alt-screen exit is un-debounced
-        runCurrent()
-
-        assertFalse(vm.directInputMode.value)
-        assertTrue(vm.composerVisible.value)
-    }
-
-    @Test
-    fun directModeExit_handsFocusBackToComposer() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        enterDirectMode(vm)
-        assertFalse(vm.requestInputFocus.value)
-
-        feed(vm, ALT_SCREEN_OFF)
-        runCurrent()
-
-        assertTrue(
-            "a raised IME must retarget the restored composer, not keep feeding the PTY",
+        assertFalse(vm.composerVisible.value)
+        assertFalse(
+            "collapse must not request focus — the keyboard dismisses with the field",
             vm.requestInputFocus.value,
         )
     }
 
     @Test
-    fun revealComposer_showsComposer_andRequestsFocus() = runTest(testDispatcher) {
+    fun revealComposer_afterHide_showsComposer_andRequestsFocus() {
         val vm = createViewModel()
-        runCurrent()
-        enterDirectMode(vm)
+        vm.hideComposer()
 
         vm.revealComposer()
 
@@ -163,42 +103,24 @@ class TerminalViewModelComposerVisibilityTest {
     }
 
     @Test
-    fun revealOverride_persistsAcrossScreenUpdates_withinEpisode() = runTest(testDispatcher) {
+    fun hideComposer_survivesReconnect() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
-        enterDirectMode(vm)
-        vm.revealComposer()
+        vm.hideComposer()
 
-        feed(vm, "TUI keeps redrawing\r\n")
-        advanceTimeBy(DEBOUNCE_PLUS)
+        eventsFlow.emit(WsEvent.Disconnected)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
         runCurrent()
 
-        assertTrue("no auto-hide tug-of-war after a manual reveal", vm.composerVisible.value)
-    }
-
-    @Test
-    fun directModeExit_resetsOverride_nextEpisodeHidesAgain() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        enterDirectMode(vm)
-        vm.revealComposer()
-
-        feed(vm, ALT_SCREEN_OFF) // episode ends
-        runCurrent()
-        assertTrue(vm.composerVisible.value)
-
-        feed(vm, ALT_SCREEN_ON) // next episode (wants-input still latched)
-        runCurrent()
-
-        assertTrue(vm.directInputMode.value)
-        assertFalse("the reveal choice must not leak into the next episode", vm.composerVisible.value)
+        assertFalse("connection churn must not resurrect the composer", vm.composerVisible.value)
     }
 
     @Test
     fun copyTextToInput_whileComposerHidden_revealsComposer() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
-        enterDirectMode(vm)
+        vm.hideComposer()
 
         vm.copyTextToInput("git status")
 
@@ -210,30 +132,10 @@ class TerminalViewModelComposerVisibilityTest {
     }
 
     @Test
-    fun mainScreenCopyToInput_doesNotSuppressNextEpisodeAutoHide() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        feed(vm, BRACKETED_PASTE_ON) // ordinary main-screen prompt
-        advanceTimeBy(DEBOUNCE_PLUS)
-        runCurrent()
-
-        vm.copyTextToInput("ls") // reveal with no episode active — must not arm the override
-
-        feed(vm, ALT_SCREEN_ON) // a TUI episode starts later
-        runCurrent()
-
-        assertTrue(vm.directInputMode.value)
-        assertFalse(
-            "a reveal at a normal prompt must not suppress the next episode's auto-hide",
-            vm.composerVisible.value,
-        )
-    }
-
-    @Test
     fun applyTemplate_whileComposerHidden_revealsComposer() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
-        enterDirectMode(vm)
+        vm.hideComposer()
 
         vm.applyTemplate(
             TemplateDto(
@@ -256,193 +158,44 @@ class TerminalViewModelComposerVisibilityTest {
     }
 
     @Test
-    fun hideComposer_hidesAtOrdinaryPrompt() = runTest(testDispatcher) {
+    fun altScreenTui_doesNotHideComposer() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
 
-        vm.hideComposer()
-
-        assertFalse("manual collapse must work outside direct mode", vm.composerVisible.value)
-        assertFalse(
-            "collapse must not request focus — the keyboard dismisses with the field",
-            vm.requestInputFocus.value,
-        )
-    }
-
-    @Test
-    fun forceHidden_survivesDirectModeEnterAndExit() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        vm.hideComposer()
-
-        enterDirectMode(vm)
-        assertFalse(vm.composerVisible.value)
-
-        feed(vm, ALT_SCREEN_OFF) // episode ends
+        feed(vm, ALT_SCREEN_ON + BRACKETED_PASTE_ON) // a TUI enters the alt screen and reads input
+        advanceTimeBy(DEBOUNCE_PLUS)
         runCurrent()
 
-        assertFalse(vm.directInputMode.value)
-        assertFalse(
-            "a manual collapse must stick across direct-mode episodes",
+        assertTrue(vm.wantsInput.value)
+        assertTrue(
+            "alt-screen/wants-input must never auto-hide the composer — visibility is user-only",
             vm.composerVisible.value,
         )
     }
 
     @Test
-    fun directModeExit_withForceHidden_doesNotRequestComposerFocus() = runTest(testDispatcher) {
+    fun hideComposer_persistsThroughAltScreenEnterAndExit() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
         vm.hideComposer()
-        enterDirectMode(vm)
-        assertFalse(vm.requestInputFocus.value)
+
+        feed(vm, ALT_SCREEN_ON + BRACKETED_PASTE_ON)
+        advanceTimeBy(DEBOUNCE_PLUS)
+        runCurrent()
+        assertFalse(vm.composerVisible.value)
+        assertFalse(
+            "TUI activity must not hand focus back to a hidden composer",
+            vm.requestInputFocus.value,
+        )
 
         feed(vm, ALT_SCREEN_OFF)
         runCurrent()
 
         assertFalse(
-            "no IME hand-back to a force-hidden composer — the terminal stays the input field",
-            vm.requestInputFocus.value,
-        )
-    }
-
-    @Test
-    fun forceHidden_survivesReconnect() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        vm.hideComposer()
-
-        eventsFlow.emit(WsEvent.Disconnected)
-        runCurrent()
-        eventsFlow.emit(WsEvent.Connected)
-        runCurrent()
-
-        assertFalse("connection churn must not resurrect the composer", vm.composerVisible.value)
-    }
-
-    @Test
-    fun revealAfterManualHide_clearsIt_andNextEpisodeStillAutoHides() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        vm.hideComposer()
-
-        vm.revealComposer() // at an ordinary prompt → back to Auto, not ForceVisible
-        assertTrue(vm.composerVisible.value)
-        assertTrue(vm.requestInputFocus.value)
-
-        enterDirectMode(vm)
-
-        assertFalse(
-            "a reveal at a normal prompt must not suppress the next episode's auto-hide",
+            "a manual collapse must stick through alt-screen enter and exit",
             vm.composerVisible.value,
         )
-    }
-
-    @Test
-    fun copyTextToInput_whileForceHidden_revealsComposer() = runTest(testDispatcher) {
-        val vm = createViewModel()
-        runCurrent()
-        vm.hideComposer()
-
-        vm.copyTextToInput("git status")
-
-        assertTrue(
-            "a gesture that targets the composer must reveal it even from a manual collapse",
-            vm.composerVisible.value,
-        )
-        assertTrue(vm.requestInputFocus.value)
-    }
-
-    @Test
-    fun manualHide_neverShowsCoachMark() = runTest(testDispatcher) {
-        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(false)
-        val vm = createViewModel()
-        runCurrent()
-
-        vm.hideComposer()
-        runCurrent()
-
-        assertFalse(
-            "the coach mark teaches AUTO-hide; a user's own collapse needs no teaching",
-            vm.showComposerCoachMark.value,
-        )
-    }
-
-    @Test
-    fun manualHide_clearsStaleCoachMarkFromEarlierAutoHide() = runTest(testDispatcher) {
-        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(false)
-        val vm = createViewModel()
-        runCurrent()
-        enterDirectMode(vm) // auto-hide surfaces the coach mark…
-        runCurrent()
-        assertTrue(vm.showComposerCoachMark.value)
-        feed(vm, ALT_SCREEN_OFF) // …but the episode ends before the user dismisses it
-        runCurrent()
-
-        vm.hideComposer()
-        runCurrent()
-
-        assertFalse(
-            "a stale undismissed coach mark must not pop on the chip a manual collapse mounts",
-            vm.showComposerCoachMark.value,
-        )
-    }
-
-    @Test
-    fun firstAutoHide_showsCoachMark_whenFlagUnseen() = runTest(testDispatcher) {
-        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(false)
-        val vm = createViewModel()
-        runCurrent()
-
-        enterDirectMode(vm)
-        runCurrent()
-
-        assertTrue(vm.showComposerCoachMark.value)
-    }
-
-    @Test
-    fun autoHide_skipsCoachMark_whenFlagSeen() = runTest(testDispatcher) {
-        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(true)
-        val vm = createViewModel()
-        runCurrent()
-
-        enterDirectMode(vm)
-        runCurrent()
-
-        assertFalse(vm.showComposerCoachMark.value)
-    }
-
-    @Test
-    fun markCoachMarkSeen_persistsFlag_andClearsState() = runTest(testDispatcher) {
-        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(false)
-        coEvery { preferencesStore.setComposerAutoHideCoachSeen() } just Runs
-        val vm = createViewModel()
-        runCurrent()
-        enterDirectMode(vm)
-        runCurrent()
-        assertTrue(vm.showComposerCoachMark.value)
-
-        vm.markCoachMarkSeen()
-        runCurrent()
-
-        assertFalse(vm.showComposerCoachMark.value)
-        coVerify(exactly = 1) { preferencesStore.setComposerAutoHideCoachSeen() }
-    }
-
-    @Test
-    fun revealComposer_dismissesPendingCoachMark() = runTest(testDispatcher) {
-        every { preferencesStore.composerAutoHideCoachSeen } returns flowOf(false)
-        val vm = createViewModel()
-        runCurrent()
-        enterDirectMode(vm)
-        runCurrent()
-        assertTrue(vm.showComposerCoachMark.value)
-
-        vm.revealComposer()
-
-        assertFalse(
-            "using the affordance proves it was discovered — no tooltip needed",
-            vm.showComposerCoachMark.value,
-        )
+        assertFalse(vm.requestInputFocus.value)
     }
 
     private companion object {

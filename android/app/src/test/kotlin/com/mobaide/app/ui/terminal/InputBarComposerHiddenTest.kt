@@ -19,7 +19,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * UI tests for [InputBar]'s direct-input-mode composer hide/reveal surface:
+ * UI tests for [InputBar]'s user-controlled composer hide/reveal surface:
  *   - `composerVisible = false` removes the text field and every composer action
  *     button (Templates, Save as template, panel toggle, Expand editor, Send) while
  *     keeping the control-key bar mounted without needing the panel toggle.
@@ -30,8 +30,6 @@ import org.robolectric.annotation.Config
  *   - Both affordances are absent while the composer is visible.
  *   - A pending `requestFocus` is deferred while the composer is hidden and consumed
  *     on the frame that mounts the field.
- *   - `showCoachMark = true` surfaces the one-time RichTooltip teaching the reveal
- *     affordance.
  *
  * Robolectric SDK pinned to 33 per project precedent; portrait qualifiers.
  */
@@ -45,10 +43,8 @@ class InputBarComposerHiddenTest {
     private fun setInputBar(
         composerVisible: Boolean,
         enabled: Boolean = true,
-        showCoachMark: Boolean = false,
         onRevealComposer: () -> Unit = {},
         onRaiseTerminalKeyboard: () -> Unit = {},
-        onCoachMarkDismissed: () -> Unit = {},
     ) {
         composeRule.setContent {
             Surface {
@@ -61,8 +57,6 @@ class InputBarComposerHiddenTest {
                     composerVisible = composerVisible,
                     onRevealComposer = onRevealComposer,
                     onRaiseTerminalKeyboard = onRaiseTerminalKeyboard,
-                    showCoachMark = showCoachMark,
-                    onCoachMarkDismissed = onCoachMarkDismissed,
                 )
             }
         }
@@ -170,17 +164,5 @@ class InputBarComposerHiddenTest {
         composeRule.waitForIdle()
 
         assertEquals(1, focusHandled)
-    }
-
-    @Test
-    fun showCoachMark_rendersRichTooltipText() {
-        setInputBar(composerVisible = false, showCoachMark = true)
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithText("Command field is tucked away").assertExists()
-        composeRule.onNodeWithText(
-            "Tap the terminal or the keyboard icon to type",
-            substring = true,
-        ).assertExists()
     }
 }

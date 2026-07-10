@@ -36,10 +36,11 @@ import org.junit.Test
  * visible AND bracketed-paste mode (DECSET 2004) on, after a 400 ms stability window
  * on both edges. A rising edge auto-raises the keyboard exactly once — targeting the
  * composer (`requestInputFocus`) while it is visible, or the terminal surface
- * (`terminalKeyboardRaise`) while it is hidden (auto-hidden by direct-input mode or
- * user-collapsed via [TerminalViewModel.hideComposer] — a hidden composer means the
- * terminal IS the input field). Raises are suppressed while not
- * [ConnectionState.Live]; an edge latched during replay fires once on Live entry.
+ * (`terminalKeyboardRaise`) while it is user-collapsed via
+ * [TerminalViewModel.hideComposer] (a hidden composer means the terminal IS the input
+ * field). Alt-screen activity never changes the raise target on its own. Raises are
+ * suppressed while not [ConnectionState.Live]; an edge latched during replay fires
+ * once on Live entry.
  *
  * Escape bytes are fed straight to the JVM-hosted emulator via `emulator.append`
  * plus a manual `sessionCallback.onTextChanged` (what `notifyScreenUpdate` does in
@@ -66,7 +67,6 @@ class TerminalViewModelWantsInputTest {
     private val preferencesStore = mockk<PreferencesStore> {
         every { terminalDisplayMode } returns flowOf(TerminalDisplayMode.Full)
         every { terminalStaticColumns } returns flowOf(TERMINAL_STATIC_COLUMNS_DEFAULT)
-        every { composerAutoHideCoachSeen } returns flowOf(true)
     }
 
     private fun createViewModel(): TerminalViewModel =
@@ -99,7 +99,6 @@ class TerminalViewModelWantsInputTest {
     fun wantsInput_defaultsFalse() {
         val vm = createViewModel()
         assertFalse(vm.wantsInput.value)
-        assertFalse(vm.directInputMode.value)
         assertFalse(vm.requestInputFocus.value)
     }
 
@@ -227,23 +226,46 @@ class TerminalViewModelWantsInputTest {
     }
 
     @Test
-    fun risingEdge_onAltScreen_raisesTerminalKeyboard_notComposerFocus() = runTest(testDispatcher) {
-        val vm = createLiveViewModel()
-        var raises = 0
-        backgroundScope.launch { vm.terminalKeyboardRaise.collect { raises++ } }
+    fun risingEdge_onAltScreen_withComposerVisible_requestsComposerFocus_zeroTerminalRaises() =
+        runTest(testDispatcher) {
+            val vm = createLiveViewModel()
+            var raises = 0
+            backgroundScope.launch { vm.terminalKeyboardRaise.collect { raises++ } }
 
-        feed(vm, ALT_SCREEN_ON + BRACKETED_PASTE_ON)
-        advanceTimeBy(DEBOUNCE_PLUS)
-        runCurrent()
+            feed(vm, ALT_SCREEN_ON + BRACKETED_PASTE_ON)
+            advanceTimeBy(DEBOUNCE_PLUS)
+            runCurrent()
 
-        assertTrue(vm.wantsInput.value)
-        assertTrue("alt-screen + wants-input = direct-input mode", vm.directInputMode.value)
-        assertEquals("IME must target the terminal surface", 1, raises)
-        assertFalse("composer focus must not fire in direct mode", vm.requestInputFocus.value)
-    }
+            assertTrue(vm.wantsInput.value)
+            assertTrue(
+                "a visible composer stays the raise target even on the alt screen",
+                vm.requestInputFocus.value,
+            )
+            assertEquals("no terminal-surface raise while the composer is visible", 0, raises)
+        }
 
     @Test
-    fun risingEdge_withComposerForceHidden_raisesTerminalKeyboard_atShellPrompt() =
+    fun risingEdge_onAltScreen_withComposerHidden_raisesTerminalKeyboard_noComposerFocus() =
+        runTest(testDispatcher) {
+            val vm = createLiveViewModel()
+            var raises = 0
+            backgroundScope.launch { vm.terminalKeyboardRaise.collect { raises++ } }
+            vm.hideComposer()
+
+            feed(vm, ALT_SCREEN_ON + BRACKETED_PASTE_ON)
+            advanceTimeBy(DEBOUNCE_PLUS)
+            runCurrent()
+
+            assertTrue(vm.wantsInput.value)
+            assertEquals("IME must target the terminal surface", 1, raises)
+            assertFalse(
+                "composer focus must not fire while the composer is hidden",
+                vm.requestInputFocus.value,
+            )
+        }
+
+    @Test
+    fun risingEdge_withComposerHidden_raisesTerminalKeyboard_atShellPrompt() =
         runTest(testDispatcher) {
             val vm = createLiveViewModel()
             var raises = 0
@@ -255,20 +277,19 @@ class TerminalViewModelWantsInputTest {
             runCurrent()
 
             assertTrue(vm.wantsInput.value)
-            assertFalse(vm.directInputMode.value)
             assertEquals(
                 "hidden composer ⇒ the terminal is the input field, raise targets it",
                 1,
                 raises,
             )
             assertFalse(
-                "composer focus must not fire while it is force-hidden",
+                "composer focus must not fire while the composer is hidden",
                 vm.requestInputFocus.value,
             )
         }
 
     @Test
-    fun deferredReplayRaise_withComposerForceHidden_targetsTerminal() = runTest(testDispatcher) {
+    fun deferredReplayRaise_withComposerHidden_targetsTerminal() = runTest(testDispatcher) {
         val vm = createViewModel()
         runCurrent()
         var raises = 0

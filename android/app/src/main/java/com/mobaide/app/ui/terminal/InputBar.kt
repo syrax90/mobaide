@@ -28,17 +28,12 @@ import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RichTooltip
 import androidx.compose.material3.Text
-import androidx.compose.material3.TooltipBox
-import androidx.compose.material3.TooltipDefaults
-import androidx.compose.material3.rememberTooltipState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -105,8 +100,8 @@ private val CtrlDKey = ControlKey("Ctrl+D", byteArrayOf(0x04))
 
 // Nav/control tail shared by every CLI. Arrows + Enter drive the in-terminal menus (mode
 // picker, approval/selection prompts, history); Ctrl+O toggles the transcript, Ctrl+R
-// searches history; Backspace erases characters typed straight into a TUI (direct-input
-// mode has no composer buffer to delete from).
+// searches history; Backspace erases characters typed straight into a TUI (terminal-
+// surface typing has no composer buffer to delete from).
 private val SHARED_TAIL = listOf(
     EscKey, CtrlCKey, EnterKey, TabKey, BackspaceKey,
     UpKey, DownKey, LeftKey, RightKey,
@@ -151,8 +146,6 @@ fun InputBar(
     onRevealComposer: () -> Unit = {},
     onHideComposer: () -> Unit = {},
     onRaiseTerminalKeyboard: () -> Unit = {},
-    showCoachMark: Boolean = false,
-    onCoachMarkDismissed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val haptic = LocalHapticFeedback.current
@@ -185,9 +178,9 @@ fun InputBar(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        // Composer block (field + action buttons). Auto-hidden in direct-input mode —
-        // the terminal owns typing there — user-collapsible via the hide button, and
-        // restored via the reveal chip below.
+        // Composer block (field + action buttons). User-collapsible via the hide
+        // button and restored via the reveal chip below; while hidden the terminal
+        // surface owns typing.
         //
         // Fade-only transitions (here and on the panel below): a vertical slide animates
         // the InputBar height frame-by-frame, which resizes the terminal view — and
@@ -218,8 +211,8 @@ fun InputBar(
         }
 
         // Control-key panel — single horizontally scrollable row; forced visible while
-        // the composer is hidden so direct-input mode always keeps Esc/arrows/Backspace
-        // and the reveal chip reachable.
+        // the composer is hidden so terminal-surface typing always keeps
+        // Esc/arrows/Backspace and the reveal chip reachable.
         AnimatedVisibility(
             visible = panelExpanded || !composerVisible,
             enter = fadeIn(),
@@ -247,8 +240,6 @@ fun InputBar(
                         )
                     }
                     RevealComposerChip(
-                        showCoachMark = showCoachMark,
-                        onCoachMarkDismissed = onCoachMarkDismissed,
                         onClick = {
                             panelExpanded = true
                             onRevealComposer()
@@ -378,53 +369,24 @@ private fun ComposerBlock(
     }
 }
 
-/** Labeled affordance that restores the auto-hidden composer; hosts the one-time
- *  coach mark teaching the hide/reveal mechanic on the first auto-hide. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Labeled affordance that restores a user-hidden composer. */
 @Composable
 private fun RevealComposerChip(
-    showCoachMark: Boolean,
-    onCoachMarkDismissed: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val tooltipState = rememberTooltipState(isPersistent = true)
-    LaunchedEffect(showCoachMark) {
-        if (showCoachMark) {
-            // show() suspends until the tooltip is dismissed (tap outside / back).
-            tooltipState.show()
-            onCoachMarkDismissed()
-        }
-    }
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberRichTooltipPositionProvider(),
-        state = tooltipState,
-        tooltip = {
-            RichTooltip(
-                title = { Text("Command field is tucked away") },
-            ) {
-                Text(
-                    "Typing goes straight into the terminal now. " +
-                        "Tap the terminal or the keyboard icon to type. " +
-                        "Tap here to bring the command field back.",
-                )
-            }
+    AssistChip(
+        onClick = onClick,
+        label = { Text("Command field") },
+        leadingIcon = {
+            Icon(
+                Icons.Outlined.Keyboard,
+                contentDescription = null,
+                modifier = Modifier.size(AssistChipDefaults.IconSize),
+            )
         },
-        modifier = modifier,
-    ) {
-        AssistChip(
-            onClick = onClick,
-            label = { Text("Command field") },
-            leadingIcon = {
-                Icon(
-                    Icons.Outlined.Keyboard,
-                    contentDescription = null,
-                    modifier = Modifier.size(AssistChipDefaults.IconSize),
-                )
-            },
-            modifier = Modifier.testTag("reveal_composer_chip"),
-        )
-    }
+        modifier = modifier.testTag("reveal_composer_chip"),
+    )
 }
 
 @Composable
@@ -548,9 +510,9 @@ private fun InputBarPreview() {
     }
 }
 
-@Preview(name = "InputBar direct mode (composer hidden) light", showBackground = true)
+@Preview(name = "InputBar composer hidden light", showBackground = true)
 @Preview(
-    name = "InputBar direct mode (composer hidden) dark",
+    name = "InputBar composer hidden dark",
     showBackground = true,
     uiMode = Configuration.UI_MODE_NIGHT_YES,
 )
