@@ -155,6 +155,12 @@ fun TerminalScreen(
             )
         },
     ) { padding ->
+        // Shared write-path gate: during replay/reconnect or on a stopped/crashed
+        // session the ViewModel's input listener silently drops terminal bytes, so
+        // affordances that would feed that path (tap-to-raise IME, selection-menu
+        // Paste) are withheld rather than offered and ignored.
+        val sessionInputActive = isConnected && sessionState == "running" &&
+            connectionState == ConnectionState.Live
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -189,15 +195,11 @@ fun TerminalScreen(
                         followMode = followMode,
                         requestKeyboard = terminalKeyboardRequest,
                         onKeyboardHandled = { terminalKeyboardRequest = false },
-                        // Same connectivity gate as the composer's `enabled` below, plus
-                        // Live: a tap must not raise an IME whose keystrokes would feed a
-                        // stopped or disconnected session, and during replay/reconnect the
-                        // write path drops terminal bytes — raising a keyboard whose input
-                        // would be silently discarded is worse than not raising it.
-                        tapToRaiseKeyboard = !composerVisible &&
-                            isConnected && sessionState == "running" &&
-                            connectionState == ConnectionState.Live,
+                        tapToRaiseKeyboard = !composerVisible && sessionInputActive,
                         onTapToRaiseKeyboard = { terminalKeyboardRequest = true },
+                        // Deliberately independent of composerVisible: pasting into the
+                        // terminal is valid whether or not the composer is on screen.
+                        pasteFromClipboardEnabled = sessionInputActive,
                         modifier = Modifier.fillMaxSize(),
                     )
                     ConnectionOverlay(state = connectionState)

@@ -1,7 +1,7 @@
 ---
 name: mobile-ui-component
-description: Use when creating or modifying Android Jetpack Compose UI components, screens, ViewModels, or wiring new ServerEvent types/repositories under android/app/src/main/java/com/claudemobile/app/. Enforces SOTA Compose + UDF patterns and the project's server-sync refresh rule.
-when_to_use: Triggered for any work touching `android/app/src/main/java/com/claudemobile/app/ui/**` or any Repository in `data/repository/**` whose state is rendered by the UI, and for adding/extending `ServerEvent` types in `data/events/**`.
+description: Use when creating or modifying Android Jetpack Compose UI components, screens, ViewModels, or wiring new ServerEvent types/repositories under android/app/src/main/java/com/mobaide/app/. Enforces SOTA Compose + UDF patterns and the project's server-sync refresh rule.
+when_to_use: Triggered for any work touching `android/app/src/main/java/com/mobaide/app/ui/**` or any Repository in `data/repository/**` whose state is rendered by the UI, and for adding/extending `ServerEvent` types in `data/events/**`.
 ---
 
 # Mobile UI Component Rules
