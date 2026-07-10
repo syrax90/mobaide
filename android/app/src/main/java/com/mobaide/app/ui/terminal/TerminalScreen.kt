@@ -41,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -172,6 +173,11 @@ fun TerminalScreen(
         // than offered and ignored.
         val sessionInputActive = isConnected && sessionState == "running" &&
             connectionState == ConnectionState.Live
+        // Cursor-row bottom (px, view-local) reported by the terminal surface. Read ONLY
+        // inside imeCursorCounterPan's placement block: per-output-frame writes then
+        // re-run placement, never composition. MAX_VALUE (no report yet) means a zero
+        // counter-pan, i.e. the plain full-pan behavior.
+        val cursorAnchorBottomPx = remember { mutableIntStateOf(Int.MAX_VALUE) }
         // Clip host: its top edge is the app bar's bottom, so content panned up by
         // the keyboard is clipped instead of drawing over the app bar.
         Box(
@@ -186,11 +192,19 @@ fun TerminalScreen(
                     // Pan, don't resize: the keyboard never changes the terminal's
                     // measured size (and thus never the grid or the remote PTY size) —
                     // the whole column just shifts up so the InputBar rides above the
-                    // IME and the bottom terminal rows stay visible. See imeFloatingPan.
+                    // IME. The terminal surface inside counter-pans to keep the cursor
+                    // row visible. See imeFloatingPan / imeCursorCounterPan.
                     .imeFloatingPan(WindowInsets.ime, WindowInsets.systemBars),
             ) {
                 Box(modifier = Modifier.weight(1f)) {
-                    Box(modifier = Modifier.fillMaxSize().background(TerminalBackground)) {
+                    // clipToBounds: the counter-pan shifts the surface down by up to the
+                    // pan amount; the overhang must not paint over the InputBar below.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(TerminalBackground)
+                            .clipToBounds(),
+                    ) {
                         TerminalSurfaceView(
                             session = viewModel.session,
                             sessionCallback = viewModel.sessionCallback,
@@ -208,13 +222,18 @@ fun TerminalScreen(
                                 viewModel.copyTextToInput(text)
                             },
                             onScrollSettled = viewModel::onUserScrollSettled,
+                            onCursorAnchorChanged = { cursorAnchorBottomPx.intValue = it },
                             followMode = followMode,
                             requestKeyboard = terminalKeyboardRequest,
                             onKeyboardHandled = { terminalKeyboardRequest = false },
                             // Deliberately independent of composerVisible: pasting into the
                             // terminal is valid whether or not the composer is on screen.
                             pasteFromClipboardEnabled = sessionInputActive,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .imeCursorCounterPan(WindowInsets.ime, WindowInsets.systemBars) {
+                                    cursorAnchorBottomPx.intValue
+                                },
                         )
                         JumpToBottomFab(
                             visible = !followMode,
