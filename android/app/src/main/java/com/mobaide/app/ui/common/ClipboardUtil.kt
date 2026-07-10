@@ -45,10 +45,17 @@ fun Context.hasClipboardText(): Boolean {
  * Reading the clip *contents* fires the Android 12+ clipboard-access
  * toast — call only in response to an explicit user gesture (e.g. a
  * "Paste" tap), never from gating or rendering code.
+ *
+ * URI-only items are rejected even when the clip *description* advertises
+ * text (`ClipData.newUri` puts the provider's MIME type in the description,
+ * and a description can lie outright): coercing a URI-backed item to text
+ * opens its ContentProvider synchronously on the calling thread — a
+ * jank/ANR and malicious-provider DoS vector on the paste tap path.
  */
 fun Context.readClipboardText(): String? {
     if (!hasClipboardText()) return null
     val manager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val item = manager.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0) ?: return null
+    if (item.text == null && item.uri != null) return null
     return item.coerceToText(this)?.toString()?.takeIf { it.isNotEmpty() }
 }

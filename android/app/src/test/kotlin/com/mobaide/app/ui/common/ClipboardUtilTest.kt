@@ -1,6 +1,7 @@
 package com.mobaide.app.ui.common
 
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
@@ -96,5 +97,37 @@ class ClipboardUtilTest {
         // A stale-menu tap after the clipboard changed to a uri clip must fail the
         // hasClipboardText pre-check and never attempt coercion.
         assertNull(context.readClipboardText())
+    }
+
+    @Test
+    fun readClipboardText_uriOnlyItemWithTextPlainDescription_returnsNull() {
+        clipboard.setPrimaryClip(
+            ClipData(
+                ClipDescription("label", arrayOf(ClipDescription.MIMETYPE_TEXT_PLAIN)),
+                ClipData.Item(Uri.parse("content://com.example.provider/item/1")),
+            ),
+        )
+
+        // ClipData.newUri-style clips put the provider MIME type in the
+        // description, so the description gate passes...
+        assertTrue(context.hasClipboardText())
+        // ...and it is the URI-only item guard that must block the read: coercing
+        // a URI-backed item would open its ContentProvider synchronously on the
+        // paste tap. Without the guard this returns the uri string, not null.
+        assertNull(context.readClipboardText())
+    }
+
+    @Test
+    fun readClipboardText_itemWithBothTextAndUri_returnsText() {
+        clipboard.setPrimaryClip(
+            ClipData(
+                ClipDescription("label", arrayOf(ClipDescription.MIMETYPE_TEXT_PLAIN)),
+                ClipData.Item("attached text", null, Uri.parse("content://com.example.provider/item/1")),
+            ),
+        )
+
+        // The guard rejects URI-only items; an item that also carries text must
+        // still paste it.
+        assertEquals("attached text", context.readClipboardText())
     }
 }
