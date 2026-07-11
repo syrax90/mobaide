@@ -1,5 +1,21 @@
 # central_server Changelog
 
+## [0.2.3](https://github.com/syrax90/claude_mobile/compare/server-v0.2.2...server-v0.2.3) (2026-07-11)
+
+
+### Features
+
+* **ios,server:** onboarding UI (6 screens), Google Sign-In + Sign in with Apple, /api/auth/apple ([46656a9](https://github.com/syrax90/claude_mobile/commit/46656a93520db5d1ed5b013d9b490b67d6294dd8))
+* **ios,server:** onboarding UI (6 screens), Google Sign-In + Sign in with Apple, /api/auth/apple ([4cad459](https://github.com/syrax90/claude_mobile/commit/4cad459db29c09e76d6495237c583323b6329a99))
+* **push:** APNs push pipeline for session attention (CLA-106 / iOS-10) ([14178f4](https://github.com/syrax90/claude_mobile/commit/14178f4ae572f2259151b27c6c49b7092b6d5e1f))
+* **push:** APNs push pipeline for session attention (CLA-106 / iOS-10) ([a1f2877](https://github.com/syrax90/claude_mobile/commit/a1f2877251ef9350c99fdade5504c6d13b0007da))
+
+
+### Bug Fixes
+
+* **central_server:** allow PATCH through relay mobile proxy ([65f45c6](https://github.com/syrax90/claude_mobile/commit/65f45c6c2d0dc00b0626a6d11b8e674c2a8ad894))
+* **central_server:** allow PATCH through relay mobile proxy ([0a9a7a5](https://github.com/syrax90/claude_mobile/commit/0a9a7a5c3216069c4ef7e0abbd21bfb8ca2eb456))
+
 ## [0.2.2](https://github.com/syrax90/claude_mobile/compare/server-v0.2.1...server-v0.2.2) (2026-06-30)
 
 

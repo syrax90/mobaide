@@ -1,5 +1,39 @@
 # Android Changelog
 
+## [2.2.0](https://github.com/syrax90/claude_mobile/compare/android-v2.1.0...android-v2.2.0) (2026-07-11)
+
+
+### Features
+
+* **agent:** move control-key row under Command field chip ([972ba42](https://github.com/syrax90/claude_mobile/commit/972ba42bdbcf42731d3df066ae78e033bff0b825))
+* **android:** add Paste to terminal long-press selection menu (CLA-132) ([4b78c6d](https://github.com/syrax90/claude_mobile/commit/4b78c6d2d76341ba12848081e8b713157d276aa7))
+* **android:** add Paste to terminal long-press selection menu (CLA-132) ([aa3a79f](https://github.com/syrax90/claude_mobile/commit/aa3a79fd92e3bd57325348675d0ca95ef22c5f3e))
+* **android:** auto-raise keyboard on terminal input readiness + direct TUI input routing (CLA-123) ([8af7e13](https://github.com/syrax90/claude_mobile/commit/8af7e139999add293ddfce0111fd9b743b3c4b56))
+* **android:** auto-raise keyboard on terminal input readiness + direct TUI input routing (CLA-123) ([3b10b7e](https://github.com/syrax90/claude_mobile/commit/3b10b7e1805fa9ce694dc19e5968497fd743db6a))
+* **push:** APNs push pipeline for session attention (CLA-106 / iOS-10) ([14178f4](https://github.com/syrax90/claude_mobile/commit/14178f4ae572f2259151b27c6c49b7092b6d5e1f))
+* **push:** APNs push pipeline for session attention (CLA-106 / iOS-10) ([a1f2877](https://github.com/syrax90/claude_mobile/commit/a1f2877251ef9350c99fdade5504c6d13b0007da))
+
+
+### Bug Fixes
+
+* **android:** gate direct typing and raise taps on running session, stop raise taps clicking mouse-tracking TUIs (CLA-123 Codex round 2) ([d28d842](https://github.com/syrax90/claude_mobile/commit/d28d84228380e2b898aae31fe469c44e6c8cf85a))
+* **android:** gate direct typing on live running session and flush coalesced sync frames (CLA-123 Codex follow-up) ([1e40afe](https://github.com/syrax90/claude_mobile/commit/1e40afe1b68910a559e4db2b225a8ec83d5b1ec8))
+* **android:** keep show-keyboard button on the Command field row ([9786d93](https://github.com/syrax90/claude_mobile/commit/9786d9383cdccb30e2ed578f07d307616b49206e))
+* **android:** keep show-keyboard button on the Command field row ([a55ed2e](https://github.com/syrax90/claude_mobile/commit/a55ed2e97c6aab550c08c3907876cfced47658aa))
+* **android:** keep terminal cursor row visible when soft keyboard shows ([337b0dc](https://github.com/syrax90/claude_mobile/commit/337b0dc086c98b90117a427a376feeaee8a8e331))
+* **android:** keep terminal cursor row visible when soft keyboard shows ([401a193](https://github.com/syrax90/claude_mobile/commit/401a1932b6b3f4581bd765e611c353ee84bcd1f1))
+* **android:** make terminal keyboard explicit-only and dismiss on leaving session ([87a928a](https://github.com/syrax90/claude_mobile/commit/87a928a4921ab29d718afc9bd2c387c5831e0bf8))
+* **android:** make terminal keyboard explicit-only and dismiss on leaving session ([0037781](https://github.com/syrax90/claude_mobile/commit/0037781106a2bba67fb66aca84a619ec856a0322))
+* **android:** move control-key row under Command field chip ([9ec99f7](https://github.com/syrax90/claude_mobile/commit/9ec99f7c5423b64b483285978a2f5af329fffff2))
+* **android:** pan terminal for soft keyboard instead of resizing grid ([df7dcf3](https://github.com/syrax90/claude_mobile/commit/df7dcf3faa0c18d6e540db04e04d06b28e81d1a5))
+* **android:** pan terminal for soft keyboard instead of resizing grid ([8bdde66](https://github.com/syrax90/claude_mobile/commit/8bdde667a267cfb2eee8bafef12c22cca516e097))
+* **android:** reject URI-only clipboard items to avoid ContentProvider I/O on main thread ([621a5f3](https://github.com/syrax90/claude_mobile/commit/621a5f3cd3b69d4ebd997567369124563c9209aa))
+* **android:** retarget IME on direct-mode exit and release deferred replay raise only at replay end (CLA-123 Codex follow-up) ([b982823](https://github.com/syrax90/claude_mobile/commit/b98282368f3a47e3363fc0fcc413d95818cdc98e))
+* **android:** show unavailability reason text in warning yellow ([14061b8](https://github.com/syrax90/claude_mobile/commit/14061b875b8fa45fa0b0c6886fdea341e7827af1))
+* **android:** show unavailability reason text in warning yellow ([c63674d](https://github.com/syrax90/claude_mobile/commit/c63674d06f0904e8adab2ef841894369ea27e964))
+* **android:** stop terminal screen shift and add composer show/hide controls (CLA-123 follow-up) ([e1809a1](https://github.com/syrax90/claude_mobile/commit/e1809a1276ea5d99b8fd92c48280d709e29f5a21))
+* **android:** stop terminal screen shift and add composer show/hide controls (CLA-123 follow-up) ([c8ab6be](https://github.com/syrax90/claude_mobile/commit/c8ab6bec98bdbc5bd1d192a2b09401276c284600))
+
 ## [2.1.0](https://github.com/syrax90/claude_mobile/compare/android-v2.0.2...android-v2.1.0) (2026-07-05)
 
 
