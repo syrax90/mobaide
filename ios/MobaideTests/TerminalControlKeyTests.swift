@@ -35,23 +35,24 @@ final class TerminalControlKeyTests: XCTestCase {
     func testClaudeSetComposition() {
         XCTAssertEqual(
             ids(TerminalControlKey.claudeKeys),
-            ["mode", "rewind", "esc", "ctrlC", "enter", "tab",
-             "up", "down", "left", "right", "ctrlO", "ctrlR", "ctrlL"]
+            ["enter", "up", "down", "left", "right", "ctrlC", "mode", "ctrlL", "esc",
+             "rewind", "tab", "ctrlO", "ctrlR"]
         )
     }
 
-    func testCodexSetPrependsApproveRejectToClaudeSet() {
+    func testCodexSetInsertsApproveRejectAfterFixedPrefix() {
         XCTAssertEqual(
             ids(TerminalControlKey.codexKeys),
-            ["approve", "reject"] + ids(TerminalControlKey.claudeKeys)
+            ["enter", "up", "down", "left", "right", "ctrlC", "mode", "ctrlL", "esc",
+             "approve", "reject", "rewind", "tab", "ctrlO", "ctrlR"]
         )
     }
 
     func testAntigravitySetComposition() {
         XCTAssertEqual(
             ids(TerminalControlKey.antigravityKeys),
-            ["ctrlK", "ctrlG", "ctrlD", "esc", "ctrlC", "enter", "tab",
-             "up", "down", "left", "right", "ctrlO", "ctrlR", "ctrlL"]
+            ["enter", "up", "down", "left", "right", "ctrlC", "ctrlL", "esc",
+             "ctrlK", "ctrlG", "ctrlD", "tab", "ctrlO", "ctrlR"]
         )
     }
 

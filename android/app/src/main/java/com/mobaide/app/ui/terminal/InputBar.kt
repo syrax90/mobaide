@@ -98,30 +98,60 @@ private val CtrlKKey = ControlKey("Ctrl+K", byteArrayOf(0x0b))
 private val CtrlGKey = ControlKey("Ctrl+G", byteArrayOf(0x07))
 private val CtrlDKey = ControlKey("Ctrl+D", byteArrayOf(0x04))
 
-// Nav/control tail shared by every CLI. Arrows + Enter drive the in-terminal menus (mode
+// Canonical left-to-right order for every control key. Each session kind renders only the
+// subset it supports (see the membership lists below), filtered from this single list, so the
+// button order stays consistent across kinds — only which buttons appear differs. The high-
+// frequency keys lead (Enter, arrows, Ctrl+C, Mode, Ctrl+L, Esc); each kind's distinctive
+// action keys come next, then the common extras (Tab, Backspace, Ctrl+O, Ctrl+R).
+private val CONTROL_KEY_ORDER = listOf(
+    EnterKey,
+    UpKey, DownKey, LeftKey, RightKey,
+    CtrlCKey,
+    ModeKey,
+    CtrlLKey,
+    EscKey,
+    ApproveKey, RejectKey,
+    CtrlKKey, CtrlGKey, CtrlDKey,
+    RewindKey,
+    TabKey, BackspaceKey,
+    CtrlOKey, CtrlRKey,
+)
+
+// Reorder a set of keys into the canonical layout. Membership is defined by the caller; the
+// resulting position is always dictated by CONTROL_KEY_ORDER. Filtering by the (unique) label
+// avoids the ByteArray reference-equality pitfall of the ControlKey data class.
+private fun orderedControlKeys(keys: List<ControlKey>): List<ControlKey> {
+    val present = keys.mapTo(HashSet()) { it.label }
+    return CONTROL_KEY_ORDER.filter { it.label in present }
+}
+
+// Nav/control keys shared by every CLI. Arrows + Enter drive the in-terminal menus (mode
 // picker, approval/selection prompts, history); Ctrl+O toggles the transcript, Ctrl+R
 // searches history; Backspace erases characters typed straight into a TUI (terminal-
-// surface typing has no composer buffer to delete from).
-private val SHARED_TAIL = listOf(
+// surface typing has no composer buffer to delete from). Order here is irrelevant —
+// CONTROL_KEY_ORDER decides the on-screen layout; this list only defines membership.
+private val SHARED_KEYS = listOf(
     EscKey, CtrlCKey, EnterKey, TabKey, BackspaceKey,
     UpKey, DownKey, LeftKey, RightKey,
     CtrlOKey, CtrlRKey,
 )
 
-// Claude / shell / auto-scan: Mode (Shift+Tab, CSI Z — cycles plan/accept-edits/normal) and
-// Rewind (Esc-Esc — edits the previous message) lead the shared tail; Ctrl+L (clear screen)
-// closes the set.
-private val CLAUDE_CONTROL_KEYS = listOf(ModeKey, RewindKey) + SHARED_TAIL + CtrlLKey
+// Claude / shell / auto-scan: the shared keys plus Mode (Shift+Tab, CSI Z — cycles
+// plan/accept-edits/normal), Rewind (Esc-Esc — edits the previous message) and Ctrl+L
+// (clear screen).
+private val CLAUDE_CONTROL_KEYS =
+    orderedControlKeys(listOf(ModeKey, RewindKey) + SHARED_KEYS + CtrlLKey)
 
 // Codex = the Claude set plus its high-frequency approval answers (bare 'y'/'n', no CR —
-// Enter stays a separate key) up front. Ctrl+L arrives via the embedded Claude set.
-private val CODEX_CONTROL_KEYS = listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS
+// Enter stays a separate key).
+private val CODEX_CONTROL_KEYS =
+    orderedControlKeys(listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS)
 
-// Antigravity (agy) leads with its own TUI controls — Ctrl+K (fast-approve pending action),
-// Ctrl+G (tool confirmation view), Ctrl+D (exit) — then the shared tail and Ctrl+L
-// (clear screen). Bracketed paste is honored, so no newline key.
+// Antigravity (agy) adds its own TUI controls — Ctrl+K (fast-approve pending action),
+// Ctrl+G (tool confirmation view), Ctrl+D (exit) — to the shared keys and Ctrl+L
+// (clear screen). It has no Mode/Rewind. Bracketed paste is honored, so no newline key.
 private val ANTIGRAVITY_CONTROL_KEYS =
-    listOf(CtrlKKey, CtrlGKey, CtrlDKey) + SHARED_TAIL + CtrlLKey
+    orderedControlKeys(listOf(CtrlKKey, CtrlGKey, CtrlDKey) + SHARED_KEYS + CtrlLKey)
 
 private fun controlKeysFor(kind: SessionKind): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS

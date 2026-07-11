@@ -19,18 +19,22 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * UI tests for [InputBar] covering the CLI-aware control-key bar:
+ * UI tests for [InputBar] covering the CLI-aware control-key bar. Every kind renders a
+ * subset of `CONTROL_KEY_ORDER`, so the shared prefix (`Enter, ↑, ↓, ←, →, Ctrl+C, Mode,
+ * Ctrl+L, Esc`) keeps the same left-to-right order across kinds; only the trailing
+ * kind-specific keys differ. These tests assert membership (which keys are present) plus the
+ * raw-byte payloads — the exact order is pinned by the composition lists in `InputBar.kt`.
  *   - Orientation-aware layout (portrait stacks; landscape inline).
  *   - For the default/Claude set ([SessionKind.Claude]), the single horizontally
  *     scrollable control-key panel exposes exactly the 14 keys
- *     `Mode, Rewind, Esc, Ctrl+C, Enter, Tab, Backspace, ↑, ↓, ←, →, Ctrl+O, Ctrl+R, Ctrl+L`.
+ *     `Enter, ↑, ↓, ←, →, Ctrl+C, Mode, Ctrl+L, Esc, Rewind, Tab, Backspace, Ctrl+O, Ctrl+R`.
  *   - Byte payloads for renamed keys are unchanged (display-only rename):
  *     `S+Tab → Mode` and `Back/Edit → Rewind`; `Newline` was removed.
- *   - For [SessionKind.Codex] the panel prepends the approval answers `Approve`/`Reject`
- *     to the Claude set (which already closes with `Ctrl+L`), with the correct raw-byte
- *     payloads; those Codex-only keys never leak into the Claude set ([InputBarCodexTest]).
- *   - For [SessionKind.Antigravity] the panel leads with `Ctrl+K`, `Ctrl+G`, `Ctrl+D`
- *     and appends `Ctrl+L` to the shared tail (no `Mode`/`Rewind`, no `Approve`/`Reject`),
+ *   - For [SessionKind.Codex] the panel adds the approval answers `Approve`/`Reject`
+ *     after the shared prefix, with the correct raw-byte payloads; those Codex-only keys
+ *     never leak into the Claude set ([InputBarCodexTest]).
+ *   - For [SessionKind.Antigravity] the panel adds `Ctrl+K`, `Ctrl+G`, `Ctrl+D`
+ *     after the shared prefix (no `Mode`/`Rewind`, no `Approve`/`Reject`),
  *     with the correct raw-byte payloads; Antigravity-only keys never leak into the
  *     Claude or Codex sets ([InputBarAntigravityTest]).
  *
@@ -193,7 +197,7 @@ class InputBarPortraitTest {
         }
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
-        composeRule.onNodeWithText("Mode").performClick()
+        composeRule.onNodeWithText("Mode").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(
@@ -217,7 +221,7 @@ class InputBarPortraitTest {
         }
 
         composeRule.onNodeWithContentDescription("Show keys").performClick()
-        composeRule.onNodeWithText("Rewind").performClick()
+        composeRule.onNodeWithText("Rewind").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x1b, 0x1b), captured.single())
@@ -300,11 +304,11 @@ class InputBarLandscapeTest {
 }
 
 /**
- * Codex control-key set: passing `sessionKind = SessionKind.Codex` prepends the approval
- * answers `Approve`/`Reject` to the shared Claude set (which already closes with `Ctrl+L`).
- * Verifies the Codex-only keys are present with the correct raw byte payloads (sent via
- * `onSendBytes`, the raw 'i'-frame path — never the submit path), and that the Codex-only
- * keys do not leak into the default/Claude set.
+ * Codex control-key set: passing `sessionKind = SessionKind.Codex` adds the approval
+ * answers `Approve`/`Reject` to the shared Claude set, positioned right after the fixed
+ * prefix by `CONTROL_KEY_ORDER`. Verifies the Codex-only keys are present with the correct
+ * raw byte payloads (sent via `onSendBytes`, the raw 'i'-frame path — never the submit
+ * path), and that the Codex-only keys do not leak into the default/Claude set.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
@@ -347,7 +351,7 @@ class InputBarCodexTest {
         val captured = mutableListOf<ByteArray>()
         openCodexPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("Approve").performClick()
+        composeRule.onNodeWithText("Approve").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf('y'.code.toByte()), captured.single())
@@ -358,7 +362,7 @@ class InputBarCodexTest {
         val captured = mutableListOf<ByteArray>()
         openCodexPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("Reject").performClick()
+        composeRule.onNodeWithText("Reject").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf('n'.code.toByte()), captured.single())
@@ -438,13 +442,13 @@ class InputBarCodexTest {
 }
 
 /**
- * Antigravity control-key set: passing `sessionKind = SessionKind.Antigravity` leads with
+ * Antigravity control-key set: passing `sessionKind = SessionKind.Antigravity` adds
  * `Ctrl+K` (fast-approve pending action), `Ctrl+G` (tool confirmation view) and `Ctrl+D`
- * (exit), reuses the shared nav/control tail, and appends `Ctrl+L`. Verifies the Antigravity
- * keys are present with the correct raw byte payloads (sent via `onSendBytes`, the raw
- * 'i'-frame path), that the shared tail matches the Claude/Codex bars, and that neither the
- * Codex-only keys (`Approve`/`Reject`) nor the Claude-only leads (`Mode`/`Rewind`) leak into
- * the Antigravity set.
+ * (exit) to the shared keys, positioned right after the fixed prefix by `CONTROL_KEY_ORDER`
+ * (Antigravity has no `Mode`/`Rewind`). Verifies the Antigravity keys are present with the
+ * correct raw byte payloads (sent via `onSendBytes`, the raw 'i'-frame path), that the
+ * shared keys match the Claude/Codex bars, and that neither the Codex-only keys
+ * (`Approve`/`Reject`) nor the Claude-only `Mode`/`Rewind` leak into the Antigravity set.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
@@ -487,7 +491,7 @@ class InputBarAntigravityTest {
         val captured = mutableListOf<ByteArray>()
         openAntigravityPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("Ctrl+K").performClick()
+        composeRule.onNodeWithText("Ctrl+K").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x0b), captured.single())
@@ -498,7 +502,7 @@ class InputBarAntigravityTest {
         val captured = mutableListOf<ByteArray>()
         openAntigravityPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("Ctrl+G").performClick()
+        composeRule.onNodeWithText("Ctrl+G").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x07), captured.single())
@@ -509,7 +513,7 @@ class InputBarAntigravityTest {
         val captured = mutableListOf<ByteArray>()
         openAntigravityPanel(onSendBytes = { captured += it })
 
-        composeRule.onNodeWithText("Ctrl+D").performClick()
+        composeRule.onNodeWithText("Ctrl+D").performScrollTo().performClick()
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x04), captured.single())
