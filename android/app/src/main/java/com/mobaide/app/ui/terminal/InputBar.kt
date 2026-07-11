@@ -210,34 +210,22 @@ fun InputBar(
             )
         }
 
-        // Control-key panel — single horizontally scrollable row; forced visible while
-        // the composer is hidden so terminal-surface typing always keeps
-        // Esc/arrows/Backspace and the reveal chip reachable.
+        // Control-key panel — two rows while the composer is hidden: the reveal chip
+        // alone on top, the keyboard button + horizontally scrollable key row below.
+        // Forced visible while the composer is hidden so terminal-surface typing
+        // always keeps Esc/arrows/Backspace and the reveal chip reachable.
         AnimatedVisibility(
             visible = panelExpanded || !composerVisible,
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (!composerVisible) {
-                    // With the composer hidden the terminal is the input field: this
-                    // re-raises the IME on the terminal surface after the user dismissed it.
-                    IconButton(
-                        onClick = onRaiseTerminalKeyboard,
-                        enabled = enabled,
-                        modifier = Modifier.testTag("raise_terminal_keyboard_button"),
-                    ) {
-                        Icon(
-                            Icons.Outlined.Keyboard,
-                            contentDescription = "Show keyboard",
-                        )
-                    }
                     RevealComposerChip(
                         onClick = {
                             panelExpanded = true
@@ -246,36 +234,56 @@ fun InputBar(
                     )
                 }
                 Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    controlKeys.forEach { key ->
-                        FilledTonalButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onSendBytes(key.bytes)
-                            },
+                    if (!composerVisible) {
+                        // With the composer hidden the terminal is the input field: this
+                        // re-raises the IME on the terminal surface after the user dismissed it.
+                        IconButton(
+                            onClick = onRaiseTerminalKeyboard,
                             enabled = enabled,
-                            contentPadding = PaddingValues(
-                                horizontal = 10.dp, vertical = 4.dp,
-                            ),
+                            modifier = Modifier.testTag("raise_terminal_keyboard_button"),
                         ) {
-                            val icon = key.icon
-                            if (icon != null) {
-                                Icon(
-                                    icon,
-                                    contentDescription = key.label,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            } else {
-                                Text(
-                                    key.label,
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontFamily = FontFamily.Monospace,
-                                    ),
-                                )
+                            Icon(
+                                Icons.Outlined.Keyboard,
+                                contentDescription = "Show keyboard",
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        controlKeys.forEach { key ->
+                            FilledTonalButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSendBytes(key.bytes)
+                                },
+                                enabled = enabled,
+                                contentPadding = PaddingValues(
+                                    horizontal = 10.dp, vertical = 4.dp,
+                                ),
+                            ) {
+                                val icon = key.icon
+                                if (icon != null) {
+                                    Icon(
+                                        icon,
+                                        contentDescription = key.label,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                } else {
+                                    Text(
+                                        key.label,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
