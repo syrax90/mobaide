@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.3.2](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.1...agent-v0.3.2) (2026-07-11)
+
+
+### Features
+
+* **push:** APNs push pipeline for session attention (CLA-106 / iOS-10) ([14178f4](https://github.com/syrax90/claude_mobile/commit/14178f4ae572f2259151b27c6c49b7092b6d5e1f))
+* **push:** APNs push pipeline for session attention (CLA-106 / iOS-10) ([a1f2877](https://github.com/syrax90/claude_mobile/commit/a1f2877251ef9350c99fdade5504c6d13b0007da))
+
 ## [0.3.1](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.0...agent-v0.3.1) (2026-07-05)
 
 
