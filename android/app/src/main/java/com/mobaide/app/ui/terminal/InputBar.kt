@@ -210,8 +210,8 @@ fun InputBar(
             )
         }
 
-        // Control-key panel — two rows while the composer is hidden: the reveal chip
-        // alone on top, the keyboard button + horizontally scrollable key row below.
+        // Control-key panel — two rows while the composer is hidden: the keyboard
+        // button + reveal chip on top, the horizontally scrollable key row below.
         // Forced visible while the composer is hidden so terminal-surface typing
         // always keeps Esc/arrows/Backspace and the reveal chip reachable.
         AnimatedVisibility(
@@ -226,19 +226,10 @@ fun InputBar(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 if (!composerVisible) {
-                    RevealComposerChip(
-                        onClick = {
-                            panelExpanded = true
-                            onRevealComposer()
-                        },
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (!composerVisible) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         // With the composer hidden the terminal is the input field: this
                         // re-raises the IME on the terminal surface after the user dismissed it.
                         IconButton(
@@ -251,39 +242,45 @@ fun InputBar(
                                 contentDescription = "Show keyboard",
                             )
                         }
+                        RevealComposerChip(
+                            onClick = {
+                                panelExpanded = true
+                                onRevealComposer()
+                            },
+                        )
                     }
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        controlKeys.forEach { key ->
-                            FilledTonalButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onSendBytes(key.bytes)
-                                },
-                                enabled = enabled,
-                                contentPadding = PaddingValues(
-                                    horizontal = 10.dp, vertical = 4.dp,
-                                ),
-                            ) {
-                                val icon = key.icon
-                                if (icon != null) {
-                                    Icon(
-                                        icon,
-                                        contentDescription = key.label,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                } else {
-                                    Text(
-                                        key.label,
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontFamily = FontFamily.Monospace,
-                                        ),
-                                    )
-                                }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    controlKeys.forEach { key ->
+                        FilledTonalButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSendBytes(key.bytes)
+                            },
+                            enabled = enabled,
+                            contentPadding = PaddingValues(
+                                horizontal = 10.dp, vertical = 4.dp,
+                            ),
+                        ) {
+                            val icon = key.icon
+                            if (icon != null) {
+                                Icon(
+                                    icon,
+                                    contentDescription = key.label,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            } else {
+                                Text(
+                                    key.label,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                    ),
+                                )
                             }
                         }
                     }
