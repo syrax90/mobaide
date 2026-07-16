@@ -27,11 +27,28 @@ struct TerminalControlKey: Identifiable {
     static let ctrlG = TerminalControlKey(id: "ctrlG", label: "Ctrl+G", bytes: [0x07])
     static let ctrlD = TerminalControlKey(id: "ctrlD", label: "Ctrl+D", bytes: [0x04])
 
-    /// Shared tail present for every kind (Android `SHARED_TAIL`).
+    /// Canonical left-to-right order for every control key (Android `CONTROL_KEY_ORDER`).
+    /// Each kind renders only the subset it supports, filtered from this single list, so the
+    /// button order stays consistent across kinds — only which buttons appear differs. iOS has
+    /// no Backspace key (a pre-existing gap vs. Android), so it is absent here.
+    static let controlKeyOrder: [TerminalControlKey] = [
+        enter, up, down, left, right, ctrlC, mode, ctrlL, esc,
+        approve, reject, ctrlK, ctrlG, ctrlD, rewind, tab, ctrlO, ctrlR,
+    ]
+
+    /// Reorder a set of keys into the canonical layout (Android `orderedControlKeys`).
+    /// Membership is defined by the caller; position is always dictated by `controlKeyOrder`.
+    private static func ordered(_ keys: [TerminalControlKey]) -> [TerminalControlKey] {
+        let present = Set(keys.map(\.id))
+        return controlKeyOrder.filter { present.contains($0.id) }
+    }
+
+    /// Shared keys present for every kind (Android `SHARED_KEYS`). Order here is irrelevant —
+    /// `controlKeyOrder` decides the layout; this list only defines membership.
     static let sharedTail: [TerminalControlKey] = [esc, ctrlC, enter, tab, up, down, left, right, ctrlO, ctrlR]
-    static let claudeKeys: [TerminalControlKey] = [mode, rewind] + sharedTail + [ctrlL]
-    static let codexKeys: [TerminalControlKey] = [approve, reject] + claudeKeys
-    static let antigravityKeys: [TerminalControlKey] = [ctrlK, ctrlG, ctrlD] + sharedTail + [ctrlL]
+    static let claudeKeys: [TerminalControlKey] = ordered([mode, rewind] + sharedTail + [ctrlL])
+    static let codexKeys: [TerminalControlKey] = ordered([approve, reject] + claudeKeys)
+    static let antigravityKeys: [TerminalControlKey] = ordered([ctrlK, ctrlG, ctrlD] + sharedTail + [ctrlL])
 
     /// Codex and Antigravity get their own sets; Claude, Shell and AutoScan
     /// all use the Claude set (Android `controlKeysFor`).
