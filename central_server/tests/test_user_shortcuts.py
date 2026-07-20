@@ -2,7 +2,8 @@
 
 Covers REST CRUD (GET / POST / PATCH / DELETE), the POST upsert semantics
 (re-saving a live (kind, chord_token) updates the name instead of
-duplicating), the ``""``-clears-name PATCH sentinel, ownership isolation,
+duplicating), the ``""``-clears-name PATCH sentinel (``name`` itself is
+required — an empty body 422s), ownership isolation,
 soft-delete semantics, admin blocking, and the user-scoped push-event
 broadcast trio (``shortcut.created`` / ``shortcut.updated`` /
 ``shortcut.deleted``).
@@ -341,6 +342,43 @@ class TestRenameShortcut:
         )
         assert resp.status_code == 200
         assert resp.json()["name"] is None
+
+    async def test_patch_explicit_null_clears_name(
+        self, client, api_auth_headers
+    ):
+        """``name`` is required-but-nullable: an explicit ``null`` must stay
+        a valid clear (only the *absent* field is rejected)."""
+        created = await _create_shortcut(client, api_auth_headers, name="Named")
+        resp = await client.patch(
+            f"/api/shortcuts/{created['shortcut_id']}",
+            json={"name": None},
+            headers=api_auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] is None
+
+    async def test_patch_empty_body_returns_422_and_changes_nothing(
+        self, client, app, viewer_user, api_auth_headers
+    ):
+        """``name`` is required, so a bare ``{}`` must fail validation —
+        it must not silently clear the name, bump the version, or
+        broadcast a ``shortcut.updated``."""
+        created = await _create_shortcut(client, api_auth_headers, name="Named")
+        sid = created["shortcut_id"]
+        c = _make_user_client(viewer_user["id"])
+        app.state.routing.register_user_client(viewer_user["id"], c)
+
+        resp = await client.patch(
+            f"/api/shortcuts/{sid}", json={}, headers=api_auth_headers
+        )
+        assert resp.status_code == 422
+
+        listing = await client.get("/api/shortcuts", headers=api_auth_headers)
+        row = next(s for s in listing.json() if s["shortcut_id"] == sid)
+        assert row["name"] == "Named"
+        assert row["version"] == created["version"]
+        with pytest.raises(asyncio.QueueEmpty):
+            c.send_queue.get_nowait()
 
     async def test_patch_not_owner_returns_403(
         self, client, app, api_auth_headers

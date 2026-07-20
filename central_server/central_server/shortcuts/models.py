@@ -31,8 +31,9 @@ class CreateShortcutRequest(BaseModel):
 
 
 class UpdateShortcutRequest(BaseModel):
-    """Rename-only update. ``""`` clears the name back to NULL — the Android
-    client's JSON encoder omits null-valued defaults, so an empty string is
-    the only way it can express "clear" on the wire."""
+    """Rename-only update. ``name`` is required so an empty body cannot
+    silently clear it; ``""`` (or an explicit null) clears the name back to
+    NULL — the Android client's JSON encoder omits null-valued defaults, so
+    the empty string is the only clear form it can express on the wire."""
 
-    name: str | None = Field(default=None, max_length=MAX_SHORTCUT_NAME)
+    name: str | None = Field(max_length=MAX_SHORTCUT_NAME)

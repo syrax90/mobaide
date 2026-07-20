@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -356,14 +357,20 @@ fun InputBar(
                     // User-saved shortcut buttons — the literal end of the row,
                     // after the ⌘ trigger. Rendered for every session kind that
                     // has saved chords; the list is already kind-filtered.
+                    // key() pins each button's remembered menu state to its
+                    // shortcut id: with positional memoization, a push-driven
+                    // removal would hand an open Rename/Remove menu to the
+                    // NEXT shortcut in the row.
                     savedShortcuts.forEach { shortcut ->
-                        SavedShortcutKeyButton(
-                            shortcut = shortcut,
-                            enabled = enabled,
-                            onSend = { onSendSavedShortcut(shortcut) },
-                            onRename = { onRenameSavedShortcut(shortcut) },
-                            onRemove = { onRemoveSavedShortcut(shortcut) },
-                        )
+                        key(shortcut.id) {
+                            SavedShortcutKeyButton(
+                                shortcut = shortcut,
+                                enabled = enabled,
+                                onSend = { onSendSavedShortcut(shortcut) },
+                                onRename = { onRenameSavedShortcut(shortcut) },
+                                onRemove = { onRemoveSavedShortcut(shortcut) },
+                            )
+                        }
                     }
                 }
             }

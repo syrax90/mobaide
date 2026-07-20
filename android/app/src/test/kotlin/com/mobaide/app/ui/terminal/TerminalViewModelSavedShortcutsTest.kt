@@ -47,7 +47,10 @@ import org.junit.Test
  * [TerminalViewModelSendChordTest.shortcutRecents_emptyAndUntouched_beforeFirstRefresh]).
  * The mapped list is kind-filtered by wire name, sorted by
  * (position, created_at, shortcut_id), drops unparseable tokens, blank names
- * collapse to null, and riskiness is re-derived from the encoder. Saves
+ * collapse to null, and riskiness is re-derived from the encoder — and it is
+ * gated on a RESOLVED kind: until the session list (or REST seed) names the
+ * real kind, the list stays empty rather than rendering the eagerly-seeded
+ * Claude default's bucket. Saves
  * re-resolve the session's kind from the live session list (REST fallback) —
  * never the eagerly-seeded `sessionKind.value` Claude default — and go out
  * under that kind's wire name with the chord's token and a trimmed
@@ -129,6 +132,7 @@ class TerminalViewModelSavedShortcutsTest {
 
     @Test
     fun savedShortcutsForKind_filtersByKind_dropsUnparseable_andMapsFields() = runTest {
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         every { shortcutsRepository.observeShortcuts() } returns MutableStateFlow(
             listOf(
                 dto("s-b", chordToken = "ctrl+b", name = "   ", position = 1),
@@ -176,6 +180,7 @@ class TerminalViewModelSavedShortcutsTest {
         // Push-applied rows append to the cache in arrival order, so the VM
         // must re-sort; created_at and id break position ties (possible after
         // cross-device races).
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         every { shortcutsRepository.observeShortcuts() } returns MutableStateFlow(
             listOf(
                 dto("s-z", chordToken = "ctrl+z", position = 0, createdAt = "2026-01-01T00:00:00Z"),
@@ -193,6 +198,42 @@ class TerminalViewModelSavedShortcutsTest {
             listOf("s-a", "s-z", "s-y", "s-first"),
             vm.savedShortcutsForKind.value.map { it.id },
         )
+    }
+
+    @Test
+    fun savedShortcutsForKind_kindUnresolved_staysEmpty_untilKindResolves() = runTest {
+        // sessionKind eagerly seeds Claude, but the SEED must never leak into
+        // the saved-button row: with the session list empty and the REST
+        // fallback down, the Claude bucket in the cache stays hidden — its
+        // buttons would be tappable in a session whose real kind is unknown.
+        coEvery { sessionRepository.listSessions() } throws RuntimeException("offline")
+        every { shortcutsRepository.observeShortcuts() } returns MutableStateFlow(
+            listOf(dto("s-a", chordToken = "ctrl+a", name = "Alpha")),
+        )
+        val vm = createViewModel()
+
+        vm.savedShortcutsForKind.test {
+            assertEquals(emptyList<SavedShortcutUi>(), awaitItem())
+            advanceUntilIdle()
+            expectNoEvents()
+
+            // First sessions.changed snapshot resolves the real kind — only
+            // now may that kind's bucket render.
+            sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
+            advanceUntilIdle()
+            assertEquals(
+                listOf(
+                    SavedShortcutUi(
+                        id = "s-a",
+                        chord = KeyChord(ctrl = true, key = "a"),
+                        name = "Alpha",
+                        risky = false,
+                    ),
+                ),
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test

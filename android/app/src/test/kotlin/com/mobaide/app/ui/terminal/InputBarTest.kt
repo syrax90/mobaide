@@ -2,7 +2,9 @@ package com.mobaide.app.ui.terminal
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -739,5 +741,41 @@ class InputBarSavedShortcutTest {
 
         assertEquals(listOf(savedCut), removed)
         assertTrue("long-press must never also fire the tap/send path", sent.isEmpty())
+    }
+
+    @Test
+    fun savedButton_openMenu_staysOnItsShortcut_whenEarlierButtonRemoved() {
+        // A live shortcut.deleted push can shift row positions under an open
+        // Rename/Remove menu. key(shortcut.id) must keep the remembered menu
+        // pinned to ITS shortcut — with positional memoization the removal
+        // would hand the open menu (or none at all) to whichever shortcut
+        // slides into that slot.
+        val renamed = mutableListOf<SavedShortcutUi>()
+        val shortcuts = mutableStateOf(listOf(savedCut, savedUnnamed))
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = {},
+                    composerVisible = false,
+                    savedShortcuts = shortcuts.value,
+                    onRenameSavedShortcut = { renamed += it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Saved shortcut Ctrl+B")
+            .performScrollTo()
+            .performTouchInput { longClick() }
+        composeRule.onNodeWithText("Rename").assertIsDisplayed()
+
+        // Push removes the FIRST shortcut while Ctrl+B's menu is open.
+        shortcuts.value = listOf(savedUnnamed)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Rename").performClick()
+        assertEquals(listOf(savedUnnamed), renamed)
     }
 }

@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -141,6 +142,12 @@ class TerminalViewModel @Inject constructor(
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
 
+    /** The session's kind once actually resolved, null until then. Written by the
+     *  [sessionKind] merge below; consumed by [savedShortcutsForKind], which must
+     *  not render another kind's saved buttons while the eager Claude seed is
+     *  still standing in (they would be tappable in the wrong session kind). */
+    private val resolvedKind = MutableStateFlow<SessionKind?>(null)
+
     /** CLI of this session, used to drive the CLI-aware control-key bar. Resolved from
      *  the app-scoped session list (the single source of truth) and, on a cold launch,
      *  from a one-shot REST seed. Defaults to Claude until either resolves, then sticks
@@ -162,7 +169,9 @@ class TerminalViewModel @Inject constructor(
                 // is no Codex→Claude→Codex flicker once a real kind arrives.
                 resolvedSessionKind()?.let { emit(it) }
             },
-        ).stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
+        )
+            .onEach { resolvedKind.value = it }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -205,12 +214,17 @@ class TerminalViewModel @Inject constructor(
     val shortcutRecents: StateFlow<List<KeyChord>> = _shortcutRecents.asStateFlow()
 
     /** Server-synced saved shortcuts for this session's kind, in save order.
-     *  `by lazy` keeps the repository untouched until the UI first collects —
-     *  the same strict-mock laziness contract [shortcutRecents] documents,
-     *  extended to [ShortcutsRepository] (an eager field initializer would
-     *  call `observeShortcuts()` during construction in every VM test). */
+     *  Gated on [resolvedKind]: while the kind is unresolved the list stays
+     *  empty rather than rendering the eager Claude seed's bucket (whose
+     *  buttons would be tappable in a not-yet-resolved Codex/Antigravity
+     *  session). `by lazy` keeps the repository untouched until the UI first
+     *  collects — the same strict-mock laziness contract [shortcutRecents]
+     *  documents, extended to [ShortcutsRepository] (an eager field
+     *  initializer would call `observeShortcuts()` during construction in
+     *  every VM test). */
     val savedShortcutsForKind: StateFlow<List<SavedShortcutUi>> by lazy {
-        combine(shortcutsRepository.observeShortcuts(), sessionKind) { all, kind ->
+        combine(shortcutsRepository.observeShortcuts(), resolvedKind) { all, kind ->
+            if (kind == null) return@combine emptyList()
             all.filter { it.kind == kind.wireName }
                 .sortedWith(
                     compareBy({ it.position }, { it.created_at }, { it.shortcut_id })

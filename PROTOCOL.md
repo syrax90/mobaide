@@ -130,10 +130,12 @@ cadence; they do **not** gate compatibility.
     list; ``POST /api/shortcuts`` ``{"kind", "chord_token", "name"?}`` →
     ``201`` — an **upsert**: re-saving an existing live (kind, chord_token)
     updates its name (when provided) instead of duplicating, still ``201``;
-    ``PATCH /api/shortcuts/{id}`` ``{"name"}`` renames — ``""`` clears the
-    name back to null (the Android JSON encoder omits null defaults, so the
-    empty string is the wire's "clear" sentinel); ``DELETE`` → ``204``
-    soft-delete. Ownership violations → ``403``.
+    ``PATCH /api/shortcuts/{id}`` ``{"name"}`` renames — the field is
+    required (an empty body ``{}`` → ``422``, it must not silently clear);
+    ``""`` (or explicit null) clears the name back to null (the Android JSON
+    encoder omits null defaults, so the empty string is the wire's "clear"
+    sentinel); ``DELETE`` → ``204`` soft-delete. Ownership violations →
+    ``403``.
 
 ## proto-v5 (superseded by proto-v6)
 
