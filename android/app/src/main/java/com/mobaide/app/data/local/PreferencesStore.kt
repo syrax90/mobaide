@@ -41,6 +41,9 @@ class PreferencesStore(private val context: Context) {
     private fun keyRecentCustomPaths(agentKey: String) =
         stringPreferencesKey("recent_custom_paths::$agentKey")
 
+    private fun keyRecentShortcutChords(sessionKindKey: String) =
+        stringPreferencesKey("recent_shortcut_chords::$sessionKindKey")
+
     private val stringListSerializer = ListSerializer(String.serializer())
 
     val lastUsedProjectName: Flow<String?> =
@@ -182,7 +185,36 @@ class PreferencesStore(private val context: Context) {
         }
     }
 
+    /**
+     * Most-recently-used shortcut chords for one session kind, newest first.
+     * Entries are opaque chord tokens (see KeyChord.token()); unparseable entries
+     * are the caller's concern, keeping this store free of UI types.
+     */
+    suspend fun getRecentShortcutChords(sessionKindKey: String): List<String> {
+        val raw = context.dataStore.data.map { it[keyRecentShortcutChords(sessionKindKey)] }.first()
+            ?: return emptyList()
+        return runCatching {
+            cacheJson.decodeFromString(stringListSerializer, raw)
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun addRecentShortcutChord(sessionKindKey: String, chordToken: String) {
+        if (chordToken.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val existing = prefs[keyRecentShortcutChords(sessionKindKey)]?.let { raw ->
+                runCatching {
+                    cacheJson.decodeFromString(stringListSerializer, raw)
+                }.getOrDefault(emptyList())
+            } ?: emptyList()
+            val merged = (listOf(chordToken) + existing.filter { it != chordToken })
+                .take(MAX_RECENT_SHORTCUT_CHORDS)
+            prefs[keyRecentShortcutChords(sessionKindKey)] =
+                cacheJson.encodeToString(stringListSerializer, merged)
+        }
+    }
+
     companion object {
         const val MAX_RECENT_CUSTOM_PATHS: Int = 5
+        const val MAX_RECENT_SHORTCUT_CHORDS: Int = 10
     }
 }

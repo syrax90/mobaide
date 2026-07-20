@@ -12,6 +12,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import com.mobaide.app.data.network.dto.SessionKind
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -37,6 +38,10 @@ import org.robolectric.annotation.Config
  *     after the shared prefix (no `Mode`/`Rewind`, no `Approve`/`Reject`),
  *     with the correct raw-byte payloads; Antigravity-only keys never leak into the
  *     Claude or Codex sets ([InputBarAntigravityTest]).
+ *   - Every kind's row additionally ends with the custom-shortcut trigger
+ *     (contentDescription `Custom shortcut`) — a non-ControlKey button that opens
+ *     the chord-picker sheet via `onOpenShortcuts` and never sends bytes itself,
+ *     so it is on top of (not part of) each kind's key count.
  *
  * Robolectric SDK pinned to 33 to match existing project precedent
  * (`AgentListScreenTest`). The `qualifiers` differ per test class to
@@ -119,6 +124,37 @@ class InputBarPortraitTest {
             .forEach { composeRule.onNodeWithText(it).assertExists() }
         listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
+        // The trailing chord-picker trigger is not a ControlKey (it opens the
+        // shortcut sheet instead of sending bytes) but must terminate the row.
+        composeRule.onNodeWithContentDescription("Custom shortcut").assertExists()
+    }
+
+    @Test
+    fun customShortcutTrigger_firesCallback_andSendsNoBytes() {
+        var opens = 0
+        val captured = mutableListOf<ByteArray>()
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = { captured += it },
+                    onOpenShortcuts = { opens++ },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Show keys").performClick()
+        composeRule.onNodeWithContentDescription("Custom shortcut")
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(1, opens)
+        assertTrue(
+            "the trigger only opens the picker — it must never send bytes itself",
+            captured.isEmpty(),
+        )
     }
 
     @Test
@@ -300,6 +336,7 @@ class InputBarLandscapeTest {
             .forEach { composeRule.onNodeWithText(it).assertExists() }
         listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
+        composeRule.onNodeWithContentDescription("Custom shortcut").assertExists()
     }
 }
 
@@ -344,6 +381,7 @@ class InputBarCodexTest {
             .forEach { composeRule.onNodeWithText(it).assertExists() }
         listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
+        composeRule.onNodeWithContentDescription("Custom shortcut").assertExists()
     }
 
     @Test
@@ -484,6 +522,7 @@ class InputBarAntigravityTest {
             .forEach { composeRule.onNodeWithText(it).assertExists() }
         listOf("↑", "↓", "←", "→", "Backspace")
             .forEach { composeRule.onNodeWithContentDescription(it).assertExists() }
+        composeRule.onNodeWithContentDescription("Custom shortcut").assertExists()
     }
 
     @Test
