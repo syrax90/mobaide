@@ -81,8 +81,10 @@ fun TerminalScreen(
     val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
     val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
     val composerVisible by viewModel.composerVisible.collectAsStateWithLifecycle()
+    val shortcutRecents by viewModel.shortcutRecents.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showTemplatesPicker by remember { mutableStateOf(false) }
+    var showShortcutPicker by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
     var terminalKeyboardRequest by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -258,6 +260,10 @@ fun TerminalScreen(
                         viewModel.refreshTemplates()
                         showTemplatesPicker = true
                     },
+                    onOpenShortcuts = {
+                        viewModel.refreshShortcutRecents()
+                        showShortcutPicker = true
+                    },
                     onSaveAsTemplate = { showSaveTemplateDialog = true },
                     sessionKind = sessionKind,
                     composerVisible = composerVisible,
@@ -299,6 +305,18 @@ fun TerminalScreen(
                 viewModel.deleteTemplate(template.template_id)
             },
             onDismiss = { showTemplatesPicker = false },
+        )
+    }
+
+    if (showShortcutPicker) {
+        ShortcutPickerSheet(
+            recents = shortcutRecents,
+            onSendChord = { chord ->
+                viewModel.sendChord(chord)
+                showShortcutPicker = false
+            },
+            onDismiss = { showShortcutPicker = false },
+            enabled = isConnected && sessionState == "running",
         )
     }
 

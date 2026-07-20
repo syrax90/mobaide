@@ -12,6 +12,20 @@ enum class SessionKind {
     @SerialName("shell") Shell,
 }
 
+/**
+ * The @SerialName wire value of each kind, used as a stable per-kind storage
+ * key suffix. Must stay in lockstep with the annotations above; the exhaustive
+ * when forces an entry for every new kind at compile time.
+ */
+val SessionKind.wireName: String
+    get() = when (this) {
+        SessionKind.Claude -> "claude"
+        SessionKind.Codex -> "codex"
+        SessionKind.Antigravity -> "antigravity"
+        SessionKind.AutoScan -> "auto_scan"
+        SessionKind.Shell -> "shell"
+    }
+
 @Serializable
 data class SessionResponse(
     val session_id: String,

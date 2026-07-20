@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
+import androidx.compose.material.icons.outlined.KeyboardCommandKey
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -170,6 +171,7 @@ fun InputBar(
     onFocusHandled: () -> Unit = {},
     onExpand: () -> Unit = {},
     onOpenTemplates: () -> Unit = {},
+    onOpenShortcuts: () -> Unit = {},
     onSaveAsTemplate: () -> Unit = {},
     sessionKind: SessionKind = SessionKind.Claude,
     composerVisible: Boolean = true,
@@ -313,6 +315,27 @@ fun InputBar(
                                 )
                             }
                         }
+                    }
+                    // Trailing chord-picker trigger — every session kind, always
+                    // last. Not a ControlKey: it opens the shortcut sheet instead
+                    // of sending bytes, so it stays out of CONTROL_KEY_ORDER and
+                    // the per-kind membership lists.
+                    FilledTonalButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onOpenShortcuts()
+                        },
+                        enabled = enabled,
+                        contentPadding = PaddingValues(
+                            horizontal = 10.dp, vertical = 4.dp,
+                        ),
+                        modifier = Modifier.testTag("custom_shortcut_button"),
+                    ) {
+                        Icon(
+                            Icons.Outlined.KeyboardCommandKey,
+                            contentDescription = "Custom shortcut",
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                 }
             }

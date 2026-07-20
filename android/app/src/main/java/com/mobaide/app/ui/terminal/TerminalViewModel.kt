@@ -15,6 +15,7 @@ import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.TemplateDto
+import com.mobaide.app.data.network.dto.wireName
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
@@ -202,6 +203,12 @@ class TerminalViewModel @Inject constructor(
     private val _templatesLoading = MutableStateFlow(false)
     val templatesLoading: StateFlow<Boolean> = _templatesLoading.asStateFlow()
 
+    /** MRU shortcut chords for the current session kind, newest first. Loaded
+     *  lazily via [refreshShortcutRecents]/[sendChord] — never in init, so the
+     *  strict-mock PreferencesStore stubs in existing ViewModel tests stay minimal. */
+    private val _shortcutRecents = MutableStateFlow<List<KeyChord>>(emptyList())
+    val shortcutRecents: StateFlow<List<KeyChord>> = _shortcutRecents.asStateFlow()
+
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
 
@@ -333,6 +340,33 @@ class TerminalViewModel @Inject constructor(
     fun sendBytes(bytes: ByteArray) {
         setFollowMode(true)
         sendChannel.trySend(TerminalProtocol.encodeInput(bytes))
+    }
+
+    private suspend fun loadShortcutRecents(kindKey: String) {
+        _shortcutRecents.value = preferencesStore.getRecentShortcutChords(kindKey)
+            .mapNotNull(KeyChord::parse)
+    }
+
+    /** Fired when the shortcut picker opens (lazy — see [shortcutRecents]). */
+    fun refreshShortcutRecents() {
+        viewModelScope.launch {
+            runCatching { loadShortcutRecents(sessionKind.value.wireName) }
+        }
+    }
+
+    /** Encode a chord and send it down the raw-byte path. The send is
+     *  unconditional; MRU persistence is a UX nicety that must never block or
+     *  fail the send, so it runs fire-and-forget afterwards. */
+    fun sendChord(chord: KeyChord) {
+        val encoding = KeyChordEncoder.encode(chord) ?: return
+        sendBytes(encoding.bytes)
+        viewModelScope.launch {
+            runCatching {
+                val kindKey = sessionKind.value.wireName
+                preferencesStore.addRecentShortcutChord(kindKey, chord.token())
+                loadShortcutRecents(kindKey)
+            }
+        }
     }
 
     /**
