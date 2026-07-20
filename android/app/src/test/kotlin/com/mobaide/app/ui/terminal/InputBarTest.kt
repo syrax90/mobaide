@@ -4,10 +4,13 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.input.TextFieldValue
 import com.mobaide.app.data.network.dto.SessionKind
 import org.junit.Assert.assertArrayEquals
@@ -597,5 +600,144 @@ class InputBarAntigravityTest {
 
         listOf("Approve", "Reject", "Mode", "Rewind", "YOLO", "TODO")
             .forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
+    }
+}
+
+/**
+ * User-saved shortcut buttons: server-synced chords rendered after the ⌘ trigger
+ * at the literal end of the control-key row. The button is a Surface with
+ * [androidx.compose.foundation.combinedClickable], not a disabled-able
+ * FilledTonalButton, so that long-press (Rename/Remove menu) stays reachable
+ * while the session gate is down — the tap path no-ops instead.
+ *
+ * All tests render with `composerVisible = false`, which forces the control-key
+ * panel visible without the "Show keys" toggle — that toggle is itself gated on
+ * `enabled`, which would make the disabled-state tests unreachable through it.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w360dp-h800dp-port-xxhdpi")
+class InputBarSavedShortcutTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    private val savedCut = SavedShortcutUi(
+        id = "s1",
+        chord = KeyChord(ctrl = true, key = "x"),
+        name = "Cut",
+        risky = false,
+    )
+    private val savedUnnamed = SavedShortcutUi(
+        id = "s2",
+        chord = KeyChord(ctrl = true, key = "b"),
+        name = null,
+        risky = false,
+    )
+
+    private fun setBar(
+        savedShortcuts: List<SavedShortcutUi>,
+        enabled: Boolean = true,
+        onSendSavedShortcut: (SavedShortcutUi) -> Unit = {},
+        onRenameSavedShortcut: (SavedShortcutUi) -> Unit = {},
+        onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
+        onSendBytes: (ByteArray) -> Unit = {},
+    ) {
+        composeRule.setContent {
+            Surface {
+                InputBar(
+                    text = TextFieldValue(""),
+                    onTextChange = {},
+                    onSend = {},
+                    onSendBytes = onSendBytes,
+                    enabled = enabled,
+                    composerVisible = false,
+                    savedShortcuts = savedShortcuts,
+                    onSendSavedShortcut = onSendSavedShortcut,
+                    onRenameSavedShortcut = onRenameSavedShortcut,
+                    onRemoveSavedShortcut = onRemoveSavedShortcut,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun savedButtons_renderCustomName_orChordDisplayFallback() {
+        setBar(listOf(savedCut, savedUnnamed))
+
+        composeRule.onNodeWithText("Cut").assertExists()
+        composeRule.onNodeWithText("Ctrl+B").assertExists()
+        composeRule.onNodeWithContentDescription("Saved shortcut Cut").assertExists()
+        composeRule.onNodeWithContentDescription("Saved shortcut Ctrl+B").assertExists()
+    }
+
+    @Test
+    fun savedButton_tapFiresOnSendSavedShortcut_andSendsNoBytesItself() {
+        val sent = mutableListOf<SavedShortcutUi>()
+        val bytes = mutableListOf<ByteArray>()
+        setBar(
+            listOf(savedCut),
+            onSendSavedShortcut = { sent += it },
+            onSendBytes = { bytes += it },
+        )
+
+        composeRule.onNodeWithTag("saved_shortcut_button")
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(listOf(savedCut), sent)
+        assertTrue(
+            "the button routes through onSendSavedShortcut (VM sendChord), never raw bytes",
+            bytes.isEmpty(),
+        )
+    }
+
+    @Test
+    fun savedButton_tapIsInert_whileSessionGateDown() {
+        val sent = mutableListOf<SavedShortcutUi>()
+        setBar(listOf(savedCut), enabled = false, onSendSavedShortcut = { sent += it })
+
+        composeRule.onNodeWithTag("saved_shortcut_button")
+            .performScrollTo()
+            .performClick()
+
+        assertTrue(
+            "tap must no-op while disabled — a dropped keystroke must not be pretended",
+            sent.isEmpty(),
+        )
+    }
+
+    @Test
+    fun savedButton_longPressMenu_renameFires_evenWhileSessionGateDown() {
+        // Rename/Remove are server mutations, not sends, so the long-press
+        // menu must stay reachable while the session gate is down — the
+        // reason the button is not simply `enabled = false`.
+        val renamed = mutableListOf<SavedShortcutUi>()
+        setBar(listOf(savedCut), enabled = false, onRenameSavedShortcut = { renamed += it })
+
+        composeRule.onNodeWithTag("saved_shortcut_button")
+            .performScrollTo()
+            .performTouchInput { longClick() }
+        composeRule.onNodeWithText("Rename").performClick()
+
+        assertEquals(listOf(savedCut), renamed)
+    }
+
+    @Test
+    fun savedButton_longPressMenu_removeFires() {
+        val removed = mutableListOf<SavedShortcutUi>()
+        val sent = mutableListOf<SavedShortcutUi>()
+        setBar(
+            listOf(savedCut),
+            onSendSavedShortcut = { sent += it },
+            onRemoveSavedShortcut = { removed += it },
+        )
+
+        composeRule.onNodeWithTag("saved_shortcut_button")
+            .performScrollTo()
+            .performTouchInput { longClick() }
+        composeRule.onNodeWithText("Remove").performClick()
+
+        assertEquals(listOf(savedCut), removed)
+        assertTrue("long-press must never also fire the tap/send path", sent.isEmpty())
     }
 }

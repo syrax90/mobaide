@@ -22,6 +22,7 @@ import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.data.repository.VersionGateRepository
 import com.mobaide.app.data.security.TrustKeyPinning
@@ -164,12 +165,22 @@ object RepositoryModule {
 
     @Provides
     @Singleton
+    fun provideShortcutsRepository(
+        centralApi: CentralApi,
+        userIdentityStore: UserIdentityStore,
+    ): ShortcutsRepository {
+        return ShortcutsRepository(centralApi, userIdentityStore)
+    }
+
+    @Provides
+    @Singleton
     fun provideUserEventBus(
         webSocketManager: WebSocketManager,
         sessionManager: SessionManager,
         userIdentityStore: UserIdentityStore,
         agentRepository: AgentRepository,
         templatesRepository: TemplatesRepository,
+        shortcutsRepository: ShortcutsRepository,
     ): UserEventBus {
         return UserEventBus(
             webSocketManager,
@@ -177,6 +188,7 @@ object RepositoryModule {
             userIdentityStore,
             agentRepository,
             templatesRepository,
+            shortcutsRepository,
         )
     }
 

@@ -114,6 +114,26 @@ cadence; they do **not** gate compatibility.
     server-side optional). A cross-tenant device reassign, a device revoke,
     and an APNs ``410 Unregistered``/``BadDeviceToken`` result all clear the
     stored token.
+* Server-synced saved keyboard shortcuts (CLA-137 — **additive, no version
+  bump**; ``central_server`` + clients only, the agent protocol is untouched).
+  Persistent named chord buttons per session kind, shared across the user's
+  devices — the server stores ``kind`` (SessionKind wire name) and
+  ``chord_token`` (the client's ``KeyChord.token()`` string) opaquely and
+  never interprets either.
+  * New user-event kinds (server-originated, same envelope as ``template.*``):
+    ``shortcut.created`` / ``shortcut.updated`` (full shortcut row:
+    ``{"shortcut_id", "kind", "chord_token", "name"?, "position",
+    "created_at", "updated_at", "version"}``) and ``shortcut.deleted``
+    ``{"shortcut_id", "version", "updated_at"}``. Clients ignoring unknown
+    kinds (both apps) make this a no-op for older builds.
+  * **REST** (dashboard/user JWT, non-admin): ``GET /api/shortcuts`` →
+    list; ``POST /api/shortcuts`` ``{"kind", "chord_token", "name"?}`` →
+    ``201`` — an **upsert**: re-saving an existing live (kind, chord_token)
+    updates its name (when provided) instead of duplicating, still ``201``;
+    ``PATCH /api/shortcuts/{id}`` ``{"name"}`` renames — ``""`` clears the
+    name back to null (the Android JSON encoder omits null defaults, so the
+    empty string is the wire's "clear" sentinel); ``DELETE`` → ``204``
+    soft-delete. Ownership violations → ``403``.
 
 ## proto-v5 (superseded by proto-v6)
 

@@ -21,6 +21,7 @@ from .auth.service import AuthService
 from .config import CentralServerConfig
 from .db.database import Database
 from .legal.loader import render_privacy, resolve_legal_dir
+from .shortcuts.service import ShortcutService
 from .templates.service import TemplateService
 from .logging_setup import (
     bind_request_context,
@@ -108,6 +109,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.pairing_ws_registry = PairingWsRegistry()
         app.state.agent_service = AgentService(db, app.state.routing)
         app.state.template_service = TemplateService(db, app.state.routing)
+        app.state.shortcut_service = ShortcutService(db, app.state.routing)
 
         from .relay.mobile_proxy import MobileProxy
 
@@ -242,6 +244,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .relay.mobile_proxy import router as mobile_proxy_router
     from .relay.mobile_ws import router as mobile_ws_router
     from .relay.user_ws import router as user_ws_router
+    from .shortcuts.router import router as shortcuts_router
     from .templates.router import router as templates_router
 
     app.include_router(auth_router)
@@ -257,6 +260,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(legal_router)
     app.include_router(manifest_router)
     app.include_router(templates_router)
+    app.include_router(shortcuts_router)
 
     # Unauthenticated — intentionally public for load-balancer probes.
     @app.get("/api/health", tags=["health"])

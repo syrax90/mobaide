@@ -4,6 +4,7 @@ import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CancelAccountDeletionResponse
 import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
+import com.mobaide.app.data.network.dto.CreateShortcutRequest
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
 import com.mobaide.app.data.network.dto.DeleteAccountRequest
 import com.mobaide.app.data.network.dto.DeviceResponse
@@ -19,7 +20,9 @@ import com.mobaide.app.data.network.dto.ResendVerificationRequest
 import com.mobaide.app.data.network.dto.ResendVerificationResponse
 import com.mobaide.app.data.network.dto.ResetPasswordRequest
 import com.mobaide.app.data.network.dto.ResetPasswordResponse
+import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDto
+import com.mobaide.app.data.network.dto.UpdateShortcutRequest
 import com.mobaide.app.data.network.dto.UpdateTemplateRequest
 import com.mobaide.app.data.network.dto.UserAuthResponse
 import com.mobaide.app.data.network.dto.UserLoginRequest
@@ -310,6 +313,56 @@ class CentralApi(
             .header("Authorization", "Bearer $userToken")
             .build()
         return execute(request)
+    }
+
+    // Saved-shortcut endpoints (per-user CRUD, JWT-authed via the user dashboard token).
+
+    suspend fun listShortcuts(userToken: String): List<ShortcutDto> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/shortcuts")
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun createShortcut(
+        userToken: String,
+        kind: String,
+        chordToken: String,
+        name: String?,
+    ): ShortcutDto {
+        val payload = json.encodeToString(CreateShortcutRequest(kind, chordToken, name))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/shortcuts")
+            .post(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun updateShortcut(
+        userToken: String,
+        shortcutId: String,
+        update: UpdateShortcutRequest,
+    ): ShortcutDto {
+        val payload = json.encodeToString(update).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/shortcuts/$shortcutId")
+            .method("PATCH", payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun deleteShortcut(userToken: String, shortcutId: String) {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/shortcuts/$shortcutId")
+            .delete()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
     }
 
     private suspend inline fun <reified T> execute(request: Request): T =

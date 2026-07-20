@@ -82,10 +82,12 @@ fun TerminalScreen(
     val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
     val composerVisible by viewModel.composerVisible.collectAsStateWithLifecycle()
     val shortcutRecents by viewModel.shortcutRecents.collectAsStateWithLifecycle()
+    val savedShortcuts by viewModel.savedShortcutsForKind.collectAsStateWithLifecycle()
     var showFullScreenInput by remember { mutableStateOf(false) }
     var showTemplatesPicker by remember { mutableStateOf(false) }
     var showShortcutPicker by remember { mutableStateOf(false) }
     var showSaveTemplateDialog by remember { mutableStateOf(false) }
+    var renameShortcutTarget by remember { mutableStateOf<SavedShortcutUi?>(null) }
     var terminalKeyboardRequest by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -262,8 +264,13 @@ fun TerminalScreen(
                     },
                     onOpenShortcuts = {
                         viewModel.refreshShortcutRecents()
+                        viewModel.refreshSavedShortcuts()
                         showShortcutPicker = true
                     },
+                    savedShortcuts = savedShortcuts,
+                    onSendSavedShortcut = { viewModel.sendChord(it.chord) },
+                    onRenameSavedShortcut = { renameShortcutTarget = it },
+                    onRemoveSavedShortcut = { viewModel.removeShortcut(it.id) },
                     onSaveAsTemplate = { showSaveTemplateDialog = true },
                     sessionKind = sessionKind,
                     composerVisible = composerVisible,
@@ -317,6 +324,20 @@ fun TerminalScreen(
             },
             onDismiss = { showShortcutPicker = false },
             enabled = isConnected && sessionState == "running",
+            savedShortcuts = savedShortcuts,
+            onSaveShortcut = viewModel::saveShortcut,
+            onRemoveSavedShortcut = { viewModel.removeShortcut(it.id) },
+        )
+    }
+
+    renameShortcutTarget?.let { target ->
+        RenameShortcutDialog(
+            shortcut = target,
+            onRename = { name ->
+                viewModel.renameShortcut(target.id, name)
+                renameShortcutTarget = null
+            },
+            onDismiss = { renameShortcutTarget = null },
         )
     }
 

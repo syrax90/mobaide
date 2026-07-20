@@ -17,6 +17,7 @@ import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.wireName
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.termux.terminal.TerminalSession
@@ -58,6 +59,7 @@ class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
     private val templatesRepository: TemplatesRepository,
+    private val shortcutsRepository: ShortcutsRepository,
     private val foregroundSessionTracker: ForegroundSessionTracker,
     private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
@@ -208,6 +210,32 @@ class TerminalViewModel @Inject constructor(
      *  strict-mock PreferencesStore stubs in existing ViewModel tests stay minimal. */
     private val _shortcutRecents = MutableStateFlow<List<KeyChord>>(emptyList())
     val shortcutRecents: StateFlow<List<KeyChord>> = _shortcutRecents.asStateFlow()
+
+    /** Server-synced saved shortcuts for this session's kind, in save order.
+     *  `by lazy` keeps the repository untouched until the UI first collects —
+     *  the same strict-mock laziness contract [shortcutRecents] documents,
+     *  extended to [ShortcutsRepository] (an eager field initializer would
+     *  call `observeShortcuts()` during construction in every VM test). */
+    val savedShortcutsForKind: StateFlow<List<SavedShortcutUi>> by lazy {
+        combine(shortcutsRepository.observeShortcuts(), sessionKind) { all, kind ->
+            all.filter { it.kind == kind.wireName }
+                .sortedWith(
+                    compareBy({ it.position }, { it.created_at }, { it.shortcut_id })
+                )
+                .mapNotNull { dto ->
+                    KeyChord.parse(dto.chord_token)?.let { chord ->
+                        SavedShortcutUi(
+                            id = dto.shortcut_id,
+                            chord = chord,
+                            name = dto.name?.takeIf { it.isNotBlank() },
+                            risky = KeyChordEncoder.encode(chord)?.usesCsiU == true,
+                        )
+                    }
+                }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }
+
+    private val _savedShortcutsLoading = MutableStateFlow(false)
 
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
@@ -447,6 +475,68 @@ class TerminalViewModel @Inject constructor(
                 )
             } finally {
                 _templatesLoading.value = false
+            }
+        }
+    }
+
+    /** Deterministic fetch fired when the shortcut picker opens, mirroring
+     *  [refreshTemplates]: the shared cache is otherwise only populated
+     *  best-effort (WS-connect refresh in UserEventBus). */
+    fun refreshSavedShortcuts() {
+        if (_savedShortcutsLoading.value) return
+        _savedShortcutsLoading.value = true
+        viewModelScope.launch {
+            try {
+                shortcutsRepository.refreshShortcuts()
+            } catch (t: Throwable) {
+                _userMessages.tryEmit(
+                    "Failed to load saved shortcuts: ${t.message ?: "unknown error"}",
+                )
+            } finally {
+                _savedShortcutsLoading.value = false
+            }
+        }
+    }
+
+    /** Persist a chord as a named button for this session's kind. The server
+     *  upserts, so re-saving an existing chord updates its name instead of
+     *  duplicating the button. */
+    fun saveShortcut(chord: KeyChord, name: String?) {
+        val trimmedName = name?.trim()?.takeIf { it.isNotEmpty() }
+        viewModelScope.launch {
+            try {
+                shortcutsRepository.createShortcut(
+                    sessionKind.value.wireName, chord.token(), trimmedName,
+                )
+                _userMessages.tryEmit(
+                    "Saved shortcut \"${trimmedName ?: chord.display()}\"",
+                )
+            } catch (t: Throwable) {
+                _userMessages.tryEmit(
+                    "Failed to save shortcut: ${t.message ?: "unknown error"}",
+                )
+            }
+        }
+    }
+
+    /** Rename a saved shortcut. A blank [name] clears the custom name so the
+     *  button falls back to the chord label. */
+    fun renameShortcut(shortcutId: String, name: String) {
+        viewModelScope.launch {
+            try {
+                shortcutsRepository.renameShortcut(shortcutId, name.trim())
+            } catch (_: Throwable) {
+                _userMessages.tryEmit("Failed to rename shortcut")
+            }
+        }
+    }
+
+    fun removeShortcut(shortcutId: String) {
+        viewModelScope.launch {
+            try {
+                shortcutsRepository.deleteShortcut(shortcutId)
+            } catch (_: Throwable) {
+                _userMessages.tryEmit("Failed to remove shortcut")
             }
         }
     }

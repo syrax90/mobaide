@@ -12,6 +12,7 @@ from central_server.manifest.store import ManifestStore
 from central_server.pairing.service import PairingService
 from central_server.push import PushDispatcher
 from central_server.relay.routing import RoutingTable
+from central_server.shortcuts.service import ShortcutService
 from central_server.templates.service import TemplateService
 
 TEST_JWT_SECRET = "test-secret-key-for-central-server-do-not-use-in-prod"
@@ -73,6 +74,9 @@ async def app(config, db):
     application.state.pairing_service = PairingService(db)
     application.state.agent_service = AgentService(db, application.state.routing)
     application.state.template_service = TemplateService(
+        db, application.state.routing
+    )
+    application.state.shortcut_service = ShortcutService(
         db, application.state.routing
     )
     # Disabled dispatcher (no APNs config in tests); push tests swap in a
