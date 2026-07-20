@@ -29,7 +29,9 @@ import org.robolectric.annotation.Config
  * empty; Send stays disabled until a base key is selected (tap-again deselects);
  * the third modifier chip disables once two are on and re-enables on deselect;
  * the live preview shows the exact wire summary, the same-byte disclosure for
- * legacy collisions (Ctrl+I = Tab), and the risky hint only for CSI-u chords.
+ * legacy collisions (Ctrl+I = Tab), and the risky hint only for CSI-u chords;
+ * with `enabled = false` (session gate) the send surfaces — recents chips and
+ * Send — are inert while the modifier/key grid stays composable.
  *
  * Screen qualifiers are taller than the defaults so the pinned footer (preview,
  * hint, Send) lays out on-screen below the 420dp scrollable key area.
@@ -44,6 +46,7 @@ class ShortcutPickerContentTest {
     private fun setContent(
         recents: List<KeyChord> = emptyList(),
         onSendChord: (KeyChord) -> Unit = {},
+        enabled: Boolean = true,
     ) {
         composeRule.setContent {
             Surface {
@@ -51,6 +54,7 @@ class ShortcutPickerContentTest {
                     recents = recents,
                     onSendChord = onSendChord,
                     onClose = {},
+                    enabled = enabled,
                 )
             }
         }
@@ -100,6 +104,31 @@ class ShortcutPickerContentTest {
 
         // Tap-again deselects the key, so Send must disarm again.
         tapKey("X")
+        composeRule.onNodeWithTag("shortcut_send_button").assertIsNotEnabled()
+    }
+
+    @Test
+    fun disabledPicker_recentsChipIsInert() {
+        val captured = mutableListOf<KeyChord>()
+        val recent = KeyChord(ctrl = true, key = "r")
+        setContent(recents = listOf(recent), onSendChord = { captured += it }, enabled = false)
+
+        val chip = composeRule.onNodeWithText("Ctrl+R").performScrollTo()
+        chip.assertIsNotEnabled()
+
+        chip.performClick()
+        assertEquals(emptyList<KeyChord>(), captured)
+    }
+
+    @Test
+    fun disabledPicker_composingStaysLive_butSendStaysDisabled() {
+        setContent(enabled = false)
+
+        // The gate must not freeze composing: modifier and key chips still react.
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("X")
+        composeRule.onNodeWithText("Sends: ", substring = true).assertExists()
+
         composeRule.onNodeWithTag("shortcut_send_button").assertIsNotEnabled()
     }
 

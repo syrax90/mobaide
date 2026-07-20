@@ -52,6 +52,7 @@ fun ShortcutPickerSheet(
     recents: List<KeyChord>,
     onSendChord: (KeyChord) -> Unit,
     onDismiss: () -> Unit,
+    enabled: Boolean = true,
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -61,6 +62,7 @@ fun ShortcutPickerSheet(
             recents = recents,
             onSendChord = onSendChord,
             onClose = onDismiss,
+            enabled = enabled,
         )
     }
 }
@@ -74,6 +76,11 @@ internal fun ShortcutPickerContent(
     recents: List<KeyChord>,
     onSendChord: (KeyChord) -> Unit,
     onClose: () -> Unit,
+    // Same session gate as the control-key row and FullScreenInputSheet: while
+    // the session is not running, chords can't reach the PTY, so the send
+    // surfaces (recents chips + Send) disable rather than pretend to send and
+    // record a recent for a dropped keystroke. Composing stays available.
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     var ctrl by remember { mutableStateOf(false) }
@@ -125,6 +132,7 @@ internal fun ShortcutPickerContent(
                     recents.forEach { recent ->
                         SuggestionChip(
                             onClick = { onSendChord(recent) },
+                            enabled = enabled,
                             label = { ChipLabel(recent.display()) },
                         )
                     }
@@ -191,7 +199,7 @@ internal fun ShortcutPickerContent(
         }
         Button(
             onClick = { chord?.let(onSendChord) },
-            enabled = chord != null,
+            enabled = enabled && chord != null,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 16.dp)

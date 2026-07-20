@@ -316,6 +316,7 @@ fun TerminalScreen(
                 showShortcutPicker = false
             },
             onDismiss = { showShortcutPicker = false },
+            enabled = isConnected && sessionState == "running",
         )
     }
 
