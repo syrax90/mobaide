@@ -429,4 +429,20 @@ class ShortcutPickerSavedSectionTest {
 
         assertEquals(listOf(KeyChord(key = "x") to null), captured)
     }
+
+    @Test
+    fun saveFlow_nameField_clampsLongPasteToServerCap() {
+        // The server rejects names over 100 chars with a 422 (and the typed
+        // text would be lost) — the field clamps a long paste up front, so
+        // the confirmed name is exactly the 100-char prefix.
+        val captured = mutableListOf<Pair<KeyChord, String?>>()
+        setContent(onSaveShortcut = { chord, name -> captured += chord to name })
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("n".repeat(150))
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        assertEquals(listOf(KeyChord(key = "x") to "n".repeat(100)), captured)
+    }
 }

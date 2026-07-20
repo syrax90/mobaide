@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 
 import pytest
 
@@ -199,6 +200,77 @@ class TestUpsert:
         assert fresh["shortcut_id"] != first["shortcut_id"]
         assert fresh["name"] is None
         assert fresh["version"] == 1
+
+    async def test_delete_racing_name_update_creates_fresh_row(
+        self, app, viewer_user, monkeypatch
+    ):
+        """A delete committing between the upsert probe and the name update
+        must not echo the stale row back (which would resurrect the deleted
+        button client-side) — the save re-probes and creates a fresh row,
+        broadcasting ``shortcut.created``."""
+        db = app.state.db
+        service = app.state.shortcut_service
+        c = _make_user_client(viewer_user["id"])
+        app.state.routing.register_user_client(viewer_user["id"], c)
+
+        first = await service.create_shortcut(
+            viewer_user["id"], "claude", "ctrl+x", "Old"
+        )
+        c.send_queue.get_nowait()  # drain shortcut.created
+
+        real_update = db.update_user_shortcut_name
+
+        async def racing_update(shortcut_id, name):
+            monkeypatch.setattr(db, "update_user_shortcut_name", real_update)
+            await db.soft_delete_user_shortcut(shortcut_id)
+            return await real_update(shortcut_id, name)
+
+        monkeypatch.setattr(db, "update_user_shortcut_name", racing_update)
+
+        fresh = await service.create_shortcut(
+            viewer_user["id"], "claude", "ctrl+x", "New"
+        )
+
+        assert fresh["shortcut_id"] != first["shortcut_id"]
+        assert fresh["name"] == "New"
+        assert fresh["version"] == 1
+
+        envelope = json.loads(c.send_queue.get_nowait())
+        assert envelope["type"] == "shortcut.created"
+        assert envelope["payload"]["shortcut_id"] == fresh["shortcut_id"]
+        with pytest.raises(asyncio.QueueEmpty):
+            c.send_queue.get_nowait()
+
+    async def test_lost_insert_race_reprobes_and_updates_winner(
+        self, app, viewer_user, monkeypatch
+    ):
+        """When a concurrent save wins the INSERT race, the partial unique
+        index rejects the loser, which must re-probe and apply its name to
+        the winning row instead of raising or duplicating the button."""
+        db = app.state.db
+        service = app.state.shortcut_service
+        real_create = db.create_user_shortcut
+        winner_ids = []
+
+        async def racing_create(owner_user_id, kind, chord_token, name):
+            monkeypatch.setattr(db, "create_user_shortcut", real_create)
+            winner = await real_create(
+                owner_user_id, kind, chord_token, "Winner"
+            )
+            winner_ids.append(winner["shortcut_id"])
+            raise sqlite3.IntegrityError("UNIQUE constraint failed")
+
+        monkeypatch.setattr(db, "create_user_shortcut", racing_create)
+
+        result = await service.create_shortcut(
+            viewer_user["id"], "claude", "ctrl+x", "Mine"
+        )
+
+        assert result["shortcut_id"] == winner_ids[0]
+        assert result["name"] == "Mine"
+        assert result["version"] == 2
+        rows = await db.list_user_shortcuts_for_user(viewer_user["id"])
+        assert len(rows) == 1
 
 
 class TestRenameShortcut:

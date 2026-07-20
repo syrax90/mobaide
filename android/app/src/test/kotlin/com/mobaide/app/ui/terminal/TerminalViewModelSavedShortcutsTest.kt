@@ -7,6 +7,8 @@ import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.SessionKind
+import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
@@ -45,9 +47,13 @@ import org.junit.Test
  * [TerminalViewModelSendChordTest.shortcutRecents_emptyAndUntouched_beforeFirstRefresh]).
  * The mapped list is kind-filtered by wire name, sorted by
  * (position, created_at, shortcut_id), drops unparseable tokens, blank names
- * collapse to null, and riskiness is re-derived from the encoder. Saves go out
- * under the session kind's wire name with the chord's token and a trimmed
- * (blank -> null) name; failures surface as snackbars, never silently.
+ * collapse to null, and riskiness is re-derived from the encoder. Saves
+ * re-resolve the session's kind from the live session list (REST fallback) —
+ * never the eagerly-seeded `sessionKind.value` Claude default — and go out
+ * under that kind's wire name with the chord's token and a trimmed
+ * (blank -> null) name; an unresolvable kind aborts the save with a snackbar
+ * before the repository is touched; failures surface as snackbars, never
+ * silently.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelSavedShortcutsTest {
@@ -59,9 +65,10 @@ class TerminalViewModelSavedShortcutsTest {
     private val connection = mockk<WebSocketConnection>(relaxed = true) {
         every { events } returns eventsFlow
     }
+    private val sessionListFlow = MutableStateFlow<List<SessionResponse>>(emptyList())
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
-        every { observeSessionList() } returns MutableStateFlow(emptyList())
+        every { observeSessionList() } returns sessionListFlow
     }
     private val templatesRepository = mockk<TemplatesRepository>(relaxed = true)
     // Deliberately strict with zero default stubs — the laziness tripwire.
@@ -80,6 +87,16 @@ class TerminalViewModelSavedShortcutsTest {
             foregroundSessionTracker = ForegroundSessionTracker(),
             preferencesStore = preferencesStore,
         )
+
+    private fun session(
+        id: String = "test-session",
+        kind: SessionKind = SessionKind.Claude,
+    ): SessionResponse = SessionResponse(
+        session_id = id,
+        state = "running",
+        created_at = "2026-07-20T12:00:00Z",
+        kind = kind,
+    )
 
     private fun dto(
         id: String,
@@ -228,6 +245,7 @@ class TerminalViewModelSavedShortcutsTest {
 
     @Test
     fun saveShortcut_sendsWireKindAndToken_withTrimmedName_andSuccessSnackbar() = runTest {
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         coEvery {
             shortcutsRepository.createShortcut(any(), any(), any())
         } returns dto("s-1", chordToken = "ctrl+x", name = "Build")
@@ -239,8 +257,8 @@ class TerminalViewModelSavedShortcutsTest {
             assertEquals("Saved shortcut \"Build\"", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
-        // "claude" pins SessionKind.wireName as the kind key (the VM's kind
-        // defaults to Claude until the session list resolves).
+        // "claude" pins the wire name of the kind resolved from the live
+        // session list — the only source saveShortcut may trust.
         coVerify(exactly = 1) {
             shortcutsRepository.createShortcut("claude", "ctrl+x", "Build")
         }
@@ -248,6 +266,7 @@ class TerminalViewModelSavedShortcutsTest {
 
     @Test
     fun saveShortcut_blankName_savesUnnamed_andSnackbarFallsBackToChordLabel() = runTest {
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         coEvery {
             shortcutsRepository.createShortcut(any(), any(), any())
         } returns dto("s-1", chordToken = "ctrl+x")
@@ -266,6 +285,7 @@ class TerminalViewModelSavedShortcutsTest {
 
     @Test
     fun saveShortcut_failure_emitsFailureSnackbar() = runTest {
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         coEvery {
             shortcutsRepository.createShortcut(any(), any(), any())
         } throws RuntimeException("boom")
@@ -281,6 +301,70 @@ class TerminalViewModelSavedShortcutsTest {
             )
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun saveShortcut_kindFromLiveList_matchesThisSession_notAnotherEntry() = runTest {
+        // The resolver must key on this VM's sessionId, not just take any
+        // list entry — and must use that entry's real kind.
+        sessionListFlow.value = listOf(
+            session(id = "other-session", kind = SessionKind.Claude),
+            session(id = "test-session", kind = SessionKind.Codex),
+        )
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } returns dto("s-1", kind = "codex", chordToken = "ctrl+x")
+        val vm = createViewModel()
+
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"), null)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("codex", "ctrl+x", null)
+        }
+    }
+
+    @Test
+    fun saveShortcut_coldLaunch_waitsForRestKind_neverSeededClaudeDefault() = runTest {
+        // The regression this pins: sessionKind is eagerly seeded Claude, so
+        // a save fired before the cold-launch REST seed lands used to file a
+        // Codex session's shortcut under "claude" permanently. The save must
+        // suspend on the REST fetch and use the kind it resolves.
+        val gate = CompletableDeferred<List<SessionResponse>>()
+        coEvery { sessionRepository.listSessions() } coAnswers { gate.await() }
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } returns dto("s-1", kind = "codex", chordToken = "ctrl+x")
+        val vm = createViewModel()
+
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"), null)
+        advanceUntilIdle() // the save is now suspended on the REST fetch
+        gate.complete(listOf(session(kind = SessionKind.Codex)))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("codex", "ctrl+x", null)
+        }
+    }
+
+    @Test
+    fun saveShortcut_kindUnresolvable_abortsWithSnackbar_andNeverTouchesRepository() = runTest {
+        // Cold launch with the session absent from the live list and the
+        // REST fallback failing: the save must abort with a snackbar rather
+        // than crash or fall back to the seeded Claude default.
+        coEvery { sessionRepository.listSessions() } throws RuntimeException("offline")
+        val vm = createViewModel()
+
+        vm.userMessages.test {
+            vm.saveShortcut(KeyChord(ctrl = true, key = "x"), "Build")
+            advanceUntilIdle()
+            assertEquals(
+                "Failed to save shortcut: session type not known yet",
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        verify { shortcutsRepository wasNot Called }
     }
 
     @Test

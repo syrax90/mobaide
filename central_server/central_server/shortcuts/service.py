@@ -50,26 +50,33 @@ class ShortcutService:
     ) -> dict:
         """Upsert: saving a chord that already exists live for the same
         (owner, kind) updates its name (when one is provided) instead of
-        creating a duplicate button."""
+        creating a duplicate button.
+
+        The probe → mutate pairs re-run from the top whenever a concurrent
+        mutation commits between their awaits (a duplicate insert, or a
+        soft-delete landing between the live probe and the name update).
+        Attempts are bounded: an ``IntegrityError`` that persists across
+        every attempt is deterministic (e.g. the owner row was hard-deleted
+        mid-request, failing the FK), not a race — retrying it forever
+        would spin on the shared connection, so the final attempt re-raises.
+        """
         name = name or None
-        existing = await self._db.get_live_user_shortcut_by_chord(
-            owner_user_id, kind, chord_token
-        )
-        if existing is None:
-            try:
-                row = await self._db.create_user_shortcut(
-                    owner_user_id, kind, chord_token, name
-                )
-            except sqlite3.IntegrityError:
-                # Lost a race with a concurrent save of the same chord —
-                # the partial unique index is the backstop; fall through to
-                # the upsert path against the winning row.
-                existing = await self._db.get_live_user_shortcut_by_chord(
-                    owner_user_id, kind, chord_token
-                )
-                if existing is None:
-                    raise
-            else:
+        for attempt in range(3):
+            existing = await self._db.get_live_user_shortcut_by_chord(
+                owner_user_id, kind, chord_token
+            )
+            if existing is None:
+                try:
+                    row = await self._db.create_user_shortcut(
+                        owner_user_id, kind, chord_token, name
+                    )
+                except sqlite3.IntegrityError:
+                    # Usually: lost a race with a concurrent save of the
+                    # same chord (partial unique index) — re-probe and take
+                    # the upsert path against the winning row.
+                    if attempt == 2:
+                        raise
+                    continue
                 payload = _row_to_payload(row)
                 broadcast_user_event(
                     self._routing, owner_user_id, "shortcut.created", payload
@@ -79,18 +86,23 @@ class ShortcutService:
                     row["shortcut_id"], owner_user_id, kind,
                 )
                 return payload
-        if name is not None and name != existing["name"]:
+            if name is None or name == existing["name"]:
+                return _row_to_payload(existing)
             row = await self._db.update_user_shortcut_name(
                 existing["shortcut_id"], name
             )
             if row is None:
-                return _row_to_payload(existing)
+                # The row was soft-deleted between the probe and the update.
+                # Returning the stale payload would resurrect the deleted
+                # button on the caller's device, so re-probe and create a
+                # fresh row instead (re-save after delete → new shortcut).
+                continue
             payload = _row_to_payload(row)
             broadcast_user_event(
                 self._routing, owner_user_id, "shortcut.updated", payload
             )
             return payload
-        return _row_to_payload(existing)
+        raise RuntimeError("shortcut upsert retries exhausted")
 
     async def rename_shortcut(
         self, shortcut_id: str, user_id: str, name: str | None

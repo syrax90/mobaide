@@ -245,7 +245,7 @@ internal fun ShortcutPickerContent(
             ) {
                 OutlinedTextField(
                     value = shortcutName,
-                    onValueChange = { shortcutName = it },
+                    onValueChange = { shortcutName = it.take(MAX_SHORTCUT_NAME_LENGTH) },
                     label = { Text("Name (optional)") },
                     singleLine = true,
                     modifier = Modifier

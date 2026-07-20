@@ -49,7 +49,7 @@ fun RenameShortcutDialog(
                 )
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = it.take(MAX_SHORTCUT_NAME_LENGTH) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(focusRequester),

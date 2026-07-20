@@ -155,19 +155,12 @@ class TerminalViewModel @Inject constructor(
                 // observeSessionList() is WS-pushed with no replay, so a cold launch
                 // (notification tap / deep link) can build this VM before the first
                 // sessions.changed snapshot — the list starts empty and a Codex session
-                // would show the Claude key bar. Seed from a one-shot REST fetch when the
-                // live list hasn't already resolved the session. mapNotNull above means
-                // the Claude default only ever comes from stateIn's seed value, so there
+                // would show the Claude key bar. Delegate to resolvedSessionKind() —
+                // the single implementation of live-list-then-REST resolution, shared
+                // with saveShortcut — for a one-shot seed. mapNotNull above means the
+                // Claude default only ever comes from stateIn's seed value, so there
                 // is no Codex→Claude→Codex flicker once a real kind arrives.
-                if (sessionRepository.observeSessionList().value
-                        .none { it.session_id == sessionId }
-                ) {
-                    runCatching { sessionRepository.listSessions() }
-                        .getOrNull()
-                        ?.firstOrNull { it.session_id == sessionId }
-                        ?.kind
-                        ?.let { emit(it) }
-                }
+                resolvedSessionKind()?.let { emit(it) }
             },
         ).stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
 
@@ -498,15 +491,37 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
+    /** The session's actual kind, or null while it cannot be determined.
+     *  [sessionKind] seeds Claude until the session list or REST fetch
+     *  resolves the real kind, and persisting a synced shortcut under the
+     *  seed would file it in the wrong per-kind bucket permanently (unlike
+     *  the self-healing device-local recents) — so saves re-resolve from
+     *  the authoritative sources instead of trusting the StateFlow value. */
+    private suspend fun resolvedSessionKind(): SessionKind? {
+        sessionRepository.observeSessionList().value
+            .firstOrNull { it.session_id == sessionId }
+            ?.let { return it.kind }
+        return runCatching { sessionRepository.listSessions() }.getOrNull()
+            ?.firstOrNull { it.session_id == sessionId }
+            ?.kind
+    }
+
     /** Persist a chord as a named button for this session's kind. The server
      *  upserts, so re-saving an existing chord updates its name instead of
      *  duplicating the button. */
     fun saveShortcut(chord: KeyChord, name: String?) {
         val trimmedName = name?.trim()?.takeIf { it.isNotEmpty() }
         viewModelScope.launch {
+            val kind = resolvedSessionKind()
+            if (kind == null) {
+                _userMessages.tryEmit(
+                    "Failed to save shortcut: session type not known yet",
+                )
+                return@launch
+            }
             try {
                 shortcutsRepository.createShortcut(
-                    sessionKind.value.wireName, chord.token(), trimmedName,
+                    kind.wireName, chord.token(), trimmedName,
                 )
                 _userMessages.tryEmit(
                     "Saved shortcut \"${trimmedName ?: chord.display()}\"",
