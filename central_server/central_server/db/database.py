@@ -1185,7 +1185,15 @@ class Database:
         await self.conn.commit()
         if cursor.rowcount != 1:
             return None
-        return await self.get_user_shortcut(shortcut_id)
+        row = await self.get_user_shortcut(shortcut_id)
+        if row is None or row["deleted_at"] is not None:
+            # A concurrent soft-delete can land between the UPDATE commit
+            # and this readback. The readback has no deleted_at filter, so
+            # returning the tombstone here would let the service broadcast
+            # a deleted row as shortcut.updated — resurrecting the button
+            # on every connected device.
+            return None
+        return row
 
     async def soft_delete_user_shortcut(
         self, shortcut_id: str

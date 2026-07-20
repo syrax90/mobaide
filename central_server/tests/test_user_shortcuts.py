@@ -241,6 +241,47 @@ class TestUpsert:
         with pytest.raises(asyncio.QueueEmpty):
             c.send_queue.get_nowait()
 
+    async def test_delete_racing_update_readback_creates_fresh_row(
+        self, app, viewer_user, monkeypatch
+    ):
+        """A delete committing after the name UPDATE but before its
+        readback (a distinct gap from the pre-update race above) must not
+        broadcast the tombstone as ``shortcut.updated`` — the save
+        re-probes and creates a fresh row, broadcasting
+        ``shortcut.created``."""
+        db = app.state.db
+        service = app.state.shortcut_service
+        c = _make_user_client(viewer_user["id"])
+        app.state.routing.register_user_client(viewer_user["id"], c)
+
+        first = await service.create_shortcut(
+            viewer_user["id"], "claude", "ctrl+x", "Old"
+        )
+        c.send_queue.get_nowait()  # drain shortcut.created
+
+        real_get = db.get_user_shortcut
+
+        async def racing_get(shortcut_id):
+            monkeypatch.setattr(db, "get_user_shortcut", real_get)
+            await db.soft_delete_user_shortcut(shortcut_id)
+            return await real_get(shortcut_id)
+
+        monkeypatch.setattr(db, "get_user_shortcut", racing_get)
+
+        fresh = await service.create_shortcut(
+            viewer_user["id"], "claude", "ctrl+x", "New"
+        )
+
+        assert fresh["shortcut_id"] != first["shortcut_id"]
+        assert fresh["name"] == "New"
+        assert fresh["version"] == 1
+
+        envelope = json.loads(c.send_queue.get_nowait())
+        assert envelope["type"] == "shortcut.created"
+        assert envelope["payload"]["shortcut_id"] == fresh["shortcut_id"]
+        with pytest.raises(asyncio.QueueEmpty):
+            c.send_queue.get_nowait()
+
     async def test_lost_insert_race_reprobes_and_updates_winner(
         self, app, viewer_user, monkeypatch
     ):
@@ -330,6 +371,39 @@ class TestRenameShortcut:
             headers=api_auth_headers,
         )
         assert resp.status_code == 403
+
+    async def test_rename_racing_delete_raises_not_found(
+        self, app, viewer_user, monkeypatch
+    ):
+        """A delete committing between the rename's UPDATE and its
+        readback must surface as not-found (403 at the router), not
+        broadcast the tombstone as ``shortcut.updated``."""
+        db = app.state.db
+        service = app.state.shortcut_service
+        c = _make_user_client(viewer_user["id"])
+        app.state.routing.register_user_client(viewer_user["id"], c)
+
+        row = await service.create_shortcut(
+            viewer_user["id"], "claude", "ctrl+x", None
+        )
+        c.send_queue.get_nowait()  # drain shortcut.created
+
+        real_get = db.get_user_shortcut
+
+        async def racing_get(shortcut_id):
+            monkeypatch.setattr(db, "get_user_shortcut", real_get)
+            await db.soft_delete_user_shortcut(shortcut_id)
+            return await real_get(shortcut_id)
+
+        monkeypatch.setattr(db, "get_user_shortcut", racing_get)
+
+        with pytest.raises(ValueError, match="Shortcut not found"):
+            await service.rename_shortcut(
+                row["shortcut_id"], viewer_user["id"], "Renamed"
+            )
+
+        with pytest.raises(asyncio.QueueEmpty):
+            c.send_queue.get_nowait()
 
 
 class TestDeleteShortcut:

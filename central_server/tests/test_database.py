@@ -1567,6 +1567,31 @@ class TestUserShortcuts:
             is None
         )
 
+    async def test_update_name_racing_delete_at_readback_returns_none(
+        self, db: Database, monkeypatch
+    ):
+        """A soft-delete committing between the name UPDATE and its
+        readback must not surface the tombstone as the updated row —
+        the helper reports None so callers treat the shortcut as gone."""
+        owner = await _create_test_user(db)
+        row = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+
+        real_get = db.get_user_shortcut
+
+        async def racing_get(shortcut_id):
+            monkeypatch.setattr(db, "get_user_shortcut", real_get)
+            await db.soft_delete_user_shortcut(shortcut_id)
+            return await real_get(shortcut_id)
+
+        monkeypatch.setattr(db, "get_user_shortcut", racing_get)
+
+        result = await db.update_user_shortcut_name(row["shortcut_id"], "New")
+
+        assert result is None
+        persisted = await db.get_user_shortcut(row["shortcut_id"])
+        assert persisted is not None
+        assert persisted["deleted_at"] is not None
+
     async def test_soft_delete_twice_returns_none(self, db: Database):
         owner = await _create_test_user(db)
         row = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
