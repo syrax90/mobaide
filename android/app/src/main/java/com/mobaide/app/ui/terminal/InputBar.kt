@@ -4,11 +4,15 @@ import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,6 +23,8 @@ import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Backspace
 import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -29,15 +35,20 @@ import androidx.compose.material.icons.outlined.Keyboard
 import androidx.compose.material.icons.outlined.KeyboardCommandKey
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,6 +63,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -172,6 +185,10 @@ fun InputBar(
     onExpand: () -> Unit = {},
     onOpenTemplates: () -> Unit = {},
     onOpenShortcuts: () -> Unit = {},
+    savedShortcuts: List<SavedShortcutUi> = emptyList(),
+    onSendSavedShortcut: (SavedShortcutUi) -> Unit = {},
+    onRenameSavedShortcut: (SavedShortcutUi) -> Unit = {},
+    onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
     onSaveAsTemplate: () -> Unit = {},
     sessionKind: SessionKind = SessionKind.Claude,
     composerVisible: Boolean = true,
@@ -336,6 +353,24 @@ fun InputBar(
                             contentDescription = "Custom shortcut",
                             modifier = Modifier.size(18.dp),
                         )
+                    }
+                    // User-saved shortcut buttons — the literal end of the row,
+                    // after the ⌘ trigger. Rendered for every session kind that
+                    // has saved chords; the list is already kind-filtered.
+                    // key() pins each button's remembered menu state to its
+                    // shortcut id: with positional memoization, a push-driven
+                    // removal would hand an open Rename/Remove menu to the
+                    // NEXT shortcut in the row.
+                    savedShortcuts.forEach { shortcut ->
+                        key(shortcut.id) {
+                            SavedShortcutKeyButton(
+                                shortcut = shortcut,
+                                enabled = enabled,
+                                onSend = { onSendSavedShortcut(shortcut) },
+                                onRename = { onRenameSavedShortcut(shortcut) },
+                                onRemove = { onRemoveSavedShortcut(shortcut) },
+                            )
+                        }
                     }
                 }
             }
@@ -549,6 +584,96 @@ private fun ActionButtons(
     }
 }
 
+/**
+ * A user-saved shortcut rendered as a control-row button. Not a
+ * [FilledTonalButton]: Material3 buttons have no long-press slot, and
+ * long-press must stay reachable even while sends are gated (a disabled
+ * node would swallow the gesture), so this is a [Surface] styled to match
+ * with [combinedClickable] — tap sends (no-op when `!enabled`, label
+ * dimmed), long-press opens the Rename/Remove menu.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SavedShortcutKeyButton(
+    shortcut: SavedShortcutUi,
+    enabled: Boolean,
+    onSend: () -> Unit,
+    onRename: () -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val haptic = LocalHapticFeedback.current
+    var menuExpanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        Surface(
+            shape = ButtonDefaults.filledTonalShape,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier
+                .testTag("saved_shortcut_button")
+                .semantics { contentDescription = "Saved shortcut ${shortcut.label}" },
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .combinedClickable(
+                        onClick = {
+                            if (enabled) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSend()
+                            }
+                        },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            menuExpanded = true
+                        },
+                    )
+                    .defaultMinSize(
+                        minWidth = ButtonDefaults.MinWidth,
+                        minHeight = ButtonDefaults.MinHeight,
+                    )
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            ) {
+                // The existing "risky" marking (CSI-u chords) carries over to
+                // saved buttons as the tertiary label color.
+                val labelColor = if (shortcut.risky) {
+                    MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.onSecondaryContainer
+                }
+                Text(
+                    shortcut.label,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                    ),
+                    color = labelColor.copy(alpha = if (enabled) 1f else 0.38f),
+                )
+            }
+        }
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Rename") },
+                onClick = {
+                    menuExpanded = false
+                    onRename()
+                },
+                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+            )
+            DropdownMenuItem(
+                text = { Text("Remove") },
+                onClick = {
+                    menuExpanded = false
+                    onRemove()
+                },
+                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+            )
+        }
+    }
+}
+
 @Preview(name = "InputBar light", showBackground = true)
 @Preview(
     name = "InputBar dark",
@@ -563,6 +688,20 @@ private fun InputBarPreview() {
             onTextChange = {},
             onSend = {},
             onSendBytes = {},
+            savedShortcuts = listOf(
+                SavedShortcutUi(
+                    id = "s1",
+                    chord = KeyChord(ctrl = true, key = "x"),
+                    name = "Cut",
+                    risky = false,
+                ),
+                SavedShortcutUi(
+                    id = "s2",
+                    chord = KeyChord(ctrl = true, shift = true, key = "p"),
+                    name = null,
+                    risky = true,
+                ),
+            ),
         )
     }
 }

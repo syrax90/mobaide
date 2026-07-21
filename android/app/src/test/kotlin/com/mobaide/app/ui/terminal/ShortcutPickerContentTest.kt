@@ -8,10 +8,12 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -218,5 +220,229 @@ class ShortcutPickerContentShortScreenTest {
         }
 
         composeRule.onNodeWithTag("shortcut_send_button").assertIsDisplayed()
+    }
+}
+
+/**
+ * Saved-shortcut surfaces inside the picker: the "Saved" InputChip section
+ * below Recents (tap = resend, gated on the session; trailing ✕ = server-side
+ * remove, never gated) and the Save footer flow (Save toggles an inline
+ * optional-name field; confirming emits `onSaveShortcut(chord, name-or-null)`).
+ * Save is a server mutation, so it depends only on a key being picked — not on
+ * the session-active `enabled` gate.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33], qualifiers = "w480dp-h1200dp-port-xxhdpi")
+class ShortcutPickerSavedSectionTest {
+
+    @get:Rule
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
+
+    private val savedRetry = SavedShortcutUi(
+        id = "s1",
+        chord = KeyChord(ctrl = true, key = "r"),
+        name = "Retry",
+        risky = false,
+    )
+
+    private fun setContent(
+        savedShortcuts: List<SavedShortcutUi> = emptyList(),
+        enabled: Boolean = true,
+        onSendChord: (KeyChord) -> Unit = {},
+        onSaveShortcut: (KeyChord, String?) -> Unit = { _, _ -> },
+        onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
+    ) {
+        composeRule.setContent {
+            Surface {
+                ShortcutPickerContent(
+                    recents = emptyList(),
+                    onSendChord = onSendChord,
+                    onClose = {},
+                    enabled = enabled,
+                    savedShortcuts = savedShortcuts,
+                    onSaveShortcut = onSaveShortcut,
+                    onRemoveSavedShortcut = onRemoveSavedShortcut,
+                )
+            }
+        }
+    }
+
+    private fun toggleModifier(tag: String) {
+        composeRule.onNodeWithTag(tag).performScrollTo().performClick()
+    }
+
+    private fun tapKey(label: String) {
+        composeRule.onNode(hasText(label) and hasClickAction())
+            .performScrollTo()
+            .performClick()
+    }
+
+    @Test
+    fun emptySaved_omitsSavedSection() {
+        setContent(savedShortcuts = emptyList())
+
+        composeRule.onNodeWithText("Saved").assertDoesNotExist()
+    }
+
+    /** Tap the chip body with a real coordinate click on the label text node
+     *  (unmerged tree: the merged chip node also spans the trailing ✕, so its
+     *  center could land inside the remove target). Deliberately not a
+     *  semantics-action shortcut — the real tap pins the layout contract that
+     *  the ✕ owns actual 48dp bounds rather than an invisible touch-target
+     *  expansion overlapping the label, which used to turn send-taps into
+     *  silent destructive removes. */
+    private fun tapChipBody(label: String) {
+        composeRule.onNodeWithText(label, useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+    }
+
+    @Test
+    fun savedChip_tapResendsChord() {
+        val captured = mutableListOf<KeyChord>()
+        setContent(
+            savedShortcuts = listOf(savedRetry),
+            onSendChord = { captured += it },
+        )
+
+        composeRule.onNodeWithText("Saved").assertExists()
+        tapChipBody("Retry")
+
+        assertEquals(listOf(savedRetry.chord), captured)
+    }
+
+    @Test
+    fun savedChip_tapIsInert_whenSessionDisabled() {
+        val captured = mutableListOf<KeyChord>()
+        setContent(
+            savedShortcuts = listOf(savedRetry),
+            enabled = false,
+            onSendChord = { captured += it },
+        )
+
+        tapChipBody("Retry")
+
+        assertEquals(emptyList<KeyChord>(), captured)
+    }
+
+    @Test
+    fun savedChip_labelTap_landsOnSend_neverOnRemove() {
+        val sent = mutableListOf<KeyChord>()
+        val removed = mutableListOf<SavedShortcutUi>()
+        setContent(
+            savedShortcuts = listOf(savedRetry),
+            onSendChord = { sent += it },
+            onRemoveSavedShortcut = { removed += it },
+        )
+
+        tapChipBody("Retry")
+
+        assertEquals(listOf(savedRetry.chord), sent)
+        assertEquals(
+            "a real tap on the label must never fall into the ✕ remove target",
+            emptyList<SavedShortcutUi>(),
+            removed,
+        )
+    }
+
+    @Test
+    fun savedChip_removeIcon_firesRemove_notSend() {
+        val removed = mutableListOf<SavedShortcutUi>()
+        val sent = mutableListOf<KeyChord>()
+        setContent(
+            savedShortcuts = listOf(savedRetry),
+            onSendChord = { sent += it },
+            onRemoveSavedShortcut = { removed += it },
+        )
+
+        composeRule.onNodeWithContentDescription("Remove Retry")
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(listOf(savedRetry), removed)
+        assertEquals(
+            "the ✕ must remove, never also resend the chord",
+            emptyList<KeyChord>(),
+            sent,
+        )
+    }
+
+    @Test
+    fun savedChip_removeIcon_staysActive_whenSessionDisabled() {
+        // Removal is a server mutation, not a send — the session gate must
+        // not block it.
+        val removed = mutableListOf<SavedShortcutUi>()
+        setContent(
+            savedShortcuts = listOf(savedRetry),
+            enabled = false,
+            onRemoveSavedShortcut = { removed += it },
+        )
+
+        composeRule.onNodeWithContentDescription("Remove Retry")
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(listOf(savedRetry), removed)
+    }
+
+    @Test
+    fun saveButton_enabledOnlyWhileAKeyIsSelected() {
+        setContent()
+
+        composeRule.onNodeWithTag("shortcut_save_button").assertIsNotEnabled()
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").assertIsEnabled()
+
+        // Tap-again deselects the key, so Save must disarm again.
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").assertIsNotEnabled()
+    }
+
+    @Test
+    fun saveFlow_withTypedName_emitsChordAndTrimmedName_evenWhenSessionDisabled() {
+        val captured = mutableListOf<Pair<KeyChord, String?>>()
+        setContent(enabled = false, onSaveShortcut = { chord, name -> captured += chord to name })
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("  Build  ")
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        assertEquals(
+            listOf(KeyChord(ctrl = true, key = "x") to "Build"),
+            captured,
+        )
+        // Confirming resets and hides the inline name row.
+        composeRule.onNodeWithTag("shortcut_name_field").assertDoesNotExist()
+    }
+
+    @Test
+    fun saveFlow_blankName_emitsNullName() {
+        val captured = mutableListOf<Pair<KeyChord, String?>>()
+        setContent(onSaveShortcut = { chord, name -> captured += chord to name })
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        assertEquals(listOf(KeyChord(key = "x") to null), captured)
+    }
+
+    @Test
+    fun saveFlow_nameField_clampsLongPasteToServerCap() {
+        // The server rejects names over 100 chars with a 422 (and the typed
+        // text would be lost) — the field clamps a long paste up front, so
+        // the confirmed name is exactly the 100-char prefix.
+        val captured = mutableListOf<Pair<KeyChord, String?>>()
+        setContent(onSaveShortcut = { chord, name -> captured += chord to name })
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("n".repeat(150))
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        assertEquals(listOf(KeyChord(key = "x") to "n".repeat(100)), captured)
     }
 }

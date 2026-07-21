@@ -90,6 +90,7 @@ class TerminalViewModelReplayClearTest {
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = repo,
             templatesRepository = templatesRepository,
+            shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),
             preferencesStore = preferencesStore,
         )

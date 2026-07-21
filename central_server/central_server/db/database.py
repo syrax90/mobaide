@@ -131,6 +131,23 @@ CREATE TABLE IF NOT EXISTS prompt_templates (
     version       INTEGER NOT NULL DEFAULT 1
 );
 
+-- Saved keyboard shortcuts pinned to the terminal control-key row.
+-- ``kind`` is the SessionKind wire name (opaque to the server) and
+-- ``chord_token`` is the client-side KeyChord.token() string; the server
+-- never interprets either.
+CREATE TABLE IF NOT EXISTS user_shortcuts (
+    shortcut_id   TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id),
+    kind          TEXT NOT NULL,
+    chord_token   TEXT NOT NULL,
+    name          TEXT,
+    position      INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    deleted_at    TEXT,
+    version       INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub
     ON users(google_sub) WHERE google_sub IS NOT NULL;
@@ -161,6 +178,10 @@ CREATE INDEX IF NOT EXISTS idx_deletion_audit_pending
     ON deletion_audit(status, scheduled_for) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_prompt_templates_owner
     ON prompt_templates(owner_user_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_user_shortcuts_owner
+    ON user_shortcuts(owner_user_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_shortcuts_dedupe
+    ON user_shortcuts(owner_user_id, kind, chord_token) WHERE deleted_at IS NULL;
 """
 
 
@@ -502,6 +523,12 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 15")
 
+        if version < 16:
+            # Additive: user_shortcuts table + partial owner/dedupe indexes
+            # (saved keyboard shortcuts). Pure _SCHEMA re-run.
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 16")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -697,8 +724,8 @@ class Database:
              reference any of those agents.
           3. Drop the ``agents`` rows themselves.
           4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
-             ``account_deletion_cancel_tokens``, ``mobile_devices``, and
-             ``prompt_templates`` owned by the user.
+             ``account_deletion_cancel_tokens``, ``mobile_devices``,
+             ``prompt_templates``, and ``user_shortcuts`` owned by the user.
           5. Drop the ``users`` row.
 
         ``deletion_audit`` rows are intentionally NOT cascaded — they have no
@@ -746,6 +773,9 @@ class Database:
         )
         await self.conn.execute(
             "DELETE FROM prompt_templates WHERE owner_user_id = ?", (user_id,)
+        )
+        await self.conn.execute(
+            "DELETE FROM user_shortcuts WHERE owner_user_id = ?", (user_id,)
         )
         await self.conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         await self.conn.commit()
@@ -1055,6 +1085,133 @@ class Database:
         if cursor.rowcount != 1:
             return None
         return await self.get_template(template_id)
+
+    _SHORTCUT_COLUMNS = (
+        "shortcut_id, owner_user_id, kind, chord_token, name, position, "
+        "created_at, updated_at, deleted_at, version"
+    )
+
+    async def create_user_shortcut(
+        self,
+        owner_user_id: str,
+        kind: str,
+        chord_token: str,
+        name: str | None,
+    ) -> dict:
+        """Create a saved shortcut owned by ``owner_user_id``. ``position``
+        is assigned as MAX(position)+1 among the owner's live rows of the
+        same kind so new buttons append to the end of the control row.
+
+        Raises ``sqlite3.IntegrityError`` when a live row with the same
+        (owner, kind, chord_token) already exists (partial unique index);
+        the service layer resolves that into upsert semantics."""
+        shortcut_id = uuid.uuid4().hex[:12]
+        now = _now_iso()
+        await self.conn.execute(
+            "INSERT INTO user_shortcuts "
+            "(shortcut_id, owner_user_id, kind, chord_token, name, position, "
+            "created_at, updated_at, deleted_at, version) "
+            "VALUES (?, ?, ?, ?, ?, "
+            "(SELECT COALESCE(MAX(position) + 1, 0) FROM user_shortcuts "
+            " WHERE owner_user_id = ? AND kind = ? AND deleted_at IS NULL), "
+            "?, ?, NULL, 1)",
+            (
+                shortcut_id, owner_user_id, kind, chord_token, name,
+                owner_user_id, kind, now, now,
+            ),
+        )
+        await self.conn.commit()
+        row = await self.get_user_shortcut(shortcut_id)
+        assert row is not None
+        return row
+
+    async def get_user_shortcut(self, shortcut_id: str) -> dict | None:
+        cursor = await self.conn.execute(
+            f"SELECT {self._SHORTCUT_COLUMNS} "
+            "FROM user_shortcuts WHERE shortcut_id = ?",
+            (shortcut_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_live_user_shortcut_by_chord(
+        self, owner_user_id: str, kind: str, chord_token: str
+    ) -> dict | None:
+        """Look up the owner's live row for a (kind, chord_token) pair —
+        the upsert probe."""
+        cursor = await self.conn.execute(
+            f"SELECT {self._SHORTCUT_COLUMNS} "
+            "FROM user_shortcuts "
+            "WHERE owner_user_id = ? AND kind = ? AND chord_token = ? "
+            "  AND deleted_at IS NULL",
+            (owner_user_id, kind, chord_token),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def list_user_shortcuts_for_user(self, user_id: str) -> list[dict]:
+        cursor = await self.conn.execute(
+            f"SELECT {self._SHORTCUT_COLUMNS} "
+            "FROM user_shortcuts "
+            "WHERE owner_user_id = ? AND deleted_at IS NULL "
+            "ORDER BY position ASC, created_at ASC, shortcut_id ASC",
+            (user_id,),
+        )
+        return [dict(row) async for row in cursor]
+
+    async def is_user_shortcut_owner(
+        self, shortcut_id: str, user_id: str
+    ) -> bool:
+        cursor = await self.conn.execute(
+            "SELECT 1 FROM user_shortcuts "
+            "WHERE shortcut_id = ? AND owner_user_id = ? "
+            "  AND deleted_at IS NULL",
+            (shortcut_id, user_id),
+        )
+        return await cursor.fetchone() is not None
+
+    async def update_user_shortcut_name(
+        self, shortcut_id: str, name: str | None
+    ) -> dict | None:
+        """Set (or clear, with None) the display name. Bumps ``updated_at``
+        and ``version``. Returns the updated row, or None if the shortcut
+        doesn't exist or has been soft-deleted."""
+        cursor = await self.conn.execute(
+            "UPDATE user_shortcuts "
+            "SET name = ?, updated_at = ?, version = version + 1 "
+            "WHERE shortcut_id = ? AND deleted_at IS NULL",
+            (name, _now_iso(), shortcut_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount != 1:
+            return None
+        row = await self.get_user_shortcut(shortcut_id)
+        if row is None or row["deleted_at"] is not None:
+            # A concurrent soft-delete can land between the UPDATE commit
+            # and this readback. The readback has no deleted_at filter, so
+            # returning the tombstone here would let the service broadcast
+            # a deleted row as shortcut.updated — resurrecting the button
+            # on every connected device.
+            return None
+        return row
+
+    async def soft_delete_user_shortcut(
+        self, shortcut_id: str
+    ) -> dict | None:
+        """Mark a shortcut as deleted. Returns the tombstone row (with
+        ``deleted_at`` and bumped ``version``/``updated_at``) or None if it
+        was already gone."""
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE user_shortcuts "
+            "SET deleted_at = ?, updated_at = ?, version = version + 1 "
+            "WHERE shortcut_id = ? AND deleted_at IS NULL",
+            (now, now, shortcut_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount != 1:
+            return None
+        return await self.get_user_shortcut(shortcut_id)
 
     async def create_pairing_token(
         self,

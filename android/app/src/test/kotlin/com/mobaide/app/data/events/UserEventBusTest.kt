@@ -7,6 +7,7 @@ import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import io.mockk.Runs
 import io.mockk.coEvery
@@ -33,10 +34,12 @@ import org.junit.Test
  *     [TemplatesRepository.applyUpserted] with the parsed [TemplateDto].
  *   - `template.deleted` envelopes are forwarded to
  *     [TemplatesRepository.applyDeleted] with just the id.
+ *   - `shortcut.created` / `shortcut.updated` / `shortcut.deleted` envelopes
+ *     are forwarded to [ShortcutsRepository] the same way.
  *   - Malformed envelopes / unknown types / wrong-typed payloads are
  *     silently dropped and do not crash the collector.
- *   - `WsEvent.Connected` triggers `refreshAgents()` and
- *     `refreshTemplates()` (reconnect resync).
+ *   - `WsEvent.Connected` triggers `refreshAgents()`, `refreshTemplates()`,
+ *     and `refreshShortcuts()` (reconnect resync).
  *   - `WsEvent.Binary` is ignored (channel is text-only).
  *
  * The connection state machine and auth-lifecycle wiring are already
@@ -60,6 +63,7 @@ class UserEventBusTest {
         val wsm: WebSocketManager,
         val agentRepository: AgentRepository,
         val templatesRepository: TemplatesRepository,
+        val shortcutsRepository: ShortcutsRepository,
     )
 
     private fun newBus(initiallyLoggedIn: Boolean = true): Fixture {
@@ -89,11 +93,19 @@ class UserEventBusTest {
         every { templatesRepository.applyDeleted(any()) } just Runs
         coEvery { templatesRepository.refreshTemplates() } just Runs
 
+        val shortcutsRepository = mockk<ShortcutsRepository>()
+        every { shortcutsRepository.applyUpserted(any()) } just Runs
+        every { shortcutsRepository.applyDeleted(any()) } just Runs
+        coEvery { shortcutsRepository.refreshShortcuts() } just Runs
+
         val bus = UserEventBus(
             wsm, sessionManager, userIdentityStore,
-            agentRepository, templatesRepository,
+            agentRepository, templatesRepository, shortcutsRepository,
         )
-        return Fixture(bus, connEvents, conn, wsm, agentRepository, templatesRepository)
+        return Fixture(
+            bus, connEvents, conn, wsm,
+            agentRepository, templatesRepository, shortcutsRepository,
+        )
     }
 
     /** Emit a WS event from a real coroutine context.
@@ -619,6 +631,197 @@ class UserEventBusTest {
         )
         verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
         verify(exactly = 0) { templates.applyDeleted(any()) }
+
+        bus.stop()
+    }
+
+    private fun shortcutJson(
+        id: String = "s-1",
+        kind: String = "claude",
+        chordToken: String = "ctrl+x",
+        name: String? = null,
+        position: Int = 0,
+        version: Int = 1,
+    ): String =
+        """
+        {
+          "shortcut_id": "$id",
+          "kind": "$kind",
+          "chord_token": "$chordToken",
+          "name": ${if (name != null) "\"$name\"" else "null"},
+          "position": $position,
+          "created_at": "2026-07-20T12:00:00Z",
+          "updated_at": "2026-07-20T12:00:00Z",
+          "version": $version
+        }
+        """.trimIndent()
+
+    @Test
+    fun connected_event_alsoTriggersRefreshShortcuts() = runTest {
+        // On WS reconnect the bus must reconcile saved shortcuts as well —
+        // otherwise shortcut.* events that fired while offline would be lost.
+        val (bus, connEvents, _, _, _, _, shortcuts) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(connEvents, WsEvent.Connected)
+
+        coVerify(timeout = 2000, exactly = 1) { shortcuts.refreshShortcuts() }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_shortcutCreated_callsApplyUpserted_withParsedDto() = runTest {
+        val (bus, connEvents, _, _, _, _, shortcuts) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"shortcut.created","payload":${shortcutJson(id = "s-42", kind = "codex", chordToken = "ctrl+k", name = "Klear")}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) {
+            shortcuts.applyUpserted(
+                match {
+                    it.shortcut_id == "s-42" &&
+                        it.kind == "codex" &&
+                        it.chord_token == "ctrl+k" &&
+                        it.name == "Klear"
+                },
+            )
+        }
+        verify(exactly = 1) { shortcuts.applyUpserted(any()) }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_shortcutUpdated_callsApplyUpserted_withParsedDto() = runTest {
+        val (bus, connEvents, _, _, _, _, shortcuts) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"shortcut.updated","payload":${shortcutJson(id = "s-9", name = null, version = 7)}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) {
+            shortcuts.applyUpserted(
+                match {
+                    it.shortcut_id == "s-9" &&
+                        it.name == null &&
+                        it.version == 7
+                },
+            )
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_shortcutDeleted_callsApplyDeleted_withShortcutId() = runTest {
+        val (bus, connEvents, _, _, _, _, shortcuts) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """
+                {
+                  "type": "shortcut.deleted",
+                  "payload": {
+                    "shortcut_id": "s-doomed",
+                    "version": 5,
+                    "updated_at": "2026-07-20T13:00:00Z"
+                  }
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) { shortcuts.applyDeleted("s-doomed") }
+        // applyUpserted must NOT fire for the delete envelope.
+        verify(exactly = 0) { shortcuts.applyUpserted(any()) }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_shortcutCreatedMalformedPayload_isSilentlySkipped() = runTest {
+        // Wrong-typed inner payload (`position` as a string) — the inner
+        // decode must fail and the bus must remain alive for the next
+        // message. Mirrors the template.created wrong-type test above.
+        val (bus, connEvents, _, _, agentRepo, _, shortcuts) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """
+                {
+                  "type": "shortcut.created",
+                  "payload": {
+                    "shortcut_id": "s-1",
+                    "kind": "claude",
+                    "chord_token": "ctrl+x",
+                    "name": null,
+                    "position": "not-an-int",
+                    "created_at": "2026-07-20T12:00:00Z",
+                    "updated_at": "2026-07-20T12:00:00Z",
+                    "version": 1
+                  }
+                }
+                """.trimIndent(),
+            ),
+        )
+
+        // Synchronize on a valid follow-up, then assert nothing fired.
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
+        verify(exactly = 0) { shortcuts.applyUpserted(any()) }
+        verify(exactly = 0) { shortcuts.applyDeleted(any()) }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_shortcutDeletedMissingId_isSilentlySkipped() = runTest {
+        // shortcut.deleted envelope without the required `shortcut_id` field —
+        // payload-level decode must throw and the bus must swallow it.
+        val (bus, connEvents, _, _, agentRepo, _, shortcuts) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"shortcut.deleted","payload":{"version":1,"updated_at":"x"}}""",
+            ),
+        )
+
+        // Sync on a valid follow-up.
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) { agentRepo.updateAgentOnline("sync", true) }
+        verify(exactly = 0) { shortcuts.applyDeleted(any()) }
 
         bus.stop()
     }

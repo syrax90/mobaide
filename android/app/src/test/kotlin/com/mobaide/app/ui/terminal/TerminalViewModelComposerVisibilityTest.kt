@@ -62,6 +62,7 @@ class TerminalViewModelComposerVisibilityTest {
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = sessionRepository,
             templatesRepository = templatesRepository,
+            shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),
             preferencesStore = preferencesStore,
         )

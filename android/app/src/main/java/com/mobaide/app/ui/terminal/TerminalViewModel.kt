@@ -17,6 +17,7 @@ import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.wireName
 import com.mobaide.app.data.repository.SessionRepository
+import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.termux.terminal.TerminalSession
@@ -37,6 +38,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -58,6 +60,7 @@ class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
     private val templatesRepository: TemplatesRepository,
+    private val shortcutsRepository: ShortcutsRepository,
     private val foregroundSessionTracker: ForegroundSessionTracker,
     private val preferencesStore: PreferencesStore,
 ) : ViewModel() {
@@ -139,6 +142,12 @@ class TerminalViewModel @Inject constructor(
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
 
+    /** The session's kind once actually resolved, null until then. Written by the
+     *  [sessionKind] merge below; consumed by [savedShortcutsForKind], which must
+     *  not render another kind's saved buttons while the eager Claude seed is
+     *  still standing in (they would be tappable in the wrong session kind). */
+    private val resolvedKind = MutableStateFlow<SessionKind?>(null)
+
     /** CLI of this session, used to drive the CLI-aware control-key bar. Resolved from
      *  the app-scoped session list (the single source of truth) and, on a cold launch,
      *  from a one-shot REST seed. Defaults to Claude until either resolves, then sticks
@@ -153,21 +162,16 @@ class TerminalViewModel @Inject constructor(
                 // observeSessionList() is WS-pushed with no replay, so a cold launch
                 // (notification tap / deep link) can build this VM before the first
                 // sessions.changed snapshot — the list starts empty and a Codex session
-                // would show the Claude key bar. Seed from a one-shot REST fetch when the
-                // live list hasn't already resolved the session. mapNotNull above means
-                // the Claude default only ever comes from stateIn's seed value, so there
+                // would show the Claude key bar. Delegate to resolvedSessionKind() —
+                // the single implementation of live-list-then-REST resolution, shared
+                // with saveShortcut — for a one-shot seed. mapNotNull above means the
+                // Claude default only ever comes from stateIn's seed value, so there
                 // is no Codex→Claude→Codex flicker once a real kind arrives.
-                if (sessionRepository.observeSessionList().value
-                        .none { it.session_id == sessionId }
-                ) {
-                    runCatching { sessionRepository.listSessions() }
-                        .getOrNull()
-                        ?.firstOrNull { it.session_id == sessionId }
-                        ?.kind
-                        ?.let { emit(it) }
-                }
+                resolvedSessionKind()?.let { emit(it) }
             },
-        ).stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
+        )
+            .onEach { resolvedKind.value = it }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -208,6 +212,37 @@ class TerminalViewModel @Inject constructor(
      *  strict-mock PreferencesStore stubs in existing ViewModel tests stay minimal. */
     private val _shortcutRecents = MutableStateFlow<List<KeyChord>>(emptyList())
     val shortcutRecents: StateFlow<List<KeyChord>> = _shortcutRecents.asStateFlow()
+
+    /** Server-synced saved shortcuts for this session's kind, in save order.
+     *  Gated on [resolvedKind]: while the kind is unresolved the list stays
+     *  empty rather than rendering the eager Claude seed's bucket (whose
+     *  buttons would be tappable in a not-yet-resolved Codex/Antigravity
+     *  session). `by lazy` keeps the repository untouched until the UI first
+     *  collects — the same strict-mock laziness contract [shortcutRecents]
+     *  documents, extended to [ShortcutsRepository] (an eager field
+     *  initializer would call `observeShortcuts()` during construction in
+     *  every VM test). */
+    val savedShortcutsForKind: StateFlow<List<SavedShortcutUi>> by lazy {
+        combine(shortcutsRepository.observeShortcuts(), resolvedKind) { all, kind ->
+            if (kind == null) return@combine emptyList()
+            all.filter { it.kind == kind.wireName }
+                .sortedWith(
+                    compareBy({ it.position }, { it.created_at }, { it.shortcut_id })
+                )
+                .mapNotNull { dto ->
+                    KeyChord.parse(dto.chord_token)?.let { chord ->
+                        SavedShortcutUi(
+                            id = dto.shortcut_id,
+                            chord = chord,
+                            name = dto.name?.takeIf { it.isNotBlank() },
+                            risky = KeyChordEncoder.encode(chord)?.usesCsiU == true,
+                        )
+                    }
+                }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }
+
+    private val _savedShortcutsLoading = MutableStateFlow(false)
 
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
@@ -447,6 +482,90 @@ class TerminalViewModel @Inject constructor(
                 )
             } finally {
                 _templatesLoading.value = false
+            }
+        }
+    }
+
+    /** Deterministic fetch fired when the shortcut picker opens, mirroring
+     *  [refreshTemplates]: the shared cache is otherwise only populated
+     *  best-effort (WS-connect refresh in UserEventBus). */
+    fun refreshSavedShortcuts() {
+        if (_savedShortcutsLoading.value) return
+        _savedShortcutsLoading.value = true
+        viewModelScope.launch {
+            try {
+                shortcutsRepository.refreshShortcuts()
+            } catch (t: Throwable) {
+                _userMessages.tryEmit(
+                    "Failed to load saved shortcuts: ${t.message ?: "unknown error"}",
+                )
+            } finally {
+                _savedShortcutsLoading.value = false
+            }
+        }
+    }
+
+    /** The session's actual kind, or null while it cannot be determined.
+     *  [sessionKind] seeds Claude until the session list or REST fetch
+     *  resolves the real kind, and persisting a synced shortcut under the
+     *  seed would file it in the wrong per-kind bucket permanently (unlike
+     *  the self-healing device-local recents) — so saves re-resolve from
+     *  the authoritative sources instead of trusting the StateFlow value. */
+    private suspend fun resolvedSessionKind(): SessionKind? {
+        sessionRepository.observeSessionList().value
+            .firstOrNull { it.session_id == sessionId }
+            ?.let { return it.kind }
+        return runCatching { sessionRepository.listSessions() }.getOrNull()
+            ?.firstOrNull { it.session_id == sessionId }
+            ?.kind
+    }
+
+    /** Persist a chord as a named button for this session's kind. The server
+     *  upserts, so re-saving an existing chord updates its name instead of
+     *  duplicating the button. */
+    fun saveShortcut(chord: KeyChord, name: String?) {
+        val trimmedName = name?.trim()?.takeIf { it.isNotEmpty() }
+        viewModelScope.launch {
+            val kind = resolvedSessionKind()
+            if (kind == null) {
+                _userMessages.tryEmit(
+                    "Failed to save shortcut: session type not known yet",
+                )
+                return@launch
+            }
+            try {
+                shortcutsRepository.createShortcut(
+                    kind.wireName, chord.token(), trimmedName,
+                )
+                _userMessages.tryEmit(
+                    "Saved shortcut \"${trimmedName ?: chord.display()}\"",
+                )
+            } catch (t: Throwable) {
+                _userMessages.tryEmit(
+                    "Failed to save shortcut: ${t.message ?: "unknown error"}",
+                )
+            }
+        }
+    }
+
+    /** Rename a saved shortcut. A blank [name] clears the custom name so the
+     *  button falls back to the chord label. */
+    fun renameShortcut(shortcutId: String, name: String) {
+        viewModelScope.launch {
+            try {
+                shortcutsRepository.renameShortcut(shortcutId, name.trim())
+            } catch (_: Throwable) {
+                _userMessages.tryEmit("Failed to rename shortcut")
+            }
+        }
+    }
+
+    fun removeShortcut(shortcutId: String) {
+        viewModelScope.launch {
+            try {
+                shortcutsRepository.deleteShortcut(shortcutId)
+            } catch (_: Throwable) {
+                _userMessages.tryEmit("Failed to remove shortcut")
             }
         }
     }

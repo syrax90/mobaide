@@ -1,6 +1,7 @@
 """Tests for the Database layer."""
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 
 import pytest
@@ -507,9 +508,9 @@ class TestDeleteUser:
         """End-to-end cascade across every table the docstring enumerates:
         ``mobile_refresh_tokens``, ``pairing_tokens``, ``mobile_devices``,
         ``agents``, ``email_verification_tokens``, ``prompt_templates``,
-        ``users``. Establish at least one row in each (across two agents to
-        exercise the IN-subquery shape) and assert each table is empty for
-        the deleted user afterward.
+        ``user_shortcuts``, ``users``. Establish at least one row in each
+        (across two agents to exercise the IN-subquery shape) and assert
+        each table is empty for the deleted user afterward.
         """
         owner = await db.create_user(email="o@test.local", password_hash="h")
         a1, _ = await db.register_agent("a1", owner)
@@ -523,6 +524,8 @@ class TestDeleteUser:
         await db.store_refresh_token("r-2", "dev-2", a2, 60)
         await db.create_template(owner, "tpl-1", "body-1")
         await db.create_template(owner, "tpl-2", "body-2")
+        s1 = await db.create_user_shortcut(owner, "claude", "ctrl+x", "Cut")
+        s2 = await db.create_user_shortcut(owner, "codex", "ctrl+k", None)
         await db.create_verification_token(owner, "code-hash", ttl_seconds=300)
 
         agent_ids = await db.delete_user(owner)
@@ -537,6 +540,9 @@ class TestDeleteUser:
         assert await db.validate_and_consume_refresh("r-1") is None
         assert await db.validate_and_consume_refresh("r-2") is None
         assert await db.list_templates_for_user(owner) == []
+        # Shortcuts are hard-deleted by the cascade, not soft-deleted.
+        assert await db.get_user_shortcut(s1["shortcut_id"]) is None
+        assert await db.get_user_shortcut(s2["shortcut_id"]) is None
         # email_verification_tokens — direct count, no public reader.
         cur = await db.conn.execute(
             "SELECT COUNT(*) AS n FROM email_verification_tokens "
@@ -566,6 +572,8 @@ class TestDeleteUser:
         await db.store_refresh_token("s-r", "s-dev", s_agent, 60)
         await db.create_template(victim, "v-tpl", "v")
         await db.create_template(survivor, "s-tpl", "s")
+        await db.create_user_shortcut(victim, "claude", "ctrl+x", None)
+        await db.create_user_shortcut(survivor, "claude", "ctrl+x", None)
 
         agent_ids = await db.delete_user(victim)
         assert agent_ids == [v_agent]
@@ -578,6 +586,9 @@ class TestDeleteUser:
         templates = await db.list_templates_for_user(survivor)
         assert len(templates) == 1
         assert templates[0]["name"] == "s-tpl"
+        shortcuts = await db.list_user_shortcuts_for_user(survivor)
+        assert len(shortcuts) == 1
+        assert shortcuts[0]["chord_token"] == "ctrl+x"
 
     async def test_delete_user_clears_qr_claimed_agent_id_rows(
         self, db: Database
@@ -930,7 +941,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 15
+        assert (await cursor.fetchone())[0] == 16
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1050,13 +1061,13 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.conn.commit()
         await db.close()
 
-        # Reopen — should run the v4 migration through to head (v15).
+        # Reopen — should run the v4 migration through to head (v16).
         db = Database(db_path)
         await db.connect()
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 15
+        assert row[0] == 16
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1086,7 +1097,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 15
+        assert row[0] == 16
         await db.close()
 
 
@@ -1486,3 +1497,104 @@ class TestDeleteUserCascadeExtensions:
         assert row is not None
         assert row["user_id"] == user_id
         assert row["email_at_request"] == "aud@test.local"
+
+
+class TestUserShortcuts:
+    """DB-layer invariants of the ``user_shortcuts`` helpers that the REST
+    surface never reaches directly: the partial dedupe unique index and the
+    per-(owner, kind) position counter."""
+
+    async def test_duplicate_live_chord_raises_integrity_error(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+        with pytest.raises(sqlite3.IntegrityError):
+            await db.create_user_shortcut(owner, "claude", "ctrl+x", "Again")
+
+    async def test_insert_allowed_after_soft_delete(self, db: Database):
+        owner = await _create_test_user(db)
+        first = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+        assert (
+            await db.soft_delete_user_shortcut(first["shortcut_id"])
+            is not None
+        )
+
+        fresh = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+        assert fresh["shortcut_id"] != first["shortcut_id"]
+        assert fresh["version"] == 1
+
+    async def test_dedupe_scoped_to_owner_and_kind(self, db: Database):
+        owner = await _create_test_user(db)
+        other = await db.create_user(
+            email="other@test.local", password_hash="h"
+        )
+        await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+        await db.create_user_shortcut(owner, "codex", "ctrl+x", None)
+        await db.create_user_shortcut(other, "claude", "ctrl+x", None)
+
+        assert len(await db.list_user_shortcuts_for_user(owner)) == 2
+        assert len(await db.list_user_shortcuts_for_user(other)) == 1
+
+    async def test_position_appends_per_owner_and_kind(self, db: Database):
+        owner = await _create_test_user(db)
+        a = await db.create_user_shortcut(owner, "claude", "ctrl+a", None)
+        b = await db.create_user_shortcut(owner, "claude", "ctrl+b", None)
+        c = await db.create_user_shortcut(owner, "codex", "ctrl+a", None)
+
+        assert (a["position"], b["position"], c["position"]) == (0, 1, 0)
+
+    async def test_position_counts_live_rows_only(self, db: Database):
+        owner = await _create_test_user(db)
+        await db.create_user_shortcut(owner, "claude", "ctrl+a", None)
+        b = await db.create_user_shortcut(owner, "claude", "ctrl+b", None)
+        assert b["position"] == 1
+        await db.soft_delete_user_shortcut(b["shortcut_id"])
+
+        c = await db.create_user_shortcut(owner, "claude", "ctrl+c", None)
+        # MAX(position)+1 over live rows: the freed slot is reused.
+        assert c["position"] == 1
+
+    async def test_update_name_on_deleted_row_returns_none(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        row = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+        await db.soft_delete_user_shortcut(row["shortcut_id"])
+
+        assert (
+            await db.update_user_shortcut_name(row["shortcut_id"], "ghost")
+            is None
+        )
+
+    async def test_update_name_racing_delete_at_readback_returns_none(
+        self, db: Database, monkeypatch
+    ):
+        """A soft-delete committing between the name UPDATE and its
+        readback must not surface the tombstone as the updated row —
+        the helper reports None so callers treat the shortcut as gone."""
+        owner = await _create_test_user(db)
+        row = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+
+        real_get = db.get_user_shortcut
+
+        async def racing_get(shortcut_id):
+            monkeypatch.setattr(db, "get_user_shortcut", real_get)
+            await db.soft_delete_user_shortcut(shortcut_id)
+            return await real_get(shortcut_id)
+
+        monkeypatch.setattr(db, "get_user_shortcut", racing_get)
+
+        result = await db.update_user_shortcut_name(row["shortcut_id"], "New")
+
+        assert result is None
+        persisted = await db.get_user_shortcut(row["shortcut_id"])
+        assert persisted is not None
+        assert persisted["deleted_at"] is not None
+
+    async def test_soft_delete_twice_returns_none(self, db: Database):
+        owner = await _create_test_user(db)
+        row = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+
+        assert await db.soft_delete_user_shortcut(row["shortcut_id"]) is not None
+        assert await db.soft_delete_user_shortcut(row["shortcut_id"]) is None

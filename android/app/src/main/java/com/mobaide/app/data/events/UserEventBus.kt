@@ -6,9 +6,12 @@ import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.ShortcutDeletedPayload
+import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDeletedPayload
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,6 +52,7 @@ class UserEventBus @Inject constructor(
     private val userIdentityStore: UserIdentityStore,
     private val agentRepository: AgentRepository,
     private val templatesRepository: TemplatesRepository,
+    private val shortcutsRepository: ShortcutsRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true }
@@ -119,6 +123,11 @@ class UserEventBus @Inject constructor(
                 } catch (t: Throwable) {
                     Log.w(TAG, "refreshTemplates on WS connect failed", t)
                 }
+                try {
+                    shortcutsRepository.refreshShortcuts()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "refreshShortcuts on WS connect failed", t)
+                }
             }
             is WsEvent.Disconnected -> _connection.value = ConnState.Connecting
             is WsEvent.Error -> _connection.value = ConnState.Connecting
@@ -166,6 +175,26 @@ class UserEventBus @Inject constructor(
                     return
                 }
                 templatesRepository.applyDeleted(p.template_id)
+            }
+            "shortcut.created", "shortcut.updated" -> {
+                val s = try {
+                    json.decodeFromJsonElement(ShortcutDto.serializer(), payload)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Malformed ${envelope.type} payload", t)
+                    return
+                }
+                shortcutsRepository.applyUpserted(s)
+            }
+            "shortcut.deleted" -> {
+                val p = try {
+                    json.decodeFromJsonElement(
+                        ShortcutDeletedPayload.serializer(), payload,
+                    )
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Malformed shortcut.deleted payload", t)
+                    return
+                }
+                shortcutsRepository.applyDeleted(p.shortcut_id)
             }
             // Unknown types are silently ignored — forward compatible.
             else -> Unit
