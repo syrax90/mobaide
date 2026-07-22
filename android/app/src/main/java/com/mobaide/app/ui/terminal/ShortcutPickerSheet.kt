@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -80,6 +81,10 @@ fun ShortcutPickerSheet(
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         ShortcutPickerContent(
+            // Same inset handling as TemplatesPickerSheet: the naming state
+            // focuses its name field on entry, so without this the IME would
+            // cover the Cancel/confirm row sitting below it.
+            modifier = Modifier.imePadding(),
             recents = recents,
             onSendChord = onSendChord,
             onClose = onDismiss,
@@ -123,10 +128,7 @@ internal fun ShortcutPickerContent(
     var selectedKey by remember { mutableStateOf<String?>(null) }
     var naming by remember { mutableStateOf(false) }
     var shortcutName by remember { mutableStateOf("") }
-    // Chord the user last confirmed, paired with the line to show for it. The
-    // line only renders once that chord actually comes back in savedShortcuts
-    // (see `notice`), so a failed server call never claims a save happened.
-    var pendingNotice by remember { mutableStateOf<Pair<KeyChord, String>?>(null) }
+    var pendingNotice by remember { mutableStateOf<PendingSaveNotice?>(null) }
     val nameFocusRequester = remember { FocusRequester() }
 
     val chord = selectedKey?.let { KeyChord(ctrl = ctrl, alt = alt, shift = shift, key = it) }
@@ -136,28 +138,44 @@ internal fun ShortcutPickerContent(
     // button renames it rather than adding a second one, so the save surfaces
     // say "Update name" instead of pretending to create something new.
     val existing = chord?.let { composed -> savedShortcuts.firstOrNull { it.chord == composed } }
-    val notice = pendingNotice?.takeIf { it.first == chord && existing != null }?.second
+    // Confirmation is a claim about server state, so it renders only while the
+    // saved list actually carries the requested chord under the requested name
+    // — a create or a rename that never lands says nothing. (Re-confirming the
+    // name a button already has is the one case that matches on the spot;
+    // there is nothing to observe, and the state already is what was asked
+    // for.)
+    val notice = pendingNotice
+        ?.takeIf { it.chord == chord && existing != null && existing.name == it.name }
+        ?.message
 
     fun confirmSave() {
         val target = chord ?: return
         val trimmed = shortcutName.trim().takeIf { it.isNotEmpty() }
         onSaveShortcut(target, trimmed)
-        pendingNotice = target to if (existing != null) {
-            "Updated \"${trimmed ?: target.display()}\""
-        } else {
-            "Saved — \"${trimmed ?: target.display()}\" is now in your key bar"
-        }
+        pendingNotice = PendingSaveNotice(
+            chord = target,
+            name = trimmed,
+            message = if (existing != null) {
+                "Updated \"${trimmed ?: target.display()}\""
+            } else {
+                "Saved — \"${trimmed ?: target.display()}\" is now in your key bar"
+            },
+        )
         naming = false
         shortcutName = ""
     }
 
-    // Deselecting the base key while naming would leave an armed name field
-    // above a dead confirm button; fall back to the compose footer instead.
     LaunchedEffect(chord) {
+        // Deselecting the base key while naming would leave an armed name field
+        // above a dead confirm button; fall back to the compose footer instead.
         if (chord == null) {
             naming = false
             shortcutName = ""
         }
+        // Drop the notice outright rather than letting it hide behind the
+        // predicate: a retained one would resurface as fresh confirmation if
+        // the user ever composed that chord again.
+        if (pendingNotice?.chord != chord) pendingNotice = null
     }
     LaunchedEffect(naming) {
         if (naming) nameFocusRequester.requestFocus()
@@ -375,6 +393,17 @@ internal fun ShortcutPickerContent(
         }
     }
 }
+
+/**
+ * A save the user confirmed, held until the picker can observe its result:
+ * [message] renders only once `savedShortcuts` carries [chord] under exactly
+ * [name], so neither a rejected create nor a rejected rename can claim success.
+ */
+private data class PendingSaveNotice(
+    val chord: KeyChord,
+    val name: String?,
+    val message: String,
+)
 
 /**
  * A saved shortcut as a picker chip: tap resends the chord (no-op while the

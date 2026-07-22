@@ -17,6 +17,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -565,6 +566,71 @@ class ShortcutPickerSavedSectionTest {
 
         tapKey("Y")
         composeRule.onNodeWithTag("shortcut_save_notice").assertDoesNotExist()
+    }
+
+    @Test
+    fun confirmedSave_noticeDoesNotReappear_whenTheChordIsComposedAgain() {
+        setContentWithLandingSaves { _, _ -> }
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        // Named, so the resulting Saved chip does not also match tapKey("X").
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("Build")
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+        composeRule.onNodeWithTag("shortcut_save_notice").assertExists()
+
+        tapKey("X")
+        tapKey("X")
+
+        // Re-composing the chord is not a new save; only the "Update name"
+        // label may report that it is already stored.
+        composeRule.onNodeWithTag("shortcut_save_notice").assertDoesNotExist()
+        composeRule.onNodeWithTag("shortcut_save_button").assertTextEquals("Update name")
+    }
+
+    @Test
+    fun failedRename_ofAnAlreadySavedChord_showsNoNotice() {
+        // `existing` is non-null before the rename is even requested, so the
+        // notice has to match the requested NAME, not just the chord —
+        // otherwise a rejected rename would render "Updated" regardless.
+        setContent(savedShortcuts = listOf(savedRetry), onSaveShortcut = { _, _ -> })
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("R")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextClearance()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("Renamed")
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        composeRule.onNodeWithTag("shortcut_save_notice").assertDoesNotExist()
+    }
+
+    @Test
+    fun landedRename_ofAnAlreadySavedChord_showsUpdatedNotice() {
+        val saved = mutableStateListOf(savedRetry)
+        composeRule.setContent {
+            Surface {
+                ShortcutPickerContent(
+                    recents = emptyList(),
+                    onSendChord = {},
+                    onClose = {},
+                    savedShortcuts = saved,
+                    onSaveShortcut = { _, name ->
+                        saved[0] = savedRetry.copy(name = name)
+                    },
+                )
+            }
+        }
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("R")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextClearance()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("Retry again")
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        composeRule.onNodeWithTag("shortcut_save_notice")
+            .assertTextEquals("Updated \"Retry again\"")
     }
 
     @Test
