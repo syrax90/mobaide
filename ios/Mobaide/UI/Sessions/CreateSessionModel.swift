@@ -134,7 +134,7 @@ final class CreateSessionModel {
     }
 
     func claudeEfforts(for model: String?) -> [String] {
-        (model == "opus" || model == "fable")
+        (model == "opus" || model == "fable" || model == "sonnet")
             ? ["low", "medium", "high", "xhigh", "max"]
             : ["low", "medium", "high"]
     }
@@ -143,8 +143,8 @@ final class CreateSessionModel {
 
     /// Ultracode always forces `xhigh` (Android parity). Otherwise the
     /// user-selected effort is clamped to the set valid for the effective model,
-    /// so switching down from opus/fable (which offer `xhigh`/`max`) to a smaller
-    /// model never submits an unsupported effort. `high` is valid for every model.
+    /// so switching to haiku (the only capped model, offering just `low`/`medium`/
+    /// `high`) never submits an unsupported effort. `high` is valid for every model.
     var effectiveClaudeEffort: String {
         if claudeUltracode { return "xhigh" }
         return claudeEfforts(for: effectiveClaudeModel).contains(claudeEffort) ? claudeEffort : "high"

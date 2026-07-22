@@ -82,7 +82,7 @@ final class CreateSessionModelTests: XCTestCase {
         model.claudeModel = "opus"
         model.claudeEffort = "max"
         XCTAssertEqual(model.buildRequest(mode: .standard).claude_options?.effort, "max")
-        model.claudeModel = "sonnet" // no longer supports "max"
+        model.claudeModel = "haiku" // no longer supports "max"
         XCTAssertEqual(
             model.buildRequest(mode: .standard).claude_options?.effort, "high",
             "a stale effort unsupported by the new model clamps to a valid value"
