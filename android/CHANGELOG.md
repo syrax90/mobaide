@@ -1,5 +1,39 @@
 # Android Changelog
 
+## [3.0.0](https://github.com/syrax90/claude_mobile/compare/android-v2.2.0...android-v3.0.0) (2026-07-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **android:** onSaveShortcut is now (KeyChord) -> Unit; TerminalViewModel.saveShortcut(chord) drops its name parameter; the never-visible save-success snackbar is gone.
+
+### Features
+
+* add persistent named custom shortcut buttons synced via central server ([8ed089a](https://github.com/syrax90/claude_mobile/commit/8ed089abd66bcaa404559ee4d1840636aa659359))
+* add persistent named custom shortcut buttons synced via central server ([04bde6f](https://github.com/syrax90/claude_mobile/commit/04bde6fb0738973d4eadab5ec7398b91823b3d9d))
+* **android:** add custom keyboard shortcut chord picker to control-key row ([d89040f](https://github.com/syrax90/claude_mobile/commit/d89040fb48e92c36b4e1be7d13c5239818325d11))
+* **android:** add custom keyboard shortcut chord picker to control-key row ([5dbb7c6](https://github.com/syrax90/claude_mobile/commit/5dbb7c6ce9e9e5b0b6359b897527fd11bb1dad91))
+* order terminal control keys consistently across session types ([11b0db0](https://github.com/syrax90/claude_mobile/commit/11b0db0d7ef6400eb42b2b8cf14cc9890b300a5b))
+* order terminal control keys consistently across session types ([a6de294](https://github.com/syrax90/claude_mobile/commit/a6de2945baf6657bf9a2f3a1fcefad6f954b9397))
+
+
+### Bug Fixes
+
+* address third Codex review round for saved shortcut buttons (CLA-137) ([740dd2f](https://github.com/syrax90/claude_mobile/commit/740dd2fc018315f0ee179edbfdb4f0ea913787b8))
+* allow xhigh/max effort for Claude Sonnet in session wizard ([6b1e0d5](https://github.com/syrax90/claude_mobile/commit/6b1e0d5f1d2b0f0e8041a5448c9e6464ae850edc))
+* allow xhigh/max effort for Claude Sonnet in session wizard ([607a771](https://github.com/syrax90/claude_mobile/commit/607a77155d557edbb51c078dbdc0e196dab5aa29))
+* **android:** align custom shortcut chips with control-key buttons in InputBar ([92830a2](https://github.com/syrax90/claude_mobile/commit/92830a2d2a85a20c5dad2e9027a794930e579142))
+* **android:** center-align control keys and saved shortcut chips in InputBar row ([6a502ee](https://github.com/syrax90/claude_mobile/commit/6a502ee1fb3f3db904577c1dc827087ee585173e))
+* **android:** drop concurrent duplicate saves so a removed chord cannot resurrect ([235be35](https://github.com/syrax90/claude_mobile/commit/235be35f0714e2a8ec42301b32ed078778bd276f))
+* **android:** gate shortcut picker send surfaces on session-active state ([7eaa975](https://github.com/syrax90/claude_mobile/commit/7eaa975ce3d33208d4a8ad46628c359ba6e6e251))
+* **android:** replace the shortcut sheet's double Save with one toggle ([b628ec5](https://github.com/syrax90/claude_mobile/commit/b628ec5d6536e6bf65985333413a4ae23bdbfeb9))
+* **android:** replace the shortcut sheet's double Save with one toggle ([7f6c4f6](https://github.com/syrax90/claude_mobile/commit/7f6c4f644b22fd3a0d13876a313711b1656f5d8d))
+* **android:** target Android 16 (API 36) for Play compliance ([b89414b](https://github.com/syrax90/claude_mobile/commit/b89414b43d4ce7b075bcad0ec2dfe26518208de1))
+* **android:** target Android 16 (API 36) for Play compliance ([c938665](https://github.com/syrax90/claude_mobile/commit/c938665a7b7b862c693502a700f4a1d5acaf0f94))
+* **android:** use clearer icon for custom shortcut trigger button ([3925ffc](https://github.com/syrax90/claude_mobile/commit/3925ffc316c80a8c6bd182d84d87bd415f2e8b7d))
+* **android:** use clearer icon for custom shortcut trigger button ([a551bfd](https://github.com/syrax90/claude_mobile/commit/a551bfdeb2c217f4451478a8458d4551606c7511))
+* resolve review findings for custom shortcut persistence (CLA-137) ([4b90ef2](https://github.com/syrax90/claude_mobile/commit/4b90ef28ceef21993d9ff193d4e83e4356ff1e36))
+
 ## [2.2.0](https://github.com/syrax90/claude_mobile/compare/android-v2.1.0...android-v2.2.0) (2026-07-11)
 
 
