@@ -357,10 +357,12 @@ internal fun ShortcutPickerContent(
  * No in-flight state on purpose: the derived saved-state is the only signal that
  * a mutation landed, so a pending flag would need a timeout of its own to
  * recover from a request that never completes — more machinery than this earns.
- * The cost is that the button stays tappable for the whole round trip, so a
- * double tap must stay harmless: create upserts server-side, and repeat deletes
- * are absorbed by [TerminalViewModel.removeShortcut] (DELETE answers 403 once
- * the row is gone — it is NOT a server-side no-op).
+ * The cost is that the button stays tappable for the whole round trip, so
+ * making a double tap harmless is the ViewModel's job, not this button's —
+ * neither server operation is idempotent on its own. [TerminalViewModel] drops
+ * a concurrent duplicate save (a late create landing after a delete would
+ * otherwise resurrect the removed chord) and absorbs a repeat delete (DELETE
+ * answers 403 once the row is gone).
  */
 @Composable
 private fun SaveToggleButton(

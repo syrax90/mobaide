@@ -61,7 +61,11 @@ import org.junit.Test
  * successful save is silent — no snackbar, since the picker's derived
  * "Saved" state is itself the confirmation; a save that resolves the kind
  * publishes it, so the gated-empty list opens up and that derived confirmation
- * can actually render; an unresolvable kind aborts the save with a snackbar
+ * can actually render; a save of a chord already in flight is dropped, since
+ * the server's upsert probe sees live rows only and a late duplicate would
+ * resurrect a chord deleted in between — but the per-chord guard always
+ * releases, on success, on failure and on abort alike; an unresolvable kind
+ * aborts the save with a snackbar
  * before the repository is touched and publishes nothing; failures surface as
  * snackbars, never silently — except an already-gone delete (403/404, the
  * non-idempotent DELETE a double tap produces), which is absorbed into a cache
@@ -313,7 +317,7 @@ class TerminalViewModelSavedShortcutsTest {
     }
 
     @Test
-    fun saveShortcut_failure_emitsFailureSnackbar() = runTest {
+    fun saveShortcut_failure_emitsFailureSnackbar_andGuardDoesNotLatch() = runTest {
         sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         coEvery {
             shortcutsRepository.createShortcut(any(), any(), any())
@@ -329,6 +333,15 @@ class TerminalViewModelSavedShortcutsTest {
                 message.startsWith("Failed to save shortcut") && message.contains("boom"),
             )
             cancelAndIgnoreRemainingEvents()
+        }
+
+        // The in-flight guard clears in a finally, so a failed save leaves the
+        // chord savable — a latched guard would make the retry the snackbar
+        // just invited impossible.
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+        coVerify(exactly = 2) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
         }
     }
 
@@ -461,6 +474,103 @@ class TerminalViewModelSavedShortcutsTest {
         assertEquals(emptyList<SavedShortcutUi>(), vm.savedShortcutsForKind.value)
         coVerify(exactly = 0) {
             shortcutsRepository.createShortcut(any(), any(), any())
+        }
+    }
+
+    @Test
+    fun saveShortcut_duplicateWhileInFlight_isDropped_andTheGuardReleasesAfterwards() = runTest {
+        // A double tap on Save is ordinary: the toggle only flips once the
+        // response lands, so it reads "Save" for the whole round trip. Letting
+        // the second POST through is not just wasteful — the server's upsert
+        // probe only sees LIVE rows, so a duplicate arriving after the user has
+        // let the first land and then tapped "Saved" to delete takes the create
+        // branch and resurrects a chord they deliberately removed.
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
+        val gate = CompletableDeferred<Unit>()
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } coAnswers {
+            gate.await()
+            dto("s-1", chordToken = "ctrl+x")
+        }
+        val vm = createViewModel()
+        val chord = KeyChord(ctrl = true, key = "x")
+
+        vm.saveShortcut(chord)
+        advanceUntilIdle() // the first save is now suspended inside createShortcut
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        }
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        // Releasing matters more than dropping: a guard that latched would make
+        // this chord permanently unsavable for the life of the ViewModel.
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+        coVerify(exactly = 2) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
+        }
+    }
+
+    @Test
+    fun saveShortcut_differentChordsInFlight_bothReachTheRepository() = runTest {
+        // The guard is keyed on the chord token, not one global flag: a save
+        // still in flight must not swallow a different chord queued behind it.
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
+        val gate = CompletableDeferred<Unit>()
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } coAnswers {
+            gate.await()
+            dto("s-1", chordToken = "ctrl+x")
+        }
+        val vm = createViewModel()
+
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+        vm.saveShortcut(KeyChord(ctrl = true, key = "y"))
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
+        }
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("claude", "ctrl+y", null)
+        }
+    }
+
+    @Test
+    fun saveShortcut_abortedOnUnresolvableKind_releasesTheGuard_soARetryIsNotBlocked() = runTest {
+        // The guard is taken BEFORE the coroutine starts, so the null-kind
+        // abort — which returns without ever reaching createShortcut — has to
+        // release it on the way out too. Otherwise the "session type not known
+        // yet" snackbar would invite a retry it has itself made impossible.
+        coEvery { sessionRepository.listSessions() } throws RuntimeException("offline")
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } returns dto("s-1", chordToken = "ctrl+x")
+        val vm = createViewModel()
+        val chord = KeyChord(ctrl = true, key = "x")
+
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+        coVerify(exactly = 0) {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        }
+
+        // The first sessions.changed snapshot lands and the user taps again.
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
         }
     }
 

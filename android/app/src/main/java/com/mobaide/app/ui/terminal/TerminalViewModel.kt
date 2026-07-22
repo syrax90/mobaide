@@ -528,35 +528,56 @@ class TerminalViewModel @Inject constructor(
             ?.kind
     }
 
+    /** Chord tokens with a create request currently in flight. Main-thread
+     *  confined: [saveShortcut] is only ever called from the UI, and
+     *  `viewModelScope` dispatches on Main. */
+    private val savesInFlight = mutableSetOf<String>()
+
     /** Pin a chord as a button for this session's kind, unnamed — the picker
-     *  routes naming through [renameShortcut] afterwards. The server upserts,
-     *  so re-saving an existing chord is a no-op rather than a duplicate.
+     *  routes naming through [renameShortcut] afterwards. Re-saving a chord
+     *  that is already live is a server-side no-op rather than a duplicate.
+     *
+     *  Concurrent saves of the SAME chord are dropped, and that is load-bearing
+     *  rather than mere request thrift. The server's upsert probes live rows
+     *  only, so a second create that reaches it AFTER an interleaved delete
+     *  finds nothing and inserts a fresh row — resurrecting a chord the user
+     *  had just removed. The picker cannot self-limit here: its toggle only
+     *  flips once the response lands, so it stays reading "Save" for the whole
+     *  round trip and a double tap is ordinary.
      *
      *  Success is deliberately silent: the picker derives its "Saved" state
      *  from the repository cache, so the confirmation is the UI itself, and a
      *  snackbar would only duplicate it. */
     fun saveShortcut(chord: KeyChord) {
+        val token = chord.token()
+        if (!savesInFlight.add(token)) return
         viewModelScope.launch {
-            val kind = resolvedSessionKind()
-            if (kind == null) {
-                _userMessages.tryEmit(
-                    "Failed to save shortcut: session type not known yet",
-                )
-                return@launch
-            }
-            // Publish what this save resolved. savedShortcutsForKind renders
-            // empty until resolvedKind lands, and this call races the sessionKind
-            // merge that normally writes it — so without this a cold-launch save
-            // can succeed while the picker still shows "Save" with no hint row
-            // and (success being silent) no feedback at all. Same authority as
-            // the merge: resolvedSessionKind() never returns the eager seed.
-            resolvedKind.compareAndSet(null, kind)
             try {
-                shortcutsRepository.createShortcut(kind.wireName, chord.token(), null)
-            } catch (t: Throwable) {
-                _userMessages.tryEmit(
-                    "Failed to save shortcut: ${t.message ?: "unknown error"}",
-                )
+                val kind = resolvedSessionKind()
+                if (kind == null) {
+                    _userMessages.tryEmit(
+                        "Failed to save shortcut: session type not known yet",
+                    )
+                    return@launch
+                }
+                // Publish what this save resolved. savedShortcutsForKind renders
+                // empty until resolvedKind lands, and this call races the sessionKind
+                // merge that normally writes it — so without this a cold-launch save
+                // can succeed while the picker still shows "Save" with no hint row
+                // and (success being silent) no feedback at all. Same authority as
+                // the merge: resolvedSessionKind() never returns the eager seed.
+                resolvedKind.compareAndSet(null, kind)
+                try {
+                    shortcutsRepository.createShortcut(kind.wireName, chord.token(), null)
+                } catch (t: Throwable) {
+                    _userMessages.tryEmit(
+                        "Failed to save shortcut: ${t.message ?: "unknown error"}",
+                    )
+                }
+            } finally {
+                // Always clears — unlike a UI-side pending flag, which has no
+                // signal to clear it on when the request fails.
+                savesInFlight.remove(token)
             }
         }
     }
