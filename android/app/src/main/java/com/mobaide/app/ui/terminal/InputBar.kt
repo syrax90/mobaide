@@ -304,6 +304,7 @@ fun InputBar(
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     controlKeys.forEach { key ->
                         FilledTonalButton(
