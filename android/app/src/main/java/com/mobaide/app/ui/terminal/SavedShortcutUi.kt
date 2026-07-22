@@ -1,7 +1,7 @@
 package com.mobaide.app.ui.terminal
 
 /** Server-enforced name cap (MAX_SHORTCUT_NAME on the central server); the
- *  name entry fields clamp to it so a long paste cannot fail the save with
+ *  rename field clamps to it so a long paste cannot fail the request with
  *  a validation error after the fact. */
 const val MAX_SHORTCUT_NAME_LENGTH = 100
 

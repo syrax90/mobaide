@@ -2,18 +2,20 @@ package com.mobaide.app.ui.terminal
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -191,6 +193,27 @@ class ShortcutPickerContentTest {
 
         composeRule.onNodeWithText("Keyboard shortcut").assertExists()
     }
+
+    @Test
+    fun fullSheet_boxWrapper_keepsFooterOnScreen() {
+        // The sheet body is wrapped in a Box (imePadding + overlaid
+        // SnackbarHost). Box must forward the sheet's incoming max constraints
+        // untouched, otherwise the footer-priority layout inside
+        // ShortcutPickerContent measures Send off-screen — a regression the
+        // content-level tests cannot see because they skip the wrapper.
+        composeRule.setContent {
+            Surface {
+                ShortcutPickerSheet(
+                    recents = emptyList(),
+                    onSendChord = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Keyboard shortcut").assertExists()
+        composeRule.onNodeWithTag("shortcut_send_button").assertIsDisplayed()
+    }
 }
 
 /**
@@ -198,7 +221,10 @@ class ShortcutPickerContentTest {
  * deliberately tall. On a landscape-height viewport the scrollable key grid is
  * weighted with `fill = false` so the footer is measured before the grid;
  * without that weight the 420dp-capped grid consumed the entire sheet height
- * and the Send button was measured off-screen and unreachable.
+ * and the Send button was measured off-screen and unreachable. Asserted both
+ * through the content directly and through the full [ShortcutPickerSheet],
+ * whose Box + overlaid SnackbarHost wrapper sits between the sheet's
+ * constraints and that layout.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w800dp-h360dp-land-xxhdpi")
@@ -221,15 +247,36 @@ class ShortcutPickerContentShortScreenTest {
 
         composeRule.onNodeWithTag("shortcut_send_button").assertIsDisplayed()
     }
+
+    @Test
+    fun shortLandscapeViewport_fullSheet_sendButtonRemainsDisplayed() {
+        // The test above drives ShortcutPickerContent directly, which skips the
+        // sheet's Box(imePadding) + overlaid SnackbarHost wrapper — the one
+        // layer that could swallow the incoming max constraints and push the
+        // footer off a short viewport, where there is no slack to absorb it.
+        composeRule.setContent {
+            Surface {
+                ShortcutPickerSheet(
+                    recents = emptyList(),
+                    onSendChord = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("shortcut_send_button").assertIsDisplayed()
+    }
 }
 
 /**
  * Saved-shortcut surfaces inside the picker: the "Saved" InputChip section
  * below Recents (tap = resend, gated on the session; trailing ✕ = server-side
- * remove, never gated) and the Save footer flow (Save toggles an inline
- * optional-name field; confirming emits `onSaveShortcut(chord, name-or-null)`).
- * Save is a server mutation, so it depends only on a key being picked — not on
- * the session-active `enabled` gate.
+ * remove, never gated) and the footer save control — a two-state toggle whose
+ * state is DERIVED from whether the composed chord already appears in
+ * `savedShortcuts` ("Save" pins it, "Saved" unpins it), plus the hint row that
+ * names the pinned button and routes naming to `onRenameSavedShortcut`.
+ * Save/remove are server mutations, so they depend only on a key being picked —
+ * not on the session-active `enabled` gate.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w480dp-h1200dp-port-xxhdpi")
@@ -245,11 +292,28 @@ class ShortcutPickerSavedSectionTest {
         risky = false,
     )
 
+    /** Named, and deliberately the same chord the tests compose (Ctrl+X). */
+    private val savedCut = SavedShortcutUi(
+        id = "s2",
+        chord = KeyChord(ctrl = true, key = "x"),
+        name = "Cut",
+        risky = false,
+    )
+
+    /** Unnamed counterpart of [savedCut] — its label falls back to "Ctrl+X". */
+    private val savedUnnamed = SavedShortcutUi(
+        id = "s3",
+        chord = KeyChord(ctrl = true, key = "x"),
+        name = null,
+        risky = false,
+    )
+
     private fun setContent(
         savedShortcuts: List<SavedShortcutUi> = emptyList(),
         enabled: Boolean = true,
         onSendChord: (KeyChord) -> Unit = {},
-        onSaveShortcut: (KeyChord, String?) -> Unit = { _, _ -> },
+        onSaveShortcut: (KeyChord) -> Unit = {},
+        onRenameSavedShortcut: (SavedShortcutUi) -> Unit = {},
         onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
     ) {
         composeRule.setContent {
@@ -261,6 +325,7 @@ class ShortcutPickerSavedSectionTest {
                     enabled = enabled,
                     savedShortcuts = savedShortcuts,
                     onSaveShortcut = onSaveShortcut,
+                    onRenameSavedShortcut = onRenameSavedShortcut,
                     onRemoveSavedShortcut = onRemoveSavedShortcut,
                 )
             }
@@ -400,49 +465,127 @@ class ShortcutPickerSavedSectionTest {
     }
 
     @Test
-    fun saveFlow_withTypedName_emitsChordAndTrimmedName_evenWhenSessionDisabled() {
-        val captured = mutableListOf<Pair<KeyChord, String?>>()
-        setContent(enabled = false, onSaveShortcut = { chord, name -> captured += chord to name })
+    fun saveToggle_oneTap_savesChord_andEmitsNothingElse_evenWhenSessionDisabled() {
+        // One tap is the whole save: no name gate, no confirm step. The
+        // session gate must not reach it either — pinning a shortcut is a
+        // server mutation, not a PTY send, so it stays live while stopped.
+        val saved = mutableListOf<KeyChord>()
+        val removed = mutableListOf<SavedShortcutUi>()
+        val sent = mutableListOf<KeyChord>()
+        setContent(
+            enabled = false,
+            onSendChord = { sent += it },
+            onSaveShortcut = { saved += it },
+            onRemoveSavedShortcut = { removed += it },
+        )
 
         toggleModifier("shortcut_mod_ctrl")
         tapKey("X")
         composeRule.onNodeWithTag("shortcut_save_button").performClick()
-        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("  Build  ")
-        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
 
-        assertEquals(
-            listOf(KeyChord(ctrl = true, key = "x") to "Build"),
-            captured,
+        assertEquals(listOf(KeyChord(ctrl = true, key = "x")), saved)
+        assertEquals(emptyList<SavedShortcutUi>(), removed)
+        assertEquals(emptyList<KeyChord>(), sent)
+    }
+
+    @Test
+    fun composedChordAlreadyPinned_showsSavedToggle_andHintNamingTheButton() {
+        setContent(savedShortcuts = listOf(savedRetry, savedCut))
+
+        composeRule.onNodeWithTag("shortcut_saved_hint").assertDoesNotExist()
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("X")
+
+        composeRule.onNodeWithTag("shortcut_save_button").assertTextEquals("Saved")
+        composeRule.onNodeWithTag("shortcut_saved_hint").assertExists()
+        composeRule.onNodeWithText("Saved as \"Cut\"").assertExists()
+    }
+
+    @Test
+    fun composedChordNotPinned_whileOtherShortcutsExist_staysInSaveState() {
+        // The toggle is matched per-chord, not "the saved list is non-empty":
+        // Ctrl+Y is unsaved even though two other shortcuts are.
+        setContent(savedShortcuts = listOf(savedRetry, savedCut))
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("Y")
+
+        composeRule.onNodeWithTag("shortcut_save_button").assertTextEquals("Save")
+        composeRule.onNodeWithTag("shortcut_saved_hint").assertDoesNotExist()
+    }
+
+    @Test
+    fun savedToggle_tap_unpinsTheMatchingShortcut_andNeverSaves() {
+        val saved = mutableListOf<KeyChord>()
+        val removed = mutableListOf<SavedShortcutUi>()
+        setContent(
+            savedShortcuts = listOf(savedRetry, savedCut),
+            onSaveShortcut = { saved += it },
+            onRemoveSavedShortcut = { removed += it },
         )
-        // Confirming resets and hides the inline name row.
-        composeRule.onNodeWithTag("shortcut_name_field").assertDoesNotExist()
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+
+        assertEquals(listOf(savedCut), removed)
+        assertEquals(
+            "the toggle in its Saved state must never re-save the chord",
+            emptyList<KeyChord>(),
+            saved,
+        )
     }
 
     @Test
-    fun saveFlow_blankName_emitsNullName() {
-        val captured = mutableListOf<Pair<KeyChord, String?>>()
-        setContent(onSaveShortcut = { chord, name -> captured += chord to name })
+    fun renameButton_unnamedShortcut_readsName_andEmitsTheMatchingShortcut() {
+        val renamed = mutableListOf<SavedShortcutUi>()
+        setContent(
+            savedShortcuts = listOf(savedRetry, savedUnnamed),
+            onRenameSavedShortcut = { renamed += it },
+        )
 
+        toggleModifier("shortcut_mod_ctrl")
         tapKey("X")
-        composeRule.onNodeWithTag("shortcut_save_button").performClick()
-        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
 
-        assertEquals(listOf(KeyChord(key = "x") to null), captured)
+        // Unnamed buttons fall back to the chord label, so the action offers
+        // to name rather than rename.
+        composeRule.onNodeWithText("Saved as \"Ctrl+X\"").assertExists()
+        composeRule.onNodeWithTag("shortcut_rename_button").assertTextEquals("Name")
+
+        composeRule.onNodeWithTag("shortcut_rename_button").performClick()
+        assertEquals(listOf(savedUnnamed), renamed)
     }
 
     @Test
-    fun saveFlow_nameField_clampsLongPasteToServerCap() {
-        // The server rejects names over 100 chars with a 422 (and the typed
-        // text would be lost) — the field clamps a long paste up front, so
-        // the confirmed name is exactly the 100-char prefix.
-        val captured = mutableListOf<Pair<KeyChord, String?>>()
-        setContent(onSaveShortcut = { chord, name -> captured += chord to name })
+    fun renameButton_namedShortcut_readsRename_andEmitsTheMatchingShortcut() {
+        val renamed = mutableListOf<SavedShortcutUi>()
+        setContent(
+            savedShortcuts = listOf(savedRetry, savedCut),
+            onRenameSavedShortcut = { renamed += it },
+        )
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("X")
+
+        composeRule.onNodeWithTag("shortcut_rename_button").assertTextEquals("Rename")
+
+        composeRule.onNodeWithTag("shortcut_rename_button").performClick()
+        assertEquals(listOf(savedCut), renamed)
+    }
+
+    @Test
+    fun exactlyOneSaveLabelOnScreen_beforeAndAfterPickingAKey() {
+        // The bug this replaced: pressing the footer "Save" only revealed a
+        // second control also labelled "Save", so two identical Save buttons
+        // were on screen and the footer one never saved. Exactly one node may
+        // ever read "Save" — exact match, so the "Saved" state never counts.
+        setContent()
+
+        composeRule.onAllNodesWithText("Save").assertCountEquals(1)
 
         tapKey("X")
-        composeRule.onNodeWithTag("shortcut_save_button").performClick()
-        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("n".repeat(150))
-        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
 
-        assertEquals(listOf(KeyChord(key = "x") to "n".repeat(100)), captured)
+        composeRule.onAllNodesWithText("Save").assertCountEquals(1)
     }
 }

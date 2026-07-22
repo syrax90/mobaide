@@ -9,6 +9,7 @@ import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayConfig
 import com.mobaide.app.data.local.TerminalDisplayMode
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.TerminalFrame
 import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
@@ -142,10 +143,17 @@ class TerminalViewModel @Inject constructor(
     private val _sessionState = MutableStateFlow("connecting")
     val sessionState: StateFlow<String> = _sessionState.asStateFlow()
 
-    /** The session's kind once actually resolved, null until then. Written by the
-     *  [sessionKind] merge below; consumed by [savedShortcutsForKind], which must
-     *  not render another kind's saved buttons while the eager Claude seed is
-     *  still standing in (they would be tappable in the wrong session kind). */
+    /** The session's kind once actually resolved, null until then. Consumed by
+     *  [savedShortcutsForKind], which must not render another kind's saved
+     *  buttons while the eager Claude seed is still standing in (they would be
+     *  tappable in the wrong session kind).
+     *
+     *  Two writers, both authoritative: the [sessionKind] merge below, and
+     *  [saveShortcut], which publishes what its own resolution found so a save
+     *  cannot land while this gate is still shut. They can therefore disagree
+     *  on a cold launch whose REST seed failed — this may hold the real kind
+     *  while [sessionKind] still reports the seeded Claude default until a WS
+     *  push corrects it. Do not assume `resolvedKind == sessionKind`. */
     private val resolvedKind = MutableStateFlow<SessionKind?>(null)
 
     /** CLI of this session, used to drive the CLI-aware control-key bar. Resolved from
@@ -520,11 +528,14 @@ class TerminalViewModel @Inject constructor(
             ?.kind
     }
 
-    /** Persist a chord as a named button for this session's kind. The server
-     *  upserts, so re-saving an existing chord updates its name instead of
-     *  duplicating the button. */
-    fun saveShortcut(chord: KeyChord, name: String?) {
-        val trimmedName = name?.trim()?.takeIf { it.isNotEmpty() }
+    /** Pin a chord as a button for this session's kind, unnamed — the picker
+     *  routes naming through [renameShortcut] afterwards. The server upserts,
+     *  so re-saving an existing chord is a no-op rather than a duplicate.
+     *
+     *  Success is deliberately silent: the picker derives its "Saved" state
+     *  from the repository cache, so the confirmation is the UI itself, and a
+     *  snackbar would only duplicate it. */
+    fun saveShortcut(chord: KeyChord) {
         viewModelScope.launch {
             val kind = resolvedSessionKind()
             if (kind == null) {
@@ -533,13 +544,15 @@ class TerminalViewModel @Inject constructor(
                 )
                 return@launch
             }
+            // Publish what this save resolved. savedShortcutsForKind renders
+            // empty until resolvedKind lands, and this call races the sessionKind
+            // merge that normally writes it — so without this a cold-launch save
+            // can succeed while the picker still shows "Save" with no hint row
+            // and (success being silent) no feedback at all. Same authority as
+            // the merge: resolvedSessionKind() never returns the eager seed.
+            resolvedKind.compareAndSet(null, kind)
             try {
-                shortcutsRepository.createShortcut(
-                    kind.wireName, chord.token(), trimmedName,
-                )
-                _userMessages.tryEmit(
-                    "Saved shortcut \"${trimmedName ?: chord.display()}\"",
-                )
+                shortcutsRepository.createShortcut(kind.wireName, chord.token(), null)
             } catch (t: Throwable) {
                 _userMessages.tryEmit(
                     "Failed to save shortcut: ${t.message ?: "unknown error"}",
@@ -560,12 +573,27 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
+    /** Unpin a saved shortcut.
+     *
+     *  DELETE is not idempotent server-side: the ownership probe filters
+     *  soft-deleted rows, so deleting an already-deleted shortcut answers 403
+     *  rather than no-op'ing. The picker's Saved toggle carries no in-flight
+     *  state and stays tappable for the whole round trip, so a second tap is
+     *  ordinary — and reporting "Failed to remove" for a shortcut that IS
+     *  removed would be a lie on the one surface built to be trusted. Ids only
+     *  ever come from this user's own cached list, so 403/404 can only mean
+     *  "already gone": reconcile the cache and stay silent. */
     fun removeShortcut(shortcutId: String) {
         viewModelScope.launch {
             try {
                 shortcutsRepository.deleteShortcut(shortcutId)
-            } catch (_: Throwable) {
-                _userMessages.tryEmit("Failed to remove shortcut")
+            } catch (t: Throwable) {
+                val alreadyGone = t is ApiException && (t.code == 403 || t.code == 404)
+                if (alreadyGone) {
+                    shortcutsRepository.applyDeleted(shortcutId)
+                } else {
+                    _userMessages.tryEmit("Failed to remove shortcut")
+                }
             }
         }
     }

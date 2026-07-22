@@ -135,7 +135,12 @@ cadence; they do **not** gate compatibility.
     ``""`` (or explicit null) clears the name back to null (the Android JSON
     encoder omits null defaults, so the empty string is the wire's "clear"
     sentinel); ``DELETE`` → ``204`` soft-delete. Ownership violations →
-    ``403``.
+    ``403`` — and since the ownership probe filters soft-deleted rows, a
+    **repeat** ``DELETE`` of an already-deleted shortcut also answers
+    ``403``, not ``204``. DELETE is therefore **not idempotent**: a client
+    whose UI lets the same row be removed twice must treat ``403``/``404``
+    on an id from its own list as "already gone" rather than reporting a
+    failure the user would rightly disbelieve.
 
 ## proto-v5 (superseded by proto-v6)
 

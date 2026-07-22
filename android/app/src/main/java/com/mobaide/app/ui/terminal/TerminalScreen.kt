@@ -62,6 +62,15 @@ import com.mobaide.app.ui.theme.StateStarting
 import com.mobaide.app.ui.theme.StateStopped
 import com.mobaide.app.ui.theme.StateStopping
 import com.mobaide.app.ui.theme.TerminalBackground
+import kotlinx.coroutines.withTimeoutOrNull
+
+/** Ceiling on how long a shortcut-sheet snackbar may hold the shared
+ *  userMessages collector. Deliberately past Android's largest "Time to take
+ *  action" accessibility timeout (2 min), which `SnackbarDuration.toMillis`
+ *  honours: a smaller bound would cut those users' messages short while the
+ *  host is alive and well. This is a stranded-collector backstop, not a
+ *  duration control, so it must never be the thing that ends a snackbar. */
+private const val SHEET_SNACKBAR_TIMEOUT_MS = 130_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,9 +99,28 @@ fun TerminalScreen(
     var renameShortcutTarget by remember { mutableStateOf<SavedShortcutUi?>(null) }
     var terminalKeyboardRequest by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val shortcutSheetSnackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) {
-        viewModel.userMessages.collect { snackbarHostState.showSnackbar(it) }
+        // The Scaffold host sits behind the shortcut sheet's window and scrim,
+        // so while that sheet is up its own save/remove failures would never be
+        // seen. Route each message to whichever host is actually on top.
+        viewModel.userMessages.collect { message ->
+            if (showShortcutPicker) {
+                // Backstop only. The sheet's own onDispose covers the reachable
+                // case (host owns a snackbar, then the sheet goes away); the
+                // read above and this suspend are one uninterrupted main-thread
+                // run, so nothing can currently slip between them. This bounds
+                // the damage anyway, because a stranded collector silently kills
+                // every later message on this screen — too sharp an edge to
+                // leave resting on an ordering argument.
+                withTimeoutOrNull(SHEET_SNACKBAR_TIMEOUT_MS) {
+                    shortcutSheetSnackbarHostState.showSnackbar(message)
+                }
+            } else {
+                snackbarHostState.showSnackbar(message)
+            }
+        }
     }
 
     // STOPPED→STARTED edge: screen turned back on, or the user navigated
@@ -326,7 +354,9 @@ fun TerminalScreen(
             enabled = isConnected && sessionState == "running",
             savedShortcuts = savedShortcuts,
             onSaveShortcut = viewModel::saveShortcut,
+            onRenameSavedShortcut = { renameShortcutTarget = it },
             onRemoveSavedShortcut = { viewModel.removeShortcut(it.id) },
+            snackbarHostState = shortcutSheetSnackbarHostState,
         )
     }
 
