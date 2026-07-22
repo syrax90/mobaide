@@ -32,7 +32,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.outlined.Keyboard
-import androidx.compose.material.icons.outlined.KeyboardCommandKey
+import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ButtonDefaults
@@ -349,7 +349,7 @@ fun InputBar(
                         modifier = Modifier.testTag("custom_shortcut_button"),
                     ) {
                         Icon(
-                            Icons.Outlined.KeyboardCommandKey,
+                            Icons.Outlined.MoreHoriz,
                             contentDescription = "Custom shortcut",
                             modifier = Modifier.size(18.dp),
                         )
