@@ -109,12 +109,12 @@ fun signingValue(envName: String, propName: String): String? {
 
 android {
     namespace = "com.mobaide.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.mobaide.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
 
         // versionName is the single source of truth for the app version and
         // is bumped automatically by release-please via the `extra-files`
