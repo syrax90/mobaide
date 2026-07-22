@@ -1,5 +1,20 @@
 # central_server Changelog
 
+## [0.2.4](https://github.com/syrax90/claude_mobile/compare/server-v0.2.3...server-v0.2.4) (2026-07-22)
+
+
+### Features
+
+* add persistent named custom shortcut buttons synced via central server ([8ed089a](https://github.com/syrax90/claude_mobile/commit/8ed089abd66bcaa404559ee4d1840636aa659359))
+* add persistent named custom shortcut buttons synced via central server ([04bde6f](https://github.com/syrax90/claude_mobile/commit/04bde6fb0738973d4eadab5ec7398b91823b3d9d))
+
+
+### Bug Fixes
+
+* address third Codex review round for saved shortcut buttons (CLA-137) ([740dd2f](https://github.com/syrax90/claude_mobile/commit/740dd2fc018315f0ee179edbfdb4f0ea913787b8))
+* resolve review findings for custom shortcut persistence (CLA-137) ([4b90ef2](https://github.com/syrax90/claude_mobile/commit/4b90ef28ceef21993d9ff193d4e83e4356ff1e36))
+* **server:** close TOCTOU window in update_user_shortcut_name readback ([45e950a](https://github.com/syrax90/claude_mobile/commit/45e950a27a585385aee8d3b3618353d69b057dd4))
+
 ## [0.2.3](https://github.com/syrax90/claude_mobile/compare/server-v0.2.2...server-v0.2.3) (2026-07-11)
 
 
