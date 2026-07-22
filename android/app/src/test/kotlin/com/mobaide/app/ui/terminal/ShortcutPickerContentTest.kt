@@ -2,9 +2,13 @@ package com.mobaide.app.ui.terminal
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -226,10 +230,16 @@ class ShortcutPickerContentShortScreenTest {
 /**
  * Saved-shortcut surfaces inside the picker: the "Saved" InputChip section
  * below Recents (tap = resend, gated on the session; trailing ✕ = server-side
- * remove, never gated) and the Save footer flow (Save toggles an inline
- * optional-name field; confirming emits `onSaveShortcut(chord, name-or-null)`).
- * Save is a server mutation, so it depends only on a key being picked — not on
- * the session-active `enabled` gate.
+ * remove, never gated) and the Save footer flow.
+ *
+ * The footer is a two-state machine and the tests pin that only one "Save"
+ * affordance is ever on screen: Save arms the naming state (name field +
+ * Cancel + confirm) and hides both Send and itself; confirming emits
+ * `onSaveShortcut(chord, name-or-null)`. Save is a server mutation, so it
+ * depends only on a key being picked — not on the session-active `enabled`
+ * gate. A chord that is already saved switches the surfaces to "Update name"
+ * (the server upserts by chord), and the post-save notice renders only once
+ * the chord actually appears in `savedShortcuts`.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], qualifiers = "w480dp-h1200dp-port-xxhdpi")
@@ -444,5 +454,130 @@ class ShortcutPickerSavedSectionTest {
         composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
 
         assertEquals(listOf(KeyChord(key = "x") to "n".repeat(100)), captured)
+    }
+
+    @Test
+    fun namingState_hidesSendAndTheArmingSave() {
+        // The whole point of the two-state footer: while naming, the confirm is
+        // the only "Save" on screen. The old inline row left the arming Save
+        // sitting next to Send, where a second tap silently collapsed the row.
+        setContent()
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+
+        composeRule.onNodeWithTag("shortcut_save_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("shortcut_send_button").assertDoesNotExist()
+        composeRule.onNodeWithTag("shortcut_save_confirm").assertIsDisplayed()
+    }
+
+    @Test
+    fun namingState_cancel_restoresFooter_withoutSaving() {
+        val captured = mutableListOf<Pair<KeyChord, String?>>()
+        setContent(onSaveShortcut = { chord, name -> captured += chord to name })
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("Discarded")
+        composeRule.onNodeWithTag("shortcut_save_cancel").performClick()
+
+        assertEquals(emptyList<Pair<KeyChord, String?>>(), captured)
+        composeRule.onNodeWithTag("shortcut_name_field").assertDoesNotExist()
+        composeRule.onNodeWithTag("shortcut_send_button").assertIsDisplayed()
+        composeRule.onNodeWithTag("shortcut_save_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun deselectingKey_whileNaming_collapsesBackToFooter() {
+        setContent()
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        // Tap-again deselects the base key: the confirm would have nothing to
+        // save, so the naming state must not linger.
+        tapKey("X")
+
+        composeRule.onNodeWithTag("shortcut_name_field").assertDoesNotExist()
+        composeRule.onNodeWithTag("shortcut_send_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun alreadySavedChord_readsUpdateName_andPrefillsTheExistingName() {
+        val captured = mutableListOf<Pair<KeyChord, String?>>()
+        setContent(
+            savedShortcuts = listOf(savedRetry),
+            onSaveShortcut = { chord, name -> captured += chord to name },
+        )
+
+        toggleModifier("shortcut_mod_ctrl")
+        tapKey("R")
+
+        composeRule.onNodeWithTag("shortcut_save_button").assertTextEquals("Update name")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").assertTextContains("Retry")
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        assertEquals(listOf(savedRetry.chord to "Retry"), captured)
+    }
+
+    /** Drives `savedShortcuts` from a snapshot list the save callback appends
+     *  to, standing in for the repository round-trip that feeds the real
+     *  picker — the post-save notice is derived from that list, not from the
+     *  tap. */
+    private fun setContentWithLandingSaves(
+        onSaveShortcut: (KeyChord, String?) -> Unit,
+    ) {
+        composeRule.setContent {
+            val saved = remember { mutableStateListOf<SavedShortcutUi>() }
+            Surface {
+                ShortcutPickerContent(
+                    recents = emptyList(),
+                    onSendChord = {},
+                    onClose = {},
+                    savedShortcuts = saved,
+                    onSaveShortcut = { chord, name ->
+                        onSaveShortcut(chord, name)
+                        saved += SavedShortcutUi(
+                            id = "new-${chord.token()}",
+                            chord = chord,
+                            name = name,
+                            risky = false,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    @Test
+    fun confirmedSave_showsNotice_thenClearsOnANewChord() {
+        setContentWithLandingSaves { _, _ -> }
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_name_field").performTextInput("Build")
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        composeRule.onNodeWithTag("shortcut_save_notice")
+            .assertTextEquals("Saved — \"Build\" is now in your key bar")
+        // The chord is now saved, so the arming button offers the upsert path.
+        composeRule.onNodeWithTag("shortcut_save_button").assertTextEquals("Update name")
+
+        tapKey("Y")
+        composeRule.onNodeWithTag("shortcut_save_notice").assertDoesNotExist()
+    }
+
+    @Test
+    fun failedSave_showsNoNotice() {
+        // The notice tracks the saved list, not the tap: when the save never
+        // lands (server error), the picker must not claim it did. The user
+        // sees the ViewModel's failure snackbar once the sheet is dismissed.
+        setContent(onSaveShortcut = { _, _ -> })
+
+        tapKey("X")
+        composeRule.onNodeWithTag("shortcut_save_button").performClick()
+        composeRule.onNodeWithTag("shortcut_save_confirm").performClick()
+
+        composeRule.onNodeWithTag("shortcut_save_notice").assertDoesNotExist()
     }
 }

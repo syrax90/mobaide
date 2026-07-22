@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -37,13 +39,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -54,9 +60,9 @@ import com.mobaide.app.ui.theme.MobaideTheme
  * base-key grid, with per-session-kind recents on top for one-tap resend and
  * the kind's server-synced saved shortcuts below them (tap = send, ✕ = remove).
  * Tapping a recent, a saved chip, or Send delivers the chord via [onSendChord];
- * Save persists the composed chord (optional name) via [onSaveShortcut] and
- * keeps the sheet open so the new chip appears in place; the caller closes
- * the sheet.
+ * Save arms the naming footer, whose confirm persists the composed chord
+ * (optional name) via [onSaveShortcut] and keeps the sheet open so the new chip
+ * appears in place; the caller closes the sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,6 +94,12 @@ fun ShortcutPickerSheet(
 // Extracted from the sheet so it can be previewed and click-tested directly:
 // Robolectric's input dispatcher cannot deliver clicks into the ModalBottomSheet
 // popup window (see TemplatesPickerSheetTest).
+//
+// The footer is a two-state machine, never both at once: compose state offers
+// [Save][Send], and Save swaps the whole footer for the naming state
+// ([name field][Cancel][Save Ctrl+X]). An earlier version kept Send visible and
+// let Save toggle an inline name row that carried its own Save button — two
+// buttons labelled "Save" on screen, the lower one silently collapsing the row.
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ShortcutPickerContent(
@@ -109,12 +121,47 @@ internal fun ShortcutPickerContent(
     var alt by remember { mutableStateOf(false) }
     var shift by remember { mutableStateOf(false) }
     var selectedKey by remember { mutableStateOf<String?>(null) }
-    var savingName by remember { mutableStateOf(false) }
+    var naming by remember { mutableStateOf(false) }
     var shortcutName by remember { mutableStateOf("") }
+    // Chord the user last confirmed, paired with the line to show for it. The
+    // line only renders once that chord actually comes back in savedShortcuts
+    // (see `notice`), so a failed server call never claims a save happened.
+    var pendingNotice by remember { mutableStateOf<Pair<KeyChord, String>?>(null) }
+    val nameFocusRequester = remember { FocusRequester() }
 
     val chord = selectedKey?.let { KeyChord(ctrl = ctrl, alt = alt, shift = shift, key = it) }
     val encoding = chord?.let { KeyChordEncoder.encode(it) }
     val selectedModifiers = listOf(ctrl, alt, shift).count { it }
+    // The server upserts by (kind, chord): re-saving a chord that is already a
+    // button renames it rather than adding a second one, so the save surfaces
+    // say "Update name" instead of pretending to create something new.
+    val existing = chord?.let { composed -> savedShortcuts.firstOrNull { it.chord == composed } }
+    val notice = pendingNotice?.takeIf { it.first == chord && existing != null }?.second
+
+    fun confirmSave() {
+        val target = chord ?: return
+        val trimmed = shortcutName.trim().takeIf { it.isNotEmpty() }
+        onSaveShortcut(target, trimmed)
+        pendingNotice = target to if (existing != null) {
+            "Updated \"${trimmed ?: target.display()}\""
+        } else {
+            "Saved — \"${trimmed ?: target.display()}\" is now in your key bar"
+        }
+        naming = false
+        shortcutName = ""
+    }
+
+    // Deselecting the base key while naming would leave an armed name field
+    // above a dead confirm button; fall back to the compose footer instead.
+    LaunchedEffect(chord) {
+        if (chord == null) {
+            naming = false
+            shortcutName = ""
+        }
+    }
+    LaunchedEffect(naming) {
+        if (naming) nameFocusRequester.requestFocus()
+    }
 
     Column(
         modifier = modifier
@@ -237,62 +284,93 @@ internal fun ShortcutPickerContent(
                 modifier = Modifier.testTag("shortcut_risky_hint"),
             )
         }
-        if (savingName) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        notice?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.testTag("shortcut_save_notice"),
+            )
+        }
+        if (naming) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedTextField(
                     value = shortcutName,
                     onValueChange = { shortcutName = it.take(MAX_SHORTCUT_NAME_LENGTH) },
                     label = { Text("Name (optional)") },
+                    supportingText = { Text("Leave empty to show the shortcut itself") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { confirmSave() }),
                     modifier = Modifier
-                        .weight(1f)
+                        .fillMaxWidth()
+                        .focusRequester(nameFocusRequester)
                         .testTag("shortcut_name_field"),
                 )
-                TextButton(
-                    onClick = {
-                        chord?.let {
-                            onSaveShortcut(
-                                it,
-                                shortcutName.trim().takeIf { n -> n.isNotEmpty() },
-                            )
-                        }
-                        savingName = false
-                        shortcutName = ""
-                    },
-                    enabled = chord != null,
-                    modifier = Modifier.testTag("shortcut_save_confirm"),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("Save")
+                    TextButton(
+                        onClick = {
+                            naming = false
+                            shortcutName = ""
+                        },
+                        modifier = Modifier.testTag("shortcut_save_cancel"),
+                    ) {
+                        Text("Cancel")
+                    }
+                    Button(
+                        onClick = { confirmSave() },
+                        enabled = chord != null,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("shortcut_save_confirm"),
+                    ) {
+                        Text(
+                            when {
+                                existing != null -> "Update name"
+                                chord != null -> "Save ${chord.display()}"
+                                else -> "Save"
+                            }
+                        )
+                    }
                 }
             }
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            // Saving is a server mutation, not a PTY send — deliberately NOT
-            // gated on the session-active `enabled`.
-            OutlinedButton(
-                onClick = { savingName = !savingName },
-                enabled = chord != null,
-                modifier = Modifier.testTag("shortcut_save_button"),
-            ) {
-                Text("Save")
-            }
-            Button(
-                onClick = { chord?.let(onSendChord) },
-                enabled = enabled && chord != null,
+        } else {
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("shortcut_send_button"),
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Send")
+                // Saving is a server mutation, not a PTY send — deliberately NOT
+                // gated on the session-active `enabled`.
+                OutlinedButton(
+                    onClick = {
+                        shortcutName = existing?.name.orEmpty()
+                        naming = true
+                    },
+                    enabled = chord != null,
+                    modifier = Modifier.testTag("shortcut_save_button"),
+                ) {
+                    Text(if (existing != null) "Update name" else "Save")
+                }
+                Button(
+                    onClick = { chord?.let(onSendChord) },
+                    enabled = enabled && chord != null,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("shortcut_send_button"),
+                ) {
+                    Text("Send")
+                }
             }
         }
     }
