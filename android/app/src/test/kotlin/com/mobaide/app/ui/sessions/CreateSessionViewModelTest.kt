@@ -302,8 +302,8 @@ class CreateSessionViewModelTest {
 
         vm.setClaudeModel("opus")
         vm.setClaudeEffort("max")
-        // sonnet doesn't support xhigh/max, so the invalid level must clamp.
-        vm.setClaudeModel("sonnet")
+        // haiku doesn't support xhigh/max, so the invalid level must clamp.
+        vm.setClaudeModel("haiku")
 
         assertEquals("high", vm.uiState.value.claudeEffort)
     }
@@ -2272,8 +2272,9 @@ class CreateSessionViewModelTest {
 
     @Test
     fun claudeEffortsFor_fable_offersFullLadder() {
-        // fable is the other xhigh-capable model; the clamp test only covers
-        // opus, so pin fable's full ladder explicitly.
+        // fable is one of the other xhigh-capable models (alongside opus and
+        // sonnet); the clamp test only covers opus, so pin fable's full ladder
+        // explicitly.
         assertEquals(
             CreateSessionViewModel.CLAUDE_EFFORTS,
             CreateSessionViewModel.claudeEffortsFor("fable"),
@@ -2281,19 +2282,19 @@ class CreateSessionViewModelTest {
     }
 
     @Test
-    fun claudeEffortsFor_sonnet_capsAtHigh_neverOffersDownshiftLevels() {
+    fun claudeEffortsFor_sonnet_offersFullLadderIncludingXhighAndMax() {
         val efforts = CreateSessionViewModel.claudeEffortsFor("sonnet")
-        assertEquals(listOf("low", "medium", "high"), efforts)
-        assertFalse("sonnet must never be offered xhigh", efforts.contains("xhigh"))
-        assertFalse("sonnet must never be offered max", efforts.contains("max"))
+        assertEquals(CreateSessionViewModel.CLAUDE_EFFORTS, efforts)
+        assertTrue("sonnet is xhigh-capable", efforts.contains("xhigh"))
+        assertTrue("sonnet is max-capable", efforts.contains("max"))
     }
 
     @Test
     fun claudeEffortsFor_haiku_capsAtHigh() {
-        assertEquals(
-            listOf("low", "medium", "high"),
-            CreateSessionViewModel.claudeEffortsFor("haiku"),
-        )
+        val efforts = CreateSessionViewModel.claudeEffortsFor("haiku")
+        assertEquals(listOf("low", "medium", "high"), efforts)
+        assertFalse("haiku must never be offered xhigh", efforts.contains("xhigh"))
+        assertFalse("haiku must never be offered max", efforts.contains("max"))
     }
 
     @Test

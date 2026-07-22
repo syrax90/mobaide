@@ -514,7 +514,7 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
         // Clamp the effort if the new model doesn't support the current level
-        // (e.g. xhigh/max → high when switching off an xhigh-capable model).
+        // (e.g. xhigh/max → high when switching to haiku, the only capped model).
         val efforts = claudeEffortsFor(v)
         it.copy(claudeModel = v, claudeEffort = if (it.claudeEffort in efforts) it.claudeEffort else "high")
     }
@@ -907,15 +907,15 @@ class CreateSessionViewModel @Inject constructor(
         val CLAUDE_MODELS = listOf("opus", "sonnet", "haiku", "fable")
 
         /** Claude effort ladder, low→high. xhigh/max only resolve on xhigh-capable
-         *  models (opus / fable); other models silently downshift, so
+         *  models (opus / fable / sonnet); other models silently downshift, so
          *  [claudeEffortsFor] filters them out. */
         val CLAUDE_EFFORTS = listOf("low", "medium", "high", "xhigh", "max")
         private val CLAUDE_EFFORTS_BASE = listOf("low", "medium", "high")
 
         /** Effort levels offered for [model]: the full ladder for xhigh-capable
-         *  opus/fable, else low/medium/high (also for the null/default model,
-         *  whose resolved capability is unknown — never offer a downshift). */
+         *  opus/fable/sonnet, else low/medium/high (also for the null/default
+         *  model, whose resolved capability is unknown — never offer a downshift). */
         fun claudeEffortsFor(model: String?): List<String> =
-            if (model == "opus" || model == "fable") CLAUDE_EFFORTS else CLAUDE_EFFORTS_BASE
+            if (model == "opus" || model == "fable" || model == "sonnet") CLAUDE_EFFORTS else CLAUDE_EFFORTS_BASE
     }
 }
