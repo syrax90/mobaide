@@ -8,17 +8,24 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -29,7 +36,8 @@ import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -37,14 +45,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.mobaide.app.ui.theme.MobaideTheme
@@ -54,9 +65,10 @@ import com.mobaide.app.ui.theme.MobaideTheme
  * base-key grid, with per-session-kind recents on top for one-tap resend and
  * the kind's server-synced saved shortcuts below them (tap = send, ✕ = remove).
  * Tapping a recent, a saved chip, or Send delivers the chord via [onSendChord];
- * Save persists the composed chord (optional name) via [onSaveShortcut] and
- * keeps the sheet open so the new chip appears in place; the caller closes
- * the sheet.
+ * the Save/Saved toggle beside the preview pins the composed chord as a button
+ * via [onSaveShortcut] or unpins it via [onRemoveSavedShortcut], and naming is
+ * a follow-up step routed through [onRenameSavedShortcut]. The sheet stays open
+ * so the new chip appears in place; the caller closes it.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,22 +78,47 @@ fun ShortcutPickerSheet(
     onDismiss: () -> Unit,
     enabled: Boolean = true,
     savedShortcuts: List<SavedShortcutUi> = emptyList(),
-    onSaveShortcut: (KeyChord, String?) -> Unit = { _, _ -> },
+    onSaveShortcut: (KeyChord) -> Unit = {},
+    onRenameSavedShortcut: (SavedShortcutUi) -> Unit = {},
     onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
-        ShortcutPickerContent(
-            recents = recents,
-            onSendChord = onSendChord,
-            onClose = onDismiss,
-            enabled = enabled,
-            savedShortcuts = savedShortcuts,
-            onSaveShortcut = onSaveShortcut,
-            onRemoveSavedShortcut = onRemoveSavedShortcut,
-        )
+        // showSnackbar() suspends until SnackbarData.dismiss()/performAction()
+        // runs, and the only auto-dismiss timer is a LaunchedEffect inside the
+        // composed SnackbarHost. This sheet leaves composition the instant it is
+        // dismissed, so a snackbar still on screen would strand its caller
+        // forever — and with it TerminalScreen's single userMessages collector,
+        // which then silently drops every later message once the SharedFlow's
+        // buffer fills. Hand the pending snackbar an ending on the way out.
+        DisposableEffect(snackbarHostState) {
+            onDispose { snackbarHostState.currentSnackbarData?.dismiss() }
+        }
+        // The screen-level SnackbarHost lives in the TerminalScreen Scaffold —
+        // behind this sheet's window and scrim — so a failed save or remove
+        // triggered here would be invisible. An overlaid host keeps that
+        // feedback on the surface the mutation was made from.
+        Box(modifier = Modifier.imePadding()) {
+            ShortcutPickerContent(
+                recents = recents,
+                onSendChord = onSendChord,
+                onClose = onDismiss,
+                enabled = enabled,
+                savedShortcuts = savedShortcuts,
+                onSaveShortcut = onSaveShortcut,
+                onRenameSavedShortcut = onRenameSavedShortcut,
+                onRemoveSavedShortcut = onRemoveSavedShortcut,
+            )
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(8.dp),
+            )
+        }
     }
 }
 
@@ -98,10 +135,12 @@ internal fun ShortcutPickerContent(
     // the session is not running, chords can't reach the PTY, so the send
     // surfaces (recents chips + Send) disable rather than pretend to send and
     // record a recent for a dropped keystroke. Composing stays available —
-    // and so do Save and chip-remove, which are server mutations, not sends.
+    // and so do the save toggle and chip-remove, which are server mutations,
+    // not sends.
     enabled: Boolean = true,
     savedShortcuts: List<SavedShortcutUi> = emptyList(),
-    onSaveShortcut: (KeyChord, String?) -> Unit = { _, _ -> },
+    onSaveShortcut: (KeyChord) -> Unit = {},
+    onRenameSavedShortcut: (SavedShortcutUi) -> Unit = {},
     onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -109,12 +148,15 @@ internal fun ShortcutPickerContent(
     var alt by remember { mutableStateOf(false) }
     var shift by remember { mutableStateOf(false) }
     var selectedKey by remember { mutableStateOf<String?>(null) }
-    var savingName by remember { mutableStateOf(false) }
-    var shortcutName by remember { mutableStateOf("") }
 
     val chord = selectedKey?.let { KeyChord(ctrl = ctrl, alt = alt, shift = shift, key = it) }
     val encoding = chord?.let { KeyChordEncoder.encode(it) }
     val selectedModifiers = listOf(ctrl, alt, shift).count { it }
+    // The composed chord's already-pinned row, if any. KeyChord is a data class,
+    // so this is exact structural equality — no token round-trip needed.
+    val savedMatch = remember(savedShortcuts, chord) {
+        chord?.let { c -> savedShortcuts.firstOrNull { it.chord == c } }
+    }
 
     Column(
         modifier = modifier
@@ -205,29 +247,48 @@ internal fun ShortcutPickerContent(
             }
         }
         HorizontalDivider()
-        Column(modifier = Modifier.testTag("shortcut_preview")) {
-            if (chord != null && encoding != null) {
-                Text(
-                    text = chord.display(),
-                    style = MaterialTheme.typography.titleSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                    ),
-                )
-                Text(
-                    text = buildString {
-                        append("Sends: ${encoding.summary}")
-                        encoding.sameAsPlainKey?.let { append(" — same byte as $it") }
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                Text(
-                    text = "Pick a key",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("shortcut_preview"),
+            ) {
+                if (chord != null && encoding != null) {
+                    Text(
+                        text = chord.display(),
+                        style = MaterialTheme.typography.titleSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                        ),
+                    )
+                    Text(
+                        text = buildString {
+                            append("Sends: ${encoding.summary}")
+                            encoding.sameAsPlainKey?.let { append(" — same byte as $it") }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = "Pick a key",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+            SaveToggleButton(
+                saved = savedMatch != null,
+                enabled = chord != null,
+                onClick = {
+                    val pinned = savedMatch
+                    if (pinned != null) onRemoveSavedShortcut(pinned)
+                    else chord?.let(onSaveShortcut)
+                },
+            )
         }
         if (encoding?.usesCsiU == true) {
             Text(
@@ -237,36 +298,36 @@ internal fun ShortcutPickerContent(
                 modifier = Modifier.testTag("shortcut_risky_hint"),
             )
         }
-        if (savingName) {
+        savedMatch?.let { pinned ->
+            // Doubles as the save confirmation and the already-pinned marker:
+            // it shows for any composed chord that is already a button, not
+            // only right after a save.
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("shortcut_saved_hint"),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                OutlinedTextField(
-                    value = shortcutName,
-                    onValueChange = { shortcutName = it.take(MAX_SHORTCUT_NAME_LENGTH) },
-                    label = { Text("Name (optional)") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("shortcut_name_field"),
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = "Saved as \"${pinned.label}\"",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
                 TextButton(
-                    onClick = {
-                        chord?.let {
-                            onSaveShortcut(
-                                it,
-                                shortcutName.trim().takeIf { n -> n.isNotEmpty() },
-                            )
-                        }
-                        savingName = false
-                        shortcutName = ""
-                    },
-                    enabled = chord != null,
-                    modifier = Modifier.testTag("shortcut_save_confirm"),
+                    onClick = { onRenameSavedShortcut(pinned) },
+                    modifier = Modifier.testTag("shortcut_rename_button"),
                 ) {
-                    Text("Save")
+                    Text(if (pinned.name == null) "Name" else "Rename")
                 }
             }
         }
@@ -274,17 +335,7 @@ internal fun ShortcutPickerContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Saving is a server mutation, not a PTY send — deliberately NOT
-            // gated on the session-active `enabled`.
-            OutlinedButton(
-                onClick = { savingName = !savingName },
-                enabled = chord != null,
-                modifier = Modifier.testTag("shortcut_save_button"),
-            ) {
-                Text("Save")
-            }
             Button(
                 onClick = { chord?.let(onSendChord) },
                 enabled = enabled && chord != null,
@@ -296,6 +347,50 @@ internal fun ShortcutPickerContent(
             }
         }
     }
+}
+
+/**
+ * Two-state pin control for the composed chord: "Save" persists it as a button,
+ * "Saved" unpins it again. Deliberately NOT gated on the session-active flag —
+ * both directions are server mutations, not PTY sends.
+ *
+ * No in-flight state on purpose: the derived saved-state is the only signal that
+ * a mutation landed, so a pending flag would need a timeout of its own to
+ * recover from a request that never completes — more machinery than this earns.
+ * The cost is that the button stays tappable for the whole round trip, so
+ * making a double tap harmless is the ViewModel's job, not this button's —
+ * neither server operation is idempotent on its own. [TerminalViewModel] drops
+ * a concurrent duplicate save (a late create landing after a delete would
+ * otherwise resurrect the removed chord) and absorbs a repeat delete (DELETE
+ * answers 403 once the row is gone).
+ */
+@Composable
+private fun SaveToggleButton(
+    saved: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val modifier = Modifier.testTag("shortcut_save_button")
+    if (saved) {
+        FilledTonalButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+            SaveToggleLabel(Icons.Default.Bookmark, "Saved")
+        }
+    } else {
+        OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+            SaveToggleLabel(Icons.Outlined.BookmarkBorder, "Save")
+        }
+    }
+}
+
+@Composable
+private fun SaveToggleLabel(icon: ImageVector, label: String) {
+    Icon(
+        icon,
+        contentDescription = null,
+        modifier = Modifier.size(ButtonDefaults.IconSize),
+    )
+    Spacer(Modifier.size(ButtonDefaults.IconSpacing))
+    Text(label)
 }
 
 /**
@@ -446,6 +541,31 @@ private fun ShortcutPickerContentPreview() {
                 onClose = {},
                 savedShortcuts = previewSavedShortcuts,
             )
+        }
+    }
+}
+
+// The Save/Saved states are not reachable from the sheet previews below: the
+// composed chord lives in ShortcutPickerContent's own selectedKey state, so a
+// preview cannot pick a key. Preview the toggle directly instead.
+@Preview(name = "Save toggle light", showBackground = true)
+@Preview(
+    name = "Save toggle dark",
+    showBackground = true,
+    uiMode = Configuration.UI_MODE_NIGHT_YES,
+)
+@Composable
+private fun SaveToggleButtonPreview() {
+    MobaideTheme(dynamicColor = false) {
+        Surface {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(16.dp),
+            ) {
+                SaveToggleButton(saved = false, enabled = false, onClick = {})
+                SaveToggleButton(saved = false, enabled = true, onClick = {})
+                SaveToggleButton(saved = true, enabled = true, onClick = {})
+            }
         }
     }
 }

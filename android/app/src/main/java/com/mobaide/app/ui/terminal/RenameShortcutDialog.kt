@@ -32,7 +32,18 @@ fun RenameShortcutDialog(
 ) {
     var name by remember { mutableStateOf(shortcut.name.orEmpty()) }
     val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    LaunchedEffect(Unit) {
+        // requestFocus() throws if the field's node is not attached yet, which
+        // depends on whether the dialog window attaches before this effect
+        // resumes — order this dialog does not control now that the shortcut
+        // picker opens it over an already-open ModalBottomSheet. Autofocus is a
+        // convenience; the user can always tap the field, so it must not be
+        // able to take the dialog down.
+        try {
+            focusRequester.requestFocus()
+        } catch (_: IllegalStateException) {
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,

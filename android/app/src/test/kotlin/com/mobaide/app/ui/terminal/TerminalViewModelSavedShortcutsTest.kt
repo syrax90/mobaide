@@ -5,6 +5,7 @@ import app.cash.turbine.test
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
+import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionKind
@@ -20,6 +21,7 @@ import io.mockk.coEvery
 import io.mockk.coJustRun
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.justRun
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.CompletableDeferred
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -53,10 +56,20 @@ import org.junit.Test
  * Claude default's bucket. Saves
  * re-resolve the session's kind from the live session list (REST fallback) —
  * never the eagerly-seeded `sessionKind.value` Claude default — and go out
- * under that kind's wire name with the chord's token and a trimmed
- * (blank -> null) name; an unresolvable kind aborts the save with a snackbar
- * before the repository is touched; failures surface as snackbars, never
- * silently.
+ * under that kind's wire name with the chord's token, always unnamed (the
+ * picker names a saved shortcut afterwards via a separate rename action); a
+ * successful save is silent — no snackbar, since the picker's derived
+ * "Saved" state is itself the confirmation; a save that resolves the kind
+ * publishes it, so the gated-empty list opens up and that derived confirmation
+ * can actually render; a save of a chord already in flight is dropped, since
+ * the server's upsert probe sees live rows only and a late duplicate would
+ * resurrect a chord deleted in between — but the per-chord guard always
+ * releases, on success, on failure and on abort alike; an unresolvable kind
+ * aborts the save with a snackbar
+ * before the repository is touched and publishes nothing; failures surface as
+ * snackbars, never silently — except an already-gone delete (403/404, the
+ * non-idempotent DELETE a double tap produces), which is absorbed into a cache
+ * reconcile instead of a false failure report.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelSavedShortcutsTest {
@@ -285,47 +298,26 @@ class TerminalViewModelSavedShortcutsTest {
     }
 
     @Test
-    fun saveShortcut_sendsWireKindAndToken_withTrimmedName_andSuccessSnackbar() = runTest {
-        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
-        coEvery {
-            shortcutsRepository.createShortcut(any(), any(), any())
-        } returns dto("s-1", chordToken = "ctrl+x", name = "Build")
-        val vm = createViewModel()
-
-        vm.userMessages.test {
-            vm.saveShortcut(KeyChord(ctrl = true, key = "x"), "  Build  ")
-            advanceUntilIdle()
-            assertEquals("Saved shortcut \"Build\"", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
-        // "claude" pins the wire name of the kind resolved from the live
-        // session list — the only source saveShortcut may trust.
-        coVerify(exactly = 1) {
-            shortcutsRepository.createShortcut("claude", "ctrl+x", "Build")
-        }
-    }
-
-    @Test
-    fun saveShortcut_blankName_savesUnnamed_andSnackbarFallsBackToChordLabel() = runTest {
+    fun saveShortcut_sendsWireKindFromLiveSessionList_andToken_unnamed() = runTest {
         sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         coEvery {
             shortcutsRepository.createShortcut(any(), any(), any())
         } returns dto("s-1", chordToken = "ctrl+x")
         val vm = createViewModel()
 
-        vm.userMessages.test {
-            vm.saveShortcut(KeyChord(ctrl = true, key = "x"), "   ")
-            advanceUntilIdle()
-            assertEquals("Saved shortcut \"Ctrl+X\"", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+
+        // "claude" pins the wire name of the kind resolved from the live
+        // session list — the only source saveShortcut may trust — and the
+        // picker always saves unnamed.
         coVerify(exactly = 1) {
             shortcutsRepository.createShortcut("claude", "ctrl+x", null)
         }
     }
 
     @Test
-    fun saveShortcut_failure_emitsFailureSnackbar() = runTest {
+    fun saveShortcut_failure_emitsFailureSnackbar_andGuardDoesNotLatch() = runTest {
         sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
         coEvery {
             shortcutsRepository.createShortcut(any(), any(), any())
@@ -333,7 +325,7 @@ class TerminalViewModelSavedShortcutsTest {
         val vm = createViewModel()
 
         vm.userMessages.test {
-            vm.saveShortcut(KeyChord(ctrl = true, key = "x"), null)
+            vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
             advanceUntilIdle()
             val message = awaitItem()
             assertTrue(
@@ -341,6 +333,15 @@ class TerminalViewModelSavedShortcutsTest {
                 message.startsWith("Failed to save shortcut") && message.contains("boom"),
             )
             cancelAndIgnoreRemainingEvents()
+        }
+
+        // The in-flight guard clears in a finally, so a failed save leaves the
+        // chord savable — a latched guard would make the retry the snackbar
+        // just invited impossible.
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+        coVerify(exactly = 2) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
         }
     }
 
@@ -357,7 +358,7 @@ class TerminalViewModelSavedShortcutsTest {
         } returns dto("s-1", kind = "codex", chordToken = "ctrl+x")
         val vm = createViewModel()
 
-        vm.saveShortcut(KeyChord(ctrl = true, key = "x"), null)
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
         advanceUntilIdle()
 
         coVerify(exactly = 1) {
@@ -378,7 +379,7 @@ class TerminalViewModelSavedShortcutsTest {
         } returns dto("s-1", kind = "codex", chordToken = "ctrl+x")
         val vm = createViewModel()
 
-        vm.saveShortcut(KeyChord(ctrl = true, key = "x"), null)
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
         advanceUntilIdle() // the save is now suspended on the REST fetch
         gate.complete(listOf(session(kind = SessionKind.Codex)))
         advanceUntilIdle()
@@ -397,7 +398,7 @@ class TerminalViewModelSavedShortcutsTest {
         val vm = createViewModel()
 
         vm.userMessages.test {
-            vm.saveShortcut(KeyChord(ctrl = true, key = "x"), "Build")
+            vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
             advanceUntilIdle()
             assertEquals(
                 "Failed to save shortcut: session type not known yet",
@@ -406,6 +407,171 @@ class TerminalViewModelSavedShortcutsTest {
             cancelAndIgnoreRemainingEvents()
         }
         verify { shortcutsRepository wasNot Called }
+    }
+
+    @Test
+    fun saveShortcut_publishesTheKindItResolved_soTheSavedListStopsBeingGatedEmpty() = runTest {
+        // Cold launch while offline: the one-shot REST seed behind sessionKind
+        // fails and the WS session list never arrives, so resolvedKind stays
+        // null and savedShortcutsForKind is gated empty. The user taps Save
+        // once the network is back. A successful save is silent, so the
+        // derived "Saved as …" hint row is the ONLY feedback there is — and it
+        // cannot appear unless the save publishes the kind it just resolved.
+        var restCalls = 0
+        coEvery { sessionRepository.listSessions() } coAnswers {
+            if (restCalls++ == 0) throw RuntimeException("offline")
+            listOf(session(kind = SessionKind.Claude))
+        }
+        val cache = MutableStateFlow<List<ShortcutDto>>(emptyList())
+        every { shortcutsRepository.observeShortcuts() } returns cache
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } coAnswers {
+            dto("s-1", chordToken = "ctrl+x").also { cache.value = listOf(it) }
+        }
+        val vm = createViewModel()
+
+        backgroundScope.launch { vm.savedShortcutsForKind.collect {} }
+        advanceUntilIdle()
+        assertEquals(
+            "precondition: the kind is unresolved, so the list starts gated empty",
+            emptyList<SavedShortcutUi>(),
+            vm.savedShortcutsForKind.value,
+        )
+
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                SavedShortcutUi(
+                    id = "s-1",
+                    chord = KeyChord(ctrl = true, key = "x"),
+                    name = null,
+                    risky = false,
+                ),
+            ),
+            vm.savedShortcutsForKind.value,
+        )
+    }
+
+    @Test
+    fun saveShortcut_kindUnresolvable_publishesNoKind_soTheSavedListStaysEmpty() = runTest {
+        // The publish must sit AFTER the null-kind abort: opening the gate on
+        // an aborted save — say by falling back to the eagerly-seeded Claude
+        // default — would hand the picker another kind's buttons in a session
+        // whose kind is still unknown.
+        coEvery { sessionRepository.listSessions() } throws RuntimeException("offline")
+        every { shortcutsRepository.observeShortcuts() } returns MutableStateFlow(
+            listOf(dto("s-a", chordToken = "ctrl+a", name = "Alpha")),
+        )
+        val vm = createViewModel()
+
+        backgroundScope.launch { vm.savedShortcutsForKind.collect {} }
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+
+        assertEquals(emptyList<SavedShortcutUi>(), vm.savedShortcutsForKind.value)
+        coVerify(exactly = 0) {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        }
+    }
+
+    @Test
+    fun saveShortcut_duplicateWhileInFlight_isDropped_andTheGuardReleasesAfterwards() = runTest {
+        // A double tap on Save is ordinary: the toggle only flips once the
+        // response lands, so it reads "Save" for the whole round trip. Letting
+        // the second POST through is not just wasteful — the server's upsert
+        // probe only sees LIVE rows, so a duplicate arriving after the user has
+        // let the first land and then tapped "Saved" to delete takes the create
+        // branch and resurrects a chord they deliberately removed.
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
+        val gate = CompletableDeferred<Unit>()
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } coAnswers {
+            gate.await()
+            dto("s-1", chordToken = "ctrl+x")
+        }
+        val vm = createViewModel()
+        val chord = KeyChord(ctrl = true, key = "x")
+
+        vm.saveShortcut(chord)
+        advanceUntilIdle() // the first save is now suspended inside createShortcut
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        }
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        // Releasing matters more than dropping: a guard that latched would make
+        // this chord permanently unsavable for the life of the ViewModel.
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+        coVerify(exactly = 2) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
+        }
+    }
+
+    @Test
+    fun saveShortcut_differentChordsInFlight_bothReachTheRepository() = runTest {
+        // The guard is keyed on the chord token, not one global flag: a save
+        // still in flight must not swallow a different chord queued behind it.
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
+        val gate = CompletableDeferred<Unit>()
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } coAnswers {
+            gate.await()
+            dto("s-1", chordToken = "ctrl+x")
+        }
+        val vm = createViewModel()
+
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+        vm.saveShortcut(KeyChord(ctrl = true, key = "y"))
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
+        }
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("claude", "ctrl+y", null)
+        }
+    }
+
+    @Test
+    fun saveShortcut_abortedOnUnresolvableKind_releasesTheGuard_soARetryIsNotBlocked() = runTest {
+        // The guard is taken BEFORE the coroutine starts, so the null-kind
+        // abort — which returns without ever reaching createShortcut — has to
+        // release it on the way out too. Otherwise the "session type not known
+        // yet" snackbar would invite a retry it has itself made impossible.
+        coEvery { sessionRepository.listSessions() } throws RuntimeException("offline")
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } returns dto("s-1", chordToken = "ctrl+x")
+        val vm = createViewModel()
+        val chord = KeyChord(ctrl = true, key = "x")
+
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+        coVerify(exactly = 0) {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        }
+
+        // The first sessions.changed snapshot lands and the user taps again.
+        sessionListFlow.value = listOf(session(kind = SessionKind.Claude))
+        vm.saveShortcut(chord)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("claude", "ctrl+x", null)
+        }
     }
 
     @Test
@@ -460,6 +626,9 @@ class TerminalViewModelSavedShortcutsTest {
         advanceUntilIdle()
 
         coVerify(exactly = 1) { shortcutsRepository.deleteShortcut("s-1") }
+        // deleteShortcut reconciles its own cache on success; a second
+        // applyDeleted here would be the ViewModel duplicating that job.
+        verify(exactly = 0) { shortcutsRepository.applyDeleted(any()) }
     }
 
     @Test
@@ -475,5 +644,65 @@ class TerminalViewModelSavedShortcutsTest {
             assertEquals("Failed to remove shortcut", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
+        // A non-API failure says nothing about the row's server-side fate, so
+        // the cache must be left alone rather than optimistically pruned.
+        verify(exactly = 0) { shortcutsRepository.applyDeleted(any()) }
+    }
+
+    @Test
+    fun removeShortcut_serverSaysAlreadyGone403_prunesCacheSilently() = runTest {
+        assertAlreadyGoneIsAbsorbed(code = 403)
+    }
+
+    @Test
+    fun removeShortcut_serverSaysAlreadyGone404_prunesCacheSilently() = runTest {
+        assertAlreadyGoneIsAbsorbed(code = 404)
+    }
+
+    /**
+     * DELETE is not idempotent server-side: the ownership check filters on
+     * `deleted_at IS NULL`, so deleting an already-soft-deleted row answers 403
+     * (404 when the row was never visible). The picker's Saved toggle carries
+     * no in-flight state and stays tappable for the whole round trip, so a
+     * double tap removed the shortcut correctly and then reported a failure —
+     * now straight into the in-sheet snackbar. Ids only ever come from the
+     * user's own cached list, so those two codes can only mean "already gone":
+     * absorb them and reconcile the cache the failed call never got to prune.
+     */
+    private suspend fun TestScope.assertAlreadyGoneIsAbsorbed(code: Int) {
+        coEvery {
+            shortcutsRepository.deleteShortcut(any())
+        } throws ApiException(code, "not the owner of this shortcut")
+        justRun { shortcutsRepository.applyDeleted(any()) }
+        val vm = createViewModel()
+
+        vm.userMessages.test {
+            vm.removeShortcut("s-1")
+            advanceUntilIdle()
+            // Not vacuous: the sibling failure tests await a real message
+            // through this exact shape, so the subscription is live here too.
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        verify(exactly = 1) { shortcutsRepository.applyDeleted("s-1") }
+    }
+
+    @Test
+    fun removeShortcut_apiFailureWithAnotherCode_stillReportsFailure() = runTest {
+        // Only 403/404 are the already-gone signal. A 500 is a real failure and
+        // the row may well still exist — absorbing it would drop the button out
+        // of the UI while the server keeps serving it back on the next refresh.
+        coEvery {
+            shortcutsRepository.deleteShortcut(any())
+        } throws ApiException(500, "internal server error")
+        val vm = createViewModel()
+
+        vm.userMessages.test {
+            vm.removeShortcut("s-1")
+            advanceUntilIdle()
+            assertEquals("Failed to remove shortcut", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+        verify(exactly = 0) { shortcutsRepository.applyDeleted(any()) }
     }
 }
