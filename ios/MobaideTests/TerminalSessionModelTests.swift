@@ -3,32 +3,13 @@ import XCTest
 
 @MainActor
 final class TerminalSessionModelTests: XCTestCase {
-    private struct StubInvalidator: SessionInvalidating {
-        func invalidateUserSession() async {}
-    }
-
-    private struct StubUserToken: UserTokenProviding {
-        func userToken() async -> String? { "user-token" }
-    }
-
     private func makeModel(
         id: String = "s1",
         kind: SessionKind = .claude,
         status: String? = nil,
         factory: FakeWebSocketTransportFactory
     ) -> TerminalSessionModel {
-        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
-        return TerminalSessionModel(
-            sessionId: id,
-            kind: kind,
-            initialStatus: status,
-            webSocketFactory: WebSocketCoreFactory.live(transportFactory: factory, sleeper: RecordingSleeper()),
-            sessionManager: harness.sessionManager,
-            tokenStore: harness.tokenStore,
-            centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubInvalidator()),
-            userTokenProvider: StubUserToken(),
-            foregroundSessionTracker: ForegroundSessionTracker()
-        )
+        TerminalTestSupport.model(sessionId: id, kind: kind, initialStatus: status, transportFactory: factory)
     }
 
     private func connectedModel(
@@ -210,8 +191,8 @@ final class TerminalSessionModelTests: XCTestCase {
             ),
             sessionManager: harness.sessionManager,
             tokenStore: harness.tokenStore,
-            centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubInvalidator()),
-            userTokenProvider: StubUserToken(),
+            centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
+            userTokenProvider: StubUserTokenProvider(),
             foregroundSessionTracker: ForegroundSessionTracker()
         )
         let first = store.model(id: "s1", kind: .claude, initialStatus: nil)

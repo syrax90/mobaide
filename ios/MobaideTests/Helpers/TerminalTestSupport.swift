@@ -25,4 +25,27 @@ enum TerminalTestSupport {
             foregroundSessionTracker: ForegroundSessionTracker()
         )
     }
+
+    static func model(
+        sessionId: String = "s1",
+        kind: SessionKind = .claude,
+        initialStatus: String? = nil,
+        transportFactory: FakeWebSocketTransportFactory = FakeWebSocketTransportFactory(),
+        harness: SessionHarness = SessionHarness(userLoggedIn: true, agentConnected: true)
+    ) -> TerminalSessionModel {
+        TerminalSessionModel(
+            sessionId: sessionId,
+            kind: kind,
+            initialStatus: initialStatus,
+            webSocketFactory: WebSocketCoreFactory.live(
+                transportFactory: transportFactory,
+                sleeper: RecordingSleeper()
+            ),
+            sessionManager: harness.sessionManager,
+            tokenStore: harness.tokenStore,
+            centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
+            userTokenProvider: StubUserTokenProvider(),
+            foregroundSessionTracker: ForegroundSessionTracker()
+        )
+    }
 }
