@@ -143,6 +143,37 @@ class TestUpdateTemplate:
         )
         assert resp.status_code == 403
 
+    async def test_update_racing_delete_raises_not_found(
+        self, app, viewer_user, monkeypatch
+    ):
+        """A delete committing between the update's UPDATE and its readback
+        must surface as not-found (403 at the router), never broadcast the
+        tombstone as ``template.updated``."""
+        db = app.state.db
+        service = app.state.template_service
+        c = _make_user_client(viewer_user["id"])
+        app.state.routing.register_user_client(viewer_user["id"], c)
+
+        row = await service.create_template(viewer_user["id"], "n", "b")
+        c.send_queue.get_nowait()  # drain template.created
+
+        real_get = db.get_template
+
+        async def racing_get(template_id):
+            monkeypatch.setattr(db, "get_template", real_get)
+            await db.soft_delete_template(template_id)
+            return await real_get(template_id)
+
+        monkeypatch.setattr(db, "get_template", racing_get)
+
+        with pytest.raises(ValueError, match="Template not found"):
+            await service.update_template(
+                row["template_id"], viewer_user["id"], is_favorite=True
+            )
+
+        with pytest.raises(asyncio.QueueEmpty):
+            c.send_queue.get_nowait()
+
 
 class TestDeleteTemplate:
     async def test_soft_delete(self, client, app, api_auth_headers):
@@ -228,6 +259,35 @@ class TestTouchTemplate:
             headers=api_auth_headers,
         )
         assert resp.status_code == 403
+
+    async def test_touch_racing_delete_raises_not_found(
+        self, app, viewer_user, monkeypatch
+    ):
+        """A delete committing between touch's UPDATE and its readback must
+        surface as not-found, never broadcast the tombstone as
+        ``template.updated``."""
+        db = app.state.db
+        service = app.state.template_service
+        c = _make_user_client(viewer_user["id"])
+        app.state.routing.register_user_client(viewer_user["id"], c)
+
+        row = await service.create_template(viewer_user["id"], "n", "b")
+        c.send_queue.get_nowait()  # drain template.created
+
+        real_get = db.get_template
+
+        async def racing_get(template_id):
+            monkeypatch.setattr(db, "get_template", real_get)
+            await db.soft_delete_template(template_id)
+            return await real_get(template_id)
+
+        monkeypatch.setattr(db, "get_template", racing_get)
+
+        with pytest.raises(ValueError, match="Template not found"):
+            await service.touch_template(row["template_id"], viewer_user["id"])
+
+        with pytest.raises(asyncio.QueueEmpty):
+            c.send_queue.get_nowait()
 
 
 class TestAdminBlocked:
