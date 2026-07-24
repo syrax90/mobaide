@@ -43,6 +43,7 @@ private struct CreateSessionContent: View {
         }
         .navigationTitle("New Session")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(model.step != .projectSelect)
         .toolbar {
             if model.step != .projectSelect {
                 ToolbarItem(placement: .topBarLeading) {
