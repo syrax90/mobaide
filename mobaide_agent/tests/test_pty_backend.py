@@ -216,16 +216,17 @@ class TestLinuxPtyBackendWrite:
 
 
 class TestTerminalEnv:
-    def test_does_not_export_columns_or_lines(
+    def test_strips_columns_and_lines_from_inherited_and_explicit_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # A static COLUMNS/LINES pins ncurses/readline TUIs at the spawn size
         # (they prefer env over the live winsize), so the spawn env must not
-        # introduce them — the PTY winsize is the single size authority.
-        monkeypatch.delenv("COLUMNS", raising=False)
-        monkeypatch.delenv("LINES", raising=False)
+        # carry them from ANY source — agent-inherited or caller-supplied —
+        # the PTY winsize is the single size authority.
+        monkeypatch.setenv("COLUMNS", "80")
+        monkeypatch.setenv("LINES", "24")
 
-        spawn_env = _terminal_env(None)
+        spawn_env = _terminal_env({"COLUMNS": "132", "LINES": "43"})
 
         assert "COLUMNS" not in spawn_env
         assert "LINES" not in spawn_env

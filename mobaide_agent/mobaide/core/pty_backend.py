@@ -13,14 +13,17 @@ logger = logging.getLogger(__name__)
 def _terminal_env(env: dict[str, str] | None) -> dict[str, str]:
     """Build the spawn environment with TERM set for TUI rendering.
 
-    COLUMNS/LINES are deliberately NOT exported: ncurses (and readline) prefer
-    them over the live TIOCGWINSZ size, so a static value pins every TUI at the
-    spawn dimensions and later client resizes are ignored. The PTY winsize —
-    set before spawn and updated via ``resize()`` — is the single size
-    authority."""
+    COLUMNS/LINES are deliberately stripped — including values inherited from
+    the agent's own environment or supplied by the caller: ncurses (and
+    readline) prefer them over the live TIOCGWINSZ size, so any static value
+    pins every TUI at the spawn dimensions and later client resizes are
+    ignored. The PTY winsize — set before spawn and updated via ``resize()`` —
+    is the single size authority."""
     spawn_env = os.environ.copy()
     if env:
         spawn_env.update(env)
+    spawn_env.pop("COLUMNS", None)
+    spawn_env.pop("LINES", None)
     spawn_env["PYTHONIOENCODING"] = "utf-8"
     spawn_env.setdefault("TERM", "xterm-256color")
     return spawn_env
