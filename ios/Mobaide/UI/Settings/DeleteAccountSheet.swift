@@ -1,5 +1,4 @@
 import AuthenticationServices
-import GoogleSignInSwift
 import SwiftUI
 
 /// Multi-step delete-account sheet (Android `DeleteAccountDialog`): Explain +
@@ -106,11 +105,7 @@ struct DeleteAccountSheet: View {
         if submitting {
             ProgressView().frame(maxWidth: .infinity).padding(.vertical, 8)
         } else {
-            GoogleSignInButton(
-                scheme: colorScheme == .dark ? .dark : .light,
-                style: .wide,
-                state: .normal
-            ) {
+            GoogleSignInButtonView(label: .continue) {
                 Task { await model.startGoogleReauth() }
             }
         }
@@ -131,7 +126,7 @@ struct DeleteAccountSheet: View {
                 model.onAppleCompletion(result)
             }
             .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(height: 44)
+            .providerButtonFrame()
         }
         errorLabel(error)
     }
