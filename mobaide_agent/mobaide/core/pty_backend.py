@@ -10,17 +10,22 @@ from typing import Protocol
 logger = logging.getLogger(__name__)
 
 
-def _terminal_env(env: dict[str, str] | None, rows: int, cols: int) -> dict[str, str]:
-    """Build the spawn environment with TERM/COLUMNS/LINES set so TUIs (Ink,
-    ncurses) render with the correct dimensions instead of falling back to
-    80x24."""
+def _terminal_env(env: dict[str, str] | None) -> dict[str, str]:
+    """Build the spawn environment with TERM set for TUI rendering.
+
+    COLUMNS/LINES are deliberately stripped — including values inherited from
+    the agent's own environment or supplied by the caller: ncurses (and
+    readline) prefer them over the live TIOCGWINSZ size, so any static value
+    pins every TUI at the spawn dimensions and later client resizes are
+    ignored. The PTY winsize — set before spawn and updated via ``resize()`` —
+    is the single size authority."""
     spawn_env = os.environ.copy()
     if env:
         spawn_env.update(env)
+    spawn_env.pop("COLUMNS", None)
+    spawn_env.pop("LINES", None)
     spawn_env["PYTHONIOENCODING"] = "utf-8"
     spawn_env.setdefault("TERM", "xterm-256color")
-    spawn_env["COLUMNS"] = str(cols)
-    spawn_env["LINES"] = str(rows)
     return spawn_env
 
 
@@ -72,7 +77,7 @@ class WindowsPtyBackend:
     ) -> None:
         from winpty import PtyProcess  # type: ignore[import-untyped]
 
-        spawn_env = _terminal_env(env, rows, cols)
+        spawn_env = _terminal_env(env)
 
         self._process = PtyProcess.spawn(
             cmd,
@@ -164,7 +169,16 @@ class LinuxPtyBackend:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
         fcntl.ioctl(master_fd, termios.TIOCSWINSZ, winsize)
 
-        spawn_env = _terminal_env(env, rows, cols)
+        spawn_env = _terminal_env(env)
+
+        # Runs in the forked child after the slave fd is dup'd onto stdin and
+        # after setsid() (start_new_session): adopt the PTY slave as the
+        # controlling terminal. Without TIOCSCTTY the tty has no foreground
+        # process group, so TIOCSWINSZ resizes never deliver SIGWINCH and
+        # TUIs (Claude Code, vim, htop) keep rendering at the spawn size, and
+        # the line discipline cannot generate SIGINT for ^C.
+        def _acquire_controlling_tty() -> None:
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
         self._process = subprocess.Popen(
             cmd,
@@ -174,6 +188,7 @@ class LinuxPtyBackend:
             cwd=cwd,
             env=spawn_env,
             start_new_session=True,
+            preexec_fn=_acquire_controlling_tty,
             close_fds=True,
         )
 

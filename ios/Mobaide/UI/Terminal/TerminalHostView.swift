@@ -64,6 +64,37 @@ final class MobaideTerminalView: TerminalView {
         }
         return nil
     }
+
+    /// Disables SwiftTerm's own gesture recognizers that would steal touches
+    /// from the app's surfaces, keeping the `mobaide.*` taps and the scroll
+    /// views' own pans intact:
+    /// - double/triple-tap and long-press start text selection, hijacking the
+    ///   Static-mode horizontal pan into a selection drag;
+    /// - the plain `UIPanGestureRecognizer` SwiftTerm adds while a TUI has
+    ///   mouse reporting enabled (Claude Code uses any-event tracking) sends
+    ///   button-drag mouse events the TUIs ignore, and being on the deeper
+    ///   view it swallows every drag — killing both the horizontal pan and
+    ///   vertical scrollback. The exact-class check keeps
+    ///   `UIScrollViewPanGestureRecognizer` (the scrollback driver) alive.
+    func neutralizeSwiftTermGestures() {
+        for recognizer in gestureRecognizers ?? [] where recognizer.name?.hasPrefix("mobaide.") != true {
+            if recognizer is UILongPressGestureRecognizer {
+                recognizer.isEnabled = false
+            } else if let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired >= 2 {
+                recognizer.isEnabled = false
+            } else if type(of: recognizer) == UIPanGestureRecognizer.self, recognizer !== panGestureRecognizer {
+                recognizer.isEnabled = false
+            }
+        }
+    }
+
+    /// SwiftTerm adds its mouse-reporting pan lazily when the TUI turns mouse
+    /// mode on (which can happen at any time, e.g. during replay), so the
+    /// neutralization sweep must re-run on every mouse-mode transition.
+    override func mouseModeChanged(source: Terminal) {
+        super.mouseModeChanged(source: source)
+        neutralizeSwiftTermGestures()
+    }
 }
 
 /// Bridges the retained `MobaideTerminalView` into SwiftUI, wrapped in a
@@ -90,6 +121,17 @@ struct TerminalHostView: UIViewRepresentable {
         uiView.displayConfig = displayConfig
     }
 
+    /// SwiftUI does not guarantee the outgoing wrapper is dismantled before
+    /// the next screen's `makeUIView` runs, so the detach is guarded: only the
+    /// wrapper that still owns the shared terminal view releases it — a newer
+    /// wrapper that already stole it (UIKit's `addSubview` re-parents
+    /// atomically) is left untouched.
+    static func dismantleUIView(_ uiView: TerminalPanScrollView, coordinator: Coordinator) {
+        if uiView.terminalView.superview === uiView {
+            uiView.terminalView.removeFromSuperview()
+        }
+    }
+
     @MainActor
     final class Coordinator: NSObject, @MainActor TerminalViewDelegate {
         private let model: TerminalSessionModel
@@ -98,8 +140,15 @@ struct TerminalHostView: UIViewRepresentable {
             self.model = model
         }
 
+        /// The recognizers live on the retained terminal view but each screen
+        /// visit brings a fresh Coordinator, and a UIGestureRecognizer retains
+        /// its target — so stale `mobaide.*` recognizers are replaced instead
+        /// of kept, both re-targeting the callbacks and releasing the previous
+        /// visit's Coordinator.
         func attachGestures(to view: MobaideTerminalView) {
-            guard view.gestureRecognizers?.contains(where: { $0.name == "mobaide.rowTap" }) != true else { return }
+            for recognizer in view.gestureRecognizers ?? [] where recognizer.name?.hasPrefix("mobaide.") == true {
+                view.removeGestureRecognizer(recognizer)
+            }
             let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
             doubleTap.numberOfTapsRequired = 2
             doubleTap.name = "mobaide.rowDoubleTap"
@@ -109,22 +158,7 @@ struct TerminalHostView: UIViewRepresentable {
             singleTap.require(toFail: doubleTap)
             view.addGestureRecognizer(doubleTap)
             view.addGestureRecognizer(singleTap)
-            Self.disableSelectionGestures(on: view)
-        }
-
-        /// SwiftTerm activates an any-direction selection pan lazily from its own
-        /// double-tap, triple-tap, and long-press. Disabling those keeps a
-        /// horizontal pan from being hijacked into text selection; input is
-        /// driven by the InputBar and row taps, so terminal-side selection is
-        /// unused. The app's own `mobaide.*` taps are left intact.
-        private static func disableSelectionGestures(on view: MobaideTerminalView) {
-            for recognizer in view.gestureRecognizers ?? [] where recognizer.name?.hasPrefix("mobaide.") != true {
-                if recognizer is UILongPressGestureRecognizer {
-                    recognizer.isEnabled = false
-                } else if let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired >= 2 {
-                    recognizer.isEnabled = false
-                }
-            }
+            view.neutralizeSwiftTermGestures()
         }
 
         @objc private func handleSingleTap(_ gesture: UITapGestureRecognizer) {

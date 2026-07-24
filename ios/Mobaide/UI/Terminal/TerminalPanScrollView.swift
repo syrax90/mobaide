@@ -14,7 +14,11 @@ final class TerminalPanScrollView: UIScrollView {
 
     var displayConfig: TerminalDisplayConfig {
         didSet {
-            guard displayConfig != oldValue else { return }
+            // Re-applied unconditionally (Android `AndroidView(update:)` parity):
+            // layout is idempotent via its own frame/contentSize equality
+            // checks, and an equality guard here would turn a dropped layout
+            // pass (zero-bounds early-out, stale wrapper) into a permanently
+            // missed mode change.
             alwaysBounceHorizontal = displayConfig.mode == .static
             setNeedsLayout()
         }
@@ -39,6 +43,10 @@ final class TerminalPanScrollView: UIScrollView {
 
         terminalView.showsHorizontalScrollIndicator = false
         terminalView.contentInsetAdjustmentBehavior = .never
+        // Nested UIScrollView pans recognize simultaneously; directional lock
+        // on the inner keeps an outer-claimed horizontal pan from also
+        // jiggling the scrollback vertically on near-diagonal drags.
+        terminalView.isDirectionalLockEnabled = true
 
         addSubview(terminalView)
     }
@@ -51,6 +59,10 @@ final class TerminalPanScrollView: UIScrollView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let viewport = bounds.size
+        // SwiftUI can keep an outgoing wrapper alive (and laying out) while
+        // the next screen's wrapper has already re-parented the shared
+        // terminal view; only the current owner may write its geometry.
+        guard terminalView.superview === self else { return }
         guard viewport.width > 0, viewport.height > 0 else { return }
 
         let targetWidth: CGFloat
@@ -74,19 +86,40 @@ final class TerminalPanScrollView: UIScrollView {
         }
     }
 
+    /// Direction decision for the Static-mode horizontal pan, mirroring
+    /// Android `TerminalHorizontalScrollView.onInterceptTouchEvent`
+    /// (intercept iff dx > dy — ties yield to the terminal). Velocity is the
+    /// primary sample: a UIScrollView pan can attempt to begin with a still
+    /// zero translation, which a translation-only check misreads as a
+    /// vertical tie and refuses — killing the pan for that whole touch.
+    /// Translation is the fallback sample; when both are zero the touch is a
+    /// stationary tap-to-stop, which must claim the pan only while a fling is
+    /// being caught (`isDecelerating`).
+    static func shouldClaimHorizontalPan(
+        velocity: CGPoint,
+        translation: CGPoint,
+        isDecelerating: Bool
+    ) -> Bool {
+        let sample = velocity != .zero ? velocity : translation
+        if sample == .zero { return isDecelerating }
+        return abs(sample.x) > abs(sample.y)
+    }
+
     /// Direction-aware arbitration so vertical scrollback still reaches the
     /// inner SwiftTerm view. `isDirectionalLockEnabled` only constrains this
     /// scroll view's own axis *after* its pan has begun; it does not stop a
     /// vertically dominant drag (with slight horizontal drift) from starting the
-    /// horizontal pan and cancelling the terminal's vertical scroll. So in
-    /// Static mode claim the pan only for *strictly* horizontally dominant drags
-    /// and let vertical ones — including the exact-diagonal tie — fall through to
-    /// SwiftTerm, mirroring Android
-    /// `TerminalHorizontalScrollView.onInterceptTouchEvent` (intercept iff dx > dy).
+    /// horizontal pan and cancelling the terminal's vertical scroll. A refused
+    /// pan stays refused for the rest of the touch sequence, so the per-touch
+    /// decision is itself the Android-style latch.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         if displayConfig.mode == .static, gestureRecognizer === panGestureRecognizer {
-            let translation = panGestureRecognizer.translation(in: self)
-            if abs(translation.y) >= abs(translation.x) {
+            let claims = Self.shouldClaimHorizontalPan(
+                velocity: panGestureRecognizer.velocity(in: self),
+                translation: panGestureRecognizer.translation(in: self),
+                isDecelerating: isDecelerating
+            )
+            if !claims {
                 return false
             }
         }
