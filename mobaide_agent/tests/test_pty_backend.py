@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from unittest.mock import Mock, patch
 
@@ -9,6 +10,7 @@ import pytest
 from mobaide.core.pty_backend import (
     LinuxPtyBackend,
     WindowsPtyBackend,
+    _terminal_env,
     create_pty_backend,
 )
 from tests.conftest import IS_WINDOWS, default_shell, skip_if_not_linux
@@ -211,3 +213,119 @@ class TestLinuxPtyBackendWrite:
         msg = warnings[0].getMessage()
         assert "bytes_written=0" in msg
         assert f"expected={len(data)}" in msg
+
+
+class TestTerminalEnv:
+    def test_does_not_export_columns_or_lines(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A static COLUMNS/LINES pins ncurses/readline TUIs at the spawn size
+        # (they prefer env over the live winsize), so the spawn env must not
+        # introduce them — the PTY winsize is the single size authority.
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.delenv("LINES", raising=False)
+
+        spawn_env = _terminal_env(None)
+
+        assert "COLUMNS" not in spawn_env
+        assert "LINES" not in spawn_env
+
+    def test_term_defaults_when_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("TERM", raising=False)
+        assert _terminal_env(None)["TERM"] == "xterm-256color"
+
+    def test_explicit_env_overrides_inherited_and_term_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MOBAIDE_TEST_INHERITED", "parent")
+
+        spawn_env = _terminal_env(
+            {"TERM": "screen-256color", "MOBAIDE_TEST_INHERITED": "explicit"}
+        )
+
+        assert spawn_env["TERM"] == "screen-256color"
+        assert spawn_env["MOBAIDE_TEST_INHERITED"] == "explicit"
+
+    def test_forces_utf8_io_encoding(self) -> None:
+        assert _terminal_env({"PYTHONIOENCODING": "latin-1"})["PYTHONIOENCODING"] == "utf-8"
+
+
+@skip_if_not_linux
+@pytest.mark.timeout(15)
+class TestLinuxPtyControllingTerminal:
+    """The spawned child must own the PTY slave as its controlling terminal.
+
+    ``start_new_session=True`` alone detaches the child from any tty; without
+    the ``TIOCSCTTY`` preexec_fn the tty has no foreground process group, so
+    ``resize()``'s ``TIOCSWINSZ`` updates the winsize but SIGWINCH is never
+    delivered and TUIs keep rendering at their spawn size forever.
+    """
+
+    def _spawn_python(self, code: str) -> LinuxPtyBackend:
+        backend = LinuxPtyBackend()
+        backend.spawn(
+            [sys.executable, "-u", "-c", code], cwd=None, env=None, rows=24, cols=80
+        )
+        return backend
+
+    def _read_until(
+        self, backend: LinuxPtyBackend, marker: bytes, timeout: float = 10.0
+    ) -> bytes:
+        output = b""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            data = backend.read(4096)
+            if data:
+                output += data
+            if marker in output:
+                break
+            time.sleep(0.05)
+        return output
+
+    def test_child_acquires_controlling_tty(self) -> None:
+        # /dev/tty resolves only through a controlling terminal — the open
+        # fails with ENXIO for a session leader that never took one.
+        code = (
+            "import os\n"
+            "try:\n"
+            "    os.close(os.open('/dev/tty', os.O_RDWR))\n"
+            "    print('CTTY_OK')\n"
+            "except OSError as exc:\n"
+            "    print(f'CTTY_FAIL {exc}')\n"
+        )
+        backend = self._spawn_python(code)
+        try:
+            output = self._read_until(backend, b"CTTY_")
+            assert b"CTTY_OK" in output, (
+                f"child has no controlling terminal; output: {output!r}"
+            )
+        finally:
+            backend.terminate(force=True)
+            backend.close()
+
+    def test_resize_delivers_sigwinch(self) -> None:
+        code = (
+            "import signal, time\n"
+            "signal.signal(\n"
+            "    signal.SIGWINCH, lambda *_: print('GOT_WINCH', flush=True)\n"
+            ")\n"
+            "print('READY', flush=True)\n"
+            "time.sleep(30)\n"
+        )
+        backend = self._spawn_python(code)
+        try:
+            ready = self._read_until(backend, b"READY")
+            assert b"READY" in ready, f"child never signalled readiness: {ready!r}"
+
+            backend.resize(40, 132)
+
+            output = self._read_until(backend, b"GOT_WINCH")
+            assert b"GOT_WINCH" in output, (
+                "TIOCSWINSZ did not deliver SIGWINCH to the child — the PTY "
+                f"slave is not its controlling terminal; output: {output!r}"
+            )
+        finally:
+            backend.terminate(force=True)
+            backend.close()
