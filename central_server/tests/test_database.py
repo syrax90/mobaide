@@ -1641,3 +1641,67 @@ class TestUserShortcuts:
 
         assert await db.soft_delete_user_shortcut(row["shortcut_id"]) is not None
         assert await db.soft_delete_user_shortcut(row["shortcut_id"]) is None
+
+
+class TestPromptTemplates:
+    """DB-layer readback guard for prompt templates: a soft-delete landing
+    between a mutation's commit and its unfiltered readback must surface as
+    ``None`` (gone), never the tombstone row — otherwise the service
+    rebroadcasts the deleted template as ``template.updated`` and resurrects
+    it on every device."""
+
+    async def test_update_template_racing_delete_at_readback_returns_none(
+        self, db: Database, monkeypatch
+    ):
+        owner = await _create_test_user(db)
+        row = await db.create_template(owner, "orig", "body")
+
+        real_get = db.get_template
+
+        async def racing_get(template_id):
+            monkeypatch.setattr(db, "get_template", real_get)
+            await db.soft_delete_template(template_id)
+            return await real_get(template_id)
+
+        monkeypatch.setattr(db, "get_template", racing_get)
+
+        result = await db.update_template(row["template_id"], name="New")
+
+        assert result is None
+        persisted = await db.get_template(row["template_id"])
+        assert persisted is not None
+        assert persisted["deleted_at"] is not None
+
+    async def test_touch_template_racing_delete_at_readback_returns_none(
+        self, db: Database, monkeypatch
+    ):
+        owner = await _create_test_user(db)
+        row = await db.create_template(owner, "orig", "body")
+
+        real_get = db.get_template
+
+        async def racing_get(template_id):
+            monkeypatch.setattr(db, "get_template", real_get)
+            await db.soft_delete_template(template_id)
+            return await real_get(template_id)
+
+        monkeypatch.setattr(db, "get_template", racing_get)
+
+        result = await db.touch_template(row["template_id"])
+
+        assert result is None
+        persisted = await db.get_template(row["template_id"])
+        assert persisted is not None
+        assert persisted["deleted_at"] is not None
+
+    async def test_update_template_no_fields_on_deleted_row_returns_none(
+        self, db: Database
+    ):
+        """The all-None PATCH path reads the row back without mutating it; on
+        an already-tombstoned row it must report ``None``, not the tombstone
+        dict (pre-fix the unfiltered readback returned the deleted row)."""
+        owner = await _create_test_user(db)
+        row = await db.create_template(owner, "orig", "body")
+        await db.soft_delete_template(row["template_id"])
+
+        assert await db.update_template(row["template_id"]) is None

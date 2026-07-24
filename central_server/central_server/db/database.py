@@ -995,6 +995,20 @@ class Database:
         row = await cursor.fetchone()
         return self._row_to_template(row) if row else None
 
+    async def _live_template_or_none(self, template_id: str) -> dict | None:
+        """Read a template back after a mutation, treating a tombstone as absent.
+
+        ``get_template`` has no ``deleted_at`` filter, so a soft-delete landing
+        between a guarded UPDATE's commit and this readback would otherwise let
+        the service broadcast a deleted row as ``template.updated`` —
+        resurrecting it on every connected device. Returning ``None`` makes
+        callers treat the template as gone.
+        """
+        row = await self.get_template(template_id)
+        if row is None or row["deleted_at"] is not None:
+            return None
+        return row
+
     async def list_templates_for_user(self, user_id: str) -> list[dict]:
         cursor = await self.conn.execute(
             f"SELECT {self._TEMPLATE_COLUMNS} "
@@ -1039,7 +1053,7 @@ class Database:
             sets.append("is_favorite = ?")
             params.append(1 if is_favorite else 0)
         if not sets:
-            return await self.get_template(template_id)
+            return await self._live_template_or_none(template_id)
         sets.append("updated_at = ?")
         params.append(_now_iso())
         sets.append("version = version + 1")
@@ -1052,7 +1066,7 @@ class Database:
         await self.conn.commit()
         if cursor.rowcount != 1:
             return None
-        return await self.get_template(template_id)
+        return await self._live_template_or_none(template_id)
 
     async def soft_delete_template(self, template_id: str) -> dict | None:
         """Mark a template as deleted. Returns the tombstone row (with
@@ -1084,7 +1098,7 @@ class Database:
         await self.conn.commit()
         if cursor.rowcount != 1:
             return None
-        return await self.get_template(template_id)
+        return await self._live_template_or_none(template_id)
 
     _SHORTCUT_COLUMNS = (
         "shortcut_id, owner_user_id, kind, chord_token, name, position, "
