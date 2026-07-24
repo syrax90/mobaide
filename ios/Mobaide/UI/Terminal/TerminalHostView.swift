@@ -21,6 +21,20 @@ final class MobaideTerminalView: TerminalView {
         font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
     }
 
+    /// SwiftTerm's per-cell dimensions. The caret is exactly one cell, so its
+    /// frame exposes SwiftTerm's internal `cellDimension` precisely — letting a
+    /// fixed column count map to an exact pixel width with no font-metric
+    /// guessing. Falls back to SwiftTerm's own pixel-snapped `"W"` measurement
+    /// only in the rare window before the caret view exists.
+    var cellSize: CGSize {
+        let caret = caretFrame.size
+        if caret.width >= 1, caret.height >= 1 { return caret }
+        let measured = ("W" as NSString).size(withAttributes: [.font: font])
+        let scale = UIScreen.main.scale
+        let snap = { (value: CGFloat) in max(1, ceil(value * scale) / scale) }
+        return CGSize(width: snap(measured.width), height: snap(measured.height))
+    }
+
     /// Resolves a tap point (in this view's content coordinates) to a prompt
     /// row's command text and whether that row holds the current input. Returns
     /// nil for rows without a recognizable prompt prefix so taps on plain
@@ -52,25 +66,29 @@ final class MobaideTerminalView: TerminalView {
     }
 }
 
-/// Bridges the retained `MobaideTerminalView` into SwiftUI. `makeUIView`
-/// returns the model-owned instance (never a fresh one) so the emulator state
+/// Bridges the retained `MobaideTerminalView` into SwiftUI, wrapped in a
+/// `TerminalPanScrollView` that applies the Full/Static display mode. The
+/// terminal instance is model-owned (never a fresh one) so emulator state
 /// persists across view recreation; the coordinator forwards the SwiftTerm
 /// delegate callbacks into the model.
 struct TerminalHostView: UIViewRepresentable {
     let model: TerminalSessionModel
+    let displayConfig: TerminalDisplayConfig
 
     func makeCoordinator() -> Coordinator {
         Coordinator(model: model)
     }
 
-    func makeUIView(context: Context) -> MobaideTerminalView {
-        let view = model.terminalView
-        view.terminalDelegate = context.coordinator
-        context.coordinator.attachGestures(to: view)
-        return view
+    func makeUIView(context: Context) -> TerminalPanScrollView {
+        let terminal = model.terminalView
+        terminal.terminalDelegate = context.coordinator
+        context.coordinator.attachGestures(to: terminal)
+        return TerminalPanScrollView(terminalView: terminal, displayConfig: displayConfig)
     }
 
-    func updateUIView(_ uiView: MobaideTerminalView, context: Context) {}
+    func updateUIView(_ uiView: TerminalPanScrollView, context: Context) {
+        uiView.displayConfig = displayConfig
+    }
 
     @MainActor
     final class Coordinator: NSObject, @MainActor TerminalViewDelegate {
@@ -84,12 +102,29 @@ struct TerminalHostView: UIViewRepresentable {
             guard view.gestureRecognizers?.contains(where: { $0.name == "mobaide.rowTap" }) != true else { return }
             let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
             doubleTap.numberOfTapsRequired = 2
+            doubleTap.name = "mobaide.rowDoubleTap"
             let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap(_:)))
             singleTap.numberOfTapsRequired = 1
             singleTap.name = "mobaide.rowTap"
             singleTap.require(toFail: doubleTap)
             view.addGestureRecognizer(doubleTap)
             view.addGestureRecognizer(singleTap)
+            Self.disableSelectionGestures(on: view)
+        }
+
+        /// SwiftTerm activates an any-direction selection pan lazily from its own
+        /// double-tap, triple-tap, and long-press. Disabling those keeps a
+        /// horizontal pan from being hijacked into text selection; input is
+        /// driven by the InputBar and row taps, so terminal-side selection is
+        /// unused. The app's own `mobaide.*` taps are left intact.
+        private static func disableSelectionGestures(on view: MobaideTerminalView) {
+            for recognizer in view.gestureRecognizers ?? [] where recognizer.name?.hasPrefix("mobaide.") != true {
+                if recognizer is UILongPressGestureRecognizer {
+                    recognizer.isEnabled = false
+                } else if let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired >= 2 {
+                    recognizer.isEnabled = false
+                }
+            }
         }
 
         @objc private func handleSingleTap(_ gesture: UITapGestureRecognizer) {

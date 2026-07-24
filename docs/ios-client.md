@@ -47,10 +47,15 @@ launch-time version gate (`VersionGateRepository.probe()` on
 `AppContainer.start()` and on scene-foreground, driving the enhanced
 `IncompatibleServerScreen` takeover with App Store + "What changed" links).
 The account-deletion grace banner mounts on the authenticated agents list.
-As part of the App Store redesign, iOS-08 **drops** the Android
-`terminal_display_mode` / `terminal_static_columns` preferences (the
-forced-columns workaround iOS-04 already abandoned) — an intentional
-divergence from Android's `PreferencesStore`. The remote-agent-outdated
+Reversing the iOS-04/iOS-08 decision, the Android `terminal_display_mode` /
+`terminal_static_columns` preferences are re-added, restoring cross-platform
+parity: a global Settings → Terminal display toggle between **Full Screen**
+(columns auto-fit the viewport and reflow) and **Static** (a fixed column
+count — default 120, adjustable 60–240 in steps of 10 — rendered wider than
+the viewport and panned horizontally), persisted locally in `UserDefaults`
+(default Static/120) and applied live to the SwiftTerm surface; since
+SwiftTerm has no forced-columns API, Static wraps the terminal in a
+horizontal-pan `TerminalPanScrollView`. The remote-agent-outdated
 banner and the optional iTunes-lookup app-update nudge are deferred (CLA-120).
 CLA-105 adds local notifications for session attention (iOS-09): an
 `AttentionCoordinator` subscribes to the `AgentEventBus` and posts a
