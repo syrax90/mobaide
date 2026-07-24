@@ -99,6 +99,8 @@ ios/
 │                                 #   (+ swift-argument-parser transitively; Package.resolved committed)
 ├── Mobaide/
 │   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel
+│   ├── Assets.xcassets/          # AppIcon — single 1024×1024 opaque icon (iOS 17 needs no smaller
+│   │                             # sizes); wired via ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
 │   ├── Core/Concurrency/         # Broadcaster (StateFlow/SharedFlow replay parity)
 │   ├── Core/Protocol/            # TerminalFrame, JSONValue, WireJSON, ProtocolVersion
 │   ├── Core/Networking/          # WebSocketCore, NWWebSocketTransport, RelayRouting,
