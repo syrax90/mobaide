@@ -22,6 +22,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -38,6 +39,10 @@ import org.junit.Test
  *    only the final dimensions are transmitted.
  * 3. After the debounce delay, a single 'r' (resize) frame is sent via
  *    the sendChannel → connection.sendBinary path.
+ * 4. On every entry into ConnectionState.Live, the cached size is force
+ *    re-asserted (bypassing the debounce and dedupe) so a PTY left at its
+ *    24x80 spawn default is corrected even when the measuring layout pass
+ *    settled before the socket connected. Mirrors iOS resendCachedSize().
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelResizeTest {
@@ -192,5 +197,109 @@ class TerminalViewModelResizeTest {
 
         val second = TerminalProtocol.encodeResize(24, 120)
         verify(exactly = 1) { connection.sendBinary(second) }
+    }
+
+    @Test
+    fun enterLive_reAssertsCachedSize_evenWithoutPostConnectResize() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        // A layout pass measured the grid before the socket connected. The
+        // debounced frame is still pending — virtual time is never advanced past
+        // the 100ms delay — modelling the race where that pre-connect frame is
+        // dropped by the transport in production.
+        vm.resize(40, 100)
+
+        // Socket becomes Live: enterLiveState() must force the cached size out.
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+
+        // resendCachedSize() is the only thing that could have sent this frame by
+        // now — the debounce has not fired — so its arrival proves the connect-time
+        // re-assert, not the layout debounce, delivered the size.
+        val expected = TerminalProtocol.encodeResize(40, 100)
+        verify(timeout = 2000) { connection.sendBinary(expected) }
+    }
+
+    @Test
+    fun enterLive_forceResendBypassesDedupe_reEmitsSameSize() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        // The size settles and is delivered once, so the cache now equals the
+        // frame already on the wire — resize()'s dedupe would suppress re-sending it.
+        vm.resize(24, 80)
+        advanceTimeBy(200)
+        runCurrent()
+
+        // Connecting force-re-sends the cached size regardless of the dedupe,
+        // because a freshly (re)spawned PTY is back at its 24x80 default.
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+
+        // Debounce sent it once; the connect-time resend sends it again → >= 2.
+        val expected = TerminalProtocol.encodeResize(24, 80)
+        verify(atLeast = 2, timeout = 2000) { connection.sendBinary(expected) }
+    }
+
+    @Test
+    fun enterLive_noSizeMeasuredYet_sendsNoFrame() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        // connect-before-layout: no resize() has run, so lastResize{Rows,Cols}
+        // are still the -1 sentinel and resendCachedSize() must no-op rather than
+        // push a bogus grid.
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+
+        verify(exactly = 0) { connection.sendBinary(any()) }
+    }
+
+    @Test
+    fun reconnect_reAssertsCachedSize_onEveryLiveEntry() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        vm.resize(24, 80)
+        advanceTimeBy(200)
+        runCurrent()
+
+        val expected = TerminalProtocol.encodeResize(24, 80)
+
+        // First connect: the debounced frame plus one connect-time resend.
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        verify(atLeast = 2, timeout = 2000) { connection.sendBinary(expected) }
+
+        // Drop, then reconnect: the PTY a reconnect finds auto-created at 24x80
+        // must be re-corrected, so entering Live again emits a further resend.
+        eventsFlow.emit(WsEvent.Disconnected)
+        runCurrent()
+        eventsFlow.emit(WsEvent.Connected)
+        runCurrent()
+        verify(atLeast = 3, timeout = 2000) { connection.sendBinary(expected) }
+    }
+
+    @Test
+    fun binaryUpgrade_missedConnected_reAssertsCachedSize() = runTest(testDispatcher) {
+        val vm = createViewModel()
+        runCurrent()
+
+        vm.resize(50, 120)
+        advanceTimeBy(200)
+        runCurrent()
+
+        // No WsEvent.Connected arrives: inbound data lands while still Reconnecting,
+        // so handleBinary()'s safety upgrade is the sole path into Live. It reaches
+        // the same enterLiveState() choke point and must re-assert the cached size.
+        val outputFrame = byteArrayOf(TerminalProtocol.TYPE_OUTPUT)
+            .plus("x".toByteArray())
+            .toByteString()
+        eventsFlow.emit(WsEvent.Binary(outputFrame))
+        runCurrent()
+
+        val expected = TerminalProtocol.encodeResize(50, 120)
+        verify(atLeast = 2, timeout = 2000) { connection.sendBinary(expected) }
     }
 }
