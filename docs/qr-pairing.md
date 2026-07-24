@@ -178,6 +178,21 @@ is no longer sufficient to claim ownership from another account. The
 current owning account must explicitly release the agent before a
 different account can acquire it.
 
+### Mobile device registry
+
+The `mobile_device_id` registry (the `mobile_devices` table) is
+**last-login-wins**, unlike agent ownership above. A claim or token mint
+from an authenticated account always moves the device row to the caller:
+the caller proves account access (user JWT) plus device possession (the
+per-install random UUID is never exposed to other users). The handover
+revokes every live refresh token previously issued for that device and
+clears its push registration, so the prior account can neither refresh
+its mobile sessions nor keep receiving notifications on hardware it no
+longer uses. This is what lets one phone switch between accounts (or a
+factory-reset/hand-me-down device re-register) without any manual
+release step — agents themselves still require the explicit release
+described above.
+
 ## Operator runbook
 
 ### First install

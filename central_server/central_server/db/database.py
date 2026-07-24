@@ -1872,32 +1872,43 @@ class Database:
         user_id: str,
         name: str | None = None,
         platform: str | None = None,
-    ) -> bool:
-        """Register a device on first sight, or refresh/reassign its row.
+    ) -> str | None:
+        """Register a device on first sight, or refresh/hand over its row.
 
-        Returns ``True`` when the row was inserted, updated, or reassigned
-        to ``user_id``; ``False`` only when ``device_id`` is held by a
-        different user *and still has a live session* (a non-revoked,
-        non-expired refresh token) — the caller maps that to HTTP 409.
+        Returns the previous owner's ``user_id`` when the call moved the
+        device from a different user (a handover), else ``None``. The
+        call always succeeds.
 
         ``mobile_device_id`` is a stable per-install UUID that survives
-        sign-out, so the same phone legitimately re-pairs under a new
-        account once the prior account stops using it (its agent is
-        deleted, the device is revoked, or all its sessions expire). Such
-        an idle device is reassigned to the new owner; a device with a live
-        refresh token stays protected so one user cannot seize another's
-        actively-paired device by submitting its id. The release test is
-        "no live token anywhere on the device" — fail-closed.
+        sign-out, so a phone re-registers under whichever account is
+        currently signed in. Ownership is last-login-wins: the caller
+        proves account access (a valid user JWT) and device possession
+        (the per-install 122-bit random UUID is never exposed to other
+        users), so an authenticated claim always takes the device over.
+        The handover revokes every live refresh token on the device and
+        wipes its push registration, so the previous account can neither
+        refresh its mobile sessions nor keep alerting hardware it no
+        longer uses. Already-issued access JWTs stay valid until they
+        need a refresh — the same soft-sign-out semantics as an explicit
+        device revoke (see ``devices/router.py``).
 
-        Re-pairing a previously revoked device under the same owner clears
-        ``revoked_at`` — possession of a valid user JWT proves account
-        control (Bitwarden semantics).
+        Re-registering a previously revoked device under the same owner
+        clears ``revoked_at`` — possession of a valid user JWT proves
+        account control (Bitwarden semantics).
+
+        Concurrency: a competing claim by another user can interleave
+        between this handover and the caller's subsequent refresh-token
+        mint, leaving one account briefly holding a live token for a row
+        owned by another. Benign under last-login-wins — the next mint
+        flips the row again — so no locking is added, matching the rest
+        of the DB layer.
         """
         now = _now_iso()
-        # The WHERE clause on the ON CONFLICT branch is the cross-tenant
-        # guard: an existing row owned by a different user causes the
-        # UPDATE to be skipped, the INSERT is abandoned (PK conflict
-        # already triggered the ON CONFLICT path), and rowcount stays 0.
+        # The WHERE clause on the ON CONFLICT branch restricts the
+        # in-place update to the current owner: an existing row owned by
+        # a different user causes the UPDATE to be skipped, the INSERT is
+        # abandoned (PK conflict already triggered the ON CONFLICT path),
+        # and rowcount stays 0 — routing that case to the handover below.
         # See SQLite UPSERT spec — https://sqlite.org/lang_upsert.html.
         cursor = await self.conn.execute(
             "INSERT INTO mobile_devices "
@@ -1914,37 +1925,33 @@ class Database:
         )
         await self.conn.commit()
         if cursor.rowcount == 1:
-            return True
+            return None
         # rowcount 0: the ON CONFLICT update was skipped because the row
-        # belongs to a different user (cross-tenant guard), or the row
-        # already matched our state. Disambiguate.
+        # belongs to a different user, or the row already matched our
+        # state. Disambiguate.
         cursor = await self.conn.execute(
             "SELECT user_id FROM mobile_devices WHERE device_id = ?",
             (device_id,),
         )
         row = await cursor.fetchone()
         if row is None or row["user_id"] == user_id:
-            return True
-        # Different user: reassign only while the device holds no live
-        # refresh token (idle ⇒ the prior account no longer uses it). One
-        # conditional UPDATE keeps the liveness check and the write atomic;
-        # an in-use device is left untouched and the caller gets a 409.
-        # The push token is cleared so the new owner's account can never
-        # keep alerting the prior owner's APNs registration.
-        reassigned = await self.conn.execute(
+            return None
+        previous_owner = row["user_id"]
+        # Different user: hand the device over. The token revoke and the
+        # owner flip share one commit. The push token is cleared so the
+        # new owner's account can never keep alerting the prior owner's
+        # APNs registration.
+        await self._revoke_live_refresh_tokens(device_id, now)
+        await self.conn.execute(
             "UPDATE mobile_devices SET "
             "    user_id = ?, name = ?, created_at = ?, last_seen_at = ?, "
             "    revoked_at = NULL, platform = COALESCE(?, platform), "
             "    push_token = NULL, push_environment = NULL "
-            "WHERE device_id = ? AND NOT EXISTS ("
-            "    SELECT 1 FROM mobile_refresh_tokens "
-            "    WHERE mobile_device_id = ? "
-            "      AND revoked_at IS NULL AND expires_at > ?"
-            ")",
-            (user_id, name, now, now, platform, device_id, device_id, now),
+            "WHERE device_id = ?",
+            (user_id, name, now, now, platform, device_id),
         )
         await self.conn.commit()
-        return reassigned.rowcount == 1
+        return previous_owner
 
     async def list_user_devices(self, user_id: str) -> list[dict]:
         """Active devices for a user, most-recently-seen first."""
@@ -2045,16 +2052,24 @@ class Database:
         )
         await self.conn.commit()
 
-    async def revoke_all_refresh_tokens_for_device(self, device_id: str) -> int:
-        """Revoke every active refresh token for the given device across all
-        agents. Returns rowcount."""
+    async def _revoke_live_refresh_tokens(
+        self, device_id: str, now: str
+    ) -> int:
+        """Mark every live refresh token for the device revoked, without
+        committing — callers group the write into their own commit."""
         cursor = await self.conn.execute(
             "UPDATE mobile_refresh_tokens SET revoked_at = ? "
             "WHERE mobile_device_id = ? AND revoked_at IS NULL",
-            (_now_iso(), device_id),
+            (now, device_id),
         )
-        await self.conn.commit()
         return cursor.rowcount
+
+    async def revoke_all_refresh_tokens_for_device(self, device_id: str) -> int:
+        """Revoke every active refresh token for the given device across all
+        agents. Returns rowcount."""
+        count = await self._revoke_live_refresh_tokens(device_id, _now_iso())
+        await self.conn.commit()
+        return count
 
     async def store_refresh_token(
         self,

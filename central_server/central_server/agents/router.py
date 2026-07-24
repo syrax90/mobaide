@@ -101,16 +101,18 @@ async def get_mobile_tokens(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not the owner of this agent",
         )
-    accepted = await db.upsert_mobile_device(
+    previous_owner = await db.upsert_mobile_device(
         device_id=body.mobile_device_id,
         user_id=user.sub,
         name=body.mobile_device_name,
         platform=body.platform,
     )
-    if not accepted:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="mobile_device_id is already registered to a different user",
+    if previous_owner is not None:
+        logger.info(
+            "mobile_device.handover device_id=%s from_user=%s to_user=%s",
+            body.mobile_device_id,
+            previous_owner,
+            user.sub,
         )
     auth_service = request.app.state.auth_service
     access, refresh = await auth_service.create_mobile_tokens(

@@ -627,14 +627,15 @@ class TestClaimWsDispatch:
 
 
 class TestClaimDeviceReassignment:
-    """End-to-end coverage of the cross-tenant ``mobile_device_id`` guard
-    through ``POST /api/pairing/claim``.
+    """End-to-end coverage of the last-login-wins ``mobile_device_id``
+    handover through ``POST /api/pairing/claim``.
 
-    The DB-layer reassignment is unit-tested in ``test_database.py``; these
-    tests pin the router branch (``upsert_mobile_device`` -> 200 vs 409) so
-    the reported HTTP 409 on re-pair is exercised at the endpoint, not just
-    the helper. Both use a first-pair nonce (no ``current_agent_id``) so the
-    agent-ownership guard cannot short-circuit ahead of the device guard.
+    The DB-layer handover is unit-tested in ``test_database.py``; these
+    tests pin the router path (``upsert_mobile_device`` always succeeds,
+    the claim proceeds to completion) at the endpoint, not just the
+    helper. Both use a first-pair nonce (no ``current_agent_id``) so the
+    agent-ownership guard — which still 409s and is covered by
+    ``test_different_owner_claim_is_rejected`` — stays out of the way.
     """
 
     async def _other_user_id(self, qr_app) -> str:
@@ -655,11 +656,10 @@ class TestClaimDeviceReassignment:
     async def test_claim_reassigns_idle_cross_tenant_device(
         self, client, qr_app, api_auth_headers, viewer_user
     ):
-        # Repro of the reported 409 at the HTTP boundary: a prior user owns
-        # the device but holds no live refresh token (idle — its agent was
-        # deleted / it was revoked). The viewer first-pairs the *same*
-        # physical device id. The router's device guard must reassign it and
-        # return 200, and the device must move to the viewer.
+        # A prior user owns the device but holds no live refresh token
+        # (idle — its agent was deleted / it was revoked). The viewer
+        # first-pairs the *same* physical device id: a clean handover
+        # with nothing to revoke. 200, and the device moves to the viewer.
         prior_id = await self._other_user_id(qr_app)
         await qr_app.state.db.upsert_mobile_device(
             device_id=_SHARED_DEV_UUID, user_id=prior_id, name="prior phone"
@@ -692,13 +692,13 @@ class TestClaimDeviceReassignment:
         assert agent is not None
         assert agent["owner_user_id"] == viewer_user["id"]
 
-    async def test_claim_rejected_when_device_has_live_session(
+    async def test_claim_hands_over_device_with_live_session(
         self, client, qr_app, api_auth_headers, viewer_user
     ):
-        # The other half of the guard: a device pinned to a prior user by a
-        # live refresh token cannot be seized. The router must surface the
-        # ``upsert_mobile_device`` False as 409, leave the device with the
-        # prior owner, and consume neither the nonce nor create an agent.
+        # Last-login-wins at the HTTP boundary: even a device pinned to a
+        # prior user by a live refresh token is handed over on claim. The
+        # claim succeeds end-to-end — the device moves, the prior owner's
+        # refresh token dies, the nonce is consumed, an agent is created.
         prior_id = await self._other_user_id(qr_app)
         prior_agent_id, _ = await qr_app.state.db.register_agent(
             "prior-agent", prior_id
@@ -727,13 +727,22 @@ class TestClaimDeviceReassignment:
             headers=api_auth_headers,
         )
 
-        assert resp.status_code == 409
-        assert "different user" in resp.json()["detail"]
-        # The device stayed with the prior owner; the viewer got nothing.
-        prior_devices = await qr_app.state.db.list_user_devices(prior_id)
-        assert [d["device_id"] for d in prior_devices] == [_SHARED_DEV_UUID]
-        assert await qr_app.state.db.list_user_devices(viewer_user["id"]) == []
-        # Fail-fast before the nonce CAS: the nonce is left replayable.
+        assert resp.status_code == 200, resp.text
+        # The device moved to the viewer and left the prior owner.
+        assert await qr_app.state.db.list_user_devices(prior_id) == []
+        viewer_devices = await qr_app.state.db.list_user_devices(
+            viewer_user["id"]
+        )
+        assert [d["device_id"] for d in viewer_devices] == [_SHARED_DEV_UUID]
+        # The prior owner's live session died with the handover.
+        assert await qr_app.state.db.validate_and_consume_refresh(
+            "prior-live-refresh"
+        ) is None
+        # The pairing ran to completion: nonce consumed, agent created
+        # for the viewer.
         meta = await qr_app.state.db.lookup_pairing_token_metadata(nonce)
         assert meta is not None
-        assert meta["consumed_at"] is None
+        assert meta["consumed_at"] is not None
+        agent = await qr_app.state.db.get_agent(resp.json()["agent_id"])
+        assert agent is not None
+        assert agent["owner_user_id"] == viewer_user["id"]
