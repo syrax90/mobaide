@@ -16,11 +16,15 @@ struct CreateSessionScreen: View {
 private struct CreateSessionContent: View {
     @State private var model: CreateSessionModel
     @State private var toast: ToastMessage?
+    @State private var projectSheet: ProjectFormMode?
 
     @Environment(Router.self) private var router
     @Environment(\.mobaideColors) private var colors
 
+    private let container: AppContainer
+
     init(container: AppContainer) {
+        self.container = container
         _model = State(initialValue: CreateSessionModel(
             agentAPI: container.agentAPI,
             sessionRepository: container.sessionRepository,
@@ -40,6 +44,9 @@ private struct CreateSessionContent: View {
         .navigationTitle("New Session")
         .navigationBarTitleDisplayMode(.inline)
         .toast($toast)
+        .sheet(item: $projectSheet) { mode in
+            ProjectFormSheet(mode: mode, container: container, onCreated: { model.onProjectCreated($0) })
+        }
         .task { await model.load() }
         .onChange(of: model.step) { _, step in
             if step == .modePick {
@@ -83,6 +90,11 @@ private struct CreateSessionContent: View {
             }
             selectableRow("Custom path…", selected: isCustomPathSelected) {
                 model.setCustomPath(model.customPathDraft)
+            }
+            Button {
+                projectSheet = .create
+            } label: {
+                Label("Create new project…", systemImage: "plus")
             }
         }
 

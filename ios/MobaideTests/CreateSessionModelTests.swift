@@ -192,6 +192,26 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.antigravityModels, CreateSessionModel.antigravityModelsFallback)
     }
 
+    func testOnProjectCreatedSelectsAndGatesGit() {
+        let model = makeModel()
+
+        let gitProject = ProjectInfo(name: "repo", path: "/p", is_git: true)
+        model.worktree = true
+        model.branchName = "feat"
+        model.onProjectCreated(gitProject)
+        XCTAssertEqual(model.selection, .stored("repo"))
+        XCTAssertTrue(model.projects.contains(gitProject), "the created project is merged into the wizard snapshot")
+        XCTAssertTrue(model.showsGitOptions)
+        XCTAssertTrue(model.worktree, "a git project keeps the worktree toggle")
+
+        let plainProject = ProjectInfo(name: "plain", path: "/q", is_git: false)
+        model.onProjectCreated(plainProject)
+        XCTAssertEqual(model.selection, .stored("plain"))
+        XCTAssertFalse(model.showsGitOptions)
+        XCTAssertFalse(model.worktree, "a non-git project resets the stale worktree toggle")
+        XCTAssertEqual(model.branchName, "")
+    }
+
     func testProjectContinueGating() {
         let model = makeModel()
         XCTAssertFalse(model.canContinueProject)

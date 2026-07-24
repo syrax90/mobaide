@@ -186,6 +186,28 @@ final class CreateSessionModel {
         customPathError = nil
     }
 
+    /// Called after `ProjectFormSheet` reports a successful create (New Session
+    /// inline "Create new project…"). Mirrors Android `onProjectCreated`: selects
+    /// the returned project and gates worktree/branch off its own `is_git`. The
+    /// project is merged into this wizard's one-shot `projects` snapshot (loaded
+    /// once via `agentAPI.getProjects()`, not observing the `projects.changed`
+    /// bus) so `selectedProject`/`showsGitOptions` resolve immediately; the
+    /// app-wide `ProjectsRepository` reconciles independently.
+    func onProjectCreated(_ project: ProjectInfo) {
+        if let index = projects.firstIndex(where: { $0.name == project.name }) {
+            projects[index] = project
+        } else {
+            projects.append(project)
+        }
+        selection = .stored(project.name)
+        customPathDraft = ""
+        customPathError = nil
+        if !project.is_git {
+            worktree = false
+            branchName = ""
+        }
+    }
+
     func setCustomPath(_ path: String) {
         customPathDraft = path
         customPathError = Self.validateCustomPath(path)
