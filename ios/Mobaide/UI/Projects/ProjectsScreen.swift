@@ -44,10 +44,10 @@ private struct ProjectsContent: View {
             }
             .refreshable { await model.refresh() }
             .sheet(item: $sheet) { mode in
-                ProjectFormSheet(mode: mode, container: container) { projectName in
+                ProjectFormSheet(mode: mode, container: container, onOpenGit: { projectName in
                     sheet = nil
                     router.navigate(to: .gitManagement(projectName: projectName))
-                }
+                })
             }
             .undoToast($model.undoToast) { model.undo() }
             .toast($toast)

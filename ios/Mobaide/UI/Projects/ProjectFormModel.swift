@@ -119,6 +119,10 @@ final class ProjectFormModel {
     var nameServerError: String?
     var message: String?
 
+    /// Set to the returned `ProjectInfo` after a successful create so the
+    /// presenting screen can select the just-created project (New Session flow).
+    private(set) var createdProject: ProjectInfo?
+
     let editing: ProjectInfo?
     private let repository: ProjectsRepository
 
@@ -392,7 +396,7 @@ final class ProjectFormModel {
             if let editing {
                 _ = try await repository.updateProject(currentName: editing.name, body: toUpdateBody())
             } else {
-                _ = try await repository.createProject(toCreateBody())
+                createdProject = try await repository.createProject(toCreateBody())
             }
             return true
         } catch let error as ProjectConflictError {

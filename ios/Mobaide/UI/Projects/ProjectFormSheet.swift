@@ -7,9 +7,10 @@ struct ProjectFormSheet: View {
     let mode: ProjectFormMode
     let container: AppContainer
     var onOpenGit: (String) -> Void = { _ in }
+    var onCreated: (ProjectInfo) -> Void = { _ in }
 
     var body: some View {
-        ProjectFormContent(mode: mode, container: container, onOpenGit: onOpenGit)
+        ProjectFormContent(mode: mode, container: container, onOpenGit: onOpenGit, onCreated: onCreated)
     }
 }
 
@@ -22,10 +23,17 @@ private struct ProjectFormContent: View {
     @Environment(\.mobaideColors) private var colors
 
     private let onOpenGit: (String) -> Void
+    private let onCreated: (ProjectInfo) -> Void
 
-    init(mode: ProjectFormMode, container: AppContainer, onOpenGit: @escaping (String) -> Void) {
+    init(
+        mode: ProjectFormMode,
+        container: AppContainer,
+        onOpenGit: @escaping (String) -> Void,
+        onCreated: @escaping (ProjectInfo) -> Void
+    ) {
         _model = State(initialValue: ProjectFormModel(mode: mode, repository: container.projectsRepository))
         self.onOpenGit = onOpenGit
+        self.onCreated = onCreated
     }
 
     var body: some View {
@@ -60,7 +68,12 @@ private struct ProjectFormContent: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(model.submitting ? "Saving…" : "Save") {
-                        Task { if await model.save() { dismiss() } }
+                        Task {
+                            if await model.save() {
+                                if let created = model.createdProject { onCreated(created) }
+                                dismiss()
+                            }
+                        }
                     }
                     .disabled(model.submitting)
                 }
