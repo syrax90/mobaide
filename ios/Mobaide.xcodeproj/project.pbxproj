@@ -31,38 +31,18 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		CA9700000000000000000033 /* Exceptions for "Mobaide" folder in "Mobaide" target */ = {
+		CA9700000000000000000033 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Support/Info.plist,
-				Support/Mobaide.entitlements,
 			);
 			target = CA9700000000000000000011 /* Mobaide */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		CA9700000000000000000031 /* Mobaide */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				CA9700000000000000000033 /* Exceptions for "Mobaide" folder in "Mobaide" target */,
-			);
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = Mobaide;
-			sourceTree = "<group>";
-		};
-		CA9700000000000000000032 /* MobaideTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
-			path = MobaideTests;
-			sourceTree = "<group>";
-		};
+		CA9700000000000000000031 /* Mobaide */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (CA9700000000000000000033 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = Mobaide; sourceTree = "<group>"; };
+		CA9700000000000000000032 /* MobaideTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = MobaideTests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -179,6 +159,7 @@
 				};
 			};
 			buildConfigurationList = CA9700000000000000000071 /* Build configuration list for PBXProject "Mobaide" */;
+			compatibilityVersion = "Xcode 16.0.Superseded.1";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -373,6 +354,7 @@
 				CODE_SIGN_ENTITLEMENTS = Mobaide/Support/Mobaide.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5NNN5NQNYW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Mobaide/Support/Info.plist;
@@ -399,6 +381,7 @@
 				CODE_SIGN_ENTITLEMENTS = Mobaide/Support/Mobaide.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5NNN5NQNYW;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Mobaide/Support/Info.plist;
