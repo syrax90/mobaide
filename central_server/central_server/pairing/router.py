@@ -231,20 +231,23 @@ async def claim_pairing(
                 ),
             )
 
-    # Cross-tenant device guard, also fail-fast: an idle device is silently
-    # reassigned to this user, an in-use one is rejected — either way the
-    # decision lands before the nonce is consumed so a rejected claim leaves
-    # the nonce replayable.
-    accepted = await db.upsert_mobile_device(
+    # Device registry is last-login-wins: an authenticated claim always
+    # takes the device over, revoking the prior account's refresh tokens.
+    # The upsert runs before the nonce CAS, so a claim that later loses
+    # the nonce race still leaves a completed handover — harmless, the
+    # retrying user already owns the device.
+    previous_owner = await db.upsert_mobile_device(
         device_id=body.mobile_device_id,
         user_id=user.sub,
         name=body.mobile_device_name,
         platform=body.platform,
     )
-    if not accepted:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="mobile_device_id is already registered to a different user",
+    if previous_owner is not None:
+        logger.info(
+            "mobile_device.handover device_id=%s from_user=%s to_user=%s",
+            body.mobile_device_id,
+            previous_owner,
+            user.sub,
         )
 
     if current_agent_id:

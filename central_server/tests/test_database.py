@@ -675,16 +675,18 @@ class TestMobileDevices:
     """Coverage for the user-scoped ``mobile_devices`` registry.
 
     Devices are keyed by a client-generated UUID and are independent of any
-    one agent. Upsert is idempotent and re-activates a previously revoked
-    device on fresh pairing (Bitwarden semantics).
+    one agent. Upsert is idempotent, re-activates a previously revoked
+    device on fresh pairing (Bitwarden semantics), and is last-login-wins
+    across users: a cross-user upsert hands the device over, returning the
+    previous owner's id and revoking their live refresh tokens.
     """
 
     async def test_upsert_and_list(self, db: Database):
         owner = await _create_test_user(db)
-        accepted = await db.upsert_mobile_device(
+        previous_owner = await db.upsert_mobile_device(
             device_id="dev-1", user_id=owner, name="Pixel 7"
         )
-        assert accepted is True
+        assert previous_owner is None
         devices = await db.list_user_devices(owner)
         assert len(devices) == 1
         assert devices[0]["device_id"] == "dev-1"
@@ -694,35 +696,76 @@ class TestMobileDevices:
         owner = await _create_test_user(db)
         assert await db.upsert_mobile_device(
             device_id="dev-1", user_id=owner, name="A"
-        ) is True
+        ) is None
         assert await db.upsert_mobile_device(
             device_id="dev-1", user_id=owner, name="A"
-        ) is True
+        ) is None
         devices = await db.list_user_devices(owner)
         assert len(devices) == 1
 
-    async def test_upsert_rejects_cross_tenant_when_device_in_use(
+    async def test_upsert_hands_over_in_use_device_and_revokes_tokens(
         self, db: Database
     ):
-        """A device with a live refresh token cannot be seized by another
-        user. ``upsert_mobile_device`` returns ``False`` and leaves the
-        owning row untouched."""
+        """Last-login-wins: even a device with a live refresh token is
+        handed over to the new authenticated claimant. The upsert returns
+        the previous owner's id, moves the row, and kills the prior
+        owner's live session."""
         u_a = await db.create_user(email="a@test.local", password_hash="h")
         u_b = await db.create_user(email="b@test.local", password_hash="h")
         agent_a, _ = await db.register_agent("a-agent", u_a)
         assert await db.upsert_mobile_device(
             device_id="dev-x", user_id=u_a, name="A's device"
-        ) is True
-        # A live session pins the device to A.
+        ) is None
+        # A live session no longer pins the device to A.
         await db.store_refresh_token("a-refresh", "dev-x", agent_a, 60)
-        # User B tries to seize the in-use device.
+
+        previous_owner = await db.upsert_mobile_device(
+            device_id="dev-x", user_id=u_b, name="B's phone"
+        )
+
+        assert previous_owner == u_a
+        # The device moved to B and left A's list.
+        assert await db.list_user_devices(u_a) == []
+        b_devices = await db.list_user_devices(u_b)
+        assert [d["name"] for d in b_devices] == ["B's phone"]
+        # A's refresh token died with the handover.
+        assert await db.validate_and_consume_refresh("a-refresh") is None
+
+    async def test_handover_revokes_tokens_across_all_agents(
+        self, db: Database
+    ):
+        """The handover revokes the prior owner's live refresh tokens for
+        *every* agent paired on the device, not just one."""
+        u_a = await db.create_user(email="a@test.local", password_hash="h")
+        u_b = await db.create_user(email="b@test.local", password_hash="h")
+        agent_1, _ = await db.register_agent("a-agent-1", u_a)
+        agent_2, _ = await db.register_agent("a-agent-2", u_a)
+        await db.upsert_mobile_device(device_id="dev-x", user_id=u_a, name="A")
+        await db.store_refresh_token("a-refresh-1", "dev-x", agent_1, 60)
+        await db.store_refresh_token("a-refresh-2", "dev-x", agent_2, 60)
+
         assert await db.upsert_mobile_device(
-            device_id="dev-x", user_id=u_b, name="hijacked"
-        ) is False
-        # A's row is intact.
-        a_devices = await db.list_user_devices(u_a)
-        assert [d["name"] for d in a_devices] == ["A's device"]
-        assert await db.list_user_devices(u_b) == []
+            device_id="dev-x", user_id=u_b, name="B"
+        ) == u_a
+
+        assert await db.validate_and_consume_refresh("a-refresh-1") is None
+        assert await db.validate_and_consume_refresh("a-refresh-2") is None
+
+    async def test_same_user_upsert_keeps_live_refresh_tokens(
+        self, db: Database
+    ):
+        """A same-owner re-upsert (routine token re-mint) is not a
+        handover and must not revoke the device's live refresh tokens."""
+        owner = await _create_test_user(db)
+        agent_id, _ = await db.register_agent("a", owner)
+        await db.upsert_mobile_device(device_id="dev-1", user_id=owner, name="A")
+        await db.store_refresh_token("r-live", "dev-1", agent_id, 60)
+
+        assert await db.upsert_mobile_device(
+            device_id="dev-1", user_id=owner, name="A"
+        ) is None
+
+        assert await db.validate_and_consume_refresh("r-live") is not None
 
     async def test_upsert_reassigns_idle_device_cross_tenant(
         self, db: Database
@@ -737,17 +780,17 @@ class TestMobileDevices:
         await db.revoke_mobile_device("dev-x", u_a)
         assert await db.upsert_mobile_device(
             device_id="dev-x", user_id=u_b, name="B's phone"
-        ) is True
+        ) == u_a
         # The device is now B's, active, and gone from A's list.
         assert await db.list_user_devices(u_a) == []
         b_devices = await db.list_user_devices(u_b)
         assert [d["name"] for d in b_devices] == ["B's phone"]
 
     async def test_upsert_reassigns_after_agent_delete(self, db: Database):
-        """Repro of the reported 409: A pairs a device to an agent, the
-        agent is deleted (hard-deleting the device's refresh tokens), then
-        the same device pairs under B and succeeds — the stale lock is
-        released because the device has no live session."""
+        """Historical repro of the old 409: A pairs a device to an agent,
+        the agent is deleted (hard-deleting the device's refresh tokens),
+        then the same device pairs under B. A clean handover — nothing
+        left to revoke."""
         u_a = await db.create_user(email="a@test.local", password_hash="h")
         u_b = await db.create_user(email="b@test.local", password_hash="h")
         agent_a, _ = await db.register_agent("a-agent", u_a)
@@ -757,7 +800,7 @@ class TestMobileDevices:
         await db.delete_agent(agent_a)
         assert await db.upsert_mobile_device(
             device_id="dev-x", user_id=u_b, name="B's phone"
-        ) is True
+        ) == u_a
         b_devices = await db.list_user_devices(u_b)
         assert [d["device_id"] for d in b_devices] == ["dev-x"]
 
@@ -889,10 +932,10 @@ class TestPushTokens:
         u_b = await db.create_user(email="b@test.local", password_hash="h")
         await self._register(db, u_a, "dev-x")
         await db.set_push_token("dev-x", u_a, "ios", "tok-a", "sandbox")
-        # Idle device (no live refresh token) re-pairs under B.
+        # The device re-pairs under B (last-login-wins handover).
         assert await db.upsert_mobile_device(
             device_id="dev-x", user_id=u_b, name="B's phone"
-        ) is True
+        ) == u_a
 
         assert await db.list_push_targets(u_a) == []
         assert await db.list_push_targets(u_b) == []

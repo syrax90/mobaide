@@ -13,8 +13,8 @@ These tests pin:
   refresh-token rows (each can independently be revoked).
 * First-mint upserts a row into ``mobile_devices`` with the provided
   name so the device appears on the user's "My devices" screen.
-* Cross-tenant collision: user B reusing user A's device id is
-  rejected with HTTP 409.
+* Cross-tenant handover: user B presenting user A's device id takes the
+  device over (last-login-wins) and A's refresh tokens for it die.
 """
 from __future__ import annotations
 
@@ -134,21 +134,21 @@ class TestMobileTokenUsesDeviceId:
 
 class TestMobileTokenCrossTenant:
     """A user submitting another user's ``device_id`` via
-    ``POST /api/agents/{agent_id}/token`` must be rejected with HTTP 409
-    and must NOT mutate the other user's device row or create a new
-    refresh-token row that the legitimate owner could later revoke
-    (which would deny-of-service the attacker — but more importantly,
-    a malicious caller in the reverse direction must not pollute the
-    legitimate owner's mobile_devices listing or rename their device).
+    ``POST /api/agents/{agent_id}/token`` takes the device over
+    (last-login-wins): the mint succeeds, the row moves to the caller
+    under the caller's name, and every live refresh token the previous
+    owner held for the device is revoked. Agent ownership is untouched —
+    the caller can still only mint for agents they own.
     """
 
-    async def test_other_users_device_id_returns_409(
+    async def test_other_users_device_id_hands_device_over(
         self, client, app, viewer_user, registered_agent
     ):
         agent_id, _ = registered_agent
         dev_id = _uuid()
 
-        # First, the legitimate owner registers the device.
+        # The first account registers the device and holds a live
+        # refresh token for it.
         owner_uid, _role, owner_token, _scheduled = await app.state.auth_service.login_user(
             "viewer@test.local", "viewerpass123"
         )
@@ -160,40 +160,45 @@ class TestMobileTokenCrossTenant:
             json={"mobile_device_id": dev_id, "mobile_device_name": "owner phone"},
         )
         assert first.status_code == 200
+        prior_refresh = first.json()["refresh_token"]
 
-        # Now create a second user with their own agent.
+        # A second account (same physical device, new sign-in) mints
+        # against its own agent with the same device id.
         await app.state.auth_service.register_user(
-            "attacker@test.local", "attacker-pw123"
+            "second@test.local", "second-pw123"
         )
-        att_uid, _role, att_token, _scheduled = await app.state.auth_service.login_user(
-            "attacker@test.local", "attacker-pw123"
+        second_uid, _role, second_token, _scheduled = await app.state.auth_service.login_user(
+            "second@test.local", "second-pw123"
         )
         del _role, _scheduled
-        att_headers = {"Authorization": f"Bearer {att_token}"}
-        att_agent_id, _ = await app.state.db.register_agent("att-agent", att_uid)
+        second_headers = {"Authorization": f"Bearer {second_token}"}
+        second_agent_id, _ = await app.state.db.register_agent(
+            "second-agent", second_uid
+        )
 
-        # Attacker tries to use the victim's device id.
         resp = await client.post(
-            f"/api/agents/{att_agent_id}/token",
-            headers=att_headers,
+            f"/api/agents/{second_agent_id}/token",
+            headers=second_headers,
             json={
                 "mobile_device_id": dev_id,
-                "mobile_device_name": "hijacked",
+                "mobile_device_name": "second phone",
             },
         )
 
-        assert resp.status_code == 409
-        # The victim's device row is untouched: still owned by the
-        # viewer, name unchanged, not revoked.
-        victim_devices = await app.state.db.list_user_devices(viewer_user["id"])
-        assert [d["name"] for d in victim_devices] == ["owner phone"]
-        # The attacker has no devices (the rejected upsert did not create one).
-        assert await app.state.db.list_user_devices(att_uid) == []
-        # And no refresh-token row was created against the attacker's
-        # agent with the victim's device id.
-        cursor = await app.state.db.conn.execute(
-            "SELECT 1 FROM mobile_refresh_tokens "
-            "WHERE agent_id = ? AND mobile_device_id = ?",
-            (att_agent_id, dev_id),
-        )
-        assert await cursor.fetchone() is None
+        assert resp.status_code == 200
+        # The device moved to the caller under the caller's name …
+        second_devices = await app.state.db.list_user_devices(second_uid)
+        assert [(d["device_id"], d["name"]) for d in second_devices] == [
+            (dev_id, "second phone")
+        ]
+        # … and left the previous owner's list.
+        assert await app.state.db.list_user_devices(viewer_user["id"]) == []
+        # The previous owner's refresh token died with the handover.
+        assert await app.state.db.validate_and_consume_refresh(
+            prior_refresh
+        ) is None
+        # The caller's freshly minted refresh token works (stored after
+        # the handover's revoke sweep, so it survives it).
+        assert await app.state.db.validate_and_consume_refresh(
+            resp.json()["refresh_token"]
+        ) == (dev_id, second_agent_id)
