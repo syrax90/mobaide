@@ -73,4 +73,23 @@ final class TerminalPanScrollView: UIScrollView {
             contentSize = targetContent
         }
     }
+
+    /// Direction-aware arbitration so vertical scrollback still reaches the
+    /// inner SwiftTerm view. `isDirectionalLockEnabled` only constrains this
+    /// scroll view's own axis *after* its pan has begun; it does not stop a
+    /// vertically dominant drag (with slight horizontal drift) from starting the
+    /// horizontal pan and cancelling the terminal's vertical scroll. So in
+    /// Static mode claim the pan only for *strictly* horizontally dominant drags
+    /// and let vertical ones — including the exact-diagonal tie — fall through to
+    /// SwiftTerm, mirroring Android
+    /// `TerminalHorizontalScrollView.onInterceptTouchEvent` (intercept iff dx > dy).
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if displayConfig.mode == .static, gestureRecognizer === panGestureRecognizer {
+            let translation = panGestureRecognizer.translation(in: self)
+            if abs(translation.y) >= abs(translation.x) {
+                return false
+            }
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
 }
