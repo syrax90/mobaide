@@ -241,8 +241,12 @@ fun TerminalScreen(
                             session = viewModel.session,
                             sessionCallback = viewModel.sessionCallback,
                             displayConfig = displayConfig,
+                            // Ungated by design: a pre-connect layout pass must still cache the
+                            // measured grid so enterLiveState()'s resendCachedSize() can deliver it
+                            // on connect (matches iOS). resize() only enqueues the frame; it never
+                            // touches the local emulator.
                             onResize = { rows, cols ->
-                                if (isConnected) viewModel.resize(rows, cols)
+                                viewModel.resize(rows, cols)
                             },
                             onRowTapped = { text, isCurrentInput ->
                                 viewModel.sendTappedRow(text, isCurrentInput)

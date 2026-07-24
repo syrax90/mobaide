@@ -446,6 +446,24 @@ class TerminalViewModel @Inject constructor(
     /** Single entry point into [ConnectionState.Live]. */
     private fun enterLiveState() {
         _connectionState.value = ConnectionState.Live
+        resendCachedSize()
+    }
+
+    /**
+     * Re-assert the last measured grid to the agent on every entry into Live.
+     *
+     * The PTY is spawned at the create default (24x80) and only a resize frame
+     * corrects it. The other resize trigger — a layout pass (TerminalScreen's
+     * onResize) — can settle before the WS connects (common when the agent host is
+     * slow to attach, e.g. a macOS agent behind a TCC prompt); that frame is dropped
+     * by the transport and then suppressed by [resize]'s dedupe, leaving the PTY at
+     * 24 rows so a full-screen TUI fills only the top of a taller device grid. Force
+     * past the debounce and dedupe here so the size still reaches a freshly spawned
+     * or reconnect-time auto-created PTY. Mirrors iOS TerminalSessionModel.resendCachedSize().
+     */
+    private fun resendCachedSize() {
+        if (lastResizeRows <= 0 || lastResizeCols <= 0) return
+        sendChannel.trySend(TerminalProtocol.encodeResize(lastResizeRows, lastResizeCols))
     }
 
     /** Reveal a hidden composer and focus its field. The focus request also retargets
