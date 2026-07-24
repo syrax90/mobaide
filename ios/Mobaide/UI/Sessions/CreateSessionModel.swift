@@ -93,6 +93,12 @@ final class CreateSessionModel {
     private let preferencesStore: PreferencesStore
     private let navBroadcaster = Broadcaster<String>(replay: .none)
 
+    /// Projects created inline via the New Session "Create new project…" flow,
+    /// retained so a late initial `load()` (a still-pending `getProjects`) cannot
+    /// clobber the just-created selection — and its Git options — with a snapshot
+    /// that predates the create.
+    private var locallyCreatedProjects: [ProjectInfo] = []
+
     init(agentAPI: AgentAPI, sessionRepository: SessionRepository, preferencesStore: PreferencesStore) {
         self.agentAPI = agentAPI
         self.sessionRepository = sessionRepository
@@ -154,8 +160,14 @@ final class CreateSessionModel {
 
     func load() async {
         do {
-            let projects = try await agentAPI.getProjects()
-            self.projects = projects
+            var fetched = try await agentAPI.getProjects()
+            // A create can land while this initial fetch is still in flight;
+            // re-add any inline-created project the snapshot predates so it is
+            // not dropped (the fetched entry wins when both are present).
+            for created in locallyCreatedProjects where !fetched.contains(where: { $0.name == created.name }) {
+                fetched.append(created)
+            }
+            self.projects = fetched
             applyProjectPrefill()
         } catch {
             // Non-fatal: the wizard still allows a custom path.
@@ -194,17 +206,22 @@ final class CreateSessionModel {
     /// bus) so `selectedProject`/`showsGitOptions` resolve immediately; the
     /// app-wide `ProjectsRepository` reconciles independently.
     func onProjectCreated(_ project: ProjectInfo) {
-        if let index = projects.firstIndex(where: { $0.name == project.name }) {
-            projects[index] = project
-        } else {
-            projects.append(project)
-        }
+        Self.upsert(project, into: &projects)
+        Self.upsert(project, into: &locallyCreatedProjects)
         selection = .stored(project.name)
         customPathDraft = ""
         customPathError = nil
         if !project.is_git {
             worktree = false
             branchName = ""
+        }
+    }
+
+    private static func upsert(_ project: ProjectInfo, into list: inout [ProjectInfo]) {
+        if let index = list.firstIndex(where: { $0.name == project.name }) {
+            list[index] = project
+        } else {
+            list.append(project)
         }
     }
 

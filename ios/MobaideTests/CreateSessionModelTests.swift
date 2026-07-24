@@ -27,9 +27,7 @@ final class CreateSessionModelTests: XCTestCase {
         return CreateSessionModel(agentAPI: agentAPI, sessionRepository: repo, preferencesStore: prefs ?? isolatedPrefs())
     }
 
-    private func modelWithProjects(_ projectsJSON: String) async -> CreateSessionModel {
-        StubURLProtocol.reset()
-        StubURLProtocol.enqueue(status: 200, body: projectsJSON)
+    private func stubbedModel() -> CreateSessionModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
             webSocketFactory: WebSocketCoreFactory.live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
@@ -39,7 +37,13 @@ final class CreateSessionModelTests: XCTestCase {
         let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
         let agentAPI = AgentAPI(baseURL: { "http://agent.example.com" }, tokens: FakeAgentTokens(token: AgentToken(value: "tok")), client: client)
         let repo = SessionRepository(agentAPI: agentAPI, agentEventBus: bus, terminalSessionStore: TerminalTestSupport.store(harness))
-        let model = CreateSessionModel(agentAPI: agentAPI, sessionRepository: repo, preferencesStore: isolatedPrefs())
+        return CreateSessionModel(agentAPI: agentAPI, sessionRepository: repo, preferencesStore: isolatedPrefs())
+    }
+
+    private func modelWithProjects(_ projectsJSON: String) async -> CreateSessionModel {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(status: 200, body: projectsJSON)
+        let model = stubbedModel()
         await model.load()
         return model
     }
@@ -210,6 +214,23 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertFalse(model.showsGitOptions)
         XCTAssertFalse(model.worktree, "a non-git project resets the stale worktree toggle")
         XCTAssertEqual(model.branchName, "")
+    }
+
+    func testLateLoadPreservesInlineCreatedProject() async {
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+
+        // A project is created inline before the initial load() response lands.
+        let created = ProjectInfo(name: "fresh", path: "/p", is_git: true)
+        model.onProjectCreated(created)
+
+        // The late load() snapshot predates the create and omits it.
+        StubURLProtocol.enqueue(status: 200, body: #"[{"name":"old","path":"/o","is_git":false}]"#)
+        await model.load()
+
+        XCTAssertTrue(model.projects.contains(created), "a stale load must not drop the inline-created project")
+        XCTAssertEqual(model.selection, .stored("fresh"))
+        XCTAssertTrue(model.showsGitOptions, "Git options stay available for the created Git repo")
     }
 
     func testProjectContinueGating() {
