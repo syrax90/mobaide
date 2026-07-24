@@ -1,5 +1,13 @@
 # Android Changelog
 
+## [3.0.1](https://github.com/syrax90/claude_mobile/compare/android-v3.0.0...android-v3.0.1) (2026-07-24)
+
+
+### Bug Fixes
+
+* **android:** fill terminal height by re-asserting PTY size on connect ([8a5afdb](https://github.com/syrax90/claude_mobile/commit/8a5afdb08e193a3385da6dda648c4ed9ba4966d4))
+* **android:** fill terminal height by re-asserting PTY size on connect ([9d3b3a5](https://github.com/syrax90/claude_mobile/commit/9d3b3a568e5e0a5088f80ddcbb7b990da3d79c1d))
+
 ## [3.0.0](https://github.com/syrax90/claude_mobile/compare/android-v2.2.0...android-v3.0.0) (2026-07-22)
 
 
