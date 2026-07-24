@@ -1,5 +1,4 @@
 import AuthenticationServices
-import GoogleSignInSwift
 import Observation
 import SwiftUI
 
@@ -96,13 +95,10 @@ private struct RegisterContent: View {
 
                 orDivider
 
-                GoogleSignInButton(
-                    scheme: colorScheme == .dark ? .dark : .light,
-                    style: .wide,
-                    state: model.isLoading ? .disabled : .normal
-                ) {
+                GoogleSignInButtonView(label: .signUp) {
                     Task { await model.signInWithGoogle() }
                 }
+                .disabled(model.isLoading)
 
                 SignInWithAppleButton(.signUp) { request in
                     model.prepareAppleRequest(request)
@@ -110,7 +106,7 @@ private struct RegisterContent: View {
                     Task { await model.completeApple(result) }
                 }
                 .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-                .frame(height: 44)
+                .providerButtonFrame()
                 .disabled(model.isLoading)
 
                 VStack(spacing: 4) {
