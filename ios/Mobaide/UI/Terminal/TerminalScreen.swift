@@ -20,6 +20,7 @@ private struct TerminalScreenContent: View {
     @State private var showTemplates = false
     @State private var showSaveTemplate = false
     @State private var templateName = ""
+    private let displayStore: TerminalDisplayStore
 
     init(container: AppContainer, sessionId: String) {
         let session = container.sessionRepository.currentSessions.first { $0.session_id == sessionId }
@@ -28,12 +29,13 @@ private struct TerminalScreenContent: View {
             kind: session?.kind ?? .claude,
             initialStatus: session?.state
         ))
+        displayStore = container.terminalDisplayStore
     }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
-                TerminalHostView(model: model)
+                TerminalHostView(model: model, displayConfig: displayStore.config)
                 connectionOverlay
                 jumpToBottomButton
             }

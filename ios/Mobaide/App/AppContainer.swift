@@ -13,6 +13,7 @@ final class AppContainer {
     let connectionStore: ConnectionStore
     let deviceIdentityStore: DeviceIdentityStore
     let preferencesStore: PreferencesStore
+    let terminalDisplayStore: TerminalDisplayStore
     let trustKeyPinning: TrustKeyPinning
     let sessionManager: SessionManager
     let agentTokenProvider: SessionAgentTokenProvider
@@ -61,6 +62,7 @@ final class AppContainer {
             )
         )
         let preferencesStore = PreferencesStore()
+        let terminalDisplayStore = TerminalDisplayStore(preferences: preferencesStore)
         let trustKeyPinning = TrustKeyPinning()
 
         let initialState = AuthState.initial(
@@ -131,6 +133,7 @@ final class AppContainer {
         self.connectionStore = connectionStore
         self.deviceIdentityStore = deviceIdentityStore
         self.preferencesStore = preferencesStore
+        self.terminalDisplayStore = terminalDisplayStore
         self.trustKeyPinning = trustKeyPinning
         self.sessionManager = sessionManager
         self.agentTokenProvider = agentTokenProvider
