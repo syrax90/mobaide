@@ -43,6 +43,16 @@ private struct CreateSessionContent: View {
         }
         .navigationTitle("New Session")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(model.step != .projectSelect)
+        .toolbar {
+            if model.step != .projectSelect {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { model.back() } label: {
+                        Label("Back", systemImage: "chevron.backward")
+                    }
+                }
+            }
+        }
         .toast($toast)
         .sheet(item: $projectSheet) { mode in
             ProjectFormSheet(mode: mode, container: container, onCreated: { model.onProjectCreated($0) })
@@ -113,8 +123,13 @@ private struct CreateSessionContent: View {
         }
 
         Section {
-            Button("Continue") { model.continueFromProject() }
-                .disabled(!model.canContinueProject)
+            Button {
+                model.continueFromProject()
+            } label: {
+                Text("Continue").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.canContinueProject)
         }
     }
 
@@ -135,9 +150,6 @@ private struct CreateSessionContent: View {
                 }
                 .disabled(!model.isEnabled(mode))
             }
-        }
-        Section {
-            Button("Back") { model.back() }
         }
     }
 
@@ -163,8 +175,8 @@ private struct CreateSessionContent: View {
                         .frame(maxWidth: .infinity)
                 }
             }
+            .buttonStyle(.borderedProminent)
             .disabled(!model.canCreate)
-            Button("Back") { model.back() }
         }
     }
 
