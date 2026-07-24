@@ -1,5 +1,15 @@
 # central_server Changelog
 
+## [0.2.5](https://github.com/syrax90/claude_mobile/compare/server-v0.2.4...server-v0.2.5) (2026-07-24)
+
+
+### Bug Fixes
+
+* **central-server:** close template tombstone resurrection race in update/touch ([46a59e3](https://github.com/syrax90/claude_mobile/commit/46a59e3936e5c5e60e736066e9be6e8c988ee9b8))
+* **central-server:** close template tombstone resurrection race in update/touch ([e243061](https://github.com/syrax90/claude_mobile/commit/e24306109b4394f820ae0956d48ade57559d4015))
+* **central-server:** make mobile device registry last-login-wins ([42e9e37](https://github.com/syrax90/claude_mobile/commit/42e9e37f1fdce5652a09b9bab505285ac47188bd))
+* **central-server:** make mobile device registry last-login-wins ([060e5b2](https://github.com/syrax90/claude_mobile/commit/060e5b2a0af97514f23275247df0c12d0f578287))
+
 ## [0.2.4](https://github.com/syrax90/claude_mobile/compare/server-v0.2.3...server-v0.2.4) (2026-07-22)
 
 
