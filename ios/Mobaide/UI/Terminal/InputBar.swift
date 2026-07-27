@@ -174,10 +174,11 @@ struct InputBar: View {
             } label: {
                 Image(systemName: model.terminalKeyboardActive ? "keyboard.chevron.compact.down" : "keyboard")
             }
-            // Raising is pointless while disconnected, but dismissing must stay
+            // Raising is pointless unless typed keys can actually reach the
+            // PTY (the `sendTerminalBytes` gate), but dismissing must stay
             // available: a socket drop leaves the keyboard raised, and this
             // toggle is its only direct dismissal control.
-            .disabled(!model.isConnected && !model.terminalKeyboardActive)
+            .disabled(!model.canSendTerminalBytes && !model.terminalKeyboardActive)
             .accessibilityLabel(model.terminalKeyboardActive ? "Hide keyboard" : "Show keyboard")
 
             Button {

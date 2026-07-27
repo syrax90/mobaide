@@ -60,6 +60,10 @@ final class TerminalSessionModel {
 
     var isConnected: Bool { connectionState == .live || connectionState == .replayingBuffer }
     var isRunning: Bool { sessionStatus == "running" }
+    /// True when terminal-originated bytes will actually reach the PTY — the
+    /// `sendTerminalBytes` predicate. The show-keyboard affordance keys off
+    /// this same property so the gate and its UI can never drift apart.
+    var canSendTerminalBytes: Bool { connectionState == .live && isRunning }
 
     private let webSocketFactory: WebSocketCoreFactory
     private let sessionManager: SessionManager
@@ -207,7 +211,7 @@ final class TerminalSessionModel {
     /// stale duplicates. Composer submits and control keys are deliberately
     /// not gated here — their buttons disable instead.
     func sendTerminalBytes(_ data: Data) {
-        guard connectionState == .live, isRunning else { return }
+        guard canSendTerminalBytes else { return }
         sendBytes(data)
     }
 
@@ -321,8 +325,8 @@ final class TerminalSessionModel {
     }
 
     /// No connectivity guard: with the keyboard down the toggle button
-    /// disables when disconnected (while raised it stays enabled only to
-    /// dismiss), and `sendTerminalBytes` protects the wire regardless.
+    /// disables unless `canSendTerminalBytes` (while raised it stays enabled
+    /// only to dismiss), and `sendTerminalBytes` protects the wire regardless.
     func showTerminalKeyboard() {
         terminalView.keyboardGate = true
         _ = terminalView.becomeFirstResponder()

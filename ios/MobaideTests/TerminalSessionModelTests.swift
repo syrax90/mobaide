@@ -189,6 +189,40 @@ final class TerminalSessionModelTests: XCTestCase {
         XCTAssertEqual(sent.first, Data([0x69, 0x61]), "typed bytes travel as plain `i` input frames")
     }
 
+    // MARK: - Show-keyboard affordance (canSendTerminalBytes)
+
+    func testCanSendTerminalBytesFalseDuringReplayEvenThoughConnected() async throws {
+        let (model, connection) = try await connectedModel()
+        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))
+        connection.emit(.binary(Data([0x62]))) // replayStart
+        let replaying = await poll { model.connectionState == .replayingBuffer && model.isRunning }
+        XCTAssertTrue(replaying)
+
+        XCTAssertTrue(model.isConnected)
+        XCTAssertFalse(
+            model.canSendTerminalBytes,
+            "replay keeps isConnected true, so an isConnected-keyed affordance would raise a keyboard whose keys sendTerminalBytes drops"
+        )
+    }
+
+    func testCanSendTerminalBytesWithdrawnWhenSessionStopsWhileSocketStaysLive() async throws {
+        let (model, connection) = try await connectedModel()
+        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))
+        let ready = await poll { model.connectionState == .live && model.isRunning }
+        XCTAssertTrue(ready)
+        XCTAssertTrue(model.canSendTerminalBytes)
+
+        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"completed"}"#.utf8)))
+        let stopped = await poll { !model.isRunning }
+        XCTAssertTrue(stopped)
+
+        XCTAssertEqual(model.connectionState, .live, "only the session stopped — the socket stays live")
+        XCTAssertFalse(
+            model.canSendTerminalBytes,
+            "a stopped session behind a live socket must withdraw the show-keyboard affordance"
+        )
+    }
+
     // MARK: - Replay state machine
 
     func testReplaySequenceDrivesConnectionState() async throws {

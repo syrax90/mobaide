@@ -84,7 +84,15 @@ final class TerminalKeyboardObserver {
         )
         let next = Transition(lift: lift, duration: duration)
         guard next != transition else { return }
-        withAnimation(Self.animation) {
+        // Zero-duration frame changes (hardware-keyboard attach, backgrounding)
+        // snap the counter-pan side (`setKeyboardLift` skips its animator), so
+        // the column lift must snap too — animating only one of the two pans
+        // desynchronizes them into a visible flash.
+        if duration > 0 {
+            withAnimation(Self.animation) {
+                transition = next
+            }
+        } else {
             transition = next
         }
     }
