@@ -49,10 +49,21 @@ final class TerminalSessionModel {
     private(set) var sessionStatus: String?
     private(set) var followMode = true
     private(set) var hasUnread = false
+    /// Purely user-controlled composer visibility (Android parity): hidden
+    /// sticks across TUI episodes and reconnects — nothing in the connection
+    /// or replay machinery may resurrect it.
+    private(set) var composerVisible = true
+    /// Whether the terminal view itself currently holds first responder (the
+    /// direct-typing keyboard); fed by the view's responder overrides.
+    private(set) var terminalKeyboardActive = false
     var inputText = ""
 
     var isConnected: Bool { connectionState == .live || connectionState == .replayingBuffer }
     var isRunning: Bool { sessionStatus == "running" }
+    /// True when terminal-originated bytes will actually reach the PTY — the
+    /// `sendTerminalBytes` predicate. The show-keyboard affordance keys off
+    /// this same property so the gate and its UI can never drift apart.
+    var canSendTerminalBytes: Bool { connectionState == .live && isRunning }
 
     private let webSocketFactory: WebSocketCoreFactory
     private let sessionManager: SessionManager
@@ -98,6 +109,9 @@ final class TerminalSessionModel {
         (outboundStream, outboundContinuation) = AsyncStream.makeStream(of: Data.self)
         terminalView = MobaideTerminalView(frame: .zero)
         terminalView.configureAppearance()
+        terminalView.onFirstResponderChange = { [weak self] active in
+            self?.terminalKeyboardActive = active
+        }
     }
 
     func focusRequests() -> AsyncStream<Void> { focusBroadcaster.subscribe(replayLatest: false) }
@@ -188,6 +202,19 @@ final class TerminalSessionModel {
         setFollowMode(true)
     }
 
+    /// Bytes originating from the terminal view itself — typed keys while it
+    /// is first responder, plus SwiftTerm's automatic replies (DA/DECRQM) to
+    /// sequences re-parsed from the replay feed. Dropped unless Live AND
+    /// running (Android input-listener parity): a keyboard raised on the
+    /// terminal surface must not feed a PTY that stopped while the socket
+    /// stayed up, and replay-era auto-replies must not reach the live PTY as
+    /// stale duplicates. Composer submits and control keys are deliberately
+    /// not gated here — their buttons disable instead.
+    func sendTerminalBytes(_ data: Data) {
+        guard canSendTerminalBytes else { return }
+        sendBytes(data)
+    }
+
     func sendControlKey(_ bytes: [UInt8]) {
         sendBytes(Data(bytes))
     }
@@ -205,9 +232,10 @@ final class TerminalSessionModel {
         }
     }
 
-    /// Wire resize notification, debounced 100 ms so a rotation/keyboard burst
+    /// Wire resize notification, debounced 100 ms so a rotation burst
     /// collapses to the final size. The native view is already resized by its
-    /// layout pass; this only drives the `r` frame.
+    /// layout pass; this only drives the `r` frame. (Keyboard show/hide never
+    /// reaches here — the screen pans instead of resizing.)
     func resize(rows: Int, cols: Int) {
         let r = max(1, rows)
         let c = max(1, cols)
@@ -268,12 +296,63 @@ final class TerminalSessionModel {
         setFollowMode(true)
     }
 
+    // MARK: - Composer / terminal keyboard
+
+    /// Reveal a hidden composer and focus its field. Also drops the
+    /// terminal-surface keyboard explicitly (a deliberate divergence from
+    /// Android, which relies on focus retargeting alone): UIKit's responder
+    /// swap is not atomic across a SwiftUI insert, so without the resign a
+    /// lost focus request could leave keystrokes routing into the PTY while
+    /// the composer looks active.
+    func revealComposer() {
+        composerVisible = true
+        dismissTerminalKeyboard()
+        focusBroadcaster.emit(())
+    }
+
+    /// Collapse the composer. No focus side effect (Android parity): the
+    /// field unmounting dismisses its keyboard naturally.
+    func hideComposer() {
+        composerVisible = false
+    }
+
+    func toggleTerminalKeyboard() {
+        if terminalKeyboardActive {
+            dismissTerminalKeyboard()
+        } else {
+            showTerminalKeyboard()
+        }
+    }
+
+    /// No connectivity guard: with the keyboard down the toggle button
+    /// disables unless `canSendTerminalBytes` (while raised it stays enabled
+    /// only to dismiss), and `sendTerminalBytes` protects the wire regardless.
+    func showTerminalKeyboard() {
+        terminalView.keyboardGate = true
+        _ = terminalView.becomeFirstResponder()
+    }
+
+    func dismissTerminalKeyboard() {
+        _ = terminalView.resignFirstResponder()
+    }
+
+    /// Reconciles after system-initiated keyboard dismissals that may bypass
+    /// the responder overrides (driven from `keyboardWillHideNotification`).
+    /// With a hardware keyboard attached the view stays first responder and
+    /// the state correctly stays active.
+    func syncTerminalKeyboardState() {
+        terminalKeyboardActive = terminalView.isFirstResponder
+        if !terminalKeyboardActive {
+            terminalView.keyboardGate = false
+        }
+    }
+
     // MARK: - Templates / input assist
 
     func setInput(_ text: String, requestFocus: Bool) {
         inputText = text
         if requestFocus {
-            focusBroadcaster.emit(())
+            revealComposer()
         }
     }
 
@@ -311,9 +390,14 @@ final class TerminalSessionModel {
 
     func markHidden() {
         foregroundSessionTracker.clearVisible(sessionId)
+        // Leaving the screen must drop the terminal keyboard (Android
+        // dismiss-on-dispose parity) — the retained view would otherwise keep
+        // first responder and swallow keys behind whatever screen comes next.
+        dismissTerminalKeyboard()
     }
 
     func disconnect() {
+        dismissTerminalKeyboard()
         isTornDown = true
         // Reflect teardown in observable state so the screen disables its send
         // controls instead of accepting input into the finished outbound stream.

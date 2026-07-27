@@ -115,6 +115,99 @@ final class TerminalPanScrollViewTests: XCTestCase {
         )
     }
 
+    // MARK: - Keyboard counter-pan
+
+    func testKeyboardLiftNeverChangesTerminalSizeOrContentSize() {
+        let (scroll, terminal) = makeViews(mode: .full)
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+        let restSize = terminal.frame.size
+        let restContent = scroll.contentSize
+
+        scroll.caretAnchorBottomOverride = 100 // high caret → maximum counter-pan
+        scroll.setKeyboardLift(300, duration: 0)
+        scroll.layoutIfNeeded()
+
+        XCTAssertEqual(terminal.frame.size, restSize, "a bounds-size change would fire sizeChanged → a PTY `r` frame")
+        XCTAssertEqual(scroll.contentSize, restContent)
+    }
+
+    func testCounterPanOffsetsTerminalFrameDownward() {
+        let (scroll, terminal) = makeViews(mode: .full)
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+
+        scroll.caretAnchorBottomOverride = 450
+        scroll.setKeyboardLift(300, duration: 0)
+        scroll.layoutIfNeeded()
+
+        XCTAssertEqual(terminal.frame.origin.y, 150, "dy = boxHeight − anchor = 600 − 450")
+        XCTAssertEqual(terminal.frame.origin.x, 0)
+    }
+
+    func testCounterPanClampsToLift() {
+        let (scroll, terminal) = makeViews(mode: .full)
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+
+        scroll.caretAnchorBottomOverride = 100 // boxHeight − anchor = 500 > lift
+        scroll.setKeyboardLift(300, duration: 0)
+        scroll.layoutIfNeeded()
+
+        XCTAssertEqual(terminal.frame.origin.y, 300, "compensation never exceeds the lift")
+    }
+
+    func testKeyboardHideRestoresRestOrigin() {
+        let (scroll, terminal) = makeViews(mode: .full)
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+        scroll.caretAnchorBottomOverride = 450
+        scroll.setKeyboardLift(300, duration: 0)
+        scroll.layoutIfNeeded()
+        XCTAssertEqual(terminal.frame.origin.y, 150)
+
+        scroll.setKeyboardLift(0, duration: 0)
+        scroll.layoutIfNeeded()
+
+        XCTAssertEqual(terminal.frame.origin.y, 0)
+    }
+
+    func testCaretDidMoveInertWhileKeyboardHiddenButSchedulesWhileLifted() {
+        let (scroll, _) = makeViews(mode: .full)
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+
+        scroll.caretDidMove()
+        XCTAssertFalse(
+            scroll.layer.needsLayout(),
+            "caret churn with no keyboard must not schedule layout passes"
+        )
+
+        scroll.caretAnchorBottomOverride = 450
+        scroll.setKeyboardLift(300, duration: 0)
+        scroll.layoutIfNeeded()
+        scroll.caretDidMove()
+        XCTAssertTrue(scroll.layer.needsLayout(), "while lifted, caret movement re-evaluates the counter-pan")
+    }
+
+    func testStaticModeKeepsWidthAndContentSizeUnderCounterPan() {
+        let (scroll, terminal) = makeViews(mode: .static, staticColumns: 120)
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+        scroll.setNeedsLayout()
+        scroll.layoutIfNeeded()
+        let restWidth = terminal.frame.width
+        let restContent = scroll.contentSize
+
+        scroll.caretAnchorBottomOverride = 450
+        scroll.setKeyboardLift(300, duration: 0)
+        scroll.layoutIfNeeded()
+
+        XCTAssertEqual(terminal.frame.origin.y, 150)
+        XCTAssertEqual(terminal.frame.width, restWidth, "the forced-columns width is untouched by the pan")
+        XCTAssertEqual(scroll.contentSize, restContent)
+    }
+
     // MARK: - displayConfig didSet
 
     func testReassigningEqualConfigStillReappliesBounceAndLayout() {
