@@ -90,6 +90,24 @@ and its `apns-collapse-id` equals the session id, so tap deep-links, foreground
 suppression, replace-in-place, and the reconcile loop all reuse the iOS-09
 pipeline unchanged. The entitlements file gains `aps-environment`
 (`development`; signing rewrites it for distribution builds).
+CLA-124 (revised scope) ports Android's explicit-only keyboard model to the
+terminal: the soft keyboard raises solely from explicit user action — the
+composer field, or a show-keyboard toggle in the `InputBar` that makes the
+SwiftTerm view itself first responder so typed keys stream to the PTY as `i`
+frames (gated on connection live + session running, keeping replay-era
+auto-replies off the wire) — and never from tapping the terminal (a
+`keyboardGate` on `canBecomeFirstResponder`, which also keeps SwiftTerm's
+sticky-Ctrl accessory suppressed); the originally specced auto-activation was
+reverted on Android as a UX regression and is deliberately not ported. The
+composer collapses behind a "Command field" reveal chip, the control-key bar
+gains a Backspace key (DEL `0x7f`), and leaving the session dismisses the
+keyboard. Keyboard avoidance is pan-don't-resize (Android `ImeFloatingPan`
+parity): the screen opts out of SwiftUI keyboard avoidance, lifts the UI
+column by the keyboard overlap (`TerminalKeyboardObserver`), and
+`TerminalPanScrollView` counter-pans the terminal so the cursor row plus two
+slack rows stays visible (`TerminalKeyboardPan` math) — the grid never
+resizes on keyboard show/hide, so keyboard transitions send no PTY resize
+frames and no SIGWINCH.
 Remaining feature screens land in later issues.
 
 ## Layout
@@ -121,7 +139,7 @@ ios/
 │   │                             # PushEnvironment (iOS-10 APNs)
 │   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
 │   │                             # Connections, Sessions (list + create wizard), Terminal
-│   │                             # (SwiftTerm host, InputBar, session model/store), and the
+│   │                             # (SwiftTerm host, InputBar, keyboard pan, session model/store), and the
 │   │                             # feature screens (Agents, Projects, Devices, Templates,
 │   │                             # AutoScan, Settings, Support, Update)
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,

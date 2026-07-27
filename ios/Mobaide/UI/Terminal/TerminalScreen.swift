@@ -17,6 +17,7 @@ struct SessionDetailScreen: View {
 
 private struct TerminalScreenContent: View {
     @State private var model: TerminalSessionModel
+    @State private var keyboard = TerminalKeyboardObserver()
     @State private var showTemplates = false
     @State private var showSaveTemplate = false
     @State private var templateName = ""
@@ -32,22 +33,39 @@ private struct TerminalScreenContent: View {
         displayStore = container.terminalDisplayStore
     }
 
+    /// Pan-don't-resize keyboard layout (Android `ImeFloatingPan` parity):
+    /// the screen opts out of SwiftUI keyboard avoidance, then lifts the whole
+    /// column by the keyboard overlap as a placement-only offset — the
+    /// terminal's allocated size is identical with the keyboard shown or
+    /// hidden, so keyboard transitions never resize the grid (no PTY `r`
+    /// frame). The wrapper counter-pans the terminal so the caret row stays
+    /// visible; the outer ZStack does not move and clips the lifted content
+    /// at the navigation-bar edge.
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack(alignment: .top) {
-                TerminalHostView(model: model, displayConfig: displayStore.config)
-                connectionOverlay
-                jumpToBottomButton
-            }
-            InputBar(
-                model: model,
-                onOpenTemplates: { showTemplates = true },
-                onSaveTemplate: {
-                    templateName = ""
-                    showSaveTemplate = true
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                ZStack(alignment: .top) {
+                    TerminalHostView(
+                        model: model,
+                        displayConfig: displayStore.config,
+                        keyboardTransition: keyboard.transition
+                    )
+                    jumpToBottomButton
                 }
-            )
+                InputBar(
+                    model: model,
+                    onOpenTemplates: { showTemplates = true },
+                    onSaveTemplate: {
+                        templateName = ""
+                        showSaveTemplate = true
+                    }
+                )
+            }
+            .offset(y: -keyboard.transition.lift)
+            connectionOverlay
         }
+        .clipped()
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .navigationTitle(model.sessionId)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -66,8 +84,15 @@ private struct TerminalScreenContent: View {
             Button("Save") { model.saveInputAsTemplate(name: templateName) }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear { model.markVisible() }
-        .onDisappear { model.markHidden() }
+        .onAppear {
+            model.markVisible()
+            keyboard.onKeyboardWillHide = { model.syncTerminalKeyboardState() }
+            keyboard.start()
+        }
+        .onDisappear {
+            model.markHidden()
+            keyboard.stop()
+        }
     }
 
     @ViewBuilder

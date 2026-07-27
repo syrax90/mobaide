@@ -47,7 +47,7 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
-    func testDisablesSelectionGesturesButKeepsSingleTapAndMobaideRecognizers() {
+    func testDisablesAllSwiftTermTapsAndSelectionGesturesButKeepsMobaideRecognizers() {
         let terminal = makeTerminal()
         let longPress = UILongPressGestureRecognizer()
         let tripleTap = UITapGestureRecognizer()
@@ -65,7 +65,10 @@ final class TerminalHostGestureTests: XCTestCase {
 
         XCTAssertFalse(longPress.isEnabled)
         XCTAssertFalse(tripleTap.isEnabled)
-        XCTAssertTrue(singleTap.isEnabled, "single taps are not selection gestures")
+        XCTAssertFalse(
+            singleTap.isEnabled,
+            "SwiftTerm's single-tap calls becomeFirstResponder — every SwiftTerm tap must be disabled"
+        )
         XCTAssertTrue(mobaideDoubleTap.isEnabled, "mobaide.* recognizers are exempt")
     }
 

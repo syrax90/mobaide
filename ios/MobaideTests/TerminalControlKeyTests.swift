@@ -36,7 +36,7 @@ final class TerminalControlKeyTests: XCTestCase {
         XCTAssertEqual(
             ids(TerminalControlKey.claudeKeys),
             ["enter", "up", "down", "left", "right", "ctrlC", "mode", "ctrlL", "esc",
-             "rewind", "tab", "ctrlO", "ctrlR"]
+             "rewind", "tab", "backspace", "ctrlO", "ctrlR"]
         )
     }
 
@@ -44,7 +44,7 @@ final class TerminalControlKeyTests: XCTestCase {
         XCTAssertEqual(
             ids(TerminalControlKey.codexKeys),
             ["enter", "up", "down", "left", "right", "ctrlC", "mode", "ctrlL", "esc",
-             "approve", "reject", "rewind", "tab", "ctrlO", "ctrlR"]
+             "approve", "reject", "rewind", "tab", "backspace", "ctrlO", "ctrlR"]
         )
     }
 
@@ -52,7 +52,7 @@ final class TerminalControlKeyTests: XCTestCase {
         XCTAssertEqual(
             ids(TerminalControlKey.antigravityKeys),
             ["enter", "up", "down", "left", "right", "ctrlC", "ctrlL", "esc",
-             "ctrlK", "ctrlG", "ctrlD", "tab", "ctrlO", "ctrlR"]
+             "ctrlK", "ctrlG", "ctrlD", "tab", "backspace", "ctrlO", "ctrlR"]
         )
     }
 
@@ -70,6 +70,14 @@ final class TerminalControlKeyTests: XCTestCase {
         let claude = TerminalControlKey.claudeKeys
         XCTAssertEqual(bytes("mode", in: claude), [0x1B, 0x5B, 0x5A])
         XCTAssertEqual(bytes("rewind", in: claude), [0x1B, 0x1B])
+    }
+
+    func testBackspaceIsSharedAndSendsDEL() {
+        // DEL (0x7F) — the erase byte readline/Claude Code/Codex expect —
+        // never BS (0x08), and present for every kind (Android SHARED_KEYS).
+        for keys in [TerminalControlKey.claudeKeys, TerminalControlKey.codexKeys, TerminalControlKey.antigravityKeys] {
+            XCTAssertEqual(bytes("backspace", in: keys), [0x7F])
+        }
     }
 
     func testCodexAndAntigravityControlBytes() {

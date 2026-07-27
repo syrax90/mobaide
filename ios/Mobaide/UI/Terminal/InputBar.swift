@@ -10,6 +10,10 @@ struct TerminalControlKey: Identifiable {
 
     static let esc = TerminalControlKey(id: "esc", label: "Esc", bytes: [0x1B])
     static let tab = TerminalControlKey(id: "tab", label: "Tab", bytes: [0x09])
+    /// DEL (0x7f) — the terminal erase byte readline/Claude Code/Codex expect
+    /// (not 0x08 BS). Terminal-surface typing has no composer buffer to delete
+    /// from, so an explicit erase key is the reliable path.
+    static let backspace = TerminalControlKey(id: "backspace", label: "Backspace", bytes: [0x7F], systemImage: "delete.left")
     static let enter = TerminalControlKey(id: "enter", label: "Enter", bytes: [0x0D])
     static let ctrlC = TerminalControlKey(id: "ctrlC", label: "Ctrl+C", bytes: [0x03])
     static let up = TerminalControlKey(id: "up", label: "Up", bytes: [0x1B, 0x5B, 0x41], systemImage: "arrow.up")
@@ -29,11 +33,10 @@ struct TerminalControlKey: Identifiable {
 
     /// Canonical left-to-right order for every control key (Android `CONTROL_KEY_ORDER`).
     /// Each kind renders only the subset it supports, filtered from this single list, so the
-    /// button order stays consistent across kinds — only which buttons appear differs. iOS has
-    /// no Backspace key (a pre-existing gap vs. Android), so it is absent here.
+    /// button order stays consistent across kinds — only which buttons appear differs.
     static let controlKeyOrder: [TerminalControlKey] = [
         enter, up, down, left, right, ctrlC, mode, ctrlL, esc,
-        approve, reject, ctrlK, ctrlG, ctrlD, rewind, tab, ctrlO, ctrlR,
+        approve, reject, ctrlK, ctrlG, ctrlD, rewind, tab, backspace, ctrlO, ctrlR,
     ]
 
     /// Reorder a set of keys into the canonical layout (Android `orderedControlKeys`).
@@ -45,7 +48,7 @@ struct TerminalControlKey: Identifiable {
 
     /// Shared keys present for every kind (Android `SHARED_KEYS`). Order here is irrelevant —
     /// `controlKeyOrder` decides the layout; this list only defines membership.
-    static let sharedTail: [TerminalControlKey] = [esc, ctrlC, enter, tab, up, down, left, right, ctrlO, ctrlR]
+    static let sharedTail: [TerminalControlKey] = [esc, ctrlC, enter, tab, backspace, up, down, left, right, ctrlO, ctrlR]
     static let claudeKeys: [TerminalControlKey] = ordered([mode, rewind] + sharedTail + [ctrlL])
     static let codexKeys: [TerminalControlKey] = ordered([approve, reject] + claudeKeys)
     static let antigravityKeys: [TerminalControlKey] = ordered([ctrlK, ctrlG, ctrlD] + sharedTail + [ctrlL])
@@ -81,56 +84,111 @@ struct InputBar: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(TerminalControlKey.keys(for: model.kind)) { key in
-                        Button {
-                            model.sendControlKey(key.bytes)
-                        } label: {
-                            if let image = key.systemImage {
-                                Image(systemName: image)
-                            } else {
-                                Text(key.label)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                        .font(.footnote)
-                        .disabled(!model.isConnected)
-                    }
-                }
-                .padding(.horizontal, 4)
+            controlKeyRow
+            // Fade only, never slide (Android parity): a slide animates the bar
+            // height frame-by-frame, resizing the terminal — and the remote PTY —
+            // through a burst of intermediate row counts. A fade changes height
+            // in a single frame, so the toggle coalesces into one debounced resize.
+            if model.composerVisible {
+                composerRow
+            } else {
+                hiddenComposerRow
             }
-
-            HStack(spacing: 8) {
-                Button(action: onOpenTemplates) {
-                    Image(systemName: "doc.text")
-                }
-                .disabled(!model.isConnected)
-
-                TextField("Message", text: $model.inputText, axis: .vertical)
-                    .lineLimit(1...5)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($inputFocused)
-
-                Button(action: onSaveTemplate) {
-                    Image(systemName: "square.and.arrow.down")
-                }
-                .disabled(trimmedInput.isEmpty)
-
-                Button(action: submit) {
-                    Image(systemName: "paperplane.fill")
-                }
-                .disabled(!canSend)
-            }
-            .padding(.horizontal, 8)
         }
         .padding(.vertical, 6)
         .background(colors.surfaceVariant.opacity(0.3))
+        .animation(.easeInOut(duration: 0.15), value: model.composerVisible)
         .task {
             for await _ in model.focusRequests() {
+                // Let a just-revealed composer render before claiming focus —
+                // setting @FocusState on a not-yet-mounted field is dropped.
+                await Task.yield()
                 inputFocused = true
             }
         }
+    }
+
+    private var controlKeyRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(TerminalControlKey.keys(for: model.kind)) { key in
+                    Button {
+                        model.sendControlKey(key.bytes)
+                    } label: {
+                        if let image = key.systemImage {
+                            Image(systemName: image)
+                        } else {
+                            Text(key.label)
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.footnote)
+                    .disabled(!model.isConnected)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+    }
+
+    private var composerRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                model.hideComposer()
+            } label: {
+                Image(systemName: "keyboard.chevron.compact.down")
+            }
+            .accessibilityLabel("Hide command field")
+
+            Button(action: onOpenTemplates) {
+                Image(systemName: "doc.text")
+            }
+            .disabled(!model.isConnected)
+
+            TextField("Message", text: $model.inputText, axis: .vertical)
+                .lineLimit(1...5)
+                .textFieldStyle(.roundedBorder)
+                .focused($inputFocused)
+
+            Button(action: onSaveTemplate) {
+                Image(systemName: "square.and.arrow.down")
+            }
+            .disabled(trimmedInput.isEmpty)
+
+            Button(action: submit) {
+                Image(systemName: "paperplane.fill")
+            }
+            .disabled(!canSend)
+        }
+        .padding(.horizontal, 8)
+        .transition(.opacity)
+    }
+
+    /// Collapsed-composer row (Android `RevealComposerChip` + show-keyboard
+    /// button). The keyboard button is a toggle with a state-reflecting icon —
+    /// the deliberate iOS divergence: there is no system back gesture to
+    /// dismiss the keyboard, so the same button must do both.
+    private var hiddenComposerRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                model.toggleTerminalKeyboard()
+            } label: {
+                Image(systemName: model.terminalKeyboardActive ? "keyboard.chevron.compact.down" : "keyboard")
+            }
+            .disabled(!model.isConnected)
+            .accessibilityLabel(model.terminalKeyboardActive ? "Hide keyboard" : "Show keyboard")
+
+            Button {
+                model.revealComposer()
+            } label: {
+                Label("Command field", systemImage: "keyboard")
+            }
+            .buttonStyle(.bordered)
+            .font(.footnote)
+
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .transition(.opacity)
     }
 
     private func submit() {

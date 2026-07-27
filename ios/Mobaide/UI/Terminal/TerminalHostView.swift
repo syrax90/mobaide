@@ -2,23 +2,59 @@
 import SwiftUI
 import UIKit
 
-/// `TerminalView` subclass that removes the on-screen keyboard and SwiftTerm's
-/// built-in input accessory. Input is driven entirely by the app's per-kind
-/// `InputBar` (Android parity), so the terminal is a display + gesture surface;
-/// this also removes the accessory's persistent (sticky) Ctrl toggle the issue
-/// calls out — there is no ctrl-modifier surface to make one-shot.
+/// `TerminalView` subclass with an explicit-only on-screen keyboard (Android
+/// parity): the keyboard raises solely from the InputBar's show-keyboard
+/// button — never from touching the terminal — and typed keys flow through
+/// SwiftTerm's existing `send` delegate path straight to the PTY. SwiftTerm's
+/// built-in input accessory (the persistent sticky-Ctrl toggle) stays removed;
+/// the app's per-kind control-key row is the only accessory surface.
 final class MobaideTerminalView: TerminalView {
     /// Visible row count, tracked from the `sizeChanged` delegate so row
     /// hit-testing can derive cell height without SwiftTerm's internal metrics.
     var visibleRows = 24
 
-    override var canBecomeFirstResponder: Bool { false }
+    /// Explicit-only keyboard gate: opened by the model just before it calls
+    /// `becomeFirstResponder()`, closed on every resign or failed raise. While
+    /// closed, nothing — including any UIKit responder plumbing — can raise
+    /// the keyboard from a terminal touch (the Android regression this model
+    /// replaced: "keyboard appears every time you tap anywhere").
+    var keyboardGate = false
+
+    /// Reports actual first-responder transitions to the owning model so the
+    /// show/hide toggle reflects reality, not the last request.
+    var onFirstResponderChange: ((Bool) -> Void)?
+
+    override var canBecomeFirstResponder: Bool { keyboardGate }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became {
+            onFirstResponderChange?(true)
+        } else {
+            keyboardGate = false
+        }
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        if resigned {
+            keyboardGate = false
+            onFirstResponderChange?(false)
+        }
+        return resigned
+    }
 
     func configureAppearance() {
         nativeBackgroundColor = UIColor(MobaideColors.terminalBackground)
         nativeForegroundColor = UIColor(MobaideColors.terminalForeground)
         backgroundColor = UIColor(MobaideColors.terminalBackground)
         font = UIFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        // Drop SwiftTerm's `TerminalAccessory` (sticky-Ctrl bar) installed by
+        // its `setup()`. The property is settable-public (not overridable), and
+        // the accessory is installed exactly once at init, so a one-time nil
+        // here — before the view can ever become first responder — is final.
+        inputAccessoryView = nil
     }
 
     /// SwiftTerm's per-cell dimensions. The caret is exactly one cell, so its
@@ -68,6 +104,11 @@ final class MobaideTerminalView: TerminalView {
     /// Disables SwiftTerm's own gesture recognizers that would steal touches
     /// from the app's surfaces, keeping the `mobaide.*` taps and the scroll
     /// views' own pans intact:
+    /// - SwiftTerm's single-tap calls `becomeFirstResponder()` (raising the
+    ///   keyboard from a terminal touch — the exact behavior the explicit-only
+    ///   keyboard model forbids) and, while first responder, sends mouse click
+    ///   reports / pops context menus that double-fire alongside the app's
+    ///   `mobaide.rowTap` semantics — so every SwiftTerm tap is disabled;
     /// - double/triple-tap and long-press start text selection, hijacking the
     ///   Static-mode horizontal pan into a selection drag;
     /// - the plain `UIPanGestureRecognizer` SwiftTerm adds while a TUI has
@@ -80,7 +121,7 @@ final class MobaideTerminalView: TerminalView {
         for recognizer in gestureRecognizers ?? [] where recognizer.name?.hasPrefix("mobaide.") != true {
             if recognizer is UILongPressGestureRecognizer {
                 recognizer.isEnabled = false
-            } else if let tap = recognizer as? UITapGestureRecognizer, tap.numberOfTapsRequired >= 2 {
+            } else if recognizer is UITapGestureRecognizer {
                 recognizer.isEnabled = false
             } else if type(of: recognizer) == UIPanGestureRecognizer.self, recognizer !== panGestureRecognizer {
                 recognizer.isEnabled = false
@@ -105,6 +146,7 @@ final class MobaideTerminalView: TerminalView {
 struct TerminalHostView: UIViewRepresentable {
     let model: TerminalSessionModel
     let displayConfig: TerminalDisplayConfig
+    let keyboardTransition: TerminalKeyboardObserver.Transition
 
     func makeCoordinator() -> Coordinator {
         Coordinator(model: model)
@@ -113,12 +155,19 @@ struct TerminalHostView: UIViewRepresentable {
     func makeUIView(context: Context) -> TerminalPanScrollView {
         let terminal = model.terminalView
         terminal.terminalDelegate = context.coordinator
+        // Fire `rangeChanged` on every display update so the keyboard
+        // counter-pan tracks the caret while a TUI redraws (its input box can
+        // move without any scroll or size change).
+        terminal.notifyUpdateChanges = true
         context.coordinator.attachGestures(to: terminal)
-        return TerminalPanScrollView(terminalView: terminal, displayConfig: displayConfig)
+        let scroll = TerminalPanScrollView(terminalView: terminal, displayConfig: displayConfig)
+        context.coordinator.panHost = scroll
+        return scroll
     }
 
     func updateUIView(_ uiView: TerminalPanScrollView, context: Context) {
         uiView.displayConfig = displayConfig
+        uiView.setKeyboardLift(keyboardTransition.lift, duration: keyboardTransition.duration)
     }
 
     /// SwiftUI does not guarantee the outgoing wrapper is dismantled before
@@ -135,6 +184,7 @@ struct TerminalHostView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, @MainActor TerminalViewDelegate {
         private let model: TerminalSessionModel
+        weak var panHost: TerminalPanScrollView?
 
         init(model: TerminalSessionModel) {
             self.model = model
@@ -176,7 +226,7 @@ struct TerminalHostView: UIViewRepresentable {
         // MARK: TerminalViewDelegate
 
         func send(source: TerminalView, data: ArraySlice<UInt8>) {
-            model.sendBytes(Data(data))
+            model.sendTerminalBytes(Data(data))
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
@@ -186,6 +236,7 @@ struct TerminalHostView: UIViewRepresentable {
 
         func scrolled(source: TerminalView, position: Double) {
             model.onScroll(position: position)
+            panHost?.caretDidMove()
         }
 
         func clipboardCopy(source: TerminalView, content: Data) {
@@ -198,6 +249,8 @@ struct TerminalHostView: UIViewRepresentable {
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
         func bell(source: TerminalView) {}
         func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
-        func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+        func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
+            panHost?.caretDidMove()
+        }
     }
 }
