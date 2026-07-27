@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -24,6 +25,27 @@ from .routing import RoutingTable
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/proxy")
+
+_CUSTOM_KIND_RE = re.compile(r"^custom_[0-9a-f]{12}$")
+
+# Agents below this handshake protocol version silently ignore the injected
+# ``resolved_*`` fields and would open a bare shell instead of the stored
+# command, so custom-kind creates are refused for them.
+_MIN_AGENT_PROTO_FOR_CUSTOM_KINDS = 7
+
+
+class _ProxyRejection(Exception):
+    """Short-circuit for interception failures whose body shape is part of
+    the relay wire contract. Raising ``HTTPException`` with a dict detail
+    would nest the payload under FastAPI's ``{"detail": ...}`` wrapper;
+    relay-path marker bodies (``agent_update_required``, mirroring the
+    agent-authored ``<cli>_cli_missing`` / ``<cli>_auth_required`` shapes)
+    must stay top-level."""
+
+    def __init__(self, status_code: int, body: dict) -> None:
+        super().__init__(body.get("detail"))
+        self.status_code = status_code
+        self.body = body
 
 
 class MobileProxy:
@@ -98,6 +120,71 @@ class MobileProxy:
             future.set_result(response)
 
 
+async def _resolve_custom_kind(
+    request: Request,
+    agent_id: str,
+    payload: MobileTokenPayload,
+    body: dict,
+) -> dict:
+    """Strip-then-inject the server-only spawn fields on session creates.
+
+    ``resolved_command`` / ``resolved_name`` are dropped from every client
+    body unconditionally — only the relay may author them (the agent trusts
+    them precisely because mobile clients have no other path that reaches
+    its control channel). For a ``cli`` matching ``custom_<12hex>`` the
+    stored command/name are looked up in the caller's registry and injected
+    into a fresh dict; the forwarded body is never the client dict mutated
+    in place.
+
+    A type deleted after this lookup but before the agent spawns still
+    launches with the snapshot command — it was live when read, matching
+    the ``kind_label`` snapshot semantics.
+    """
+    body = {
+        k: v
+        for k, v in body.items()
+        if k not in ("resolved_command", "resolved_name")
+    }
+    cli = body.get("cli")
+    if not isinstance(cli, str) or not cli.startswith("custom_"):
+        return body
+    if _CUSTOM_KIND_RE.fullmatch(cli) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid custom agent type id",
+        )
+    service = request.app.state.custom_agent_type_service
+    row = await service.resolve_for_launch(
+        cli.removeprefix("custom_"), payload.user_id
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Custom agent type not found",
+        )
+    # Gate on the LIVE tunnel's negotiated version (stamped synchronously at
+    # registration), not the DB handshake row — overlapping tunnels can
+    # leave the row describing a different connection than the one this
+    # request will be forwarded to. An offline agent skips the gate here;
+    # MobileProxy.forward answers 503 for it immediately after.
+    agent_conn = request.app.state.routing.get_agent(agent_id)
+    if agent_conn is not None:
+        proto = agent_conn.protocol_version
+        if proto is None or proto < _MIN_AGENT_PROTO_FOR_CUSTOM_KINDS:
+            raise _ProxyRejection(
+                status.HTTP_409_CONFLICT,
+                {
+                    "agent_update_required": True,
+                    "detail": (
+                        "Agent update required to launch custom agent types"
+                    ),
+                },
+            )
+    body["resolved_command"] = row["command"]
+    body["resolved_name"] = row["name"]
+    return body
+
+
 @router.api_route(
     "/{agent_id}/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
@@ -130,6 +217,19 @@ async def proxy_to_agent(
                 body = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 body = None
+
+    if (
+        request.method == "POST"
+        and path == "api/sessions"
+        and isinstance(body, dict)
+    ):
+        try:
+            body = await _resolve_custom_kind(request, agent_id, payload, body)
+        except _ProxyRejection as rejection:
+            return JSONResponse(
+                status_code=rejection.status_code,
+                content=rejection.body,
+            )
 
     query = dict(request.query_params) if request.query_params else None
 

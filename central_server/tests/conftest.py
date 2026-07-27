@@ -7,6 +7,7 @@ from central_server.agents.service import AgentService
 from central_server.app import create_app
 from central_server.auth.service import AuthService
 from central_server.config import CentralServerConfig
+from central_server.custom_agent_types.service import CustomAgentTypeService
 from central_server.db.database import Database
 from central_server.manifest.store import ManifestStore
 from central_server.pairing.service import PairingService
@@ -77,6 +78,9 @@ async def app(config, db):
         db, application.state.routing
     )
     application.state.shortcut_service = ShortcutService(
+        db, application.state.routing
+    )
+    application.state.custom_agent_type_service = CustomAgentTypeService(
         db, application.state.routing
     )
     # Disabled dispatcher (no APNs config in tests); push tests swap in a

@@ -1,15 +1,29 @@
 from __future__ import annotations
 
 import enum
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from .shell import build_custom_argv
+
 if TYPE_CHECKING:
     from .antigravity_launcher import AntigravityOptions  # noqa: F401
     from .claude_launcher import ClaudeOptions  # noqa: F401
     from .codex_launcher import CodexOptions  # noqa: F401
+
+# Wire pattern for account-scoped custom AI agent type kinds. The 12-hex id
+# is minted by the central server's registry; the raw string is the wire
+# kind (never a SessionKind member).
+CUSTOM_KIND_PATTERN = re.compile(r"^custom_[0-9a-f]{12}$")
+
+
+class CustomCommandUnresolvedError(ValueError):
+    """A ``custom_<id>`` cli reached spawn resolution without a
+    relay-injected ``resolved_command`` (agent-direct REST, an unknown or
+    malformed id, or a relay too old to resolve the registry)."""
 
 
 class SessionState(enum.Enum):
@@ -29,8 +43,14 @@ class SessionKind(enum.Enum):
     Antigravity CLI (``agy``) launched via ``AntigravityLauncher`` (create with
     ``cli="antigravity"`` / ``antigravity_options``). ``AUTO_SCAN`` —
     sub-sessions spawned by the Linear scanner; argv/cwd/env pre-built by the
-    scanner. ``SHELL`` — raw shell (``_DEFAULT_SHELL``) anchored to a project's
-    cwd; bypasses the managed-CLI launchers entirely.
+    scanner. ``SHELL`` — the user's login shell anchored to a project's cwd;
+    bypasses the managed-CLI launchers entirely.
+
+    Account-scoped custom AI agent types are NOT members: their wire kind is
+    the raw string ``custom_<12hex>`` (``CUSTOM_KIND_PATTERN``), carried
+    through ``SessionConfig.kind`` / ``SessionInfo.kind`` as ``str`` and
+    emitted verbatim by ``session_to_wire_dict``. They behave like ``SHELL``
+    sessions running a relay-resolved stored command.
     """
 
     CLAUDE = "claude"
@@ -66,7 +86,14 @@ class SessionConfig:
     # Set when the session runs the Antigravity CLI. Mutually exclusive with the
     # other options blocks; ``SessionManager`` dispatches to ``AntigravityLauncher``.
     antigravity_options: AntigravityOptions | None = None
-    kind: SessionKind = SessionKind.CLAUDE
+    # A SessionKind member, or the raw ``custom_<12hex>`` wire string for
+    # account-scoped custom agent types.
+    kind: SessionKind | str = SessionKind.CLAUDE
+    # Snapshot of the custom agent type's display name taken at session
+    # creation (relay-injected ``resolved_name``), so session lists render
+    # correctly even after the type is renamed or deleted. None for
+    # built-in kinds.
+    kind_label: str | None = None
     # Terminal-mode worktree request. Consumed only on the SHELL+project path
     # (``SessionManager._resolve_project_cwd``); kept separate from
     # ``claude_options`` so a Terminal session can create a worktree while
@@ -92,7 +119,11 @@ class SessionInfo:
     cwd: str | None
     title: str | None = None
     project_name: str | None = None
-    kind: SessionKind = SessionKind.CLAUDE
+    # A SessionKind member, or the raw ``custom_<12hex>`` wire string.
+    kind: SessionKind | str = SessionKind.CLAUDE
+    # Custom-type display-name snapshot from creation time; None for
+    # built-in kinds. See ``SessionConfig.kind_label``.
+    kind_label: str | None = None
     # Attention state: ``awaiting_permission`` | ``awaiting_os_permission`` |
     # ``turn_finished`` | ``ended`` | ``None``. ``awaiting_os_permission`` is the
     # agent's own startup-stall heuristic (a child producing no output is most
@@ -150,8 +181,9 @@ def resolve_spawn_args(
     command_hint: list[str] | None,
     env_hint: dict[str, str] | None,
     default_shell: list[str],
+    resolved_command: str | None = None,
 ) -> tuple[
-    SessionKind,
+    SessionKind | str,
     list[str],
     dict[str, str] | None,
     "ClaudeOptions | None",
@@ -169,11 +201,30 @@ def resolve_spawn_args(
     requests honour the hints (overwritten later by the launcher inside
     ``SessionManager``).
 
+    Custom agent types (``cli`` matching ``CUSTOM_KIND_PATTERN``) keep the
+    same guard posture: the client hints are discarded and the spawn argv is
+    built exclusively from ``resolved_command`` — the stored command the
+    relay injected after its registry lookup. Only the relay can author that
+    field on any path that reaches this function, so argv authority stays
+    server-side. A custom ``cli`` without ``resolved_command`` (agent-direct
+    REST, unknown/deleted id, malformed id) raises
+    ``CustomCommandUnresolvedError`` — never a silent bare-shell downgrade.
+
     Also normalises the options so exactly the chosen CLI's object is set —
     defaulted when the client gave an explicit ``cli`` but omitted the options
     block — and the others are cleared, keeping ``kind`` / options / launcher
     choice consistent for ``SessionManager`` dispatch.
     """
+    if cli is not None and cli.startswith("custom_"):
+        if CUSTOM_KIND_PATTERN.fullmatch(cli) is None:
+            raise CustomCommandUnresolvedError(
+                f"Invalid custom agent type kind: {cli!r}"
+            )
+        if resolved_command is None:
+            raise CustomCommandUnresolvedError(
+                "Custom agent types can only be launched through the relay"
+            )
+        return cli, build_custom_argv(resolved_command), None, None, None, None
     kind = _resolve_session_kind(
         cli, claude_options, codex_options, antigravity_options
     )
@@ -223,6 +274,7 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
     place, preventing the drift that previously hid behind five duplicated
     literal dict-comprehensions.
     """
+    kind = info.kind
     return {
         "session_id": info.session_id,
         "state": info.state.value,
@@ -232,7 +284,8 @@ def session_to_wire_dict(info: SessionInfo) -> dict[str, Any]:
         "cwd": info.cwd,
         "title": info.title,
         "project_name": info.project_name,
-        "kind": info.kind.value,
+        "kind": kind.value if isinstance(kind, SessionKind) else kind,
+        "kind_label": info.kind_label,
         "attention": info.attention,
         "exit_reason": info.exit_reason,
     }

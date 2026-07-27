@@ -614,6 +614,7 @@ class TerminalSession:
             title=self._title,
             project_name=self._config.project_name,
             kind=self._config.kind,
+            kind_label=self._config.kind_label,
             attention=self._attention,
             exit_reason=self._exit_reason,
         )

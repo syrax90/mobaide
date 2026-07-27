@@ -414,3 +414,117 @@ class TestResolveSpawnArgs:
         # Exactly one options object survives, matching the chosen kind.
         assert kind is SessionKind.ANTIGRAVITY
         assert antigravity is not None and claude is None and codex is None
+
+
+CUSTOM_KIND = "custom_0123456789ab"
+
+
+class TestResolveSpawnArgsCustomKind:
+    """The custom-agent-type branch of ``resolve_spawn_args``: argv comes
+    exclusively from the relay-injected ``resolved_command`` (client hints
+    stay discarded), and a custom ``cli`` without it fails loudly instead
+    of degrading to a bare shell."""
+
+    _SHELL = ["/bin/sh"]
+
+    def _call(
+        self, cli, resolved_command=None, claude=None, cmd=None, env=None,
+    ):
+        from mobaide.core.models import resolve_spawn_args
+
+        return resolve_spawn_args(
+            cli, claude, None, None, cmd, env, self._SHELL,
+            resolved_command=resolved_command,
+        )
+
+    def test_resolved_command_builds_login_shell_argv(self):
+        from mobaide.core.shell import build_custom_argv
+
+        kind, command, env, claude, codex, antigravity = self._call(
+            CUSTOM_KIND,
+            resolved_command="aider --model x",
+            cmd=["rm", "-rf"],
+            env={"EVIL": "1"},
+        )
+
+        assert kind == CUSTOM_KIND
+        assert isinstance(kind, str)
+        # Spawn contract: the stored command rides as ONE argv element
+        # through the login shell — never the client's command/env hints.
+        assert command == build_custom_argv("aider --model x")
+        assert command[-1] == "aider --model x"
+        assert env is None
+        assert claude is None and codex is None and antigravity is None
+
+    def test_custom_branch_wins_over_stray_options(self):
+        from mobaide.core.claude_launcher import ClaudeOptions
+
+        kind, _command, _env, claude, _codex, _antigravity = self._call(
+            CUSTOM_KIND,
+            resolved_command="echo hi",
+            claude=ClaudeOptions(),
+        )
+        assert kind == CUSTOM_KIND
+        assert claude is None
+
+    def test_missing_resolved_command_raises(self):
+        from mobaide.core.models import CustomCommandUnresolvedError
+
+        with pytest.raises(CustomCommandUnresolvedError, match="relay"):
+            self._call(CUSTOM_KIND)
+
+    @pytest.mark.parametrize(
+        "bad_cli",
+        [
+            "custom_xyz",
+            "custom_0123456789a",   # 11 hex chars
+            "custom_0123456789abc",  # 13 hex chars
+            "custom_0123456789AB",  # uppercase
+            "custom_",
+        ],
+    )
+    def test_malformed_custom_cli_raises_even_with_resolved_command(
+        self, bad_cli,
+    ):
+        from mobaide.core.models import CustomCommandUnresolvedError
+
+        with pytest.raises(CustomCommandUnresolvedError):
+            self._call(bad_cli, resolved_command="echo hi")
+
+
+class TestSessionWireDictCustomKind:
+    """``session_to_wire_dict`` emits raw-string custom kinds verbatim and
+    always carries the additive nullable ``kind_label``."""
+
+    def _info(self, **overrides):
+        from datetime import datetime, timezone
+
+        from mobaide.core.models import SessionInfo, SessionState
+
+        defaults = dict(
+            session_id="sid",
+            state=SessionState.RUNNING,
+            created_at=datetime(2026, 7, 27, 0, 0, 0, tzinfo=timezone.utc),
+            pid=42,
+            command=["/bin/sh"],
+            cwd="/work",
+        )
+        defaults.update(overrides)
+        return SessionInfo(**defaults)
+
+    def test_custom_str_kind_and_label_pass_through(self):
+        from mobaide.core.models import session_to_wire_dict
+
+        wire = session_to_wire_dict(
+            self._info(kind=CUSTOM_KIND, kind_label="My Agent"),
+        )
+        assert wire["kind"] == CUSTOM_KIND
+        assert wire["kind_label"] == "My Agent"
+
+    def test_builtin_kind_still_wires_enum_value_with_null_label(self):
+        from mobaide.core.models import SessionKind, session_to_wire_dict
+
+        wire = session_to_wire_dict(self._info(kind=SessionKind.SHELL))
+        assert wire["kind"] == "shell"
+        assert "kind_label" in wire
+        assert wire["kind_label"] is None

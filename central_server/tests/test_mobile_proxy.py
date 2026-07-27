@@ -327,3 +327,362 @@ class TestProxyEndpoint:
                 break
         else:
             pytest.fail("proxy catch-all route not found on the router")
+
+
+class TestSessionCreateInterception:
+    """The relay's strip-then-inject on ``POST /proxy/{agent_id}/api/sessions``.
+
+    ``resolved_command`` / ``resolved_name`` are popped from every client
+    dict body on this route; for a valid ``custom_<12hex>`` ``cli`` the
+    stored command/name are looked up in the caller's registry and
+    injected. Failures answer without forwarding: malformed id → 400,
+    unknown/deleted/foreign id → 404, LIVE tunnel protocol version None
+    or < 7 → 409 with the ``agent_update_required`` marker. The gate
+    reads the routing entry, never the DB handshake row; with no live
+    conn it is skipped and ``forward`` answers 503.
+    """
+
+    async def _setup(
+        self, app, registered_agent, proto: int | None = 7
+    ) -> tuple[str, dict, dict[str, str], dict]:
+        """Wire tokens, routing, a capturing forward; stamp the live conn.
+
+        ``proto`` is stamped on the registered ``AgentConnection`` — the
+        source the 409 gate reads. ``proto=None`` models a routing entry
+        that was never stamped (gate must fail closed).
+        """
+        agent_id, _ = registered_agent
+        owner = await app.state.db.get_user_by_email("viewer@test.local")
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            owner["id"], agent_id, owner["id"]
+        )
+        app.state.mobile_proxy = MobileProxy(app.state.routing)
+        conn = app.state.routing.register_agent(agent_id, _mock_ws())
+        conn.protocol_version = proto
+
+        captured: dict = {}
+
+        async def mock_forward(
+            agent_id, method, path, query=None, body=None, timeout=30.0
+        ):
+            captured["method"] = method
+            captured["path"] = path
+            captured["body"] = body
+            return {"status": 201, "body": {"session_id": "s1"}}
+
+        app.state.mobile_proxy.forward = mock_forward
+        headers = {"Authorization": f"Bearer {access}"}
+        return agent_id, owner, headers, captured
+
+    async def test_custom_cli_injects_stored_command_and_name(
+        self, client, app, registered_agent
+    ):
+        """Happy path: client-supplied ``resolved_*`` are overwritten with
+        the registry values; the rest of the body is forwarded intact."""
+        agent_id, owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider --yes"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={
+                "cli": f"custom_{row['id']}",
+                "resolved_command": "client-forged",
+                "resolved_name": "client-forged",
+                "rows": 30,
+            },
+            headers=headers,
+        )
+
+        assert resp.status_code == 201
+        assert captured["body"]["resolved_command"] == "aider --yes"
+        assert captured["body"]["resolved_name"] == "Aider"
+        assert captured["body"]["cli"] == f"custom_{row['id']}"
+        assert captured["body"]["rows"] == 30
+
+    async def test_non_custom_cli_strips_resolved_fields(
+        self, client, app, registered_agent
+    ):
+        agent_id, _owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={
+                "cli": "claude",
+                "resolved_command": "forged",
+                "resolved_name": "forged",
+            },
+            headers=headers,
+        )
+
+        assert resp.status_code == 201
+        assert "resolved_command" not in captured["body"]
+        assert "resolved_name" not in captured["body"]
+        assert captured["body"]["cli"] == "claude"
+
+    async def test_unknown_custom_id_returns_404_without_forwarding(
+        self, client, app, registered_agent
+    ):
+        agent_id, _owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": "custom_" + "a" * 12},
+            headers=headers,
+        )
+
+        assert resp.status_code == 404
+        assert captured == {}
+
+    async def test_deleted_custom_id_returns_404(
+        self, client, app, registered_agent
+    ):
+        agent_id, owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Gone", "gone-cmd"
+        )
+        await app.state.db.soft_delete_custom_agent_type(
+            row["id"], owner["id"]
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 404
+        assert captured == {}
+
+    async def test_foreign_custom_id_returns_404(
+        self, client, app, registered_agent
+    ):
+        """Another user's type id resolves against the caller's registry
+        scope and must look identical to an unknown id."""
+        agent_id, _owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+        other_user = await app.state.db.create_user(
+            email="other@test.local", password_hash="hash"
+        )
+        row = await app.state.db.create_custom_agent_type(
+            other_user, "Theirs", "their-cmd"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 404
+        assert captured == {}
+
+    @pytest.mark.parametrize(
+        "bad_cli",
+        ["custom_xyz", "custom_" + "a" * 11, "custom_" + "A" * 12, "custom_"],
+    )
+    async def test_malformed_custom_id_returns_400(
+        self, client, app, registered_agent, bad_cli
+    ):
+        agent_id, _owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": bad_cli},
+            headers=headers,
+        )
+
+        assert resp.status_code == 400
+        assert captured == {}
+
+    @pytest.mark.parametrize("proto", [None, 6])
+    async def test_old_agent_proto_returns_409_update_marker(
+        self, client, app, registered_agent, proto
+    ):
+        agent_id, owner, headers, captured = await self._setup(
+            app, registered_agent, proto=proto
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["agent_update_required"] is True
+        assert captured == {}
+
+    async def test_agent_update_marker_body_is_top_level(
+        self, client, app, registered_agent
+    ):
+        """The 409 marker mirrors the agent-authored ``*_cli_missing`` /
+        ``*_auth_required`` wire shape: ``agent_update_required`` and
+        ``detail`` sit at the top level of the body, not nested under
+        FastAPI's ``{"detail": ...}`` wrapper."""
+        agent_id, owner, headers, _captured = await self._setup(
+            app, registered_agent, proto=6
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 409
+        body = resp.json()
+        assert set(body.keys()) == {"agent_update_required", "detail"}
+        assert body["agent_update_required"] is True
+        assert isinstance(body["detail"], str)
+
+    async def test_db_row_saying_v7_does_not_unlock_v6_live_conn(
+        self, client, app, registered_agent
+    ):
+        """Overlapping tunnels can leave the DB handshake row describing a
+        connection other than the one this request will be forwarded to.
+        A row claiming v7 while the live conn negotiated v6 must still
+        409 — the gate follows the tunnel, not the row."""
+        agent_id, owner, headers, captured = await self._setup(
+            app, registered_agent, proto=6
+        )
+        await app.state.db.update_agent_handshake_info(
+            agent_id, "test-agent-v", 7
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["agent_update_required"] is True
+        assert captured == {}
+
+    async def test_stale_db_row_does_not_block_v7_live_conn(
+        self, client, app, registered_agent
+    ):
+        """The same race, other direction: a v7 tunnel whose handshake
+        write lost to a stale v6 row must still be allowed to launch."""
+        agent_id, owner, headers, captured = await self._setup(
+            app, registered_agent, proto=7
+        )
+        await app.state.db.update_agent_handshake_info(
+            agent_id, "test-agent-v", 6
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider --yes"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 201
+        assert captured["body"]["resolved_command"] == "aider --yes"
+
+    async def test_offline_agent_returns_503_not_409(
+        self, client, app, registered_agent
+    ):
+        """No live conn → the proto gate is skipped entirely and
+        ``MobileProxy.forward`` answers 503, even when a stale DB row
+        says the agent is pre-v7 (the old row-based gate would 409)."""
+        agent_id, _ = registered_agent
+        owner = await app.state.db.get_user_by_email("viewer@test.local")
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            owner["id"], agent_id, owner["id"]
+        )
+        await app.state.db.update_agent_handshake_info(
+            agent_id, "test-agent-v", 6
+        )
+        app.state.mobile_proxy = MobileProxy(app.state.routing)
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers={"Authorization": f"Bearer {access}"},
+        )
+
+        assert resp.status_code == 503
+        assert "offline" in resp.json()["detail"].lower()
+
+    async def test_array_body_is_forwarded_untouched(
+        self, client, app, registered_agent
+    ):
+        agent_id, _owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json=[{"cli": "custom_" + "a" * 12}],
+            headers=headers,
+        )
+
+        assert resp.status_code == 201
+        assert captured["body"] == [{"cli": "custom_" + "a" * 12}]
+
+    async def test_other_post_paths_are_not_stripped(
+        self, client, app, registered_agent
+    ):
+        agent_id, _owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/projects",
+            json={"resolved_command": "kept", "name": "p"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 201
+        assert captured["path"] == "/api/projects"
+        assert captured["body"] == {"resolved_command": "kept", "name": "p"}
+
+    async def test_put_to_sessions_path_is_not_intercepted(
+        self, client, app, registered_agent
+    ):
+        """Only POST creates sessions; other verbs on the path keep their
+        body verbatim."""
+        agent_id, _owner, headers, captured = await self._setup(
+            app, registered_agent
+        )
+
+        resp = await client.put(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": "custom_xyz", "resolved_command": "kept"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 201
+        assert captured["body"] == {
+            "cli": "custom_xyz",
+            "resolved_command": "kept",
+        }

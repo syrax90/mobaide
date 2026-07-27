@@ -279,7 +279,7 @@ macOS versions.
 The agent now runs with the developer's full UID privileges and has read/write access to `$HOME`. A compromise of the relay channel — i.e. a stolen `RELAY_AGENT_TOKEN` or a compromised central server — gains the same access the developer has interactively:
 
 - their source trees, SSH keys, GPG keys, browser cookies, `~/.aws/credentials`, `~/.netrc`, `~/.gitconfig` (which may reference signing keys / tokens);
-- any process the user can spawn (the relay can request arbitrary `command` in `create_session`);
+- any process the user can spawn (the relay can request arbitrary `command` in `create_session`, and since proto-v7 it also injects `resolved_command` for custom agent types — same trust class);
 - any host the user can reach over SSH.
 
 Treat `RELAY_AGENT_TOKEN` as equivalent to the developer's interactive shell credential. Rotate it immediately on any suspected central-server compromise; revoke it via the admin API before decommissioning a host. Rotate `JWT_SECRET_KEY` (in `<prefix>/agent.env`) on the same trigger — it signs the agent's local API tokens and is equivalent in trust to a stolen `RELAY_AGENT_TOKEN`. The systemd unit retains `NoNewPrivileges=yes`, `ProtectSystem=strict` with explicit `ReadWritePaths=$HOME /opt/mobaide`, and `PrivateTmp=yes` for residual hardening, but these protect against privilege escalation, not against a relay-token compromise.

@@ -131,6 +131,10 @@ async def agent_tunnel(websocket: WebSocket) -> None:
         return
 
     conn = routing.register_agent(agent_id, websocket)
+    # Stamp the negotiated version on the live connection before the first
+    # await: the DB handshake write below can lose a race between two
+    # overlapping tunnels, but routing always describes the current one.
+    conn.protocol_version = client_protocol_version
     # Resolve owner once at registration so the offline-broadcast path
     # (which runs after the tunnel is torn down) doesn't have to hit the DB.
     conn.owner_user_id = await db.get_agent_owner(agent_id)

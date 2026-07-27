@@ -37,6 +37,25 @@ class TestCreateSession:
         assert resp.status_code == 409
         assert "limit" in resp.json()["detail"].lower()
 
+    async def test_custom_cli_returns_400_even_with_resolved_command(
+        self, client, auth_headers,
+    ):
+        """The agent-direct REST layer has no registry access, so a custom
+        kind is rejected outright — a caller smuggling the relay-only
+        ``resolved_command``/``resolved_name`` fields must not be able to
+        spawn an arbitrary command through this path."""
+        resp = await client.post(
+            "/api/sessions",
+            headers=auth_headers,
+            json={
+                "cli": "custom_0123456789ab",
+                "resolved_command": "echo pwned",
+                "resolved_name": "Pwn",
+            },
+        )
+        assert resp.status_code == 400
+        assert "relay" in resp.json()["detail"].lower()
+
 
 class TestCreateSessionProjectPathErrors:
     async def test_nonexistent_project_path_returns_400_with_clean_detail(
