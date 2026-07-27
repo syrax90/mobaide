@@ -198,6 +198,35 @@ final class RecordingTemplateSync: TemplateSyncApplying, @unchecked Sendable {
     }
 }
 
+final class RecordingShortcutSync: ShortcutSyncApplying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var upsertsStorage: [ShortcutDto] = []
+    private var deletesStorage: [String] = []
+    private var refreshCountStorage = 0
+    private var clearCountStorage = 0
+
+    var upserts: [ShortcutDto] { lock.withLock { upsertsStorage } }
+    var deletes: [String] { lock.withLock { deletesStorage } }
+    var refreshCount: Int { lock.withLock { refreshCountStorage } }
+    var clearCount: Int { lock.withLock { clearCountStorage } }
+
+    func applyUpserted(_ shortcut: ShortcutDto) async {
+        lock.withLock { upsertsStorage.append(shortcut) }
+    }
+
+    func applyDeleted(shortcutId: String) async {
+        lock.withLock { deletesStorage.append(shortcutId) }
+    }
+
+    func refreshShortcuts() async throws {
+        lock.withLock { refreshCountStorage += 1 }
+    }
+
+    func clear() async {
+        lock.withLock { clearCountStorage += 1 }
+    }
+}
+
 // MARK: - Envelope builders
 
 enum EnvelopeFixtures {

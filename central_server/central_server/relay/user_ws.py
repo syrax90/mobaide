@@ -14,6 +14,11 @@ of the shape ``{"type": "...", "payload": {...}}``. Current event types:
 - ``template.updated`` — payload: full template row (PATCH or /touch)
 - ``template.deleted`` — payload: ``{"template_id": str, "version": int,
   "updated_at": str}``
+- ``shortcut.created`` — payload: full shortcut row
+- ``shortcut.updated`` — payload: full shortcut row (upsert rename or PATCH)
+- ``shortcut.deleted`` — payload: ``{"shortcut_id": str, "version": int,
+  "updated_at": str}``
+- ``session.attention`` — payload: attention push mirror (see PROTOCOL.md)
 """
 from __future__ import annotations
 

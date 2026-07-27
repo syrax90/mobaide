@@ -187,6 +187,66 @@ final class CentralAPITests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt")
     }
 
+    // MARK: - Shortcut routes
+
+    private let shortcutRowJSON =
+        #"{"shortcut_id":"s1","kind":"claude","chord_token":"ctrl+a","name":null,"position":0,"created_at":"c","updated_at":"u","version":1}"#
+
+    func testListShortcutsGetsWithBearer() async throws {
+        StubURLProtocol.enqueue(status: 200, body: "[\(shortcutRowJSON)]")
+        let shortcuts = try await makeAPI().listShortcuts(userToken: "user-jwt")
+
+        XCTAssertEqual(shortcuts.map(\.shortcut_id), ["s1"])
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.url?.absoluteString, "https://central.example.com/api/shortcuts")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt")
+    }
+
+    func testCreateShortcutOmitsNilNameFromBody() async throws {
+        StubURLProtocol.enqueue(status: 201, body: shortcutRowJSON)
+        _ = try await makeAPI().createShortcut(userToken: "u", kind: "claude", chordToken: "ctrl+a")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "https://central.example.com/api/shortcuts")
+        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
+        XCTAssertEqual(body, ["kind": "claude", "chord_token": "ctrl+a"], "an unnamed save omits name, never sends null")
+    }
+
+    func testCreateShortcutWithNameIncludesIt() async throws {
+        StubURLProtocol.enqueue(status: 201, body: shortcutRowJSON)
+        _ = try await makeAPI().createShortcut(userToken: "u", kind: "codex", chordToken: "ctrl+x", name: "Build")
+
+        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
+        XCTAssertEqual(body, ["kind": "codex", "chord_token": "ctrl+x", "name": "Build"])
+    }
+
+    func testUpdateShortcutPatchesEmptyStringClearSentinelVerbatim() async throws {
+        StubURLProtocol.enqueue(status: 200, body: shortcutRowJSON)
+        _ = try await makeAPI().updateShortcut(
+            userToken: "u",
+            shortcutId: "s1",
+            update: UpdateShortcutRequest(name: "")
+        )
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "PATCH")
+        XCTAssertEqual(request.url?.absoluteString, "https://central.example.com/api/shortcuts/s1")
+        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
+        XCTAssertEqual(body, ["name": ""], #"clearing the name sends {"name":""} — the server 422s on {}"#)
+    }
+
+    func testDeleteShortcutUsesNoContentRoute() async throws {
+        StubURLProtocol.enqueue(status: 204, body: "")
+        try await makeAPI().deleteShortcut(userToken: "user-jwt", shortcutId: "s1")
+
+        let request = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(request.httpMethod, "DELETE")
+        XCTAssertEqual(request.url?.absoluteString, "https://central.example.com/api/shortcuts/s1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer user-jwt")
+    }
+
     func testTrailingSlashesTrimmedFromBase() async throws {
         StubURLProtocol.enqueue(
             status: 200,

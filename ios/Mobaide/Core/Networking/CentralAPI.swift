@@ -138,6 +138,29 @@ struct CentralAPI: Sendable {
         try await execute(method: "POST", path: "/api/templates/\(templateId)/touch", rawBody: Data(), bearer: userToken)
     }
 
+    func listShortcuts(userToken: String) async throws -> [ShortcutDto] {
+        try await execute(method: "GET", path: "/api/shortcuts", bearer: userToken)
+    }
+
+    /// Server-side upsert on (kind, chord_token): re-POSTing an existing chord
+    /// returns the existing row (201 either way), never a conflict.
+    func createShortcut(userToken: String, kind: String, chordToken: String, name: String? = nil) async throws -> ShortcutDto {
+        try await execute(
+            method: "POST",
+            path: "/api/shortcuts",
+            body: CreateShortcutRequest(kind: kind, chord_token: chordToken, name: name),
+            bearer: userToken
+        )
+    }
+
+    func updateShortcut(userToken: String, shortcutId: String, update: UpdateShortcutRequest) async throws -> ShortcutDto {
+        try await execute(method: "PATCH", path: "/api/shortcuts/\(shortcutId)", body: update, bearer: userToken)
+    }
+
+    func deleteShortcut(userToken: String, shortcutId: String) async throws {
+        try await executeNoContent(method: "DELETE", path: "/api/shortcuts/\(shortcutId)", bearer: userToken)
+    }
+
     // MARK: - Plumbing
 
     private func baseURL() -> String {

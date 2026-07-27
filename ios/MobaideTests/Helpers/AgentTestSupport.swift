@@ -12,6 +12,7 @@ struct AgentHarness {
     let connectionStore: ConnectionStore
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
+    let shortcutsRepository: ShortcutsRepository
     let deviceRepository: DeviceRepository
     let authRepository: AuthRepository
     let deviceIdentityStore: DeviceIdentityStore
@@ -31,6 +32,7 @@ struct AgentHarness {
         self.connectionStore = connectionStore
         agentRepository = AgentRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         templatesRepository = TemplatesRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
+        shortcutsRepository = ShortcutsRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         deviceRepository = DeviceRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         let agentAPI = AgentAPI(
             baseURL: { [tokenStore = session.tokenStore] in tokenStore.getEffectiveBaseUrl() },

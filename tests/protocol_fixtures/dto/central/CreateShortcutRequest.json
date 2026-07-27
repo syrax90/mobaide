@@ -1,0 +1,7 @@
+{
+  "type": "CreateShortcutRequest",
+  "cases": [
+    { "name": "unnamed", "wire": { "kind": "claude", "chord_token": "ctrl+x" } },
+    { "name": "named", "wire": { "kind": "codex", "chord_token": "ctrl+shift+i", "name": "Interrupt" } }
+  ]
+}
