@@ -7,6 +7,7 @@ final class UserEventBusTests: XCTestCase {
         let transportFactory = FakeWebSocketTransportFactory()
         let agentStatus = RecordingAgentStatusApplier()
         let templateSync = RecordingTemplateSync()
+        let shortcutSync = RecordingShortcutSync()
         let bus: UserEventBus
 
         init(session: SessionHarness) {
@@ -20,7 +21,8 @@ final class UserEventBusTests: XCTestCase {
                 userIdentityStore: session.userIdentityStore,
                 tokenStore: session.tokenStore,
                 agentStatusApplier: agentStatus,
-                templateSync: templateSync
+                templateSync: templateSync,
+                shortcutSync: shortcutSync
             )
         }
     }
@@ -46,6 +48,52 @@ final class UserEventBusTests: XCTestCase {
             }
             XCTAssertFalse(templateId.isEmpty)
         }
+    }
+
+    func testShortcutUpsertFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/central/ShortcutDto.json") {
+            for type in ["shortcut.created", "shortcut.updated"] {
+                let envelope = try EnvelopeFixtures.envelope(type: type, payload: fixtureCase.wire)
+                guard case .shortcutUpserted(let shortcut) = UserEnvelopeDemux.demux(envelope) else {
+                    return XCTFail("case \(fixtureCase.name) (\(type)): expected shortcutUpserted")
+                }
+                XCTAssertFalse(shortcut.shortcut_id.isEmpty)
+            }
+        }
+    }
+
+    func testShortcutUpsertDemuxPreservesUnknownKindVerbatim() {
+        // `ShortcutDto.kind` is deliberately a raw String: decoding it as
+        // `SessionKind` would coerce unknown kinds to .claude and re-bucket a
+        // newer client's shortcut under Claude sessions.
+        let action = UserEnvelopeDemux.demux(
+            #"{"type":"shortcut.created","payload":{"shortcut_id":"ffeeddccbbaa","kind":"future_kind","chord_token":"ctrl+a","position":0,"created_at":"c","updated_at":"u","version":1}}"#
+        )
+        guard case .shortcutUpserted(let shortcut) = action else {
+            return XCTFail("expected shortcutUpserted")
+        }
+        XCTAssertEqual(shortcut.kind, "future_kind")
+    }
+
+    func testShortcutDeletedFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/central/ShortcutDeletedPayload.json") {
+            let envelope = try EnvelopeFixtures.envelope(type: "shortcut.deleted", payload: fixtureCase.wire)
+            guard case .shortcutDeleted(let shortcutId) = UserEnvelopeDemux.demux(envelope) else {
+                return XCTFail("case \(fixtureCase.name): expected shortcutDeleted")
+            }
+            XCTAssertFalse(shortcutId.isEmpty)
+        }
+    }
+
+    func testMalformedShortcutPayloadsAreSilentlyIgnored() {
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"shortcut.created","payload":{"shortcut_id":42}}"#),
+            .none
+        )
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"shortcut.deleted","payload":{}}"#),
+            .none
+        )
     }
 
     func testAgentStatusChangedDemux() {
@@ -173,6 +221,52 @@ final class UserEventBusTests: XCTestCase {
         XCTAssertEqual(harness.agentStatus.updates.first?.agentId, "A1")
         XCTAssertEqual(harness.agentStatus.updates.first?.online, false)
         XCTAssertEqual(harness.templateSync.deletes, ["t1"])
+    }
+
+    func testShortcutEventsRouteToHooksAndReconcileRefreshes() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        let states = StreamCollector(harness.bus.connectionStates())
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+
+        connection.emit(.text(
+            #"{"type":"shortcut.created","payload":{"shortcut_id":"sc1","kind":"claude","chord_token":"ctrl+a","position":0,"created_at":"c","updated_at":"u","version":1}}"#
+        ))
+        connection.emit(.text(
+            #"{"type":"shortcut.deleted","payload":{"shortcut_id":"sc0","version":2,"updated_at":"u"}}"#
+        ))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline,
+              harness.shortcutSync.upserts.isEmpty || harness.shortcutSync.deletes.isEmpty {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(harness.shortcutSync.refreshCount, 1, "on-connect reconcile re-pulls shortcuts too")
+        XCTAssertEqual(harness.shortcutSync.upserts.map(\.shortcut_id), ["sc1"])
+        XCTAssertEqual(harness.shortcutSync.deletes, ["sc0"])
+    }
+
+    func testLogoutClearsShortcutCache() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+
+        await harness.session.sessionManager.invalidateUserSession(.tokenRejected)
+
+        // Cross-account isolation: a different account signing in on this
+        // process must never see the previous user's shortcut buttons.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline, harness.shortcutSync.clearCount < 1 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(harness.shortcutSync.clearCount, 1)
     }
 
     func testTokenRejectedCloseInvalidatesSession() async throws {

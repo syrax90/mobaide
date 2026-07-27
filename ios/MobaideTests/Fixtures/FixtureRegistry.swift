@@ -123,6 +123,11 @@ enum FixtureRegistry {
         "SessionResponse": runner(SessionResponse.self),
         "CreateSessionRequest": runner(CreateSessionRequest.self),
         "ScrollbackResponse": runner(ScrollbackResponse.self),
+        // ShortcutDto.swift
+        "ShortcutDto": runner(ShortcutDto.self),
+        "CreateShortcutRequest": runner(CreateShortcutRequest.self),
+        "UpdateShortcutRequest": runner(UpdateShortcutRequest.self),
+        "ShortcutDeletedPayload": runner(ShortcutDeletedPayload.self),
         // TemplateDto.swift
         "TemplateDto": runner(TemplateDto.self),
         "CreateTemplateRequest": runner(CreateTemplateRequest.self),

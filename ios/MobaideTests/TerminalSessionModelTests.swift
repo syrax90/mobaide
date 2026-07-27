@@ -272,27 +272,33 @@ final class TerminalSessionModelTests: XCTestCase {
 
     func testStoreReusesModelInstance() {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
-        let store = TerminalSessionStore(
-            webSocketFactory: WebSocketCoreFactory.live(
-                transportFactory: FakeWebSocketTransportFactory(),
-                sleeper: RecordingSleeper()
-            ),
-            sessionManager: harness.sessionManager,
-            tokenStore: harness.tokenStore,
-            centralAPI: CentralAPI(centralServerURL: "https://central.test", sessionInvalidator: StubSessionInvalidator()),
-            userTokenProvider: StubUserTokenProvider(),
-            foregroundSessionTracker: ForegroundSessionTracker()
-        )
-        let first = store.model(id: "s1", kind: .claude, initialStatus: nil)
-        let again = store.model(id: "s1", kind: .claude, initialStatus: nil)
+        let store = TerminalTestSupport.store(harness)
+        let first = store.model(id: "s1", kind: .claude, resolvedKind: nil, initialStatus: nil)
+        let again = store.model(id: "s1", kind: .claude, resolvedKind: nil, initialStatus: nil)
         XCTAssertTrue(first === again, "same id must return the retained model")
 
-        let other = store.model(id: "s2", kind: .claude, initialStatus: nil)
+        let other = store.model(id: "s2", kind: .claude, resolvedKind: nil, initialStatus: nil)
         XCTAssertFalse(first === other)
 
         store.evict("s1")
-        let rebuilt = store.model(id: "s1", kind: .claude, initialStatus: nil)
+        let rebuilt = store.model(id: "s1", kind: .claude, resolvedKind: nil, initialStatus: nil)
         XCTAssertFalse(first === rebuilt, "evicted id must build a fresh model")
+    }
+
+    func testStoreTopsUpResolvedKindOnCachedModel() {
+        // A model created before the session row loaded (cold-start deep link)
+        // has no resolved kind; the next lookup that knows better adopts it.
+        let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
+        let store = TerminalTestSupport.store(harness)
+        let first = store.model(id: "s1", kind: .claude, resolvedKind: nil, initialStatus: nil)
+        XCTAssertNil(first.resolvedKind)
+
+        let again = store.model(id: "s1", kind: .claude, resolvedKind: .codex, initialStatus: nil)
+        XCTAssertTrue(first === again)
+        XCTAssertEqual(first.resolvedKind, .codex, "cached models adopt a later-known kind")
+
+        _ = store.model(id: "s1", kind: .claude, resolvedKind: .shell, initialStatus: nil)
+        XCTAssertEqual(first.resolvedKind, .codex, "an adopted kind is never overwritten")
     }
 
     // MARK: - Follow mode / unread

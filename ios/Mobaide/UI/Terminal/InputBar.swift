@@ -70,6 +70,8 @@ struct InputBar: View {
     @Bindable var model: TerminalSessionModel
     let onOpenTemplates: () -> Void
     let onSaveTemplate: () -> Void
+    let onOpenShortcuts: () -> Void
+    let onRenameSavedShortcut: (SavedShortcutUi) -> Void
 
     @FocusState private var inputFocused: Bool
     @Environment(\.mobaideColors) private var colors
@@ -123,7 +125,27 @@ struct InputBar: View {
                     }
                     .buttonStyle(.bordered)
                     .font(.footnote)
-                    .disabled(!model.isConnected)
+                    // Same gate as every other byte-send surface (Android
+                    // connected-AND-running parity): a key tapped during
+                    // replay or after the session stopped must not feed the
+                    // PTY.
+                    .disabled(!model.canSendTerminalBytes)
+                }
+                Button(action: onOpenShortcuts) {
+                    Image(systemName: "ellipsis")
+                }
+                .buttonStyle(.bordered)
+                .font(.footnote)
+                .disabled(!model.canSendTerminalBytes)
+                .accessibilityLabel("Custom shortcut")
+                ForEach(model.savedShortcutsForKind) { shortcut in
+                    SavedShortcutKeyButton(
+                        shortcut: shortcut,
+                        enabled: model.canSendTerminalBytes,
+                        onSend: { model.sendChord(shortcut.chord) },
+                        onRename: { onRenameSavedShortcut(shortcut) },
+                        onRemove: { model.removeShortcut(id: shortcut.id) }
+                    )
                 }
             }
             .padding(.horizontal, 4)
@@ -202,5 +224,54 @@ struct InputBar: View {
         }
         guard !text.isEmpty else { return }
         model.sendInput(text)
+    }
+}
+
+/// A saved custom shortcut rendered at the end of the control-key row
+/// (Android `SavedShortcutKeyButton`). Never `.disabled`: a disabled control
+/// would also swallow the context menu, and Rename/Remove must stay reachable
+/// while the session gate is down. The tap guards itself instead, with the
+/// dimmed label signalling inertness.
+private struct SavedShortcutKeyButton: View {
+    let shortcut: SavedShortcutUi
+    let enabled: Bool
+    let onSend: () -> Void
+    let onRename: () -> Void
+    let onRemove: () -> Void
+
+    @Environment(\.mobaideColors) private var colors
+
+    var body: some View {
+        Button {
+            guard enabled else { return }
+            onSend()
+        } label: {
+            label
+        }
+        .buttonStyle(.bordered)
+        .contextMenu {
+            Button(action: onRename) {
+                Label("Rename", systemImage: "pencil")
+            }
+            Button(role: .destructive, action: onRemove) {
+                Label("Remove", systemImage: "trash")
+            }
+        }
+        .accessibilityLabel("Saved shortcut \(shortcut.label)")
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        let text = Text(shortcut.label)
+            .font(.footnote.monospaced())
+            .lineLimit(1)
+        Group {
+            if shortcut.risky {
+                text.foregroundStyle(colors.tertiary)
+            } else {
+                text
+            }
+        }
+        .opacity(enabled ? 1 : 0.38)
     }
 }

@@ -86,6 +86,55 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.getRecentCustomPaths(agentKey: "codex"), [], "per-agent isolation")
     }
 
+    func testRecentShortcutChordsMRUOrderBumpAndCap() {
+        XCTAssertEqual(
+            PreferencesStore.recentShortcutChordsKey(kindKey: "claude"),
+            "recent_shortcut_chords::claude"
+        )
+
+        for token in ["ctrl+a", "ctrl+b", "ctrl+c"] {
+            store.addRecentShortcutChord(kindKey: "claude", token: token)
+        }
+        XCTAssertEqual(store.getRecentShortcutChords(kindKey: "claude"), ["ctrl+c", "ctrl+b", "ctrl+a"])
+
+        store.addRecentShortcutChord(kindKey: "claude", token: "ctrl+a")
+        XCTAssertEqual(
+            store.getRecentShortcutChords(kindKey: "claude"),
+            ["ctrl+a", "ctrl+c", "ctrl+b"],
+            "re-sending a chord bumps it to the front without duplicating"
+        )
+
+        let tokens = "abcdefghijk".map { "ctrl+\($0)" }
+        XCTAssertEqual(tokens.count, PreferencesStore.maxRecentShortcutChords + 1)
+        for token in tokens {
+            store.addRecentShortcutChord(kindKey: "shell", token: token)
+        }
+        let capped = store.getRecentShortcutChords(kindKey: "shell")
+        XCTAssertEqual(capped.count, PreferencesStore.maxRecentShortcutChords, "cap at 10")
+        XCTAssertEqual(
+            capped, Array(tokens.dropFirst().reversed()),
+            "the oldest chord falls off once the cap is exceeded"
+        )
+    }
+
+    func testRecentShortcutChordsIgnoreBlanksIsolateBucketsAndSurviveGarbage() {
+        store.addRecentShortcutChord(kindKey: "claude", token: "")
+        store.addRecentShortcutChord(kindKey: "claude", token: "   ")
+        XCTAssertEqual(store.getRecentShortcutChords(kindKey: "claude"), [], "blank tokens are ignored")
+
+        store.addRecentShortcutChord(kindKey: "claude", token: "ctrl+x")
+        store.addRecentShortcutChord(kindKey: "codex", token: "ctrl+y")
+        XCTAssertEqual(store.getRecentShortcutChords(kindKey: "claude"), ["ctrl+x"])
+        XCTAssertEqual(store.getRecentShortcutChords(kindKey: "codex"), ["ctrl+y"], "per-kind buckets are isolated")
+        XCTAssertEqual(store.getRecentShortcutChords(kindKey: "auto_scan"), [], "untouched bucket reads empty")
+
+        defaults.set("not-json", forKey: PreferencesStore.recentShortcutChordsKey(kindKey: "claude"))
+        XCTAssertEqual(
+            store.getRecentShortcutChords(kindKey: "claude"), [],
+            "a corrupt blob decodes to empty, not a crash"
+        )
+    }
+
     func testTerminalDisplayModeDefaultsToStaticAndPersistsRawValue() {
         XCTAssertEqual(store.getTerminalDisplayMode(), .static, "unset default matches Android")
 

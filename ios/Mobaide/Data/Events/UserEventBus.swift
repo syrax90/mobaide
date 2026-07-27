@@ -24,6 +24,7 @@ actor UserEventBus {
     private let tokenStore: TokenStore
     private let agentStatusApplier: any AgentStatusApplying
     private let templateSync: any TemplateSyncApplying
+    private let shortcutSync: any ShortcutSyncApplying
 
     private let connectionBroadcaster = Broadcaster<BusConnectionState>.stateFlow()
 
@@ -37,7 +38,8 @@ actor UserEventBus {
         userIdentityStore: UserIdentityStore,
         tokenStore: TokenStore,
         agentStatusApplier: any AgentStatusApplying = NoOpAgentStatusApplier(),
-        templateSync: any TemplateSyncApplying = NoOpTemplateSyncApplier()
+        templateSync: any TemplateSyncApplying = NoOpTemplateSyncApplier(),
+        shortcutSync: any ShortcutSyncApplying = NoOpShortcutSyncApplier()
     ) {
         self.webSocketFactory = webSocketFactory
         self.sessionManager = sessionManager
@@ -45,6 +47,7 @@ actor UserEventBus {
         self.tokenStore = tokenStore
         self.agentStatusApplier = agentStatusApplier
         self.templateSync = templateSync
+        self.shortcutSync = shortcutSync
         connectionBroadcaster.emit(.disconnected)
     }
 
@@ -70,11 +73,12 @@ actor UserEventBus {
                     await self.startConnection()
                 case .unauthenticated:
                     await self.stopConnection()
-                    // Cross-account isolation: drop cached agents/templates so a
-                    // different account signing in the same process never sees
-                    // the previous user's data.
+                    // Cross-account isolation: drop cached agents/templates/
+                    // shortcuts so a different account signing in the same
+                    // process never sees the previous user's data.
                     await self.agentStatusApplier.clear()
                     await self.templateSync.clear()
+                    await self.shortcutSync.clear()
                 case .incompatibleServer:
                     await self.stopConnection()
                 }
@@ -144,6 +148,7 @@ actor UserEventBus {
     private func reconcileAfterConnect() async {
         try? await agentStatusApplier.refreshAgents()
         try? await templateSync.refreshTemplates()
+        try? await shortcutSync.refreshShortcuts()
     }
 
     private func route(_ text: String) async {
@@ -154,6 +159,10 @@ actor UserEventBus {
             await templateSync.applyUpserted(template)
         case .templateDeleted(let templateId):
             await templateSync.applyDeleted(templateId: templateId)
+        case .shortcutUpserted(let shortcut):
+            await shortcutSync.applyUpserted(shortcut)
+        case .shortcutDeleted(let shortcutId):
+            await shortcutSync.applyDeleted(shortcutId: shortcutId)
         case .none:
             break
         }
@@ -201,6 +210,8 @@ enum UserEnvelopeDemux {
         case agentStatusChanged(agentId: String, online: Bool)
         case templateUpserted(TemplateDto)
         case templateDeleted(templateId: String)
+        case shortcutUpserted(ShortcutDto)
+        case shortcutDeleted(shortcutId: String)
         case none
     }
 
@@ -224,6 +235,16 @@ enum UserEnvelopeDemux {
                 return .none
             }
             return .templateDeleted(templateId: payload.template_id)
+        case "shortcut.created", "shortcut.updated":
+            guard let shortcut = try? WireJSON.decoder().decode(ShortcutDto.self, from: data) else {
+                return .none
+            }
+            return .shortcutUpserted(shortcut)
+        case "shortcut.deleted":
+            guard let payload = try? WireJSON.decoder().decode(ShortcutDeletedPayload.self, from: data) else {
+                return .none
+            }
+            return .shortcutDeleted(shortcutId: payload.shortcut_id)
         default:
             return .none
         }

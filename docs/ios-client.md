@@ -108,6 +108,22 @@ column by the keyboard overlap (`TerminalKeyboardObserver`), and
 slack rows stays visible (`TerminalKeyboardPan` math) — the grid never
 resizes on keyboard show/hide, so keyboard transitions send no PTY resize
 frames and no SIGWINCH.
+CLA-136/CLA-138 port Android's terminal custom keyboard shortcuts: the
+control-key row (now gated on `canSendTerminalBytes`, matching the wire)
+gains a trailing "Custom shortcut" ellipsis trigger that opens a
+chord-picker sheet — Ctrl/Alt/Shift modifiers (max two) over an
+A–Z / 0–9 / F1–F12 / Tab / Enter / Space / Backspace key grid, with a live
+byte preview that flags CSI-u encodings as "may not work in every CLI" and
+discloses same-byte chords. Recents are device-local MRU per session kind
+(cap 10); saved shortcuts render as buttons after the trigger (tap sends,
+context menu Rename/Remove, Save/Saved toggle in the picker) and sync live
+across devices through `/api/shortcuts` and the `shortcut.*` user events
+(the CLA-137 server contract in PROTOCOL.md). Under the hood: a byte-exact
+`KeyChordEncoder` port, a `ShortcutsRepository` cloned from the templates
+stack and wired to the `UserEventBus` (refresh-on-connect,
+clear-on-logout), `TerminalSessionModel`'s `resolvedKind` so shortcut
+lists key off the session's true kind, and golden fixtures for the four
+shortcut DTOs.
 Remaining feature screens land in later issues.
 
 ## Layout
@@ -139,9 +155,10 @@ ios/
 │   │                             # PushEnvironment (iOS-10 APNs)
 │   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
 │   │                             # Connections, Sessions (list + create wizard), Terminal
-│   │                             # (SwiftTerm host, InputBar, keyboard pan, session model/store), and the
-│   │                             # feature screens (Agents, Projects, Devices, Templates,
-│   │                             # AutoScan, Settings, Support, Update)
+│   │                             # (SwiftTerm host, InputBar, keyboard pan, shortcut picker,
+│   │                             # session model/store), and the feature screens (Agents,
+│   │                             # Projects, Devices, Templates, AutoScan, Settings, Support,
+│   │                             # Update)
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
 │                                 # reversed-client-id URL scheme) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites

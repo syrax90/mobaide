@@ -15,10 +15,12 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalStaticColumns = "terminal_static_columns"
 
     static let maxRecentCustomPaths = 5
+    static let maxRecentShortcutChords = 10
 
     static func linearLabelsKey(projectName: String) -> String { "linear_labels::\(projectName)" }
     static func linearStatesKey(projectName: String) -> String { "linear_states::\(projectName)" }
     static func recentCustomPathsKey(agentKey: String) -> String { "recent_custom_paths::\(agentKey)" }
+    static func recentShortcutChordsKey(kindKey: String) -> String { "recent_shortcut_chords::\(kindKey)" }
 
     // UserDefaults is documented thread-safe; this struct holds no other
     // mutable state, hence @unchecked Sendable.
@@ -116,6 +118,24 @@ struct PreferencesStore: @unchecked Sendable {
         encodeBlob(
             Array(paths.prefix(Self.maxRecentCustomPaths)),
             forKey: Self.recentCustomPathsKey(agentKey: agentKey)
+        )
+    }
+
+    /// Recently sent shortcut chords for one session kind, most-recent-first,
+    /// as `KeyChord` tokens (Android `getRecentShortcutChords`).
+    func getRecentShortcutChords(kindKey: String) -> [String] {
+        decodeBlob(forKey: Self.recentShortcutChordsKey(kindKey: kindKey)) ?? []
+    }
+
+    /// Prepend `token`, dedupe, cap at `maxRecentShortcutChords` (MRU bump-to-front).
+    func addRecentShortcutChord(kindKey: String, token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var tokens = getRecentShortcutChords(kindKey: kindKey).filter { $0 != trimmed }
+        tokens.insert(trimmed, at: 0)
+        encodeBlob(
+            Array(tokens.prefix(Self.maxRecentShortcutChords)),
+            forKey: Self.recentShortcutChordsKey(kindKey: kindKey)
         )
     }
 

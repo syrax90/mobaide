@@ -1,0 +1,7 @@
+{
+  "type": "UpdateShortcutRequest",
+  "cases": [
+    { "name": "set_name", "wire": { "name": "Build" } },
+    { "name": "clear_name_sentinel", "wire": { "name": "" } }
+  ]
+}

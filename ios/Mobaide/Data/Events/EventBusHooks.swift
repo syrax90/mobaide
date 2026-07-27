@@ -25,6 +25,17 @@ protocol TemplateSyncApplying: Sendable {
     func clear() async
 }
 
+protocol ShortcutSyncApplying: Sendable {
+    /// Insert-or-replace by `shortcut_id`.
+    func applyUpserted(_ shortcut: ShortcutDto) async
+    /// Remove by `shortcut_id`.
+    func applyDeleted(shortcutId: String) async
+    /// Full REST reconcile after (re)connect.
+    func refreshShortcuts() async throws
+    /// Drop the cached snapshot on sign-out (cross-account isolation).
+    func clear() async
+}
+
 struct NoOpAgentStatusApplier: AgentStatusApplying {
     func updateAgentOnline(agentId: String, online: Bool) async {}
     func refreshAgents() async throws {}
@@ -35,5 +46,12 @@ struct NoOpTemplateSyncApplier: TemplateSyncApplying {
     func applyUpserted(_ template: TemplateDto) async {}
     func applyDeleted(templateId: String) async {}
     func refreshTemplates() async throws {}
+    func clear() async {}
+}
+
+struct NoOpShortcutSyncApplier: ShortcutSyncApplying {
+    func applyUpserted(_ shortcut: ShortcutDto) async {}
+    func applyDeleted(shortcutId: String) async {}
+    func refreshShortcuts() async throws {}
     func clear() async {}
 }

@@ -33,6 +33,7 @@ final class AppContainer {
     let autoScanRepository: AutoScanRepository
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
+    let shortcutsRepository: ShortcutsRepository
     let deviceRepository: DeviceRepository
     let terminalSessionStore: TerminalSessionStore
     let router: Router
@@ -99,6 +100,10 @@ final class AppContainer {
             centralAPI: centralAPI,
             userIdentityStore: userIdentityStore
         )
+        let shortcutsRepository = ShortcutsRepository(
+            centralAPI: centralAPI,
+            userIdentityStore: userIdentityStore
+        )
         let deviceRepository = DeviceRepository(
             centralAPI: centralAPI,
             userIdentityStore: userIdentityStore
@@ -116,7 +121,8 @@ final class AppContainer {
             userIdentityStore: userIdentityStore,
             tokenStore: tokenStore,
             agentStatusApplier: agentRepository,
-            templateSync: templatesRepository
+            templateSync: templatesRepository,
+            shortcutSync: shortcutsRepository
         )
 
         let authRepository = AuthRepository(
@@ -145,6 +151,7 @@ final class AppContainer {
         self.userEventBus = userEventBus
         self.agentRepository = agentRepository
         self.templatesRepository = templatesRepository
+        self.shortcutsRepository = shortcutsRepository
         self.deviceRepository = deviceRepository
         self.authRepository = authRepository
         self.signInService = SignInService(
@@ -165,14 +172,33 @@ final class AppContainer {
             tokenStore: tokenStore,
             centralAPI: centralAPI,
             userTokenProvider: userTokenProvider,
-            foregroundSessionTracker: foregroundSessionTracker
+            foregroundSessionTracker: foregroundSessionTracker,
+            preferencesStore: preferencesStore,
+            shortcutsRepository: shortcutsRepository
         )
         self.terminalSessionStore = terminalSessionStore
-        self.sessionRepository = SessionRepository(
+        let sessionRepository = SessionRepository(
             agentAPI: agentAPI,
             agentEventBus: agentEventBus,
             terminalSessionStore: terminalSessionStore
         )
+        self.sessionRepository = sessionRepository
+        // Assigned post-init because SessionRepository takes the store in its
+        // own init; weak so the store → closure → repository → store loop
+        // never retains.
+        terminalSessionStore.sessionKindResolver = { [weak sessionRepository, agentAPI] sessionId in
+            guard let sessionRepository else { return nil }
+            if let known = sessionRepository.currentSessions
+                .first(where: { $0.session_id == sessionId })?.kind {
+                return known
+            }
+            // Read-only fetch on purpose: SessionRepository.listSessions()
+            // publishes the REST snapshot and evicts terminal models absent
+            // from it, so a stale response on this hot cold-start path could
+            // disconnect a session created meanwhile.
+            let list = try? await agentAPI.listSessions()
+            return list?.first(where: { $0.session_id == sessionId })?.kind
+        }
         self.projectsRepository = ProjectsRepository(
             agentAPI: agentAPI,
             agentEventBus: agentEventBus

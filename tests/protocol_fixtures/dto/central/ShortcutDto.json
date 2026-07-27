@@ -1,0 +1,22 @@
+{
+  "type": "ShortcutDto",
+  "cases": [
+    {
+      "name": "named",
+      "wire": { "shortcut_id": "a1b2c3d4e5f6", "kind": "claude", "chord_token": "ctrl+shift+i", "name": "Interrupt", "position": 3, "created_at": "2026-07-20T12:00:00Z", "updated_at": "2026-07-21T09:30:00Z", "version": 2 }
+    },
+    {
+      "name": "unnamed",
+      "wire": { "shortcut_id": "0123456789ab", "kind": "shell", "chord_token": "ctrl+c", "position": 0, "created_at": "2026-07-20T12:00:00Z", "updated_at": "2026-07-20T12:00:00Z", "version": 1 }
+    },
+    {
+      "name": "explicit_null_name",
+      "wire": { "shortcut_id": "0123456789ab", "kind": "codex", "chord_token": "alt+x", "name": null, "position": 1, "created_at": "c", "updated_at": "u", "version": 1 },
+      "decoded_canonical": { "shortcut_id": "0123456789ab", "kind": "codex", "chord_token": "alt+x", "position": 1, "created_at": "c", "updated_at": "u", "version": 1 }
+    },
+    {
+      "name": "unknown_kind_preserved",
+      "wire": { "shortcut_id": "ffeeddccbbaa", "kind": "future_kind", "chord_token": "alt+f4", "position": 1, "created_at": "c", "updated_at": "u", "version": 1 }
+    }
+  ]
+}

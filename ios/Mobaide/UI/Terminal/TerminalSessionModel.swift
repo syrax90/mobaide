@@ -45,6 +45,13 @@ final class TerminalSessionModel {
     let kind: SessionKind
     let terminalView: MobaideTerminalView
 
+    /// The session's true kind, or nil until it is known. Unlike `kind` — the
+    /// render seed that falls back to `.claude` when the session row was not
+    /// loaded yet — this never guesses: saved shortcuts filter on it and saves
+    /// send it to the server, so a wrong value would pin a chord under the
+    /// wrong kind (Android `resolvedKind` parity).
+    private(set) var resolvedKind: SessionKind?
+
     private(set) var connectionState: ConnectionState = .reconnecting
     private(set) var sessionStatus: String?
     private(set) var followMode = true
@@ -57,6 +64,15 @@ final class TerminalSessionModel {
     /// direct-typing keyboard); fed by the view's responder overrides.
     private(set) var terminalKeyboardActive = false
     var inputText = ""
+
+    /// Per-kind MRU chords, parsed from the device-local store on demand
+    /// (empty until `refreshShortcutRecents` first runs — Android parity).
+    private(set) var shortcutRecents: [KeyChord] = []
+    /// Transient shortcut save/rename/remove/load failure surface, rendered
+    /// as a toast by both the terminal screen and the picker sheet.
+    var shortcutMessage: ToastMessage?
+    /// All kinds' saved shortcuts, fed by the repository subscription.
+    private var allShortcuts: [ShortcutDto] = []
 
     var isConnected: Bool { connectionState == .live || connectionState == .replayingBuffer }
     var isRunning: Bool { sessionStatus == "running" }
@@ -71,11 +87,21 @@ final class TerminalSessionModel {
     private let centralAPI: CentralAPI
     private let userTokenProvider: any UserTokenProviding
     private let foregroundSessionTracker: ForegroundSessionTracker
+    private let preferencesStore: PreferencesStore
+    private let shortcutsRepository: ShortcutsRepository
+    private let kindResolver: (String) async -> SessionKind?
 
     private var core: WebSocketCore?
     private var eventTask: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
     private var resizeTask: Task<Void, Never>?
+    private var shortcutsTask: Task<Void, Never>?
+    /// Chord tokens with a create still in flight. A second POST for the same
+    /// token is dropped while one is pending: the server upsert probes live
+    /// rows only, so a late duplicate create landing after an interleaved
+    /// delete would silently resurrect the removed chord.
+    private var savesInFlight: Set<String> = []
+    private var savedShortcutsRefreshInFlight = false
     private var inReplay = false
     private var started = false
     private var isTornDown = false
@@ -89,22 +115,30 @@ final class TerminalSessionModel {
     init(
         sessionId: String,
         kind: SessionKind,
+        resolvedKind: SessionKind?,
         initialStatus: String?,
         webSocketFactory: WebSocketCoreFactory,
         sessionManager: SessionManager,
         tokenStore: TokenStore,
         centralAPI: CentralAPI,
         userTokenProvider: any UserTokenProviding,
-        foregroundSessionTracker: ForegroundSessionTracker
+        foregroundSessionTracker: ForegroundSessionTracker,
+        preferencesStore: PreferencesStore,
+        shortcutsRepository: ShortcutsRepository,
+        kindResolver: @escaping (String) async -> SessionKind?
     ) {
         self.sessionId = sessionId
         self.kind = kind
+        self.resolvedKind = resolvedKind
         self.webSocketFactory = webSocketFactory
         self.sessionManager = sessionManager
         self.tokenStore = tokenStore
         self.centralAPI = centralAPI
         self.userTokenProvider = userTokenProvider
         self.foregroundSessionTracker = foregroundSessionTracker
+        self.preferencesStore = preferencesStore
+        self.shortcutsRepository = shortcutsRepository
+        self.kindResolver = kindResolver
         self.sessionStatus = initialStatus
         (outboundStream, outboundContinuation) = AsyncStream.makeStream(of: Data.self)
         terminalView = MobaideTerminalView(frame: .zero)
@@ -119,6 +153,18 @@ final class TerminalSessionModel {
     func start() {
         guard !started else { return }
         started = true
+        // Subscribed for the model's whole life (not lazily on picker open):
+        // the control-key row renders saved-shortcut buttons without the
+        // picker ever opening, and `shortcut.*` pushes must land there live.
+        shortcutsTask = Task { [weak self] in
+            guard let stream = self?.shortcutsRepository.shortcuts() else { return }
+            for await list in stream {
+                self?.allShortcuts = list
+            }
+        }
+        if resolvedKind == nil {
+            Task { [weak self] in _ = await self?.resolveSessionKind() }
+        }
         Task { await openConnection() }
     }
 
@@ -379,6 +425,136 @@ final class TerminalSessionModel {
         }
     }
 
+    // MARK: - Custom shortcuts
+
+    /// The picker's per-kind saved shortcuts: filtered on the resolved kind
+    /// (empty until it is known — a `.claude` guess would flash another kind's
+    /// buttons), server order (position, created_at, shortcut_id), unparseable
+    /// tokens from newer clients dropped silently.
+    var savedShortcutsForKind: [SavedShortcutUi] {
+        guard let resolvedKind else { return [] }
+        return allShortcuts
+            .filter { $0.kind == resolvedKind.rawValue }
+            .sorted { a, b in
+                if a.position != b.position { return a.position < b.position }
+                if a.created_at != b.created_at { return a.created_at < b.created_at }
+                return a.shortcut_id < b.shortcut_id
+            }
+            .compactMap { dto in
+                guard let chord = KeyChord.parse(dto.chord_token) else { return nil }
+                return SavedShortcutUi(
+                    id: dto.shortcut_id,
+                    chord: chord,
+                    name: dto.name.flatMap { name in
+                        name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : name
+                    },
+                    risky: KeyChordEncoder.encode(chord)?.usesCsiU == true
+                )
+            }
+    }
+
+    func refreshShortcutRecents() {
+        shortcutRecents = preferencesStore
+            .getRecentShortcutChords(kindKey: (resolvedKind ?? kind).rawValue)
+            .compactMap(KeyChord.parse)
+    }
+
+    /// Encode and send the chord, then record it in the device-local MRU.
+    /// Deliberately not session-gated here — the send surfaces disable in the
+    /// UI instead (Android parity). The send happens before the MRU write so
+    /// persistence can never interfere with delivery.
+    func sendChord(_ chord: KeyChord) {
+        guard let encoding = KeyChordEncoder.encode(chord) else { return }
+        sendBytes(Data(encoding.bytes))
+        preferencesStore.addRecentShortcutChord(
+            kindKey: (resolvedKind ?? kind).rawValue,
+            token: chord.token
+        )
+        refreshShortcutRecents()
+    }
+
+    func refreshSavedShortcuts() {
+        guard !savedShortcutsRefreshInFlight else { return }
+        savedShortcutsRefreshInFlight = true
+        Task { [weak self] in
+            defer { self?.savedShortcutsRefreshInFlight = false }
+            do {
+                try await self?.shortcutsRepository.refreshShortcuts()
+            } catch {
+                self?.shortcutMessage = ToastMessage(text: "Failed to load saved shortcuts")
+            }
+        }
+    }
+
+    /// Resolve the true session kind: the value seeded at construction, else
+    /// the app-scoped session list (live snapshot, then one-shot REST). The
+    /// result is published so later callers skip the lookup.
+    func resolveSessionKind() async -> SessionKind? {
+        if let resolvedKind { return resolvedKind }
+        guard let resolved = await kindResolver(sessionId) else { return nil }
+        adoptResolvedKind(resolved)
+        return resolvedKind
+    }
+
+    func adoptResolvedKind(_ kind: SessionKind) {
+        if resolvedKind == nil {
+            resolvedKind = kind
+            // Recents already loaded under the `.claude` rendering fallback
+            // belong to another kind's bucket; reload so an open picker shows
+            // (and sendChord records into) the right one.
+            refreshShortcutRecents()
+        }
+    }
+
+    /// Pin the chord server-side, always unnamed — naming is a follow-up
+    /// rename (Android parity). Success is silent: the pushed/applied row
+    /// flipping the Save toggle to "Saved" is the confirmation.
+    func saveShortcut(_ chord: KeyChord) {
+        let token = chord.token
+        guard savesInFlight.insert(token).inserted else { return }
+        Task { [weak self] in
+            defer { self?.savesInFlight.remove(token) }
+            guard let self else { return }
+            guard let kind = await self.resolveSessionKind() else {
+                self.shortcutMessage = ToastMessage(text: "Failed to save shortcut: session type not known yet")
+                return
+            }
+            do {
+                try await self.shortcutsRepository.createShortcut(kind: kind.rawValue, chordToken: token)
+            } catch {
+                self.shortcutMessage = ToastMessage(text: "Failed to save shortcut")
+            }
+        }
+    }
+
+    func renameShortcut(id: String, name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.shortcutsRepository.renameShortcut(shortcutId: id, name: trimmed)
+            } catch {
+                self.shortcutMessage = ToastMessage(text: "Failed to rename shortcut")
+            }
+        }
+    }
+
+    func removeShortcut(id: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.shortcutsRepository.deleteShortcut(shortcutId: id)
+            } catch let error as APIError where error.code == 403 || error.code == 404 {
+                // Already gone server-side (DELETE answers 403 once the row is
+                // soft-deleted): prune the cache silently instead of alarming
+                // the user about a delete that effectively succeeded.
+                await self.shortcutsRepository.applyDeleted(shortcutId: id)
+            } catch {
+                self.shortcutMessage = ToastMessage(text: "Failed to remove shortcut")
+            }
+        }
+    }
+
     // MARK: - Lifecycle
 
     func markVisible() {
@@ -406,6 +582,7 @@ final class TerminalSessionModel {
         eventTask?.cancel()
         sendTask?.cancel()
         resizeTask?.cancel()
+        shortcutsTask?.cancel()
         outboundContinuation.finish()
         if let core {
             Task { await core.disconnect() }

@@ -21,6 +21,8 @@ private struct TerminalScreenContent: View {
     @State private var showTemplates = false
     @State private var showSaveTemplate = false
     @State private var templateName = ""
+    @State private var showShortcutPicker = false
+    @State private var renameShortcutTarget: SavedShortcutUi?
     private let displayStore: TerminalDisplayStore
 
     init(container: AppContainer, sessionId: String) {
@@ -28,6 +30,10 @@ private struct TerminalScreenContent: View {
         _model = State(initialValue: container.terminalSessionStore.model(
             id: sessionId,
             kind: session?.kind ?? .claude,
+            // nil when the session row is not loaded yet (cold-start deep
+            // link): the model resolves the true kind itself rather than
+            // trusting the `.claude` render fallback above.
+            resolvedKind: session?.kind,
             initialStatus: session?.state
         ))
         displayStore = container.terminalDisplayStore
@@ -58,7 +64,13 @@ private struct TerminalScreenContent: View {
                     onSaveTemplate: {
                         templateName = ""
                         showSaveTemplate = true
-                    }
+                    },
+                    onOpenShortcuts: {
+                        model.refreshShortcutRecents()
+                        model.refreshSavedShortcuts()
+                        showShortcutPicker = true
+                    },
+                    onRenameSavedShortcut: { renameShortcutTarget = $0 }
                 )
             }
             .offset(y: -keyboard.transition.lift)
@@ -79,10 +91,20 @@ private struct TerminalScreenContent: View {
         .sheet(isPresented: $showTemplates) {
             TemplatesPickerSheet(model: model)
         }
+        .sheet(isPresented: $showShortcutPicker) {
+            ShortcutPickerSheet(model: model)
+        }
         .alert("Save as template", isPresented: $showSaveTemplate) {
             TextField("Name", text: $templateName)
             Button("Save") { model.saveInputAsTemplate(name: templateName) }
             Button("Cancel", role: .cancel) {}
+        }
+        // Failure surface for control-row shortcut actions (long-press
+        // Rename/Remove) taken while the picker sheet is not up; the sheet
+        // attaches its own copies of both for actions taken inside it.
+        .toast(Bindable(model).shortcutMessage)
+        .renameShortcutAlert(target: $renameShortcutTarget) { shortcut, name in
+            model.renameShortcut(id: shortcut.id, name: name)
         }
         .onAppear {
             model.markVisible()

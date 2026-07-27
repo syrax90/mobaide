@@ -127,11 +127,11 @@ final class SessionRepositoryTests: XCTestCase {
         connection.emit(.text(sessionsChanged(["a", "b"])))
         _ = await waitFor(repo) { $0.count == 2 }
 
-        let modelA = store.model(id: "a", kind: .claude, initialStatus: nil)
+        let modelA = store.model(id: "a", kind: .claude, resolvedKind: nil, initialStatus: nil)
         connection.emit(.text(sessionsChanged(["b"])))
         _ = await waitFor(repo) { $0.map(\.session_id) == ["b"] }
 
-        let rebuiltA = store.model(id: "a", kind: .claude, initialStatus: nil)
+        let rebuiltA = store.model(id: "a", kind: .claude, resolvedKind: nil, initialStatus: nil)
         XCTAssertFalse(modelA === rebuiltA, "a session dropped from the snapshot must be evicted from the store")
     }
 
