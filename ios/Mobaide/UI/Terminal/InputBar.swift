@@ -174,7 +174,10 @@ struct InputBar: View {
             } label: {
                 Image(systemName: model.terminalKeyboardActive ? "keyboard.chevron.compact.down" : "keyboard")
             }
-            .disabled(!model.isConnected)
+            // Raising is pointless while disconnected, but dismissing must stay
+            // available: a socket drop leaves the keyboard raised, and this
+            // toggle is its only direct dismissal control.
+            .disabled(!model.isConnected && !model.terminalKeyboardActive)
             .accessibilityLabel(model.terminalKeyboardActive ? "Hide keyboard" : "Show keyboard")
 
             Button {

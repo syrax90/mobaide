@@ -320,8 +320,9 @@ final class TerminalSessionModel {
         }
     }
 
-    /// No connectivity guard: the button disables when disconnected, and
-    /// `sendTerminalBytes` protects the wire regardless.
+    /// No connectivity guard: with the keyboard down the toggle button
+    /// disables when disconnected (while raised it stays enabled only to
+    /// dismiss), and `sendTerminalBytes` protects the wire regardless.
     func showTerminalKeyboard() {
         terminalView.keyboardGate = true
         _ = terminalView.becomeFirstResponder()
