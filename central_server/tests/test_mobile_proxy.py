@@ -525,9 +525,34 @@ class TestSessionCreateInterception:
         )
 
         assert resp.status_code == 409
-        detail = resp.json()["detail"]
-        assert detail["agent_update_required"] is True
+        assert resp.json()["agent_update_required"] is True
         assert captured == {}
+
+    async def test_agent_update_marker_body_is_top_level(
+        self, client, app, registered_agent
+    ):
+        """The 409 marker mirrors the agent-authored ``*_cli_missing`` /
+        ``*_auth_required`` wire shape: ``agent_update_required`` and
+        ``detail`` sit at the top level of the body, not nested under
+        FastAPI's ``{"detail": ...}`` wrapper."""
+        agent_id, owner, headers, _captured = await self._setup(
+            app, registered_agent, proto=6
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 409
+        body = resp.json()
+        assert set(body.keys()) == {"agent_update_required", "detail"}
+        assert body["agent_update_required"] is True
+        assert isinstance(body["detail"], str)
 
     async def test_array_body_is_forwarded_untouched(
         self, client, app, registered_agent

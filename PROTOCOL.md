@@ -75,7 +75,9 @@ cadence; they do **not** gate compatibility.
   empty-string-clears form — both attributes are mandatory);
   ``DELETE /api/custom-agent-types/{id}`` → ``204`` (soft-delete).
   Validation: ``name`` 1–60 chars trimmed, unique per account
-  case-insensitively; ``command`` 1–1000 chars trimmed. The per-account
+  case-insensitively (ASCII case folding only — SQLite ``NOCASE``;
+  non-ASCII characters compare byte-wise, so ``Ågent`` and ``ågent`` are
+  distinct names); ``command`` 1–1000 chars trimmed. The per-account
   cap is **20** live types, enforced atomically → ``409``; a name
   conflict → ``409`` (distinct ``detail`` strings); ownership violations
   and repeat deletes → ``403`` (same non-idempotent-DELETE caveat as

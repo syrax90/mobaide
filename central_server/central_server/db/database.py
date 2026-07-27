@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -1151,19 +1152,27 @@ class Database:
         the service layer resolves that into upsert semantics."""
         shortcut_id = uuid.uuid4().hex[:12]
         now = _now_iso()
-        await self.conn.execute(
-            "INSERT INTO user_shortcuts "
-            "(shortcut_id, owner_user_id, kind, chord_token, name, position, "
-            "created_at, updated_at, deleted_at, version) "
-            "VALUES (?, ?, ?, ?, ?, "
-            "(SELECT COALESCE(MAX(position) + 1, 0) FROM user_shortcuts "
-            " WHERE owner_user_id = ? AND kind = ? AND deleted_at IS NULL), "
-            "?, ?, NULL, 1)",
-            (
-                shortcut_id, owner_user_id, kind, chord_token, name,
-                owner_user_id, kind, now, now,
-            ),
-        )
+        try:
+            await self.conn.execute(
+                "INSERT INTO user_shortcuts "
+                "(shortcut_id, owner_user_id, kind, chord_token, name, "
+                "position, created_at, updated_at, deleted_at, version) "
+                "VALUES (?, ?, ?, ?, ?, "
+                "(SELECT COALESCE(MAX(position) + 1, 0) FROM user_shortcuts "
+                " WHERE owner_user_id = ? AND kind = ? AND deleted_at IS NULL), "
+                "?, ?, NULL, 1)",
+                (
+                    shortcut_id, owner_user_id, kind, chord_token, name,
+                    owner_user_id, kind, now, now,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            # Same open-transaction hazard as create_custom_agent_type: the
+            # upsert retry loop in ShortcutService can return without ever
+            # committing after a lost race, which would otherwise leave the
+            # aborted INSERT's implicit transaction pinning the connection.
+            await self.conn.rollback()
+            raise
         await self.conn.commit()
         row = await self.get_user_shortcut(shortcut_id)
         assert row is not None
@@ -1281,17 +1290,25 @@ class Database:
         (partial unique index)."""
         type_id = uuid.uuid4().hex[:12]
         now = _now_iso()
-        cursor = await self.conn.execute(
-            "INSERT INTO custom_agent_types "
-            "(id, owner_user_id, name, command, created_at, updated_at, "
-            "deleted_at) "
-            "SELECT ?, ?, ?, ?, ?, ?, NULL "
-            "WHERE (SELECT COUNT(*) FROM custom_agent_types "
-            "       WHERE owner_user_id = ? AND deleted_at IS NULL) < ? "
-            "RETURNING id",
-            (type_id, owner_user_id, name, command, now, now,
-             owner_user_id, cap),
-        )
+        try:
+            cursor = await self.conn.execute(
+                "INSERT INTO custom_agent_types "
+                "(id, owner_user_id, name, command, created_at, updated_at, "
+                "deleted_at) "
+                "SELECT ?, ?, ?, ?, ?, ?, NULL "
+                "WHERE (SELECT COUNT(*) FROM custom_agent_types "
+                "       WHERE owner_user_id = ? AND deleted_at IS NULL) < ? "
+                "RETURNING id",
+                (type_id, owner_user_id, name, command, now, now,
+                 owner_user_id, cap),
+            )
+        except sqlite3.IntegrityError:
+            # The aborted INSERT leaves the connection's implicit write
+            # transaction open (legacy transaction mode); without a
+            # rollback it would pin the WAL snapshot and fold the next
+            # unrelated write into a stale transaction.
+            await self.conn.rollback()
+            raise
         # RETURNING rows must be consumed before commit() resets the
         # pending statement.
         inserted = await cursor.fetchone()
@@ -1349,14 +1366,21 @@ class Database:
         updated row, or None when the type doesn't exist, is soft-deleted,
         or is owned by someone else. Raises ``sqlite3.IntegrityError`` when
         the new name collides case-insensitively with another live type."""
-        cursor = await self.conn.execute(
-            "UPDATE custom_agent_types "
-            "SET name = COALESCE(?, name), "
-            "    command = COALESCE(?, command), "
-            "    updated_at = ? "
-            "WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL",
-            (name, command, _now_iso(), type_id, owner_user_id),
-        )
+        try:
+            cursor = await self.conn.execute(
+                "UPDATE custom_agent_types "
+                "SET name = COALESCE(?, name), "
+                "    command = COALESCE(?, command), "
+                "    updated_at = ? "
+                "WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL",
+                (name, command, _now_iso(), type_id, owner_user_id),
+            )
+        except sqlite3.IntegrityError:
+            # See create_custom_agent_type: roll the implicit write
+            # transaction back so the aborted UPDATE cannot pin the
+            # connection in an open-transaction state.
+            await self.conn.rollback()
+            raise
         await self.conn.commit()
         if cursor.rowcount != 1:
             return None

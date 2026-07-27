@@ -1555,6 +1555,22 @@ class TestUserShortcuts:
         with pytest.raises(sqlite3.IntegrityError):
             await db.create_user_shortcut(owner, "claude", "ctrl+x", "Again")
 
+    async def test_duplicate_chord_rolls_back_open_transaction(
+        self, db: Database
+    ):
+        """The aborted INSERT must not leave the shared connection's
+        implicit write transaction open; the next shortcut write still
+        lands normally."""
+        owner = await _create_test_user(db)
+        await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
+
+        assert db.conn.in_transaction is False
+        fresh = await db.create_user_shortcut(owner, "claude", "ctrl+y", None)
+        assert fresh["position"] == 1
+
     async def test_insert_allowed_after_soft_delete(self, db: Database):
         owner = await _create_test_user(db)
         first = await db.create_user_shortcut(owner, "claude", "ctrl+x", None)
@@ -1764,6 +1780,40 @@ class TestCustomAgentTypes:
 
         with pytest.raises(sqlite3.IntegrityError):
             await db.create_custom_agent_type(owner, "aIDER", "c2")
+
+    async def test_create_name_conflict_rolls_back_open_transaction(
+        self, db: Database
+    ):
+        """The aborted INSERT must not leave the shared connection's
+        implicit write transaction open; the next unrelated write still
+        lands normally."""
+        owner = await _create_test_user(db)
+        await db.create_custom_agent_type(owner, "Aider", "c1")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await db.create_custom_agent_type(owner, "aider", "c2")
+
+        assert db.conn.in_transaction is False
+        fresh = await db.create_custom_agent_type(owner, "Goose", "goose run")
+        assert await db.get_custom_agent_type(fresh["id"]) == fresh
+
+    async def test_update_name_conflict_rolls_back_open_transaction(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        await db.create_custom_agent_type(owner, "Aider", "c1")
+        target = await db.create_custom_agent_type(owner, "Goose", "c2")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await db.update_custom_agent_type(
+                target["id"], owner, name="AIDER"
+            )
+
+        assert db.conn.in_transaction is False
+        renamed = await db.update_custom_agent_type(
+            target["id"], owner, name="Gander"
+        )
+        assert renamed["name"] == "Gander"
 
     async def test_get_live_for_owner_scoping(self, db: Database):
         owner = await _create_test_user(db)

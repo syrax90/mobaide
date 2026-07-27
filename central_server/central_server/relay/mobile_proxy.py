@@ -34,6 +34,20 @@ _CUSTOM_KIND_RE = re.compile(r"^custom_[0-9a-f]{12}$")
 _MIN_AGENT_PROTO_FOR_CUSTOM_KINDS = 7
 
 
+class _ProxyRejection(Exception):
+    """Short-circuit for interception failures whose body shape is part of
+    the relay wire contract. Raising ``HTTPException`` with a dict detail
+    would nest the payload under FastAPI's ``{"detail": ...}`` wrapper;
+    relay-path marker bodies (``agent_update_required``, mirroring the
+    agent-authored ``<cli>_cli_missing`` / ``<cli>_auth_required`` shapes)
+    must stay top-level."""
+
+    def __init__(self, status_code: int, body: dict) -> None:
+        super().__init__(body.get("detail"))
+        self.status_code = status_code
+        self.body = body
+
+
 class MobileProxy:
     """Request-response correlation for proxy calls through the agent tunnel."""
 
@@ -151,9 +165,9 @@ async def _resolve_custom_kind(
     agent_row = await request.app.state.db.get_agent(agent_id)
     proto = (agent_row or {}).get("agent_protocol_version")
     if proto is None or proto < _MIN_AGENT_PROTO_FOR_CUSTOM_KINDS:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
+        raise _ProxyRejection(
+            status.HTTP_409_CONFLICT,
+            {
                 "agent_update_required": True,
                 "detail": (
                     "Agent update required to launch custom agent types"
@@ -203,7 +217,13 @@ async def proxy_to_agent(
         and path == "api/sessions"
         and isinstance(body, dict)
     ):
-        body = await _resolve_custom_kind(request, agent_id, payload, body)
+        try:
+            body = await _resolve_custom_kind(request, agent_id, payload, body)
+        except _ProxyRejection as rejection:
+            return JSONResponse(
+                status_code=rejection.status_code,
+                content=rejection.body,
+            )
 
     query = dict(request.query_params) if request.query_params else None
 
