@@ -18,6 +18,12 @@ of the shape ``{"type": "...", "payload": {...}}``. Current event types:
 - ``shortcut.updated`` — payload: full shortcut row (upsert rename or PATCH)
 - ``shortcut.deleted`` — payload: ``{"shortcut_id": str, "version": int,
   "updated_at": str}``
+- ``custom_type.created`` — payload: full custom agent type row
+- ``custom_type.updated`` — payload: full custom agent type row
+- ``custom_type.deleted`` — payload: ``{"id": str}``; the server has
+  already cascaded the type's kind-scoped saved shortcuts, so clients
+  purge their local shortcut caches for ``custom_<id>`` on receipt (no
+  companion ``shortcut.deleted`` events are sent)
 - ``session.attention`` — payload: attention push mirror (see PROTOCOL.md)
 """
 from __future__ import annotations

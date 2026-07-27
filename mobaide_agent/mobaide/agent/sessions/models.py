@@ -136,6 +136,13 @@ class CreateSessionRequest(BaseModel):
     # intent inside their own options block.
     worktree: bool = False
     branch_name: str | None = None
+    # Server-only fields for custom agent types (``cli="custom_<12hex>"``):
+    # the relay strips any client-supplied values and injects the stored
+    # command + display name after its registry lookup, so on the relay
+    # proxy path a non-null value is always relay-authored. The agent-direct
+    # REST router never reads them (custom kinds are rejected there).
+    resolved_command: str | None = None
+    resolved_name: str | None = None
 
 
 class SessionResponse(BaseModel):
@@ -155,6 +162,9 @@ class SessionResponse(BaseModel):
     title: str | None = None
     project_name: str | None = None
     kind: str = "claude"
+    # Custom-type display-name snapshot from creation time; null for
+    # built-in kinds.
+    kind_label: str | None = None
     attention: str | None = None
     exit_reason: str | None = None
 

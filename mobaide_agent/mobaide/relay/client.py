@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import platform
 import random
 import re
 import ssl
@@ -36,6 +35,7 @@ from mobaide.core.cli_launcher import (
 )
 from mobaide.core.codex_auth import codex_login_with_api_key
 from mobaide.core.models import (
+    CustomCommandUnresolvedError,
     SessionConfig,
     SessionEvent,
     SessionKind,
@@ -44,6 +44,7 @@ from mobaide.core.models import (
     session_to_wire_dict,
 )
 from mobaide.core.projects_store import safe_path_exists
+from mobaide.core.shell import resolve_default_shell
 
 from pydantic import ValidationError
 
@@ -227,11 +228,6 @@ _STATE_MAP = {
     SessionState.STOPPED: "stopped",
     SessionState.CRASHED: "crashed",
 }
-
-# Platform default shell for auto-created sessions.
-_DEFAULT_SHELL = (
-    ["cmd.exe"] if platform.system() == "Windows" else ["/bin/bash", "-l"]
-)
 
 MAX_AUTOSCAN_STREAMS = 10
 
@@ -1022,22 +1018,37 @@ class RelayClient:
                 }
                 await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
                 return
-        (
-            kind,
-            spawn_command,
-            spawn_env,
-            claude_options,
-            codex_options,
-            antigravity_options,
-        ) = resolve_spawn_args(
-            ctrl.get("cli"),
-            claude_options,
-            codex_options,
-            antigravity_options,
-            ctrl.get("command"),
-            ctrl.get("env"),
-            _DEFAULT_SHELL,
-        )
+        try:
+            (
+                kind,
+                spawn_command,
+                spawn_env,
+                claude_options,
+                codex_options,
+                antigravity_options,
+            ) = resolve_spawn_args(
+                ctrl.get("cli"),
+                claude_options,
+                codex_options,
+                antigravity_options,
+                ctrl.get("command"),
+                ctrl.get("env"),
+                resolve_default_shell(),
+                resolved_command=ctrl.get("resolved_command"),
+            )
+        except CustomCommandUnresolvedError as exc:
+            logger.warning(
+                "relay.create_session_custom_unresolved session_id=%s error=%s",
+                session_id, exc,
+            )
+            resp = {
+                "type": "session_create_failed",
+                "session_id": session_id,
+                "error": str(exc),
+            }
+            await ws.send(encode(CH_CONTROL, "", json.dumps(resp).encode()))
+            return
+        resolved_name = ctrl.get("resolved_name")
         config = SessionConfig(
             session_id=session_id,
             command=spawn_command,
@@ -1052,6 +1063,11 @@ class RelayClient:
             worktree=bool(ctrl.get("worktree", False)),
             branch_name=ctrl.get("branch_name"),
             kind=kind,
+            kind_label=(
+                resolved_name
+                if isinstance(kind, str) and isinstance(resolved_name, str)
+                else None
+            ),
         )
         try:
             session = await self._session_manager.create_session(config)
@@ -1380,22 +1396,29 @@ class RelayClient:
                 if parsed.antigravity_options is not None
                 else None
             )
-            (
-                kind,
-                spawn_command,
-                spawn_env,
-                claude_options,
-                codex_options,
-                antigravity_options,
-            ) = resolve_spawn_args(
-                parsed.cli,
-                claude_options,
-                codex_options,
-                antigravity_options,
-                parsed.command,
-                parsed.env,
-                _DEFAULT_SHELL,
-            )
+            try:
+                (
+                    kind,
+                    spawn_command,
+                    spawn_env,
+                    claude_options,
+                    codex_options,
+                    antigravity_options,
+                ) = resolve_spawn_args(
+                    parsed.cli,
+                    claude_options,
+                    codex_options,
+                    antigravity_options,
+                    parsed.command,
+                    parsed.env,
+                    resolve_default_shell(),
+                    resolved_command=parsed.resolved_command,
+                )
+            except CustomCommandUnresolvedError as exc:
+                # An unknown/malformed custom kind, or a relay too old to
+                # inject resolved_command — a clean 400, never the generic
+                # 500 from _handle_proxy_request's catch-all.
+                return {"status": 400, "body": {"detail": str(exc)}}
             config = SessionConfig(
                 session_id=session_id,
                 command=spawn_command,
@@ -1410,6 +1433,9 @@ class RelayClient:
                 worktree=parsed.worktree,
                 branch_name=parsed.branch_name,
                 kind=kind,
+                kind_label=(
+                    parsed.resolved_name if isinstance(kind, str) else None
+                ),
             )
             session = await self._session_manager.create_session(config)
             self._bridge_session(session, ws)
@@ -1970,7 +1996,7 @@ class RelayClient:
         """Auto-create a session when relay traffic arrives for unknown ID."""
         config = SessionConfig(
             session_id=session_id,
-            command=_DEFAULT_SHELL,
+            command=resolve_default_shell(),
             rows=24,
             cols=80,
             kind=SessionKind.SHELL,

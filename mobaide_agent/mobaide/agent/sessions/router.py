@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import platform
 import uuid
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from mobaide.core import (
     SessionManager,
 )
 from mobaide.core.models import resolve_spawn_args
+from mobaide.core.shell import resolve_default_shell
 from mobaide.linear.worktree import WorktreeCreationError
 
 from ..auth.dependencies import get_current_user
@@ -27,8 +27,6 @@ router = APIRouter(
     tags=["sessions"],
     dependencies=[Depends(get_current_user)],
 )
-
-_DEFAULT_SHELL = ["cmd.exe"] if platform.system() == "Windows" else ["/bin/bash"]
 
 
 def _validate_adhoc_cwd(cwd: str) -> None:
@@ -74,6 +72,17 @@ async def create_session(
     """Create a new PTY session."""
     manager = _get_manager(request)
     session_id = uuid.uuid4().hex[:12]
+    # Custom agent types need the relay's registry lookup to resolve the
+    # stored command — this direct REST layer has no registry access, so
+    # the kind is rejected outright (and the relay-only ``resolved_*``
+    # fields on the DTO are never read here).
+    if body.cli is not None and body.cli.startswith("custom_"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Custom agent types can only be launched through the relay"
+            ),
+        )
     claude_options = (
         body.claude_options.to_options()
         if body.claude_options is not None
@@ -109,7 +118,7 @@ async def create_session(
         antigravity_options,
         body.command,
         body.env,
-        _DEFAULT_SHELL,
+        resolve_default_shell(),
     )
     config = SessionConfig(
         session_id=session_id,

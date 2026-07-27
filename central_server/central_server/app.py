@@ -19,6 +19,7 @@ from .auth.email import build_email_sender
 from .auth.rate_limit import ResendRateLimiter
 from .auth.service import AuthService
 from .config import CentralServerConfig
+from .custom_agent_types.service import CustomAgentTypeService
 from .db.database import Database
 from .legal.loader import render_privacy, resolve_legal_dir
 from .shortcuts.service import ShortcutService
@@ -110,6 +111,9 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         app.state.agent_service = AgentService(db, app.state.routing)
         app.state.template_service = TemplateService(db, app.state.routing)
         app.state.shortcut_service = ShortcutService(db, app.state.routing)
+        app.state.custom_agent_type_service = CustomAgentTypeService(
+            db, app.state.routing
+        )
 
         from .relay.mobile_proxy import MobileProxy
 
@@ -234,6 +238,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
 
     from .agents.router import router as agents_router
     from .auth.router import router as auth_router
+    from .custom_agent_types.router import router as custom_agent_types_router
     from .dashboard.router import router as dashboard_router
     from .devices.router import router as devices_router
     from .legal.router import router as legal_router
@@ -261,6 +266,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(manifest_router)
     app.include_router(templates_router)
     app.include_router(shortcuts_router)
+    app.include_router(custom_agent_types_router)
 
     # Unauthenticated — intentionally public for load-balancer probes.
     @app.get("/api/health", tags=["health"])

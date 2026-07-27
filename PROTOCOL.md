@@ -6,7 +6,101 @@ and ``central_server``. The three human-facing semvers (``android-vX.Y.Z``,
 ``agent-vX.Y.Z``, ``server-vX.Y.Z``) are independent and ship on their own
 cadence; they do **not** gate compatibility.
 
-## proto-v6 (current)
+## proto-v7 (current)
+
+* Introduced: 2026-07-27 (CLA-153).
+* Python support: ``PROTOCOL_VERSION = 7``, ``SUPPORTED_PROTOCOL_VERSIONS =
+  (6, 7)``, ``MIN_CLIENT_PROTOCOL_VERSION = 6`` (both ``mobaide_agent`` and
+  ``central_server``). Android/iOS constants stay at ``6`` and advance to
+  ``7`` with their client halves (CLA-154 / CLA-155) — old mobile builds
+  remain accepted meanwhile.
+* **Deployment order matters**: a proto-v7 agent handshaking against a
+  proto-v6-only relay is closed with ``4002``, so the central server must
+  deploy before any agent rollout. Old (v6) agents keep connecting — the
+  relay supports both versions — but cannot launch custom agent types
+  (see the ``409`` gate below).
+* Change vs proto-v6: account-scoped **custom AI agent types** — a name +
+  launch command registry on the central server, launched as plain
+  terminal sessions with an **open session kind**. The version is bumped
+  (rather than riding the additive no-bump precedent) because the kind
+  vocabulary stops being a closed enum: clients must **preserve unknown
+  ``kind`` strings verbatim** instead of coercing them to ``claude``, and
+  a detectable version boundary is needed so the relay can refuse custom
+  launches against old agents that would silently ignore the new fields
+  and open a bare shell.
+* **Open session kind**: ``kind`` (in ``session_to_wire_dict`` and every
+  session list/event envelope) may now be the raw string
+  ``custom_<12hex>`` (pattern ``^custom_[0-9a-f]{12}$``; the 12-hex id is
+  the registry row id). Built-in kinds are unchanged. The session wire
+  dict also gains nullable ``kind_label`` — a snapshot of the type's
+  display name taken at session creation, so lists render correctly after
+  the type is renamed or deleted (null for built-in kinds).
+* **Session create** (``POST /api/sessions`` proxied over ``CH_CONTROL``,
+  and the equivalent ``create_session`` control message): the **existing
+  ``cli`` discriminator** carries the custom kind — ``cli:
+  "custom_<12hex>"``. Clients never send the command; the client-supplied
+  ``command``/``env`` hints stay discarded exactly as on the Terminal
+  path.
+  * The relay **strips** ``resolved_command`` / ``resolved_name`` from
+    every client body on this route, then — for a valid custom ``cli`` —
+    looks the id up in the caller's registry and **injects** the stored
+    command + display name into the forwarded body. These two fields are
+    therefore server-only: on the agent side a non-null value is always
+    relay-authored (mobile clients have no path that reaches the agent's
+    control channel with arbitrary JSON).
+  * Relay-side failures answer without forwarding: unknown/deleted id →
+    ``404``; malformed ``custom_*`` id → ``400``; paired agent's last
+    handshake ``protocol_version`` null or ``< 7`` → ``409`` with body
+    ``{"agent_update_required": true, "detail": ...}``.
+  * Agent-side: a custom ``cli`` without ``resolved_command`` (agent-direct
+    REST, or a pre-v7 relay) fails cleanly — ``400`` on the REST/proxy
+    paths, ``session_create_failed`` on the control path — never a silent
+    bare-shell downgrade. The agent-direct REST API always rejects custom
+    kinds (``400``): it has no registry access.
+  * Spawn contract: POSIX ``[login_shell, "-l", "-c", command]`` with the
+    stored command as **one argv element** (no interpolation, no quoting
+    layer); Windows ``["cmd.exe", "/c", command]``. The login shell
+    resolves ``$SHELL`` → ``pw_shell`` → ``/bin/sh``, falling back to
+    ``/bin/sh`` when the basename isn't a known POSIX shell (bash / zsh /
+    sh / dash / ksh). Plain Terminal sessions now use the same resolver
+    (previously hardcoded ``/bin/bash``). Custom sessions are
+    plain-terminal semantics end to end: the ``worktree`` /
+    ``branch_name`` toggle works unchanged, and there is no managed-CLI
+    machinery (no options block, no attention hooks, no autoscan).
+* **REST registry** (dashboard/user JWT, non-admin, on the central
+  server): ``GET /api/custom-agent-types`` → list;
+  ``POST /api/custom-agent-types`` ``{"name", "command"}`` → ``201``;
+  ``PATCH /api/custom-agent-types/{id}`` ``{"name"? , "command"?}`` (at
+  least one field; provided-but-blank → ``422``; there is **no**
+  empty-string-clears form — both attributes are mandatory);
+  ``DELETE /api/custom-agent-types/{id}`` → ``204`` (soft-delete).
+  Validation: ``name`` 1–60 chars trimmed, unique per account
+  case-insensitively; ``command`` 1–1000 chars trimmed. The per-account
+  cap is **20** live types, enforced atomically → ``409``; a name
+  conflict → ``409`` (distinct ``detail`` strings); ownership violations
+  and repeat deletes → ``403`` (same non-idempotent-DELETE caveat as
+  shortcuts). The row shape is ``{"id", "name", "command", "created_at",
+  "updated_at"}`` — ``command`` is returned to its owner (the editor
+  needs it); only session-create requests never carry it.
+* **New user-event kinds** (server-originated, same envelope as
+  ``template.*`` / ``shortcut.*``): ``custom_type.created`` /
+  ``custom_type.updated`` (full row) and ``custom_type.deleted``
+  ``{"id"}``. Deleting a type also soft-deletes the owner's saved
+  shortcuts whose ``kind`` equals ``custom_<id>`` **in the same
+  transaction, with only the one ``custom_type.deleted`` event** — no
+  companion ``shortcut.deleted`` events; clients purge their local
+  shortcut caches for that kind on receipt. Connect-time reconcile is the
+  usual REST refresh (``GET /api/custom-agent-types``). Per-type shortcut
+  scoping needs no server change: ``custom_<12hex>`` already satisfies
+  the shortcuts ``KIND_PATTERN`` and the server stores kinds opaquely.
+* Protocol-fixture updates under ``tests/protocol_fixtures/`` (dropping
+  the ``unknown_coerces_to_claude`` cases, adding ``custom_*`` round-trip
+  cases and the ``CustomAgentTypeDto`` fixtures) ride with the iOS client
+  half (CLA-155): the fixtures' only consumer is the iOS test target,
+  whose registry gate would break the iOS build if they changed before
+  the ``.custom`` kind exists there.
+
+## proto-v6 (superseded by proto-v7)
 
 * Introduced: 2026-06-26
 * App support: ``APP_PROTOCOL_VERSION = 6`` (Android), ``PROTOCOL_VERSION = 6``

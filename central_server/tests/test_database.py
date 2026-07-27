@@ -984,7 +984,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 16
+        assert (await cursor.fetchone())[0] == 17
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1104,13 +1104,13 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.conn.commit()
         await db.close()
 
-        # Reopen — should run the v4 migration through to head (v16).
+        # Reopen — should run the v4 migration through to head (v17).
         db = Database(db_path)
         await db.connect()
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 16
+        assert row[0] == 17
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1140,7 +1140,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 16
+        assert row[0] == 17
         await db.close()
 
 
@@ -1705,3 +1705,211 @@ class TestPromptTemplates:
         await db.soft_delete_template(row["template_id"])
 
         assert await db.update_template(row["template_id"]) is None
+
+
+class TestCustomAgentTypes:
+    """DB helpers for the account-scoped custom agent type registry:
+    single-statement cap enforcement, NOCASE name uniqueness, guarded
+    update, and the kind-scoped shortcut cascade on soft-delete."""
+
+    async def test_create_and_readback(self, db: Database):
+        owner = await _create_test_user(db)
+        row = await db.create_custom_agent_type(owner, "Aider", "aider --yes")
+
+        assert row is not None
+        assert len(row["id"]) == 12
+        assert row["owner_user_id"] == owner
+        assert row["name"] == "Aider"
+        assert row["command"] == "aider --yes"
+        assert row["deleted_at"] is None
+        assert row["created_at"] == row["updated_at"]
+
+        readback = await db.get_custom_agent_type(row["id"])
+        assert readback == row
+
+    async def test_create_cap_kwarg_returns_none_and_inserts_nothing(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        assert await db.create_custom_agent_type(owner, "One", "c1", cap=1)
+
+        assert await db.create_custom_agent_type(
+            owner, "Two", "c2", cap=1
+        ) is None
+        rows = await db.list_custom_agent_types_for_user(owner)
+        assert [r["name"] for r in rows] == ["One"]
+
+    async def test_cap_counts_only_live_rows(self, db: Database):
+        owner = await _create_test_user(db)
+        first = await db.create_custom_agent_type(owner, "One", "c1", cap=1)
+        await db.soft_delete_custom_agent_type(first["id"], owner)
+
+        fresh = await db.create_custom_agent_type(owner, "Two", "c2", cap=1)
+        assert fresh is not None
+
+    async def test_cap_is_per_owner(self, db: Database):
+        owner = await _create_test_user(db)
+        other = await db.create_user(
+            email="other@test.local", password_hash="hash"
+        )
+        assert await db.create_custom_agent_type(owner, "One", "c1", cap=1)
+
+        assert await db.create_custom_agent_type(
+            other, "One", "c1", cap=1
+        ) is not None
+
+    async def test_nocase_duplicate_raises_integrity_error(self, db: Database):
+        owner = await _create_test_user(db)
+        await db.create_custom_agent_type(owner, "Aider", "c1")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await db.create_custom_agent_type(owner, "aIDER", "c2")
+
+    async def test_get_live_for_owner_scoping(self, db: Database):
+        owner = await _create_test_user(db)
+        other = await db.create_user(
+            email="other@test.local", password_hash="hash"
+        )
+        row = await db.create_custom_agent_type(owner, "Aider", "c1")
+
+        assert await db.get_live_custom_agent_type_for_owner(
+            row["id"], owner
+        ) is not None
+        assert await db.get_live_custom_agent_type_for_owner(
+            row["id"], other
+        ) is None
+
+        await db.soft_delete_custom_agent_type(row["id"], owner)
+        assert await db.get_live_custom_agent_type_for_owner(
+            row["id"], owner
+        ) is None
+
+    async def test_update_coalesce_keeps_omitted_fields(self, db: Database):
+        owner = await _create_test_user(db)
+        row = await db.create_custom_agent_type(owner, "Aider", "c1")
+
+        renamed = await db.update_custom_agent_type(
+            row["id"], owner, name="Renamed"
+        )
+        assert renamed["name"] == "Renamed"
+        assert renamed["command"] == "c1"
+
+        recommanded = await db.update_custom_agent_type(
+            row["id"], owner, command="c2"
+        )
+        assert recommanded["name"] == "Renamed"
+        assert recommanded["command"] == "c2"
+
+    async def test_update_guard_returns_none(self, db: Database):
+        owner = await _create_test_user(db)
+        other = await db.create_user(
+            email="other@test.local", password_hash="hash"
+        )
+        row = await db.create_custom_agent_type(owner, "Aider", "c1")
+
+        assert await db.update_custom_agent_type(
+            "nonexistent12", owner, name="X"
+        ) is None
+        assert await db.update_custom_agent_type(
+            row["id"], other, name="X"
+        ) is None
+
+        await db.soft_delete_custom_agent_type(row["id"], owner)
+        assert await db.update_custom_agent_type(
+            row["id"], owner, name="X"
+        ) is None
+
+    async def test_soft_delete_cascades_only_matching_kind_shortcuts(
+        self, db: Database
+    ):
+        owner = await _create_test_user(db)
+        other = await db.create_user(
+            email="other@test.local", password_hash="hash"
+        )
+        row = await db.create_custom_agent_type(owner, "Aider", "c1")
+        kind = f"custom_{row['id']}"
+        scoped = await db.create_user_shortcut(owner, kind, "ctrl+x", None)
+        other_kind = await db.create_user_shortcut(
+            owner, "claude", "ctrl+x", None
+        )
+        foreign = await db.create_user_shortcut(other, kind, "ctrl+x", None)
+
+        tombstone = await db.soft_delete_custom_agent_type(row["id"], owner)
+        assert tombstone is not None
+        assert tombstone["deleted_at"] is not None
+
+        scoped_after = await db.get_user_shortcut(scoped["shortcut_id"])
+        assert scoped_after["deleted_at"] is not None
+        assert scoped_after["version"] == scoped["version"] + 1
+
+        other_after = await db.get_user_shortcut(other_kind["shortcut_id"])
+        assert other_after["deleted_at"] is None
+        assert other_after["version"] == other_kind["version"]
+
+        foreign_after = await db.get_user_shortcut(foreign["shortcut_id"])
+        assert foreign_after["deleted_at"] is None
+
+    async def test_soft_delete_guard_returns_none(self, db: Database):
+        owner = await _create_test_user(db)
+        other = await db.create_user(
+            email="other@test.local", password_hash="hash"
+        )
+        row = await db.create_custom_agent_type(owner, "Aider", "c1")
+
+        assert await db.soft_delete_custom_agent_type(row["id"], other) is None
+        assert await db.soft_delete_custom_agent_type(row["id"], owner)
+        assert await db.soft_delete_custom_agent_type(row["id"], owner) is None
+
+    async def test_delete_user_purges_custom_agent_types(self, db: Database):
+        owner = await _create_test_user(db)
+        survivor = await db.create_user(
+            email="other@test.local", password_hash="hash"
+        )
+        await db.create_custom_agent_type(owner, "Mine", "c1")
+        kept = await db.create_custom_agent_type(survivor, "Theirs", "c2")
+
+        await db.delete_user(owner)
+
+        cursor = await db.conn.execute(
+            "SELECT COUNT(*) FROM custom_agent_types WHERE owner_user_id = ?",
+            (owner,),
+        )
+        assert (await cursor.fetchone())[0] == 0
+        assert await db.get_custom_agent_type(kept["id"]) is not None
+
+
+class TestCustomAgentTypesMigration:
+    async def test_v17_creates_table_on_existing_db(self, tmp_path):
+        db_path = str(tmp_path / "pre_v17.db")
+        db = Database(db_path)
+        await db.connect()
+        owner = await _create_test_user(db)
+        # Simulate a pre-v17 on-disk schema: drop the new table + indexes
+        # and roll user_version back so reopening replays the v17 block.
+        await db.conn.execute("DROP INDEX idx_custom_agent_types_owner")
+        await db.conn.execute("DROP INDEX idx_custom_agent_types_owner_name")
+        await db.conn.execute("DROP TABLE custom_agent_types")
+        await db.conn.execute("PRAGMA user_version = 16")
+        await db.conn.commit()
+        await db.close()
+
+        db = Database(db_path)
+        await db.connect()
+        cursor = await db.conn.execute("PRAGMA user_version")
+        assert (await cursor.fetchone())[0] == 17
+
+        # Table is usable and the NOCASE unique index came back with it.
+        row = await db.create_custom_agent_type(owner, "Aider", "c1")
+        assert row is not None
+        with pytest.raises(sqlite3.IntegrityError):
+            await db.create_custom_agent_type(owner, "AIDER", "c2")
+        await db.close()
+
+        # Idempotent: a second reopen at head is a no-op and the row
+        # survives.
+        db = Database(db_path)
+        await db.connect()
+        cursor = await db.conn.execute("PRAGMA user_version")
+        assert (await cursor.fetchone())[0] == 17
+        assert await db.get_custom_agent_type(row["id"]) is not None
+        await db.close()

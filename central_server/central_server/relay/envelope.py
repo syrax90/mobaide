@@ -22,9 +22,9 @@ CH_CONTROL = 0x10
 # breaking change to the JSON shapes carried over CH_CONTROL or CH_EVENTS,
 # or to the binary frame layout on CH_SESSION_IO. Mirrored in the matching
 # mobaide_agent envelope module — CI enforces equality.
-PROTOCOL_VERSION: int = 6
+PROTOCOL_VERSION: int = 7
 MIN_CLIENT_PROTOCOL_VERSION: int = 6
-SUPPORTED_PROTOCOL_VERSIONS: tuple[int, ...] = (6,)
+SUPPORTED_PROTOCOL_VERSIONS: tuple[int, ...] = (6, 7)
 
 # Application-private close codes (RFC 6455 §7.4.2).
 PROTOCOL_INCOMPATIBLE_CLOSE_CODE = 4002

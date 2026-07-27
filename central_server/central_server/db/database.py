@@ -148,6 +148,19 @@ CREATE TABLE IF NOT EXISTS user_shortcuts (
     version       INTEGER NOT NULL DEFAULT 1
 );
 
+-- Account-scoped custom AI agent types: a display name plus the launch
+-- command the relay injects server-side on session create; clients never
+-- send the command. The wire session kind is ``custom_<id>``.
+CREATE TABLE IF NOT EXISTS custom_agent_types (
+    id            TEXT PRIMARY KEY,
+    owner_user_id TEXT NOT NULL REFERENCES users(id),
+    name          TEXT NOT NULL,
+    command       TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    deleted_at    TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_google_sub
     ON users(google_sub) WHERE google_sub IS NOT NULL;
@@ -182,6 +195,11 @@ CREATE INDEX IF NOT EXISTS idx_user_shortcuts_owner
     ON user_shortcuts(owner_user_id) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_shortcuts_dedupe
     ON user_shortcuts(owner_user_id, kind, chord_token) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_custom_agent_types_owner
+    ON custom_agent_types(owner_user_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_custom_agent_types_owner_name
+    ON custom_agent_types(owner_user_id, name COLLATE NOCASE)
+    WHERE deleted_at IS NULL;
 """
 
 
@@ -529,6 +547,13 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 16")
 
+        if version < 17:
+            # Additive: custom_agent_types table + partial owner/name
+            # indexes (account-scoped custom AI agent types). Pure
+            # _SCHEMA re-run.
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 17")
+
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -725,7 +750,8 @@ class Database:
           3. Drop the ``agents`` rows themselves.
           4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
              ``account_deletion_cancel_tokens``, ``mobile_devices``,
-             ``prompt_templates``, and ``user_shortcuts`` owned by the user.
+             ``prompt_templates``, ``user_shortcuts``, and
+             ``custom_agent_types`` owned by the user.
           5. Drop the ``users`` row.
 
         ``deletion_audit`` rows are intentionally NOT cascaded — they have no
@@ -776,6 +802,10 @@ class Database:
         )
         await self.conn.execute(
             "DELETE FROM user_shortcuts WHERE owner_user_id = ?", (user_id,)
+        )
+        await self.conn.execute(
+            "DELETE FROM custom_agent_types WHERE owner_user_id = ?",
+            (user_id,),
         )
         await self.conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         await self.conn.commit()
@@ -1226,6 +1256,149 @@ class Database:
         if cursor.rowcount != 1:
             return None
         return await self.get_user_shortcut(shortcut_id)
+
+    _CUSTOM_TYPE_COLUMNS = (
+        "id, owner_user_id, name, command, created_at, updated_at, deleted_at"
+    )
+
+    async def create_custom_agent_type(
+        self,
+        owner_user_id: str,
+        name: str,
+        command: str,
+        *,
+        cap: int = 20,
+    ) -> dict | None:
+        """Create a custom agent type, enforcing the per-account cap in the
+        same statement (INSERT ... SELECT ... WHERE COUNT < cap). aiosqlite
+        serializes statements, not await sequences, so a separate
+        COUNT-then-INSERT pair could interleave with another create and
+        overshoot the cap; the single statement cannot.
+
+        Returns the created row, or None when the owner already has
+        ``cap`` live types. Raises ``sqlite3.IntegrityError`` when a live
+        row with the same name (case-insensitive) exists for the owner
+        (partial unique index)."""
+        type_id = uuid.uuid4().hex[:12]
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "INSERT INTO custom_agent_types "
+            "(id, owner_user_id, name, command, created_at, updated_at, "
+            "deleted_at) "
+            "SELECT ?, ?, ?, ?, ?, ?, NULL "
+            "WHERE (SELECT COUNT(*) FROM custom_agent_types "
+            "       WHERE owner_user_id = ? AND deleted_at IS NULL) < ? "
+            "RETURNING id",
+            (type_id, owner_user_id, name, command, now, now,
+             owner_user_id, cap),
+        )
+        # RETURNING rows must be consumed before commit() resets the
+        # pending statement.
+        inserted = await cursor.fetchone()
+        await self.conn.commit()
+        if inserted is None:
+            return None
+        row = await self.get_custom_agent_type(type_id)
+        assert row is not None
+        return row
+
+    async def get_custom_agent_type(self, type_id: str) -> dict | None:
+        cursor = await self.conn.execute(
+            f"SELECT {self._CUSTOM_TYPE_COLUMNS} "
+            "FROM custom_agent_types WHERE id = ?",
+            (type_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_live_custom_agent_type_for_owner(
+        self, type_id: str, owner_user_id: str
+    ) -> dict | None:
+        """Owner-scoped live lookup — the relay's launch-resolution probe."""
+        cursor = await self.conn.execute(
+            f"SELECT {self._CUSTOM_TYPE_COLUMNS} "
+            "FROM custom_agent_types "
+            "WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL",
+            (type_id, owner_user_id),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def list_custom_agent_types_for_user(
+        self, user_id: str
+    ) -> list[dict]:
+        cursor = await self.conn.execute(
+            f"SELECT {self._CUSTOM_TYPE_COLUMNS} "
+            "FROM custom_agent_types "
+            "WHERE owner_user_id = ? AND deleted_at IS NULL "
+            "ORDER BY created_at ASC, id ASC",
+            (user_id,),
+        )
+        return [dict(row) async for row in cursor]
+
+    async def update_custom_agent_type(
+        self,
+        type_id: str,
+        owner_user_id: str,
+        *,
+        name: str | None = None,
+        command: str | None = None,
+    ) -> dict | None:
+        """Update name and/or command (None = leave unchanged; both columns
+        are NOT NULL so COALESCE is safe). Bumps ``updated_at``. Returns the
+        updated row, or None when the type doesn't exist, is soft-deleted,
+        or is owned by someone else. Raises ``sqlite3.IntegrityError`` when
+        the new name collides case-insensitively with another live type."""
+        cursor = await self.conn.execute(
+            "UPDATE custom_agent_types "
+            "SET name = COALESCE(?, name), "
+            "    command = COALESCE(?, command), "
+            "    updated_at = ? "
+            "WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL",
+            (name, command, _now_iso(), type_id, owner_user_id),
+        )
+        await self.conn.commit()
+        if cursor.rowcount != 1:
+            return None
+        row = await self.get_custom_agent_type(type_id)
+        if row is None or row["deleted_at"] is not None:
+            # Concurrent soft-delete between the UPDATE commit and this
+            # readback — never hand a tombstone to the service, it would
+            # broadcast a deleted type as custom_type.updated.
+            return None
+        return row
+
+    async def soft_delete_custom_agent_type(
+        self, type_id: str, owner_user_id: str
+    ) -> dict | None:
+        """Tombstone a custom agent type AND soft-delete the owner's live
+        saved shortcuts scoped to its ``custom_<id>`` kind, in one
+        transaction (single commit). The shortcut rows get the same
+        ``version`` bump semantics as ``soft_delete_user_shortcut`` so
+        client-side version reconciliation stays coherent; the service
+        deliberately broadcasts only one ``custom_type.deleted`` event
+        (clients purge their local shortcut caches for the kind).
+
+        Returns the type tombstone row, or None if the type was already
+        gone or is owned by someone else."""
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "UPDATE custom_agent_types "
+            "SET deleted_at = ?, updated_at = ? "
+            "WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL",
+            (now, now, type_id, owner_user_id),
+        )
+        if cursor.rowcount != 1:
+            await self.conn.commit()
+            return None
+        await self.conn.execute(
+            "UPDATE user_shortcuts "
+            "SET deleted_at = ?, updated_at = ?, version = version + 1 "
+            "WHERE owner_user_id = ? AND kind = ? AND deleted_at IS NULL",
+            (now, now, owner_user_id, f"custom_{type_id}"),
+        )
+        await self.conn.commit()
+        return await self.get_custom_agent_type(type_id)
 
     async def create_pairing_token(
         self,

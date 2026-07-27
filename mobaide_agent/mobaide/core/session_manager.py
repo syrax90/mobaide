@@ -110,7 +110,7 @@ class SessionManager:
         * stored project + managed → ``_apply_project_launch`` builds full
           argv/cwd/env via the matching launcher against ``ProjectsStore``.
         * stored project + shell → ``_resolve_project_cwd`` only fills ``cwd`` so
-          the caller's ``_DEFAULT_SHELL`` argv stays intact.
+          the caller's login-shell (or custom-type) argv stays intact.
         * no project + managed → ``_apply_adhoc_launch`` builds a launch against
           the bare ``config.cwd`` (custom-path mode); never touches
           ``ProjectsStore``.
@@ -229,8 +229,9 @@ class SessionManager:
     async def _resolve_project_cwd(self, config: SessionConfig) -> None:
         """Resolve the project ``cwd`` (optionally a worktree) without invoking ``ClaudeLauncher``.
 
-        Used by the Terminal mode path: caller has set ``config.command`` to
-        ``_DEFAULT_SHELL`` and we just need the PTY to spawn in the project's
+        Used by the Terminal mode path (and custom agent types): caller has
+        set ``config.command`` to the login shell or the resolved custom
+        command and we just need the PTY to spawn in the project's
         working directory — or, when ``config.worktree`` is set, in a freshly
         created git worktree of that project. Raises the same ``ValueError`` /
         ``KeyError`` shapes ``_apply_project_launch`` uses so router/relay

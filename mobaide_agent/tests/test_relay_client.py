@@ -569,6 +569,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.title = None
         sess_info.project_name = None
         sess_info.kind = SessionKind.CLAUDE
+        sess_info.kind_label = None
         sess_info.attention = None
         sess_info.exit_reason = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
@@ -596,6 +597,7 @@ class TestHandleRequestEventsSnapshot:
                     "title": None,
                     "project_name": None,
                     "kind": "claude",
+                    "kind_label": None,
                     "attention": None,
                     "exit_reason": None,
                 },
@@ -675,6 +677,7 @@ class TestHandleRequestEventsSnapshot:
         sess_info.title = None
         sess_info.project_name = None
         sess_info.kind = SessionKind.CLAUDE
+        sess_info.kind_label = None
         sess_info.attention = None
         sess_info.exit_reason = None
         mock_session_manager.list_sessions = MagicMock(return_value=[sess_info])
@@ -705,6 +708,7 @@ class TestHandleRequestEventsSnapshot:
                 "title": None,
                 "project_name": None,
                 "kind": "claude",
+                "kind_label": None,
                 "attention": None,
                 "exit_reason": None,
             },
@@ -3131,11 +3135,11 @@ class TestProxySessionsWireShape:
         assert len(body) == 2
 
         a, b = body
-        # Canonical 11-key shape, in any order — locks down session_to_wire_dict.
+        # Canonical 12-key shape, in any order — locks down session_to_wire_dict.
         expected_keys = {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "attention", "exit_reason",
+            "kind_label", "attention", "exit_reason",
         }
         assert set(a.keys()) == expected_keys
         assert set(b.keys()) == expected_keys
@@ -3191,11 +3195,11 @@ class TestProxySessionsWireShape:
         body = result["body"]
         assert isinstance(body, dict)
 
-        # Canonical 11-key shape — the consolidation contract.
+        # Canonical 12-key shape — the consolidation contract.
         assert set(body.keys()) == {
             "session_id", "state", "created_at", "pid",
             "command", "cwd", "title", "project_name", "kind",
-            "attention", "exit_reason",
+            "kind_label", "attention", "exit_reason",
         }
         # The two new fields are present (even when title is None at create).
         assert body["title"] is None
@@ -3512,6 +3516,7 @@ class TestHandleProxyRequestCodex:
             info.title = None
             info.project_name = None
             info.kind = SessionKind.CODEX
+            info.kind_label = None
             info.attention = None
             info.exit_reason = None
             s.to_info = MagicMock(return_value=info)
@@ -3933,6 +3938,7 @@ class TestHandleProxyRequestAntigravity:
             info.title = None
             info.project_name = None
             info.kind = SessionKind.ANTIGRAVITY
+            info.kind_label = None
             info.attention = None
             info.exit_reason = None
             s.to_info = MagicMock(return_value=info)
@@ -4037,3 +4043,231 @@ class TestHandleProxyRequestAntigravity:
             "/usr/local/bin/agy",
         ]
         assert isinstance(resp["body"]["detail"], str) and resp["body"]["detail"]
+
+
+CUSTOM_KIND = "custom_0123456789ab"
+
+
+class TestProxyCreateSessionCustomKind:
+    """``POST /api/sessions`` over proxy_request with a ``custom_<12hex>``
+    ``cli``: spawn argv comes exclusively from the relay-injected
+    ``resolved_command``; a missing/malformed resolution is a clean 400 —
+    never the catch-all 500, never a silent bare-shell downgrade."""
+
+    def _created_info(self):
+        from mobaide.core.models import SessionInfo
+
+        return SessionInfo(
+            session_id="sid-custom",
+            state=SessionState.RUNNING,
+            created_at=datetime(2026, 7, 27, 13, 0, 0, tzinfo=timezone.utc),
+            pid=4242,
+            command=["/bin/sh", "-l", "-c", "aider"],
+            cwd="/work",
+            kind=CUSTOM_KIND,
+            kind_label="My Agent",
+        )
+
+    async def test_custom_create_builds_config_from_resolved_command(
+        self, client, mock_session_manager,
+    ):
+        from mobaide.core.models import SessionConfig
+        from mobaide.core.shell import build_custom_argv
+
+        fake_session = MagicMock()
+        fake_session.to_info.return_value = self._created_info()
+        mock_session_manager.create_session = AsyncMock(
+            return_value=fake_session
+        )
+
+        ws = AsyncMock()
+        body = {
+            "cli": CUSTOM_KIND,
+            "resolved_command": "aider --model x",
+            "resolved_name": "My Agent",
+            # Client hints must stay discarded on the custom path.
+            "command": ["rm", "-rf", "/"],
+            "env": {"EVIL": "1"},
+        }
+
+        with patch.object(client, "_bridge_session"):
+            result = await client._dispatch_proxy(
+                "POST", "/api/sessions", body, None, ws,
+            )
+
+        assert result["status"] == 201
+        assert result["body"]["kind"] == CUSTOM_KIND
+        assert result["body"]["kind_label"] == "My Agent"
+
+        call = mock_session_manager.create_session.await_args
+        config: SessionConfig = call.args[0]
+        assert config.kind == CUSTOM_KIND
+        assert isinstance(config.kind, str)
+        assert config.kind_label == "My Agent"
+        assert config.command == build_custom_argv("aider --model x")
+        assert config.command[-1] == "aider --model x"
+        assert config.env is None
+        assert config.claude_options is None
+        assert config.codex_options is None
+        assert config.antigravity_options is None
+
+    async def test_custom_without_resolved_command_returns_400_not_500(
+        self, client, mock_session_manager,
+    ):
+        mock_session_manager.create_session = AsyncMock()
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST", "/api/sessions", {"cli": CUSTOM_KIND}, None, ws,
+        )
+
+        assert result["status"] == 400
+        assert "relay" in result["body"]["detail"].lower()
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_malformed_custom_cli_returns_400(
+        self, client, mock_session_manager,
+    ):
+        mock_session_manager.create_session = AsyncMock()
+
+        ws = AsyncMock()
+        result = await client._dispatch_proxy(
+            "POST",
+            "/api/sessions",
+            {"cli": "custom_XYZ", "resolved_command": "echo hi"},
+            None,
+            ws,
+        )
+
+        assert result["status"] == 400
+        mock_session_manager.create_session.assert_not_awaited()
+
+
+class TestHandleCreateSessionCustomKind:
+    """The dormant CH_CONTROL ``create_session`` path honours the same
+    ``resolved_command``/``resolved_name`` contract (relay-only reachable),
+    answering ``session_create_failed`` on an unresolved custom kind."""
+
+    async def test_custom_create_forwards_resolved_fields_to_config(
+        self, client, mock_session_manager,
+    ):
+        from mobaide.core.models import SessionConfig
+        from mobaide.core.shell import build_custom_argv
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "sid-c"
+            s.pid = 7
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "sid-c",
+            "cli": CUSTOM_KIND,
+            "resolved_command": "goose run",
+            "resolved_name": "Goose",
+            "command": ["rm", "-rf", "/"],
+            "env": {"EVIL": "1"},
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind == CUSTOM_KIND
+        assert cfg.kind_label == "Goose"
+        assert cfg.command == build_custom_argv("goose run")
+        assert cfg.env is None
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_created"
+        assert resp["session_id"] == "sid-c"
+
+    async def test_custom_without_resolved_command_fails_cleanly(
+        self, client, mock_session_manager,
+    ):
+        mock_session_manager.create_session = AsyncMock()
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "sid-fail",
+            "cli": CUSTOM_KIND,
+        }
+
+        await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        resp = json.loads(decode(ws.send.call_args[0][0])[2])
+        assert resp["type"] == "session_create_failed"
+        assert resp["session_id"] == "sid-fail"
+        assert "relay" in resp["error"].lower()
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_resolved_name_ignored_for_builtin_kinds(
+        self, client, mock_session_manager,
+    ):
+        """``kind_label`` is a custom-type snapshot only — a stray
+        ``resolved_name`` on a built-in create must not leak into it."""
+        from mobaide.core.models import SessionConfig
+
+        async def _capture(config: SessionConfig):
+            _capture.config = config  # type: ignore[attr-defined]
+            s = MagicMock()
+            s.session_id = "sid-b"
+            s.pid = 8
+            return s
+
+        mock_session_manager.create_session = AsyncMock(side_effect=_capture)
+
+        ws = AsyncMock()
+        ctrl = {
+            "type": "create_session",
+            "session_id": "sid-b",
+            "cli": "claude",
+            "resolved_name": "Sneaky",
+        }
+
+        with patch.object(client, "_bridge_session"):
+            await client._handle_control(json.dumps(ctrl).encode(), ws)
+
+        cfg: SessionConfig = _capture.config  # type: ignore[attr-defined]
+        assert cfg.kind is SessionKind.CLAUDE
+        assert cfg.kind_label is None
+
+
+class TestAutoCreateUsesLoginShellResolver:
+    async def test_auto_create_command_comes_from_resolve_default_shell(
+        self, client, mock_session_manager,
+    ):
+        """The unknown-session auto-create path spawns the login shell via
+        the per-request resolver, not a module-level constant frozen at
+        import time."""
+        mock_new_session = AsyncMock()
+        mock_new_session.session_id = "unknown-1"
+        mock_new_session.state = SessionState.RUNNING
+        mock_new_session.pid = 200
+        mock_new_session.iter_ring_chunks = MagicMock(
+            side_effect=_mock_iter_ring_chunks(b""),
+        )
+
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        mock_session_manager.create_session = AsyncMock(
+            return_value=mock_new_session
+        )
+
+        ws = AsyncMock()
+        with patch(
+            "mobaide.relay.client.resolve_default_shell",
+            return_value=["/bin/zsh", "-l"],
+        ), patch.object(client, "_bridge_session"):
+            await client._handle_session_input(
+                "unknown-1", FRAME_INPUT + b"hi", ws
+            )
+
+        config = mock_session_manager.create_session.await_args.args[0]
+        assert config.command == ["/bin/zsh", "-l"]
+        assert config.kind is SessionKind.SHELL

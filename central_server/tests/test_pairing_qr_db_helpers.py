@@ -105,8 +105,8 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_first_reopen = (await cur.fetchone())[0]
-        assert version_after_first_reopen == 15, (
-            f"after the v7->v15 migrations run, user_version must be 15; "
+        assert version_after_first_reopen == 17, (
+            f"after the v7->v17 migrations run, user_version must be 17; "
             f"got {version_after_first_reopen}"
         )
         # The seeded row must survive the migration. The relay_url
@@ -134,7 +134,7 @@ class TestSchema:
 
         cur = await database.conn.execute("PRAGMA user_version")
         version_after_second_reopen = (await cur.fetchone())[0]
-        assert version_after_second_reopen == 15
+        assert version_after_second_reopen == 17
 
         # The seeded row is still there — second reopen is a no-op,
         # not a destructive rebuild.
