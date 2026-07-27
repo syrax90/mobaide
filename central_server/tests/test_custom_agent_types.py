@@ -1,8 +1,8 @@
 """Tests for the account-scoped custom AI agent type registry API.
 
 Covers REST CRUD (GET / POST / PATCH / DELETE) on
-``/api/custom-agent-types``, validation (trim, blank, length, empty
-PATCH body), the two distinct 409s (per-account cap vs case-insensitive
+``/api/custom-agent-types``, validation (trim, blank, NUL, length,
+empty PATCH body), the two distinct 409s (per-account cap vs case-insensitive
 name conflict), ownership isolation (403), soft-delete semantics
 including the kind-scoped shortcut cascade, admin blocking, and the
 user-scoped push-event trio (``custom_type.created`` /
@@ -63,6 +63,10 @@ class TestCreate:
             {"name": "Aider"},
             {"name": "x" * 61, "command": "run"},
             {"name": "Aider", "command": "c" * 1001},
+            # NUL survives strip() and SQLite; it must be rejected before
+            # it can persist an unlaunchable command.
+            {"name": "Ai\x00der", "command": "run"},
+            {"name": "Aider", "command": "run\x00 --flag"},
         ],
     )
     async def test_create_invalid_body_returns_422(
@@ -219,7 +223,15 @@ class TestUpdate:
         assert resp.json()["command"] == "both-cmd"
 
     @pytest.mark.parametrize(
-        "body", [{}, {"name": "   "}, {"command": "   "}, {"name": None}]
+        "body",
+        [
+            {},
+            {"name": "   "},
+            {"command": "   "},
+            {"name": None},
+            {"name": "Ai\x00der"},
+            {"command": "run\x00 --flag"},
+        ],
     )
     async def test_patch_empty_or_blank_returns_422(
         self, client, api_auth_headers, body

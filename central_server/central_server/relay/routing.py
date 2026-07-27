@@ -124,6 +124,12 @@ class AgentConnection:
     # Owner resolved at registration time so status broadcasts don't require
     # an async DB hit on the disconnect path.
     owner_user_id: str | None = None
+    # Negotiated wire-protocol version of THIS tunnel, stamped synchronously
+    # at registration. Gates that must match the live connection (e.g. the
+    # custom-agent-type resolved_command injection) read this instead of the
+    # DB row, which two overlapping tunnels can leave describing the other
+    # connection.
+    protocol_version: int | None = None
     send_queue: asyncio.Queue[bytes] = field(
         default_factory=lambda: asyncio.Queue(maxsize=_AGENT_QUEUE_SIZE)
     )

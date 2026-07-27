@@ -49,9 +49,13 @@ cadence; they do **not** gate compatibility.
     relay-authored (mobile clients have no path that reaches the agent's
     control channel with arbitrary JSON).
   * Relay-side failures answer without forwarding: unknown/deleted id →
-    ``404``; malformed ``custom_*`` id → ``400``; paired agent's last
-    handshake ``protocol_version`` null or ``< 7`` → ``409`` with body
-    ``{"agent_update_required": true, "detail": ...}``.
+    ``404``; malformed ``custom_*`` id → ``400``; **live tunnel's**
+    negotiated ``protocol_version`` ``< 7`` (or unset) → ``409`` with body
+    ``{"agent_update_required": true, "detail": ...}``. Agent **offline** →
+    the standard proxy ``503`` (the version gate applies only to a live
+    tunnel — the relay never answers ``agent_update_required`` from a
+    persisted handshake row, which overlapping tunnels can leave
+    describing a different connection).
   * Agent-side: a custom ``cli`` without ``resolved_command`` (agent-direct
     REST, or a pre-v7 relay) fails cleanly — ``400`` on the REST/proxy
     paths, ``session_create_failed`` on the control path — never a silent
@@ -77,7 +81,8 @@ cadence; they do **not** gate compatibility.
   Validation: ``name`` 1–60 chars trimmed, unique per account
   case-insensitively (ASCII case folding only — SQLite ``NOCASE``;
   non-ASCII characters compare byte-wise, so ``Ågent`` and ``ågent`` are
-  distinct names); ``command`` 1–1000 chars trimmed. The per-account
+  distinct names); ``command`` 1–1000 chars trimmed; an embedded NUL
+  byte in either field → ``422``. The per-account
   cap is **20** live types, enforced atomically → ``409``; a name
   conflict → ``409`` (distinct ``detail`` strings); ownership violations
   and repeat deletes → ``403`` (same non-idempotent-DELETE caveat as

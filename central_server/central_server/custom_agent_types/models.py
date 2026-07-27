@@ -27,6 +27,11 @@ class CreateCustomAgentTypeRequest(BaseModel):
     @field_validator("name", "command")
     @classmethod
     def _strip_non_blank(cls, value: str) -> str:
+        # NUL survives strip() and round-trips through SQLite, but the
+        # agent-side spawn rejects embedded null bytes in argv — a stored
+        # command containing one would be permanently unlaunchable.
+        if "\x00" in value:
+            raise ValueError("must not contain NUL characters")
         stripped = value.strip()
         if not stripped:
             raise ValueError("must not be blank")
@@ -47,6 +52,10 @@ class UpdateCustomAgentTypeRequest(BaseModel):
     def _strip_non_blank(cls, value: str | None) -> str | None:
         if value is None:
             return None
+        # See CreateCustomAgentTypeRequest: NUL would persist an
+        # unlaunchable command.
+        if "\x00" in value:
+            raise ValueError("must not contain NUL characters")
         stripped = value.strip()
         if not stripped:
             raise ValueError("must not be blank")

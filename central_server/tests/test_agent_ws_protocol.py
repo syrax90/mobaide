@@ -1,7 +1,8 @@
 """Cover the protocol-version handshake on ``/ws/agent-tunnel``:
 
 * Compatible ``protocol_version`` -> ``auth_ok`` carrying server version
-  fields and (optional) manifest pointer.
+  fields and (optional) manifest pointer, and the negotiated version
+  stamped on the live routing entry.
 * Unsupported ``protocol_version`` -> ``incompatible`` text frame followed
   by close code ``PROTOCOL_INCOMPATIBLE_CLOSE_CODE`` (4002), no agent
   registration.
@@ -110,6 +111,28 @@ class TestAgentTunnelProtocolHandshake:
             assert resp["latest_agent_version"] is None
             assert resp["manifest_body"] is None
             assert resp["manifest_signature"] is None
+
+    def test_handshake_stamps_negotiated_version_on_routing_entry(
+        self, app, registered_agent,
+    ):
+        """The live ``AgentConnection`` carries the tunnel's own negotiated
+        version — the source the relay's custom-kind 409 gate reads
+        instead of the DB handshake row, which an overlapping tunnel can
+        leave describing the other connection."""
+        agent_id, raw_token = registered_agent
+        client = TestClient(app)
+        with client.websocket_connect("/ws/agent-tunnel") as ws:
+            ws.send_text(json.dumps({
+                "type": "auth",
+                "agent_id": agent_id,
+                "token": raw_token,
+                "protocol_version": PROTOCOL_VERSION,
+            }))
+            assert json.loads(ws.receive_text())["type"] == "auth_ok"
+
+            conn = app.state.routing.get_agent(agent_id)
+            assert conn is not None
+            assert conn.protocol_version == PROTOCOL_VERSION
 
     def test_missing_protocol_version_defaults_to_incompatible(
         self, app, registered_agent,

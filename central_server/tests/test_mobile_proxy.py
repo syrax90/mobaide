@@ -336,29 +336,29 @@ class TestSessionCreateInterception:
     dict body on this route; for a valid ``custom_<12hex>`` ``cli`` the
     stored command/name are looked up in the caller's registry and
     injected. Failures answer without forwarding: malformed id → 400,
-    unknown/deleted/foreign id → 404, agent handshake protocol version
-    NULL or < 7 → 409 with the ``agent_update_required`` marker.
+    unknown/deleted/foreign id → 404, LIVE tunnel protocol version None
+    or < 7 → 409 with the ``agent_update_required`` marker. The gate
+    reads the routing entry, never the DB handshake row; with no live
+    conn it is skipped and ``forward`` answers 503.
     """
 
     async def _setup(
         self, app, registered_agent, proto: int | None = 7
     ) -> tuple[str, dict, dict[str, str], dict]:
-        """Wire tokens, routing, a capturing forward; persist agent proto.
+        """Wire tokens, routing, a capturing forward; stamp the live conn.
 
-        ``proto=None`` leaves the freshly-registered agent's handshake
-        column NULL (a pre-v7 agent that never reconnected).
+        ``proto`` is stamped on the registered ``AgentConnection`` — the
+        source the 409 gate reads. ``proto=None`` models a routing entry
+        that was never stamped (gate must fail closed).
         """
         agent_id, _ = registered_agent
         owner = await app.state.db.get_user_by_email("viewer@test.local")
         access, _ = await app.state.auth_service.create_mobile_tokens(
             owner["id"], agent_id, owner["id"]
         )
-        if proto is not None:
-            await app.state.db.update_agent_handshake_info(
-                agent_id, "test-agent-v", proto
-            )
         app.state.mobile_proxy = MobileProxy(app.state.routing)
-        app.state.routing.register_agent(agent_id, _mock_ws())
+        conn = app.state.routing.register_agent(agent_id, _mock_ws())
+        conn.protocol_version = proto
 
         captured: dict = {}
 
@@ -553,6 +553,85 @@ class TestSessionCreateInterception:
         assert set(body.keys()) == {"agent_update_required", "detail"}
         assert body["agent_update_required"] is True
         assert isinstance(body["detail"], str)
+
+    async def test_db_row_saying_v7_does_not_unlock_v6_live_conn(
+        self, client, app, registered_agent
+    ):
+        """Overlapping tunnels can leave the DB handshake row describing a
+        connection other than the one this request will be forwarded to.
+        A row claiming v7 while the live conn negotiated v6 must still
+        409 — the gate follows the tunnel, not the row."""
+        agent_id, owner, headers, captured = await self._setup(
+            app, registered_agent, proto=6
+        )
+        await app.state.db.update_agent_handshake_info(
+            agent_id, "test-agent-v", 7
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 409
+        assert resp.json()["agent_update_required"] is True
+        assert captured == {}
+
+    async def test_stale_db_row_does_not_block_v7_live_conn(
+        self, client, app, registered_agent
+    ):
+        """The same race, other direction: a v7 tunnel whose handshake
+        write lost to a stale v6 row must still be allowed to launch."""
+        agent_id, owner, headers, captured = await self._setup(
+            app, registered_agent, proto=7
+        )
+        await app.state.db.update_agent_handshake_info(
+            agent_id, "test-agent-v", 6
+        )
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider --yes"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers=headers,
+        )
+
+        assert resp.status_code == 201
+        assert captured["body"]["resolved_command"] == "aider --yes"
+
+    async def test_offline_agent_returns_503_not_409(
+        self, client, app, registered_agent
+    ):
+        """No live conn → the proto gate is skipped entirely and
+        ``MobileProxy.forward`` answers 503, even when a stale DB row
+        says the agent is pre-v7 (the old row-based gate would 409)."""
+        agent_id, _ = registered_agent
+        owner = await app.state.db.get_user_by_email("viewer@test.local")
+        access, _ = await app.state.auth_service.create_mobile_tokens(
+            owner["id"], agent_id, owner["id"]
+        )
+        await app.state.db.update_agent_handshake_info(
+            agent_id, "test-agent-v", 6
+        )
+        app.state.mobile_proxy = MobileProxy(app.state.routing)
+        row = await app.state.db.create_custom_agent_type(
+            owner["id"], "Aider", "aider"
+        )
+
+        resp = await client.post(
+            f"/proxy/{agent_id}/api/sessions",
+            json={"cli": f"custom_{row['id']}"},
+            headers={"Authorization": f"Bearer {access}"},
+        )
+
+        assert resp.status_code == 503
+        assert "offline" in resp.json()["detail"].lower()
 
     async def test_array_body_is_forwarded_untouched(
         self, client, app, registered_agent

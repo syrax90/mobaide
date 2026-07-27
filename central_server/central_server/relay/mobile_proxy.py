@@ -162,18 +162,24 @@ async def _resolve_custom_kind(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Custom agent type not found",
         )
-    agent_row = await request.app.state.db.get_agent(agent_id)
-    proto = (agent_row or {}).get("agent_protocol_version")
-    if proto is None or proto < _MIN_AGENT_PROTO_FOR_CUSTOM_KINDS:
-        raise _ProxyRejection(
-            status.HTTP_409_CONFLICT,
-            {
-                "agent_update_required": True,
-                "detail": (
-                    "Agent update required to launch custom agent types"
-                ),
-            },
-        )
+    # Gate on the LIVE tunnel's negotiated version (stamped synchronously at
+    # registration), not the DB handshake row — overlapping tunnels can
+    # leave the row describing a different connection than the one this
+    # request will be forwarded to. An offline agent skips the gate here;
+    # MobileProxy.forward answers 503 for it immediately after.
+    agent_conn = request.app.state.routing.get_agent(agent_id)
+    if agent_conn is not None:
+        proto = agent_conn.protocol_version
+        if proto is None or proto < _MIN_AGENT_PROTO_FOR_CUSTOM_KINDS:
+            raise _ProxyRejection(
+                status.HTTP_409_CONFLICT,
+                {
+                    "agent_update_required": True,
+                    "detail": (
+                        "Agent update required to launch custom agent types"
+                    ),
+                },
+            )
     body["resolved_command"] = row["command"]
     body["resolved_name"] = row["name"]
     return body
