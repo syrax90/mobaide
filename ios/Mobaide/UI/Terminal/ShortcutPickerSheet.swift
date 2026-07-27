@@ -330,7 +330,21 @@ enum ShortcutPickerLogic {
         return text
     }
 
+    /// Clamp in the server's unit: the 100-char limit counts code points
+    /// (Pydantic `max_length` on `str`), not grapheme clusters — a
+    /// `String.prefix` clamp would pass emoji/combining-mark names that the
+    /// server then 422s. Truncates at a grapheme boundary so no cluster is
+    /// split.
     static func clampName(_ name: String) -> String {
-        String(name.prefix(SavedShortcutUi.maxNameLength))
+        guard name.unicodeScalars.count > SavedShortcutUi.maxNameLength else { return name }
+        var scalarCount = 0
+        var end = name.startIndex
+        for character in name {
+            let next = scalarCount + character.unicodeScalars.count
+            if next > SavedShortcutUi.maxNameLength { break }
+            scalarCount = next
+            end = name.index(after: end)
+        }
+        return String(name[..<end])
     }
 }

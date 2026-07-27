@@ -32,7 +32,15 @@ final class ShortcutsRepository: ShortcutSyncApplying {
     // MARK: - ShortcutSyncApplying
 
     func refreshShortcuts() async throws {
-        setShortcuts(try await centralAPI.listShortcuts(userToken: try userToken()))
+        // Account-generation guard: a refresh started for one account must not
+        // apply after logout cleared the cache (or after another account
+        // signed in) — the stale response would silently repopulate it. The
+        // user id is the generation marker (unlike the token, it survives
+        // token refresh mid-flight).
+        let requestUserId = userIdentityStore.getUserId()
+        let list = try await centralAPI.listShortcuts(userToken: try userToken())
+        guard userIdentityStore.getUserId() == requestUserId else { return }
+        setShortcuts(list)
     }
 
     func applyUpserted(_ shortcut: ShortcutDto) async {

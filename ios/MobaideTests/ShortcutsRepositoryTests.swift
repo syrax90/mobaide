@@ -17,6 +17,13 @@ final class ShortcutsRepositoryTests: XCTestCase {
         AgentHarness(session: SessionHarness(userLoggedIn: loggedIn)).shortcutsRepository
     }
 
+    /// Repo plus its (Sendable) identity store, for tests that flip the
+    /// signed-in account while a request is in flight.
+    private func makeRepoWithIdentity() -> (repo: ShortcutsRepository, identity: UserIdentityStore) {
+        let session = SessionHarness(userLoggedIn: true)
+        return (AgentHarness(session: session).shortcutsRepository, session.userIdentityStore)
+    }
+
     private func shortcutJSON(
         id: String,
         kind: String = "claude",
@@ -61,6 +68,59 @@ final class ShortcutsRepositoryTests: XCTestCase {
             XCTFail("unexpected error \(error)")
         }
         XCTAssertTrue(StubURLProtocol.requests.isEmpty, "no request may leave without a user token")
+    }
+
+    func testRefreshDiscardsResponseWhenUserLogsOutMidFlight() async throws {
+        let (repo, identity) = makeRepoWithIdentity()
+        StubURLProtocol.enqueue(status: 200, body: "[\(shortcutJSON(id: "s-1", chordToken: "ctrl+a"))]")
+        StubURLProtocol.onRequest = { _ in identity.clearUserSession() }
+
+        try await repo.refreshShortcuts()
+
+        XCTAssertTrue(
+            repo.currentShortcuts.isEmpty,
+            "a response landing after logout must not silently repopulate the cleared cache"
+        )
+    }
+
+    func testRefreshDiscardsResponseWhenAccountSwitchesMidFlight() async throws {
+        let (repo, identity) = makeRepoWithIdentity()
+        StubURLProtocol.enqueue(status: 200, body: "[\(shortcutJSON(id: "s-old-account", chordToken: "ctrl+a"))]")
+        StubURLProtocol.onRequest = { _ in
+            identity.saveUserSession(
+                accessToken: "user-token-2",
+                email: "other@example.com",
+                userId: "u2",
+                role: "user"
+            )
+        }
+
+        try await repo.refreshShortcuts()
+
+        XCTAssertTrue(
+            repo.currentShortcuts.isEmpty,
+            "the previous account's list must never leak into the next account's cache"
+        )
+    }
+
+    func testRefreshAppliesWhenTokenRotatesForSameUserMidFlight() async throws {
+        let (repo, identity) = makeRepoWithIdentity()
+        StubURLProtocol.enqueue(status: 200, body: "[\(shortcutJSON(id: "s-1", chordToken: "ctrl+a"))]")
+        StubURLProtocol.onRequest = { _ in
+            identity.saveUserSession(
+                accessToken: "rotated-token",
+                email: "user@example.com",
+                userId: "u1",
+                role: "user"
+            )
+        }
+
+        try await repo.refreshShortcuts()
+
+        XCTAssertEqual(
+            repo.currentShortcuts.map(\.shortcut_id), ["s-1"],
+            "the guard keys on the user id, not the token — a token refresh mid-flight must not drop data"
+        )
     }
 
     func testCreatePostsAndUpsertsWithoutRelisting() async throws {

@@ -13,12 +13,23 @@ final class StubURLProtocol: URLProtocol {
     private nonisolated(unsafe) static var queue: [StubResponse] = []
     private nonisolated(unsafe) static var recordedRequests: [URLRequest] = []
     private nonisolated(unsafe) static var recordedBodies: [Data] = []
+    private nonisolated(unsafe) static var onRequestStorage: (@Sendable (URLRequest) -> Void)?
+
+    /// Fires on the URLSession loading thread after the request is recorded
+    /// and strictly before its response is delivered — the deterministic seam
+    /// for mutating app state mid-flight (request issued, response not yet
+    /// applied). Cleared by `reset()`.
+    static var onRequest: (@Sendable (URLRequest) -> Void)? {
+        get { lock.withLock { onRequestStorage } }
+        set { lock.withLock { onRequestStorage = newValue } }
+    }
 
     static func reset() {
         lock.withLock {
             queue = []
             recordedRequests = []
             recordedBodies = []
+            onRequestStorage = nil
         }
     }
 
@@ -49,6 +60,7 @@ final class StubURLProtocol: URLProtocol {
                 ? StubResponse(status: 200, body: Data("{}".utf8))
                 : Self.queue.removeFirst()
         }
+        Self.onRequest?(request)
         let http = HTTPURLResponse(
             url: request.url!,
             statusCode: response.status,

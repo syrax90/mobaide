@@ -186,13 +186,17 @@ final class AppContainer {
         // Assigned post-init because SessionRepository takes the store in its
         // own init; weak so the store → closure → repository → store loop
         // never retains.
-        terminalSessionStore.sessionKindResolver = { [weak sessionRepository] sessionId in
+        terminalSessionStore.sessionKindResolver = { [weak sessionRepository, agentAPI] sessionId in
             guard let sessionRepository else { return nil }
             if let known = sessionRepository.currentSessions
                 .first(where: { $0.session_id == sessionId })?.kind {
                 return known
             }
-            let list = try? await sessionRepository.listSessions()
+            // Read-only fetch on purpose: SessionRepository.listSessions()
+            // publishes the REST snapshot and evicts terminal models absent
+            // from it, so a stale response on this hot cold-start path could
+            // disconnect a session created meanwhile.
+            let list = try? await agentAPI.listSessions()
             return list?.first(where: { $0.session_id == sessionId })?.kind
         }
         self.projectsRepository = ProjectsRepository(

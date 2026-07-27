@@ -150,6 +150,43 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         XCTAssertTrue(makeHarness().model.shortcutRecents.isEmpty)
     }
 
+    // MARK: - adoptResolvedKind + recents
+
+    func testAdoptResolvedKindReloadsRecentsFromResolvedBucket() {
+        let harness = makeHarness(kind: .claude, resolvedKind: nil)
+        harness.prefs.addRecentShortcutChord(kindKey: "claude", token: "ctrl+a")
+        harness.prefs.addRecentShortcutChord(kindKey: "codex", token: "ctrl+x")
+
+        harness.model.refreshShortcutRecents()
+        XCTAssertEqual(
+            harness.model.shortcutRecents, [KeyChord(ctrl: true, key: "a")],
+            "before resolution recents render from the .claude fallback bucket"
+        )
+
+        harness.model.adoptResolvedKind(.codex)
+
+        XCTAssertEqual(
+            harness.model.shortcutRecents, [KeyChord(ctrl: true, key: "x")],
+            "resolution must swap the already-loaded fallback list for the real kind's bucket"
+        )
+    }
+
+    func testAdoptResolvedKindOnAlreadyResolvedModelDoesNotReload() {
+        let harness = makeHarness(kind: .claude, resolvedKind: .codex)
+        harness.prefs.addRecentShortcutChord(kindKey: "codex", token: "ctrl+x")
+        harness.model.refreshShortcutRecents()
+
+        harness.prefs.addRecentShortcutChord(kindKey: "codex", token: "ctrl+y")
+        harness.prefs.addRecentShortcutChord(kindKey: "claude", token: "ctrl+a")
+        harness.model.adoptResolvedKind(.claude)
+
+        XCTAssertEqual(harness.model.resolvedKind, .codex, "the first resolution wins — adopt is once-only")
+        XCTAssertEqual(
+            harness.model.shortcutRecents, [KeyChord(ctrl: true, key: "x")],
+            "a late duplicate resolution must not trigger a recents reload"
+        )
+    }
+
     // MARK: - savedShortcutsForKind
 
     func testSavedShortcutsFilterByKindDropUnparseableAndMapFields() async {

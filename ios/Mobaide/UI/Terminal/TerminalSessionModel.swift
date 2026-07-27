@@ -499,6 +499,10 @@ final class TerminalSessionModel {
     func adoptResolvedKind(_ kind: SessionKind) {
         if resolvedKind == nil {
             resolvedKind = kind
+            // Recents already loaded under the `.claude` rendering fallback
+            // belong to another kind's bucket; reload so an open picker shows
+            // (and sendChord records into) the right one.
+            refreshShortcutRecents()
         }
     }
 
