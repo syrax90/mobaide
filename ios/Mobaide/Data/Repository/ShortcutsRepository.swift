@@ -63,31 +63,45 @@ final class ShortcutsRepository: ShortcutSyncApplying {
 
     // MARK: - Mutations
 
+    // Mutations carry the same account-generation guard as `refreshShortcuts`:
+    // their Tasks outlive the screen, so a response landing after an account
+    // switch must not write the previous account's row into the cache the new
+    // account observes. The server row is still returned on mismatch — only
+    // the cache write is skipped.
+
     @discardableResult
     func createShortcut(kind: String, chordToken: String, name: String? = nil) async throws -> ShortcutDto {
+        let requestUserId = userIdentityStore.getUserId()
         let created = try await centralAPI.createShortcut(
             userToken: try userToken(),
             kind: kind,
             chordToken: chordToken,
             name: name
         )
-        await applyUpserted(created)
+        if userIdentityStore.getUserId() == requestUserId {
+            await applyUpserted(created)
+        }
         return created
     }
 
     @discardableResult
     func renameShortcut(shortcutId: String, name: String) async throws -> ShortcutDto {
+        let requestUserId = userIdentityStore.getUserId()
         let updated = try await centralAPI.updateShortcut(
             userToken: try userToken(),
             shortcutId: shortcutId,
             update: UpdateShortcutRequest(name: name)
         )
-        await applyUpserted(updated)
+        if userIdentityStore.getUserId() == requestUserId {
+            await applyUpserted(updated)
+        }
         return updated
     }
 
     func deleteShortcut(shortcutId: String) async throws {
+        let requestUserId = userIdentityStore.getUserId()
         try await centralAPI.deleteShortcut(userToken: try userToken(), shortcutId: shortcutId)
+        guard userIdentityStore.getUserId() == requestUserId else { return }
         await applyDeleted(shortcutId: shortcutId)
     }
 
