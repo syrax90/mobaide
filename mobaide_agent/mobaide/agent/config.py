@@ -50,7 +50,7 @@ class AgentConfig(BaseSettings):
     projects_store_path: str = "projects.json"
     host: str = "0.0.0.0"
     port: int = 8000
-    max_sessions: int = 16
+    max_sessions: int = 32
     session_disconnect_timeout: int = 300
     log_level: str = "INFO"
     log_format: str = "json"

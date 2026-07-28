@@ -29,7 +29,7 @@ class AutoScanConfig(BaseSettings):
     available for auto-scan without a restart.
     """
 
-    worktree_base: str = "claude_worktree"
+    worktree_base: str = "mobaide_worktree"
     scan_interval_seconds: int = 300
     branch_prefix: str = ""
     main_branch: str = "main"

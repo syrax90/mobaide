@@ -143,8 +143,8 @@ class TestWorktreeManager:
     @pytest.fixture
     def manager(self):
         return WorktreeManager(
-            worktree_base="claude_worktree",
-            branch_prefix="feature/claude",
+            worktree_base="mobaide_worktree",
+            branch_prefix="feature/mobaide",
             main_branch="main",
         )
 
@@ -152,7 +152,7 @@ class TestWorktreeManager:
         """If the worktree directory already exists, return it without running git."""
         project_root = str(tmp_path / "project")
         os.makedirs(project_root)
-        wt_dir = os.path.join(project_root, "claude_worktree", "cla-8-test")
+        wt_dir = os.path.join(project_root, "mobaide_worktree", "cla-8-test")
         os.makedirs(wt_dir)
 
         result = await manager.create_worktree("cla-8-test", project_root)
@@ -175,7 +175,7 @@ class TestWorktreeManager:
 
         result = await manager.create_worktree("cla-8-test", project_root)
         assert result.is_new is True
-        assert result.branch == "feature/claude/cla-8-test"
+        assert result.branch == "feature/mobaide/cla-8-test"
         assert mock_git.call_count == 4
 
         worktree_add_call = mock_git.call_args_list[3]
@@ -205,7 +205,7 @@ class TestWorktreeManager:
         worktree_add_call = mock_git.call_args_list[3]
         assert "feature/user-typed" in worktree_add_call.args
         # The prefix must NOT be applied when branch_name is given explicitly.
-        assert "feature/claude/my-dir" not in worktree_add_call.args
+        assert "feature/mobaide/my-dir" not in worktree_add_call.args
 
     @patch("mobaide.linear.worktree._run_git")
     async def test_create_worktree_rejects_dash_prefixed_branch(
@@ -311,7 +311,7 @@ class TestWorktreeManager:
 
         with pytest.raises(WorktreeCreationError) as exc_info:
             await manager.create_worktree("cla-8-test", project_root)
-        assert exc_info.value.branch == "feature/claude/cla-8-test"
+        assert exc_info.value.branch == "feature/mobaide/cla-8-test"
         assert "still no" in exc_info.value.stderr or "boom" in exc_info.value.stderr
 
     @patch("mobaide.linear.worktree._run_git")

@@ -48,7 +48,7 @@ class SessionManager:
 
     def __init__(
         self,
-        max_sessions: int = 16,
+        max_sessions: int = 32,
         projects_store: ProjectsStore | None = None,
         launcher: ClaudeLauncher | None = None,
         codex_launcher: CodexLauncher | None = None,

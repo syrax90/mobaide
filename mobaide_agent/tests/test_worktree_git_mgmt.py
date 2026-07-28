@@ -185,11 +185,11 @@ class TestParseWorktreePorcelain:
             "HEAD sha1\n"
             "branch refs/heads/main\n"
             "\n"
-            "worktree /repo/claude_worktree/cla-1\n"
+            "worktree /repo/mobaide_worktree/cla-1\n"
             "HEAD sha2\n"
-            "branch refs/heads/feature/claude/cla-1\n"
+            "branch refs/heads/feature/mobaide/cla-1\n"
             "\n"
-            "worktree /repo/claude_worktree/detached\n"
+            "worktree /repo/mobaide_worktree/detached\n"
             "HEAD sha3\n"
             "detached\n"
             "\n"
@@ -198,11 +198,11 @@ class TestParseWorktreePorcelain:
         assert len(result) == 3
         assert [wt.path for wt in result] == [
             "/repo",
-            "/repo/claude_worktree/cla-1",
-            "/repo/claude_worktree/detached",
+            "/repo/mobaide_worktree/cla-1",
+            "/repo/mobaide_worktree/detached",
         ]
         assert result[2].detached is True
-        assert result[1].branch == "refs/heads/feature/claude/cla-1"
+        assert result[1].branch == "refs/heads/feature/mobaide/cla-1"
 
     def test_carriage_returns_stripped(self):
         # Git-on-Windows can emit CRLF-terminated lines.
@@ -232,8 +232,8 @@ class TestParseWorktreePorcelain:
 @pytest.fixture
 def manager() -> WorktreeManager:
     return WorktreeManager(
-        worktree_base="claude_worktree",
-        branch_prefix="feature/claude",
+        worktree_base="mobaide_worktree",
+        branch_prefix="feature/mobaide",
         main_branch="main",
     )
 

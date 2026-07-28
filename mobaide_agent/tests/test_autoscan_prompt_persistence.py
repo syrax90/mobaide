@@ -65,9 +65,9 @@ def _make_store(tmp_path, *, prompt: str | None = None) -> ProjectsStore:
 
 def _make_manager(store: ProjectsStore, bus: _RecordingEventBus) -> AutoScanSessionManager:
     config = AutoScanConfig(
-        worktree_base="claude_worktree",
+        worktree_base="mobaide_worktree",
         scan_interval_seconds=1,
-        branch_prefix="feature/claude",
+        branch_prefix="feature/mobaide",
         main_branch="main",
         auto_remove_worktrees=False,
         state_dir="state",

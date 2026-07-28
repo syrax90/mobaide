@@ -772,7 +772,7 @@ class AutoScanSessionManager:
                 api_key=project.linear_api_key,
                 rate_limiter=self._rate_limiter,
             )
-            prefix = self._config.branch_prefix or "feature/claude"
+            prefix = self._config.branch_prefix or "feature/mobaide"
             worktree_mgr = WorktreeManager(
                 worktree_base=self._config.worktree_base,
                 branch_prefix=prefix,

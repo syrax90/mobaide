@@ -358,7 +358,7 @@ async def test_cwd_resolution_with_worktree(tmp_path: Path):
 async def test_cwd_resolution_autoscan_uses_slug_no_explicit_branch(tmp_path: Path):
     """Auto Scan (``identifier`` set) calls ``create_worktree`` without the
     ``branch_name`` kwarg so the WorktreeManager applies its prefix convention
-    (``feature/claude/<slug>``)."""
+    (``feature/mobaide/<slug>``)."""
     (tmp_path / ".git").mkdir()
     mgr = _FakeWorktreeMgr()
     launcher = ClaudeLauncher(worktree_mgr=mgr)  # type: ignore[arg-type]
