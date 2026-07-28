@@ -1,5 +1,20 @@
 # mobaide_agent Changelog
 
+## [0.3.3](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.2...agent-v0.3.3) (2026-07-28)
+
+
+### Features
+
+* **agent:** add account-scoped custom AI agent types registry (CLA-153) ([e3372d1](https://github.com/syrax90/claude_mobile/commit/e3372d10aaeebeae141160ab6dba694989c43d87))
+* **backend:** add account-scoped custom AI agent types registry (CLA-153) ([dd061d1](https://github.com/syrax90/claude_mobile/commit/dd061d1a53b364abe73510c07c0e61151f97ab56))
+
+
+### Bug Fixes
+
+* **agent:** Fix terminal display-mode gestures and PTY resize propagation ([28ee7c6](https://github.com/syrax90/claude_mobile/commit/28ee7c60ccd9a93aef0f22bd11decfda715a84d5))
+* **agent:** make PTY slave the controlling terminal so resizes reach running TUIs ([29dcd46](https://github.com/syrax90/claude_mobile/commit/29dcd46f568ff23def46ce9cb33bcab8f3c2dad1))
+* **agent:** strip COLUMNS/LINES from inherited and caller-supplied env ([eeba174](https://github.com/syrax90/claude_mobile/commit/eeba174d45a3701597e6199378f0e3f723071824))
+
 ## [0.3.2](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.1...agent-v0.3.2) (2026-07-11)
 
 

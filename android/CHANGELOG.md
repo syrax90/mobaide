@@ -1,5 +1,20 @@
 # Android Changelog
 
+## [3.1.0](https://github.com/syrax90/claude_mobile/compare/android-v3.0.1...android-v3.1.0) (2026-07-28)
+
+
+### Features
+
+* **android:** custom AI agent types — mode-picker cards + editor sheet (CLA-154) ([0ba30d4](https://github.com/syrax90/claude_mobile/commit/0ba30d461487c014b61a9f915e45d3905e73b4a1))
+* **android:** custom AI agent types — mode-picker cards + editor sheet (CLA-154) ([517bdcd](https://github.com/syrax90/claude_mobile/commit/517bdcd560b12de9c8d485e99c6c96bc9a89cb68))
+
+
+### Bug Fixes
+
+* **android:** key custom-launch 404 on relay detail and self-heal MRU recents on kind resolution (CLA-154) ([7d62bba](https://github.com/syrax90/claude_mobile/commit/7d62bbad2b1f355b4bbf17b9b44edb861b086140))
+* **android:** scope custom-agent-type editor save completions and gate busy dismissal (CLA-154) ([2971e62](https://github.com/syrax90/claude_mobile/commit/2971e62ed30b722156eb54ef7a807ee2389dca3b))
+* **android:** veto sheet dismissal pre-hide and count type-editor limits in code points (CLA-154) ([1dec742](https://github.com/syrax90/claude_mobile/commit/1dec7424340ffb6f71ebe6d1d01ebf7ebee81d70))
+
 ## [3.0.1](https://github.com/syrax90/claude_mobile/compare/android-v3.0.0...android-v3.0.1) (2026-07-24)
 
 
