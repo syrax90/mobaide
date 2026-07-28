@@ -6,6 +6,7 @@
     { "name": "antigravity", "wire": "antigravity" },
     { "name": "auto_scan", "wire": "auto_scan" },
     { "name": "shell", "wire": "shell" },
-    { "name": "unknown_coerces_to_claude", "wire": "some_future_kind", "decoded_canonical": "claude" }
+    { "name": "custom_type", "wire": "custom_ab12cd34ef56" },
+    { "name": "unknown_kind_preserved", "wire": "some_future_kind" }
   ]
 }

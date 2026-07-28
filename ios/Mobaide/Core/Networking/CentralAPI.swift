@@ -161,6 +161,27 @@ struct CentralAPI: Sendable {
         try await executeNoContent(method: "DELETE", path: "/api/shortcuts/\(shortcutId)", bearer: userToken)
     }
 
+    func listCustomAgentTypes(userToken: String) async throws -> [CustomAgentTypeDto] {
+        try await execute(method: "GET", path: "/api/custom-agent-types", bearer: userToken)
+    }
+
+    func createCustomAgentType(userToken: String, name: String, command: String) async throws -> CustomAgentTypeDto {
+        try await execute(
+            method: "POST",
+            path: "/api/custom-agent-types",
+            body: CreateCustomAgentTypeRequest(name: name, command: command),
+            bearer: userToken
+        )
+    }
+
+    func updateCustomAgentType(userToken: String, typeId: String, update: UpdateCustomAgentTypeRequest) async throws -> CustomAgentTypeDto {
+        try await execute(method: "PATCH", path: "/api/custom-agent-types/\(typeId)", body: update, bearer: userToken)
+    }
+
+    func deleteCustomAgentType(userToken: String, typeId: String) async throws {
+        try await executeNoContent(method: "DELETE", path: "/api/custom-agent-types/\(typeId)", bearer: userToken)
+    }
+
     // MARK: - Plumbing
 
     private func baseURL() -> String {

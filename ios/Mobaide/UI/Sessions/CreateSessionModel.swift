@@ -3,9 +3,9 @@ import Observation
 
 /// Create-session wizard state (Android `CreateSessionViewModel`). Builds
 /// byte-identical `CreateSessionRequest`s: managed CLIs carry worktree/branch
-/// inside their options block, shell carries them on the top-level request, and
-/// custom paths always force worktree off. AutoScan mode is deferred to iOS-07,
-/// so it is omitted here.
+/// inside their options block, shell and custom agent types carry them on the
+/// top-level request, and custom paths always force worktree off. AutoScan
+/// mode is deferred to iOS-07, so it is omitted here.
 @MainActor
 @Observable
 final class CreateSessionModel {
@@ -15,11 +15,45 @@ final class CreateSessionModel {
         case config
     }
 
-    enum Mode: String, CaseIterable, Equatable {
+    enum Mode: Hashable, Equatable {
         case standard
         case codex
         case antigravity
         case shell
+        /// An account-scoped custom agent type, identified by its 12-hex id
+        /// (the wire kind is `custom_<id>`). Holding only the id keeps the
+        /// selection valid across renames and lets a remotely-deleted type
+        /// surface the relay 404 at launch instead of silently falling back
+        /// to a plain Terminal (a known Android bug, deliberately not
+        /// mirrored).
+        case custom(String)
+
+        /// The static mode cards, in render order; custom-type cards follow.
+        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .shell]
+
+        var isCustom: Bool {
+            if case .custom = self { return true }
+            return false
+        }
+    }
+
+    /// Editor target for the custom-agent-type sheet — `create` or
+    /// `edit(existing)` (same shape as `TemplateEditorTarget`).
+    enum CustomTypeEditorTarget: Identifiable, Equatable {
+        case create
+        case edit(CustomAgentTypeDto)
+
+        var id: String {
+            switch self {
+            case .create: return "__create__"
+            case .edit(let type): return type.id
+            }
+        }
+
+        var type: CustomAgentTypeDto? {
+            if case .edit(let type) = self { return type }
+            return nil
+        }
     }
 
     enum ProjectSelection: Equatable {
@@ -51,6 +85,16 @@ final class CreateSessionModel {
     var customPathDraft = ""
     private(set) var customPathError: String?
     var mode: Mode?
+
+    // Custom agent types (proto-v7)
+    private(set) var customTypes: [CustomAgentTypeDto] = []
+    var typeEditorTarget: CustomTypeEditorTarget? {
+        didSet { if typeEditorTarget != oldValue { typeEditorError = nil } }
+    }
+    private(set) var isSavingType = false
+    var typeEditorError: String?
+    var typeDeleteTarget: CustomAgentTypeDto?
+    private(set) var isDeletingType = false
 
     private(set) var claudeAvailable: Bool?
     private(set) var codexAvailable: Bool?
@@ -91,6 +135,7 @@ final class CreateSessionModel {
     private let agentAPI: AgentAPI
     private let sessionRepository: SessionRepository
     private let preferencesStore: PreferencesStore
+    private let customAgentTypesRepository: CustomAgentTypesRepository
     private let navBroadcaster = Broadcaster<String>(replay: .none)
 
     /// Projects created inline via the New Session "Create new project…" flow,
@@ -99,10 +144,17 @@ final class CreateSessionModel {
     /// that predates the create.
     private var locallyCreatedProjects: [ProjectInfo] = []
 
-    init(agentAPI: AgentAPI, sessionRepository: SessionRepository, preferencesStore: PreferencesStore) {
+    init(
+        agentAPI: AgentAPI,
+        sessionRepository: SessionRepository,
+        preferencesStore: PreferencesStore,
+        customAgentTypesRepository: CustomAgentTypesRepository
+    ) {
         self.agentAPI = agentAPI
         self.sessionRepository = sessionRepository
         self.preferencesStore = preferencesStore
+        self.customAgentTypesRepository = customAgentTypesRepository
+        self.customTypes = customAgentTypesRepository.currentTypes
         applyPrefill()
     }
 
@@ -120,6 +172,9 @@ final class CreateSessionModel {
         case .codex: return codexEnabled
         case .antigravity: return antigravityEnabled
         case .shell: return true
+        // No CLI probe for custom types — the agent runs whatever command the
+        // relay resolves; a launch failure surfaces from the server instead.
+        case .custom: return true
         }
     }
 
@@ -136,6 +191,27 @@ final class CreateSessionModel {
                 : "Antigravity CLI (agy) is not installed on the agent."
         case .shell:
             return "Bash / cmd in the chosen directory"
+        case .custom(let id):
+            // The mode card renders the command itself (monospaced); this is
+            // the config-step subtitle fallback.
+            return customType(id: id)?.command ?? "Runs your saved launch command"
+        }
+    }
+
+    func customType(id: String) -> CustomAgentTypeDto? {
+        customTypes.first { $0.id == id }
+    }
+
+    /// Config-step section title (Android `TerminalConfig` TopAppBar parity):
+    /// the custom type's live name, falling back to "Terminal session" when
+    /// the type was deleted remotely mid-wizard.
+    func modeTitle(_ mode: Mode) -> String {
+        switch mode {
+        case .standard: return "Claude Code"
+        case .codex: return "Codex"
+        case .antigravity: return "Antigravity"
+        case .shell: return "Terminal"
+        case .custom(let id): return customType(id: id)?.name ?? "Terminal session"
         }
     }
 
@@ -181,6 +257,20 @@ final class CreateSessionModel {
         antigravityAvailable = version.cliAvailable("antigravity")
         if let models = version.cliModels("codex"), !models.isEmpty { codexModels = models }
         if let models = version.cliModels("antigravity"), !models.isEmpty { antigravityModels = models }
+    }
+
+    /// Mirrors the repository's push-driven cache into the wizard. The loop
+    /// only reassigns `customTypes` — a selected `.custom` mode is deliberately
+    /// kept when its type disappears (see `Mode.custom`).
+    func observeCustomTypes() async {
+        for await types in customAgentTypesRepository.types() {
+            customTypes = types
+        }
+    }
+
+    /// Best-effort cold-start seed (the bus reconcile owns steady-state).
+    func refreshCustomTypes() async {
+        try? await customAgentTypesRepository.refreshCustomTypes()
     }
 
     // MARK: - Navigation between steps
@@ -286,10 +376,34 @@ final class CreateSessionModel {
         } catch let apiError as APIError where mode == .codex && apiError.errorBody.contains("codex_auth_required") {
             submitting = false
             showCodexLogin = true
+        } catch let apiError as APIError where Self.isAgentUpdateRequired(apiError.errorBody) {
+            // Relay-side gate: the agent's live tunnel negotiated a protocol
+            // too old to launch custom agent types.
+            submitting = false
+            self.error = "Update your agent to launch custom agent types"
+        } catch let apiError as APIError where apiError.code == 404 && mode.isCustom
+            && ConflictDetail.string(from: apiError.errorBody) == "Custom agent type not found" {
+            // The type was deleted between rendering the card and the launch —
+            // refresh so the stale card disappears. Keyed on the relay's exact
+            // detail string, not the status alone: a 404 from a concurrently
+            // deleted project must fall through to the generic message.
+            submitting = false
+            self.error = "This agent type was deleted"
+            await refreshCustomTypes()
         } catch {
             submitting = false
             self.error = "Failed to create session: \(String(describing: error))"
         }
+    }
+
+    /// The relay's proto-gate 409 carries a top-level marker (unlike the codex
+    /// marker, which is matched anywhere in the body).
+    static func isAgentUpdateRequired(_ errorBody: String) -> Bool {
+        guard
+            let data = errorBody.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return object["agent_update_required"] as? Bool == true
     }
 
     func submitCodexLogin() async {
@@ -308,6 +422,108 @@ final class CreateSessionModel {
     func cancelCodexLogin() {
         showCodexLogin = false
         codexApiKey = ""
+    }
+
+    // MARK: - Custom agent type editor / delete
+
+    // Server-enforced limits on custom agent types (post-trim); validated
+    // client-side too so the editor errors without a round trip.
+    static let maxTypeNameLength = 60
+    static let maxTypeCommandLength = 1000
+
+    /// Android-parity validation on trimmed values; nil means valid. Lengths
+    /// are counted in Unicode scalars to match the server's limits (Pydantic
+    /// `max_length` counts code points) — Swift's `count` counts grapheme
+    /// clusters and would falsely accept supplementary-plane input (emoji,
+    /// rare CJK) the server rejects.
+    static func validateCustomType(name: String, command: String) -> String? {
+        if name.isEmpty { return "Name is required" }
+        if name.unicodeScalars.count > maxTypeNameLength {
+            return "Name must be at most \(maxTypeNameLength) characters"
+        }
+        if command.isEmpty { return "Command is required" }
+        if command.unicodeScalars.count > maxTypeCommandLength {
+            return "Command must be at most \(maxTypeCommandLength) characters"
+        }
+        return nil
+    }
+
+    /// Undo iOS smart punctuation in a launch command: curly quotes back to
+    /// ASCII quotes, em-dash back to the `--` it was typed as, en-dash to `-`.
+    /// Applied live by the editor *and* on save (traits don't cover paste).
+    /// Deliberate iOS-only divergence — Android relies on keyboard hints.
+    static func sanitizeCommandPunctuation(_ input: String) -> String {
+        var result = ""
+        result.reserveCapacity(input.count)
+        for character in input {
+            switch character {
+            case "\u{201C}", "\u{201D}", "\u{201E}": result.append("\"")
+            case "\u{2018}", "\u{2019}", "\u{201A}": result.append("'")
+            case "\u{2014}": result.append("--")
+            case "\u{2013}": result.append("-")
+            default: result.append(character)
+            }
+        }
+        return result
+    }
+
+    func startCreateType() { typeEditorTarget = .create }
+
+    func startEditType(_ type: CustomAgentTypeDto) { typeEditorTarget = .edit(type) }
+
+    /// Save from the editor sheet. Keeps the editor (and the user's draft)
+    /// until the save succeeds; the server's 409 details (20-type cap, name
+    /// conflict) surface inline via `typeEditorError`.
+    func saveCustomType(name: String, command: String) async {
+        guard !isSavingType, let target = typeEditorTarget else { return }
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCommand = Self.sanitizeCommandPunctuation(command)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let validationError = Self.validateCustomType(name: trimmedName, command: trimmedCommand) {
+            typeEditorError = validationError
+            return
+        }
+        isSavingType = true
+        defer { isSavingType = false }
+        do {
+            switch target {
+            case .edit(let type):
+                // Both fields always go on the wire (Android parity) — the
+                // PATCH contract has no empty-body form.
+                try await customAgentTypesRepository.updateType(
+                    typeId: type.id,
+                    name: trimmedName,
+                    command: trimmedCommand
+                )
+            case .create:
+                try await customAgentTypesRepository.createType(name: trimmedName, command: trimmedCommand)
+            }
+            typeEditorTarget = nil  // dismiss only on success
+        } catch let apiError as APIError {
+            typeEditorError = ConflictDetail.stringOrNil(from: apiError.errorBody)
+                ?? "Couldn't save (HTTP \(apiError.code))"
+        } catch {
+            typeEditorError = "Couldn't save the agent type"
+        }
+    }
+
+    /// Pessimistic delete; a 403 means the type is already gone elsewhere
+    /// (repeat delete / another device) and counts as success — followed by a
+    /// best-effort refresh so the cards converge either way.
+    func confirmDeleteType(_ type: CustomAgentTypeDto) async {
+        guard !isDeletingType else { return }
+        isDeletingType = true
+        defer {
+            isDeletingType = false
+            typeDeleteTarget = nil
+        }
+        do {
+            try await customAgentTypesRepository.deleteType(typeId: type.id)
+        } catch let apiError as APIError where apiError.code == 403 {
+            await refreshCustomTypes()
+        } catch {
+            self.error = "Failed to delete agent type: \(String(describing: error))"
+        }
     }
 
     func buildRequest(mode: Mode) -> CreateSessionRequest {
@@ -374,6 +590,17 @@ final class CreateSessionModel {
                 worktree: effectiveWorktree,
                 branch_name: effectiveBranch
             )
+        case .custom(let id):
+            // Plain-terminal semantics plus the `cli` discriminator. Only the
+            // type id goes on the wire — the relay resolves the stored
+            // command server-side; the client never sends it.
+            return CreateSessionRequest(
+                cwd: cwd,
+                project_name: projectName,
+                cli: "custom_\(id)",
+                worktree: effectiveWorktree,
+                branch_name: effectiveBranch
+            )
         }
     }
 
@@ -405,7 +632,7 @@ final class CreateSessionModel {
                 skipPermissions: antigravitySkipPermissions,
                 sandbox: antigravitySandbox
             ))
-        case .shell:
+        case .shell, .custom:
             break
         }
     }

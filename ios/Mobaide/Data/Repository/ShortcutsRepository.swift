@@ -57,6 +57,14 @@ final class ShortcutsRepository: ShortcutSyncApplying {
         setShortcuts(currentShortcuts.filter { $0.shortcut_id != shortcutId })
     }
 
+    /// Purge every cached shortcut of `kind` (the full wire string, e.g.
+    /// `custom_<id>`) — the client half of the server-side cascade on
+    /// `custom_type.deleted`, which soft-deletes the type's shortcuts without
+    /// emitting per-shortcut `shortcut.deleted` events.
+    func purgeKind(_ kind: String) async {
+        setShortcuts(currentShortcuts.filter { $0.kind != kind })
+    }
+
     func clear() async {
         setShortcuts([])
     }

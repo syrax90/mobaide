@@ -12,11 +12,16 @@ final class SessionListModel {
     private(set) var activeScans: [AutoScanInstanceDto] = []
     private(set) var isReconnecting = false
     private(set) var error: String?
+    /// Live custom-type names keyed on the full wire kind (`custom_<id>`),
+    /// the second link of the label chain (`kind_label` snapshot → this →
+    /// "Custom").
+    private(set) var customTypeNames: [String: String] = [:]
 
     private let repository: SessionRepository
     private let agentEventBus: AgentEventBus
     private let preferencesStore: PreferencesStore
     private let autoScanRepository: AutoScanRepository
+    private let customAgentTypesRepository: CustomAgentTypesRepository
     // `.latestClearable` so the one-shot auto-resume id survives the race where
     // `observeSessions` emits before the screen's `autoResumeEvents` task
     // subscribes, while `clearAutoResume()` (called by the screen after it
@@ -29,14 +34,17 @@ final class SessionListModel {
         repository: SessionRepository,
         agentEventBus: AgentEventBus,
         preferencesStore: PreferencesStore,
-        autoScanRepository: AutoScanRepository
+        autoScanRepository: AutoScanRepository,
+        customAgentTypesRepository: CustomAgentTypesRepository
     ) {
         self.repository = repository
         self.agentEventBus = agentEventBus
         self.preferencesStore = preferencesStore
         self.autoScanRepository = autoScanRepository
+        self.customAgentTypesRepository = customAgentTypesRepository
         self.sessions = repository.currentSessions
         self.activeScans = autoScanRepository.currentScans
+        self.customTypeNames = Self.typeNames(customAgentTypesRepository.currentTypes)
     }
 
     var isEmpty: Bool { sessions.isEmpty && !isReconnecting }
@@ -67,6 +75,19 @@ final class SessionListModel {
         for await scans in autoScanRepository.scans() {
             activeScans = scans
         }
+    }
+
+    /// Best-effort cold-start refresh (a session of a deleted/renamed type may
+    /// predate the bus connection), then mirrors push-driven updates.
+    func observeCustomTypes() async {
+        try? await customAgentTypesRepository.refreshCustomTypes()
+        for await types in customAgentTypesRepository.types() {
+            customTypeNames = Self.typeNames(types)
+        }
+    }
+
+    private static func typeNames(_ types: [CustomAgentTypeDto]) -> [String: String] {
+        Dictionary(types.map { ("custom_\($0.id)", $0.name) }, uniquingKeysWith: { _, last in last })
     }
 
     func stopScan(_ projectName: String) async {
@@ -111,13 +132,18 @@ final class SessionListModel {
 
 /// Display helpers shared by the list and its cards.
 enum SessionDisplay {
-    static func kindLabel(_ kind: SessionKind) -> String {
-        switch kind {
+    /// Custom kinds prefer the wire `kind_label` snapshot (survives
+    /// rename/delete of the type), then the live registry name, then a
+    /// generic "Custom" (Android `sessionKindLabel` parity).
+    static func kindLabel(_ session: SessionResponse, customTypeNames: [String: String]) -> String {
+        switch session.kind {
         case .claude: return "Claude Code"
         case .codex: return "Codex"
         case .antigravity: return "Antigravity"
         case .autoScan: return "Auto Scan"
         case .shell: return "Terminal"
+        case .custom(let raw):
+            return session.kind_label ?? customTypeNames[raw] ?? "Custom"
         }
     }
 

@@ -25,6 +25,7 @@ actor UserEventBus {
     private let agentStatusApplier: any AgentStatusApplying
     private let templateSync: any TemplateSyncApplying
     private let shortcutSync: any ShortcutSyncApplying
+    private let customTypeSync: any CustomTypeSyncApplying
 
     private let connectionBroadcaster = Broadcaster<BusConnectionState>.stateFlow()
 
@@ -39,7 +40,8 @@ actor UserEventBus {
         tokenStore: TokenStore,
         agentStatusApplier: any AgentStatusApplying = NoOpAgentStatusApplier(),
         templateSync: any TemplateSyncApplying = NoOpTemplateSyncApplier(),
-        shortcutSync: any ShortcutSyncApplying = NoOpShortcutSyncApplier()
+        shortcutSync: any ShortcutSyncApplying = NoOpShortcutSyncApplier(),
+        customTypeSync: any CustomTypeSyncApplying = NoOpCustomTypeSyncApplier()
     ) {
         self.webSocketFactory = webSocketFactory
         self.sessionManager = sessionManager
@@ -48,6 +50,7 @@ actor UserEventBus {
         self.agentStatusApplier = agentStatusApplier
         self.templateSync = templateSync
         self.shortcutSync = shortcutSync
+        self.customTypeSync = customTypeSync
         connectionBroadcaster.emit(.disconnected)
     }
 
@@ -74,11 +77,12 @@ actor UserEventBus {
                 case .unauthenticated:
                     await self.stopConnection()
                     // Cross-account isolation: drop cached agents/templates/
-                    // shortcuts so a different account signing in the same
-                    // process never sees the previous user's data.
+                    // shortcuts/custom types so a different account signing in
+                    // the same process never sees the previous user's data.
                     await self.agentStatusApplier.clear()
                     await self.templateSync.clear()
                     await self.shortcutSync.clear()
+                    await self.customTypeSync.clear()
                 case .incompatibleServer:
                     await self.stopConnection()
                 }
@@ -149,6 +153,7 @@ actor UserEventBus {
         try? await agentStatusApplier.refreshAgents()
         try? await templateSync.refreshTemplates()
         try? await shortcutSync.refreshShortcuts()
+        try? await customTypeSync.refreshCustomTypes()
     }
 
     private func route(_ text: String) async {
@@ -163,6 +168,13 @@ actor UserEventBus {
             await shortcutSync.applyUpserted(shortcut)
         case .shortcutDeleted(let shortcutId):
             await shortcutSync.applyDeleted(shortcutId: shortcutId)
+        case .customTypeUpserted(let type):
+            await customTypeSync.applyUpserted(type)
+        case .customTypeDeleted(let typeId):
+            await customTypeSync.applyDeleted(typeId: typeId)
+            // The server cascades the type's saved shortcuts in the same
+            // transaction without per-shortcut events — mirror it locally.
+            await shortcutSync.purgeKind("custom_\(typeId)")
         case .none:
             break
         }
@@ -212,6 +224,8 @@ enum UserEnvelopeDemux {
         case templateDeleted(templateId: String)
         case shortcutUpserted(ShortcutDto)
         case shortcutDeleted(shortcutId: String)
+        case customTypeUpserted(CustomAgentTypeDto)
+        case customTypeDeleted(typeId: String)
         case none
     }
 
@@ -245,6 +259,16 @@ enum UserEnvelopeDemux {
                 return .none
             }
             return .shortcutDeleted(shortcutId: payload.shortcut_id)
+        case "custom_type.created", "custom_type.updated":
+            guard let type = try? WireJSON.decoder().decode(CustomAgentTypeDto.self, from: data) else {
+                return .none
+            }
+            return .customTypeUpserted(type)
+        case "custom_type.deleted":
+            guard let payload = try? WireJSON.decoder().decode(CustomTypeDeletedPayload.self, from: data) else {
+                return .none
+            }
+            return .customTypeDeleted(typeId: payload.id)
         default:
             return .none
         }

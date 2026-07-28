@@ -12,7 +12,20 @@ final class CreateSessionModelTests: XCTestCase {
         PreferencesStore(defaults: UserDefaults(suiteName: "cw-\(UUID().uuidString)")!)
     }
 
-    private func makeModel(prefs: PreferencesStore? = nil) -> CreateSessionModel {
+    /// Repository over `StubURLProtocol` with its own logged-in identity —
+    /// pass the same instance to the model when a test seeds or inspects the
+    /// custom-type cache.
+    private func makeTypesRepo() -> CustomAgentTypesRepository {
+        CustomAgentTypesRepository(
+            centralAPI: TerminalTestSupport.stubbedCentralAPI(),
+            userIdentityStore: SessionHarness(userLoggedIn: true).userIdentityStore
+        )
+    }
+
+    private func makeModel(
+        prefs: PreferencesStore? = nil,
+        typesRepo: CustomAgentTypesRepository? = nil
+    ) -> CreateSessionModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
             webSocketFactory: WebSocketCoreFactory.live(
@@ -24,10 +37,15 @@ final class CreateSessionModelTests: XCTestCase {
         )
         let agentAPI = AgentAPI(baseURL: { "https://agent.test" }, tokens: StubAgentTokens())
         let repo = SessionRepository(agentAPI: agentAPI, agentEventBus: bus, terminalSessionStore: TerminalTestSupport.store(harness))
-        return CreateSessionModel(agentAPI: agentAPI, sessionRepository: repo, preferencesStore: prefs ?? isolatedPrefs())
+        return CreateSessionModel(
+            agentAPI: agentAPI,
+            sessionRepository: repo,
+            preferencesStore: prefs ?? isolatedPrefs(),
+            customAgentTypesRepository: typesRepo ?? makeTypesRepo()
+        )
     }
 
-    private func stubbedModel() -> CreateSessionModel {
+    private func stubbedModel(typesRepo: CustomAgentTypesRepository? = nil) -> CreateSessionModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
             webSocketFactory: WebSocketCoreFactory.live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
@@ -37,7 +55,12 @@ final class CreateSessionModelTests: XCTestCase {
         let client = HTTPClient(session: HTTPClient.makeSession(protocolClasses: [StubURLProtocol.self]))
         let agentAPI = AgentAPI(baseURL: { "http://agent.example.com" }, tokens: FakeAgentTokens(token: AgentToken(value: "tok")), client: client)
         let repo = SessionRepository(agentAPI: agentAPI, agentEventBus: bus, terminalSessionStore: TerminalTestSupport.store(harness))
-        return CreateSessionModel(agentAPI: agentAPI, sessionRepository: repo, preferencesStore: isolatedPrefs())
+        return CreateSessionModel(
+            agentAPI: agentAPI,
+            sessionRepository: repo,
+            preferencesStore: isolatedPrefs(),
+            customAgentTypesRepository: typesRepo ?? makeTypesRepo()
+        )
     }
 
     private func modelWithProjects(_ projectsJSON: String) async -> CreateSessionModel {
@@ -129,6 +152,25 @@ final class CreateSessionModelTests: XCTestCase {
         let request = model.buildRequest(mode: .shell)
         XCTAssertNil(request.cli)
         XCTAssertNil(request.claude_options)
+        XCTAssertEqual(request.project_name, "a")
+        XCTAssertEqual(request.worktree, true)
+        XCTAssertEqual(request.branch_name, "feat")
+    }
+
+    func testCustomTypeCarriesCliAndTopLevelWorktree() async {
+        // Custom agent types launch with plain-terminal semantics plus the
+        // `cli` discriminator — worktree/branch ride the top level exactly
+        // like `.shell` (compare testShellCarriesWorktreeOnTopLevel).
+        let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
+        model.selectStoredProject("a")
+        model.worktree = true
+        model.branchName = "feat"
+        let request = model.buildRequest(mode: .custom("ab12cd34ef56"))
+        XCTAssertEqual(request.cli, "custom_ab12cd34ef56")
+        XCTAssertNil(request.command, "the stored command is resolved relay-side — the client never sends it")
+        XCTAssertNil(request.claude_options)
+        XCTAssertNil(request.codex_options)
+        XCTAssertNil(request.antigravity_options)
         XCTAssertEqual(request.project_name, "a")
         XCTAssertEqual(request.worktree, true)
         XCTAssertEqual(request.branch_name, "feat")
@@ -267,5 +309,249 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.codexModel, "gpt-5.4")
         XCTAssertEqual(model.codexApproval, "never")
         XCTAssertTrue(model.codexFullAuto)
+    }
+
+    // MARK: - Custom agent types: validation / sanitization statics
+
+    func testValidateCustomTypeMessagesAndOrder() {
+        XCTAssertNil(CreateSessionModel.validateCustomType(name: "Aider", command: "aider --model sonnet"))
+        XCTAssertEqual(CreateSessionModel.validateCustomType(name: "", command: "aider"), "Name is required")
+        XCTAssertEqual(
+            CreateSessionModel.validateCustomType(name: String(repeating: "a", count: 61), command: "aider"),
+            "Name must be at most 60 characters"
+        )
+        XCTAssertEqual(CreateSessionModel.validateCustomType(name: "Aider", command: ""), "Command is required")
+        XCTAssertEqual(
+            CreateSessionModel.validateCustomType(name: "Aider", command: String(repeating: "x", count: 1001)),
+            "Command must be at most 1000 characters"
+        )
+        XCTAssertNil(
+            CreateSessionModel.validateCustomType(name: "Aider", command: String(repeating: "x", count: 1000)),
+            "the limit is inclusive"
+        )
+        XCTAssertEqual(
+            CreateSessionModel.validateCustomType(name: "", command: ""), "Name is required",
+            "name errors win over command errors (Android message order)"
+        )
+    }
+
+    func testValidateCustomTypeCountsUnicodeCodePointsNotGraphemes() {
+        // "👍🏽" is one grapheme but two Unicode scalars, so 31 of them pass a
+        // grapheme count (31 ≤ 60) yet exceed the server's 60-code-point
+        // limit (62) — the validator must reject what the server rejects.
+        let emojiName = String(repeating: "👍🏽", count: 31)
+        XCTAssertLessThanOrEqual(emojiName.count, 60)
+        XCTAssertEqual(
+            CreateSessionModel.validateCustomType(name: emojiName, command: "aider"),
+            "Name must be at most 60 characters"
+        )
+        XCTAssertNil(
+            CreateSessionModel.validateCustomType(name: String(repeating: "👍🏽", count: 30), command: "aider"),
+            "exactly 60 code points is accepted"
+        )
+    }
+
+    func testSanitizeCommandPunctuationUndoesSmartSubstitutions() {
+        XCTAssertEqual(
+            CreateSessionModel.sanitizeCommandPunctuation(
+                "\u{201C}aider\u{201D} \u{2014}model \u{2018}sonnet\u{2019} \u{2013}x \u{201E}q\u{201A}"
+            ),
+            #""aider" --model 'sonnet' -x "q'"#
+        )
+        XCTAssertEqual(
+            CreateSessionModel.sanitizeCommandPunctuation("aider --model sonnet"),
+            "aider --model sonnet",
+            "already-clean input passes through unchanged"
+        )
+    }
+
+    func testEditorSaveEnablementRequiresBothFieldsNonBlank() {
+        XCTAssertFalse(CustomAgentTypeEditorSheet.isSaveEnabled(name: "  ", command: "aider"))
+        XCTAssertFalse(CustomAgentTypeEditorSheet.isSaveEnabled(name: "Aider", command: " \n "))
+        XCTAssertTrue(CustomAgentTypeEditorSheet.isSaveEnabled(name: " Aider ", command: " aider "))
+    }
+
+    // MARK: - Custom agent types: mode card metadata
+
+    func testCustomModeTitleAndReasonFallBackWhenTypeVanishes() async {
+        let typesRepo = makeTypesRepo()
+        await typesRepo.applyUpserted(makeCustomAgentType())
+        let model = makeModel(typesRepo: typesRepo)
+
+        XCTAssertEqual(model.modeTitle(.custom("ab12cd34ef56")), "Aider")
+        XCTAssertEqual(model.reason(for: .custom("ab12cd34ef56")), "aider --model sonnet")
+        XCTAssertEqual(
+            model.modeTitle(.custom("ffffffffffff")), "Terminal session",
+            "a remotely-deleted type keeps the wizard usable with the terminal fallback"
+        )
+        XCTAssertEqual(model.reason(for: .custom("ffffffffffff")), "Runs your saved launch command")
+    }
+
+    // MARK: - Custom agent types: save flow
+
+    func testSaveCustomTypeValidationFailsInlineWithoutNetwork() async {
+        StubURLProtocol.reset()
+        let model = makeModel()
+        model.typeEditorTarget = .create
+
+        await model.saveCustomType(name: "   ", command: "aider")
+
+        XCTAssertEqual(model.typeEditorError, "Name is required")
+        XCTAssertNotNil(model.typeEditorTarget, "the editor stays open on validation failure")
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty, "invalid input never reaches the wire")
+    }
+
+    func testSaveCustomTypeCreateSuccessDismissesAndUpserts() async throws {
+        StubURLProtocol.reset()
+        let typesRepo = makeTypesRepo()
+        let model = stubbedModel(typesRepo: typesRepo)
+        model.typeEditorTarget = .create
+        StubURLProtocol.enqueue(
+            status: 201,
+            body: #"{"id":"ab12cd34ef56","name":"Aider","command":"aider --model sonnet","created_at":"c","updated_at":"u"}"#
+        )
+
+        await model.saveCustomType(name: " Aider ", command: " aider --model sonnet ")
+
+        XCTAssertNil(model.typeEditorError)
+        XCTAssertNil(model.typeEditorTarget, "the sheet dismisses only on success")
+        XCTAssertEqual(typesRepo.currentTypes.map(\.id), ["ab12cd34ef56"])
+        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "POST")
+        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
+        XCTAssertEqual(body, ["name": "Aider", "command": "aider --model sonnet"], "values are trimmed before the wire")
+    }
+
+    func testSaveCustomTypeEditSanitizesPastedPunctuationAndPatchesBothFields() async throws {
+        StubURLProtocol.reset()
+        let typesRepo = makeTypesRepo()
+        await typesRepo.applyUpserted(makeCustomAgentType())
+        let model = stubbedModel(typesRepo: typesRepo)
+        model.typeEditorTarget = .edit(makeCustomAgentType())
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"id":"ab12cd34ef56","name":"Aider","command":"aider --model \"sonnet\"","created_at":"c","updated_at":"u2"}"#
+        )
+
+        // Pasted text bypasses keyboard traits — the save path must undo the
+        // smart punctuation the live editor would have caught.
+        await model.saveCustomType(name: "Aider", command: "aider \u{2014}model \u{201C}sonnet\u{201D}")
+
+        XCTAssertEqual(StubURLProtocol.requests.first?.httpMethod, "PATCH")
+        XCTAssertEqual(StubURLProtocol.requests.first?.url?.path, "/api/custom-agent-types/ab12cd34ef56")
+        let body = try WireJSON.decoder().decode(JSONValue.self, from: StubURLProtocol.bodies[0])
+        XCTAssertEqual(
+            body, ["name": "Aider", "command": #"aider --model "sonnet""#],
+            "an edit always sends both fields (never an empty PATCH) with sanitized punctuation"
+        )
+        XCTAssertNil(model.typeEditorTarget)
+    }
+
+    func testSaveCustomTypeConflictSurfacesInlineAndKeepsDraft() async {
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+        model.typeEditorTarget = .create
+        StubURLProtocol.enqueue(status: 409, body: #"{"detail":"A custom agent type with this name already exists"}"#)
+
+        await model.saveCustomType(name: "Aider", command: "aider")
+
+        XCTAssertEqual(model.typeEditorError, "A custom agent type with this name already exists")
+        XCTAssertNotNil(model.typeEditorTarget, "a failed save keeps the sheet and the draft")
+    }
+
+    func testSaveCustomTypeNonDetailErrorFallsBackToHTTPCode() async {
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+        model.typeEditorTarget = .create
+        StubURLProtocol.enqueue(status: 500, body: "boom")
+
+        await model.saveCustomType(name: "Aider", command: "aider")
+
+        XCTAssertEqual(model.typeEditorError, "Couldn't save (HTTP 500)")
+        XCTAssertNotNil(model.typeEditorTarget)
+    }
+
+    // MARK: - Custom agent types: delete flow
+
+    func testConfirmDeleteType403CountsAsSuccessAndRefreshes() async {
+        StubURLProtocol.reset()
+        let typesRepo = makeTypesRepo()
+        await typesRepo.applyUpserted(makeCustomAgentType())
+        let model = stubbedModel(typesRepo: typesRepo)
+        model.typeDeleteTarget = makeCustomAgentType()
+        StubURLProtocol.enqueue(status: 403, body: #"{"detail":"Custom agent type not found"}"#)
+        StubURLProtocol.enqueue(status: 200, body: "[]")
+
+        await model.confirmDeleteType(makeCustomAgentType())
+
+        XCTAssertNil(model.error, "an already-gone type (repeat delete / other device) is success, not an error")
+        XCTAssertNil(model.typeDeleteTarget)
+        XCTAssertEqual(
+            StubURLProtocol.requests.compactMap(\.httpMethod), ["DELETE", "GET"],
+            "the 403 triggers a best-effort refresh so the cards converge"
+        )
+        XCTAssertTrue(typesRepo.currentTypes.isEmpty)
+    }
+
+    func testConfirmDeleteTypeFailureSurfacesToastAndKeepsCache() async {
+        StubURLProtocol.reset()
+        let typesRepo = makeTypesRepo()
+        await typesRepo.applyUpserted(makeCustomAgentType())
+        let model = stubbedModel(typesRepo: typesRepo)
+        model.typeDeleteTarget = makeCustomAgentType()
+        StubURLProtocol.enqueue(status: 500, body: "boom")
+
+        await model.confirmDeleteType(makeCustomAgentType())
+
+        XCTAssertTrue(model.error?.hasPrefix("Failed to delete agent type") ?? false)
+        XCTAssertNil(model.typeDeleteTarget, "the confirmation alert is dismissed either way")
+        XCTAssertEqual(typesRepo.currentTypes.map(\.id), ["ab12cd34ef56"], "the delete failed — the card stays")
+    }
+
+    // MARK: - Custom agent types: launch errors
+
+    func testCreateCustomModeAgentUpdateRequired409() async {
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+        model.selection = .stored("a")
+        model.mode = .custom("ab12cd34ef56")
+        StubURLProtocol.enqueue(status: 409, body: #"{"agent_update_required": true, "detail": "agent protocol too old"}"#)
+
+        await model.create()
+
+        XCTAssertEqual(model.error, "Update your agent to launch custom agent types")
+        XCTAssertFalse(model.submitting)
+    }
+
+    func testCreateCustomModeDeletedType404RefreshesTypes() async {
+        StubURLProtocol.reset()
+        let typesRepo = makeTypesRepo()
+        await typesRepo.applyUpserted(makeCustomAgentType())
+        let model = stubbedModel(typesRepo: typesRepo)
+        model.selection = .stored("a")
+        model.mode = .custom("ab12cd34ef56")
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Custom agent type not found"}"#)
+        StubURLProtocol.enqueue(status: 200, body: "[]")
+
+        await model.create()
+
+        XCTAssertEqual(model.error, "This agent type was deleted")
+        XCTAssertTrue(typesRepo.currentTypes.isEmpty, "the stale card disappears via the best-effort refresh")
+    }
+
+    func testCreateCustomModeOther404FallsThroughToGenericError() async {
+        // A concurrently-deleted *project* also 404s — matching on the status
+        // alone mislabeled it as a deleted agent type (a shipped-then-fixed
+        // Android regression). Only the exact detail string routes to the
+        // deleted-type message.
+        StubURLProtocol.reset()
+        let model = stubbedModel()
+        model.selection = .stored("a")
+        model.mode = .custom("ab12cd34ef56")
+        StubURLProtocol.enqueue(status: 404, body: #"{"detail":"Project not found"}"#)
+
+        await model.create()
+
+        XCTAssertTrue(model.error?.hasPrefix("Failed to create session") ?? false)
+        XCTAssertEqual(StubURLProtocol.requests.count, 1, "no type refresh for a non-type 404")
     }
 }

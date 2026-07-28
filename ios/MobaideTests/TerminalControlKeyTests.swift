@@ -26,8 +26,17 @@ final class TerminalControlKeyTests: XCTestCase {
         let claudeIds = ids(TerminalControlKey.claudeKeys)
         XCTAssertEqual(ids(TerminalControlKey.keys(for: .claude)), claudeIds)
         XCTAssertEqual(ids(TerminalControlKey.keys(for: .shell)), claudeIds,
-                       "shell has no bespoke set — it must fall through to the Claude keys")
+                       "shell deliberately keeps the Claude set — folding it into defaultKeys is a separate tracked change, not a side effect")
         XCTAssertEqual(ids(TerminalControlKey.keys(for: .autoScan)), claudeIds)
+    }
+
+    func testNilAndCustomKindsUseDefaultSet() {
+        let defaultIds = ids(TerminalControlKey.defaultKeys)
+        XCTAssertEqual(
+            ids(TerminalControlKey.keys(for: nil)), defaultIds,
+            "an unresolved kind renders the neutral set — never a guessed Claude bar"
+        )
+        XCTAssertEqual(ids(TerminalControlKey.keys(for: .custom("custom_ab12cd34ef56"))), defaultIds)
     }
 
     // MARK: - Set composition (order is what the user sees + the fixed wire order)
@@ -53,6 +62,16 @@ final class TerminalControlKeyTests: XCTestCase {
             ids(TerminalControlKey.antigravityKeys),
             ["enter", "up", "down", "left", "right", "ctrlC", "ctrlL", "esc",
              "ctrlK", "ctrlG", "ctrlD", "tab", "backspace", "ctrlO", "ctrlR"]
+        )
+    }
+
+    func testDefaultSetCompositionOmitsClaudeTUIKeys() {
+        // Nav + universal interrupt/erase only (Android DEFAULT_CONTROL_KEYS):
+        // Mode/Rewind/Ctrl+O/Ctrl+R/Ctrl+L carry Claude-TUI meanings an
+        // arbitrary CLI may bind differently, so they must not leak in.
+        XCTAssertEqual(
+            ids(TerminalControlKey.defaultKeys),
+            ["enter", "up", "down", "left", "right", "ctrlC", "esc", "tab", "backspace"]
         )
     }
 

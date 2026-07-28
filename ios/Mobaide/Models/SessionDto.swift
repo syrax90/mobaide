@@ -1,20 +1,47 @@
 import Foundation
 
-/// Wire values mirror the Kotlin `@SerialName` mapping. An unknown raw value
-/// coerces to `.claude` (kotlinx `coerceInputValues` parity) instead of throwing,
-/// so a newer server's session kinds don't break decoding of session snapshots.
-enum SessionKind: String, Codable, Equatable, Sendable, CaseIterable {
+/// Wire values mirror the Kotlin `wireName` mapping. An unknown raw value is
+/// preserved verbatim as `.custom` (proto-v7, Android `SessionKindSerializer`
+/// parity) — coercing it to `.claude` would silently render Claude's key bar
+/// and re-bucket shortcuts for custom agent types (`custom_<12hex>`).
+enum SessionKind: Hashable, Sendable, Codable {
     case claude
     case codex
     case antigravity
-    case autoScan = "auto_scan"
+    case autoScan
     case shell
-}
+    /// Any kind string this build does not recognize, held verbatim.
+    case custom(String)
 
-extension SessionKind {
+    var wireName: String {
+        switch self {
+        case .claude: return "claude"
+        case .codex: return "codex"
+        case .antigravity: return "antigravity"
+        case .autoScan: return "auto_scan"
+        case .shell: return "shell"
+        case .custom(let raw): return raw
+        }
+    }
+
+    init(wire: String) {
+        switch wire {
+        case "claude": self = .claude
+        case "codex": self = .codex
+        case "antigravity": self = .antigravity
+        case "auto_scan": self = .autoScan
+        case "shell": self = .shell
+        default: self = .custom(wire)
+        }
+    }
+
     init(from decoder: any Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = SessionKind(rawValue: raw) ?? .claude
+        self.init(wire: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wireName)
     }
 }
 
@@ -28,8 +55,40 @@ struct SessionResponse: Codable, Equatable, Sendable {
     let title: String?
     let project_name: String?
     let kind: SessionKind
+    /// Display-name snapshot of a custom agent type at session-creation time
+    /// (proto-v7); nil for built-in kinds. Survives rename/delete of the type,
+    /// so lists keep a meaningful label without a live registry lookup.
+    let kind_label: String?
     let attention: String?
     let exit_reason: String?
+
+    init(
+        session_id: String,
+        state: String,
+        created_at: String,
+        pid: Int?,
+        command: [String],
+        cwd: String?,
+        title: String?,
+        project_name: String?,
+        kind: SessionKind,
+        kind_label: String? = nil,
+        attention: String?,
+        exit_reason: String?
+    ) {
+        self.session_id = session_id
+        self.state = state
+        self.created_at = created_at
+        self.pid = pid
+        self.command = command
+        self.cwd = cwd
+        self.title = title
+        self.project_name = project_name
+        self.kind = kind
+        self.kind_label = kind_label
+        self.attention = attention
+        self.exit_reason = exit_reason
+    }
 }
 
 extension SessionResponse {
@@ -43,7 +102,10 @@ extension SessionResponse {
         cwd = try container.decodeIfPresent(String.self, forKey: .cwd)
         title = try container.decodeIfPresent(String.self, forKey: .title)
         project_name = try container.decodeIfPresent(String.self, forKey: .project_name)
+        // Explicit-null/absent kind still falls back to the property default
+        // (Kotlin `coerceInputValues` parity); unknown strings are preserved.
         kind = try container.decodeIfPresent(SessionKind.self, forKey: .kind) ?? .claude
+        kind_label = try container.decodeIfPresent(String.self, forKey: .kind_label)
         attention = try container.decodeIfPresent(String.self, forKey: .attention)
         exit_reason = try container.decodeIfPresent(String.self, forKey: .exit_reason)
     }

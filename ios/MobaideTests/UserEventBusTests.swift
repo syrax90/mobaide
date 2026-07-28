@@ -8,6 +8,7 @@ final class UserEventBusTests: XCTestCase {
         let agentStatus = RecordingAgentStatusApplier()
         let templateSync = RecordingTemplateSync()
         let shortcutSync = RecordingShortcutSync()
+        let customTypeSync = RecordingCustomTypeSync()
         let bus: UserEventBus
 
         init(session: SessionHarness) {
@@ -22,9 +23,29 @@ final class UserEventBusTests: XCTestCase {
                 tokenStore: session.tokenStore,
                 agentStatusApplier: agentStatus,
                 templateSync: templateSync,
-                shortcutSync: shortcutSync
+                shortcutSync: shortcutSync,
+                customTypeSync: customTypeSync
             )
         }
+    }
+
+    /// One object wearing both sync hats, recording every call into a single
+    /// ordered log — the only way to assert cross-hook ordering (type delete
+    /// strictly before the shortcut-kind purge).
+    private final class OrderedCascadeRecorder: ShortcutSyncApplying, CustomTypeSyncApplying, @unchecked Sendable {
+        private let lock = NSLock()
+        private var eventsStorage: [String] = []
+        var events: [String] { lock.withLock { eventsStorage } }
+        private func record(_ event: String) { lock.withLock { eventsStorage.append(event) } }
+
+        func applyUpserted(_ shortcut: ShortcutDto) async { record("shortcutUpsert:\(shortcut.shortcut_id)") }
+        func applyDeleted(shortcutId: String) async { record("shortcutDelete:\(shortcutId)") }
+        func purgeKind(_ kind: String) async { record("purgeKind:\(kind)") }
+        func refreshShortcuts() async throws { record("refreshShortcuts") }
+        func applyUpserted(_ type: CustomAgentTypeDto) async { record("typeUpsert:\(type.id)") }
+        func applyDeleted(typeId: String) async { record("typeDelete:\(typeId)") }
+        func refreshCustomTypes() async throws { record("refreshCustomTypes") }
+        func clear() async { record("clear") }
     }
 
     // MARK: - Demux (pure, fixture-driven)
@@ -83,6 +104,44 @@ final class UserEventBusTests: XCTestCase {
             }
             XCTAssertFalse(shortcutId.isEmpty)
         }
+    }
+
+    func testCustomTypeUpsertFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/central/CustomAgentTypeDto.json") {
+            for type in ["custom_type.created", "custom_type.updated"] {
+                let envelope = try EnvelopeFixtures.envelope(type: type, payload: fixtureCase.wire)
+                guard case .customTypeUpserted(let customType) = UserEnvelopeDemux.demux(envelope) else {
+                    return XCTFail("case \(fixtureCase.name) (\(type)): expected customTypeUpserted")
+                }
+                XCTAssertFalse(customType.id.isEmpty)
+            }
+        }
+    }
+
+    func testCustomTypeDeletedFixtureDemux() throws {
+        for fixtureCase in try EnvelopeFixtures.cases(fixture: "dto/central/CustomTypeDeletedPayload.json") {
+            let envelope = try EnvelopeFixtures.envelope(type: "custom_type.deleted", payload: fixtureCase.wire)
+            guard case .customTypeDeleted(let typeId) = UserEnvelopeDemux.demux(envelope) else {
+                return XCTFail("case \(fixtureCase.name): expected customTypeDeleted")
+            }
+            XCTAssertFalse(typeId.isEmpty)
+        }
+    }
+
+    func testMalformedCustomTypePayloadsAreSilentlyIgnored() {
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"custom_type.created","payload":{"id":42}}"#),
+            .none
+        )
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"custom_type.deleted","payload":{}}"#),
+            .none
+        )
+        XCTAssertEqual(
+            UserEnvelopeDemux.demux(#"{"type":"custom_type.deleted","payload":{"type_id":"ab12cd34ef56"}}"#),
+            .none,
+            "the tombstone key is `id` — a `type_id` payload must not demux"
+        )
     }
 
     func testMalformedShortcutPayloadsAreSilentlyIgnored() {
@@ -248,6 +307,92 @@ final class UserEventBusTests: XCTestCase {
         XCTAssertEqual(harness.shortcutSync.refreshCount, 1, "on-connect reconcile re-pulls shortcuts too")
         XCTAssertEqual(harness.shortcutSync.upserts.map(\.shortcut_id), ["sc1"])
         XCTAssertEqual(harness.shortcutSync.deletes, ["sc0"])
+    }
+
+    func testCustomTypeEventsRouteToHooksAndReconcileRefreshes() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+        let states = StreamCollector(harness.bus.connectionStates())
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+        _ = try await states.next(where: { $0 == .connected })
+
+        connection.emit(.text(
+            #"{"type":"custom_type.created","payload":{"id":"ab12cd34ef56","name":"Aider","command":"aider --model sonnet","created_at":"c","updated_at":"u"}}"#
+        ))
+        connection.emit(.text(
+            #"{"type":"custom_type.deleted","payload":{"id":"ffffffffffff"}}"#
+        ))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline,
+              harness.customTypeSync.upserts.isEmpty || harness.shortcutSync.purges.isEmpty {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(harness.customTypeSync.refreshCount, 1, "on-connect reconcile re-pulls custom types too")
+        XCTAssertEqual(harness.customTypeSync.upserts.map(\.id), ["ab12cd34ef56"])
+        XCTAssertEqual(harness.customTypeSync.deletes, ["ffffffffffff"])
+        XCTAssertEqual(
+            harness.shortcutSync.purges, ["custom_ffffffffffff"],
+            "the deleted type's shortcut bucket is purged by full wire kind — the server cascade emits no per-shortcut events"
+        )
+    }
+
+    func testCustomTypeDeletedAppliesDeleteBeforeShortcutPurge() async throws {
+        // The purge keys on the type that just died; running it first would
+        // let a concurrent upsert-for-that-kind sneak back in between.
+        let session = SessionHarness(userLoggedIn: true)
+        session.tokenStore.saveAgentUrl("https://agent.example.com")
+        let transportFactory = FakeWebSocketTransportFactory()
+        let recorder = OrderedCascadeRecorder()
+        let bus = UserEventBus(
+            webSocketFactory: WebSocketCoreFactory.live(
+                transportFactory: transportFactory,
+                sleeper: RecordingSleeper()
+            ),
+            sessionManager: session.sessionManager,
+            userIdentityStore: session.userIdentityStore,
+            tokenStore: session.tokenStore,
+            shortcutSync: recorder,
+            customTypeSync: recorder
+        )
+
+        await bus.start()
+        let connection = try await transportFactory.connection(1)
+        connection.emit(.opened)
+        connection.emit(.text(#"{"type":"custom_type.deleted","payload":{"id":"ab12cd34ef56"}}"#))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline,
+              !recorder.events.contains("purgeKind:custom_ab12cd34ef56") {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        let cascade = recorder.events.filter { $0.hasPrefix("typeDelete:") || $0.hasPrefix("purgeKind:") }
+        XCTAssertEqual(
+            cascade, ["typeDelete:ab12cd34ef56", "purgeKind:custom_ab12cd34ef56"],
+            "the type row is removed strictly before its shortcut kind is purged"
+        )
+    }
+
+    func testLogoutClearsCustomTypeCache() async throws {
+        let harness = BusHarness(session: SessionHarness(userLoggedIn: true))
+        harness.session.tokenStore.saveAgentUrl("https://agent.example.com")
+
+        await harness.bus.start()
+        let connection = try await harness.transportFactory.connection(1)
+        connection.emit(.opened)
+
+        await harness.session.sessionManager.invalidateUserSession(.tokenRejected)
+
+        // Cross-account isolation: a different account signing in on this
+        // process must never see the previous user's custom agent cards.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while ContinuousClock.now < deadline, harness.customTypeSync.clearCount < 1 {
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        XCTAssertEqual(harness.customTypeSync.clearCount, 1)
     }
 
     func testLogoutClearsShortcutCache() async throws {

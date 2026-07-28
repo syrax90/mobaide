@@ -27,9 +27,15 @@ final class DTOFixtureTests: XCTestCase {
         XCTAssertTrue(uncovered.isEmpty, "registered DTO types without fixtures: \(uncovered.sorted())")
     }
 
-    func testUnknownSessionKindCoercesInsteadOfThrowing() throws {
+    func testUnknownSessionKindIsPreservedVerbatim() throws {
+        // Proto-v7: no more unknown→claude coercion — an unrecognized kind
+        // string is held verbatim as `.custom` and re-encodes byte-identical,
+        // so custom/newer kinds never re-bucket into Claude.
         let decoded = try WireJSON.decoder().decode(SessionKind.self, from: Data("\"never_heard_of_it\"".utf8))
-        XCTAssertEqual(decoded, .claude)
+        XCTAssertEqual(decoded, .custom("never_heard_of_it"))
+
+        let reencoded = try WireJSON.encoder().encode(decoded)
+        XCTAssertEqual(String(decoding: reencoded, as: UTF8.self), "\"never_heard_of_it\"")
     }
 
     func testGitItemComputedPropertiesAreDerivedNotSerialized() throws {

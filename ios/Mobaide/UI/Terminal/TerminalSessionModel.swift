@@ -451,7 +451,7 @@ final class TerminalSessionModel {
     var savedShortcutsForKind: [SavedShortcutUi] {
         guard let resolvedKind else { return [] }
         return allShortcuts
-            .filter { $0.kind == resolvedKind.rawValue }
+            .filter { $0.kind == resolvedKind.wireName }
             .sorted { a, b in
                 if a.position != b.position { return a.position < b.position }
                 if a.created_at != b.created_at { return a.created_at < b.created_at }
@@ -470,9 +470,13 @@ final class TerminalSessionModel {
             }
     }
 
+    // MRU buckets are keyed on the wire kind (`custom_<id>` for custom agent
+    // types — rename-stable). A deleted type's bucket is deliberately left
+    // behind: it is device-local, invisible without a session of that kind,
+    // and purging would race the push-driven type cache (Android parity).
     func refreshShortcutRecents() {
         shortcutRecents = preferencesStore
-            .getRecentShortcutChords(kindKey: (resolvedKind ?? kind).rawValue)
+            .getRecentShortcutChords(kindKey: (resolvedKind ?? kind).wireName)
             .compactMap(KeyChord.parse)
     }
 
@@ -484,7 +488,7 @@ final class TerminalSessionModel {
         guard let encoding = KeyChordEncoder.encode(chord) else { return }
         sendBytes(Data(encoding.bytes))
         preferencesStore.addRecentShortcutChord(
-            kindKey: (resolvedKind ?? kind).rawValue,
+            kindKey: (resolvedKind ?? kind).wireName,
             token: chord.token
         )
         refreshShortcutRecents()
@@ -537,7 +541,7 @@ final class TerminalSessionModel {
                 return
             }
             do {
-                try await self.shortcutsRepository.createShortcut(kind: kind.rawValue, chordToken: token)
+                try await self.shortcutsRepository.createShortcut(kind: kind.wireName, chordToken: token)
             } catch {
                 self.shortcutMessage = ToastMessage(text: "Failed to save shortcut")
             }
