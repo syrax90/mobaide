@@ -1,5 +1,12 @@
 # mobaide_agent Changelog
 
+## [0.3.4](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.3...agent-v0.3.4) (2026-07-28)
+
+
+### Bug Fixes
+
+* **agent:** Increase max sessions to 32; rename worktree dir to mobaide_worktree ([f41caa0](https://github.com/syrax90/claude_mobile/commit/f41caa01382abcdeff36708295d2d2a0c6dfda12))
+
 ## [0.3.3](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.2...agent-v0.3.3) (2026-07-28)
 
 
