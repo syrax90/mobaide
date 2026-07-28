@@ -2784,12 +2784,13 @@ class CreateSessionViewModelTest {
 
     @Test
     fun submitCustomAgent_404_setsDeletedMessage_andRefreshesTypes() = runTest {
-        // The type was deleted between rendering the card and the launch.
+        // The type was deleted between rendering the card and the launch —
+        // recognized by the relay's exact detail string, not the status alone.
         val fx = newFixture()
         val vm = fx.buildVm()
         advanceUntilIdle()
         coEvery { fx.sessionRepo.createSession(any()) } throws
-            ApiException(404, """{"detail":"unknown custom agent type"}""")
+            ApiException(404, """{"detail":"Custom agent type not found"}""")
 
         vm.selectProject("beta")
         vm.confirmProject()
@@ -2800,6 +2801,30 @@ class CreateSessionViewModelTest {
         assertEquals("This agent type was deleted", vm.uiState.value.error)
         // Once from init's cold-start seed + once from the 404 reconcile.
         coVerify(exactly = 2) { fx.customTypesRepo.refreshTypes() }
+    }
+
+    @Test
+    fun submitCustomAgent_projectDeleted404_fallsThroughToGenericError() = runTest {
+        // A custom launch can also 404 for a concurrently-deleted PROJECT
+        // (agent-side detail) — same status, different detail string. That
+        // must not masquerade as a deleted type nor trigger a type refresh.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(404, """{"detail":"Project 'beta' not found"}""")
+
+        vm.selectProject("beta")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("t1"))
+        vm.selectCustomAgentMode("t1")
+        advanceUntilIdle()
+
+        assertNotNull(vm.uiState.value.error)
+        assertTrue(vm.uiState.value.error!!.startsWith("Failed to create session"))
+        assertFalse(vm.uiState.value.submitting)
+        // Only init's cold-start seed — a project 404 must not reconcile types.
+        coVerify(exactly = 1) { fx.customTypesRepo.refreshTypes() }
     }
 
     @Test

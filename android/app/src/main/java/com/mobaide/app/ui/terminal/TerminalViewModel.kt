@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
@@ -393,11 +395,21 @@ class TerminalViewModel @Inject constructor(
             .mapNotNull(KeyChord::parse)
     }
 
+    /** Pending recents load; cancel-and-replace so reopening the picker while
+     *  a previous open is still awaiting kind resolution never leaks a
+     *  suspended collector or double-writes [_shortcutRecents]. */
+    private var shortcutRecentsLoadJob: Job? = null
+
     /** Fired when the shortcut picker opens (lazy — see [shortcutRecents]).
-     *  No-op while the kind is unresolved — there is no bucket to read. */
+     *  Suspends until the kind resolves rather than no-opping: the picker can
+     *  open in the sub-second window before the session list / REST seed
+     *  names the kind, and a one-shot early return would leave the MRU row
+     *  empty for the rest of that open while the saved-shortcut list (a
+     *  combine over [resolvedKind]) self-heals. */
     fun refreshShortcutRecents() {
-        val kindKey = sessionKind.value?.wireName ?: return
-        viewModelScope.launch {
+        shortcutRecentsLoadJob?.cancel()
+        shortcutRecentsLoadJob = viewModelScope.launch {
+            val kindKey = sessionKind.filterNotNull().first().wireName
             runCatching { loadShortcutRecents(kindKey) }
         }
     }

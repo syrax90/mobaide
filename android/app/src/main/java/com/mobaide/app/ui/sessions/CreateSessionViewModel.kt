@@ -1052,10 +1052,16 @@ class CreateSessionViewModel @Inject constructor(
                     }
                 } else if (
                     e is ApiException && e.code == 404 &&
-                    request.cli?.startsWith("custom_") == true
+                    request.cli?.startsWith("custom_") == true &&
+                    extractDetail(e.errorBody) == "Custom agent type not found"
                 ) {
                     // The type was deleted between rendering the card and the
-                    // launch — refresh so the stale card disappears.
+                    // launch — refresh so the stale card disappears. Keyed on
+                    // the relay's exact detail string, not the status alone: a
+                    // custom launch can also 404 for a concurrently-deleted
+                    // project (agent-side "Project 'X' not found"), which must
+                    // fall through to the generic message below. If the relay
+                    // string ever changes this degrades to the generic path.
                     _uiState.update {
                         it.copy(submitting = false, error = "This agent type was deleted")
                     }

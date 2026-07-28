@@ -39,9 +39,10 @@ import org.junit.Test
  * Load-bearing contracts: a chord travels the raw 'i'-frame path with its
  * encoded bytes; the send is unconditional while MRU persistence is
  * fire-and-forget (a store failure must never lose the keystroke); recents are
- * keyed by the session kind's wire name and are skipped entirely while the
+ * keyed by the session kind's wire name — MRU writes are skipped while the
  * kind is unresolved (null since proto-v7 — never recorded under a guessed
- * Claude bucket); unparseable persisted tokens are dropped silently; and
+ * Claude bucket) and a picker-open refresh waits for resolution instead of
+ * no-opping; unparseable persisted tokens are dropped silently; and
  * NOTHING touches the chord store before
  * [TerminalViewModel.refreshShortcutRecents]/[TerminalViewModel.sendChord] fire
  * — every existing ViewModel test stubs [PreferencesStore] strictly with only
@@ -200,9 +201,10 @@ class TerminalViewModelSendChordTest {
     }
 
     @Test
-    fun refreshShortcutRecents_kindUnresolved_isNoOp() = runTest {
-        // There is no bucket to read while the kind is null — the strict mock
-        // pins the zero-access contract.
+    fun refreshShortcutRecents_kindUnresolved_readsNothingWhilePending() = runTest {
+        // The load waits for kind resolution rather than no-opping — while it
+        // is still pending the strict mock pins the zero-access contract (no
+        // bucket guess, no read).
         val vm = createViewModel()
         advanceUntilIdle()
 
@@ -211,6 +213,55 @@ class TerminalViewModelSendChordTest {
 
         assertTrue(vm.shortcutRecents.value.isEmpty())
         coVerify(exactly = 0) { preferencesStore.getRecentShortcutChords(any()) }
+    }
+
+    @Test
+    fun refreshShortcutRecents_pendingLoadResumes_whenKindResolves() = runTest {
+        // Picker opened before the first sessions snapshot: the load suspends,
+        // then self-heals into the RESOLVED kind's bucket — here a custom
+        // type, pinning that the awaited wireName is used, never a guess.
+        coEvery {
+            preferencesStore.getRecentShortcutChords("custom_ab12cd34ef56")
+        } returns listOf("ctrl+a")
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.refreshShortcutRecents()
+        advanceUntilIdle()
+        coVerify(exactly = 0) { preferencesStore.getRecentShortcutChords(any()) }
+
+        resolveKind(SessionKind.Custom("custom_ab12cd34ef56"))
+        advanceUntilIdle()
+
+        assertEquals(
+            "a pre-resolution picker open must self-heal once the kind lands",
+            listOf(KeyChord(ctrl = true, key = "a")),
+            vm.shortcutRecents.value,
+        )
+        coVerify(exactly = 1) {
+            preferencesStore.getRecentShortcutChords("custom_ab12cd34ef56")
+        }
+    }
+
+    @Test
+    fun refreshShortcutRecents_reopenWhilePending_loadsExactlyOnce() = runTest {
+        // Cancel-and-replace: reopening the picker while the first open is
+        // still awaiting kind resolution must not stack a second collector —
+        // resolution then triggers exactly one bucket read.
+        coEvery { preferencesStore.getRecentShortcutChords("claude") } returns listOf("ctrl+a")
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.refreshShortcutRecents()
+        advanceUntilIdle() // first load reaches its suspension point
+        vm.refreshShortcutRecents()
+        advanceUntilIdle()
+
+        resolveKind(SessionKind.Claude)
+        advanceUntilIdle()
+
+        assertEquals(listOf(KeyChord(ctrl = true, key = "a")), vm.shortcutRecents.value)
+        coVerify(exactly = 1) { preferencesStore.getRecentShortcutChords("claude") }
     }
 
     @Test
