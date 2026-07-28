@@ -484,7 +484,10 @@ final class CreateSessionModelTests: XCTestCase {
         await model.confirmDeleteType(makeCustomAgentType())
 
         XCTAssertNil(model.error, "an already-gone type (repeat delete / other device) is success, not an error")
-        XCTAssertNil(model.typeDeleteTarget)
+        XCTAssertEqual(
+            model.typeDeleteTarget?.id, "ab12cd34ef56",
+            "the model leaves the alert target alone — the alert's presentation binding clears it"
+        )
         XCTAssertEqual(
             StubURLProtocol.requests.compactMap(\.httpMethod), ["DELETE", "GET"],
             "the 403 triggers a best-effort refresh so the cards converge"
@@ -503,8 +506,91 @@ final class CreateSessionModelTests: XCTestCase {
         await model.confirmDeleteType(makeCustomAgentType())
 
         XCTAssertTrue(model.error?.hasPrefix("Failed to delete agent type") ?? false)
-        XCTAssertNil(model.typeDeleteTarget, "the confirmation alert is dismissed either way")
+        XCTAssertEqual(
+            model.typeDeleteTarget?.id, "ab12cd34ef56",
+            "the model leaves the alert target alone — nilling it from the async flow could tear down a second type's freshly-raised confirmation"
+        )
         XCTAssertEqual(typesRepo.currentTypes.map(\.id), ["ab12cd34ef56"], "the delete failed — the card stays")
+    }
+
+    func testConfirmDeleteTypeRepeatConfirmOfSameInFlightTypeIsNoOp() async {
+        StubURLProtocol.reset()
+        let typesRepo = makeTypesRepo()
+        await typesRepo.applyUpserted(makeCustomAgentType())
+        let model = stubbedModel(typesRepo: typesRepo)
+        model.typeDeleteTarget = makeCustomAgentType()
+        StubURLProtocol.enqueue(status: 200, body: "{}")
+
+        // Hold the first DELETE's response until a repeat confirm of the same
+        // type has run — the alert auto-dismisses on tap, so this re-confirm
+        // window is reachable in the UI.
+        let released = DispatchSemaphore(value: 0)
+        StubURLProtocol.onRequest = { request in
+            guard request.httpMethod == "DELETE" else { return }
+            StubURLProtocol.onRequest = nil
+            Task { @MainActor in
+                await model.confirmDeleteType(makeCustomAgentType())
+                released.signal()
+            }
+            _ = released.wait(timeout: .now() + 2)
+        }
+
+        await model.confirmDeleteType(makeCustomAgentType())
+
+        XCTAssertEqual(
+            StubURLProtocol.requests.filter { $0.httpMethod == "DELETE" }.count, 1,
+            "a repeat confirm of a type whose DELETE is already in flight must not fire a second call"
+        )
+        XCTAssertNil(model.error)
+        XCTAssertTrue(model.deletesInFlightTypeIds.isEmpty, "the guard entry is released once the DELETE settles")
+        XCTAssertTrue(typesRepo.currentTypes.isEmpty)
+        XCTAssertEqual(
+            model.typeDeleteTarget?.id, "ab12cd34ef56",
+            "the model must not clear the alert target — the presentation binding owns it"
+        )
+    }
+
+    func testConfirmDeleteTypeSecondTypeWhileFirstInFlightBothFire() async {
+        StubURLProtocol.reset()
+        let typesRepo = makeTypesRepo()
+        await typesRepo.applyUpserted(makeCustomAgentType())
+        await typesRepo.applyUpserted(makeCustomAgentType(id: "cd34ef56ab12", name: "Goose", command: "goose"))
+        let model = stubbedModel(typesRepo: typesRepo)
+        StubURLProtocol.enqueue(status: 200, body: "{}")
+        StubURLProtocol.enqueue(status: 200, body: "{}")
+
+        // The alert dismisses on tap, so a second type can be confirmed while
+        // the first DELETE still awaits; hold the first response until the
+        // second confirm is provably in flight (a single-boolean guard would
+        // silently drop that second confirmed destructive action).
+        let released = DispatchSemaphore(value: 0)
+        StubURLProtocol.onRequest = { request in
+            guard request.url?.lastPathComponent == "ab12cd34ef56" else { return }
+            StubURLProtocol.onRequest = nil
+            Task { @MainActor in
+                let second = Task { @MainActor in
+                    await model.confirmDeleteType(makeCustomAgentType(id: "cd34ef56ab12", name: "Goose", command: "goose"))
+                }
+                let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+                while !model.deletesInFlightTypeIds.contains("cd34ef56ab12"), ContinuousClock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(2))
+                }
+                released.signal()
+                await second.value
+            }
+            _ = released.wait(timeout: .now() + 2)
+        }
+
+        await model.confirmDeleteType(makeCustomAgentType())
+        await waitUntil { StubURLProtocol.requests.count == 2 && model.deletesInFlightTypeIds.isEmpty }
+
+        XCTAssertEqual(
+            Set(StubURLProtocol.requests.compactMap { $0.url?.lastPathComponent }),
+            ["ab12cd34ef56", "cd34ef56ab12"],
+            "a second type confirmed while the first DELETE is in flight must not be silently dropped"
+        )
+        XCTAssertNil(model.error)
+        XCTAssertTrue(typesRepo.currentTypes.isEmpty, "both confirmed deletes reach the server and apply")
     }
 
     // MARK: - Custom agent types: launch errors

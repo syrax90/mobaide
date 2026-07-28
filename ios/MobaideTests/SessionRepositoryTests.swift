@@ -22,9 +22,10 @@ final class SessionRepositoryTests: XCTestCase {
         return (repo, bus, factory, store)
     }
 
-    private func session(_ id: String, state: String = "running", attention: String? = nil) -> String {
+    private func session(_ id: String, state: String = "running", attention: String? = nil, kind: String? = nil) -> String {
         var fields = #""session_id":"\#(id)","state":"\#(state)","created_at":"t""#
         if let attention { fields += #","attention":"\#(attention)""# }
+        if let kind { fields += #","kind":"\#(kind)""# }
         return "{\(fields)}"
     }
 
@@ -33,8 +34,13 @@ final class SessionRepositoryTests: XCTestCase {
         return #"{"type":"sessions.changed","payload":{"sessions":[\#(payload)]}}"#
     }
 
-    private func sessionUpdated(_ id: String, state: String = "running", attention: String? = nil) -> String {
-        #"{"type":"session.updated","payload":{"session":\#(session(id, state: state, attention: attention))}}"#
+    private func sessionsChanged(entries: [(id: String, kind: String)]) -> String {
+        let payload = entries.map { session($0.id, kind: $0.kind) }.joined(separator: ",")
+        return #"{"type":"sessions.changed","payload":{"sessions":[\#(payload)]}}"#
+    }
+
+    private func sessionUpdated(_ id: String, state: String = "running", attention: String? = nil, kind: String? = nil) -> String {
+        #"{"type":"session.updated","payload":{"session":\#(session(id, state: state, attention: attention, kind: kind))}}"#
     }
 
     private func sessionAttention(_ id: String, attention: String) -> String {
@@ -133,6 +139,69 @@ final class SessionRepositoryTests: XCTestCase {
 
         let rebuiltA = store.model(id: "a", kind: .claude, resolvedKind: nil, initialStatus: nil)
         XCTAssertFalse(modelA === rebuiltA, "a session dropped from the snapshot must be evicted from the store")
+    }
+
+    func testSnapshotAdoptsKindIntoUnresolvedTerminalModel() async throws {
+        let (repo, bus, factory, store) = makeStack()
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+
+        // Cold-start deep link: the model exists before any session row loaded
+        // and its one-shot resolver found nothing.
+        let model = store.model(id: "a", kind: .claude, resolvedKind: nil, initialStatus: nil)
+        XCTAssertNil(model.resolvedKind)
+
+        connection.emit(.text(sessionsChanged(entries: [
+            (id: "a", kind: "custom_ab12cd34ef56"),
+            (id: "ghost", kind: "codex"),
+        ])))
+        _ = await waitFor(repo) { $0.count == 2 }
+
+        XCTAssertEqual(
+            model.resolvedKind, .custom("custom_ab12cd34ef56"),
+            "the next sessions.changed snapshot must heal a failed one-shot kind resolution"
+        )
+        let ghost = store.model(id: "ghost", kind: .claude, resolvedKind: nil, initialStatus: nil)
+        XCTAssertNil(ghost.resolvedKind, "adoption for an id with no live model must not create or seed one")
+    }
+
+    func testSnapshotKindAdoptionIsFirstWins() async throws {
+        let (repo, bus, factory, store) = makeStack()
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+        let model = store.model(id: "a", kind: .claude, resolvedKind: nil, initialStatus: nil)
+
+        connection.emit(.text(sessionsChanged(entries: [(id: "a", kind: "codex")])))
+        _ = await waitFor(repo) { $0.first?.kind == .codex }
+        XCTAssertEqual(model.resolvedKind, .codex)
+
+        connection.emit(.text(sessionsChanged(entries: [(id: "a", kind: "claude")])))
+        _ = await waitFor(repo) { $0.first?.kind == .claude }
+        XCTAssertEqual(
+            model.resolvedKind, .codex,
+            "only the first resolution wins — a later snapshot must not flip an adopted kind"
+        )
+    }
+
+    func testSessionUpdatedUpsertAlsoAdoptsKind() async throws {
+        let (repo, bus, factory, store) = makeStack()
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+        let model = store.model(id: "a", kind: .claude, resolvedKind: nil, initialStatus: nil)
+
+        connection.emit(.text(sessionUpdated("a", kind: "codex")))
+        _ = await waitFor(repo) { $0.contains { $0.session_id == "a" } }
+
+        XCTAssertEqual(
+            model.resolvedKind, .codex,
+            "the session.updated upsert path funnels through the same kind adoption as full snapshots"
+        )
     }
 
     func testCreateSessionPublishesResponseWithKind() async throws {

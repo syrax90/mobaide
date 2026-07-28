@@ -94,7 +94,12 @@ final class CreateSessionModel {
     private(set) var isSavingType = false
     var typeEditorError: String?
     var typeDeleteTarget: CustomAgentTypeDto?
-    private(set) var isDeletingType = false
+    /// Ids of types whose DELETE is in flight, keyed per target (the
+    /// `savesInFlight` pattern): the confirmation alert auto-dismisses on tap,
+    /// so a second type can be confirmed while the first DELETE still awaits —
+    /// a single boolean guard would silently drop that confirmed destructive
+    /// action. A repeat confirm of the same type stays a no-op.
+    private(set) var deletesInFlightTypeIds: Set<String> = []
 
     private(set) var claudeAvailable: Bool?
     private(set) var codexAvailable: Bool?
@@ -510,13 +515,13 @@ final class CreateSessionModel {
     /// Pessimistic delete; a 403 means the type is already gone elsewhere
     /// (repeat delete / another device) and counts as success — followed by a
     /// best-effort refresh so the cards converge either way.
+    /// `typeDeleteTarget` is deliberately not touched here: the alert's
+    /// presentation binding clears it on dismissal, and nilling it from this
+    /// async flow could tear down a confirmation freshly raised for a
+    /// different type.
     func confirmDeleteType(_ type: CustomAgentTypeDto) async {
-        guard !isDeletingType else { return }
-        isDeletingType = true
-        defer {
-            isDeletingType = false
-            typeDeleteTarget = nil
-        }
+        guard deletesInFlightTypeIds.insert(type.id).inserted else { return }
+        defer { deletesInFlightTypeIds.remove(type.id) }
         do {
             try await customAgentTypesRepository.deleteType(typeId: type.id)
         } catch let apiError as APIError where apiError.code == 403 {
