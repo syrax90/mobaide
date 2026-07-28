@@ -122,6 +122,87 @@ final class TerminalSessionModelTests: XCTestCase {
         XCTAssertEqual(resizes.last, Data([0x72, 0x00, 0x28, 0x00, 0x78]))
     }
 
+    /// The model is constructed and started inside the SwiftUI `View.init`, so
+    /// on a first open the socket routinely connects before the grid has ever
+    /// been measured. Nothing may go on the wire then — least of all a 0x0
+    /// resize — and the measurement that follows must still reach the PTY.
+    func testConnectBeforeAnyResizeSendsNothingAndLaterResizeStillDelivers() async throws {
+        let (model, connection) = try await connectedModel()
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertTrue(
+            connection.sentBinaries.filter { $0.first == 0x72 }.isEmpty,
+            "an unmeasured grid has no size to assert"
+        )
+
+        model.resize(rows: 40, cols: 120)
+        let sent = await waitForBinaries(connection, atLeast: 1)
+        XCTAssertEqual(
+            sent.filter { $0.first == 0x72 },
+            [Data([0x72, 0x00, 0x28, 0x00, 0x78])],
+            "the first measured size still reaches the PTY"
+        )
+    }
+
+    /// Auto Scan sessions arrive with a long pre-attach replay, so the layout
+    /// pass that measures the grid lands mid-replay. If that frame is dropped
+    /// while the socket is down, `resize`'s dedupe suppresses every identical
+    /// retry, and without a re-assert at `replayEnd` the PTY stays at its 24x80
+    /// spawn size for the session's whole life.
+    func testReplayEndReassertsSizeDroppedWhileSocketWasDown() async throws {
+        let (model, connection) = try await connectedModel()
+        connection.emit(.binary(Data([0x62]))) // replayStart
+        let replaying = await poll { model.connectionState == .replayingBuffer }
+        XCTAssertTrue(replaying)
+
+        connection.dropsBinaries = true
+        model.resize(rows: 40, cols: 120)
+        let dropped = await poll { !connection.droppedBinaries.isEmpty }
+        XCTAssertTrue(dropped, "the debounced resize hit a socket that was down")
+        connection.dropsBinaries = false
+
+        connection.emit(.binary(Data([0x65]))) // replayEnd
+        let live = await poll { model.connectionState == .live }
+        XCTAssertTrue(live)
+        let sent = await waitForBinaries(connection, atLeast: 1)
+        XCTAssertEqual(
+            sent.filter { $0.first == 0x72 },
+            [Data([0x72, 0x00, 0x28, 0x00, 0x78])],
+            "entering live re-asserts the measured grid the dedupe guard would never retry"
+        )
+    }
+
+    /// The same recovery on the other entry into live — the first inbound
+    /// binary upgrading out of `.reconnecting`, with no `.connected` in between
+    /// to carry the re-assert.
+    ///
+    /// `.opened` is deliberately never emitted, so no `.connected` event exists
+    /// and the first-binary upgrade is structurally the only path that can put
+    /// the measured grid on the wire. `WebSocketCore.doConnect` assigns the
+    /// connection before starting the transport, so sends still reach the fake.
+    func testFirstBinaryUpgradeReassertsSizeDroppedWhileSocketWasDown() async throws {
+        let factory = FakeWebSocketTransportFactory()
+        let model = makeModel(factory: factory)
+        model.start()
+        let connection = try await factory.connection(1)
+        XCTAssertEqual(model.connectionState, .reconnecting)
+
+        connection.dropsBinaries = true
+        model.resize(rows: 40, cols: 120)
+        let dropped = await poll { !connection.droppedBinaries.isEmpty }
+        XCTAssertTrue(dropped, "the debounced resize hit a socket that was down")
+        connection.dropsBinaries = false
+
+        connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))
+        let live = await poll { model.connectionState == .live }
+        XCTAssertTrue(live)
+        let sent = await waitForBinaries(connection, atLeast: 1)
+        XCTAssertEqual(
+            sent.filter { $0.first == 0x72 },
+            [Data([0x72, 0x00, 0x28, 0x00, 0x78])],
+            "the first-binary upgrade re-asserts the measured grid"
+        )
+    }
+
     func testDisconnectClosesAndDisablesInput() async throws {
         let (model, connection) = try await connectedModel()
         connection.emit(.binary(Data([0x73]) + Data(#"{"status":"running"}"#.utf8)))

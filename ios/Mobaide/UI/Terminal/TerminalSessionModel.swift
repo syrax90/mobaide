@@ -18,9 +18,11 @@ import SwiftTerm
 /// - `.replayingBuffer` — entered on `replayStart`: the screen is cleared with
 ///   `ESC[H ESC[2J ESC[3J` exactly once per marker, follow-mode is forced, and
 ///   the overlay shows "Replaying buffer…" until `replayEnd`.
-/// - `.live` — entered on `replayEnd` (or the first non-marker binary). Replay
-///   and live `output` frames are fed identically; only the markers move the
-///   machine, so a reconnect re-clears and re-feeds without duplicating output.
+/// - `.live` — entered on `replayEnd`, or provisionally on the first inbound
+///   binary of a cycle (the upgrade precedes decoding, so a marker counts),
+///   always via `enterLiveState()`, which also re-asserts the cached PTY size.
+///   Replay and live `output` frames are fed identically; only the markers move
+///   the machine, so a reconnect re-clears and re-feeds without duplicating output.
 @MainActor
 @Observable
 final class TerminalSessionModel {
@@ -207,7 +209,7 @@ final class TerminalSessionModel {
 
     private func handleBinary(_ data: Data) {
         if connectionState == .reconnecting {
-            connectionState = .live
+            enterLiveState()
         }
         guard let frame = TerminalInboundFrame.decode(data) else { return }
         switch frame {
@@ -225,7 +227,7 @@ final class TerminalSessionModel {
         case .replayEnd:
             if inReplay {
                 inReplay = false
-                connectionState = .live
+                enterLiveState()
             }
         }
     }
@@ -302,11 +304,26 @@ final class TerminalSessionModel {
         outboundContinuation.yield(frame.encoded)
     }
 
-    /// A resize enqueued while the socket was down is dropped by the transport
-    /// and then suppressed by `resize`'s dedupe guard, so re-send the last known
-    /// size on every successful connect (including the first, whose initial
-    /// resize may have been dropped by a failed prior attempt) to keep the PTY
-    /// dimensions correct. Re-sending the same size is idempotent.
+    /// Single entry point into `.live` (Android `TerminalViewModel.enterLiveState`).
+    private func enterLiveState() {
+        connectionState = .live
+        resendCachedSize()
+    }
+
+    /// Re-assert the last measured grid: on `.connected`, and on every entry
+    /// into `.live`.
+    ///
+    /// The PTY is spawned at the create default (24x80) and only a resize frame
+    /// corrects it. `.connected` alone cannot carry that guarantee — the model is
+    /// constructed and started inside the SwiftUI `View.init`, so on a first open
+    /// the socket routinely opens before the terminal has ever been laid out and
+    /// this call no-ops on an empty cache. The `sizeChanged` that follows is
+    /// debounced 100 ms and dropped silently by the transport if the socket is
+    /// down at that moment, after which `resize`'s dedupe suppresses every
+    /// identical retry. The replay-end and first-binary entries give the measured
+    /// size its second chance, so an agent-spawned session (Auto Scan) cannot be
+    /// left at 24 rows with the bottom of a taller device grid blank. Re-sending
+    /// the same size is idempotent.
     private func resendCachedSize() {
         guard lastResizeRows > 0, lastResizeCols > 0 else { return }
         enqueue(.resize(rows: UInt16(clamping: lastResizeRows), cols: UInt16(clamping: lastResizeCols)))

@@ -12,6 +12,8 @@ final class FakeWebSocketConnection: WebSocketTransportConnection, @unchecked Se
     private var startedFlag = false
     private var sentTextsStorage: [String] = []
     private var sentBinariesStorage: [Data] = []
+    private var droppedBinariesStorage: [Data] = []
+    private var dropBinariesFlag = false
     private var closeCallsStorage: [(code: UInt16, reason: String)] = []
     private var cancelled = false
 
@@ -26,6 +28,17 @@ final class FakeWebSocketConnection: WebSocketTransportConnection, @unchecked Se
     var closeCalls: [(code: UInt16, reason: String)] { lock.withLock { closeCallsStorage } }
     var wasCancelled: Bool { lock.withLock { cancelled } }
 
+    /// While true, `send(binary:)` fails and the frame never lands in
+    /// `sentBinaries` — the real transport's silent drop over a socket that is
+    /// down. Dropped frames are kept in `droppedBinaries` so a test can wait
+    /// for the drop instead of racing a debounce timer.
+    var dropsBinaries: Bool {
+        get { lock.withLock { dropBinariesFlag } }
+        set { lock.withLock { dropBinariesFlag = newValue } }
+    }
+
+    var droppedBinaries: [Data] { lock.withLock { droppedBinariesStorage } }
+
     func start() {
         lock.withLock { startedFlag = true }
     }
@@ -36,8 +49,14 @@ final class FakeWebSocketConnection: WebSocketTransportConnection, @unchecked Se
     }
 
     func send(binary: Data) async -> Bool {
-        lock.withLock { sentBinariesStorage.append(binary) }
-        return true
+        lock.withLock { () -> Bool in
+            if dropBinariesFlag {
+                droppedBinariesStorage.append(binary)
+                return false
+            }
+            sentBinariesStorage.append(binary)
+            return true
+        }
     }
 
     func close(code: UInt16, reason: String) {
