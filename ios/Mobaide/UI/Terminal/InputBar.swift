@@ -52,14 +52,25 @@ struct TerminalControlKey: Identifiable {
     static let claudeKeys: [TerminalControlKey] = ordered([mode, rewind] + sharedTail + [ctrlL])
     static let codexKeys: [TerminalControlKey] = ordered([approve, reject] + claudeKeys)
     static let antigravityKeys: [TerminalControlKey] = ordered([ctrlK, ctrlG, ctrlD] + sharedTail + [ctrlL])
+    /// Kind-neutral minimal set for custom agent types and the not-yet-resolved
+    /// state (Android `DEFAULT_CONTROL_KEYS`): nav + the universal
+    /// interrupt/erase keys only. Ctrl+O/Ctrl+R/Ctrl+L are deliberately absent —
+    /// they carry Claude-TUI meanings an arbitrary CLI may bind differently;
+    /// the saved-shortcut "…" picker is the escape hatch.
+    static let defaultKeys: [TerminalControlKey] = ordered([enter, up, down, left, right, ctrlC, esc, tab, backspace])
 
-    /// Codex and Antigravity get their own sets; Claude, Shell and AutoScan
-    /// all use the Claude set (Android `controlKeysFor`).
-    static func keys(for kind: SessionKind) -> [TerminalControlKey] {
+    /// Codex and Antigravity get their own sets (Android `controlKeysFor`).
+    /// `nil` = kind not resolved yet: render the neutral set instead of
+    /// guessing Claude (its Mode/Rewind escape codes are wrong input for
+    /// other TUIs).
+    static func keys(for kind: SessionKind?) -> [TerminalControlKey] {
         switch kind {
         case .codex: return codexKeys
         case .antigravity: return antigravityKeys
-        default: return claudeKeys
+        case nil, .custom: return defaultKeys
+        // Shell keeping the Claude set is a known oddity, deliberately
+        // unchanged here.
+        case .claude, .autoScan, .shell: return claudeKeys
         }
     }
 }
@@ -113,7 +124,11 @@ struct InputBar: View {
     private var controlKeyRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(TerminalControlKey.keys(for: model.kind)) { key in
+                // Dispatch on the resolved kind, not the construction seed:
+                // a cold-start deep link seeds `.claude` before the true kind
+                // is known, and the seed never updates (Android renders the
+                // neutral set for an unresolved kind too).
+                ForEach(TerminalControlKey.keys(for: model.resolvedKind)) { key in
                     Button {
                         model.sendControlKey(key.bytes)
                     } label: {

@@ -1,9 +1,10 @@
 import Foundation
 
-/// `kind` is deliberately a raw `String`, not `SessionKind`: the enum's
-/// decoder coerces unknown raw values to `.claude`, which would silently
-/// re-bucket a foreign/newer-kind shortcut into Claude sessions. Clients
-/// filter with `dto.kind == kind.rawValue`, so unknown kinds stay invisible.
+/// `kind` is deliberately a raw `String`, not `SessionKind`: the wire kind
+/// vocabulary is open (`custom_<id>` per-type buckets, future kinds), and the
+/// filter `dto.kind == kind.wireName` must compare the verbatim wire string —
+/// shortcuts of a kind this build can't render stay invisible, never
+/// re-bucketed.
 struct ShortcutDto: Codable, Equatable, Sendable {
     let shortcut_id: String
     let kind: String

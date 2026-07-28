@@ -33,7 +33,8 @@ final class SessionListModelTests: XCTestCase {
             repository: repo,
             agentEventBus: bus,
             preferencesStore: prefs,
-            autoScanRepository: autoScanRepo
+            autoScanRepository: autoScanRepo,
+            customAgentTypesRepository: makeTypesRepo(harness: harness)
         )
         return (model, repo, bus, factory)
     }
@@ -57,7 +58,15 @@ final class SessionListModelTests: XCTestCase {
             repository: repo,
             agentEventBus: bus,
             preferencesStore: isolatedPrefs(),
-            autoScanRepository: autoScanRepo
+            autoScanRepository: autoScanRepo,
+            customAgentTypesRepository: makeTypesRepo(harness: harness)
+        )
+    }
+
+    private func makeTypesRepo(harness: SessionHarness) -> CustomAgentTypesRepository {
+        CustomAgentTypesRepository(
+            centralAPI: TerminalTestSupport.stubbedCentralAPI(),
+            userIdentityStore: harness.userIdentityStore
         )
     }
 
@@ -72,10 +81,30 @@ final class SessionListModelTests: XCTestCase {
     // MARK: - Display helpers (pure)
 
     func testKindLabels() {
-        XCTAssertEqual(SessionDisplay.kindLabel(.claude), "Claude Code")
-        XCTAssertEqual(SessionDisplay.kindLabel(.codex), "Codex")
-        XCTAssertEqual(SessionDisplay.kindLabel(.antigravity), "Antigravity")
-        XCTAssertEqual(SessionDisplay.kindLabel(.shell), "Terminal")
+        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .claude), customTypeNames: [:]), "Claude Code")
+        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .codex), customTypeNames: [:]), "Codex")
+        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .antigravity), customTypeNames: [:]), "Antigravity")
+        XCTAssertEqual(SessionDisplay.kindLabel(makeSessionResponse(kind: .shell), customTypeNames: [:]), "Terminal")
+    }
+
+    func testCustomKindLabelChain() {
+        let names = ["custom_ab12cd34ef56": "Aider Renamed"]
+
+        let withSnapshot = makeSessionResponse(kind: .custom("custom_ab12cd34ef56"), kindLabel: "Aider")
+        XCTAssertEqual(
+            SessionDisplay.kindLabel(withSnapshot, customTypeNames: names), "Aider",
+            "the creation-time kind_label snapshot wins over the live registry name"
+        )
+
+        let withoutSnapshot = makeSessionResponse(kind: .custom("custom_ab12cd34ef56"))
+        XCTAssertEqual(
+            SessionDisplay.kindLabel(withoutSnapshot, customTypeNames: names), "Aider Renamed",
+            "no snapshot falls back to the live name keyed on the full wire kind"
+        )
+        XCTAssertEqual(
+            SessionDisplay.kindLabel(withoutSnapshot, customTypeNames: [:]), "Custom",
+            "a deleted/unknown type without a snapshot renders the generic label"
+        )
     }
 
     func testAttentionMapping() {
@@ -107,6 +136,25 @@ final class SessionListModelTests: XCTestCase {
 
         await waitUntil { !model.activeScans.isEmpty }
         XCTAssertEqual(model.activeScans.map(\.project_name), ["p"])
+    }
+
+    // MARK: - Custom-type name map
+
+    func testObserveCustomTypesMapsFullWireKindToName() async {
+        StubURLProtocol.reset()
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"[{"id":"ab12cd34ef56","name":"Aider","command":"aider --model sonnet","created_at":"c","updated_at":"u"}]"#
+        )
+        let model = makeRESTModel()
+        let observe = Task { await model.observeCustomTypes() }
+        defer { observe.cancel() }
+
+        await waitUntil { !model.customTypeNames.isEmpty }
+        XCTAssertEqual(
+            model.customTypeNames, ["custom_ab12cd34ef56": "Aider"],
+            "the map keys on the full wire kind, never the bare 12-hex id"
+        )
     }
 
     // MARK: - Bus-driven list + auto-resume

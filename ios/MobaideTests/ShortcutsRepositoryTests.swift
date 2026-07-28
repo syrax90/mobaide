@@ -301,6 +301,27 @@ final class ShortcutsRepositoryTests: XCTestCase {
         )
     }
 
+    func testPurgeKindRemovesOnlyTheExactWireKind() async {
+        // Client half of the server-side cascade on `custom_type.deleted`,
+        // which soft-deletes the type's shortcuts without per-shortcut events.
+        let repo = makeRepo()
+        await repo.applyUpserted(makeShortcut(id: "s-1", kind: "custom_ab12cd34ef56", chordToken: "ctrl+a"))
+        await repo.applyUpserted(makeShortcut(id: "s-2", kind: "custom_ffffffffffff", chordToken: "ctrl+b"))
+        await repo.applyUpserted(makeShortcut(id: "s-3", kind: "claude", chordToken: "ctrl+c"))
+
+        await repo.purgeKind("ab12cd34ef56")
+        XCTAssertEqual(
+            repo.currentShortcuts.map(\.shortcut_id), ["s-1", "s-2", "s-3"],
+            "the purge matches the full wire kind — a bare type id must be a no-op"
+        )
+
+        await repo.purgeKind("custom_ab12cd34ef56")
+        XCTAssertEqual(
+            repo.currentShortcuts.map(\.shortcut_id), ["s-2", "s-3"],
+            "only the deleted type's bucket is purged — sibling custom types and built-ins survive"
+        )
+    }
+
     func testClearEmptiesCache() async {
         let repo = makeRepo()
         await repo.applyUpserted(makeShortcut(id: "s-1", chordToken: "ctrl+a"))

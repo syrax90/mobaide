@@ -13,6 +13,7 @@ struct AgentHarness {
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
     let shortcutsRepository: ShortcutsRepository
+    let customAgentTypesRepository: CustomAgentTypesRepository
     let deviceRepository: DeviceRepository
     let authRepository: AuthRepository
     let deviceIdentityStore: DeviceIdentityStore
@@ -33,6 +34,7 @@ struct AgentHarness {
         agentRepository = AgentRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         templatesRepository = TemplatesRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         shortcutsRepository = ShortcutsRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
+        customAgentTypesRepository = CustomAgentTypesRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         deviceRepository = DeviceRepository(centralAPI: centralAPI, userIdentityStore: session.userIdentityStore)
         let agentAPI = AgentAPI(
             baseURL: { [tokenStore = session.tokenStore] in tokenStore.getEffectiveBaseUrl() },
@@ -89,6 +91,24 @@ func makeTemplate(
         created_at: "t",
         updated_at: "t",
         version: version
+    )
+}
+
+/// Small CustomAgentTypeDto builder using the canonical cross-platform fixture
+/// values (id `ab12cd34ef56`, name "Aider", command "aider --model sonnet").
+func makeCustomAgentType(
+    id: String = "ab12cd34ef56",
+    name: String = "Aider",
+    command: String = "aider --model sonnet",
+    createdAt: String = "2026-07-28T12:00:00Z",
+    updatedAt: String = "2026-07-28T12:00:00Z"
+) -> CustomAgentTypeDto {
+    CustomAgentTypeDto(
+        id: id,
+        name: name,
+        command: command,
+        created_at: createdAt,
+        updated_at: updatedAt
     )
 }
 

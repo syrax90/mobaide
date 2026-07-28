@@ -30,8 +30,23 @@ protocol ShortcutSyncApplying: Sendable {
     func applyUpserted(_ shortcut: ShortcutDto) async
     /// Remove by `shortcut_id`.
     func applyDeleted(shortcutId: String) async
+    /// Remove every cached shortcut of one wire kind — the client half of the
+    /// server-side cascade on `custom_type.deleted`, which soft-deletes the
+    /// type's shortcuts without emitting per-shortcut `shortcut.deleted` events.
+    func purgeKind(_ kind: String) async
     /// Full REST reconcile after (re)connect.
     func refreshShortcuts() async throws
+    /// Drop the cached snapshot on sign-out (cross-account isolation).
+    func clear() async
+}
+
+protocol CustomTypeSyncApplying: Sendable {
+    /// Insert-or-replace by `id`.
+    func applyUpserted(_ type: CustomAgentTypeDto) async
+    /// Remove by `id`.
+    func applyDeleted(typeId: String) async
+    /// Full REST reconcile after (re)connect.
+    func refreshCustomTypes() async throws
     /// Drop the cached snapshot on sign-out (cross-account isolation).
     func clear() async
 }
@@ -52,6 +67,14 @@ struct NoOpTemplateSyncApplier: TemplateSyncApplying {
 struct NoOpShortcutSyncApplier: ShortcutSyncApplying {
     func applyUpserted(_ shortcut: ShortcutDto) async {}
     func applyDeleted(shortcutId: String) async {}
+    func purgeKind(_ kind: String) async {}
     func refreshShortcuts() async throws {}
+    func clear() async {}
+}
+
+struct NoOpCustomTypeSyncApplier: CustomTypeSyncApplying {
+    func applyUpserted(_ type: CustomAgentTypeDto) async {}
+    func applyDeleted(typeId: String) async {}
+    func refreshCustomTypes() async throws {}
     func clear() async {}
 }

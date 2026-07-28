@@ -2,8 +2,9 @@
 
 Native iOS client (SwiftUI, iOS 17+) with feature parity to the Android app as
 the goal of the iOS series (CLA-97…CLA-106). The backend (`central_server/`
-relay + `mobaide_agent/`) and the wire protocol (v6, see `PROTOCOL.md`) are
-frozen — iOS conforms to them byte for byte (with one additive exception:
+relay + `mobaide_agent/`) and the wire protocol (v6 during the series, v7
+since CLA-155 — see `PROTOCOL.md`) are frozen — iOS conforms to them byte
+for byte (with one additive exception:
 CLA-99 added `POST /api/auth/apple` to the server, mirroring the Google
 verification path). CLA-97 bootstrapped the project and ported the networking
 spine; CLA-98 added the auth/session core (Keychain stores, SessionManager,
@@ -124,6 +125,24 @@ stack and wired to the `UserEventBus` (refresh-on-connect,
 clear-on-logout), `TerminalSessionModel`'s `resolvedKind` so shortcut
 lists key off the session's true kind, and golden fixtures for the four
 shortcut DTOs.
+CLA-155 ports the custom AI agent types client half (proto-v7; server
+contract CLA-153, Android reference CLA-154): `SessionKind` becomes an open
+enum that preserves unknown wire values verbatim as `.custom(String)` (the
+old coerce-to-`.claude` fallback is gone), `SessionResponse` gains the
+nullable `kind_label` name snapshot, and the `CustomAgentTypeDto` family
+plus `/api/custom-agent-types` CRUD in `CentralAPI` back an
+account-generation-guarded `CustomAgentTypesRepository` wired to the
+`UserEventBus` (`custom_type.created/updated/deleted` demux; a deletion
+also purges that kind's saved shortcuts locally, mirroring the server-side
+cascade). The create-session mode step renders one card per custom type
+plus an "Add custom agent…" card opening `CustomAgentTypeEditorSheet`
+(create/edit via long-press context menu, delete with a confirmation that
+spells out the shortcut cascade); custom launches keep the worktree toggle
+and run as plain terminal sessions; session cards label custom kinds via
+`kind_label` → live registry name → `Custom`; the control-key bar falls
+back to a kind-neutral 9-key set for custom (and not-yet-resolved) kinds;
+and `APP_PROTOCOL_VERSION` bumps 6 → 7, with four new central DTO fixtures
+registered in the golden-fixture registry.
 Remaining feature screens land in later issues.
 
 ## Layout
@@ -250,8 +269,9 @@ reviewable file by file:
 - **kotlinx parity**: unknown JSON keys are ignored (`JSONDecoder` default);
   every Kotlin-defaulted field decodes via `decodeIfPresent ?? default` in a
   hand-written `init(from:)` (kotlinx fills defaults for missing keys — Swift
-  synthesis would throw); `SessionKind` coerces unknown raw values to
-  `.claude` (`coerceInputValues` parity); `ProjectUpdate` relies on
+  synthesis would throw); `SessionKind` preserves unknown raw values
+  verbatim as `.custom` (proto-v7 `SessionKindSerializer` parity; an
+  explicit-null `kind` still falls back to `.claude`); `ProjectUpdate` relies on
   synthesized `encodeIfPresent` so nil fields vanish (three-state PATCH),
   while `ProjectWrite.default_flags` is non-optional and always serialized.
 - **Terminal frames** (`TerminalFrame.swift`): type byte + payload; encode

@@ -28,7 +28,8 @@ private struct CreateSessionContent: View {
         _model = State(initialValue: CreateSessionModel(
             agentAPI: container.agentAPI,
             sessionRepository: container.sessionRepository,
-            preferencesStore: container.preferencesStore
+            preferencesStore: container.preferencesStore,
+            customAgentTypesRepository: container.customAgentTypesRepository
         ))
     }
 
@@ -58,10 +59,27 @@ private struct CreateSessionContent: View {
             ProjectFormSheet(mode: mode, container: container, onCreated: { model.onProjectCreated($0) })
         }
         .task { await model.load() }
+        .task { await model.observeCustomTypes() }
         .onChange(of: model.step) { _, step in
             if step == .modePick {
                 Task { await model.refreshCliAvailability() }
+                Task { await model.refreshCustomTypes() }
             }
+        }
+        .sheet(item: $model.typeEditorTarget) { target in
+            CustomAgentTypeEditorSheet(model: model, target: target.type)
+        }
+        .alert(
+            "Delete agent type?",
+            isPresented: typeDeletePresented,
+            presenting: model.typeDeleteTarget
+        ) { type in
+            Button("Delete", role: .destructive) {
+                Task { await model.confirmDeleteType(type) }
+            }
+            Button("Cancel", role: .cancel) { model.typeDeleteTarget = nil }
+        } message: { type in
+            Text("Delete \"\(type.name)\"? Saved shortcuts for this agent type will also be deleted. Running sessions are not affected.")
         }
         .onChange(of: model.error) { _, newValue in
             if let newValue {
@@ -86,6 +104,13 @@ private struct CreateSessionContent: View {
 
     private var codexLoginPresented: Binding<Bool> {
         Binding(get: { model.showCodexLogin }, set: { if !$0 { model.cancelCodexLogin() } })
+    }
+
+    private var typeDeletePresented: Binding<Bool> {
+        Binding(
+            get: { model.typeDeleteTarget != nil },
+            set: { if !$0 { model.typeDeleteTarget = nil } }
+        )
     }
 
     // MARK: - Project select
@@ -138,10 +163,10 @@ private struct CreateSessionContent: View {
     @ViewBuilder
     private var modePickStep: some View {
         Section("Mode") {
-            ForEach(CreateSessionModel.Mode.allCases, id: \.self) { mode in
+            ForEach(CreateSessionModel.Mode.builtIn, id: \.self) { mode in
                 Button { model.selectMode(mode) } label: {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(Self.modeTitle(mode))
+                        Text(model.modeTitle(mode))
                             .foregroundStyle(model.isEnabled(mode) ? colors.primary : .secondary)
                         Text(model.reason(for: mode))
                             .font(.caption)
@@ -149,6 +174,55 @@ private struct CreateSessionContent: View {
                     }
                 }
                 .disabled(!model.isEnabled(mode))
+            }
+            ForEach(model.customTypes) { type in
+                customTypeRow(type)
+            }
+            Button {
+                // Always enabled — the 20-type cap is not gated client-side
+                // (the cached list can be stale); the editor surfaces the
+                // server's 409 inline instead.
+                model.startCreateType()
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("Add custom agent…", systemImage: "plus")
+                        .foregroundStyle(colors.primary)
+                    Text("Name + launch command, synced to your account")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Mode card for one account-scoped custom agent type. Tap selects the
+    /// mode; the context menu carries Edit/Delete (iOS affordance for
+    /// Android's long-press menu). Never `.disabled` — a disabled row would
+    /// also swallow the context menu (the `SavedShortcutKeyButton` rule), and
+    /// custom modes are always launchable anyway.
+    private func customTypeRow(_ type: CustomAgentTypeDto) -> some View {
+        Button {
+            model.selectMode(.custom(type.id))
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(type.name)
+                    .foregroundStyle(colors.primary)
+                Text(type.command)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .contextMenu {
+            Button {
+                model.startEditType(type)
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                model.typeDeleteTarget = type
+            } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
@@ -161,6 +235,7 @@ private struct CreateSessionContent: View {
         case .standard: claudeConfig
         case .codex: codexConfig
         case .antigravity: antigravityConfig
+        case .custom(let id): customConfig(id)
         case .shell, .none: shellConfig
         }
         gitOptionsSection
@@ -262,6 +337,20 @@ private struct CreateSessionContent: View {
         }
     }
 
+    /// Terminal-style config section for a custom agent type: the type's live
+    /// name as the header and its command as the body (falls back to the
+    /// plain-terminal wording when the type was deleted remotely mid-wizard —
+    /// the launch then surfaces the relay's 404).
+    @ViewBuilder
+    private func customConfig(_ id: String) -> some View {
+        Section(model.modeTitle(.custom(id))) {
+            Text(model.customType(id: id)?.command ?? "Bash / cmd in the chosen directory")
+                .font(.footnote.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+        }
+    }
+
     @ViewBuilder
     private var gitOptionsSection: some View {
         if model.showsGitOptions {
@@ -305,14 +394,5 @@ private struct CreateSessionContent: View {
     private var isCustomPathSelected: Bool {
         if case .customPath = model.selection { return true }
         return false
-    }
-
-    private static func modeTitle(_ mode: CreateSessionModel.Mode) -> String {
-        switch mode {
-        case .standard: return "Claude Code"
-        case .codex: return "Codex"
-        case .antigravity: return "Antigravity"
-        case .shell: return "Terminal"
-        }
     }
 }

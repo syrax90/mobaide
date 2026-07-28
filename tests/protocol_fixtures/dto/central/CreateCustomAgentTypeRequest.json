@@ -1,0 +1,6 @@
+{
+  "type": "CreateCustomAgentTypeRequest",
+  "cases": [
+    { "name": "full", "wire": { "name": "Aider", "command": "aider --model sonnet" } }
+  ]
+}

@@ -20,6 +20,23 @@
       "name": "minimal_defaults_materialize",
       "wire": {},
       "decoded_canonical": { "rows": 24, "cols": 80, "worktree": false }
+    },
+    {
+      "name": "custom_agent_type_launch",
+      "wire": {
+        "project_name": "proj",
+        "cli": "custom_ab12cd34ef56",
+        "worktree": true,
+        "branch_name": "feature/x"
+      },
+      "decoded_canonical": {
+        "project_name": "proj",
+        "cli": "custom_ab12cd34ef56",
+        "rows": 24,
+        "cols": 80,
+        "worktree": true,
+        "branch_name": "feature/x"
+      }
     }
   ]
 }

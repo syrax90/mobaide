@@ -34,6 +34,24 @@ final class ConflictParsingTests: XCTestCase {
         XCTAssertEqual(ConflictDetail.string(from: body), body)
     }
 
+    // MARK: - stringOrNil(from:) — callers with their own fallback message
+
+    func testStringOrNilExtractsDetail() {
+        XCTAssertEqual(
+            ConflictDetail.stringOrNil(from: #"{"detail":"A custom agent type with this name already exists"}"#),
+            "A custom agent type with this name already exists"
+        )
+    }
+
+    func testStringOrNilReturnsNilForNonDetailShapes() {
+        // Unlike string(from:), callers get nil — not the raw body — so they
+        // can substitute their own message (e.g. "Couldn't save (HTTP n)").
+        XCTAssertNil(ConflictDetail.stringOrNil(from: "boom"))
+        XCTAssertNil(ConflictDetail.stringOrNil(from: ""))
+        XCTAssertNil(ConflictDetail.stringOrNil(from: #"{"error":"nope"}"#))
+        XCTAssertNil(ConflictDetail.stringOrNil(from: #"{"detail":{"busy_by":[]}}"#))
+    }
+
     // MARK: - busyHolders(from:) — git delete conflicts
 
     func testBusyHoldersParsesNestedHolders() {

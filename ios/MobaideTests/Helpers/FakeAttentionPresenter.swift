@@ -48,15 +48,18 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
     }
 }
 
-/// Builds a `SessionResponse` for notification tests (the wire model has no
-/// defaulted memberwise init — every field is required).
+/// Builds a `SessionResponse` for notification/display tests (the wire
+/// model's memberwise init defaults only `kind_label` — every other field
+/// is required).
 func makeSessionResponse(
     id: String = "s1",
     attention: String? = nil,
     title: String? = nil,
     projectName: String? = nil,
     exitReason: String? = nil,
-    state: String = "running"
+    state: String = "running",
+    kind: SessionKind = .claude,
+    kindLabel: String? = nil
 ) -> SessionResponse {
     SessionResponse(
         session_id: id,
@@ -67,7 +70,8 @@ func makeSessionResponse(
         cwd: nil,
         title: title,
         project_name: projectName,
-        kind: .claude,
+        kind: kind,
+        kind_label: kindLabel,
         attention: attention,
         exit_reason: exitReason
     )

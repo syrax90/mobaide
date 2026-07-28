@@ -1,0 +1,12 @@
+{
+  "type": "UpdateCustomAgentTypeRequest",
+  "cases": [
+    { "name": "both_fields", "wire": { "name": "Aider", "command": "aider --model sonnet" } },
+    { "name": "name_only_omits_command", "wire": { "name": "Aider" } },
+    {
+      "name": "explicit_null_dropped",
+      "wire": { "name": "Aider", "command": null },
+      "decoded_canonical": { "name": "Aider" }
+    }
+  ]
+}

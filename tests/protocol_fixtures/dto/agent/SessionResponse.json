@@ -13,6 +13,7 @@
         "title": "fix bug",
         "project_name": "proj",
         "kind": "codex",
+        "kind_label": null,
         "attention": "awaiting_permission",
         "exit_reason": null
       },
@@ -41,14 +42,32 @@
       }
     },
     {
-      "name": "unknown_kind_coerces",
+      "name": "unknown_kind_preserved",
       "wire": { "session_id": "s3", "state": "running", "created_at": "c", "kind": "quantum" },
-      "decoded_canonical": { "session_id": "s3", "state": "running", "created_at": "c", "command": [], "kind": "claude" }
+      "decoded_canonical": { "session_id": "s3", "state": "running", "created_at": "c", "command": [], "kind": "quantum" }
     },
     {
       "name": "null_kind_coerces",
       "wire": { "session_id": "s4", "state": "running", "created_at": "c", "kind": null },
       "decoded_canonical": { "session_id": "s4", "state": "running", "created_at": "c", "command": [], "kind": "claude" }
+    },
+    {
+      "name": "custom_kind_with_label",
+      "wire": {
+        "session_id": "s5",
+        "state": "running",
+        "created_at": "2026-07-28T12:00:00Z",
+        "kind": "custom_ab12cd34ef56",
+        "kind_label": "Aider"
+      },
+      "decoded_canonical": {
+        "session_id": "s5",
+        "state": "running",
+        "created_at": "2026-07-28T12:00:00Z",
+        "command": [],
+        "kind": "custom_ab12cd34ef56",
+        "kind_label": "Aider"
+      }
     }
   ]
 }

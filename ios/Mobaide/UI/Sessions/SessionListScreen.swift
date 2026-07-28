@@ -25,7 +25,8 @@ private struct SessionListContent: View {
             repository: container.sessionRepository,
             agentEventBus: container.agentEventBus,
             preferencesStore: container.preferencesStore,
-            autoScanRepository: container.autoScanRepository
+            autoScanRepository: container.autoScanRepository,
+            customAgentTypesRepository: container.customAgentTypesRepository
         ))
     }
 
@@ -61,6 +62,7 @@ private struct SessionListContent: View {
             .task { await model.observeSessions() }
             .task { await model.observeConnection() }
             .task { await model.observeScans() }
+            .task { await model.observeCustomTypes() }
             .task {
                 for await id in model.autoResumeEvents() {
                     router.navigate(to: .sessionDetail(sessionId: id))
@@ -102,7 +104,10 @@ private struct SessionListContent: View {
                         Button {
                             router.navigate(to: .sessionDetail(sessionId: session.session_id))
                         } label: {
-                            SessionCardRow(session: session) { pendingKill = session }
+                            SessionCardRow(
+                                session: session,
+                                kindLabel: SessionDisplay.kindLabel(session, customTypeNames: model.customTypeNames)
+                            ) { pendingKill = session }
                         }
                         .buttonStyle(.plain)
                     }
@@ -126,6 +131,7 @@ private struct SessionListContent: View {
 
 private struct SessionCardRow: View {
     let session: SessionResponse
+    let kindLabel: String
     let onStop: () -> Void
 
     var body: some View {
@@ -135,9 +141,9 @@ private struct SessionCardRow: View {
                 .frame(width: 10, height: 10)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.title ?? SessionDisplay.kindLabel(session.kind))
+                Text(session.title ?? kindLabel)
                     .font(.body)
-                Text(SessionDisplay.kindLabel(session.kind))
+                Text(kindLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let cwd = session.cwd {

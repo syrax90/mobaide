@@ -59,6 +59,13 @@ final class SessionRepository {
         for id in removedIds {
             terminalSessionStore.evict(id)
         }
+        // Every snapshot also re-seeds kind resolution: a terminal opened via
+        // a cold-start deep link resolves its kind exactly once, and if that
+        // one-shot fails the model would otherwise render the neutral key bar
+        // for its whole life. Adoption is idempotent (first resolution wins).
+        for session in list {
+            terminalSessionStore.adoptKind(id: session.session_id, kind: session.kind)
+        }
         broadcaster.emit(list)
     }
 

@@ -84,6 +84,15 @@ final class TerminalSessionStore {
         return model
     }
 
+    /// Adopt a session's kind into an already-live model (idempotent — only
+    /// the first resolution wins). Fed by `SessionRepository` on every
+    /// snapshot, so a model whose one-shot cold-start resolution failed
+    /// self-heals from the next `sessions.changed` push instead of keeping
+    /// the neutral key bar forever (Android's live session-list merge parity).
+    func adoptKind(id: String, kind: SessionKind) {
+        models[id]?.adoptResolvedKind(kind)
+    }
+
     func evict(_ id: String) {
         models.removeValue(forKey: id)?.disconnect()
     }

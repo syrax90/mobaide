@@ -1,0 +1,6 @@
+{
+  "type": "CustomTypeDeletedPayload",
+  "cases": [
+    { "name": "tombstone", "wire": { "id": "ab12cd34ef56" } }
+  ]
+}

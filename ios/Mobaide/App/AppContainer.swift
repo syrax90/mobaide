@@ -34,6 +34,7 @@ final class AppContainer {
     let agentRepository: AgentRepository
     let templatesRepository: TemplatesRepository
     let shortcutsRepository: ShortcutsRepository
+    let customAgentTypesRepository: CustomAgentTypesRepository
     let deviceRepository: DeviceRepository
     let terminalSessionStore: TerminalSessionStore
     let router: Router
@@ -104,6 +105,10 @@ final class AppContainer {
             centralAPI: centralAPI,
             userIdentityStore: userIdentityStore
         )
+        let customAgentTypesRepository = CustomAgentTypesRepository(
+            centralAPI: centralAPI,
+            userIdentityStore: userIdentityStore
+        )
         let deviceRepository = DeviceRepository(
             centralAPI: centralAPI,
             userIdentityStore: userIdentityStore
@@ -122,7 +127,8 @@ final class AppContainer {
             tokenStore: tokenStore,
             agentStatusApplier: agentRepository,
             templateSync: templatesRepository,
-            shortcutSync: shortcutsRepository
+            shortcutSync: shortcutsRepository,
+            customTypeSync: customAgentTypesRepository
         )
 
         let authRepository = AuthRepository(
@@ -152,6 +158,7 @@ final class AppContainer {
         self.agentRepository = agentRepository
         self.templatesRepository = templatesRepository
         self.shortcutsRepository = shortcutsRepository
+        self.customAgentTypesRepository = customAgentTypesRepository
         self.deviceRepository = deviceRepository
         self.authRepository = authRepository
         self.signInService = SignInService(

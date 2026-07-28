@@ -14,12 +14,21 @@ enum ConflictDetail {
     /// The `detail` string of a project conflict, falling back to the raw body
     /// and then a generic label (Android `parseDetail`).
     static func string(from errorBody: String) -> String {
+        guard let detail = stringOrNil(from: errorBody) else {
+            return errorBody.isEmpty ? "Conflict" : errorBody
+        }
+        return detail
+    }
+
+    /// The `detail` string, or nil when the body is not that shape — for
+    /// callers with their own fallback message (Android `extractDetail`).
+    static func stringOrNil(from errorBody: String) -> String? {
         guard
             let data = errorBody.data(using: .utf8),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let detail = object["detail"] as? String
         else {
-            return errorBody.isEmpty ? "Conflict" : errorBody
+            return nil
         }
         return detail
     }

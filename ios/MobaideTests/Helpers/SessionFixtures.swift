@@ -202,11 +202,13 @@ final class RecordingShortcutSync: ShortcutSyncApplying, @unchecked Sendable {
     private let lock = NSLock()
     private var upsertsStorage: [ShortcutDto] = []
     private var deletesStorage: [String] = []
+    private var purgesStorage: [String] = []
     private var refreshCountStorage = 0
     private var clearCountStorage = 0
 
     var upserts: [ShortcutDto] { lock.withLock { upsertsStorage } }
     var deletes: [String] { lock.withLock { deletesStorage } }
+    var purges: [String] { lock.withLock { purgesStorage } }
     var refreshCount: Int { lock.withLock { refreshCountStorage } }
     var clearCount: Int { lock.withLock { clearCountStorage } }
 
@@ -218,7 +220,40 @@ final class RecordingShortcutSync: ShortcutSyncApplying, @unchecked Sendable {
         lock.withLock { deletesStorage.append(shortcutId) }
     }
 
+    func purgeKind(_ kind: String) async {
+        lock.withLock { purgesStorage.append(kind) }
+    }
+
     func refreshShortcuts() async throws {
+        lock.withLock { refreshCountStorage += 1 }
+    }
+
+    func clear() async {
+        lock.withLock { clearCountStorage += 1 }
+    }
+}
+
+final class RecordingCustomTypeSync: CustomTypeSyncApplying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var upsertsStorage: [CustomAgentTypeDto] = []
+    private var deletesStorage: [String] = []
+    private var refreshCountStorage = 0
+    private var clearCountStorage = 0
+
+    var upserts: [CustomAgentTypeDto] { lock.withLock { upsertsStorage } }
+    var deletes: [String] { lock.withLock { deletesStorage } }
+    var refreshCount: Int { lock.withLock { refreshCountStorage } }
+    var clearCount: Int { lock.withLock { clearCountStorage } }
+
+    func applyUpserted(_ type: CustomAgentTypeDto) async {
+        lock.withLock { upsertsStorage.append(type) }
+    }
+
+    func applyDeleted(typeId: String) async {
+        lock.withLock { deletesStorage.append(typeId) }
+    }
+
+    func refreshCustomTypes() async throws {
         lock.withLock { refreshCountStorage += 1 }
     }
 

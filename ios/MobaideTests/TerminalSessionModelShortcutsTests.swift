@@ -6,8 +6,10 @@ import XCTest
 /// save/rename/remove actions over `ShortcutsRepository`. Mirrors Android
 /// `TerminalViewModelSendChordTest` + `TerminalViewModelSavedShortcutsTest`.
 ///
-/// Load-bearing contracts: chords ride the raw `i` frame; recents key on the
-/// resolved kind's wire name and fall back to the render seed; the saved list
+/// Load-bearing contracts: chords ride the raw `i` frame; recents read and
+/// write ONLY the resolved kind's bucket — while the kind is unresolved the
+/// list is gated empty and `sendChord` still sends but skips the MRU write
+/// (the construction seed can be a `.claude` guess); the saved list
 /// stays empty until the REAL kind is known (the eagerly-seeded `.claude`
 /// default must never leak); saves resolve the kind and publish it, are always
 /// unnamed, and drop a duplicate while one is in flight — but the per-chord
@@ -95,8 +97,8 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         )
     }
 
-    func testSendChordPersistsTokenUnderWireBucketAndReloadsRecents() {
-        let harness = makeHarness(kind: .claude)
+    func testSendChordResolvedBuiltInPersistsTokenUnderWireBucketAndReloadsRecents() {
+        let harness = makeHarness(kind: .claude, resolvedKind: .claude)
 
         harness.model.sendChord(KeyChord(ctrl: true, key: "a"))
 
@@ -119,8 +121,38 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         )
     }
 
+    func testRefreshShortcutRecentsUnresolvedGatesEmptyDespiteSeedBucketEntries() {
+        let harness = makeHarness(kind: .claude, resolvedKind: nil)
+        harness.prefs.addRecentShortcutChord(kindKey: "claude", token: "ctrl+a")
+
+        harness.model.refreshShortcutRecents()
+
+        XCTAssertEqual(
+            harness.model.shortcutRecents, [],
+            "the seed is a guess (cold-start deep link) — its bucket must never render as this session's recents"
+        )
+    }
+
+    func testSendChordUnresolvedStillSendsBytesButSkipsMRUWrite() async throws {
+        let harness = makeHarness(kind: .claude, resolvedKind: nil)
+        let connection = try await connect(harness)
+
+        harness.model.sendChord(KeyChord(ctrl: true, key: "a"))
+
+        let sent = await waitForBinaries(connection, atLeast: 1)
+        XCTAssertEqual(sent.first, Data([0x69, 0x01]), "delivery must not wait for kind resolution")
+        XCTAssertEqual(
+            harness.prefs.getRecentShortcutChords(kindKey: "claude"), [],
+            "persisting under the guessed seed would pollute Claude's device-local recents permanently"
+        )
+        XCTAssertEqual(harness.model.shortcutRecents, [], "no MRU write, so recents stay gated empty")
+    }
+
     func testSendChordUnencodableSendsNothingAndPersistsNothing() async throws {
-        let harness = makeHarness()
+        // Resolved kind on purpose: with an unresolved kind the resolution
+        // gate alone would make the persistence assertions pass; this test
+        // must prove the *encoder* guard blocks both the send and the write.
+        let harness = makeHarness(kind: .claude, resolvedKind: .claude)
         let connection = try await connect(harness)
 
         harness.model.sendChord(KeyChord(ctrl: true, alt: true, shift: true, key: "a"))
@@ -132,7 +164,7 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
     }
 
     func testRefreshShortcutRecentsDropsUnparseableTokens() {
-        let harness = makeHarness(kind: .claude)
+        let harness = makeHarness(kind: .claude, resolvedKind: .claude)
         for token in ["shift+f5", "bogus", "ctrl+alt+shift+a", "meta+x", "ctrl+a"] {
             harness.prefs.addRecentShortcutChord(kindKey: "claude", token: token)
         }
@@ -159,15 +191,41 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
 
         harness.model.refreshShortcutRecents()
         XCTAssertEqual(
-            harness.model.shortcutRecents, [KeyChord(ctrl: true, key: "a")],
-            "before resolution recents render from the .claude fallback bucket"
+            harness.model.shortcutRecents, [],
+            "before resolution recents are gated empty — never the seed's guessed bucket"
         )
 
         harness.model.adoptResolvedKind(.codex)
 
         XCTAssertEqual(
             harness.model.shortcutRecents, [KeyChord(ctrl: true, key: "x")],
-            "resolution must swap the already-loaded fallback list for the real kind's bucket"
+            "resolution must replace the gated-empty list with the real kind's bucket"
+        )
+    }
+
+    func testAdoptResolvedCustomKindSelfHealsRecentsAndRoutesMRUWrites() {
+        let harness = makeHarness(kind: .claude, resolvedKind: nil)
+        harness.prefs.addRecentShortcutChord(kindKey: "claude", token: "ctrl+a")
+        harness.prefs.addRecentShortcutChord(kindKey: "custom_ab12cd34ef56", token: "ctrl+x")
+
+        harness.model.refreshShortcutRecents()
+        XCTAssertEqual(harness.model.shortcutRecents, [], "unresolved recents stay gated empty")
+
+        harness.model.adoptResolvedKind(.custom("custom_ab12cd34ef56"))
+        XCTAssertEqual(
+            harness.model.shortcutRecents, [KeyChord(ctrl: true, key: "x")],
+            "resolution must repopulate an open picker from the custom kind's bucket"
+        )
+
+        harness.model.sendChord(KeyChord(ctrl: true, key: "b"))
+        XCTAssertEqual(
+            harness.prefs.getRecentShortcutChords(kindKey: "custom_ab12cd34ef56"),
+            ["ctrl+b", "ctrl+x"],
+            "post-resolution sends must record into the custom bucket, MRU front"
+        )
+        XCTAssertEqual(
+            harness.prefs.getRecentShortcutChords(kindKey: "claude"), ["ctrl+a"],
+            "the seed's bucket must stay untouched after resolution too"
         )
     }
 
