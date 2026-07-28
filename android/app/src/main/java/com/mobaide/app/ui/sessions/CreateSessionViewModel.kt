@@ -12,10 +12,12 @@ import com.mobaide.app.data.network.dto.AntigravityOptionsModel
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexOptionsModel
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.cliAvailable
 import com.mobaide.app.data.network.dto.cliModels
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -39,7 +41,25 @@ import javax.inject.Inject
 
 enum class CreateSessionStep { ProjectSelect, ModePick, StandardConfig, CodexConfig, AntigravityConfig, AutoScanConfig, TerminalConfig }
 
-enum class CreateSessionMode { Standard, Codex, Antigravity, AutoScan, CustomShell }
+/**
+ * Mode-picker selection. The built-in modes are singletons; [Custom] carries
+ * the server id of an account-scoped custom agent type (stable across rename,
+ * so a selection survives a concurrent edit).
+ */
+sealed interface CreateSessionMode {
+    data object Standard : CreateSessionMode
+    data object Codex : CreateSessionMode
+    data object Antigravity : CreateSessionMode
+    data object AutoScan : CreateSessionMode
+    data object CustomShell : CreateSessionMode
+    data class Custom(val typeId: String) : CreateSessionMode
+}
+
+/** Custom-agent-type editor sheet state; a null [Open.target] means "create". */
+sealed interface TypeEditorState {
+    data object Hidden : TypeEditorState
+    data class Open(val target: CustomAgentTypeDto?) : TypeEditorState
+}
 
 /**
  * Convenience autonomy presets that collapse Codex's two-axis sandbox×approval
@@ -131,6 +151,15 @@ data class CreateSessionUiState(
     val codexApiKeyVisible: Boolean = false,
     val codexLoginSubmitting: Boolean = false,
     val codexLoginError: String? = null,
+    // Account-scoped custom agent types rendered as extra mode-picker cards.
+    // The repository cache is the source of truth; UserEventBus keeps it in
+    // sync across devices via custom_type.* events.
+    val customTypes: List<CustomAgentTypeDto> = emptyList(),
+    val typeEditor: TypeEditorState = TypeEditorState.Hidden,
+    val typeEditorError: String? = null,
+    val typeEditorSaving: Boolean = false,
+    val deleteTypeTarget: CustomAgentTypeDto? = null,
+    val deleteTypeInFlight: Boolean = false,
 )
 
 /**
@@ -195,6 +224,7 @@ class CreateSessionViewModel @Inject constructor(
     private val autoScanRepository: AutoScanRepository,
     private val preferencesStore: PreferencesStore,
     private val tokenStore: TokenStore,
+    private val customAgentTypesRepository: CustomAgentTypesRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(CreateSessionUiState())
@@ -262,6 +292,34 @@ class CreateSessionViewModel @Inject constructor(
                         selection = resolved,
                     )
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            customAgentTypesRepository.observeTypes().collect { types ->
+                _uiState.update { state ->
+                    // A type deleted on another device while the picker is open
+                    // must not stay selected — its card is gone and a launch
+                    // would 404.
+                    val selected = state.selectedMode
+                    val stillExists = selected !is CreateSessionMode.Custom ||
+                        types.any { it.id == selected.typeId }
+                    state.copy(
+                        customTypes = types,
+                        selectedMode = if (stillExists) selected else null,
+                    )
+                }
+            }
+        }
+
+        viewModelScope.launch {
+            // Best-effort cold-start seed: the connect-time reconcile in
+            // UserEventBus owns steady-state freshness, but this screen can
+            // mount before the user-events socket connects.
+            try {
+                customAgentTypesRepository.refreshTypes()
+            } catch (_: Exception) {
+                // The picker just shows no custom cards until a refresh lands.
             }
         }
 
@@ -434,6 +492,35 @@ class CreateSessionViewModel @Inject constructor(
             _uiState.update { it.copy(step = CreateSessionStep.TerminalConfig) }
         } else {
             submitCustomShell()
+        }
+    }
+
+    /**
+     * Continue from the mode picker for a custom agent type. Identical flow to
+     * [selectTerminalMode] — custom types are plain-terminal sessions, so a
+     * stored git project opens the Terminal config page (worktree toggle) and
+     * anything else launches immediately.
+     */
+    fun selectCustomAgentMode(typeId: String) {
+        val state = _uiState.value
+        val storedGit = (state.selection as? ProjectSelection.Stored)?.let { sel ->
+            state.projects.firstOrNull { it.name == sel.name }?.is_git == true
+        } ?: false
+        if (storedGit) {
+            _uiState.update { it.copy(step = CreateSessionStep.TerminalConfig) }
+        } else {
+            submitCustomAgent(typeId)
+        }
+    }
+
+    /**
+     * Submit from the TerminalConfig step, which is shared between plain
+     * Terminal mode and custom agent types — dispatch on the selected mode.
+     */
+    fun submitFromTerminalConfig() {
+        when (val mode = _uiState.value.selectedMode) {
+            is CreateSessionMode.Custom -> submitCustomAgent(mode.typeId)
+            else -> submitCustomShell()
         }
     }
 
@@ -735,7 +822,19 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun submitCustomShell() {
+    fun submitCustomShell() = submitPlainTerminal(cli = null)
+
+    /**
+     * Launch a session of an account-scoped custom agent type — the same
+     * plain-terminal semantics as [submitCustomShell] including the worktree
+     * toggle, except the request carries `cli = "custom_<id>"`. Only the
+     * type id goes on the wire; the relay resolves the stored command
+     * server-side.
+     */
+    private fun submitCustomAgent(typeId: String) =
+        submitPlainTerminal(cli = "custom_$typeId")
+
+    private fun submitPlainTerminal(cli: String?) {
         val state = _uiState.value
         if (state.submitting) return
         when (val sel = state.selection) {
@@ -744,6 +843,7 @@ class CreateSessionViewModel @Inject constructor(
                 request = CreateSessionRequest(
                     project_name = sel.name,
                     command = null,
+                    cli = cli,
                     claude_options = null,
                     worktree = state.worktree,
                     branch_name = state.branchName.takeIf { it.isNotBlank() },
@@ -757,6 +857,7 @@ class CreateSessionViewModel @Inject constructor(
                         project_name = null,
                         cwd = sel.path,
                         command = null,
+                        cli = cli,
                         claude_options = null,
                         worktree = false,
                         branch_name = null,
@@ -764,6 +865,135 @@ class CreateSessionViewModel @Inject constructor(
                 )
             }
             ProjectSelection.None -> Unit
+        }
+    }
+
+    fun openTypeEditor(target: CustomAgentTypeDto?) = _uiState.update {
+        it.copy(
+            typeEditor = TypeEditorState.Open(target),
+            typeEditorError = null,
+            typeEditorSaving = false,
+        )
+    }
+
+    fun dismissTypeEditor() = _uiState.update {
+        it.copy(
+            typeEditor = TypeEditorState.Hidden,
+            typeEditorError = null,
+            typeEditorSaving = false,
+        )
+    }
+
+    /**
+     * Create or update (depending on the open editor's target) a custom agent
+     * type. Values are trimmed and validated client-side first; the sheet is
+     * dismissed only on success, and failures surface inline in the sheet —
+     * the server's 409 `detail` strings (20-type cap, name conflict) are
+     * user-grade copy and are shown verbatim.
+     */
+    fun saveCustomAgentType(name: String, command: String) {
+        val editor = _uiState.value.typeEditor as? TypeEditorState.Open ?: return
+        if (_uiState.value.typeEditorSaving) return
+        val trimmedName = name.trim()
+        val trimmedCommand = command.trim()
+        // Lengths are counted in code points to match the server's limits
+        // (Pydantic max_length counts characters) — UTF-16 String.length
+        // would falsely reject supplementary-plane input (emoji, rare CJK)
+        // the server accepts.
+        val validationError = when {
+            trimmedName.isEmpty() -> "Name is required"
+            trimmedName.codePointCount(0, trimmedName.length) > MAX_TYPE_NAME_LENGTH ->
+                "Name must be at most $MAX_TYPE_NAME_LENGTH characters"
+            trimmedCommand.isEmpty() -> "Command is required"
+            trimmedCommand.codePointCount(0, trimmedCommand.length) > MAX_TYPE_COMMAND_LENGTH ->
+                "Command must be at most $MAX_TYPE_COMMAND_LENGTH characters"
+            else -> null
+        }
+        if (validationError != null) {
+            _uiState.update { it.copy(typeEditorError = validationError) }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(typeEditorSaving = true, typeEditorError = null) }
+            try {
+                val target = editor.target
+                if (target == null) {
+                    customAgentTypesRepository.createType(trimmedName, trimmedCommand)
+                } else {
+                    // Both fields are always sent: the server treats an
+                    // unchanged value as fine, while `{}` is a 422 — this
+                    // avoids dirty-tracking without hitting that edge.
+                    customAgentTypesRepository.updateType(target.id, trimmedName, trimmedCommand)
+                }
+                // Completion is scoped to the editor this save started from:
+                // if the sheet was dismissed and reopened for another target
+                // mid-flight, only release the saving flag — never close the
+                // new editor. (The sheet also blocks dismissal while saving;
+                // this is the defense-in-depth half of that fix.)
+                _uiState.update {
+                    if (it.typeEditor == editor) {
+                        it.copy(typeEditor = TypeEditorState.Hidden, typeEditorSaving = false)
+                    } else {
+                        it.copy(typeEditorSaving = false)
+                    }
+                }
+            } catch (e: Exception) {
+                val message = when {
+                    e is ApiException ->
+                        extractDetail(e.errorBody) ?: "Couldn't save (HTTP ${e.code})"
+                    else -> e.message ?: "Couldn't save the agent type"
+                }
+                // Same operation scoping: a stale save's error must not be
+                // written into an editor it did not come from.
+                _uiState.update {
+                    if (it.typeEditor == editor) {
+                        it.copy(typeEditorSaving = false, typeEditorError = message)
+                    } else {
+                        it.copy(typeEditorSaving = false)
+                    }
+                }
+            }
+        }
+    }
+
+    fun requestDeleteType(target: CustomAgentTypeDto) = _uiState.update {
+        it.copy(deleteTypeTarget = target)
+    }
+
+    fun dismissDeleteType() = _uiState.update { it.copy(deleteTypeTarget = null) }
+
+    /**
+     * Pessimistic delete (destructive: the server cascades the type's saved
+     * shortcuts). A 403 means the type is already gone elsewhere — treat it
+     * as success and reconcile via refresh.
+     */
+    fun confirmDeleteType() {
+        val target = _uiState.value.deleteTypeTarget ?: return
+        if (_uiState.value.deleteTypeInFlight) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(deleteTypeInFlight = true) }
+            try {
+                customAgentTypesRepository.deleteType(target.id)
+                _uiState.update { it.copy(deleteTypeTarget = null, deleteTypeInFlight = false) }
+            } catch (e: Exception) {
+                if (e is ApiException && e.code == 403) {
+                    _uiState.update { it.copy(deleteTypeTarget = null, deleteTypeInFlight = false) }
+                    try {
+                        customAgentTypesRepository.refreshTypes()
+                    } catch (_: Exception) {
+                        // The custom_type.deleted event already removed it for
+                        // the common case; a failed reconcile self-heals on the
+                        // next connect.
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            deleteTypeInFlight = false,
+                            error = "Failed to delete agent type: ${e.message}",
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -811,6 +1041,35 @@ class CreateSessionViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(submitting = false, codexLoginVisible = true, codexLoginError = null)
                     }
+                } else if (e is ApiException && isAgentUpdateRequired(e.errorBody)) {
+                    // Relay-side gate: the agent's live tunnel negotiated a
+                    // protocol too old to launch custom agent types.
+                    _uiState.update {
+                        it.copy(
+                            submitting = false,
+                            error = "Update your agent to launch custom agent types",
+                        )
+                    }
+                } else if (
+                    e is ApiException && e.code == 404 &&
+                    request.cli?.startsWith("custom_") == true &&
+                    extractDetail(e.errorBody) == "Custom agent type not found"
+                ) {
+                    // The type was deleted between rendering the card and the
+                    // launch — refresh so the stale card disappears. Keyed on
+                    // the relay's exact detail string, not the status alone: a
+                    // custom launch can also 404 for a concurrently-deleted
+                    // project (agent-side "Project 'X' not found"), which must
+                    // fall through to the generic message below. If the relay
+                    // string ever changes this degrades to the generic path.
+                    _uiState.update {
+                        it.copy(submitting = false, error = "This agent type was deleted")
+                    }
+                    try {
+                        customAgentTypesRepository.refreshTypes()
+                    } catch (_: Exception) {
+                        // Reconciled on the next user-events connect instead.
+                    }
                 } else {
                     _uiState.update {
                         it.copy(submitting = false, error = "Failed to create session: ${e.message}")
@@ -832,6 +1091,16 @@ class CreateSessionViewModel @Inject constructor(
 
     private fun JsonObject.hasCodexAuthMarker(): Boolean =
         this["codex_auth_required"]?.jsonPrimitive?.booleanOrNull == true
+
+    /**
+     * True when an error body carries the `agent_update_required` marker the
+     * relay sends (409, top-level) for custom-type launches against an agent
+     * whose tunnel negotiated protocol < 7.
+     */
+    private fun isAgentUpdateRequired(body: String): Boolean = runCatching {
+        Json.parseToJsonElement(body)
+            .jsonObject["agent_update_required"]?.jsonPrimitive?.booleanOrNull == true
+    }.getOrDefault(false)
 
     /** Splits the additional-directories draft on newlines/commas into a clean list. */
     private fun parseAddDirs(draft: String): List<String> =
@@ -865,6 +1134,11 @@ class CreateSessionViewModel @Inject constructor(
 
     companion object {
         private val WINDOWS_ABS_REGEX = Regex("^[A-Za-z]:[\\\\/]")
+
+        // Server-enforced limits on custom agent types (post-trim); validated
+        // client-side too so the editor errors without a round trip.
+        const val MAX_TYPE_NAME_LENGTH = 60
+        const val MAX_TYPE_COMMAND_LENGTH = 1000
 
         /**
          * Fallback Codex model quick-picks for the wizard dropdown, used when the

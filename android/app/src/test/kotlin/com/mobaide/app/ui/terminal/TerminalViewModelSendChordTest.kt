@@ -6,6 +6,8 @@ import com.mobaide.app.data.local.TERMINAL_STATIC_COLUMNS_DEFAULT
 import com.mobaide.app.data.local.TerminalDisplayMode
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.SessionKind
+import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
@@ -37,8 +39,11 @@ import org.junit.Test
  * Load-bearing contracts: a chord travels the raw 'i'-frame path with its
  * encoded bytes; the send is unconditional while MRU persistence is
  * fire-and-forget (a store failure must never lose the keystroke); recents are
- * keyed by the session kind's wire name; unparseable persisted tokens are
- * dropped silently; and NOTHING touches the chord store before
+ * keyed by the session kind's wire name — MRU writes are skipped while the
+ * kind is unresolved (null since proto-v7 — never recorded under a guessed
+ * Claude bucket) and a picker-open refresh waits for resolution instead of
+ * no-opping; unparseable persisted tokens are dropped silently; and
+ * NOTHING touches the chord store before
  * [TerminalViewModel.refreshShortcutRecents]/[TerminalViewModel.sendChord] fire
  * — every existing ViewModel test stubs [PreferencesStore] strictly with only
  * the display-mode flows, so any eager access would break the whole suite.
@@ -53,9 +58,25 @@ class TerminalViewModelSendChordTest {
     private val connection = mockk<WebSocketConnection>(relaxed = true) {
         every { events } returns eventsFlow
     }
+
+    /** Empty by default — the kind stays unresolved (null). Bucket-pinning
+     *  tests resolve it by seeding a session BEFORE building the VM. */
+    private val sessionListFlow = MutableStateFlow<List<SessionResponse>>(emptyList())
+
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
-        every { observeSessionList() } returns MutableStateFlow(emptyList())
+        every { observeSessionList() } returns sessionListFlow
+    }
+
+    private fun resolveKind(kind: SessionKind = SessionKind.Claude) {
+        sessionListFlow.value = listOf(
+            SessionResponse(
+                session_id = "test-session",
+                state = "running",
+                created_at = "2026-01-01T00:00:00Z",
+                kind = kind,
+            ),
+        )
     }
     private val templatesRepository = mockk<TemplatesRepository>(relaxed = true)
     private val preferencesStore = mockk<PreferencesStore> {
@@ -102,13 +123,15 @@ class TerminalViewModelSendChordTest {
     fun sendChord_persistsTokenUnderWireNameBucket_andReloadsRecents() = runTest {
         coJustRun { preferencesStore.addRecentShortcutChord(any(), any()) }
         coEvery { preferencesStore.getRecentShortcutChords("claude") } returns listOf("ctrl+a")
+        resolveKind(SessionKind.Claude)
         val vm = createViewModel()
+        advanceUntilIdle() // let sessionKind resolve from the seeded list
 
         vm.sendChord(KeyChord(ctrl = true, key = "a"))
         advanceUntilIdle()
 
-        // "claude" pins SessionKind.wireName as the bucket key (the VM's kind
-        // defaults to Claude until the session list resolves).
+        // "claude" pins SessionKind.wireName as the bucket key, taken from the
+        // RESOLVED kind — an unresolved kind skips MRU entirely (see below).
         coVerify(exactly = 1) { preferencesStore.addRecentShortcutChord("claude", "ctrl+a") }
         assertEquals(
             "a sent chord must reappear in recents without reopening the sheet",
@@ -118,11 +141,33 @@ class TerminalViewModelSendChordTest {
     }
 
     @Test
+    fun sendChord_customKind_persistsUnderRawWireKindBucket() = runTest {
+        // Custom-type sessions bucket under their id-based wire string —
+        // rename-stable, never the display name.
+        coJustRun { preferencesStore.addRecentShortcutChord(any(), any()) }
+        coEvery {
+            preferencesStore.getRecentShortcutChords("custom_ab12cd34ef56")
+        } returns emptyList()
+        resolveKind(SessionKind.Custom("custom_ab12cd34ef56"))
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.sendChord(KeyChord(ctrl = true, key = "a"))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            preferencesStore.addRecentShortcutChord("custom_ab12cd34ef56", "ctrl+a")
+        }
+    }
+
+    @Test
     fun sendChord_persistFailure_stillSendsBytes() = runTest {
         coEvery {
             preferencesStore.addRecentShortcutChord(any(), any())
         } throws RuntimeException("disk full")
+        resolveKind(SessionKind.Claude)
         val vm = createViewModel()
+        advanceUntilIdle() // resolve the kind so the persist path actually runs
         val captured = slot<ByteString>()
 
         vm.sendChord(KeyChord(ctrl = true, key = "a"))
@@ -134,6 +179,89 @@ class TerminalViewModelSendChordTest {
             byteArrayOf(0x01),
             payloadOf(captured.captured),
         )
+        coVerify(exactly = 1) { preferencesStore.addRecentShortcutChord("claude", "ctrl+a") }
+    }
+
+    @Test
+    fun sendChord_kindUnresolved_sendsBytes_withoutTouchingMruBucket() = runTest {
+        // No chord-store stubs on purpose: while the kind is null the strict
+        // mock proves NOTHING records under a guessed bucket, yet the
+        // keystroke still travels the raw path.
+        val vm = createViewModel()
+        advanceUntilIdle()
+        val captured = slot<ByteString>()
+
+        vm.sendChord(KeyChord(ctrl = true, key = "a"))
+        advanceUntilIdle()
+
+        verify(timeout = 2000) { connection.sendBinary(capture(captured)) }
+        assertArrayEquals(byteArrayOf(0x01), payloadOf(captured.captured))
+        coVerify(exactly = 0) { preferencesStore.addRecentShortcutChord(any(), any()) }
+        coVerify(exactly = 0) { preferencesStore.getRecentShortcutChords(any()) }
+    }
+
+    @Test
+    fun refreshShortcutRecents_kindUnresolved_readsNothingWhilePending() = runTest {
+        // The load waits for kind resolution rather than no-opping — while it
+        // is still pending the strict mock pins the zero-access contract (no
+        // bucket guess, no read).
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.refreshShortcutRecents()
+        advanceUntilIdle()
+
+        assertTrue(vm.shortcutRecents.value.isEmpty())
+        coVerify(exactly = 0) { preferencesStore.getRecentShortcutChords(any()) }
+    }
+
+    @Test
+    fun refreshShortcutRecents_pendingLoadResumes_whenKindResolves() = runTest {
+        // Picker opened before the first sessions snapshot: the load suspends,
+        // then self-heals into the RESOLVED kind's bucket — here a custom
+        // type, pinning that the awaited wireName is used, never a guess.
+        coEvery {
+            preferencesStore.getRecentShortcutChords("custom_ab12cd34ef56")
+        } returns listOf("ctrl+a")
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.refreshShortcutRecents()
+        advanceUntilIdle()
+        coVerify(exactly = 0) { preferencesStore.getRecentShortcutChords(any()) }
+
+        resolveKind(SessionKind.Custom("custom_ab12cd34ef56"))
+        advanceUntilIdle()
+
+        assertEquals(
+            "a pre-resolution picker open must self-heal once the kind lands",
+            listOf(KeyChord(ctrl = true, key = "a")),
+            vm.shortcutRecents.value,
+        )
+        coVerify(exactly = 1) {
+            preferencesStore.getRecentShortcutChords("custom_ab12cd34ef56")
+        }
+    }
+
+    @Test
+    fun refreshShortcutRecents_reopenWhilePending_loadsExactlyOnce() = runTest {
+        // Cancel-and-replace: reopening the picker while the first open is
+        // still awaiting kind resolution must not stack a second collector —
+        // resolution then triggers exactly one bucket read.
+        coEvery { preferencesStore.getRecentShortcutChords("claude") } returns listOf("ctrl+a")
+        val vm = createViewModel()
+        advanceUntilIdle()
+
+        vm.refreshShortcutRecents()
+        advanceUntilIdle() // first load reaches its suspension point
+        vm.refreshShortcutRecents()
+        advanceUntilIdle()
+
+        resolveKind(SessionKind.Claude)
+        advanceUntilIdle()
+
+        assertEquals(listOf(KeyChord(ctrl = true, key = "a")), vm.shortcutRecents.value)
+        coVerify(exactly = 1) { preferencesStore.getRecentShortcutChords("claude") }
     }
 
     @Test
@@ -156,7 +284,9 @@ class TerminalViewModelSendChordTest {
             "bogus",
             "shift+f5",
         )
+        resolveKind(SessionKind.Claude)
         val vm = createViewModel()
+        advanceUntilIdle()
 
         vm.refreshShortcutRecents()
         advanceUntilIdle()

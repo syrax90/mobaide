@@ -18,6 +18,13 @@ import kotlinx.coroutines.flow.update
  * Cache mutations come from two paths: explicit REST calls made by the UI
  * (`createShortcut`, `renameShortcut`, ...) and inbound `shortcut.*` events
  * delivered over `/ws/user-events` and forwarded by `UserEventBus`.
+ *
+ * Every REST path carries an account-generation guard: the user id (not the
+ * token — it survives token refresh mid-flight) is captured before the call
+ * and the cache write is skipped if it changed by the time the response
+ * lands, so a request resolving after logout/account switch cannot
+ * repopulate a cache the previous account no longer owns. The server
+ * response is still returned to the caller either way.
  */
 class ShortcutsRepository(
     private val centralApi: CentralApi,
@@ -28,8 +35,12 @@ class ShortcutsRepository(
     fun observeShortcuts(): StateFlow<List<ShortcutDto>> = _shortcuts.asStateFlow()
 
     suspend fun refreshShortcuts() {
+        val owner = userIdentityStore.getUserId()
         val token = userIdentityStore.requireAccessToken()
-        _shortcuts.value = centralApi.listShortcuts(token)
+        val list = centralApi.listShortcuts(token)
+        if (userIdentityStore.getUserId() == owner) {
+            _shortcuts.value = list
+        }
     }
 
     /**
@@ -43,28 +54,37 @@ class ShortcutsRepository(
         chordToken: String,
         name: String?,
     ): ShortcutDto {
+        val owner = userIdentityStore.getUserId()
         val token = userIdentityStore.requireAccessToken()
         val created = centralApi.createShortcut(token, kind, chordToken, name)
-        applyUpserted(created)
+        if (userIdentityStore.getUserId() == owner) {
+            applyUpserted(created)
+        }
         return created
     }
 
     /** Rename a shortcut; an empty [name] clears it back to the chord label. */
     suspend fun renameShortcut(shortcutId: String, name: String): ShortcutDto {
+        val owner = userIdentityStore.getUserId()
         val token = userIdentityStore.requireAccessToken()
         val updated = centralApi.updateShortcut(
             token,
             shortcutId,
             UpdateShortcutRequest(name = name),
         )
-        applyUpserted(updated)
+        if (userIdentityStore.getUserId() == owner) {
+            applyUpserted(updated)
+        }
         return updated
     }
 
     suspend fun deleteShortcut(shortcutId: String) {
+        val owner = userIdentityStore.getUserId()
         val token = userIdentityStore.requireAccessToken()
         centralApi.deleteShortcut(token, shortcutId)
-        applyDeleted(shortcutId)
+        if (userIdentityStore.getUserId() == owner) {
+            applyDeleted(shortcutId)
+        }
     }
 
     /** Insert or replace a shortcut in the cache by `shortcut_id`. */
@@ -79,6 +99,18 @@ class ShortcutsRepository(
     fun applyDeleted(shortcutId: String) {
         _shortcuts.update { current ->
             current.filterNot { it.shortcut_id == shortcutId }
+        }
+    }
+
+    /**
+     * Purge every cached shortcut of [kind] — the client half of the
+     * server-side cascade on `custom_type.deleted`, which soft-deletes the
+     * type's shortcuts without emitting per-shortcut `shortcut.deleted`
+     * events.
+     */
+    fun purgeKind(kind: String) {
+        _shortcuts.update { current ->
+            current.filterNot { it.kind == kind }
         }
     }
 

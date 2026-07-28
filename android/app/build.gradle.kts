@@ -136,7 +136,7 @@ android {
         buildConfigField("String", "PRIVACY_POLICY_URL", "\"$privacyPolicyUrl\"")
         buildConfigField("String", "SUPPORT_GITHUB_URL", "\"$supportGithubUrl\"")
         buildConfigField("String", "SUPPORT_EMAIL", "\"$supportEmail\"")
-        buildConfigField("int", "APP_PROTOCOL_VERSION", "6")
+        buildConfigField("int", "APP_PROTOCOL_VERSION", "7")
         buildConfigField("int", "MIN_SERVER_PROTOCOL_VERSION", "6")
     }
 

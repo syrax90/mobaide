@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -27,6 +28,10 @@ data class SessionListUiState(
     val error: String? = null,
     val activeScans: List<AutoScanInstanceDto> = emptyList(),
     val outdated: AgentVersionMonitor.Outdated? = null,
+    // Live custom-agent-type names keyed by the full wire kind
+    // ("custom_<id>" → name). Fallback label source for custom sessions whose
+    // wire kind_label snapshot is absent.
+    val customTypeNames: Map<String, String> = emptyMap(),
 )
 
 @HiltViewModel
@@ -37,6 +42,7 @@ class SessionListViewModel @Inject constructor(
     private val agentEventBus: AgentEventBus,
     private val agentVersionMonitor: AgentVersionMonitor,
     private val agentUpdateRepository: AgentUpdateRepository,
+    private val customAgentTypesRepository: CustomAgentTypesRepository,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SessionListUiState())
@@ -79,6 +85,26 @@ class SessionListViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(isReconnecting = state == AgentEventBus.ConnState.Connecting)
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            customAgentTypesRepository.observeTypes().collect { types ->
+                _uiState.update { state ->
+                    state.copy(
+                        customTypeNames = types.associate { "custom_${it.id}" to it.name },
+                    )
+                }
+            }
+        }
+
+        // Best-effort cold-start seed for the label fallback; steady-state
+        // freshness comes from UserEventBus's connect-time reconcile.
+        viewModelScope.launch {
+            try {
+                customAgentTypesRepository.refreshTypes()
+            } catch (_: Exception) {
+                // Custom sessions fall back to their kind_label snapshot.
             }
         }
 

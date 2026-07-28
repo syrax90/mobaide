@@ -5,10 +5,12 @@ import com.mobaide.app.data.events.AgentEventBus
 import com.mobaide.app.data.local.PreferencesStore
 import com.mobaide.app.data.network.dto.AutoScanInstanceDto
 import com.mobaide.app.data.network.dto.AutoScanListResponse
+import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.Runs
@@ -72,6 +74,8 @@ class SessionListViewModelTest {
         val scanListFlow: MutableStateFlow<AutoScanListResponse>,
         val connectionFlow: MutableStateFlow<AgentEventBus.ConnState>,
         val outdatedFlow: MutableStateFlow<AgentVersionMonitor.Outdated?>,
+        val customTypesRepo: CustomAgentTypesRepository,
+        val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
     )
 
     /**
@@ -113,14 +117,23 @@ class SessionListViewModelTest {
         coEvery { prefs.getLastUsedSessionId() } returns null
         coEvery { prefs.setLastUsedSessionId(any()) } just Runs
 
+        val customTypesFlow = MutableStateFlow<List<CustomAgentTypeDto>>(emptyList())
+        val customTypesRepo = mockk<CustomAgentTypesRepository>()
+        every { customTypesRepo.observeTypes() } returns customTypesFlow
+        coEvery { customTypesRepo.refreshTypes() } just Runs
+
         return Fixture(
             sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo,
             sessionsFlow, scanListFlow, connectionFlow, outdatedFlow,
+            customTypesRepo, customTypesFlow,
         )
     }
 
     private fun Fixture.buildVm(): SessionListViewModel =
-        SessionListViewModel(sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo)
+        SessionListViewModel(
+            sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo,
+            customTypesRepo,
+        )
 
     // ---- init() side-effects -----------------------------------------------
 
@@ -491,5 +504,40 @@ class SessionListViewModelTest {
 
         assertNull(vm.uiState.value.error)
         assertEquals(1, vm.uiState.value.sessions.size)
+    }
+
+    // ---- customTypeNames map (kind-label fallback) --------------------------
+
+    @Test
+    fun customTypeNames_keysFullWireKindToName_andTracksRepositoryFlow() = runTest {
+        // The map is the live-registry fallback for custom sessions whose wire
+        // kind_label snapshot is absent — keyed by the FULL wire kind
+        // ("custom_<id>"), not the bare id.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        assertEquals(emptyMap<String, String>(), vm.uiState.value.customTypeNames)
+
+        fx.customTypesFlow.value = listOf(
+            CustomAgentTypeDto(
+                id = "ab12cd34ef56",
+                name = "Aider",
+                command = "aider",
+                created_at = "2026-07-28T12:00:00Z",
+                updated_at = "2026-07-28T12:00:00Z",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(
+            mapOf("custom_ab12cd34ef56" to "Aider"),
+            vm.uiState.value.customTypeNames,
+        )
+
+        fx.customTypesFlow.value = emptyList()
+        advanceUntilIdle()
+
+        assertEquals(emptyMap<String, String>(), vm.uiState.value.customTypeNames)
     }
 }

@@ -11,9 +11,9 @@ cadence; they do **not** gate compatibility.
 * Introduced: 2026-07-27 (CLA-153).
 * Python support: ``PROTOCOL_VERSION = 7``, ``SUPPORTED_PROTOCOL_VERSIONS =
   (6, 7)``, ``MIN_CLIENT_PROTOCOL_VERSION = 6`` (both ``mobaide_agent`` and
-  ``central_server``). Android/iOS constants stay at ``6`` and advance to
-  ``7`` with their client halves (CLA-154 / CLA-155) — old mobile builds
-  remain accepted meanwhile.
+  ``central_server``). Android advanced to ``7`` with its client half
+  (CLA-154, ``APP_PROTOCOL_VERSION = 7``); the iOS constant stays at ``6``
+  until CLA-155 — old mobile builds remain accepted meanwhile.
 * **Deployment order matters**: a proto-v7 agent handshaking against a
   proto-v6-only relay is closed with ``4002``, so the central server must
   deploy before any agent rollout. Old (v6) agents keep connecting — the

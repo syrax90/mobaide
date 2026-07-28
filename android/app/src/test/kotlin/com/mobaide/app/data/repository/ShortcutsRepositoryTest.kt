@@ -59,6 +59,9 @@ class ShortcutsRepositoryTest {
         val centralApi = mockk<CentralApi>(relaxed = true)
         val userIdentityStore = mockk<UserIdentityStore>()
         every { userIdentityStore.getUserAccessToken() } returns userToken
+        // Owner-guard reads: every REST path captures the user id before the
+        // call and re-checks it after (see the owner-guard tests below).
+        every { userIdentityStore.getUserId() } returns "user-1"
         return Fixture(
             repo = ShortcutsRepository(centralApi, userIdentityStore),
             centralApi = centralApi,
@@ -296,6 +299,73 @@ class ShortcutsRepositoryTest {
             listOf("s-1"),
             repo.observeShortcuts().value.map { it.shortcut_id },
         )
+    }
+
+    @Test
+    fun purgeKind_removesEveryShortcutOfThatKind_keepingOthers() = runTest {
+        // Client half of the server-side cascade on `custom_type.deleted`:
+        // the type's shortcuts are soft-deleted server-side without
+        // per-shortcut events, so the cache purges by kind locally.
+        val (repo, api) = newFixture()
+        coEvery { api.listShortcuts(any()) } returns listOf(
+            shortcut("s-1", kind = "claude"),
+            shortcut("s-2", kind = "custom_ab12cd34ef56"),
+            shortcut("s-3", kind = "custom_ab12cd34ef56"),
+            shortcut("s-4", kind = "codex"),
+        )
+        repo.refreshShortcuts()
+
+        repo.purgeKind("custom_ab12cd34ef56")
+
+        assertEquals(
+            listOf("s-1", "s-4"),
+            repo.observeShortcuts().value.map { it.shortcut_id },
+        )
+    }
+
+    @Test
+    fun purgeKind_unknownKind_isNoOp() = runTest {
+        val (repo, api) = newFixture()
+        coEvery { api.listShortcuts(any()) } returns listOf(shortcut("s-1"))
+        repo.refreshShortcuts()
+
+        repo.purgeKind("custom_never_seen")
+
+        assertEquals(
+            listOf("s-1"),
+            repo.observeShortcuts().value.map { it.shortcut_id },
+        )
+    }
+
+    // ---- Account-generation owner guard -------------------------------------
+
+    @Test
+    fun refreshShortcuts_userChangedMidFlight_skipsCacheWrite() = runTest {
+        // The user id is captured before the call and re-read after: a
+        // response landing after an account switch must not repopulate the
+        // new account's cache with the old account's rows.
+        val (repo, api, identity) = newFixture()
+        every { identity.getUserId() } returnsMany listOf("user-1", "user-2")
+        coEvery { api.listShortcuts(any()) } returns listOf(shortcut("s-stale"))
+
+        repo.refreshShortcuts()
+
+        assertTrue(repo.observeShortcuts().value.isEmpty())
+    }
+
+    @Test
+    fun createShortcut_userChangedMidFlight_returnsPayload_withoutCacheWrite() = runTest {
+        // The server response still goes back to the caller either way —
+        // only the cache write is discarded.
+        val (repo, api, identity) = newFixture()
+        every { identity.getUserId() } returnsMany listOf("user-1", "user-2")
+        val created = shortcut("s-stale")
+        coEvery { api.createShortcut(any(), any(), any(), any()) } returns created
+
+        val returned = repo.createShortcut("claude", "ctrl+x", null)
+
+        assertSame(created, returned)
+        assertTrue(repo.observeShortcuts().value.isEmpty())
     }
 
     @Test

@@ -10,10 +10,12 @@ import com.mobaide.app.data.network.ApiException
 import com.mobaide.app.data.network.dto.ClaudeOptionsModel
 import com.mobaide.app.data.network.dto.CodexLoginResponse
 import com.mobaide.app.data.network.dto.CreateSessionRequest
+import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.ProjectInfo
 import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.VersionInfoResponse
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ProjectsRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.testing.MainDispatcherRule
@@ -24,6 +26,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -71,6 +74,8 @@ class CreateSessionViewModelTest {
         val prefs: PreferencesStore,
         val tokenStore: TokenStore,
         val projectsFlow: MutableStateFlow<List<ProjectInfo>>,
+        val customTypesRepo: CustomAgentTypesRepository,
+        val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
     )
 
     private fun newFixture(
@@ -108,11 +113,23 @@ class CreateSessionViewModelTest {
         every { tokenStore.getAgentId() } returns agentId
         every { tokenStore.getAgentUrl() } returns agentUrl
 
-        return Fixture(projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, projectsFlow)
+        // Strict mock on purpose: the init block must only observe + refresh;
+        // CRUD calls are stubbed per-test.
+        val customTypesFlow = MutableStateFlow<List<CustomAgentTypeDto>>(emptyList())
+        val customTypesRepo = mockk<CustomAgentTypesRepository>()
+        every { customTypesRepo.observeTypes() } returns customTypesFlow
+        coEvery { customTypesRepo.refreshTypes() } just Runs
+
+        return Fixture(
+            projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, projectsFlow,
+            customTypesRepo, customTypesFlow,
+        )
     }
 
     private fun Fixture.buildVm(): CreateSessionViewModel =
-        CreateSessionViewModel(projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore)
+        CreateSessionViewModel(
+            projectsRepo, sessionRepo, autoScanRepo, prefs, tokenStore, customTypesRepo,
+        )
 
     // ---- Wizard step flow --------------------------------------------------
 
@@ -2330,5 +2347,505 @@ class CreateSessionViewModelTest {
                 CreateSessionViewModel.CLAUDE_EFFORTS.containsAll(efforts),
             )
         }
+    }
+
+    // ---- Custom agent types -------------------------------------------------
+
+    private fun customType(
+        id: String = "ab12cd34ef56",
+        name: String = "Aider",
+        command: String = "aider --model sonnet",
+    ): CustomAgentTypeDto = CustomAgentTypeDto(
+        id = id,
+        name = name,
+        command = command,
+        created_at = "2026-07-28T12:00:00Z",
+        updated_at = "2026-07-28T12:00:00Z",
+    )
+
+    @Test
+    fun customTypes_fromRepositoryFlow_appearInUiState() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        fx.customTypesFlow.value = listOf(customType())
+        advanceUntilIdle()
+
+        assertEquals(listOf("ab12cd34ef56"), vm.uiState.value.customTypes.map { it.id })
+    }
+
+    @Test
+    fun customTypeDeletedRemotely_clearsItsSelectedMode() = runTest {
+        // A type deleted on another device while the picker is open must not
+        // stay selected — its card is gone and a launch would 404.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        fx.customTypesFlow.value = listOf(customType(id = "t1"))
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("t1"))
+        assertEquals(CreateSessionMode.Custom("t1"), vm.uiState.value.selectedMode)
+
+        fx.customTypesFlow.value = emptyList()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.selectedMode)
+    }
+
+    @Test
+    fun selectCustomAgentMode_gitStoredProject_advancesToTerminalConfig_noSubmit() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha") // is_git = true
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("t1"))
+        vm.selectCustomAgentMode("t1")
+        advanceUntilIdle()
+
+        assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
+        coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
+    }
+
+    @Test
+    fun selectCustomAgentMode_nonGitProject_submitsImmediately_withCustomCli() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-custom", "starting", "2026-07-28T00:00:00Z")
+
+        vm.selectProject("beta") // is_git = false
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("ab12cd34ef56"))
+        vm.selectCustomAgentMode("ab12cd34ef56")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+        val req = requestSlot.captured
+        assertEquals("custom_ab12cd34ef56", req.cli)
+        assertNull("only the type id goes on the wire, never the command", req.command)
+        assertNull("custom types must not send claude_options", req.claude_options)
+        assertFalse("non-git project must never request a worktree", req.worktree)
+    }
+
+    @Test
+    fun submitFromTerminalConfig_customMode_submitsCustomCli_withWorktreePassthrough() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-custom-wt", "starting", "2026-07-28T00:00:00Z")
+
+        vm.selectProject("alpha") // git
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("ab12cd34ef56"))
+        vm.selectCustomAgentMode("ab12cd34ef56")
+        assertEquals(CreateSessionStep.TerminalConfig, vm.uiState.value.step)
+
+        vm.toggleWorktree(true)
+        vm.setBranchName("feature/x")
+        vm.submitFromTerminalConfig()
+        advanceUntilIdle()
+
+        val req = requestSlot.captured
+        assertEquals("custom_ab12cd34ef56", req.cli)
+        assertTrue("worktree toggle must propagate to a custom launch", req.worktree)
+        assertEquals("feature/x", req.branch_name)
+        assertNull(req.command)
+    }
+
+    @Test
+    fun submitFromTerminalConfig_customShellMode_stillSubmitsPlainShell() = runTest {
+        // The TerminalConfig step is shared between Terminal mode and custom
+        // agent types — the dispatch must not send a cli for plain Terminal.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-shell2", "starting", "2026-07-28T00:00:00Z")
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.CustomShell)
+        vm.selectTerminalMode()
+        vm.submitFromTerminalConfig()
+        advanceUntilIdle()
+
+        assertNull("plain Terminal must not carry a custom cli", requestSlot.captured.cli)
+    }
+
+    // ---- Custom type editor state machine -----------------------------------
+
+    @Test
+    fun saveCustomAgentType_clientValidation_setsInlineError_withoutRequest() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.openTypeEditor(null)
+
+        vm.saveCustomAgentType("   ", "aider")
+        assertEquals("Name is required", vm.uiState.value.typeEditorError)
+
+        vm.saveCustomAgentType("n".repeat(61), "aider")
+        assertEquals(
+            "Name must be at most 60 characters",
+            vm.uiState.value.typeEditorError,
+        )
+
+        vm.saveCustomAgentType("Aider", "   ")
+        assertEquals("Command is required", vm.uiState.value.typeEditorError)
+
+        vm.saveCustomAgentType("Aider", "c".repeat(1001))
+        assertEquals(
+            "Command must be at most 1000 characters",
+            vm.uiState.value.typeEditorError,
+        )
+
+        advanceUntilIdle()
+        coVerify(exactly = 0) { fx.customTypesRepo.createType(any(), any()) }
+        coVerify(exactly = 0) { fx.customTypesRepo.updateType(any(), any(), any()) }
+    }
+
+    @Test
+    fun saveCustomAgentType_supplementaryPlaneAtLimit_countsCodePoints_andCreates() = runTest {
+        // 60 / 1000 code points but 120 / 2000 UTF-16 units: counting
+        // String.length would falsely reject input the server's
+        // per-character limits accept.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val name = "🚀".repeat(60)
+        val command = "🚀".repeat(1000)
+        coEvery { fx.customTypesRepo.createType(name, command) } returns customType()
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType(name, command)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.customTypesRepo.createType(name, command) }
+        assertEquals(TypeEditorState.Hidden, vm.uiState.value.typeEditor)
+        assertNull(vm.uiState.value.typeEditorError)
+    }
+
+    @Test
+    fun saveCustomAgentType_supplementaryPlaneOverLimit_rejectsInline_withoutRequest() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.openTypeEditor(null)
+
+        vm.saveCustomAgentType("🚀".repeat(61), "aider")
+        assertEquals(
+            "Name must be at most 60 characters",
+            vm.uiState.value.typeEditorError,
+        )
+
+        vm.saveCustomAgentType("Aider", "🚀".repeat(1001))
+        assertEquals(
+            "Command must be at most 1000 characters",
+            vm.uiState.value.typeEditorError,
+        )
+
+        advanceUntilIdle()
+        coVerify(exactly = 0) { fx.customTypesRepo.createType(any(), any()) }
+        coVerify(exactly = 0) { fx.customTypesRepo.updateType(any(), any(), any()) }
+    }
+
+    @Test
+    fun saveCustomAgentType_create_trimsFields_andDismissesOnSuccess() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.customTypesRepo.createType("Aider", "aider") } returns customType()
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("  Aider  ", "  aider  ")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.customTypesRepo.createType("Aider", "aider") }
+        assertEquals(TypeEditorState.Hidden, vm.uiState.value.typeEditor)
+        assertNull(vm.uiState.value.typeEditorError)
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    @Test
+    fun saveCustomAgentType_editTarget_updatesWithBothFields() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val target = customType(id = "t9")
+        coEvery { fx.customTypesRepo.updateType("t9", "New", "new-cmd") } returns
+            customType(id = "t9", name = "New", command = "new-cmd")
+
+        vm.openTypeEditor(target)
+        vm.saveCustomAgentType("New", "new-cmd")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.customTypesRepo.updateType("t9", "New", "new-cmd") }
+        coVerify(exactly = 0) { fx.customTypesRepo.createType(any(), any()) }
+        assertEquals(TypeEditorState.Hidden, vm.uiState.value.typeEditor)
+    }
+
+    @Test
+    fun saveCustomAgentType_serverConflict409_surfacesDetailInline_keepsEditorOpen() = runTest {
+        // 409 detail strings (20-type cap, name conflict) are user-grade copy
+        // and must surface verbatim — never the raw "HTTP 409: {json}" leak.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.customTypesRepo.createType(any(), any()) } throws
+            ApiException(409, """{"detail":"Custom agent type limit reached (20)"}""")
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("Aider", "aider")
+        advanceUntilIdle()
+
+        assertEquals(
+            "Custom agent type limit reached (20)",
+            vm.uiState.value.typeEditorError,
+        )
+        assertTrue(vm.uiState.value.typeEditor is TypeEditorState.Open)
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    @Test
+    fun saveCustomAgentType_staleSuccessAfterReopen_keepsNewEditorOpen() = runTest {
+        // A save resolving after the sheet was dismissed and reopened for a
+        // different target must only release the saving flag — never close
+        // the editor it did not come from.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val gate = CompletableDeferred<CustomAgentTypeDto>()
+        coEvery { fx.customTypesRepo.createType("Aider", "aider") } coAnswers { gate.await() }
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("Aider", "aider")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.typeEditorSaving)
+
+        val other = customType(id = "t2", name = "Goose", command = "goose")
+        vm.dismissTypeEditor()
+        vm.openTypeEditor(other)
+
+        gate.complete(customType())
+        advanceUntilIdle()
+
+        assertEquals(TypeEditorState.Open(other), vm.uiState.value.typeEditor)
+        assertNull(vm.uiState.value.typeEditorError)
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    @Test
+    fun saveCustomAgentType_staleFailureAfterReopen_noStaleErrorInNewEditor() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val gate = CompletableDeferred<CustomAgentTypeDto>()
+        coEvery { fx.customTypesRepo.createType("Aider", "aider") } coAnswers { gate.await() }
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("Aider", "aider")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.typeEditorSaving)
+
+        val other = customType(id = "t2", name = "Goose", command = "goose")
+        vm.dismissTypeEditor()
+        vm.openTypeEditor(other)
+
+        gate.completeExceptionally(
+            ApiException(409, """{"detail":"An agent type named \"Aider\" already exists"}"""),
+        )
+        advanceUntilIdle()
+
+        assertEquals(TypeEditorState.Open(other), vm.uiState.value.typeEditor)
+        assertNull(
+            "a stale save's error must not surface in an editor it did not come from",
+            vm.uiState.value.typeEditorError,
+        )
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    @Test
+    fun saveCustomAgentType_staleFailureAfterDismiss_staysHiddenWithoutError() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val gate = CompletableDeferred<CustomAgentTypeDto>()
+        coEvery { fx.customTypesRepo.createType("Aider", "aider") } coAnswers { gate.await() }
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("Aider", "aider")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.typeEditorSaving)
+
+        vm.dismissTypeEditor()
+
+        gate.completeExceptionally(ApiException(500, """{"detail":"boom"}"""))
+        advanceUntilIdle()
+
+        assertEquals(TypeEditorState.Hidden, vm.uiState.value.typeEditor)
+        assertNull(vm.uiState.value.typeEditorError)
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    // ---- Custom type delete flow --------------------------------------------
+
+    @Test
+    fun confirmDeleteType_success_deletesAndDismissesDialog() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.customTypesRepo.deleteType("t1") } just Runs
+
+        vm.requestDeleteType(customType(id = "t1"))
+        vm.confirmDeleteType()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.customTypesRepo.deleteType("t1") }
+        assertNull(vm.uiState.value.deleteTypeTarget)
+        assertFalse(vm.uiState.value.deleteTypeInFlight)
+        assertNull(vm.uiState.value.error)
+    }
+
+    @Test
+    fun confirmDeleteType_403_treatedAsAlreadyGone_dismissesAndRefreshes() = runTest {
+        // 403 means the type is already gone elsewhere — success semantics
+        // plus a reconcile refresh, never an error banner.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.customTypesRepo.deleteType("t1") } throws
+            ApiException(403, """{"detail":"Not found"}""")
+
+        vm.requestDeleteType(customType(id = "t1"))
+        vm.confirmDeleteType()
+        advanceUntilIdle()
+
+        assertNull(vm.uiState.value.deleteTypeTarget)
+        assertNull(vm.uiState.value.error)
+        // Once from init's cold-start seed + once from the 403 reconcile.
+        coVerify(exactly = 2) { fx.customTypesRepo.refreshTypes() }
+    }
+
+    @Test
+    fun confirmDeleteType_serverError_keepsDialogClosed_setsErrorBanner() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.customTypesRepo.deleteType("t1") } throws
+            ApiException(500, """{"detail":"boom"}""")
+
+        vm.requestDeleteType(customType(id = "t1"))
+        vm.confirmDeleteType()
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.deleteTypeInFlight)
+        assertNotNull(vm.uiState.value.error)
+    }
+
+    // ---- Custom launch error mapping ----------------------------------------
+
+    @Test
+    fun submitCustomAgent_agentUpdateRequired409_setsUpdateAgentMessage() = runTest {
+        // Relay-side gate: the agent's live tunnel negotiated protocol < 7.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(409, """{"agent_update_required":true,"detail":"agent too old"}""")
+
+        vm.selectProject("beta") // non-git -> submits immediately
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("t1"))
+        vm.selectCustomAgentMode("t1")
+        advanceUntilIdle()
+
+        assertEquals(
+            "Update your agent to launch custom agent types",
+            vm.uiState.value.error,
+        )
+        assertFalse(vm.uiState.value.submitting)
+    }
+
+    @Test
+    fun submitCustomAgent_404_setsDeletedMessage_andRefreshesTypes() = runTest {
+        // The type was deleted between rendering the card and the launch —
+        // recognized by the relay's exact detail string, not the status alone.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(404, """{"detail":"Custom agent type not found"}""")
+
+        vm.selectProject("beta")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("t1"))
+        vm.selectCustomAgentMode("t1")
+        advanceUntilIdle()
+
+        assertEquals("This agent type was deleted", vm.uiState.value.error)
+        // Once from init's cold-start seed + once from the 404 reconcile.
+        coVerify(exactly = 2) { fx.customTypesRepo.refreshTypes() }
+    }
+
+    @Test
+    fun submitCustomAgent_projectDeleted404_fallsThroughToGenericError() = runTest {
+        // A custom launch can also 404 for a concurrently-deleted PROJECT
+        // (agent-side detail) — same status, different detail string. That
+        // must not masquerade as a deleted type nor trigger a type refresh.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(404, """{"detail":"Project 'beta' not found"}""")
+
+        vm.selectProject("beta")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.Custom("t1"))
+        vm.selectCustomAgentMode("t1")
+        advanceUntilIdle()
+
+        assertNotNull(vm.uiState.value.error)
+        assertTrue(vm.uiState.value.error!!.startsWith("Failed to create session"))
+        assertFalse(vm.uiState.value.submitting)
+        // Only init's cold-start seed — a project 404 must not reconcile types.
+        coVerify(exactly = 1) { fx.customTypesRepo.refreshTypes() }
+    }
+
+    @Test
+    fun submitCustomShell_404_isNotMappedToDeletedTypeMessage() = runTest {
+        // The 404 → "deleted" mapping is gated on a custom_ cli — a plain
+        // Terminal 404 must fall through to the generic failure copy.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        coEvery { fx.sessionRepo.createSession(any()) } throws
+            ApiException(404, """{"detail":"project gone"}""")
+
+        vm.selectProject("beta")
+        vm.confirmProject()
+        vm.pickMode(CreateSessionMode.CustomShell)
+        vm.selectTerminalMode()
+        advanceUntilIdle()
+
+        assertNotNull(vm.uiState.value.error)
+        assertTrue(vm.uiState.value.error!!.startsWith("Failed to create session"))
+        // Only init's cold-start seed — no reconcile for non-custom launches.
+        coVerify(exactly = 1) { fx.customTypesRepo.refreshTypes() }
     }
 }

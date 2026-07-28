@@ -36,6 +36,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
@@ -145,22 +147,25 @@ class TerminalViewModel @Inject constructor(
 
     /** The session's kind once actually resolved, null until then. Consumed by
      *  [savedShortcutsForKind], which must not render another kind's saved
-     *  buttons while the eager Claude seed is still standing in (they would be
-     *  tappable in the wrong session kind).
+     *  buttons while the kind is unresolved (they would be tappable in the
+     *  wrong session kind).
      *
      *  Two writers, both authoritative: the [sessionKind] merge below, and
      *  [saveShortcut], which publishes what its own resolution found so a save
      *  cannot land while this gate is still shut. They can therefore disagree
      *  on a cold launch whose REST seed failed — this may hold the real kind
-     *  while [sessionKind] still reports the seeded Claude default until a WS
-     *  push corrects it. Do not assume `resolvedKind == sessionKind`. */
+     *  while [sessionKind] is still null until a WS push corrects it. Do not
+     *  assume `resolvedKind == sessionKind`. */
     private val resolvedKind = MutableStateFlow<SessionKind?>(null)
 
     /** CLI of this session, used to drive the CLI-aware control-key bar. Resolved from
      *  the app-scoped session list (the single source of truth) and, on a cold launch,
-     *  from a one-shot REST seed. Defaults to Claude until either resolves, then sticks
-     *  to the real kind (immutable per session, so the two sources never disagree). */
-    val sessionKind: StateFlow<SessionKind> =
+     *  from a one-shot REST seed. Null until either resolves — consumers render the
+     *  kind-neutral default (plain key bar, no saved shortcuts, no MRU writes) rather
+     *  than guessing Claude, which would flash the wrong bar and mislabel MRU buckets
+     *  for custom/Codex sessions — then sticks to the real kind (immutable per
+     *  session, so the two sources never disagree). */
+    val sessionKind: StateFlow<SessionKind?> =
         merge(
             sessionRepository.observeSessionList()
                 .mapNotNull { sessions ->
@@ -169,17 +174,17 @@ class TerminalViewModel @Inject constructor(
             flow {
                 // observeSessionList() is WS-pushed with no replay, so a cold launch
                 // (notification tap / deep link) can build this VM before the first
-                // sessions.changed snapshot — the list starts empty and a Codex session
-                // would show the Claude key bar. Delegate to resolvedSessionKind() —
-                // the single implementation of live-list-then-REST resolution, shared
-                // with saveShortcut — for a one-shot seed. mapNotNull above means the
-                // Claude default only ever comes from stateIn's seed value, so there
-                // is no Codex→Claude→Codex flicker once a real kind arrives.
+                // sessions.changed snapshot — the list starts empty and the kind
+                // would stay unresolved. Delegate to resolvedSessionKind() — the
+                // single implementation of live-list-then-REST resolution, shared
+                // with saveShortcut — for a one-shot seed. mapNotNull above means
+                // null only ever comes from stateIn's seed value, so there is no
+                // Codex→null→Codex flicker once a real kind arrives.
                 resolvedSessionKind()?.let { emit(it) }
             },
         )
             .onEach { resolvedKind.value = it }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, SessionKind.Claude)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -390,22 +395,36 @@ class TerminalViewModel @Inject constructor(
             .mapNotNull(KeyChord::parse)
     }
 
-    /** Fired when the shortcut picker opens (lazy — see [shortcutRecents]). */
+    /** Pending recents load; cancel-and-replace so reopening the picker while
+     *  a previous open is still awaiting kind resolution never leaks a
+     *  suspended collector or double-writes [_shortcutRecents]. */
+    private var shortcutRecentsLoadJob: Job? = null
+
+    /** Fired when the shortcut picker opens (lazy — see [shortcutRecents]).
+     *  Suspends until the kind resolves rather than no-opping: the picker can
+     *  open in the sub-second window before the session list / REST seed
+     *  names the kind, and a one-shot early return would leave the MRU row
+     *  empty for the rest of that open while the saved-shortcut list (a
+     *  combine over [resolvedKind]) self-heals. */
     fun refreshShortcutRecents() {
-        viewModelScope.launch {
-            runCatching { loadShortcutRecents(sessionKind.value.wireName) }
+        shortcutRecentsLoadJob?.cancel()
+        shortcutRecentsLoadJob = viewModelScope.launch {
+            val kindKey = sessionKind.filterNotNull().first().wireName
+            runCatching { loadShortcutRecents(kindKey) }
         }
     }
 
     /** Encode a chord and send it down the raw-byte path. The send is
      *  unconditional; MRU persistence is a UX nicety that must never block or
-     *  fail the send, so it runs fire-and-forget afterwards. */
+     *  fail the send, so it runs fire-and-forget afterwards — and is skipped
+     *  entirely while the kind is unresolved rather than recorded under a
+     *  guessed bucket. */
     fun sendChord(chord: KeyChord) {
         val encoding = KeyChordEncoder.encode(chord) ?: return
         sendBytes(encoding.bytes)
+        val kindKey = sessionKind.value?.wireName ?: return
         viewModelScope.launch {
             runCatching {
-                val kindKey = sessionKind.value.wireName
                 preferencesStore.addRecentShortcutChord(kindKey, chord.token())
                 loadShortcutRecents(kindKey)
             }
@@ -532,11 +551,10 @@ class TerminalViewModel @Inject constructor(
     }
 
     /** The session's actual kind, or null while it cannot be determined.
-     *  [sessionKind] seeds Claude until the session list or REST fetch
-     *  resolves the real kind, and persisting a synced shortcut under the
-     *  seed would file it in the wrong per-kind bucket permanently (unlike
-     *  the self-healing device-local recents) — so saves re-resolve from
-     *  the authoritative sources instead of trusting the StateFlow value. */
+     *  Persisting a synced shortcut under a guessed kind would file it in
+     *  the wrong per-kind bucket permanently (unlike the self-healing
+     *  device-local recents) — so saves re-resolve from the authoritative
+     *  sources instead of trusting the [sessionKind] StateFlow value. */
     private suspend fun resolvedSessionKind(): SessionKind? {
         sessionRepository.observeSessionList().value
             .firstOrNull { it.session_id == sessionId }

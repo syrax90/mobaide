@@ -17,6 +17,7 @@ import com.mobaide.app.data.repository.AgentUpdateRepository
 import com.mobaide.app.data.repository.AgentVersionMonitor
 import com.mobaide.app.data.repository.AuthRepository
 import com.mobaide.app.data.repository.AutoScanRepository
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.DeviceRepository
 import com.mobaide.app.data.repository.GitRepository
 import com.mobaide.app.data.repository.LinearMetadataRepository
@@ -174,6 +175,15 @@ object RepositoryModule {
 
     @Provides
     @Singleton
+    fun provideCustomAgentTypesRepository(
+        centralApi: CentralApi,
+        userIdentityStore: UserIdentityStore,
+    ): CustomAgentTypesRepository {
+        return CustomAgentTypesRepository(centralApi, userIdentityStore)
+    }
+
+    @Provides
+    @Singleton
     fun provideUserEventBus(
         webSocketManager: WebSocketManager,
         sessionManager: SessionManager,
@@ -181,6 +191,7 @@ object RepositoryModule {
         agentRepository: AgentRepository,
         templatesRepository: TemplatesRepository,
         shortcutsRepository: ShortcutsRepository,
+        customAgentTypesRepository: CustomAgentTypesRepository,
     ): UserEventBus {
         return UserEventBus(
             webSocketManager,
@@ -189,6 +200,7 @@ object RepositoryModule {
             agentRepository,
             templatesRepository,
             shortcutsRepository,
+            customAgentTypesRepository,
         )
     }
 

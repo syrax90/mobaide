@@ -7,6 +7,7 @@ import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import io.mockk.Runs
@@ -56,6 +57,9 @@ class UserEventBusTest {
 
     // ---- Fixture ------------------------------------------------------------
 
+    // New collaborators are appended LAST: tests positionally destructure
+    // prefixes of this fixture, so inserting in the middle would silently
+    // shift every existing destructuring.
     private data class Fixture(
         val bus: UserEventBus,
         val connEvents: MutableSharedFlow<WsEvent>,
@@ -64,6 +68,8 @@ class UserEventBusTest {
         val agentRepository: AgentRepository,
         val templatesRepository: TemplatesRepository,
         val shortcutsRepository: ShortcutsRepository,
+        val customAgentTypesRepository: CustomAgentTypesRepository,
+        val authStateFlow: MutableStateFlow<SessionManager.AuthState>,
     )
 
     private fun newBus(initiallyLoggedIn: Boolean = true): Fixture {
@@ -96,15 +102,26 @@ class UserEventBusTest {
         val shortcutsRepository = mockk<ShortcutsRepository>()
         every { shortcutsRepository.applyUpserted(any()) } just Runs
         every { shortcutsRepository.applyDeleted(any()) } just Runs
+        every { shortcutsRepository.purgeKind(any()) } just Runs
+        every { shortcutsRepository.clear() } just Runs
         coEvery { shortcutsRepository.refreshShortcuts() } just Runs
+        every { templatesRepository.clear() } just Runs
+
+        val customAgentTypesRepository = mockk<CustomAgentTypesRepository>()
+        every { customAgentTypesRepository.applyUpserted(any()) } just Runs
+        every { customAgentTypesRepository.applyDeleted(any()) } just Runs
+        every { customAgentTypesRepository.clear() } just Runs
+        coEvery { customAgentTypesRepository.refreshTypes() } just Runs
 
         val bus = UserEventBus(
             wsm, sessionManager, userIdentityStore,
             agentRepository, templatesRepository, shortcutsRepository,
+            customAgentTypesRepository,
         )
         return Fixture(
             bus, connEvents, conn, wsm,
             agentRepository, templatesRepository, shortcutsRepository,
+            customAgentTypesRepository, authStateFlow,
         )
     }
 
@@ -824,5 +841,206 @@ class UserEventBusTest {
         verify(exactly = 0) { shortcuts.applyDeleted(any()) }
 
         bus.stop()
+    }
+
+    // ---- parse(): custom_type.* envelopes -> CustomAgentTypesRepository -----
+
+    private fun customTypeJson(
+        id: String = "ab12cd34ef56",
+        name: String = "Aider",
+        command: String = "aider --model sonnet",
+    ): String =
+        """
+        {
+          "id": "$id",
+          "name": "$name",
+          "command": "$command",
+          "created_at": "2026-07-28T12:00:00Z",
+          "updated_at": "2026-07-28T12:00:00Z"
+        }
+        """.trimIndent()
+
+    @Test
+    fun connected_event_alsoTriggersRefreshTypes() = runTest {
+        // On WS reconnect the bus must reconcile custom agent types as well —
+        // otherwise custom_type.* events that fired while offline would be lost.
+        val (bus, connEvents, _, _, _, _, _, customTypes) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(connEvents, WsEvent.Connected)
+
+        coVerify(timeout = 2000, exactly = 1) { customTypes.refreshTypes() }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_customTypeCreated_callsApplyUpserted_withParsedDto() = runTest {
+        val (bus, connEvents, _, _, _, _, _, customTypes) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"custom_type.created","payload":${customTypeJson(id = "ab12cd34ef56", name = "Aider")}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) {
+            customTypes.applyUpserted(
+                match {
+                    it.id == "ab12cd34ef56" &&
+                        it.name == "Aider" &&
+                        it.command == "aider --model sonnet"
+                },
+            )
+        }
+        verify(exactly = 1) { customTypes.applyUpserted(any()) }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_customTypeUpdated_callsApplyUpserted_withParsedDto() = runTest {
+        val (bus, connEvents, _, _, _, _, _, customTypes) = newBus()
+        bus.start()
+        awaitSubscribed(connEvents)
+
+        emit(
+            connEvents,
+            WsEvent.Message(
+                """{"type":"custom_type.updated","payload":${customTypeJson(id = "ab12cd34ef56", name = "Renamed")}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) {
+            customTypes.applyUpserted(
+                match { it.id == "ab12cd34ef56" && it.name == "Renamed" },
+            )
+        }
+
+        bus.stop()
+    }
+
+    @Test
+    fun message_customTypeDeleted_appliesDeleted_andPurgesShortcutKind() = runTest {
+        // The server cascades the type's saved shortcuts in the same
+        // transaction WITHOUT per-shortcut shortcut.deleted events — the bus
+        // must mirror that locally via purgeKind on the full wire kind, and
+        // must NOT route through the per-shortcut applyDeleted path.
+        val fx = newBus()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"custom_type.deleted","payload":{"id":"ab12cd34ef56"}}""",
+            ),
+        )
+
+        verify(timeout = 2000, exactly = 1) {
+            fx.customAgentTypesRepository.applyDeleted("ab12cd34ef56")
+        }
+        verify(timeout = 2000, exactly = 1) {
+            fx.shortcutsRepository.purgeKind("custom_ab12cd34ef56")
+        }
+        verify(exactly = 0) { fx.shortcutsRepository.applyDeleted(any()) }
+
+        fx.bus.stop()
+    }
+
+    @Test
+    fun message_customTypeCreatedMalformedPayload_isSilentlySkipped() = runTest {
+        // Payload missing the required `command` field — the inner decode must
+        // fail and the bus must remain alive for the next message.
+        val fx = newBus()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"custom_type.created","payload":{"id":"t-1","name":"x"}}""",
+            ),
+        )
+
+        // Synchronize on a valid follow-up, then assert nothing fired.
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) {
+            fx.agentRepository.updateAgentOnline("sync", true)
+        }
+        verify(exactly = 0) { fx.customAgentTypesRepository.applyUpserted(any()) }
+        verify(exactly = 0) { fx.customAgentTypesRepository.applyDeleted(any()) }
+
+        fx.bus.stop()
+    }
+
+    @Test
+    fun message_customTypeDeletedMissingId_isSilentlySkipped() = runTest {
+        // custom_type.deleted without the required `id` field — the payload
+        // decode must throw, be swallowed, and neither the type delete nor
+        // the shortcut cascade may run on a guessed id.
+        val fx = newBus()
+        fx.bus.start()
+        awaitSubscribed(fx.connEvents)
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message("""{"type":"custom_type.deleted","payload":{}}"""),
+        )
+
+        emit(
+            fx.connEvents,
+            WsEvent.Message(
+                """{"type":"agent.status_changed","payload":{"agent_id":"sync","online":true}}""",
+            ),
+        )
+        verify(timeout = 2000, exactly = 1) {
+            fx.agentRepository.updateAgentOnline("sync", true)
+        }
+        verify(exactly = 0) { fx.customAgentTypesRepository.applyDeleted(any()) }
+        verify(exactly = 0) { fx.shortcutsRepository.purgeKind(any()) }
+
+        fx.bus.stop()
+    }
+
+    // ---- Auth lifecycle: logout clears the account-scoped caches ------------
+
+    @Test
+    fun unauthenticated_transition_clearsAccountScopedCaches() = runTest {
+        // Every logout/account-switch path funnels through
+        // AuthState.Unauthenticated — the single seam where the previous
+        // account's templates/shortcuts/custom-type caches must be dropped.
+        val fx = newBus(initiallyLoggedIn = true)
+
+        // The bus's auth collector applies drop(1) to skip the initial state.
+        // Flipping the flow before that collector subscribes would make
+        // Unauthenticated itself the dropped first value — wait for the
+        // subscription on wall time, mirroring awaitSubscribed.
+        runBlocking {
+            val deadline = System.currentTimeMillis() + 2000
+            while (fx.authStateFlow.subscriptionCount.value == 0 &&
+                System.currentTimeMillis() < deadline
+            ) {
+                kotlinx.coroutines.delay(10)
+            }
+            check(fx.authStateFlow.subscriptionCount.value > 0) {
+                "UserEventBus did not subscribe to authState within 2s"
+            }
+        }
+
+        fx.authStateFlow.value = SessionManager.AuthState.Unauthenticated
+
+        verify(timeout = 2000, exactly = 1) { fx.templatesRepository.clear() }
+        verify(timeout = 2000, exactly = 1) { fx.shortcutsRepository.clear() }
+        verify(timeout = 2000, exactly = 1) { fx.customAgentTypesRepository.clear() }
     }
 }
