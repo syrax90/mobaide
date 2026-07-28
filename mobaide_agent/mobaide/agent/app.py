@@ -689,7 +689,7 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
     # conventions (``worktree_base``, ``branch_prefix``, ``main_branch``) come
     # from AutoScanConfig when present; otherwise sensible defaults apply.
     auto_scan_cfg = config.auto_scan_config or AutoScanConfig()
-    prefix = auto_scan_cfg.branch_prefix or "feature/claude"
+    prefix = auto_scan_cfg.branch_prefix or "feature/mobaide"
     worktree_mgr = WorktreeManager(
         worktree_base=auto_scan_cfg.worktree_base,
         branch_prefix=prefix,

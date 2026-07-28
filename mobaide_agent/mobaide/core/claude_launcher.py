@@ -340,7 +340,7 @@ class ClaudeLauncher:
             from mobaide.linear.worktree import convert_to_worktree_slug
 
             # The WorktreeManager applies its configured ``branch_prefix``
-            # (e.g. ``feature/claude/<slug>``) to the issue-derived slug.
+            # (e.g. ``feature/mobaide/<slug>``) to the issue-derived slug.
             slug = convert_to_worktree_slug(options.identifier, options.title or "")
             result = await self._worktree_mgr.create_worktree(slug, target.path)
             return check_cwd_exists(result.path)

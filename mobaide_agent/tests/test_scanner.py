@@ -31,7 +31,7 @@ def _make_config(tmp_path, *, auto_remove_worktrees: bool = True) -> AutoScanCon
     return AutoScanConfig(
         worktree_base="mobaide_worktree",
         scan_interval_seconds=1,
-        branch_prefix="feature/claude",
+        branch_prefix="feature/mobaide",
         main_branch="main",
         auto_scan_prompt=None,
         auto_remove_worktrees=auto_remove_worktrees,
@@ -312,7 +312,7 @@ class TestProcessIssueEmitsPerStepEvents:
 
         launcher = AsyncMock()
         launcher.build.side_effect = WorktreeCreationError(
-            branch="feature/claude/cla-8-test-issue", path="/x", stderr="boom",
+            branch="feature/mobaide/cla-8-test-issue", path="/x", stderr="boom",
         )
 
         inst = _make_instance(
@@ -641,7 +641,7 @@ class TestProcessIssueForwardsClientOptions:
         config = AutoScanConfig(
             worktree_base="mobaide_worktree",
             scan_interval_seconds=1,
-            branch_prefix="feature/claude",
+            branch_prefix="feature/mobaide",
             main_branch="main",
             auto_scan_prompt="ENGINE DEFAULT",
             auto_remove_worktrees=False,
@@ -770,7 +770,7 @@ class TestWorktreeCleanup:
 
         launcher = AsyncMock()
         launcher.build.side_effect = WorktreeCreationError(
-            branch="feature/claude/cla-noWT-test-issue", path="/x", stderr="boom",
+            branch="feature/mobaide/cla-noWT-test-issue", path="/x", stderr="boom",
         )
 
         inst = _make_instance(

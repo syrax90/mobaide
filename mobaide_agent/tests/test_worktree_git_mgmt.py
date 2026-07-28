@@ -187,7 +187,7 @@ class TestParseWorktreePorcelain:
             "\n"
             "worktree /repo/mobaide_worktree/cla-1\n"
             "HEAD sha2\n"
-            "branch refs/heads/feature/claude/cla-1\n"
+            "branch refs/heads/feature/mobaide/cla-1\n"
             "\n"
             "worktree /repo/mobaide_worktree/detached\n"
             "HEAD sha3\n"
@@ -202,7 +202,7 @@ class TestParseWorktreePorcelain:
             "/repo/mobaide_worktree/detached",
         ]
         assert result[2].detached is True
-        assert result[1].branch == "refs/heads/feature/claude/cla-1"
+        assert result[1].branch == "refs/heads/feature/mobaide/cla-1"
 
     def test_carriage_returns_stripped(self):
         # Git-on-Windows can emit CRLF-terminated lines.
@@ -233,7 +233,7 @@ class TestParseWorktreePorcelain:
 def manager() -> WorktreeManager:
     return WorktreeManager(
         worktree_base="mobaide_worktree",
-        branch_prefix="feature/claude",
+        branch_prefix="feature/mobaide",
         main_branch="main",
     )
 
