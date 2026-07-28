@@ -474,21 +474,33 @@ final class TerminalSessionModel {
     // types — rename-stable). A deleted type's bucket is deliberately left
     // behind: it is device-local, invisible without a session of that kind,
     // and purging would race the push-driven type cache (Android parity).
+    // Both readers and the writer gate on `resolvedKind` — the construction
+    // seed can be a `.claude` guess (cold-start deep link), and reading or
+    // writing under a guessed bucket would leak recents across kinds.
+    // `adoptResolvedKind` re-runs this on resolution, so an open picker
+    // self-heals from empty to the right bucket.
     func refreshShortcutRecents() {
+        guard let resolvedKind else {
+            shortcutRecents = []
+            return
+        }
         shortcutRecents = preferencesStore
-            .getRecentShortcutChords(kindKey: (resolvedKind ?? kind).wireName)
+            .getRecentShortcutChords(kindKey: resolvedKind.wireName)
             .compactMap(KeyChord.parse)
     }
 
     /// Encode and send the chord, then record it in the device-local MRU.
     /// Deliberately not session-gated here — the send surfaces disable in the
     /// UI instead (Android parity). The send happens before the MRU write so
-    /// persistence can never interfere with delivery.
+    /// persistence can never interfere with delivery; the write is skipped
+    /// while the kind is unresolved (never persist into a guessed bucket —
+    /// Android returns after the send there too).
     func sendChord(_ chord: KeyChord) {
         guard let encoding = KeyChordEncoder.encode(chord) else { return }
         sendBytes(Data(encoding.bytes))
+        guard let resolvedKind else { return }
         preferencesStore.addRecentShortcutChord(
-            kindKey: (resolvedKind ?? kind).wireName,
+            kindKey: resolvedKind.wireName,
             token: chord.token
         )
         refreshShortcutRecents()
@@ -520,9 +532,9 @@ final class TerminalSessionModel {
     func adoptResolvedKind(_ kind: SessionKind) {
         if resolvedKind == nil {
             resolvedKind = kind
-            // Recents already loaded under the `.claude` rendering fallback
-            // belong to another kind's bucket; reload so an open picker shows
-            // (and sendChord records into) the right one.
+            // Recents are gated empty while the kind is unresolved; reload so
+            // an open picker repopulates from (and sendChord records into)
+            // the resolved kind's bucket.
             refreshShortcutRecents()
         }
     }
