@@ -1,21 +1,38 @@
 package com.mobaide.app.data.network.dto
 
-import kotlinx.serialization.SerialName
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 
-@Serializable
-enum class SessionKind {
-    @SerialName("claude") Claude,
-    @SerialName("codex") Codex,
-    @SerialName("antigravity") Antigravity,
-    @SerialName("auto_scan") AutoScan,
-    @SerialName("shell") Shell,
+/**
+ * Open session-kind vocabulary (proto-v7). The built-in kinds are singletons;
+ * any other wire string — account-scoped custom agent types (`custom_<12hex>`)
+ * or kinds added by a newer server — is preserved verbatim in [Custom] instead
+ * of being coerced to Claude, so per-kind behavior (labels, key bars, shortcut
+ * scoping) never mislabels a non-Claude session.
+ */
+@Serializable(with = SessionKindSerializer::class)
+sealed interface SessionKind {
+    data object Claude : SessionKind
+    data object Codex : SessionKind
+    data object Antigravity : SessionKind
+    data object AutoScan : SessionKind
+    data object Shell : SessionKind
+
+    /** Any kind string this build does not recognize, held verbatim. */
+    data class Custom(val raw: String) : SessionKind
 }
 
 /**
- * The @SerialName wire value of each kind, used as a stable per-kind storage
- * key suffix. Must stay in lockstep with the annotations above; the exhaustive
- * when forces an entry for every new kind at compile time.
+ * The wire value of each kind, used as a stable per-kind storage key suffix
+ * (shortcut buckets, MRU recents). The exhaustive when forces an entry for
+ * every new built-in kind at compile time; [SessionKind.Custom] passes its
+ * raw wire string through, which keeps custom buckets rename-stable (the id,
+ * not the display name, is in the key).
  */
 val SessionKind.wireName: String
     get() = when (this) {
@@ -24,7 +41,40 @@ val SessionKind.wireName: String
         SessionKind.Antigravity -> "antigravity"
         SessionKind.AutoScan -> "auto_scan"
         SessionKind.Shell -> "shell"
+        is SessionKind.Custom -> raw
     }
+
+/**
+ * Hand-written serializer with a [PrimitiveKind.STRING] descriptor — never an
+ * ENUM-kind descriptor: `Json { coerceInputValues = true }` performs its
+ * unknown-value-to-default coercion *before* invoking a custom deserializer
+ * when the descriptor kind is ENUM (kotlinx.serialization#1947), which would
+ * silently re-introduce the unknown-kind→Claude mislabel this type exists to
+ * remove. With a STRING descriptor the flag is inert for non-null values,
+ * while an explicit `"kind": null` still coerces to the property default
+ * (null-coercion keys on the property's nullability, not the descriptor).
+ */
+object SessionKindSerializer : KSerializer<SessionKind> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("SessionKind", PrimitiveKind.STRING)
+
+    private val known = mapOf(
+        "claude" to SessionKind.Claude,
+        "codex" to SessionKind.Codex,
+        "antigravity" to SessionKind.Antigravity,
+        "auto_scan" to SessionKind.AutoScan,
+        "shell" to SessionKind.Shell,
+    )
+
+    override fun deserialize(decoder: Decoder): SessionKind {
+        val raw = decoder.decodeString()
+        return known[raw] ?: SessionKind.Custom(raw)
+    }
+
+    override fun serialize(encoder: Encoder, value: SessionKind) {
+        encoder.encodeString(value.wireName)
+    }
+}
 
 @Serializable
 data class SessionResponse(
@@ -37,6 +87,10 @@ data class SessionResponse(
     val title: String? = null,
     val project_name: String? = null,
     val kind: SessionKind = SessionKind.Claude,
+    // Display-name snapshot of a custom agent type at session-creation time
+    // (proto-v7); null for built-in kinds. Survives rename/delete of the type,
+    // so lists keep a meaningful label without a live registry lookup.
+    val kind_label: String? = null,
     // Attention state (proto-v4): "awaiting_permission" |
     // "awaiting_os_permission" | "turn_finished" | "ended" | null.
     // "awaiting_os_permission" is the agent's startup-stall heuristic (the
@@ -58,8 +112,10 @@ data class CreateSessionRequest(
     val cols: Int = 80,
     // When set, command/cwd/env are ignored; the server derives them from the named project.
     val project_name: String? = null,
-    // Which managed CLI to launch: "claude" | "codex" | "antigravity". Null for Terminal/shell
-    // sessions; when null the server infers the kind from whichever options block is present.
+    // Which managed CLI to launch: "claude" | "codex" | "antigravity", or "custom_<12hex>"
+    // for an account-scoped custom agent type (proto-v7; the relay resolves the stored
+    // command — the client never sends it). Null for Terminal/shell sessions; when null
+    // the server infers the kind from whichever options block is present.
     val cli: String? = null,
     val claude_options: ClaudeOptionsModel? = null,
     val codex_options: CodexOptionsModel? = null,

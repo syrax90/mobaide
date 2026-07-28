@@ -10,8 +10,9 @@ import org.junit.Test
 /**
  * Wire-contract guard for the Codex DTOs: [CodexOptionsModel] must serialize the
  * same snake_case keys + defaults as the server Pydantic model, [SessionKind]
- * must round-trip the new `codex` value, and an unknown future kind must coerce
- * to the default rather than throwing (the coerceInputValues forward-compat path).
+ * must round-trip the new `codex` value, and an unknown future kind must be
+ * preserved verbatim as [SessionKind.Custom] rather than throwing or coercing
+ * to Claude (proto-v7; see [SessionKindSerializerTest]).
  */
 class CodexOptionsModelTest {
 
@@ -64,15 +65,17 @@ class CodexOptionsModelTest {
     }
 
     @Test
-    fun unknownSessionKind_coercesToDefault_insteadOfThrowing() {
-        // Forward-compat: a kind added by a newer server (without a major proto
-        // bump) must not break decoding of the whole session snapshot. Uses a
-        // still-unknown wire value ("grok") — "antigravity" is now a real kind.
+    fun unknownSessionKind_isPreservedVerbatim_asCustom_insteadOfCoercingToClaude() {
+        // Forward-compat, proto-v7: a kind added by a newer server (or an
+        // account-scoped custom type) must not break decoding of the whole
+        // session snapshot AND must not be mislabeled as Claude — the raw wire
+        // string is held verbatim in SessionKind.Custom. Uses a still-unknown
+        // wire value ("grok") — "antigravity" is now a real kind.
         val dto = json.decodeFromString(
             SessionResponse.serializer(),
             """{"session_id":"s1","state":"running","created_at":"t","kind":"grok"}""",
         )
-        assertEquals(SessionKind.Claude, dto.kind)
+        assertEquals(SessionKind.Custom("grok"), dto.kind)
     }
 
     @Test

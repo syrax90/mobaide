@@ -30,9 +30,11 @@ import org.junit.Test
  * Unit tests for [TerminalViewModel.sessionKind] — the CLI-aware control-key bar reads
  * this to pick the Codex vs Claude/shell key set. It is derived from the app-scoped
  * [SessionRepository.observeSessionList] (the single source of truth), matched on the
- * session id, defaulting to [SessionKind.Claude] until the snapshot resolves and flipping
- * reactively when it does. On a cold launch (the WS list still empty), a one-shot
- * [SessionRepository.listSessions] REST seed resolves the kind before the first snapshot.
+ * session id, staying null (kind-neutral rendering, proto-v7 — never a guessed Claude
+ * seed, which would flash the wrong bar for Codex/custom sessions) until the snapshot
+ * resolves and flipping reactively when it does. On a cold launch (the WS list still
+ * empty), a one-shot [SessionRepository.listSessions] REST seed resolves the kind
+ * before the first snapshot.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class TerminalViewModelSessionKindTest {
@@ -92,13 +94,15 @@ class TerminalViewModelSessionKindTest {
         }
 
     @Test
-    fun sessionKind_defaultsClaude_whenSessionNotInList() =
+    fun sessionKind_staysNull_whenSessionNotInList() =
         runTest(testDispatcher) {
+            // Unresolved must be null, not a guessed Claude — consumers render
+            // the kind-neutral default bar and skip MRU bucket writes.
             val sessions = MutableStateFlow<List<SessionResponse>>(emptyList())
             val vm = newViewModel(newRepository(sessions))
             runCurrent()
 
-            assertEquals(SessionKind.Claude, vm.sessionKind.value)
+            assertEquals(null, vm.sessionKind.value)
         }
 
     @Test
@@ -108,7 +112,20 @@ class TerminalViewModelSessionKindTest {
             val vm = newViewModel(newRepository(sessions))
             runCurrent()
 
-            assertEquals(SessionKind.Claude, vm.sessionKind.value)
+            assertEquals(null, vm.sessionKind.value)
+        }
+
+    @Test
+    fun sessionKind_resolvesCustomKind_preservingRawWireString() =
+        runTest(testDispatcher) {
+            // A custom-agent-type session must resolve to its verbatim wire
+            // kind — the key bar and shortcut buckets key off the raw string.
+            val kind = SessionKind.Custom("custom_ab12cd34ef56")
+            val sessions = MutableStateFlow(listOf(session("test-session", kind)))
+            val vm = newViewModel(newRepository(sessions))
+            runCurrent()
+
+            assertEquals(kind, vm.sessionKind.value)
         }
 
     @Test
@@ -118,8 +135,8 @@ class TerminalViewModelSessionKindTest {
             val vm = newViewModel(newRepository(sessions))
             runCurrent()
             assertEquals(
-                "pre-condition: empty list resolves to the default Claude set",
-                SessionKind.Claude,
+                "pre-condition: empty list stays unresolved (null)",
+                null,
                 vm.sessionKind.value,
             )
 
@@ -162,10 +179,11 @@ class TerminalViewModelSessionKindTest {
         }
 
     @Test
-    fun sessionKind_staysClaude_whenRestSeedFetchFails() =
+    fun sessionKind_staysNull_whenRestSeedFetchFails() =
         runTest(testDispatcher) {
-            // A failed REST seed must not crash the flow: it falls back to the Claude
-            // default, and the live list can still resolve the kind reactively later.
+            // A failed REST seed must not crash the flow: the kind stays
+            // unresolved (null), and the live list can still resolve it
+            // reactively later.
             val sessions = MutableStateFlow<List<SessionResponse>>(emptyList())
             val repo = mockk<SessionRepository> {
                 every { createSessionIoConnection("test-session") } returns connection
@@ -175,6 +193,6 @@ class TerminalViewModelSessionKindTest {
             val vm = newViewModel(repo)
             runCurrent()
 
-            assertEquals(SessionKind.Claude, vm.sessionKind.value)
+            assertEquals(null, vm.sessionKind.value)
         }
 }

@@ -367,6 +367,59 @@ class TerminalViewModelSavedShortcutsTest {
     }
 
     @Test
+    fun savedShortcutsForKind_customKind_filtersByRawWireKind() = runTest {
+        // Per-type shortcut scoping: a custom-agent session's saved
+        // row must show only its own "custom_<id>" bucket — never another
+        // custom type's bucket and never a built-in kind's.
+        sessionListFlow.value = listOf(
+            session(kind = SessionKind.Custom("custom_ab12cd34ef56")),
+        )
+        every { shortcutsRepository.observeShortcuts() } returns MutableStateFlow(
+            listOf(
+                dto("s-mine", kind = "custom_ab12cd34ef56", chordToken = "ctrl+a", name = "Mine"),
+                dto("s-other-type", kind = "custom_ffffffffffff", chordToken = "ctrl+b"),
+                dto("s-claude", kind = "claude", chordToken = "ctrl+c"),
+            ),
+        )
+        val vm = createViewModel()
+
+        backgroundScope.launch { vm.savedShortcutsForKind.collect {} }
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                SavedShortcutUi(
+                    id = "s-mine",
+                    chord = KeyChord(ctrl = true, key = "a"),
+                    name = "Mine",
+                    risky = false,
+                ),
+            ),
+            vm.savedShortcutsForKind.value,
+        )
+    }
+
+    @Test
+    fun saveShortcut_customKindSession_savesUnderRawWireKind() = runTest {
+        // The save must go out under the raw "custom_<id>" wire kind — the id
+        // (not the display name) keys the bucket, so renames never orphan it.
+        sessionListFlow.value = listOf(
+            session(kind = SessionKind.Custom("custom_ab12cd34ef56")),
+        )
+        coEvery {
+            shortcutsRepository.createShortcut(any(), any(), any())
+        } returns dto("s-1", kind = "custom_ab12cd34ef56", chordToken = "ctrl+x")
+        val vm = createViewModel()
+
+        vm.saveShortcut(KeyChord(ctrl = true, key = "x"))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            shortcutsRepository.createShortcut("custom_ab12cd34ef56", "ctrl+x", null)
+        }
+    }
+
+    @Test
     fun saveShortcut_coldLaunch_waitsForRestKind_neverSeededClaudeDefault() = runTest {
         // The regression this pins: sessionKind is eagerly seeded Claude, so
         // a save fired before the cold-launch REST seed lands used to file a

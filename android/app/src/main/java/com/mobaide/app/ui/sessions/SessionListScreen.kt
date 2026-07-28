@@ -181,6 +181,7 @@ fun SessionListScreen(
                 items(uiState.sessions, key = { it.session_id }) { session ->
                     SessionCard(
                         session = session,
+                        kindLabel = sessionKindLabel(session, uiState.customTypeNames),
                         onClick = { onSessionClick(session.session_id) },
                         onStop = { viewModel.deleteSession(session.session_id) },
                     )
@@ -191,9 +192,30 @@ fun SessionListScreen(
     }
 }
 
+/**
+ * Human-readable label for a session's kind. Custom types prefer the wire
+ * `kind_label` snapshot (creation-time name — stable across rename/delete of
+ * the type), then a live registry lookup by wire kind, then a generic
+ * fallback.
+ */
+private fun sessionKindLabel(
+    session: SessionResponse,
+    customTypeNames: Map<String, String>,
+): String = when (val kind = session.kind) {
+    SessionKind.Claude -> "Claude Code"
+    SessionKind.Codex -> "Codex"
+    SessionKind.Antigravity -> "Antigravity"
+    SessionKind.AutoScan -> "Auto Scan"
+    SessionKind.Shell -> "Terminal"
+    is SessionKind.Custom -> session.kind_label
+        ?: customTypeNames[kind.raw]
+        ?: "Custom"
+}
+
 @Composable
 private fun SessionCard(
     session: SessionResponse,
+    kindLabel: String,
     onClick: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -227,7 +249,7 @@ private fun SessionCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = session.title
-                        ?: "Claude Code · ${session.project_name ?: session.session_id.take(8)}",
+                        ?: "$kindLabel · ${session.project_name ?: session.session_id.take(8)}",
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = FontFamily.Monospace,
                     maxLines = 1,
@@ -235,13 +257,7 @@ private fun SessionCard(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = when (session.kind) {
-                        SessionKind.Claude -> "Claude Code"
-                        SessionKind.Codex -> "Codex"
-                        SessionKind.Antigravity -> "Antigravity"
-                        SessionKind.AutoScan -> "Auto Scan"
-                        SessionKind.Shell -> "Terminal"
-                    },
+                    text = kindLabel,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

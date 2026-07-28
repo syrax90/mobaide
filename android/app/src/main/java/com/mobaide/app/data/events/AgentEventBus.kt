@@ -46,9 +46,11 @@ class AgentEventBus @Inject constructor(
     private val sessionManager: SessionManager,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    // coerceInputValues: an unknown future SessionKind in a sessions.changed /
-    // session.* payload falls back to SessionResponse.kind's default instead of
-    // throwing and dropping the whole event.
+    // coerceInputValues no longer touches unknown SessionKind strings in
+    // sessions.changed / session.* payloads (they decode verbatim via
+    // SessionKindSerializer's STRING descriptor, proto-v7); it is kept so an
+    // explicit `"kind": null` still falls back to SessionResponse.kind's
+    // default instead of throwing and dropping the whole event.
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
     private val _events = MutableSharedFlow<AgentEvent>(

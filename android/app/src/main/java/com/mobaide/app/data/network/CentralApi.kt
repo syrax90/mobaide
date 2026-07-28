@@ -4,8 +4,10 @@ import com.mobaide.app.data.network.dto.AgentSummaryResponse
 import com.mobaide.app.data.network.dto.CancelAccountDeletionResponse
 import com.mobaide.app.data.network.dto.CreateAgentRequest
 import com.mobaide.app.data.network.dto.CreateAgentResponse
+import com.mobaide.app.data.network.dto.CreateCustomAgentTypeRequest
 import com.mobaide.app.data.network.dto.CreateShortcutRequest
 import com.mobaide.app.data.network.dto.CreateTemplateRequest
+import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.data.network.dto.DeleteAccountRequest
 import com.mobaide.app.data.network.dto.DeviceResponse
 import com.mobaide.app.data.network.dto.ForgotPasswordRequest
@@ -22,6 +24,7 @@ import com.mobaide.app.data.network.dto.ResetPasswordRequest
 import com.mobaide.app.data.network.dto.ResetPasswordResponse
 import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDto
+import com.mobaide.app.data.network.dto.UpdateCustomAgentTypeRequest
 import com.mobaide.app.data.network.dto.UpdateShortcutRequest
 import com.mobaide.app.data.network.dto.UpdateTemplateRequest
 import com.mobaide.app.data.network.dto.UserAuthResponse
@@ -359,6 +362,55 @@ class CentralApi(
     suspend fun deleteShortcut(userToken: String, shortcutId: String) {
         val request = Request.Builder()
             .url("${baseUrl()}/api/shortcuts/$shortcutId")
+            .delete()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        executeNoContent(request)
+    }
+
+    // Custom agent type endpoints (per-user CRUD, JWT-authed via the user dashboard token).
+
+    suspend fun listCustomAgentTypes(userToken: String): List<CustomAgentTypeDto> {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/custom-agent-types")
+            .get()
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun createCustomAgentType(
+        userToken: String,
+        name: String,
+        command: String,
+    ): CustomAgentTypeDto {
+        val payload = json.encodeToString(CreateCustomAgentTypeRequest(name, command))
+            .toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/custom-agent-types")
+            .post(payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun updateCustomAgentType(
+        userToken: String,
+        typeId: String,
+        update: UpdateCustomAgentTypeRequest,
+    ): CustomAgentTypeDto {
+        val payload = json.encodeToString(update).toRequestBody(jsonMediaType)
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/custom-agent-types/$typeId")
+            .method("PATCH", payload)
+            .header("Authorization", "Bearer $userToken")
+            .build()
+        return execute(request)
+    }
+
+    suspend fun deleteCustomAgentType(userToken: String, typeId: String) {
+        val request = Request.Builder()
+            .url("${baseUrl()}/api/custom-agent-types/$typeId")
             .delete()
             .header("Authorization", "Bearer $userToken")
             .build()

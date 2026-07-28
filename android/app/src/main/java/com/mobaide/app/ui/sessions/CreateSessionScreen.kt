@@ -1,7 +1,10 @@
 package com.mobaide.app.ui.sessions
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -16,13 +19,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -34,6 +41,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -50,18 +58,23 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mobaide.app.data.network.dto.CustomAgentTypeDto
 import com.mobaide.app.ui.common.SecretTextField
 import com.mobaide.app.ui.projects.ProjectFormSheet
 import com.mobaide.app.ui.projects.ProjectsUiEvent
@@ -143,7 +156,15 @@ fun CreateSessionScreen(
                             CreateSessionStep.CodexConfig -> "Codex session"
                             CreateSessionStep.AntigravityConfig -> "Antigravity session"
                             CreateSessionStep.AutoScanConfig -> "Auto Scan mode"
-                            CreateSessionStep.TerminalConfig -> "Terminal session"
+                            // TerminalConfig is shared between Terminal mode and
+                            // custom agent types — title by the selected mode.
+                            CreateSessionStep.TerminalConfig ->
+                                (state.selectedMode as? CreateSessionMode.Custom)
+                                    ?.let { mode ->
+                                        state.customTypes
+                                            .firstOrNull { it.id == mode.typeId }?.name
+                                    }
+                                    ?: "Terminal session"
                         }
                     )
                 },
@@ -204,14 +225,19 @@ fun CreateSessionScreen(
                     claudeEnabled = state.claudeEnabled,
                     codexEnabled = state.codexEnabled,
                     antigravityEnabled = state.antigravityEnabled,
+                    customTypes = state.customTypes,
                     onPickMode = viewModel::pickMode,
+                    onAddCustomType = { viewModel.openTypeEditor(null) },
+                    onEditCustomType = viewModel::openTypeEditor,
+                    onDeleteCustomType = viewModel::requestDeleteType,
                     onCommit = {
-                        when (state.selectedMode) {
+                        when (val mode = state.selectedMode) {
                             CreateSessionMode.Standard -> viewModel.selectStandardMode()
                             CreateSessionMode.Codex -> viewModel.selectCodexMode()
                             CreateSessionMode.Antigravity -> viewModel.selectAntigravityMode()
                             CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
                             CreateSessionMode.CustomShell -> viewModel.selectTerminalMode()
+                            is CreateSessionMode.Custom -> viewModel.selectCustomAgentMode(mode.typeId)
                             null -> Unit
                         }
                     },
@@ -283,6 +309,64 @@ fun CreateSessionScreen(
             onDismiss = viewModel::dismissCodexLogin,
         )
     }
+
+    val typeEditor = state.typeEditor
+    if (typeEditor is TypeEditorState.Open) {
+        CustomAgentTypeEditorSheet(
+            target = typeEditor.target,
+            error = state.typeEditorError,
+            saving = state.typeEditorSaving,
+            onSave = viewModel::saveCustomAgentType,
+            onDismiss = viewModel::dismissTypeEditor,
+        )
+    }
+
+    state.deleteTypeTarget?.let { target ->
+        DeleteCustomAgentTypeDialog(
+            name = target.name,
+            deleting = state.deleteTypeInFlight,
+            onConfirm = viewModel::confirmDeleteType,
+            onDismiss = viewModel::dismissDeleteType,
+        )
+    }
+}
+
+/**
+ * Delete confirmation for a custom agent type. The wording covers the server's
+ * shortcut cascade so the destructive scope is explicit before confirming.
+ */
+@Composable
+private fun DeleteCustomAgentTypeDialog(
+    name: String,
+    deleting: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete agent type?") },
+        text = {
+            Text(
+                "Delete \"$name\"? Saved shortcuts for this agent type will " +
+                    "also be deleted. Running sessions are not affected.",
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onConfirm,
+                enabled = !deleting,
+                modifier = Modifier.testTag("delete_custom_type_confirm"),
+            ) {
+                Text(
+                    if (deleting) "Deleting…" else "Delete",
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !deleting) { Text("Cancel") }
+        },
+    )
 }
 
 /**
@@ -549,6 +633,9 @@ private fun modeEnabled(
     CreateSessionMode.Codex -> codexEnabled
     CreateSessionMode.Antigravity -> antigravityEnabled
     CreateSessionMode.CustomShell -> true
+    // Custom types launch through the login shell like Terminal — no CLI
+    // probe gates them; a stale/deleted type surfaces via the create-time 404.
+    is CreateSessionMode.Custom -> true
 }
 
 @Composable
@@ -558,7 +645,11 @@ private fun ModePickerSection(
     claudeEnabled: Boolean,
     codexEnabled: Boolean,
     antigravityEnabled: Boolean,
+    customTypes: List<CustomAgentTypeDto>,
     onPickMode: (CreateSessionMode) -> Unit,
+    onAddCustomType: () -> Unit,
+    onEditCustomType: (CustomAgentTypeDto) -> Unit,
+    onDeleteCustomType: (CustomAgentTypeDto) -> Unit,
     onCommit: () -> Unit,
 ) {
     Text(
@@ -687,12 +778,125 @@ private fun ModePickerSection(
         )
     }
 
+    customTypes.forEach { type ->
+        key(type.id) {
+            CustomAgentTypeCard(
+                type = type,
+                selected = selectedMode == CreateSessionMode.Custom(type.id),
+                selectedColors = selectedColors,
+                listColors = enabledList,
+                onPick = { onPickMode(CreateSessionMode.Custom(type.id)) },
+                onEdit = { onEditCustomType(type) },
+                onDelete = { onDeleteCustomType(type) },
+            )
+        }
+    }
+
+    // Always enabled — the 20-type cap is not gated client-side (the cached
+    // list can be stale); the editor surfaces the server's 409 inline instead.
+    ElevatedCard(
+        onClick = onAddCustomType,
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("add_custom_type_card"),
+    ) {
+        ListItem(
+            headlineContent = { Text("Add custom agent…") },
+            supportingContent = { Text("Name + launch command, synced to your account") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = null,
+                )
+            },
+            colors = enabledList,
+        )
+    }
+
     Button(
         onClick = onCommit,
         enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled, antigravityEnabled, autoScanEnabled),
         modifier = Modifier.fillMaxWidth(),
     ) {
         Text("Continue")
+    }
+}
+
+/**
+ * Mode-picker card for one account-scoped custom agent type. Tap selects the
+ * mode; long-press opens the Edit/Delete context menu (`ElevatedCard`'s
+ * clickable overload has no long-press support, hence `combinedClickable`).
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CustomAgentTypeCard(
+    type: CustomAgentTypeDto,
+    selected: Boolean,
+    selectedColors: CardColors,
+    listColors: ListItemColors,
+    onPick: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuExpanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        ElevatedCard(
+            colors = if (selected) selectedColors else CardDefaults.elevatedCardColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("custom_type_card_${type.id}")
+                .combinedClickable(
+                    onClick = onPick,
+                    onLongClick = { menuExpanded = true },
+                    onLongClickLabel = "Edit or delete",
+                ),
+        ) {
+            ListItem(
+                headlineContent = { Text(type.name) },
+                supportingContent = {
+                    Text(
+                        text = type.command,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Filled.SmartToy,
+                        contentDescription = null,
+                    )
+                },
+                colors = listColors,
+            )
+        }
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+        ) {
+            DropdownMenuItem(
+                text = { Text("Edit") },
+                leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                onClick = {
+                    menuExpanded = false
+                    onEdit()
+                },
+            )
+            DropdownMenuItem(
+                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                },
+                onClick = {
+                    menuExpanded = false
+                    onDelete()
+                },
+            )
+        }
     }
 }
 
@@ -1159,7 +1363,7 @@ private fun TerminalConfigSection(
     }
 
     Button(
-        onClick = viewModel::submitCustomShell,
+        onClick = viewModel::submitFromTerminalConfig,
         enabled = state.selection !is ProjectSelection.None && !state.submitting,
         modifier = Modifier.fillMaxWidth(),
     ) {

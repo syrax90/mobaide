@@ -39,9 +39,10 @@ class RestApi(
     private val client: OkHttpClient,
     private val tokenStore: TokenStore,
 ) {
-    // coerceInputValues lets an unknown future SessionKind (added by a newer
-    // server without a major proto bump) fall back to SessionResponse.kind's
-    // default (Claude) instead of throwing while decoding a session snapshot.
+    // coerceInputValues no longer touches unknown SessionKind strings (they
+    // decode verbatim via SessionKindSerializer's STRING descriptor, proto-v7);
+    // it is kept so an explicit `"kind": null` still falls back to
+    // SessionResponse.kind's default instead of throwing.
     private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
     // Dedicated encoder for `ProjectUpdate`: `explicitNulls = false` +

@@ -6,11 +6,14 @@ import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WebSocketManager
 import com.mobaide.app.data.network.WsEvent
+import com.mobaide.app.data.network.dto.CustomAgentTypeDto
+import com.mobaide.app.data.network.dto.CustomTypeDeletedPayload
 import com.mobaide.app.data.network.dto.ShortcutDeletedPayload
 import com.mobaide.app.data.network.dto.ShortcutDto
 import com.mobaide.app.data.network.dto.TemplateDeletedPayload
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.repository.AgentRepository
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import kotlinx.coroutines.CoroutineScope
@@ -53,6 +56,7 @@ class UserEventBus @Inject constructor(
     private val agentRepository: AgentRepository,
     private val templatesRepository: TemplatesRepository,
     private val shortcutsRepository: ShortcutsRepository,
+    private val customAgentTypesRepository: CustomAgentTypesRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val json = Json { ignoreUnknownKeys = true }
@@ -72,7 +76,21 @@ class UserEventBus @Inject constructor(
         scope.launch {
             sessionManager.authState.drop(1).collect { state ->
                 when (state) {
-                    SessionManager.AuthState.Unauthenticated -> stop()
+                    SessionManager.AuthState.Unauthenticated -> {
+                        stop()
+                        // Account boundary: every logout/account-switch path
+                        // funnels through this state, so the account-scoped
+                        // caches are dropped here (not on IncompatibleServer,
+                        // which is an upgrade gate — the identity persists).
+                        // In-flight shortcut/custom-type requests that resolve
+                        // after this are discarded by those repositories'
+                        // owner guards; TemplatesRepository has no guard yet,
+                        // so a template request resolving after logout can
+                        // transiently repopulate its cache.
+                        templatesRepository.clear()
+                        shortcutsRepository.clear()
+                        customAgentTypesRepository.clear()
+                    }
                     is SessionManager.AuthState.IncompatibleServer -> stop()
                     SessionManager.AuthState.UserOnly,
                     SessionManager.AuthState.FullyConnected -> start()
@@ -127,6 +145,11 @@ class UserEventBus @Inject constructor(
                     shortcutsRepository.refreshShortcuts()
                 } catch (t: Throwable) {
                     Log.w(TAG, "refreshShortcuts on WS connect failed", t)
+                }
+                try {
+                    customAgentTypesRepository.refreshTypes()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "refreshTypes on WS connect failed", t)
                 }
             }
             is WsEvent.Disconnected -> _connection.value = ConnState.Connecting
@@ -195,6 +218,29 @@ class UserEventBus @Inject constructor(
                     return
                 }
                 shortcutsRepository.applyDeleted(p.shortcut_id)
+            }
+            "custom_type.created", "custom_type.updated" -> {
+                val t = try {
+                    json.decodeFromJsonElement(CustomAgentTypeDto.serializer(), payload)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Malformed ${envelope.type} payload", t)
+                    return
+                }
+                customAgentTypesRepository.applyUpserted(t)
+            }
+            "custom_type.deleted" -> {
+                val p = try {
+                    json.decodeFromJsonElement(
+                        CustomTypeDeletedPayload.serializer(), payload,
+                    )
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Malformed custom_type.deleted payload", t)
+                    return
+                }
+                customAgentTypesRepository.applyDeleted(p.id)
+                // The server cascades the type's saved shortcuts in the same
+                // transaction without per-shortcut events — mirror it locally.
+                shortcutsRepository.purgeKind("custom_${p.id}")
             }
             // Unknown types are silently ignored — forward compatible.
             else -> Unit

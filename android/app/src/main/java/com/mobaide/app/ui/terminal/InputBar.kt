@@ -167,10 +167,26 @@ private val CODEX_CONTROL_KEYS =
 private val ANTIGRAVITY_CONTROL_KEYS =
     orderedControlKeys(listOf(CtrlKKey, CtrlGKey, CtrlDKey) + SHARED_KEYS + CtrlLKey)
 
-private fun controlKeysFor(kind: SessionKind): List<ControlKey> = when (kind) {
+// Kind-neutral minimal set for custom agent types and the not-yet-resolved
+// state: nav + the universal interrupt/erase keys only. Ctrl+O/Ctrl+R/Ctrl+L
+// are deliberately absent — they carry Claude-TUI meanings an arbitrary CLI
+// may bind differently; the saved-shortcut "…" picker is the escape hatch.
+private val DEFAULT_CONTROL_KEYS = orderedControlKeys(
+    listOf(
+        EnterKey, UpKey, DownKey, LeftKey, RightKey,
+        CtrlCKey, EscKey, TabKey, BackspaceKey,
+    ),
+)
+
+private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
     SessionKind.Antigravity -> ANTIGRAVITY_CONTROL_KEYS
-    else -> CLAUDE_CONTROL_KEYS // Claude, shell, and auto-scan share the Mode/nav/control core.
+    // null = kind not resolved yet: render the neutral set instead of guessing
+    // Claude (its Mode/Rewind escape codes are wrong input for other TUIs).
+    null, is SessionKind.Custom -> DEFAULT_CONTROL_KEYS
+    // Shell keeping the Claude set is a known oddity, deliberately unchanged
+    // here — switching it to DEFAULT_CONTROL_KEYS is tracked as CLA-158.
+    SessionKind.Claude, SessionKind.AutoScan, SessionKind.Shell -> CLAUDE_CONTROL_KEYS
 }
 
 @Composable
@@ -190,7 +206,7 @@ fun InputBar(
     onRenameSavedShortcut: (SavedShortcutUi) -> Unit = {},
     onRemoveSavedShortcut: (SavedShortcutUi) -> Unit = {},
     onSaveAsTemplate: () -> Unit = {},
-    sessionKind: SessionKind = SessionKind.Claude,
+    sessionKind: SessionKind? = SessionKind.Claude,
     composerVisible: Boolean = true,
     onRevealComposer: () -> Unit = {},
     onHideComposer: () -> Unit = {},
