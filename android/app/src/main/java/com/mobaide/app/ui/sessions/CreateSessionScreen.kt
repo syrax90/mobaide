@@ -343,7 +343,9 @@ private fun DeleteCustomAgentTypeDialog(
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        // Ignore back-press / outside-tap while the delete is in flight,
+        // matching the disabled Cancel button.
+        onDismissRequest = { if (!deleting) onDismiss() },
         title = { Text("Delete agent type?") },
         text = {
             Text(

@@ -921,8 +921,17 @@ class CreateSessionViewModel @Inject constructor(
                     // avoids dirty-tracking without hitting that edge.
                     customAgentTypesRepository.updateType(target.id, trimmedName, trimmedCommand)
                 }
+                // Completion is scoped to the editor this save started from:
+                // if the sheet was dismissed and reopened for another target
+                // mid-flight, only release the saving flag — never close the
+                // new editor. (The sheet also blocks dismissal while saving;
+                // this is the defense-in-depth half of that fix.)
                 _uiState.update {
-                    it.copy(typeEditor = TypeEditorState.Hidden, typeEditorSaving = false)
+                    if (it.typeEditor == editor) {
+                        it.copy(typeEditor = TypeEditorState.Hidden, typeEditorSaving = false)
+                    } else {
+                        it.copy(typeEditorSaving = false)
+                    }
                 }
             } catch (e: Exception) {
                 val message = when {
@@ -930,7 +939,15 @@ class CreateSessionViewModel @Inject constructor(
                         extractDetail(e.errorBody) ?: "Couldn't save (HTTP ${e.code})"
                     else -> e.message ?: "Couldn't save the agent type"
                 }
-                _uiState.update { it.copy(typeEditorSaving = false, typeEditorError = message) }
+                // Same operation scoping: a stale save's error must not be
+                // written into an editor it did not come from.
+                _uiState.update {
+                    if (it.typeEditor == editor) {
+                        it.copy(typeEditorSaving = false, typeEditorError = message)
+                    } else {
+                        it.copy(typeEditorSaving = false)
+                    }
+                }
             }
         }
     }

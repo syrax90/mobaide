@@ -26,6 +26,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -2572,6 +2573,87 @@ class CreateSessionViewModelTest {
             vm.uiState.value.typeEditorError,
         )
         assertTrue(vm.uiState.value.typeEditor is TypeEditorState.Open)
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    @Test
+    fun saveCustomAgentType_staleSuccessAfterReopen_keepsNewEditorOpen() = runTest {
+        // A save resolving after the sheet was dismissed and reopened for a
+        // different target must only release the saving flag — never close
+        // the editor it did not come from.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val gate = CompletableDeferred<CustomAgentTypeDto>()
+        coEvery { fx.customTypesRepo.createType("Aider", "aider") } coAnswers { gate.await() }
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("Aider", "aider")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.typeEditorSaving)
+
+        val other = customType(id = "t2", name = "Goose", command = "goose")
+        vm.dismissTypeEditor()
+        vm.openTypeEditor(other)
+
+        gate.complete(customType())
+        advanceUntilIdle()
+
+        assertEquals(TypeEditorState.Open(other), vm.uiState.value.typeEditor)
+        assertNull(vm.uiState.value.typeEditorError)
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    @Test
+    fun saveCustomAgentType_staleFailureAfterReopen_noStaleErrorInNewEditor() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val gate = CompletableDeferred<CustomAgentTypeDto>()
+        coEvery { fx.customTypesRepo.createType("Aider", "aider") } coAnswers { gate.await() }
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("Aider", "aider")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.typeEditorSaving)
+
+        val other = customType(id = "t2", name = "Goose", command = "goose")
+        vm.dismissTypeEditor()
+        vm.openTypeEditor(other)
+
+        gate.completeExceptionally(
+            ApiException(409, """{"detail":"An agent type named \"Aider\" already exists"}"""),
+        )
+        advanceUntilIdle()
+
+        assertEquals(TypeEditorState.Open(other), vm.uiState.value.typeEditor)
+        assertNull(
+            "a stale save's error must not surface in an editor it did not come from",
+            vm.uiState.value.typeEditorError,
+        )
+        assertFalse(vm.uiState.value.typeEditorSaving)
+    }
+
+    @Test
+    fun saveCustomAgentType_staleFailureAfterDismiss_staysHiddenWithoutError() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val gate = CompletableDeferred<CustomAgentTypeDto>()
+        coEvery { fx.customTypesRepo.createType("Aider", "aider") } coAnswers { gate.await() }
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType("Aider", "aider")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.typeEditorSaving)
+
+        vm.dismissTypeEditor()
+
+        gate.completeExceptionally(ApiException(500, """{"detail":"boom"}"""))
+        advanceUntilIdle()
+
+        assertEquals(TypeEditorState.Hidden, vm.uiState.value.typeEditor)
+        assertNull(vm.uiState.value.typeEditorError)
         assertFalse(vm.uiState.value.typeEditorSaving)
     }
 

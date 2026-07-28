@@ -57,7 +57,11 @@ fun CustomAgentTypeEditorSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        // Scrim tap / back / swipe must not dismiss mid-save: dismissal resets
+        // the ViewModel's saving state, which would let a second save start
+        // while the first is in flight and let the first save's completion
+        // close (or mislabel the error of) a subsequently reopened editor.
+        onDismissRequest = { if (!saving) onDismiss() },
         sheetState = sheetState,
         modifier = modifier,
     ) {
