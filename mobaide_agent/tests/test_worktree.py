@@ -143,7 +143,7 @@ class TestWorktreeManager:
     @pytest.fixture
     def manager(self):
         return WorktreeManager(
-            worktree_base="claude_worktree",
+            worktree_base="mobaide_worktree",
             branch_prefix="feature/claude",
             main_branch="main",
         )
@@ -152,7 +152,7 @@ class TestWorktreeManager:
         """If the worktree directory already exists, return it without running git."""
         project_root = str(tmp_path / "project")
         os.makedirs(project_root)
-        wt_dir = os.path.join(project_root, "claude_worktree", "cla-8-test")
+        wt_dir = os.path.join(project_root, "mobaide_worktree", "cla-8-test")
         os.makedirs(wt_dir)
 
         result = await manager.create_worktree("cla-8-test", project_root)
