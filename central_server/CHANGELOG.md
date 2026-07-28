@@ -1,5 +1,21 @@
 # central_server Changelog
 
+## [0.2.6](https://github.com/syrax90/claude_mobile/compare/server-v0.2.5...server-v0.2.6) (2026-07-28)
+
+
+### Features
+
+* **agent:** add account-scoped custom AI agent types registry (CLA-153) ([e3372d1](https://github.com/syrax90/claude_mobile/commit/e3372d10aaeebeae141160ab6dba694989c43d87))
+* **backend:** add account-scoped custom AI agent types registry (CLA-153) ([dd061d1](https://github.com/syrax90/claude_mobile/commit/dd061d1a53b364abe73510c07c0e61151f97ab56))
+* **ios:** add custom keyboard shortcut chord picker and synced saved shortcuts (CLA-136, CLA-138) ([a226562](https://github.com/syrax90/claude_mobile/commit/a22656231b91c38e322b35a3f8ade9667df10da0))
+* **ios:** add custom keyboard shortcut chord picker and synced saved shortcuts (CLA-136, CLA-138) ([3ab4788](https://github.com/syrax90/claude_mobile/commit/3ab47884cfcb4f90b8b894c3e06e52b7379a4d4e))
+
+
+### Bug Fixes
+
+* **backend:** gate custom agent-type launch on live tunnel version, reject embedded NUL ([beab1ad](https://github.com/syrax90/claude_mobile/commit/beab1ad243b1d3903f4c3aae5bef41d6b19ce06d))
+* **backend:** roll back aborted custom-agent-type/shortcut writes and fix 409 body shape ([fa1fee6](https://github.com/syrax90/claude_mobile/commit/fa1fee6fe589c7e8abeba6618b39187c67210137))
+
 ## [0.2.5](https://github.com/syrax90/claude_mobile/compare/server-v0.2.4...server-v0.2.5) (2026-07-24)
 
 
