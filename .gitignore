@@ -61,3 +61,4 @@ ios/.swiftpm/
 *.ipa
 # Developer-local build overrides (android/local.properties parity)
 ios/Config/Local.xcconfig
+ios/buildServer.json
