@@ -896,12 +896,16 @@ class CreateSessionViewModel @Inject constructor(
         if (_uiState.value.typeEditorSaving) return
         val trimmedName = name.trim()
         val trimmedCommand = command.trim()
+        // Lengths are counted in code points to match the server's limits
+        // (Pydantic max_length counts characters) — UTF-16 String.length
+        // would falsely reject supplementary-plane input (emoji, rare CJK)
+        // the server accepts.
         val validationError = when {
             trimmedName.isEmpty() -> "Name is required"
-            trimmedName.length > MAX_TYPE_NAME_LENGTH ->
+            trimmedName.codePointCount(0, trimmedName.length) > MAX_TYPE_NAME_LENGTH ->
                 "Name must be at most $MAX_TYPE_NAME_LENGTH characters"
             trimmedCommand.isEmpty() -> "Command is required"
-            trimmedCommand.length > MAX_TYPE_COMMAND_LENGTH ->
+            trimmedCommand.codePointCount(0, trimmedCommand.length) > MAX_TYPE_COMMAND_LENGTH ->
                 "Command must be at most $MAX_TYPE_COMMAND_LENGTH characters"
             else -> null
         }

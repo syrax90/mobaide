@@ -2520,6 +2520,52 @@ class CreateSessionViewModelTest {
     }
 
     @Test
+    fun saveCustomAgentType_supplementaryPlaneAtLimit_countsCodePoints_andCreates() = runTest {
+        // 60 / 1000 code points but 120 / 2000 UTF-16 units: counting
+        // String.length would falsely reject input the server's
+        // per-character limits accept.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        val name = "🚀".repeat(60)
+        val command = "🚀".repeat(1000)
+        coEvery { fx.customTypesRepo.createType(name, command) } returns customType()
+
+        vm.openTypeEditor(null)
+        vm.saveCustomAgentType(name, command)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fx.customTypesRepo.createType(name, command) }
+        assertEquals(TypeEditorState.Hidden, vm.uiState.value.typeEditor)
+        assertNull(vm.uiState.value.typeEditorError)
+    }
+
+    @Test
+    fun saveCustomAgentType_supplementaryPlaneOverLimit_rejectsInline_withoutRequest() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.openTypeEditor(null)
+
+        vm.saveCustomAgentType("🚀".repeat(61), "aider")
+        assertEquals(
+            "Name must be at most 60 characters",
+            vm.uiState.value.typeEditorError,
+        )
+
+        vm.saveCustomAgentType("Aider", "🚀".repeat(1001))
+        assertEquals(
+            "Command must be at most 1000 characters",
+            vm.uiState.value.typeEditorError,
+        )
+
+        advanceUntilIdle()
+        coVerify(exactly = 0) { fx.customTypesRepo.createType(any(), any()) }
+        coVerify(exactly = 0) { fx.customTypesRepo.updateType(any(), any(), any()) }
+    }
+
+    @Test
     fun saveCustomAgentType_create_trimsFields_andDismissesOnSuccess() = runTest {
         val fx = newFixture()
         val vm = fx.buildVm()

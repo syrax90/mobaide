@@ -13,13 +13,16 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -54,15 +57,30 @@ fun CustomAgentTypeEditorSheet(
 ) {
     var name by rememberSaveable(target?.id) { mutableStateOf(target?.name ?: "") }
     var command by rememberSaveable(target?.id) { mutableStateOf(target?.command ?: "") }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Scrim tap / back / swipe must not dismiss mid-save: dismissal resets the
+    // ViewModel's saving state, which would let a second save start while the
+    // first is in flight and let the first save's completion close (or
+    // mislabel the error of) a subsequently reopened editor. The veto must
+    // happen in confirmValueChange — Material3 hides the sheet BEFORE calling
+    // onDismissRequest, so gating only the callback would leave an invisible
+    // but still-composed sheet blocking the screen. Back-press bypasses
+    // confirmValueChange entirely (it calls hide() directly), hence the
+    // properties gate below. savingState is read through rememberUpdatedState
+    // so the confirmValueChange lambda stays identity-stable — it is a
+    // rememberSaveable key of the sheet state, and a new lambda per `saving`
+    // flip would recreate the sheet mid-animation.
+    val savingState = rememberUpdatedState(saving)
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { value ->
+            value != SheetValue.Hidden || !savingState.value
+        },
+    )
 
     ModalBottomSheet(
-        // Scrim tap / back / swipe must not dismiss mid-save: dismissal resets
-        // the ViewModel's saving state, which would let a second save start
-        // while the first is in flight and let the first save's completion
-        // close (or mislabel the error of) a subsequently reopened editor.
-        onDismissRequest = { if (!saving) onDismiss() },
+        onDismissRequest = { if (!savingState.value) onDismiss() },
         sheetState = sheetState,
+        properties = ModalBottomSheetProperties(shouldDismissOnBackPress = !saving),
         modifier = modifier,
     ) {
         Column(
