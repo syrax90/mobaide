@@ -11,7 +11,7 @@ _DEFAULT_SITE_BASE_URL = "https://mobaide.com"
 # straight into canonical/OG/JSON-LD URLs, the sitemap and robots.txt, so a
 # malformed value would emit relative links or malformed XML rather than fail
 # loudly. Rejecting the shape here is cheaper than escaping at every use site.
-_ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:\d{1,5})?$")
+_ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(?::(?P<port>\d{1,5}))?$")
 
 
 def _env_origin(name: str, default: str) -> str:
@@ -20,9 +20,19 @@ def _env_origin(name: str, default: str) -> str:
     A typo in a marketing URL should not take the relay down, so this degrades
     to the default rather than raising. The trailing-slash strip runs before the
     match, so ``https://host/`` is accepted and normalised rather than rejected.
+
+    The port is range-checked as well as shape-checked: ``\\d{1,5}`` alone would
+    admit ``:99999``, which is not a usable port, so the guard would pass a value
+    that cannot resolve.
     """
     raw = (os.getenv(name) or "").strip().rstrip("/")
-    return raw if _ORIGIN_RE.fullmatch(raw) else default
+    match = _ORIGIN_RE.fullmatch(raw)
+    if match is None:
+        return default
+    port = match.group("port")
+    if port is not None and not 1 <= int(port) <= 65535:
+        return default
+    return raw
 
 
 def _env_bool(name: str, default: bool) -> bool:

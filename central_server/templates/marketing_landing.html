@@ -152,7 +152,10 @@
       <li><span class="px-bullet"></span>Agent runs on <strong>Windows, macOS, Linux</strong></li>
       <li><span class="px-bullet"></span>Android app on Google Play</li>
       <li><span class="px-bullet"></span>Free, no paywalled features</li>
-      <li><span class="px-bullet"></span>No inbound ports, ever</li>
+      {# NOT "no inbound ports": the agent binds 0.0.0.0:8000 by default for
+         optional LAN/direct mode (mobaide_agent/mobaide/agent/config.py:51).
+         What is true is that nothing has to be reachable from the internet. #}
+      <li><span class="px-bullet"></span>No public IP or port forwarding</li>
     </ul>
   </section>
 
@@ -268,9 +271,13 @@ irm https://get.mobaide.com/install.ps1 | iex</code></pre>
       <article class="card notch">
         <h3>A real PTY, not a log tail</h3>
         <p>
+          {# Deliberately no line count: reconnect replays from a byte ring
+             (RING_MAX_BYTES = 4 MiB, core/session.py), not from the 10,000-entry
+             scrollback deque — that one holds arbitrary read chunks and feeds
+             the REST /scrollback endpoint instead. #}
           Full two-way terminal I/O, so TUIs behave: arrow keys, Ctrl-C, plan
-          mode, approval prompts. Every session keeps a 10,000-line scrollback,
-          so a dropped connection replays instead of losing output.
+          mode, approval prompts. Every session keeps a rolling buffer of recent
+          output, so a dropped connection replays instead of losing it.
         </p>
       </article>
 
@@ -348,10 +355,12 @@ irm https://get.mobaide.com/install.ps1 | iex</code></pre>
         <summary>Do I need a public IP, port forwarding or a VPN?</summary>
         <p>
           No. The agent on your computer dials <em>out</em> to the relay over an
-          encrypted WebSocket and nothing on your machine listens for inbound
-          connections. That is what makes it work behind NAT, on a corporate
-          router, on café Wi-Fi or on mobile data — no SSH, no tunnel to
-          configure.
+          encrypted WebSocket, so nothing has to be reachable from the internet
+          and you open no ports on your router. That is what makes it work behind
+          NAT, on a corporate router, on café Wi-Fi or on mobile data — no SSH,
+          no tunnel to configure. (The agent does serve a local HTTP API on your
+          own network, which is what lets the app talk to it directly over LAN
+          when you want that; it is never exposed publicly.)
         </p>
       </details>
 
@@ -370,8 +379,8 @@ irm https://get.mobaide.com/install.ps1 | iex</code></pre>
           Session traffic is <strong>relayed, not stored</strong>: your keystrokes
           and the terminal output pass through the relay's in-memory routing and
           are then discarded — never appended to its database, log files or
-          backups. Server-side logs record connection events only and redact
-          payloads.
+          backups. Server-side logs record connection and error events, never
+          session payloads.
         </p>
         <p>
           The relay does persist the things that have to sync across your

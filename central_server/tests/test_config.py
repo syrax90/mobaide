@@ -118,6 +118,7 @@ def test_enable_api_docs_parses_as_a_boolean(monkeypatch, raw, expected):
         # the shape match.
         ("https://staging.example.com/", "https://staging.example.com"),
         ("http://127.0.0.1:9000", "http://127.0.0.1:9000"),
+        ("https://mobaide.com:65535", "https://mobaide.com:65535"),
         # Everything below is malformed and must fall back rather than publish a
         # relative or broken canonical/OG/sitemap URL.
         ("", "https://mobaide.com"),
@@ -127,6 +128,9 @@ def test_enable_api_docs_parses_as_a_boolean(monkeypatch, raw, expected):
         ("https://mobaide.com/path", "https://mobaide.com"),
         ('https://x.com" onload="a', "https://mobaide.com"),
         ("https://a.com\nDisallow: /", "https://mobaide.com"),
+        # `\d{1,5}` alone would admit these, but neither is a usable port.
+        ("https://mobaide.com:99999", "https://mobaide.com"),
+        ("https://mobaide.com:0", "https://mobaide.com"),
     ],
 )
 def test_site_base_url_falls_back_when_malformed(monkeypatch, raw, expected):

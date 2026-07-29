@@ -29,6 +29,7 @@ import pytest
 
 from central_server.app import create_app
 from central_server.marketing.loader import (
+    asset_version,
     render_landing,
     render_robots,
     render_sitemap,
@@ -54,6 +55,14 @@ CONTRADICTED_CLAIMS = (
     "32 sessions per",
     # The product is "Claude Code".
     "cloud code",
+    # The agent binds 0.0.0.0:8000 by default so the app can reach it over LAN
+    # (mobaide_agent/mobaide/agent/config.py:51). What is true is that nothing
+    # needs to be reachable from the internet — not that nothing listens.
+    "no inbound ports",
+    "nothing on your machine listens",
+    # Reconnect replays from a byte ring (RING_MAX_BYTES = 4 MiB), not from the
+    # 10,000-entry deque of read chunks that backs the REST /scrollback route.
+    "10,000-line",
 )
 
 # Claims that are true only with their qualifier attached, plus the three
@@ -281,6 +290,33 @@ class TestCrawlerFiles:
         response = await client.get("/favicon.ico")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("image/")
+
+
+class TestAssetVersion:
+    """The ``?v=`` query is what makes the 7-day site-asset TTL safe."""
+
+    def test_version_tracks_asset_bytes_not_the_package_version(
+        self, tmp_path
+    ) -> None:
+        """`deploy_central.py` ships the working tree while ``__version__`` only
+        moves on a release, so two deploys can carry different CSS under one
+        version — and a repeat visitor would then pair fresh HTML with week-stale
+        CSS. The query has to change when the bytes do."""
+        site = tmp_path / "site"
+        site.mkdir()
+        (site / "site.css").write_text("a{}")
+        (site / "site.js").write_text("//")
+        before = asset_version(tmp_path, "fallback")
+
+        (site / "site.css").write_text("b{}")
+        after = asset_version(tmp_path, "fallback")
+
+        assert before != after
+        assert "fallback" not in (before, after)
+
+    def test_missing_asset_degrades_to_the_fallback(self, tmp_path) -> None:
+        """A partial checkout must not fail startup."""
+        assert asset_version(tmp_path, "fallback") == "fallback"
 
 
 class TestPublicRouteMethods:

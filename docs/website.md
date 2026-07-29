@@ -46,6 +46,9 @@ CLA-170), but the website must not repeat them:
 | "32 sessions **per agent type**", or 32 as a hard limit | `max_sessions` (`mobaide_agent/mobaide/core/session_manager.py`) is one global cap over a flat session dict, and it is configurable (`mobaide/agent/config.py`); 32 is the default. | "Up to 32 concurrent sessions on one agent" |
 | "**each** session in its own dedicated Git worktree" | Worktrees are opt-in per launch and Git-only. A `worktree=true` request against a non-Git project logs a warning and falls back to the project root. | The worktree claim **with both qualifiers**: opt-in per launch, Git projects only |
 | any implication that nothing is stored server-side | The relay persists accounts, paired devices, prompt templates, saved shortcuts and custom agent types. | "the relay never persists session traffic" + name what it does persist |
+| "no inbound ports", "nothing listens on your machine" | The agent binds `0.0.0.0:8000` by default — `mobaide_agent/mobaide/agent/config.py:51`, whose own comment says it "binds every interface by default (DIRECT mode needs LAN reachability)". | "No public IP or port forwarding", "nothing has to be reachable from the internet" |
+| "10,000-line scrollback" replays on reconnect | Two different buffers. The realtime WS path replays byte-exactly from a ring capped at `RING_MAX_BYTES` (4 MiB, `core/session.py`); the 10,000 figure is `scrollback_size`, a deque of read **chunks** that backs the REST `/scrollback` endpoint (see `get_scrollback`'s docstring). | "a rolling buffer of recent output" — state the guarantee, not a line count |
+| "JWT auth on every hop" | Only the app→relay hop is a JWT. Each agent presents an opaque per-agent token verified by SHA-256 `compare_digest` (`auth/service.py` → `db.verify_agent_token`). | name the two mechanisms separately |
 
 The worktree capability itself is broad and true, and the page says so: every
 session kind supports it — Claude Code, Codex CLI, Antigravity CLI, raw
@@ -86,8 +89,16 @@ tiers:
 | Path | Value | Why |
 |---|---|---|
 | `static/htmx.min.js` | `no-cache` | **Do not raise this.** `portal_base.html` pins an SRI `integrity` hash on it and the filename carries no version. If a client may reuse a cached copy without revalidating, an htmx upgrade hands it new HTML plus stale JS, the hashes disagree, and the browser blocks htmx — every portal form silently breaks until the entry expires. `no-cache` still stores and still 304s; it only forbids reuse without asking. |
-| `static/site/**` | 7 days | Versioned by the `?v=<server version>` query the template appends, so a release busts them immediately. |
+| `static/site/**` | 7 days | Versioned by a `?v=` query the template appends, so an asset edit busts them immediately. |
 | everything else | 1 hour | Referenced without a version query, so the TTL is what propagates a deploy. |
+
+That `?v=` value is a **content hash** over `site.css` + `site.js`
+(`marketing.loader.asset_version`), not the package version. It has to be:
+`deploy_central.py` ships whatever is in the working tree, while `__version__`
+only moves when release-please bumps it — so two deploys can carry different CSS
+under one version, and a repeat visitor would pair fresh HTML (5-minute TTL) with
+week-stale CSS. If an asset is missing the helper degrades to the package version
+rather than failing startup.
 
 The font is the one `static/site/` asset with **no** `?v=` query, in both the
 `<link rel="preload">` and the `@font-face` `url()`. That is required, not an

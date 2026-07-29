@@ -24,6 +24,7 @@ from .custom_agent_types.service import CustomAgentTypeService
 from .db.database import Database
 from .legal.loader import render_privacy, resolve_legal_dir
 from .marketing.loader import (
+    asset_version,
     read_favicon,
     render_landing,
     render_robots,
@@ -359,11 +360,13 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     # the relay origin embedded in QR pairing payloads (api.mobaide.com in
     # production), which would put the wrong host in canonical and OG URLs.
     _site_origin = config.site_base_url.rstrip("/")
-    app.state.marketing_html = render_landing(_site_origin, __version__)
+    _static_dir = resolve_static_dir()
+    app.state.marketing_html = render_landing(
+        _site_origin, asset_version(_static_dir, __version__)
+    )
     app.state.marketing_robots = render_robots(_site_origin)
     app.state.marketing_sitemap = render_sitemap(_site_origin)
 
-    _static_dir = resolve_static_dir()
     # Read once here rather than per request: /favicon.ico is anonymous and
     # crawler-facing, and a per-request stat would block the relay's event loop.
     app.state.marketing_favicon = read_favicon(_static_dir)
