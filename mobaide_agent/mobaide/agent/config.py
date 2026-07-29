@@ -23,7 +23,7 @@ from mobaide.linear.config import AutoScanConfig
 from mobaide.relay.config import RelayConfig
 
 
-_LOG_SAMPLE_WS_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
 class AgentConfig(BaseSettings):
@@ -50,6 +50,11 @@ class AgentConfig(BaseSettings):
     projects_store_path: str = "projects.json"
     host: str = "0.0.0.0"
     port: int = 8000
+    # OpenAPI exposure (ENABLE_API_DOCS). Default-deny, because the agent
+    # binds every interface by default (DIRECT mode needs LAN reachability),
+    # so FastAPI's stock /docs would hand the whole session/project/git
+    # surface to anything on the network. Enable only for local development.
+    enable_api_docs: bool = False
     max_sessions: int = 32
     session_disconnect_timeout: int = 300
     log_level: str = "INFO"
@@ -122,13 +127,13 @@ class AgentConfig(BaseSettings):
             return None
         return value
 
-    @field_validator("log_sample_ws", mode="before")
+    @field_validator("log_sample_ws", "enable_api_docs", mode="before")
     @classmethod
-    def _parse_log_sample_ws(cls, value: Any) -> bool:
+    def _parse_env_bool(cls, value: Any) -> bool:
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
-            return value.strip().lower() in _LOG_SAMPLE_WS_TRUTHY
+            return value.strip().lower() in _TRUTHY
         return False
 
     @model_validator(mode="after")

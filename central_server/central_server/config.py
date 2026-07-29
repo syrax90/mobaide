@@ -24,6 +24,13 @@ class CentralServerConfig:
     # temp-dir storage; see from_env() and auth.email.build_email_sender().
     env: str = "production"
 
+    # OpenAPI exposure (ENABLE_API_DOCS). Default-deny: the schema enumerates
+    # every route, parameter and model — including the admin dashboard and the
+    # release-pipeline endpoint — so it is a recon map, not a public asset.
+    # False leaves /docs, /redoc and /openapi.json unregistered (hard 404).
+    # True registers them behind an admin session; see app._register_api_docs.
+    enable_api_docs: bool = False
+
     # Admin seeding (optional — only takes effect on first startup)
     admin_seed_email: str | None = None
     admin_seed_password: str | None = None
@@ -183,6 +190,7 @@ class CentralServerConfig:
         return cls(
             jwt_secret_key=secret,
             env=env,
+            enable_api_docs=_env_bool("ENABLE_API_DOCS", False),
             admin_seed_email=os.getenv("ADMIN_SEED_EMAIL"),
             admin_seed_password=os.getenv("ADMIN_SEED_PASSWORD"),
             google_client_id=os.getenv("GOOGLE_CLIENT_ID"),

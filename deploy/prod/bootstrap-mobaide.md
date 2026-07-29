@@ -142,6 +142,18 @@ fresher dashboard timestamps at the cost of more DB writes:
 HEARTBEAT_FLUSH_INTERVAL_SECONDS=60
 ```
 
+The interactive OpenAPI docs (`/docs`, `/redoc`, `/openapi.json`) are **off by
+default** and return 404. Turning them on does not make the schema public — the
+routes then require an admin session — but only add the knob when you actually
+need them:
+
+```
+# Register /docs, /redoc and /openapi.json (admin-gated when on; default off)
+ENABLE_API_DOCS=1
+```
+
+See the "Public API surface" section of [`docs/deployment.md`](../../docs/deployment.md) for the full policy.
+
 The privacy policy is now served by the central server itself at
 `/privacy.html` (rendered from `central_server/legal/privacy.md` at startup),
 so there is no separate URL to configure.

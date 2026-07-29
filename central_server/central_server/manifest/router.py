@@ -91,7 +91,15 @@ async def get_trust_key(request: Request) -> TrustKeyResponse:
     return TrustKeyResponse(public_key_b64=public_key_b64)
 
 
-@router.post("/api/internal/agent_manifest", response_model=ManifestResponse, tags=["manifest"])
+@router.post(
+    "/api/internal/agent_manifest",
+    response_model=ManifestResponse,
+    tags=["manifest"],
+    # Release-pipeline only, guarded by a hand-rolled X-Release-Token check
+    # rather than a dependency — so OpenAPI cannot express its security scheme
+    # and would publish the publishing contract with no guard shown at all.
+    include_in_schema=False,
+)
 async def publish_manifest(
     payload: PublishManifestRequest,
     request: Request,
