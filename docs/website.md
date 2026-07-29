@@ -49,6 +49,7 @@ CLA-170), but the website must not repeat them:
 | "no inbound ports", "nothing listens on your machine" | The agent binds `0.0.0.0:8000` by default — `mobaide_agent/mobaide/agent/config.py:51`, whose own comment says it "binds every interface by default (DIRECT mode needs LAN reachability)". | "No public IP or port forwarding", "nothing has to be reachable from the internet" |
 | "10,000-line scrollback" replays on reconnect | Two different buffers. The realtime WS path replays byte-exactly from a ring capped at `RING_MAX_BYTES` (4 MiB, `core/session.py`); the 10,000 figure is `scrollback_size`, a deque of read **chunks** that backs the REST `/scrollback` endpoint (see `get_scrollback`'s docstring). | "a rolling buffer of recent output" — state the guarantee, not a line count |
 | "JWT auth on every hop" | Only the app→relay hop is a JWT. Each agent presents an opaque per-agent token verified by SHA-256 `compare_digest` (`auth/service.py` → `db.verify_agent_token`). | name the two mechanisms separately |
+| "every hop is TLS-encrypted" **unqualified** | True for relay mode only. The optional direct/LAN mode builds `ws://` unless the agent sits behind HTTPS — `WebSocketManager.kt`: `if (agentUrl.startsWith("https")) "wss" else "ws"` — and the agent's own listener is plain HTTP by default. | scope it ("going through the relay — the default — every hop is…") and state the direct-mode caveat |
 
 The worktree capability itself is broad and true, and the page says so: every
 session kind supports it — Claude Code, Codex CLI, Antigravity CLI, raw

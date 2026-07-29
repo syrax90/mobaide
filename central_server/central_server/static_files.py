@@ -13,11 +13,13 @@ from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
-# Marketing-site assets are versioned by a ``?v=<server version>`` query the
-# landing template appends, so a release busts them immediately and this TTL
-# only bounds how long an unversioned request may serve a stale copy. Kept off
-# ``immutable`` deliberately: the filenames are not content-hashed, so an
-# in-place edit to an immutable asset would be uncorrectable for a year.
+# Marketing-site assets are versioned by a ``?v=`` query the landing template
+# appends, whose value is a content hash over the whole ``site/`` tree
+# (``marketing.loader.asset_version``) — so an asset edit busts them immediately
+# and this TTL only bounds how long an unversioned request may serve a stale
+# copy. Kept off ``immutable`` deliberately: the filenames themselves are not
+# content-hashed, so an in-place edit to an immutable asset would be
+# uncorrectable for a year.
 _SITE_CACHE_CONTROL = "public, max-age=604800"
 
 # The dashboard/portal sheet is referenced without a version query, so it gets a

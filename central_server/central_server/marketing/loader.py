@@ -18,9 +18,7 @@ from ..templates_dir import resolve_templates_dir
 _TEMPLATE_NAME = "marketing_landing.html"
 _FAVICON_RELATIVE_PATH = ("site", "img", "favicon.ico")
 
-# The two site assets that change with any edit and are cached for 7 days, so
-# their URLs must change whenever their bytes do.
-_VERSIONED_ASSETS = (("site", "site.css"), ("site", "site.js"))
+_SITE_ASSET_DIR = "site"
 
 # Only the two surfaces a crawler could actually reach and index. `/privacy.html`
 # is deliberately left crawlable — the Play listing links to it.
@@ -70,23 +68,30 @@ def render_landing(
 
 
 def asset_version(static_dir: Path, fallback: str) -> str:
-    """Short content hash over the versioned site assets, for cache busting.
+    """Short content hash over the whole site asset tree, for cache busting.
 
     Deliberately NOT the package version: ``deploy_central.py`` tars whatever is
     in the working tree, while ``__version__`` only moves when release-please
-    bumps it. Two deploys can therefore ship different ``site.css``/``site.js``
-    under the same version — and since those carry a 7-day TTL, a repeat visitor
-    would pair fresh HTML (5-minute TTL) with week-stale CSS. Hashing the bytes
-    makes the query change exactly when the bytes do.
+    bumps it. Two deploys can therefore ship different assets under the same
+    version — and since ``static/site/**`` carries a 7-day TTL, a repeat visitor
+    would pair fresh HTML (5-minute TTL) with week-stale CSS or images. Hashing
+    the bytes makes the query change exactly when the bytes do.
 
-    Falls back to ``fallback`` (the package version) if an asset is missing, so a
-    partial checkout degrades to the old behaviour instead of failing startup.
+    Hashes the **entire** tree rather than an enumerated list of the files the
+    template happens to stamp today: an over-broad hash only busts a few extra
+    URLs (harmless), whereas a list that drifts out of sync with the template
+    silently reintroduces the week-stale bug for whatever it missed. Relative
+    paths go into the digest too, so a rename alone changes the version.
+
+    Falls back to ``fallback`` (the package version) when the tree is missing, so
+    a partial checkout degrades to the old behaviour instead of failing startup.
     """
+    root = static_dir / _SITE_ASSET_DIR
+    if not root.is_dir():
+        return fallback
     digest = hashlib.sha256()
-    for parts in _VERSIONED_ASSETS:
-        path = static_dir.joinpath(*parts)
-        if not path.is_file():
-            return fallback
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        digest.update(path.relative_to(root).as_posix().encode())
         digest.update(path.read_bytes())
     return digest.hexdigest()[:12]
 

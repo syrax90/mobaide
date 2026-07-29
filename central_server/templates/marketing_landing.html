@@ -402,11 +402,23 @@ irm https://get.mobaide.com/install.ps1 | iex</code></pre>
 
       <details>
         <summary>How is the connection secured?</summary>
+        {# "Every hop is TLS" would be false: the optional direct/LAN mode builds
+           its URL as ws:// unless the agent URL is https
+           (WebSocketManager.kt: `if (agentUrl.startsWith("https")) "wss" else "ws"`),
+           and the agent's own listener is plain HTTP by default. Scope the TLS
+           claim to relay mode and state the direct-mode caveat outright. #}
         <p>
-          Every hop is TLS-encrypted (WSS). The app authenticates to the relay
-          with a JWT, and each agent authenticates with its own per-agent token;
-          pairing pins the relay's signing key on first use. Tokens are held in
-          Android's EncryptedSharedPreferences, backed by the Keystore.
+          Going through the relay — the default — every hop is TLS-encrypted
+          (WSS). The app authenticates to the relay with a JWT, and each agent
+          authenticates with its own per-agent token; pairing pins the relay's
+          signing key on first use. Tokens are held in Android's
+          EncryptedSharedPreferences, backed by the Keystore.
+        </p>
+        <p>
+          If you instead point the app straight at the agent over your own LAN,
+          that connection is only encrypted when you put the agent behind an
+          HTTPS endpoint yourself — otherwise it is plain
+          <code>ws://</code> on your local network.
         </p>
       </details>
 

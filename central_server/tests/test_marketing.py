@@ -70,6 +70,10 @@ CONTRADICTED_CLAIMS = (
 VERIFIED_CLAIMS = (
     "opt-in per launch",
     "git projects only",
+    # The TLS guarantee must name relay mode. Unqualified it is false: the
+    # optional direct/LAN mode builds a ws:// URL unless the agent sits behind
+    # HTTPS, and the agent's own listener is plain HTTP by default.
+    "going through the relay",
     "systemd",
     "launchd",
     "scheduled task",
@@ -295,17 +299,23 @@ class TestCrawlerFiles:
 class TestAssetVersion:
     """The ``?v=`` query is what makes the 7-day site-asset TTL safe."""
 
+    @staticmethod
+    def _tree(root: Path) -> Path:
+        site = root / "site"
+        (site / "img").mkdir(parents=True)
+        (site / "site.css").write_text("a{}")
+        (site / "site.js").write_text("//")
+        (site / "img" / "wordmark.png").write_bytes(b"\x89PNG-one")
+        return site
+
     def test_version_tracks_asset_bytes_not_the_package_version(
         self, tmp_path
     ) -> None:
         """`deploy_central.py` ships the working tree while ``__version__`` only
-        moves on a release, so two deploys can carry different CSS under one
+        moves on a release, so two deploys can carry different assets under one
         version — and a repeat visitor would then pair fresh HTML with week-stale
         CSS. The query has to change when the bytes do."""
-        site = tmp_path / "site"
-        site.mkdir()
-        (site / "site.css").write_text("a{}")
-        (site / "site.js").write_text("//")
+        site = self._tree(tmp_path)
         before = asset_version(tmp_path, "fallback")
 
         (site / "site.css").write_text("b{}")
@@ -314,7 +324,26 @@ class TestAssetVersion:
         assert before != after
         assert "fallback" not in (before, after)
 
-    def test_missing_asset_degrades_to_the_fallback(self, tmp_path) -> None:
+    def test_version_covers_images_not_just_css_and_js(self, tmp_path) -> None:
+        """The template stamps ``?v=`` on the images too, so an image-only deploy
+        must bust them — hashing an enumerated list of files would silently miss
+        whatever the list drifted away from."""
+        site = self._tree(tmp_path)
+        before = asset_version(tmp_path, "fallback")
+
+        (site / "img" / "wordmark.png").write_bytes(b"\x89PNG-two")
+
+        assert asset_version(tmp_path, "fallback") != before
+
+    def test_version_changes_when_an_asset_is_renamed(self, tmp_path) -> None:
+        site = self._tree(tmp_path)
+        before = asset_version(tmp_path, "fallback")
+
+        (site / "img" / "wordmark.png").rename(site / "img" / "wordmark-v2.png")
+
+        assert asset_version(tmp_path, "fallback") != before
+
+    def test_missing_tree_degrades_to_the_fallback(self, tmp_path) -> None:
         """A partial checkout must not fail startup."""
         assert asset_version(tmp_path, "fallback") == "fallback"
 
