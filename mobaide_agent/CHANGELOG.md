@@ -1,5 +1,13 @@
 # mobaide_agent Changelog
 
+## [0.3.5](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.4...agent-v0.3.5) (2026-07-29)
+
+
+### Bug Fixes
+
+* **agent:** gate OpenAPI docs and default-deny undocumented admin/internal routes ([4406c0e](https://github.com/syrax90/claude_mobile/commit/4406c0efc7e8026d73c2f52f45df86d5522f03bd))
+* **security:** gate OpenAPI docs and default-deny undocumented admin/internal routes ([fee5d16](https://github.com/syrax90/claude_mobile/commit/fee5d16a6bd025873d5b1159904aa214c82afe47))
+
 ## [0.3.4](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.3...agent-v0.3.4) (2026-07-28)
 
 
