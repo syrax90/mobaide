@@ -1,8 +1,28 @@
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 from dataclasses import dataclass
+
+_DEFAULT_SITE_BASE_URL = "https://mobaide.com"
+
+# Scheme + host (+ optional port) only, no path. An origin is concatenated
+# straight into canonical/OG/JSON-LD URLs, the sitemap and robots.txt, so a
+# malformed value would emit relative links or malformed XML rather than fail
+# loudly. Rejecting the shape here is cheaper than escaping at every use site.
+_ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9.-]+(:\d{1,5})?$")
+
+
+def _env_origin(name: str, default: str) -> str:
+    """Read an origin env var, falling back to ``default`` if it is malformed.
+
+    A typo in a marketing URL should not take the relay down, so this degrades
+    to the default rather than raising. The trailing-slash strip runs before the
+    match, so ``https://host/`` is accepted and normalised rather than rejected.
+    """
+    raw = (os.getenv(name) or "").strip().rstrip("/")
+    return raw if _ORIGIN_RE.fullmatch(raw) else default
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -145,6 +165,14 @@ class CentralServerConfig:
     # When set, ``POST /api/pairing/initiate`` embeds it in the QR payload.
     # When unset, falls back to the Host header from the initiate request.
     public_base_url: str | None = None
+
+    # Origin the marketing site advertises in its canonical, Open Graph, and
+    # JSON-LD URLs. Deliberately separate from `public_base_url`: that one is
+    # the relay origin the clients dial (production points it at
+    # api.mobaide.com), so reusing it here would publish the API host as the
+    # site's canonical URL. Defaults to the apex the site is served from; a
+    # malformed SITE_BASE_URL falls back to that default (see `_env_origin`).
+    site_base_url: str = _DEFAULT_SITE_BASE_URL
 
     # APNs push. All optional: when any of the four is unset the
     # push dispatcher is disabled and attention delivery falls back to the
@@ -293,6 +321,7 @@ class CentralServerConfig:
                 "data/agent_manifest.json",
             ),
             public_base_url=os.getenv("PUBLIC_BASE_URL") or None,
+            site_base_url=_env_origin("SITE_BASE_URL", _DEFAULT_SITE_BASE_URL),
             apns_key_path=os.getenv("APNS_KEY_PATH") or None,
             apns_key_id=os.getenv("APNS_KEY_ID") or None,
             apns_team_id=os.getenv("APNS_TEAM_ID") or None,

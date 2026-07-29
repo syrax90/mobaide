@@ -35,6 +35,7 @@ The manual steps below remain the authoritative reference if you prefer to do ev
 - Ubuntu 22.04 or later (or any systemd distro) with Docker Engine + Docker Compose plugin installed.
 - Ports **22**, **80**, **443** reachable from the public internet.
 - DNS `A` record `mobaide.com` → VPS public IP (see the TLS section below for Cloudflare proxy settings).
+- DNS record for `www.mobaide.com` → same VPS (`A`, or a `CNAME` to the apex). Both Caddyfiles 308-redirect `www` → apex; without this record that site block never receives traffic.
 
 ## Prerequisites on your workstation (Windows or macOS)
 
@@ -178,13 +179,13 @@ sudo ufw enable
 
 ### Option A — `LetsEncrypt` (recommended)
 
-- In Cloudflare DNS, set the `A` record for `mobaide.com` to **DNS only** (gray cloud).
+- In Cloudflare DNS, set the `A` record for `mobaide.com` to **DNS only** (gray cloud). The `www` record must be **DNS only** too — Caddy provisions a separate cert for `www.mobaide.com` over ACME HTTP-01, which fails if Cloudflare proxies that host.
 - Caddy will provision a real Let's Encrypt cert via ACME HTTP-01 on first start and renew it automatically.
 - No extra files needed on the server.
 
 ### Option B — `CloudflareOrigin`
 
-- In Cloudflare DNS, keep the `A` record **Proxied** (orange cloud).
+- In Cloudflare DNS, keep the `A` record **Proxied** (orange cloud). Proxy the `www` record too; the default origin-cert hostnames below (`*.mobaide.com` plus the apex) already cover `www`, so it needs no extra cert step.
 - In the Cloudflare dashboard → **SSL/TLS** → **Overview**, set mode to **Full (strict)**.
 - Create an Origin Certificate: **SSL/TLS** → **Origin Server** → **Create Certificate** (default RSA 2048, 15-year validity).
 - Save the two PEMs on the server:

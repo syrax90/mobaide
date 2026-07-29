@@ -5,7 +5,6 @@ import asyncio
 import secrets
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from asgi_correlation_id import CorrelationIdMiddleware
 from asgi_correlation_id.context import correlation_id
@@ -13,7 +12,6 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .agents.service import AgentService
@@ -25,7 +23,14 @@ from .config import CentralServerConfig
 from .custom_agent_types.service import CustomAgentTypeService
 from .db.database import Database
 from .legal.loader import render_privacy, resolve_legal_dir
+from .marketing.loader import (
+    read_favicon,
+    render_landing,
+    render_robots,
+    render_sitemap,
+)
 from .shortcuts.service import ShortcutService
+from .static_files import CachedStaticFiles, resolve_static_dir
 from .templates.service import TemplateService
 from .logging_setup import (
     bind_request_context,
@@ -49,13 +54,6 @@ _HTTP_LOG_SKIP_PATHS = frozenset({"/api/health"})
 
 _OPENAPI_PATH = "/openapi.json"
 _DOCS_METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
-
-# Static files and templates live alongside the package directory in a source
-# checkout, or alongside the working directory when packaged into a Docker
-# image that only ships site-packages.
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_CWD_STATIC = Path.cwd() / "static"
-_STATIC_DIR = _CWD_STATIC if _CWD_STATIC.is_dir() else _PROJECT_ROOT / "static"
 
 
 def _generate_correlation_id() -> str:
@@ -356,8 +354,25 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.state.privacy_html = _rendered_privacy["html"]
     app.state.privacy_toc_html = _rendered_privacy["toc"]
 
-    if _STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    # Same pre-render-once contract as the privacy policy above. `site_base_url`
+    # is the marketing origin, deliberately not `public_base_url` — that one is
+    # the relay origin embedded in QR pairing payloads (api.mobaide.com in
+    # production), which would put the wrong host in canonical and OG URLs.
+    _site_origin = config.site_base_url.rstrip("/")
+    app.state.marketing_html = render_landing(_site_origin, __version__)
+    app.state.marketing_robots = render_robots(_site_origin)
+    app.state.marketing_sitemap = render_sitemap(_site_origin)
+
+    _static_dir = resolve_static_dir()
+    # Read once here rather than per request: /favicon.ico is anonymous and
+    # crawler-facing, and a per-request stat would block the relay's event loop.
+    app.state.marketing_favicon = read_favicon(_static_dir)
+    if _static_dir.exists():
+        app.mount(
+            "/static",
+            CachedStaticFiles(directory=str(_static_dir)),
+            name="static",
+        )
 
     from .agents.router import router as agents_router
     from .auth.router import router as auth_router
@@ -366,6 +381,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     from .devices.router import router as devices_router
     from .legal.router import router as legal_router
     from .manifest.router import router as manifest_router
+    from .marketing.router import router as marketing_router
     from .pairing.router import router as pairing_router
     from .portal.router import router as portal_router
     from .relay.agent_ws import router as agent_ws_router
@@ -383,13 +399,14 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(user_ws_router)
     app.include_router(pairing_router)
     app.include_router(devices_router)
-    # The dashboard, portal and legal routers serve HTML and HTMX fragments to
-    # browsers, not an API. Keeping them out of the schema means an enabled
-    # admin docs page describes the actual JSON surface instead of the
+    # The dashboard, portal, legal and marketing routers serve HTML and HTMX
+    # fragments to browsers, not an API. Keeping them out of the schema means an
+    # enabled admin docs page describes the actual JSON surface instead of the
     # browser-only one. include_in_schema has no effect on routing.
     app.include_router(dashboard_router, include_in_schema=False)
     app.include_router(portal_router, include_in_schema=False)
     app.include_router(legal_router, include_in_schema=False)
+    app.include_router(marketing_router, include_in_schema=False)
     app.include_router(manifest_router)
     app.include_router(templates_router)
     app.include_router(shortcuts_router)

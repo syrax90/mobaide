@@ -1,0 +1,439 @@
+{#
+  Public landing page for mobaide.com. Rendered once at startup by
+  marketing/loader.py and served from app.state — see docs/website.md before
+  editing the copy.
+
+  Two hard constraints, both enforced by central_server/tests/test_marketing.py:
+
+  1. NO inline `style="..."` and NO inline <script> anywhere in this file. The
+     response ships `Content-Security-Policy: default-src 'self'` with no
+     'unsafe-inline', so either would be blocked. Icons are inline <svg>
+     markup rather than data: URIs for the same reason.
+  2. Every claim here is checked against the code. In particular: never write
+     "end-to-end" (transport is TLS per hop, not E2E), and never state the
+     worktree feature without both qualifiers — opt-in per launch, Git projects
+     only.
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mobaide — run Claude Code, Codex CLI and Antigravity CLI from your phone</title>
+<meta name="description" content="Mobaide turns your phone into a real terminal for AI coding agents running on your own computer. Free, and no public IP, port forwarding, VPN or SSH.">
+<link rel="canonical" href="{{ site_origin }}/">
+<meta name="theme-color" content="#121212">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Mobaide">
+<meta property="og:url" content="{{ site_origin }}/">
+<meta property="og:title" content="Mobaide — run AI coding agents on your computer, from your phone">
+<meta property="og:description" content="A real terminal for Claude Code, Codex CLI, Antigravity CLI and your own agents, running on your own machine. Free, and nothing to open on your network.">
+<meta property="og:image" content="{{ site_origin }}/static/site/img/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Mobaide — run AI coding agents on your computer, from your phone">
+<meta property="og:locale" content="en_US">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mobaide — run AI coding agents on your computer, from your phone">
+<meta name="twitter:description" content="A real terminal for Claude Code, Codex CLI, Antigravity CLI and your own agents, running on your own machine. Free, and nothing to open on your network.">
+<meta name="twitter:image" content="{{ site_origin }}/static/site/img/og.png">
+
+<link rel="icon" href="/static/site/img/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="apple-touch-icon" href="/static/site/img/apple-touch-icon.png?v={{ asset_version }}">
+{# href must be byte-identical to the @font-face url() in site.css — preload
+   matching keys on the full URL including the query string, so a `?v=` here
+   (which a static stylesheet cannot carry) would download the font twice and
+   defeat the preload entirely. The font relies on rename-on-change instead. #}
+<link rel="preload" href="/static/site/fonts/DepartureMono-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/site/site.css?v={{ asset_version }}">
+{# Deliberately NOT deferred: the first statement sets a `js` class on <html>,
+   which gates the reveal-animation start states. Deferring it would paint the
+   page with animated sections still hidden. #}
+<script src="/static/site/site.js?v={{ asset_version }}"></script>
+
+{# A data block, not executable script — CSP's script-src does not apply. #}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Mobaide",
+  "url": "{{ site_origin }}/",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Android",
+  "description": "Mobaide turns your phone into a real terminal for AI coding agents — Claude Code, Codex CLI, Antigravity CLI, custom agent types and raw shells — running on your own Windows, macOS or Linux computer. No public IP, port forwarding, VPN or SSH.",
+  "image": "{{ site_origin }}/static/site/img/og.png",
+  "downloadUrl": "https://play.google.com/store/apps/details?id=com.mobaide.app",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "author": {
+    "@type": "Person",
+    "name": "Pavel Timonin"
+  },
+  "privacyPolicy": "{{ site_origin }}/privacy.html"
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-head">
+  <a class="brand" href="/" aria-label="Mobaide home">
+    {# Single-resolution on purpose — the pixel-art wordmark is rendered with
+       `image-rendering: pixelated`, so a hidpi screen should upscale this in
+       crisp blocks rather than fetch a finer, smoother source. #}
+    <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
+         width="227" height="40" alt="Mobaide">
+  </a>
+  <nav class="site-nav" aria-label="Site">
+    <a href="#how">How it works</a>
+    <a href="#features">Features</a>
+    <a href="#faq">FAQ</a>
+    <a class="btn btn-ghost" href="/portal/login">Sign in</a>
+  </nav>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <div class="hero-copy">
+      <h1>Run AI coding agents on your computer, from your phone.</h1>
+      <p class="lede">
+        Mobaide puts a real terminal in your pocket. Start, watch and steer
+        <strong>Claude Code</strong>, <strong>Codex CLI</strong>,
+        <strong>Antigravity CLI</strong> or agents you define yourself on your own
+        Windows, macOS or Linux machine — with nothing to open on your network.
+      </p>
+      <div class="cta">
+        <a class="badge-link" href="https://play.google.com/store/apps/details?id=com.mobaide.app" rel="noopener">
+          {# Unmodified official badge from Google's Partner Marketing Hub. Do
+             not recolour, crop, or re-render it, and keep it no smaller than
+             any other store badge on the page. #}
+          <img src="/static/site/img/google-play-badge.png?v={{ asset_version }}"
+               width="323" height="125" alt="Get it on Google Play">
+        </a>
+        {# A plain chip on purpose. Apple's badge artwork may not be imitated or
+           altered, and the iOS client is not on the App Store yet. #}
+        <span class="chip">iOS — coming soon</span>
+      </div>
+      <p class="cta-note">
+        Free — no subscription, no paywalled features. No public IP, port
+        forwarding, VPN or SSH.
+      </p>
+    </div>
+
+    <div class="hero-term">
+      <div class="term px-frame" data-typewriter aria-label="Example Mobaide session">
+        <div class="term-bar"><span class="term-dot"></span>mobaide — macbook-pro</div>
+        {# Lines are kept to ~42 characters so the transcript needs no
+           horizontal scroll even at a 320px viewport. #}
+        <pre class="term-body"><code><span class="t-line"><span class="t-ink"><span class="c-dim">$</span> mobaide status</span></span>
+<span class="t-line"><span class="t-ink">agent  <span class="c-ok">online</span>  macbook-pro  proto 7</span></span>
+<span class="t-line"><span class="t-ink"> </span></span>
+<span class="t-line"><span class="t-ink"><span class="c-dim">#</span> from the app: Claude Code + worktree</span></span>
+<span class="t-line"><span class="t-ink"><span class="c-accent">▸</span> a4f1c2  claude  ~/dev/api-server</span></span>
+<span class="t-line"><span class="t-ink">  worktree mobaide_worktree/retry-fix</span></span>
+<span class="t-line"><span class="t-ink"> </span></span>
+<span class="t-line"><span class="t-ink">Reading src/http/retry.py …</span></span>
+<span class="t-line"><span class="t-ink">The retry helper swallows the timeout</span></span>
+<span class="t-line"><span class="t-ink">instead of re-raising, so the caller</span></span>
+<span class="t-line"><span class="t-ink">sees a null response. Fixing.</span></span>
+<span class="t-line"><span class="t-ink"> </span></span>
+<span class="t-line"><span class="t-ink"><span class="c-ok">✓</span> 48 tests passed</span></span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="strip" aria-label="At a glance">
+    <ul class="strip-list">
+      <li><span class="px-bullet"></span>Agent runs on <strong>Windows, macOS, Linux</strong></li>
+      <li><span class="px-bullet"></span>Android app on Google Play</li>
+      <li><span class="px-bullet"></span>Free, no paywalled features</li>
+      <li><span class="px-bullet"></span>No inbound ports, ever</li>
+    </ul>
+  </section>
+
+  <section id="how" class="section" data-reveal>
+    <h2 class="h-pixel">How it works</h2>
+    <p class="section-lede">
+      One install on the computer, one QR scan on the phone. Your machine dials
+      out to the relay, so it works behind any router, NAT or firewall — on
+      mobile data or any Wi-Fi.
+    </p>
+    <ol class="steps">
+      <li class="step notch">
+        <span class="step-n">01</span>
+        <h3>Install the agent</h3>
+        <p>One line on the machine you want to reach.</p>
+        <pre class="code px-frame"><code><span class="c-dim"># macOS / Linux</span>
+curl -fsSL https://get.mobaide.com/install.sh | bash
+
+<span class="c-dim"># Windows (PowerShell)</span>
+irm https://get.mobaide.com/install.ps1 | iex</code></pre>
+      </li>
+      <li class="step notch">
+        <span class="step-n">02</span>
+        <h3>Scan the pairing QR</h3>
+        <p>
+          The agent prints a QR code when it finishes installing. Scan it in the
+          app and you are paired — no tokens to copy, nothing to type on the
+          phone.
+        </p>
+      </li>
+      <li class="step notch">
+        <span class="step-n">03</span>
+        <h3>Start an agent</h3>
+        <p>
+          Pick a project, pick what to run — Claude Code, Codex CLI, Antigravity
+          CLI, a raw shell, or one of your own agent types — and drive it from
+          the terminal view.
+        </p>
+      </li>
+    </ol>
+  </section>
+
+  <section id="features" class="section" data-reveal>
+    <h2 class="h-pixel">What you get</h2>
+    <div class="grid">
+
+      <article class="card notch">
+        <h3>Built-in agents, fully configurable</h3>
+        <p>
+          Claude Code, Codex CLI and Antigravity CLI each launch with their own
+          options — model, reasoning effort, sandbox and approval policy, plan
+          mode, an initial prompt, extra directories — chosen per session in the
+          app.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Your own agent types</h3>
+        <p>
+          Define an agent from any command your shell can run, with whatever
+          flags you like. Name it and it sits in the mode picker beside the
+          built-ins. Up to 20 per account, synced live across your devices.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Optional Git worktrees — for every kind</h3>
+        <p>
+          Start any session in its own dedicated Git worktree, so parallel runs
+          never collide: Claude Code, Codex, Antigravity, a raw terminal, and
+          your own custom types all support it. <strong>Opt-in per launch, and
+          Git projects only</strong> — a non-Git project just runs in the project
+          root.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>It survives a reboot</h3>
+        {# Keep each service name on one source line: the copy-accuracy test
+           greps for these phrases, and a line break inside <strong> splits the
+           text node even though it renders identically. #}
+        <p>
+          The agent installs as a real OS service, not a terminal you left open:
+          a <strong>systemd</strong> unit on Linux (starts at boot),
+          a <strong>launchd</strong> job on macOS,
+          and a <strong>Scheduled Task</strong> on Windows (both start at
+          sign-in) — each supervised, so it restarts itself if it dies.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Shortcuts you define</h3>
+        <p>
+          Build control-key chords from Ctrl, Alt or Shift plus a key — letters,
+          digits, F-keys, Tab, Enter, Space, Backspace — save them as named
+          buttons on the terminal's control bar per session kind, and they sync
+          across your devices.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Linear Auto Scan</h3>
+        {# "on a Git project" is load-bearing: Auto Scan is not gated on
+           is_git in the picker, so a non-Git project silently runs in the
+           project root instead. Same qualifier rule as the worktree card. #}
+        <p>
+          Point a Git project at a Linear filter and the agent picks up matching
+          issues on its own, creates a worktree for each, and launches Claude
+          Code to work on it — while you watch the scan log from the app.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>A real PTY, not a log tail</h3>
+        <p>
+          Full two-way terminal I/O, so TUIs behave: arrow keys, Ctrl-C, plan
+          mode, approval prompts. Every session keeps a 10,000-line scrollback,
+          so a dropped connection replays instead of losing output.
+        </p>
+      </article>
+
+      <article class="card notch">
+        <h3>Run several at once</h3>
+        <p>
+          Up to 32 concurrent sessions on one agent — a Claude Code run, a Codex
+          review and a shell, side by side in the session list, each with its own
+          scrollback and state.
+        </p>
+      </article>
+
+    </div>
+  </section>
+
+  <section class="section section-tight" data-reveal>
+    <h2 class="h-pixel">Start any of these</h2>
+    <ul class="chips" aria-label="Supported session kinds">
+      <li class="chip">Claude Code</li>
+      <li class="chip">Codex CLI</li>
+      <li class="chip">Antigravity CLI</li>
+      <li class="chip">Terminal</li>
+      <li class="chip">Auto Scan</li>
+      <li class="chip chip-brand">Your own types — up to 20</li>
+    </ul>
+    <p class="fineprint">
+      Mobaide launches the CLIs you already have installed and signed in on your
+      own machine. It does not resell or proxy any model provider.
+    </p>
+  </section>
+
+  <section id="screens" class="section" data-reveal>
+    <h2 class="h-pixel">In the app</h2>
+    <div class="shots">
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-terminal.webp?v={{ asset_version }}" width="420" height="801"
+               loading="lazy" decoding="async"
+               alt="A running Claude Code session in Mobaide's terminal view, with a command field and control-key bar.">
+        </div>
+        <figcaption>A live Claude Code session, driven from the phone.</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-sessions.webp?v={{ asset_version }}" width="420" height="838"
+               loading="lazy" decoding="async"
+               alt="Mobaide's session list showing an active Auto Scan and two running sessions.">
+        </div>
+        <figcaption>Several sessions at once, each with its own state.</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-pairing.webp?v={{ asset_version }}" width="420" height="819"
+               loading="lazy" decoding="async"
+               alt="Mobaide's empty agents screen, offering install commands and a QR scanner to pair an agent.">
+        </div>
+        <figcaption>Pairing is an install command and a QR scan.</figcaption>
+      </figure>
+      <figure class="shot">
+        <div class="device">
+          <img src="/static/site/img/shot-autoscan.webp?v={{ asset_version }}" width="420" height="836"
+               loading="lazy" decoding="async"
+               alt="Mobaide's Auto Scan monitor showing scan, label, worktree and spawn steps with recent Linear issues.">
+        </div>
+        <figcaption>Auto Scan, step by step, as it picks up issues.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="faq" class="section" data-reveal>
+    <h2 class="h-pixel">Questions</h2>
+    <div class="faq">
+
+      <details>
+        <summary>Do I need a public IP, port forwarding or a VPN?</summary>
+        <p>
+          No. The agent on your computer dials <em>out</em> to the relay over an
+          encrypted WebSocket and nothing on your machine listens for inbound
+          connections. That is what makes it work behind NAT, on a corporate
+          router, on café Wi-Fi or on mobile data — no SSH, no tunnel to
+          configure.
+        </p>
+      </details>
+
+      <details>
+        <summary>Is it actually free?</summary>
+        <p>
+          Yes. There is no subscription and no paywalled feature — the app and
+          the agent are free. You bring your own Claude Code, Codex or
+          Antigravity access and run the agent on hardware you already own.
+        </p>
+      </details>
+
+      <details>
+        <summary>What leaves my machine?</summary>
+        <p>
+          Session traffic is <strong>relayed, not stored</strong>: your keystrokes
+          and the terminal output pass through the relay's in-memory routing and
+          are then discarded — never appended to its database, log files or
+          backups. Server-side logs record connection events only and redact
+          payloads.
+        </p>
+        <p>
+          The relay does persist the things that have to sync across your
+          devices: your account, your paired devices, prompt templates, saved
+          shortcuts and custom agent types. There are no analytics SDKs in the
+          app or the agent. The
+          <a href="/privacy.html">privacy policy</a> lists every field.
+        </p>
+      </details>
+
+      <details>
+        <summary>Can I run an agent that isn't in the list?</summary>
+        <p>
+          Yes. Define a custom agent type from any command your login shell can
+          run — any binary, any flags — and launch it exactly like a built-in,
+          including the optional Git worktree. Up to 20 per account.
+        </p>
+      </details>
+
+      <details>
+        <summary>How is the connection secured?</summary>
+        <p>
+          Every hop is TLS-encrypted (WSS). The app authenticates to the relay
+          with a JWT, and each agent authenticates with its own per-agent token;
+          pairing pins the relay's signing key on first use. Tokens are held in
+          Android's EncryptedSharedPreferences, backed by the Keystore.
+        </p>
+      </details>
+
+      <details>
+        <summary>When is the iPhone app out?</summary>
+        <p>
+          The iOS client is in active development and is not on the App Store
+          yet. Android is available today.
+        </p>
+      </details>
+
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="foot-top">
+    <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
+         width="227" height="40" alt="Mobaide">
+    <nav class="foot-nav" aria-label="Footer">
+      <a href="/privacy.html">Privacy policy</a>
+      <a href="/portal/delete-account-info">Account deletion</a>
+      <a href="/portal/login">Sign in</a>
+      <a href="https://github.com/syrax90/mobaide-community/discussions" rel="noopener">Community</a>
+      <a href="mailto:support@mobaide.com">Email support</a>
+    </nav>
+  </div>
+  <p class="disclaimer">
+    Mobaide is an independent app and is not affiliated with or endorsed by
+    Anthropic, OpenAI, Google or Linear. “Claude” and “Claude Code” are
+    trademarks of Anthropic. “Codex” is a trademark of OpenAI. “Antigravity” is a
+    trademark of Google. Google Play and the Google Play logo are trademarks of
+    Google LLC. All other trademarks are the property of their respective owners.
+  </p>
+  <p class="disclaimer">&copy; Mobaide</p>
+</footer>
+</body>
+</html>
