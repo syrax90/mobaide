@@ -42,7 +42,7 @@ CLA-170), but the website must not repeat them:
 
 | Do not write | Why | Write instead |
 |---|---|---|
-| "end-to-end" (auth or encryption) | Transport is TLS per hop; the relay terminates TLS and forwards plaintext through in-memory routing. There is no E2E crypto anywhere in the repo. | "Every hop is TLS-encrypted (WSS)", "JWT auth on every hop" |
+| "end-to-end" (auth or encryption) | Transport is TLS per hop; the relay terminates TLS and forwards plaintext through in-memory routing. There is no E2E crypto anywhere in the repo. | "Going through the relay — the default — every hop is TLS-encrypted (WSS)", and name the two auth mechanisms separately. **Both halves need the qualifiers in the last two rows** — do not write a bare "every hop is TLS-encrypted" or "JWT auth on every hop". |
 | "32 sessions **per agent type**", or 32 as a hard limit | `max_sessions` (`mobaide_agent/mobaide/core/session_manager.py`) is one global cap over a flat session dict, and it is configurable (`mobaide/agent/config.py`); 32 is the default. | "Up to 32 concurrent sessions on one agent" |
 | "**each** session in its own dedicated Git worktree" | Worktrees are opt-in per launch and Git-only. A `worktree=true` request against a non-Git project logs a warning and falls back to the project root. | The worktree claim **with both qualifiers**: opt-in per launch, Git projects only |
 | any implication that nothing is stored server-side | The relay persists accounts, paired devices, prompt templates, saved shortcuts and custom agent types. | "the relay never persists session traffic" + name what it does persist |
@@ -72,7 +72,14 @@ from `accounts.google.com` and `portal_base.html` contains inline `<script>` and
 `style=` attributes, all of which this policy would block. Site-wide headers are
 tracked separately in CLA-171.
 
-`/robots.txt` disallows only `/api/` and `/portal/`. It deliberately does **not**
+`/robots.txt` disallows only `/api/` and `/portal/`, with one carve-out: an
+`Allow: /portal/delete-account-info` line **emitted before the disallows**. That
+page is anonymous, is the URL submitted to Google Play Console's Data Safety
+form, and is linked from this site's own footer, so the blanket `/portal/` block
+must not swallow it — RFC 9309 §2.2.2 longest-match makes the specific rule win,
+and both Google and Bing honour it. `/portal/login` stays blocked on purpose.
+
+It deliberately does **not**
 list `/dashboard/`, `/docs`, `/redoc` or `/openapi.json`: nothing public links to
 them so a `Disallow` buys no crawl budget, and naming them would publish the
 admin login's location and undercut `app._require_docs_admin`, which answers 404

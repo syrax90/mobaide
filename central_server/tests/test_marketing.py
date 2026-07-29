@@ -276,6 +276,19 @@ class TestCrawlerFiles:
         response = await client.get("/robots.txt")
         assert path not in response.text
 
+    async def test_robots_txt_keeps_the_deletion_page_crawlable(
+        self, client
+    ) -> None:
+        """``/portal/delete-account-info`` is anonymous, is the URL submitted to
+        Play Console's Data Safety form, and is linked from this site's own
+        footer — the blanket ``Disallow: /portal/`` must not swallow it. The
+        ``Allow`` has to precede the disallows for longest-match to apply."""
+        body = (await client.get("/robots.txt")).text
+        assert "Allow: /portal/delete-account-info" in body
+        assert body.index("Allow: /portal/delete-account-info") < body.index(
+            "Disallow: /portal/"
+        )
+
     async def test_sitemap_is_valid_xml_listing_the_apex(
         self, client, config
     ) -> None:

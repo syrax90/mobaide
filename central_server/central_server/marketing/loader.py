@@ -20,8 +20,16 @@ _FAVICON_RELATIVE_PATH = ("site", "img", "favicon.ico")
 
 _SITE_ASSET_DIR = "site"
 
-# Only the two surfaces a crawler could actually reach and index. `/privacy.html`
-# is deliberately left crawlable — the Play listing links to it.
+# Carved back out of the `/portal/` block below: this page is anonymous, is the
+# URL submitted to Google Play Console's Data Safety form, and is linked from
+# this site's own footer. Disallowing it would leave a linked-but-blocked URL
+# that Search Console flags, on a site whose entire purpose is discoverability.
+# Emitted before the disallows; RFC 9309 §2.2.2 longest-match makes the more
+# specific rule win, and Google and Bing both honour it.
+_ALLOWED = ("/portal/delete-account-info",)
+
+# Only the surfaces a crawler could actually reach and index. `/privacy.html` is
+# deliberately left crawlable — the Play listing links to it.
 #
 # Deliberately NOT listed: `/dashboard/`, `/docs`, `/redoc`, `/openapi.json`.
 # Nothing public links to them, so a `Disallow` line buys no crawl budget, and
@@ -112,10 +120,11 @@ def read_favicon(static_dir: Path) -> bytes | None:
 
 
 def render_robots(site_origin: str) -> str:
+    allow = "\n".join(f"Allow: {path}" for path in ("/", *_ALLOWED))
     disallow = "\n".join(f"Disallow: {path}" for path in _DISALLOWED)
     return (
         "User-agent: *\n"
-        "Allow: /\n"
+        f"{allow}\n"
         f"{disallow}\n"
         "\n"
         f"Sitemap: {site_origin}/sitemap.xml\n"
