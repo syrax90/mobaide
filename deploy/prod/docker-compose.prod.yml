@@ -25,6 +25,13 @@ services:
       - HOST=0.0.0.0
       - PORT=9000
       - DB_PATH=/app/data/central_server.db
+      # Caddy is a separate container, so its bridge IP is the peer uvicorn
+      # sees. Without this, uvicorn's default (127.0.0.1) refuses to trust
+      # X-Forwarded-For and every request reports Caddy's IP — collapsing the
+      # per-IP password-reset quota onto a single bucket and blinding the
+      # access log. Safe here: this service is `expose`-only, never published,
+      # so nothing but Caddy on the compose network can reach it.
+      - FORWARDED_ALLOW_IPS=*
     volumes:
       - central-server-data:/app/data
     expose:

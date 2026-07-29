@@ -90,3 +90,21 @@ def test_apns_env_vars_parse(monkeypatch):
     assert config.apns_team_id == "TEAM123456"
     assert config.apns_topic == "com.mobaide.app"
     assert config.apns_use_sandbox is True
+
+
+def test_api_docs_are_disabled_unless_enabled(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("ENABLE_API_DOCS", raising=False)
+    assert CentralServerConfig.from_env().enable_api_docs is False
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("1", True), ("true", True), ("0", False), ("false", False), ("", False)],
+)
+def test_enable_api_docs_parses_as_a_boolean(monkeypatch, raw, expected):
+    """Opting in must be explicit: a plain truthiness check on the raw string
+    would read "0"/"false" as enabled and silently republish the schema."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("ENABLE_API_DOCS", raw)
+    assert CentralServerConfig.from_env().enable_api_docs is expected

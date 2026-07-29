@@ -18,6 +18,7 @@ _ENV_VARS = (
     "PROJECTS_STORE_PATH",
     "MOBAIDE_ENV",
     "MOBAIDE_AGENT_PREFIX",
+    "ENABLE_API_DOCS",
     "HOST",
     "PORT",
     "MAX_SESSIONS",
@@ -175,6 +176,74 @@ class TestAgentConfigStringPassThrough:
 
         assert cfg.log_level == "DEBUG"
         assert cfg.log_format == "console"
+
+
+class TestAgentConfigEnableApiDocs:
+    """``ENABLE_API_DOCS`` binds by field name via ``env_prefix=""``."""
+
+    def test_unset_is_false(self, monkeypatch):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+
+        assert AgentConfig.from_env().enable_api_docs is False
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [("1", True), ("true", True), ("0", False), ("false", False)],
+    )
+    def test_env_var_opts_in_explicitly(self, monkeypatch, raw, expected):
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("ENABLE_API_DOCS", raw)
+
+        assert AgentConfig.from_env().enable_api_docs is expected
+
+    @pytest.mark.parametrize(
+        "raw,expected", [("", False), ("maybe", False), ("True ", True)]
+    )
+    def test_unrecognised_value_does_not_block_startup(
+        self, monkeypatch, raw, expected
+    ):
+        """Pydantic's own bool coercion raises ``ValidationError`` on these
+        three, which takes the whole agent down at construction. The empty
+        string is what an operator gets from uncommenting the
+        ``# ENABLE_API_DOCS=1`` line in ``env.template``, so the strict field
+        turned a documentation hint into a refusal to start."""
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("ENABLE_API_DOCS", raw)
+
+        assert AgentConfig.from_env().enable_api_docs is expected
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("", False),
+            ("maybe", False),
+            ("True ", True),
+            ("1", True),
+            ("0", False),
+            ("yes", True),
+            ("on", True),
+            ("FALSE", False),
+        ],
+    )
+    def test_agrees_with_the_sibling_boolean(self, monkeypatch, raw, expected):
+        """The invariant the shared ``_parse_env_bool`` validator exists to
+        establish: whatever ``LOG_SAMPLE_WS`` makes of a raw value, every
+        other boolean in the package — ``ENABLE_API_DOCS`` included — makes
+        of it too."""
+        monkeypatch.setenv("JWT_SECRET_KEY", "s")
+        monkeypatch.setenv("ENABLE_API_DOCS", raw)
+        monkeypatch.setenv("LOG_SAMPLE_WS", raw)
+
+        cfg = AgentConfig.from_env()
+
+        assert (cfg.enable_api_docs, cfg.log_sample_ws) == (expected, expected)
+
+    def test_explicit_bool_is_passed_through(self):
+        """The validator normalises strings; a caller-supplied ``bool`` has
+        to survive it, or programmatic opt-in silently stays off."""
+        cfg = AgentConfig(jwt_secret_key="s", enable_api_docs=True)
+
+        assert cfg.enable_api_docs is True
 
 
 class TestAgentConfigRelayIntegration:

@@ -573,7 +573,18 @@ def create_app(config: AgentConfig | None = None) -> FastAPI:
         await app.state.session_manager.shutdown()
         shutdown_logging()
 
-    app = FastAPI(title="Mobaide Agent", version=__version__, lifespan=lifespan)
+    # Default-deny on the doc routes: the agent binds every interface, so
+    # FastAPI's stock /docs would publish the full session/project/git/codex
+    # surface to the local network. ENABLE_API_DOCS opts a dev box back in.
+    docs_enabled = config.enable_api_docs
+    app = FastAPI(
+        title="Mobaide Agent",
+        version=__version__,
+        lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
 
     # Strip secret inputs from validation errors so a malformed body cannot echo
     # the secret back to the caller; other fields keep `input`.

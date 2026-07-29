@@ -10,11 +10,14 @@ from pathlib import Path
 from asgi_correlation_id import CorrelationIdMiddleware
 from asgi_correlation_id.context import correlation_id
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .agents.service import AgentService
+from .auth.dependencies import get_api_user, get_dashboard_user
 from .auth.email import build_email_sender
 from .auth.rate_limit import ResendRateLimiter
 from .auth.service import AuthService
@@ -44,6 +47,9 @@ logger = get_logger(__name__)
 
 _HTTP_LOG_SKIP_PATHS = frozenset({"/api/health"})
 
+_OPENAPI_PATH = "/openapi.json"
+_DOCS_METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE")
+
 # Static files and templates live alongside the package directory in a source
 # checkout, or alongside the working directory when packaged into a Docker
 # image that only ships site-packages.
@@ -54,6 +60,97 @@ _STATIC_DIR = _CWD_STATIC if _CWD_STATIC.is_dir() else _PROJECT_ROOT / "static"
 
 def _generate_correlation_id() -> str:
     return secrets.token_hex(16)
+
+
+async def _require_docs_admin(request: Request) -> None:
+    """Allow only platform admins through to the OpenAPI routes.
+
+    Accepts either an admin ``Authorization: Bearer`` token (for ``curl``) or
+    the ``dashboard_token`` cookie an admin already holds after signing in at
+    ``/dashboard/login`` — the same session Swagger UI and ReDoc send along
+    with their same-origin fetch of the schema.
+
+    Every rejection is a 404, never a 401/403, so an ordinary probe cannot
+    tell a deployment with docs enabled-but-gated from one with
+    ``ENABLE_API_DOCS`` off, where the routes do not exist at all.
+    ``get_dashboard_user`` signals failure with a 303 redirect to the login
+    page, so ``HTTPException`` covers the ordinary rejection path for both
+    dependencies. Anything else fails closed the same way — a 500 here would
+    itself disclose that the route exists — but is logged, since reaching it
+    means an auth dependency broke rather than merely refused.
+
+    ``_register_api_docs`` is what extends that 404 across the methods and
+    spellings an ordinary probe uses; see its note on why a bare ``@app.get``
+    is not enough. Two residuals stay observable and are accepted: a
+    non-standard verb draws a 405, and a repeated trailing slash (``/docs//``)
+    draws Starlette's 307, because ``redirect_slashes`` ``rstrip``s to the
+    registered path and no set of explicit spellings can pre-empt it. So the
+    guarantee is "no ordinary probe reveals the flag", not equivalence. What
+    is absolute is that the schema itself never reaches a non-admin.
+    """
+    try:
+        user = (
+            await get_api_user(request)
+            if request.headers.get("Authorization")
+            else await get_dashboard_user(request)
+        )
+    except HTTPException:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    except Exception:
+        logger.exception("api_docs.auth_error")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
+def _register_api_docs(app: FastAPI) -> None:
+    """Register admin-gated ``/openapi.json``, ``/docs`` and ``/redoc``.
+
+    Only called when ``ENABLE_API_DOCS`` is set. The app is always constructed
+    with ``docs_url=None, redoc_url=None, openapi_url=None``, so FastAPI's own
+    unauthenticated doc routes are never registered in any environment.
+
+    Each path is registered for every standard method and both trailing-slash
+    spellings, because Starlette resolves method mismatches and slash
+    redirects in the router, before dependencies run. A bare ``@app.get``
+    would answer 405 to ``HEAD``/``POST`` and 307 to ``/docs/`` while the flag
+    is on, versus 404 for all of them while it is off — either of which hands
+    an anonymous caller the flag's value.
+    """
+    docs_dependencies = [Depends(_require_docs_admin)]
+
+    async def openapi_schema() -> JSONResponse:
+        return JSONResponse(app.openapi())
+
+    async def swagger_ui() -> HTMLResponse:
+        # oauth2_redirect_url must be None: FastAPI only registers
+        # /docs/oauth2-redirect when docs_url is set, so the default would
+        # point Swagger UI at a 404.
+        return get_swagger_ui_html(
+            openapi_url=_OPENAPI_PATH,
+            title=f"{app.title} — API docs",
+            oauth2_redirect_url=None,
+        )
+
+    async def redoc_ui() -> HTMLResponse:
+        return get_redoc_html(
+            openapi_url=_OPENAPI_PATH,
+            title=f"{app.title} — API docs",
+        )
+
+    for path, endpoint in (
+        (_OPENAPI_PATH, openapi_schema),
+        ("/docs", swagger_ui),
+        ("/redoc", redoc_ui),
+    ):
+        for spelling in (path, f"{path}/"):
+            app.add_api_route(
+                spelling,
+                endpoint,
+                methods=list(_DOCS_METHODS),
+                include_in_schema=False,
+                dependencies=docs_dependencies,
+            )
 
 
 def create_app(config: CentralServerConfig | None = None) -> FastAPI:
@@ -170,6 +267,12 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         title="Central Server",
         version=__version__,
         lifespan=lifespan,
+        # Default-deny: FastAPI would otherwise publish the full route,
+        # parameter and model map to anonymous callers. _register_api_docs
+        # puts them back behind an admin session when ENABLE_API_DOCS is set.
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
 
     # Middleware is executed in reverse registration order.
@@ -260,13 +363,20 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     app.include_router(user_ws_router)
     app.include_router(pairing_router)
     app.include_router(devices_router)
-    app.include_router(dashboard_router)
-    app.include_router(portal_router)
-    app.include_router(legal_router)
+    # The dashboard, portal and legal routers serve HTML and HTMX fragments to
+    # browsers, not an API. Keeping them out of the schema means an enabled
+    # admin docs page describes the actual JSON surface instead of the
+    # browser-only one. include_in_schema has no effect on routing.
+    app.include_router(dashboard_router, include_in_schema=False)
+    app.include_router(portal_router, include_in_schema=False)
+    app.include_router(legal_router, include_in_schema=False)
     app.include_router(manifest_router)
     app.include_router(templates_router)
     app.include_router(shortcuts_router)
     app.include_router(custom_agent_types_router)
+
+    if config.enable_api_docs:
+        _register_api_docs(app)
 
     # Unauthenticated — intentionally public for load-balancer probes.
     @app.get("/api/health", tags=["health"])
