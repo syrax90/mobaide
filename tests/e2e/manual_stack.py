@@ -56,6 +56,13 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_EMAIL = "dev@test.local"
 DEFAULT_PASSWORD = "Qwe>123"
 DEFAULT_AGENT_NAME = "manual-e2e-agent"
+
+# Internal wiring only: seeded via ADMIN_SEED_EMAIL/ADMIN_SEED_PASSWORD so the
+# script can authenticate the admin-gated /api/health counts for its own
+# readiness/status probes. Never surfaced to the developer, never persisted
+# to state.json, never used as the app-login identity (DEFAULT_EMAIL).
+_HEALTH_ADMIN_EMAIL = "manual-stack-health-admin@test.local"
+_HEALTH_ADMIN_PASSWORD = "ManualStackHealthAdminPass123!"
 DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "mobaide-manual-e2e"
 
 ANDROID_DIR = REPO_ROOT / "android"
@@ -91,6 +98,8 @@ SANITIZED_ENV_VARS = (
     "MOBAIDE_ENV",
     "JWT_SECRET_KEY",
     "EMAIL_VERIFICATION_REQUIRED",
+    "ADMIN_SEED_EMAIL",
+    "ADMIN_SEED_PASSWORD",
     "HOST",
     "PORT",
     "DB_PATH",
@@ -486,6 +495,8 @@ def build_server_env(state: dict, args: argparse.Namespace, server_dir: Path) ->
             "MOBAIDE_ENV": "test",
             "JWT_SECRET_KEY": state["jwt_secret_key"],
             "EMAIL_VERIFICATION_REQUIRED": "false",
+            "ADMIN_SEED_EMAIL": _HEALTH_ADMIN_EMAIL,
+            "ADMIN_SEED_PASSWORD": _HEALTH_ADMIN_PASSWORD,
             "HOST": args.host,
             "PORT": str(args.port),
             "DB_PATH": str(server_dir / "central.db"),
@@ -994,7 +1005,10 @@ def cmd_up(args: argparse.Namespace) -> int:
             expect_status_ok=True,
         )
         # The 4012-safe gate: agent's relay tunnel is up, not just its HTTP port.
-        client.wait_agents_online(1, timeout=45)
+        # agents_online is admin-gated, so poll with the seeded admin's token, not
+        # the app-owner's (which the agent-ownership endpoints reject as admin).
+        admin_token = client.login(_HEALTH_ADMIN_EMAIL, _HEALTH_ADMIN_PASSWORD)
+        client.wait_agents_online(1, timeout=45, token=admin_token)
         log("agent tunnel is online (agents_online >= 1)")
 
         if args.smoke:
@@ -1099,9 +1113,15 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     deps = load_deps(auto_install=False)
     probe = local_probe_host((state or {}).get("server_host") or DEFAULT_HOST)
+    client = deps.mmc.MockMobileClient(f"http://{probe}:{port}", http_timeout=3.0)
     try:
-        resp = deps.httpx.get(f"http://{probe}:{port}/api/health", timeout=3)
-        health = resp.json()
+        # agents_online/agents_registered are admin-gated. A server not booted
+        # by this script's `up` (no admin seeded) just falls back to bare status.
+        try:
+            admin_token = client.login(_HEALTH_ADMIN_EMAIL, _HEALTH_ADMIN_PASSWORD)
+        except (deps.httpx.HTTPError, RuntimeError):
+            admin_token = None
+        health = client.health(token=admin_token)
         log(
             f"server:    UP on port {port} -- status={health.get('status')} "
             f"agents_online={health.get('agents_online')} "
@@ -1111,6 +1131,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001
         log(f"server:    DOWN on port {port} ({type(exc).__name__})")
         return 1
+    finally:
+        client.close()
 
 
 def cmd_clean(args: argparse.Namespace) -> int:

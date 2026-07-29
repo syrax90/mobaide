@@ -58,10 +58,31 @@ class MockMobileClient:
     def __exit__(self, *_exc) -> None:
         self.close()
 
-    def health(self) -> dict:
-        resp = self._http.get("/api/health")
+    def health(self, *, token: str | None = None) -> dict:
+        """GET /api/health. Attaches a Bearer token (explicit or the logged-in
+        owner's) when available, since the agent counts are admin-gated."""
+        token = token if token is not None else self.access_token
+        headers = self._bearer(token) if token else {}
+        resp = self._http.get("/api/health", headers=headers)
         resp.raise_for_status()
         return resp.json()
+
+    def login(self, email: str, password: str) -> str:
+        """Log in and return the access token without touching ``self.access_token``.
+
+        Used to mint a token for an identity distinct from the logged-in
+        owner (e.g. an admin, for the health-count-gated readiness poll) —
+        agent-ownership endpoints reject admin tokens, so the owner identity
+        driven by ``register_and_login``/``access_token`` must stay untouched.
+        """
+        resp = self._http.post(
+            "/api/auth/login", json={"email": email, "password": password}
+        )
+        resp.raise_for_status()
+        token = resp.json().get("access_token")
+        if not token:
+            raise RuntimeError(f"no access_token from login: {resp.json()!r}")
+        return token
 
     def register_and_login(self, email: str, password: str) -> str:
         """Create the owner user (verification disabled in test mode) and keep its dashboard JWT."""
@@ -97,14 +118,24 @@ class MockMobileClient:
         return resp.json()
 
     def wait_agents_online(
-        self, minimum: int = 1, *, timeout: float = 30.0, interval: float = 0.25
+        self,
+        minimum: int = 1,
+        *,
+        timeout: float = 30.0,
+        interval: float = 0.25,
+        token: str | None = None,
     ) -> dict:
-        """Poll /api/health until ``agents_online >= minimum`` (the correct cross-process gate)."""
+        """Poll /api/health until ``agents_online >= minimum`` (the correct cross-process gate).
+
+        ``token`` must be an admin token — the counts are admin-gated, so an
+        anonymous or non-admin poll would never see ``agents_online`` rise
+        and would time out even once the agent tunnel is actually up.
+        """
         deadline = time.monotonic() + timeout
         last: dict | None = None
         while time.monotonic() < deadline:
             try:
-                last = self.health()
+                last = self.health(token=token)
                 if last.get("agents_online", 0) >= minimum:
                     return last
             except httpx.HTTPError:

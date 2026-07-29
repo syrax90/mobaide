@@ -103,6 +103,26 @@ async def _require_docs_admin(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
+async def _health_is_admin(request: Request) -> bool:
+    """True iff the caller is an authenticated platform admin.
+
+    Same dual Bearer/cookie resolution as ``_require_docs_admin``, but never
+    raises: ``/api/health`` must keep answering 200 with the bare status for
+    anonymous load-balancer, Docker, and deploy-script probes. Any auth
+    failure — missing, invalid, or non-admin — just means the agent counts
+    are omitted, not that the request is rejected.
+    """
+    try:
+        user = (
+            await get_api_user(request)
+            if request.headers.get("Authorization")
+            else await get_dashboard_user(request)
+        )
+    except HTTPException:
+        return False
+    return user.role == "admin"
+
+
 def _register_api_docs(app: FastAPI) -> None:
     """Register admin-gated ``/openapi.json``, ``/docs`` and ``/redoc``.
 
@@ -378,9 +398,13 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     if config.enable_api_docs:
         _register_api_docs(app)
 
-    # Unauthenticated — intentionally public for load-balancer probes.
+    # Bare status is intentionally public for load-balancer probes. Agent
+    # counts (install/concurrency numbers) require an admin bearer token or
+    # dashboard session — see _health_is_admin.
     @app.get("/api/health", tags=["health"])
-    async def health():
+    async def health(request: Request):
+        if not await _health_is_admin(request):
+            return {"status": "ok"}
         routing = app.state.routing
         db = app.state.db
         agents = await db.list_agents()
