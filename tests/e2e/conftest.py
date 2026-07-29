@@ -36,6 +36,12 @@ if sys.platform == "win32":
 E2E_EMAIL = "e2e-harness@test.local"
 E2E_PASSWORD = "E2eHarnessPass123!"
 
+# Seeded via ADMIN_SEED_EMAIL/ADMIN_SEED_PASSWORD below, purely so the harness
+# can authenticate the admin-gated /api/health counts for the readiness poll
+# (see wait_agents_online). Never used as the mobile-owner identity.
+E2E_ADMIN_EMAIL = "e2e-harness-admin@test.local"
+E2E_ADMIN_PASSWORD = "E2eHarnessAdminPass123!"
+
 
 @dataclass
 class Harness:
@@ -45,6 +51,7 @@ class Harness:
     server_port: int
     agent_id: str
     access_token: str
+    admin_token: str
     client: MockMobileClient
     tmp: Path
 
@@ -169,6 +176,8 @@ def e2e_stack(request, xprocess):
         "MOBAIDE_ENV": "test",
         "JWT_SECRET_KEY": jwt_secret,
         "EMAIL_VERIFICATION_REQUIRED": "false",
+        "ADMIN_SEED_EMAIL": E2E_ADMIN_EMAIL,
+        "ADMIN_SEED_PASSWORD": E2E_ADMIN_PASSWORD,
         "HOST": "127.0.0.1",
         "PORT": str(server_port),
         "DB_PATH": str(server_dir / "central.db"),
@@ -217,13 +226,17 @@ def e2e_stack(request, xprocess):
     xprocess.ensure(agent_name, agent_starter)
 
     # The correct cross-process gate: wait for the relay handshake, not bare HTTP 200.
-    client.wait_agents_online(1, timeout=45)
+    # agents_online is admin-gated, so poll with the seeded admin's token, not the
+    # mobile-owner's (which the agent-ownership endpoints reject as admin anyway).
+    admin_token = client.login(E2E_ADMIN_EMAIL, E2E_ADMIN_PASSWORD)
+    client.wait_agents_online(1, timeout=45, token=admin_token)
 
     yield Harness(
         server_base=f"http://127.0.0.1:{server_port}",
         server_port=server_port,
         agent_id=agent_id,
         access_token=access_token,
+        admin_token=admin_token,
         client=client,
         tmp=tmp,
     )

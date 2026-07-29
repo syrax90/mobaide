@@ -28,6 +28,13 @@ reuses this harness's recipe outside pytest.
 5. gates readiness on `GET /api/health` → `agents_online >= 1` (not bare HTTP 200,
    which races into WS close 4012), then yields a `MockMobileClient`.
 
+`agents_online`/`agents_registered` are admin-gated (anonymous callers only get
+`{"status": "ok"}`), so the server is booted with `ADMIN_SEED_EMAIL`/
+`ADMIN_SEED_PASSWORD` set to `E2E_ADMIN_EMAIL`/`E2E_ADMIN_PASSWORD`, and step 5
+polls with that admin's token (`client.login(...)`), not the mobile-owner's —
+if this wiring is ever dropped, the readiness wait fails silently as a 45s
+timeout rather than an auth error.
+
 `tests/e2e/test_e2e_session_echo.py` then mints a mobile token, creates a **SHELL** session
 via `POST /proxy/{agent_id}/api/sessions` (the agent's `FakePtyBackend` — no real
 shell, no `claude`/`codex` CLI), attaches the relay session WebSocket, and asserts

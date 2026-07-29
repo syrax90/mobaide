@@ -504,9 +504,45 @@ class TestRequestEventsSnapshotHelper:
 
 class TestHealthEndpoint:
     async def test_health(self, client):
+        """Anonymous callers get the bare status only — no agent counts."""
         resp = await client.get("/api/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "agents_online" not in data
+        assert "agents_registered" not in data
+
+    async def test_health_admin_bearer_token(self, client, admin_api_auth_headers):
+        resp = await client.get("/api/health", headers=admin_api_auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
         assert "agents_online" in data
         assert "agents_registered" in data
+
+    async def test_health_admin_dashboard_cookie(self, client, dashboard_headers):
+        resp = await client.get("/api/health", headers=dashboard_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "agents_online" in data
+        assert "agents_registered" in data
+
+    async def test_health_viewer_bearer_token_no_counts(self, client, api_auth_headers):
+        """A non-admin bearer token authenticates but does not unlock counts."""
+        resp = await client.get("/api/health", headers=api_auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "agents_online" not in data
+        assert "agents_registered" not in data
+
+    async def test_health_invalid_bearer_degrades(self, client):
+        """A malformed token must never turn an uptime probe into a 401."""
+        resp = await client.get(
+            "/api/health", headers={"Authorization": "Bearer bogus"}
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert "agents_online" not in data

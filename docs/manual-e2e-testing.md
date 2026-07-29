@@ -55,7 +55,12 @@ the test URL in place across restarts instead.
    (`MOBAIDE_AGENT_ALLOW_INSECURE_WS=1`), with all agent state isolated under a
    throwaway `MOBAIDE_AGENT_PREFIX`.
 5. Gates readiness on `/api/health` → `agents_online >= 1` (the same
-   4012-safe gate the automated harness uses).
+   4012-safe gate the automated harness uses). Those counts are admin-gated,
+   so the server is also booted with an internal, script-only admin account
+   (`ADMIN_SEED_EMAIL`/`ADMIN_SEED_PASSWORD`, distinct from your tester
+   login) whose token the script uses to poll them — `status` (the CLI
+   subcommand) does the same, falling back to bare status if that login
+   fails (e.g. against a server not started by this script).
 6. Syncs the two **gitignored** Android files (next section) and prints the
    READY banner, then streams `[server]` / `[agent]` logs until `Ctrl+C`
    (logs are also written under the state dir).

@@ -15,7 +15,7 @@ import uuid
 
 import pytest
 
-from mock_mobile_client import FRAME_INPUT, FRAME_SUBMIT
+from mock_mobile_client import FRAME_INPUT, FRAME_SUBMIT, MockMobileClient
 
 pytestmark = pytest.mark.timeout(120)
 
@@ -26,10 +26,15 @@ def _unique(prefix: str) -> bytes:
 
 def test_health_reports_agent_online(e2e_stack):
     """Readiness gate contract: the agent's relay tunnel is up (no flaky 4012 closes)."""
-    health = e2e_stack.client.health()
+    health = e2e_stack.client.health(token=e2e_stack.admin_token)
     assert health["status"] == "ok"
     assert health["agents_online"] >= 1
     assert health["agents_registered"] >= 1
+
+    # A truly anonymous caller (fresh client, no token) gets the bare status only.
+    with MockMobileClient(e2e_stack.server_base) as anonymous_client:
+        anonymous_health = anonymous_client.health()
+    assert anonymous_health == {"status": "ok"}
 
 
 def test_session_echo_over_real_sockets(e2e_stack):
