@@ -1,5 +1,28 @@
 # central_server Changelog
 
+## [0.2.8](https://github.com/syrax90/claude_mobile/compare/server-v0.2.7...server-v0.2.8) (2026-07-30)
+
+
+### Features
+
+* **central_server:** adopt site-wide security headers and CSP ([32a53a1](https://github.com/syrax90/claude_mobile/commit/32a53a1941df5783b5657db359a135e8f519cac9))
+* **central_server:** adopt site-wide security headers and CSP ([50f70c3](https://github.com/syrax90/claude_mobile/commit/50f70c3b7143cbd2e1b56711da1044b82426bd0e))
+* **marketing:** serve pixel-styled mobaide.com landing page from central_server ([17bfeb8](https://github.com/syrax90/claude_mobile/commit/17bfeb870506139777ea7eaa908b7a1a8a2bf217))
+* **marketing:** serve pixel-styled mobaide.com landing page from central_server ([ac41546](https://github.com/syrax90/claude_mobile/commit/ac415469844761d70c3baa7449f8a5aaf4b3404d))
+* **portal:** restyle the web portal to the marketing pixel design system ([f9c0913](https://github.com/syrax90/claude_mobile/commit/f9c0913deeced170c010cfd7ee5f85e418f8e29d))
+* **portal:** restyle the web portal to the marketing pixel design system ([0fe82aa](https://github.com/syrax90/claude_mobile/commit/0fe82aa38cb7de1a82ee4614c3dea1e02e6cbe8a))
+
+
+### Bug Fixes
+
+* **legal:** add support@mobaide.com to the privacy policy ([951311b](https://github.com/syrax90/claude_mobile/commit/951311be4f19074680c3cebb7bdf158a310efc9f))
+* **legal:** add support@mobaide.com to the privacy policy ([47412af](https://github.com/syrax90/claude_mobile/commit/47412af86955aae389b0cd57869bab20a9c9e50a))
+* **marketing:** correct false landing-page claims and cache versioning from PR review ([fa8849c](https://github.com/syrax90/claude_mobile/commit/fa8849c21423a885771935518c758a447873f015))
+* **marketing:** keep the deletion page crawlable, scope README's WSS claim ([8f21cf3](https://github.com/syrax90/claude_mobile/commit/8f21cf310f4503c9bbb1f6a1bb570dae878c5937))
+* **marketing:** scope the TLS claim to relay mode, hash the whole asset tree ([479f21a](https://github.com/syrax90/claude_mobile/commit/479f21aa23237362b5574fdf4f45e155d9a2a86f))
+* **security:** gate /api/health agent counts behind admin auth ([dbcb596](https://github.com/syrax90/claude_mobile/commit/dbcb596a802dd575bcbf3fd6ec3737aa5a91fc0e))
+* **security:** gate /api/health agent counts behind admin auth ([d19d61e](https://github.com/syrax90/claude_mobile/commit/d19d61ec3a1c4d195b8b048f82e9a8c019b33146))
+
 ## [0.2.7](https://github.com/syrax90/claude_mobile/compare/server-v0.2.6...server-v0.2.7) (2026-07-29)
 
 
