@@ -8,6 +8,21 @@
 #             /opt/mobaide/tls/origin-key.pem
 #           (both chmod 600, owner matches the user running docker compose).
 
+# Send www to the apex. Without this block Caddy matches no site for the www
+# host and answers its default empty 200, which is what www.mobaide.com did
+# before: a bare 200 with a zero-byte body and no `Via: 1.1 Caddy`, because the
+# request reached Caddy but never reached a reverse_proxy.
+#
+# 308 rather than 301 so the method and body survive the redirect.
+#
+# The same Cloudflare Origin Certificate serves this host — the free 15-year
+# origin cert covers *.mobaide.com alongside the apex — so no extra cert step is
+# needed here, only a proxied DNS record for www.
+www.mobaide.com {
+    tls /etc/caddy/tls/origin-cert.pem /etc/caddy/tls/origin-key.pem
+    redir https://mobaide.com{uri} 308
+}
+
 mobaide.com, api.mobaide.com {
     tls /etc/caddy/tls/origin-cert.pem /etc/caddy/tls/origin-key.pem
     encode zstd gzip

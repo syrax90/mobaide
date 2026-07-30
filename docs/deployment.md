@@ -16,7 +16,7 @@ Deploy the central server only to a remote Ubuntu host (e.g. `mobaide.com`) from
 Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md):
 
 1. On the VPS: `mkdir /opt/mobaide`, populate `/opt/mobaide/.env` from `central_server/.env.example`, open ports 80/443.
-2. DNS: `A` record for your domain → VPS public IP. Cloudflare proxy can be on (use `CloudflareOrigin` TLS mode) or off (use `LetsEncrypt`).
+2. DNS: `A` record for your domain → VPS public IP, plus a `www` record (both Caddyfiles 308-redirect `www` → apex). Cloudflare proxy can be on (use `CloudflareOrigin` TLS mode) or off (use `LetsEncrypt`).
 3. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
 
 ### Deploy
@@ -58,7 +58,7 @@ The relay never publishes its OpenAPI schema. `create_app` passes `docs_url=None
 
 Set `ENABLE_API_DOCS=1` in `/opt/mobaide/.env` to get the docs back. They are then **admin-gated**: a request must carry either the `dashboard_token` cookie from `/dashboard/login` or an admin `Authorization: Bearer` token. Everything else — anonymous callers and non-admin users alike — still gets a 404, so the flag cannot re-expose the schema publicly. Browsers work as expected: sign in at `/dashboard/login` first, then open `/docs`.
 
-Routers that serve HTML rather than an API (`/dashboard/*`, `/portal/*`, `/privacy.html`) and the release-pipeline endpoint `POST /api/internal/agent_manifest` are registered with `include_in_schema=False`, so even an enabled docs page describes only the real JSON surface.
+Routers that serve HTML rather than an API (`/dashboard/*`, `/portal/*`, `/privacy.html`, and the marketing site's `/`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`) and the release-pipeline endpoint `POST /api/internal/agent_manifest` are registered with `include_in_schema=False`, so even an enabled docs page describes only the real JSON surface.
 
 The agent has the same knob with the same name and the same default. It matters more there than it looks: the agent binds `0.0.0.0` so DIRECT mode works over the LAN, so stock FastAPI docs would hand its whole session/project/git surface to anything on the same network. Leave it off outside local development.
 

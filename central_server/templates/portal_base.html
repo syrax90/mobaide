@@ -15,7 +15,14 @@
     {# Vendored htmx 2.0.4 — served from same origin (no CDN) so a compromised
        CDN cannot inject JS into the end-user-facing portal. SRI hash is
        computed from the bundled bytes; if you upgrade the vendored file,
-       refresh both ``/static/htmx.min.js`` and the integrity attribute. #}
+       refresh both ``/static/htmx.min.js`` and the integrity attribute.
+
+       Because the hash is pinned to an unversioned filename, this bundle is
+       held at ``no-cache`` by ``_SRI_PINNED_ASSETS`` in
+       ``central_server/static_files.py`` — a client that could reuse a cached
+       copy without revalidating would pair this new hash with stale JS and the
+       browser would block htmx outright. Do not give it a TTL without also
+       versioning the src. #}
     <script src="/static/htmx.min.js"
             integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
             crossorigin="anonymous"></script>
@@ -26,7 +33,7 @@
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
     <header>
         <nav>
-            <a href="/portal/account" class="logo">Mobaide</a>
+            <a href="/" class="logo">Mobaide</a>
             <div class="nav-right">
                 {% block nav_right %}
                 <a href="/portal/login" class="btn btn-sm">Sign in</a>

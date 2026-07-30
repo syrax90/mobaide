@@ -3,6 +3,20 @@
 #           ports 80 + 443 open in the server firewall.
 # Caddy auto-provisions and renews a Let's Encrypt cert via ACME HTTP-01.
 
+# Send www to the apex. Without this block Caddy matches no site for the www
+# host and answers its default empty 200, which is what www.mobaide.com did
+# before: a bare 200 with a zero-byte body and no `Via: 1.1 Caddy`, because the
+# request reached Caddy but never reached a reverse_proxy.
+#
+# 308 rather than 301 so the method and body survive the redirect.
+#
+# In this TLS mode Caddy provisions a separate Let's Encrypt cert for this host
+# over ACME HTTP-01, so www.mobaide.com needs a DNS record pointing here and
+# must be "DNS only" (gray cloud) like the apex.
+www.mobaide.com {
+    redir https://mobaide.com{uri} 308
+}
+
 mobaide.com, api.mobaide.com {
     encode zstd gzip
     reverse_proxy central-server:9000

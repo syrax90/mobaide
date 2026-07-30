@@ -1,0 +1,817 @@
+/* Mobaide marketing site — "modern pixel", dark first.
+ *
+ * Deliberately NOT sharing central_server/static/style.css: that is the
+ * light Bootstrap-flavoured dashboard sheet (--primary: #0d6efd) and none of
+ * its tokens apply here.
+ *
+ * Two rules this sheet exists to enforce:
+ *   - #6008AC and #6650A4 are FILL AND BORDER COLOURS ONLY. #6650A4 on #1E1E1E
+ *     is ~2.6:1 and fails WCAG AA, so text on dark uses --accent / --text /
+ *     --text-muted, never the brand purples.
+ *   - No border-radius. The pixel look comes from square corners, stepped
+ *     box-shadow frames, and 4px clip-path corner notches.
+ */
+
+:root {
+  --bg: #121212;
+  --bg-2: #171717;
+  --surface: #1e1e1e;
+  --surface-2: #232323;
+
+  /* Fills and borders only — never text on a dark background. */
+  --brand: #6008ac;
+  --brand-2: #6650a4;
+
+  /* Text colours, all AA-or-better on --bg and --surface. */
+  --accent: #d0bcff;
+  --text: #e9e5ef;
+  --text-muted: #ccc2dc;
+  --gray: #8b8b8b;
+
+  --rule: #625b71;
+  --plate: #f4f4f4;
+
+  --px: 4px;
+  --maxw: 1120px;
+
+  /* Departure Mono is drawn on an 11px grid; sizing headings in multiples of
+     11 keeps its stems on whole pixels instead of blurring between them. */
+  --pix-sm: 11px;
+  --pix-md: 22px;
+  --pix-lg: 33px;
+  --pix-xl: 44px;
+}
+
+@font-face {
+  font-family: "Departure Mono";
+  src: url("/static/site/fonts/DepartureMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  /* Anchored sections must clear the sticky header. */
+  scroll-padding-top: 88px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.65;
+  /* A dotted rail behind everything: cheap pixel texture, no image request. */
+  background-image: radial-gradient(var(--surface-2) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Grid items default to `min-width: auto`, so an item holding non-wrapping
+   content (the terminal transcript, a long install command) refuses to shrink
+   below its min-content width and pushes the whole page wider than the
+   viewport — `minmax(0, 1fr)` on the track alone does not prevent it. Setting
+   min-width: 0 is what lets the inner `overflow-x: auto` actually scroll
+   instead of the document overflowing sideways. */
+.hero > *,
+.steps > *,
+.grid > *,
+.shots > *,
+.faq > * {
+  min-width: 0;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  color: #fff;
+}
+
+strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ---------- pixel kit ---------- */
+
+/* Stepped 9-slice frame. The four shadows leave the corners unpainted, which
+   is what reads as a chunky pixel border rather than a CSS box. */
+.px-frame {
+  box-shadow:
+    0 calc(-1 * var(--px)) 0 0 var(--rule),
+    0 var(--px) 0 0 var(--rule),
+    calc(-1 * var(--px)) 0 0 0 var(--rule),
+    var(--px) 0 0 0 var(--rule);
+}
+
+/* 4px corner cuts. Pairs with a hard-offset shadow for the "sticker" look. */
+.notch {
+  clip-path: polygon(
+    var(--px) 0,
+    calc(100% - var(--px)) 0,
+    100% var(--px),
+    100% calc(100% - var(--px)),
+    calc(100% - var(--px)) 100%,
+    var(--px) 100%,
+    0 calc(100% - var(--px)),
+    0 var(--px)
+  );
+}
+
+.px-bullet {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 10px;
+  background: var(--brand);
+  box-shadow: 3px 3px 0 0 var(--brand-2);
+  flex: 0 0 auto;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10;
+  padding: 12px 18px;
+  background: var(--accent);
+  color: #1a1024;
+  font-weight: 700;
+}
+
+.skip:focus {
+  left: 8px;
+  top: 8px;
+}
+
+/* ---------- header ---------- */
+
+.site-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px clamp(16px, 4vw, 40px);
+  /* No backdrop-filter here on purpose: at 0.92 alpha only ~8% of the backdrop
+     shows through, so a blur would be imperceptible while forcing a full-width
+     GPU blur on every scroll frame (the header is sticky, so the backdrop
+     region changes constantly and the result cannot be cached). */
+  background: rgba(18, 18, 18, 0.92);
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.brand {
+  display: inline-flex;
+  line-height: 0;
+}
+
+/* The wordmark is dark purple ink drawn for a light plate (it is lifted
+   straight out of the app icon), so it keeps its plate here rather than being
+   recoloured — 6008AC straight onto #121212 would read as a smudge. */
+.brand-mark {
+  display: block;
+  width: 152px;
+  height: auto;
+  padding: 7px 11px;
+  background: var(--plate);
+  image-rendering: pixelated;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2.5vw, 26px);
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.site-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.site-nav a:hover {
+  color: var(--accent);
+}
+
+.btn,
+.btn-ghost {
+  display: inline-block;
+  padding: 9px 16px;
+  background: var(--brand);
+  color: #fff;
+  text-decoration: none;
+  box-shadow: var(--px) var(--px) 0 0 #2b0450;
+  transition: transform 90ms steps(2), box-shadow 90ms steps(2);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--accent);
+  box-shadow:
+    inset 0 0 0 2px var(--brand-2),
+    var(--px) var(--px) 0 0 #2b0450;
+}
+
+.btn:hover,
+.btn-ghost:hover {
+  color: #fff;
+}
+
+/* Press-down: the button travels into its own shadow. */
+.btn:active,
+.btn-ghost:active {
+  transform: translate(var(--px), var(--px));
+  box-shadow: 0 0 0 0 #2b0450;
+}
+
+.btn-ghost:active {
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+/* ---------- layout ---------- */
+
+.hero,
+.section,
+.strip,
+.site-foot {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 40px);
+}
+
+.section {
+  padding-top: clamp(56px, 8vw, 96px);
+  padding-bottom: clamp(8px, 2vw, 16px);
+}
+
+.section-tight {
+  padding-top: clamp(40px, 6vw, 64px);
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+  gap: clamp(28px, 5vw, 64px);
+  align-items: center;
+  padding-top: clamp(40px, 7vw, 88px);
+  padding-bottom: clamp(40px, 6vw, 72px);
+}
+
+h1 {
+  margin: 0 0 20px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: clamp(28px, 5.2vw, var(--pix-xl));
+  line-height: 1.22;
+  font-weight: 400;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+
+.lede {
+  margin: 0 0 26px;
+  font-size: clamp(1rem, 1.6vw, 1.125rem);
+  color: var(--text-muted);
+  max-width: 46ch;
+}
+
+.h-pixel {
+  margin: 0 0 14px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: clamp(22px, 3.4vw, var(--pix-lg));
+  font-weight: 400;
+  color: var(--accent);
+  line-height: 1.3;
+}
+
+.h-pixel::after {
+  content: "";
+  display: block;
+  width: 64px;
+  height: var(--px);
+  margin-top: 14px;
+  background: var(--brand);
+  box-shadow: var(--px) var(--px) 0 0 var(--brand-2);
+}
+
+.section-lede {
+  margin: 0 0 32px;
+  color: var(--text-muted);
+  max-width: 62ch;
+}
+
+/* ---------- hero CTA ---------- */
+
+.cta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.badge-link {
+  display: inline-block;
+  line-height: 0;
+}
+
+.badge-link img {
+  width: 194px;
+  height: auto;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  box-shadow: inset 0 0 0 2px var(--rule);
+}
+
+.chip-brand {
+  color: #fff;
+  background: var(--brand);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.cta-note {
+  margin: 0;
+  color: var(--gray);
+  font-size: 0.875rem;
+}
+
+/* ---------- hero terminal ---------- */
+
+.term {
+  background: var(--surface);
+  margin: var(--px);
+  overflow: hidden;
+}
+
+.term-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 2px solid #2e2e2e;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  color: var(--gray);
+}
+
+.term-dot {
+  width: 8px;
+  height: 8px;
+  background: #4caf50;
+  flex: 0 0 auto;
+}
+
+.term-body {
+  margin: 0;
+  padding: 14px 16px 18px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  /* The transcript is fixed-width art; let it scroll rather than reflow. */
+  overflow-x: auto;
+  /* Overriding <pre>'s default `pre` so the newlines BETWEEN the block-level
+     .t-line spans collapse. Left as `pre`, each line break would render on top
+     of the block layout and double-space the whole transcript. Each line
+     re-establishes `pre` below to keep its own internal spacing. */
+  white-space: normal;
+}
+
+.term-body code {
+  font: inherit;
+}
+
+.t-line {
+  display: block;
+  white-space: pre;
+}
+
+.c-dim {
+  color: var(--gray);
+}
+
+.c-ok {
+  color: #23d18b;
+}
+
+.c-accent {
+  color: var(--accent);
+}
+
+/* ---------- strip ---------- */
+
+.strip {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.strip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px clamp(18px, 3vw, 38px);
+  margin: 0;
+  padding: 18px 0;
+  list-style: none;
+  border-top: 2px solid var(--surface-2);
+  border-bottom: 2px solid var(--surface-2);
+  font-size: 0.9375rem;
+  color: var(--text-muted);
+}
+
+/* Inline, NOT flex. Flex would promote each text node to a flex item and drop
+   the whitespace between "…on" and the <strong> that follows it. */
+.strip-list li {
+  display: block;
+}
+
+.strip-list .px-bullet {
+  vertical-align: middle;
+}
+
+/* ---------- steps ---------- */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: clamp(16px, 2.5vw, 24px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.step {
+  position: relative;
+  padding: 26px 22px 22px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+.step-n,
+.step h3,
+.card h3 {
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-weight: 400;
+}
+
+.step-n {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 3px 9px;
+  background: var(--brand);
+  color: #fff;
+  font-size: var(--pix-sm);
+  letter-spacing: 0.1em;
+}
+
+.step h3,
+.card h3 {
+  margin: 0 0 8px;
+  font-size: var(--pix-md);
+  line-height: 1.35;
+  color: var(--accent);
+}
+
+.step p,
+.card p {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.step p:last-child,
+.card p:last-child {
+  margin-bottom: 0;
+}
+
+.code {
+  margin: 14px var(--px) var(--px);
+  padding: 14px;
+  background: var(--surface);
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.75;
+  color: #d4d4d4;
+  /* Soft-wrap rather than scroll: these are the install commands, and a
+     horizontally clipped one is the worst thing on the page. `pre-wrap` wraps
+     for display without inserting real newlines, so a copy-paste still yields
+     one command per line. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- feature grid ---------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: clamp(16px, 2.5vw, 24px);
+}
+
+.card {
+  padding: 24px 22px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+/* ---------- chips row ---------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+
+.fineprint {
+  margin: 0;
+  color: var(--gray);
+  font-size: 0.875rem;
+  max-width: 62ch;
+}
+
+/* ---------- screenshots ---------- */
+
+.shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: clamp(20px, 3vw, 34px);
+}
+
+.shot {
+  margin: 0;
+}
+
+/* Pixel device frame. The screenshots are bare app captures, so the phone
+   body is drawn here in CSS instead of being baked into the image. */
+.device {
+  position: relative;
+  padding: 10px 8px 22px;
+  background: var(--surface-2);
+  box-shadow:
+    inset 0 0 0 2px var(--rule),
+    var(--px) var(--px) 0 0 var(--brand);
+}
+
+.device::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  width: 44px;
+  height: var(--px);
+  margin-left: -22px;
+  background: var(--rule);
+}
+
+.device img {
+  display: block;
+  width: 100%;
+}
+
+.shot figcaption {
+  margin-top: 14px;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+/* ---------- faq ---------- */
+
+.faq {
+  display: grid;
+  gap: 12px;
+  max-width: 76ch;
+}
+
+.faq details {
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+.faq summary {
+  padding: 16px 20px;
+  cursor: pointer;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: 15px;
+  color: var(--accent);
+  list-style: none;
+}
+
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq summary::before {
+  content: "+";
+  display: inline-block;
+  width: 1.4em;
+  color: var(--gray);
+}
+
+.faq details[open] > summary::before {
+  content: "\2212";
+}
+
+.faq summary:hover {
+  color: #fff;
+}
+
+.faq p {
+  margin: 0 20px 16px;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+/* ---------- footer ---------- */
+
+.site-foot {
+  margin-top: clamp(56px, 8vw, 96px);
+  padding-top: 28px;
+  padding-bottom: 48px;
+  border-top: 2px solid var(--surface-2);
+}
+
+.foot-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.foot-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.foot-nav a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.foot-nav a:hover {
+  color: var(--accent);
+}
+
+.disclaimer {
+  margin: 0 0 10px;
+  color: var(--gray);
+  font-size: 0.8125rem;
+  max-width: 90ch;
+}
+
+/* ---------- motion ---------- */
+
+/* Start states are gated on `.js` so that with scripting off — or if site.js
+   fails to load — every section renders visible instead of blank. */
+.js [data-reveal] {
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 420ms ease-out, transform 420ms ease-out;
+}
+
+.js [data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+
+/* Typewriter.
+ *
+ * The transcript is hidden only while BOTH conditions hold: scripting is live
+ * (`.js`) and the script still owns the animation (no `.is-ready`). site.js
+ * adds `.is-ready` on every exit path it has — finished, reduced-motion,
+ * no IntersectionObserver, or a watchdog timeout — so the content can never be
+ * left hidden by a stalled animation, and with scripting off the `.js` gate
+ * means it is never hidden at all.
+ */
+.js [data-typewriter]:not(.is-ready) .t-line {
+  visibility: hidden;
+}
+
+.js [data-typewriter]:not(.is-ready) .t-line.is-shown {
+  visibility: visible;
+}
+
+.t-line.is-typing > .t-ink {
+  display: inline-block;
+  clip-path: inset(0 calc(100% - var(--shown, 0) * 1ch) 0 0);
+}
+
+.t-line.is-typing::after {
+  content: "";
+  display: inline-block;
+  width: 1ch;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: blink 900ms steps(1, end) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .js [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  .btn,
+  .btn-ghost {
+    transition: none;
+  }
+
+  .t-line.is-typing::after {
+    animation: none;
+  }
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lede {
+    max-width: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .site-nav a:not(.btn-ghost) {
+    display: none;
+  }
+
+  .brand-mark {
+    width: 128px;
+  }
+
+  /* Fits the ~42-character transcript into a 320px viewport without needing
+     the panel's own horizontal scroll. Past that the panel scrolls, which is
+     the right behaviour for a terminal — the page itself never does. */
+  .term-body {
+    font-size: 11px;
+    padding: 12px 12px 14px;
+  }
+
+  .foot-top {
+    align-items: flex-start;
+  }
+}

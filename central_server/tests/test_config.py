@@ -108,3 +108,41 @@ def test_enable_api_docs_parses_as_a_boolean(monkeypatch, raw, expected):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("ENABLE_API_DOCS", raw)
     assert CentralServerConfig.from_env().enable_api_docs is expected
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("https://staging.example.com", "https://staging.example.com"),
+        # A trailing slash is normalised, not rejected — the strip runs before
+        # the shape match.
+        ("https://staging.example.com/", "https://staging.example.com"),
+        ("http://127.0.0.1:9000", "http://127.0.0.1:9000"),
+        ("https://mobaide.com:65535", "https://mobaide.com:65535"),
+        # Everything below is malformed and must fall back rather than publish a
+        # relative or broken canonical/OG/sitemap URL.
+        ("", "https://mobaide.com"),
+        ("not-a-url", "https://mobaide.com"),
+        ("staging.example.com", "https://mobaide.com"),
+        ("ftp://mobaide.com", "https://mobaide.com"),
+        ("https://mobaide.com/path", "https://mobaide.com"),
+        ('https://x.com" onload="a', "https://mobaide.com"),
+        ("https://a.com\nDisallow: /", "https://mobaide.com"),
+        # `\d{1,5}` alone would admit these, but neither is a usable port.
+        ("https://mobaide.com:99999", "https://mobaide.com"),
+        ("https://mobaide.com:0", "https://mobaide.com"),
+    ],
+)
+def test_site_base_url_falls_back_when_malformed(monkeypatch, raw, expected):
+    """The origin is concatenated straight into canonical/OG/JSON-LD URLs, the
+    sitemap and robots.txt, so a malformed value must never reach them — but a
+    typo in a marketing URL must not take the relay down either."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("SITE_BASE_URL", raw)
+    assert CentralServerConfig.from_env().site_base_url == expected
+
+
+def test_site_base_url_defaults_to_the_apex_when_unset(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("SITE_BASE_URL", raising=False)
+    assert CentralServerConfig.from_env().site_base_url == "https://mobaide.com"
