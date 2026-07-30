@@ -251,7 +251,7 @@ class CreateSessionViewModelTest {
         val opts = req.claude_options
         assertNotNull(opts)
         assertTrue(opts!!.no_memory)
-        assertTrue(opts.skip_permissions)
+        assertFalse(opts.skip_permissions)
         assertEquals("effort defaults to high", "high", opts.effort)
         assertNull("model defaults to the account default (null)", opts.model)
         assertFalse(opts.fast_mode)
@@ -546,7 +546,7 @@ class CreateSessionViewModelTest {
         }
 
         val opts = optsSlot.captured
-        assertTrue(opts.skip_permissions)
+        assertFalse(opts.skip_permissions)
         assertEquals("Auto Scan effort defaults to high", "high", opts.effort)
         assertNull(opts.model)
         assertTrue(opts.worktree)

@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 data class ClaudeOptionsModel(
     val plan_mode: Boolean = false,
     val no_memory: Boolean = false,
-    val skip_permissions: Boolean = true,
+    val skip_permissions: Boolean = false,
     val initial_prompt: String? = null,
     val worktree: Boolean = false,
     val branch_name: String? = null,

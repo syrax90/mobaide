@@ -101,7 +101,7 @@ class ClaudeOptions:
 
     plan_mode: bool = False
     no_memory: bool = False
-    skip_permissions: bool = True
+    skip_permissions: bool = False
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None

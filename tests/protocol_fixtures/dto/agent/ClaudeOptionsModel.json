@@ -20,12 +20,12 @@
       }
     },
     {
-      "name": "empty_defaults_materialize_skip_permissions_true",
+      "name": "empty_defaults_materialize_skip_permissions_false",
       "wire": {},
       "decoded_canonical": {
         "plan_mode": false,
         "no_memory": false,
-        "skip_permissions": true,
+        "skip_permissions": false,
         "worktree": false,
         "fast_mode": false,
         "ultracode": false

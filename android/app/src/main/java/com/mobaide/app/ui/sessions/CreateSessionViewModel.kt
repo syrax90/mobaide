@@ -110,7 +110,7 @@ data class CreateSessionUiState(
     val antigravityModels: List<String>? = null,
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
-    val skipPermissions: Boolean = true,
+    val skipPermissions: Boolean = false,
     // Claude reasoning controls (replace the old boolean "Max effort"). model is
     // a curated alias or null (account default); effort "high" == omit the flag.
     val claudeModel: String? = null,

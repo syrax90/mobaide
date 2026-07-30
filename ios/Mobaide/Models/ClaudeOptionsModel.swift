@@ -18,7 +18,7 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
     init(
         plan_mode: Bool = false,
         no_memory: Bool = false,
-        skip_permissions: Bool = true,
+        skip_permissions: Bool = false,
         initial_prompt: String? = nil,
         worktree: Bool = false,
         branch_name: String? = nil,
@@ -51,7 +51,7 @@ extension ClaudeOptionsModel {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         plan_mode = try container.decodeIfPresent(Bool.self, forKey: .plan_mode) ?? false
         no_memory = try container.decodeIfPresent(Bool.self, forKey: .no_memory) ?? false
-        skip_permissions = try container.decodeIfPresent(Bool.self, forKey: .skip_permissions) ?? true
+        skip_permissions = try container.decodeIfPresent(Bool.self, forKey: .skip_permissions) ?? false
         initial_prompt = try container.decodeIfPresent(String.self, forKey: .initial_prompt)
         worktree = try container.decodeIfPresent(Bool.self, forKey: .worktree) ?? false
         branch_name = try container.decodeIfPresent(String.self, forKey: .branch_name)
