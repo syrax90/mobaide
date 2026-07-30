@@ -75,11 +75,19 @@ def _issue_google_nonce(response: Response) -> str:
 
 
 def _portal_context(request: Request, **extra) -> dict:
-    """Build a base Jinja context with CSRF and Google client ID prefilled."""
+    """Build a base Jinja context with CSRF, Google client ID and the shared
+    asset version prefilled.
+
+    ``asset_version`` is the ``?v=`` cache-busting query ``portal_base.html``
+    stamps on both stylesheets and the wordmark. It must be the same value the
+    landing page uses, which is why it is read from ``app.state`` rather than
+    recomputed here.
+    """
     config = request.app.state.config
     return {
         "csrf_token": getattr(request.state, "csrf_token", ""),
         "google_client_id": config.google_client_id,
+        "asset_version": request.app.state.asset_version,
         **extra,
     }
 
@@ -128,6 +136,7 @@ async def login_submit(
             error="Please verify your email before signing in. Check your inbox.",
             notice=None,
             status_code=status.HTTP_403_FORBIDDEN,
+            issue_google_nonce=True,
         )
     except ValueError:
         return _render_with_csrf(
@@ -136,6 +145,7 @@ async def login_submit(
             error="Invalid email or password.",
             notice=None,
             status_code=status.HTTP_401_UNAUTHORIZED,
+            issue_google_nonce=True,
         )
 
     ttl = request.app.state.config.portal_token_expire_minutes
@@ -232,6 +242,7 @@ async def signup_submit(
             "portal_signup.html",
             error="Email and password are required.",
             status_code=status.HTTP_400_BAD_REQUEST,
+            issue_google_nonce=True,
         )
     if password != confirm_password:
         return _render_with_csrf(
@@ -239,6 +250,7 @@ async def signup_submit(
             "portal_signup.html",
             error="Passwords don't match.",
             status_code=status.HTTP_400_BAD_REQUEST,
+            issue_google_nonce=True,
         )
 
     auth_service = request.app.state.auth_service
@@ -250,6 +262,7 @@ async def signup_submit(
             "portal_signup.html",
             error=str(exc),
             status_code=status.HTTP_409_CONFLICT,
+            issue_google_nonce=True,
         )
 
     if result.status == "verification_required":

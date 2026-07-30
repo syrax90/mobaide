@@ -6,9 +6,9 @@
         <div class="alert alert-error">
             The seed admin account cannot be self-deleted.
         </div>
-        <div style="text-align:right">
+        <div class="btn-row btn-row-end">
             <button type="button"
-                    class="btn"
+                    class="btn btn-ghost"
                     onclick="document.getElementById('modal-root').innerHTML=''">
                 Close
             </button>
@@ -82,7 +82,7 @@
             </div>
             {% endif %}
 
-            <label for="confirm-email">
+            <label for="confirm-email" class="label-prose">
                 Type <code>{{ user.email }}</code> to confirm:
             </label>
             <input type="text"
@@ -92,7 +92,7 @@
                    autocomplete="off">
 
             {% if has_google %}
-            <div id="reauth-google-panel" style="margin-top: 1rem;">
+            <div id="reauth-google-panel" class="reauth-panel">
                 <p id="confirm-delete-google-hint" class="delete-mode-hint"></p>
                 <div id="confirm-delete-google-wrapper"
                      class="google-verify-wrapper"
@@ -102,9 +102,9 @@
             </div>
             {% endif %}
 
-            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem; flex-wrap: wrap;">
+            <div class="btn-row btn-row-end">
                 <button type="button"
-                        class="btn"
+                        class="btn btn-ghost"
                         onclick="document.getElementById('modal-root').innerHTML=''">
                     Cancel
                 </button>
@@ -236,7 +236,9 @@
                     });
                     window.google.accounts.id.renderButton(gBtnContainer, {
                         type: 'standard',
-                        theme: 'outline',
+                        // Matches _portal_google_button.html: outline renders a
+                        // white slab on this dark surface.
+                        theme: 'filled_black',
                         size: 'large',
                         shape: 'rectangular',
                         text: 'continue_with',

@@ -1,0 +1,920 @@
+/* Mobaide portal — the "modern pixel" system applied to forms.
+ *
+ * Loaded by templates/portal_base.html AFTER site.css, which owns every token,
+ * the @font-face, the pixel kit (.px-frame/.notch/.px-bullet), .btn/.btn-ghost,
+ * .card, the .site-head/.site-foot chrome and the global focus ring. This sheet
+ * adds only what site.css lacks — it ships zero form-control styles because the
+ * landing page has no forms.
+ *
+ * The admin dashboard (templates/base.html) must never load this file: it stays
+ * on the light static/style.css, which is now admin-only.
+ *
+ * Four invariants:
+ *   1. No :root and no @font-face here. site.css is the single source of truth.
+ *   2. No non-zero border-radius. The one `border-radius: 0` below is a reset
+ *      that defeats iOS Safari's default input rounding, not a decoration.
+ *   3. --brand (#6008AC) and --brand-2 (#6650A4) are FILL AND BORDER colours
+ *      only. #6650A4 on #1E1E1E is ~2.6:1 and fails WCAG AA as text.
+ *   4. Form-control boundaries ring in --gray (#8B8B8B, 5.26:1 on --bg-2), not
+ *      --rule (#625B71, 2.78:1 — below WCAG 1.4.11's 3:1 for a UI component
+ *      boundary). --rule stays correct for decorative frames and plates.
+ *
+ * Section order is load-bearing: several rules below win on source order
+ * against attribute selectors of equal specificity. Do not reorder.
+ *
+ * Deliberately NOT ported from style.css, because no portal template uses them:
+ * .badge*, .info-grid, .qr-*, .token-display, .search-bar, .user-row,
+ * .detail-row, .expand-arrow, .page-header, .nav-right, .logo, and `select`.
+ * They belong to the admin dashboard and stay in style.css.
+ */
+
+/* ---------- layout shell ---------- */
+
+/* Narrower than site.css's --maxw (1120px) on purpose: this is a form and
+   reading surface, not a marketing grid. The gutter clamp is site.css's own, so
+   the portal and the landing page align at every width. */
+.portal-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: clamp(32px, 6vw, 64px) clamp(16px, 4vw, 40px) clamp(48px, 8vw, 80px);
+}
+
+.portal-main > .h-pixel:not(:first-child) {
+  margin-top: clamp(32px, 5vw, 48px);
+}
+
+/* .site-nav uppercases its contents, which would mangle the signed-in address
+   the account page puts in the header. */
+.site-nav .user {
+  color: var(--gray);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* ---------- headings ---------- */
+
+/* Mirrors site.css's `.card h3` recipe, so a card title needs no class. .h-pixel
+   is clamp(22px, 3.4vw, 33px) with a 64px underline bar — right for a page
+   section, oversized for a 420px auth card. */
+.card h2,
+.modal-card h2 {
+  margin: 28px 0 10px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-md);
+  font-weight: 400;
+  line-height: 1.35;
+  color: var(--accent);
+}
+
+.card > h2:first-child,
+.modal-card > h2:first-child {
+  margin-top: 0;
+}
+
+.h-danger {
+  color: var(--danger);
+}
+
+/* ---------- cards and prose ---------- */
+
+/* Do not narrow below ~380px: the Google button renders at width 320 inside
+   site.css's 22px card padding, so 420 - 44 = 376px of content is the floor. */
+.login-card {
+  max-width: 420px;
+  margin: clamp(28px, 7vw, 72px) auto;
+}
+
+.card-prose {
+  max-width: 720px;
+  margin-inline: auto;
+}
+
+/* site.css .card draws its boundary with an inset shadow and has no `border`, so
+   a `border-color` override paints nothing — the ring itself has to be replaced. */
+.card-danger {
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+
+.card-links {
+  margin: 16px 0 0;
+  font-size: 0.875rem;
+}
+
+.card-links + .card-links {
+  margin-top: 8px;
+}
+
+.card ul,
+.card ol {
+  margin: 0 0 14px;
+  padding-left: 22px;
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.card ul {
+  list-style: square;
+}
+
+.card li + li {
+  margin-top: 6px;
+}
+
+/* A marker reads as text, so it cannot take a brand purple (2.6:1) or --rule. */
+.card li::marker,
+.legal-body li::marker {
+  color: var(--accent);
+}
+
+.card > .fineprint {
+  margin-top: 28px;
+}
+
+/* site.css has only the `.code` class, for pre blocks. `em` rather than `rem` so
+   an inline token scales with its container inside a <td> or a <label>. */
+code {
+  padding: 2px 6px;
+  background: var(--surface);
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: 0.8125em;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+/* --gray, not --text-muted: site.css `.card p` is already --text-muted, so the
+   class would be a no-op inside a card. 5.26:1 on --bg-2. */
+.text-muted {
+  color: var(--gray);
+  font-size: 0.875rem;
+}
+
+/* ---------- alerts ---------- */
+
+/* The .chip idiom — a bordered plate — rather than a tinted background. A dark
+   analogue of a light-mode --error-bg does not exist, and the obvious candidate
+   (#8C1D18 as a ring on --surface) measures 1.83:1 and fails 1.4.11. */
+.alert {
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  color: var(--text-muted);
+  font-size: 0.9375rem;
+}
+
+.alert-error {
+  color: var(--danger);
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+
+.alert-success {
+  color: var(--ok);
+  box-shadow: inset 0 0 0 2px var(--ok);
+}
+
+/* site.css sets `strong { color: #fff }` globally, which would otherwise turn
+   the emphasised half of a status sentence white while the rest stays semantic. */
+.alert strong,
+.alert p {
+  color: inherit;
+}
+
+.alert p {
+  margin: 8px 0 0;
+}
+
+.alert a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.alert .btn {
+  margin-top: 12px;
+}
+
+/* ---------- buttons ---------- */
+
+/* site.css's .btn was written for <a>: it sets no border, no font and no cursor.
+   Every portal action is a <button>, which without this reset keeps its UA
+   `border: 2px outset ButtonBorder` and 13.3px Arial label. */
+.btn,
+.btn-ghost,
+.btn-danger {
+  border: 0;
+  font: inherit;
+  line-height: 1.65;
+  cursor: pointer;
+  text-align: center;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* #fff on #8C1D18 is 9.1:1. The fill sits at 2.05:1 against the page, but
+   site.css's own .btn is already 1.90:1 — this system carries the affordance in
+   the 4px hard-offset shadow and the white label, not in fill contrast. */
+.btn-danger {
+  display: inline-block;
+  padding: 9px 16px;
+  background: #8c1d18;
+  color: #fff;
+  text-decoration: none;
+  box-shadow: var(--px) var(--px) 0 0 #4a0f0c;
+  transition: transform 90ms steps(2), box-shadow 90ms steps(2);
+}
+
+.btn-danger:hover {
+  color: #fff;
+}
+
+.btn-danger:active {
+  transform: translate(var(--px), var(--px));
+  box-shadow: 0 0 0 0 #4a0f0c;
+}
+
+/* Not polish: the signup, reset-password and confirm-delete submits all start
+   `disabled` and used to rely on the UA grey-out. Once .btn forces a brand fill
+   and a white label, a disabled button looks fully enabled. */
+.btn:disabled,
+.btn-ghost:disabled,
+.btn-danger:disabled {
+  background: var(--surface-2);
+  color: var(--gray);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  cursor: not-allowed;
+}
+
+.btn:disabled:active,
+.btn-ghost:disabled:active,
+.btn-danger:disabled:active {
+  transform: none;
+  box-shadow: inset 0 0 0 2px var(--rule);
+}
+
+.btn-sm {
+  padding: 5px 11px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* The gap must stay >= --px or adjacent buttons' offset shadows collide. */
+.btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.btn-row-end {
+  justify-content: flex-end;
+}
+
+.card form > button[type="submit"] {
+  margin-top: 20px;
+}
+
+/* ---------- form fields ---------- */
+
+/* Mono/uppercase/11px is this system's chrome typography (.site-nav, .chip,
+   .foot-nav, .step-n all use it), so labels tie in rather than importing a
+   sans-serif form idiom. Departure Mono is drawn on an 11px grid, which is what
+   --pix-sm is for. --text-muted on --bg-2 is 10.5:1. */
+label {
+  display: block;
+  margin: 18px 0 7px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* Prose labels opt out of the chrome typography above. Three of them exist and
+   each would otherwise be actively wrong: an address the user is asked to type
+   back verbatim must not be uppercased, and `.choice-option` is a <label>
+   wrapping a whole sentence of explanatory copy, not a field name. */
+label code,
+label.label-prose,
+label.choice-option {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+label.label-prose,
+label.choice-option {
+  font-family: inherit;
+  font-size: 0.9375rem;
+}
+
+/* Types are enumerated rather than matched with a bare `input`, which would also
+   hit every hidden csrf_token field and the delete modal's radios. */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="tel"],
+input[type="search"],
+input[type="url"],
+textarea {
+  width: 100%;
+  padding: 11px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  /* Not 0.95rem: iOS Safari auto-zooms the viewport on focus for any field under
+     16px, which the old sheet's 15.2px triggered on every portal form. */
+  font-size: 1rem;
+  line-height: 1.4;
+  border: 0;
+  /* Both declarations are needed — iOS Safari rounds text inputs by UA default
+     and neither one alone reliably defeats it. */
+  border-radius: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  box-shadow: inset 0 0 0 2px var(--gray);
+}
+
+::placeholder {
+  color: var(--gray);
+  opacity: 1;
+}
+
+/* :focus, not :focus-visible — site.css's global
+   `:focus-visible { outline: 3px solid var(--accent) }` stays the single
+   focus-ring source of truth, and this recolours the field's own boundary as a
+   second cue. Fields sit 22px inside the card, so the outer ring has room. */
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input[type="number"]:focus,
+input[type="tel"]:focus,
+input[type="search"]:focus,
+input[type="url"]:focus,
+textarea:focus {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+/* Chrome paints autofilled fields through a UA rule that plain
+   `background-color` cannot reach, so an autofilled email or password turns the
+   field white on a dark card. The 1000px inset fill is the only way to cover it;
+   the absurd transition delay keeps Chrome from re-painting on blur. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+  -webkit-box-shadow: inset 0 0 0 2px var(--gray), inset 0 0 0 1000px var(--surface);
+  transition: background-color 0s 600000s;
+}
+
+/* `input.otp-input`, not `.otp-input`: input[type="text"] is (0,1,1) and would
+   beat a bare class on `width`. */
+input.otp-input {
+  width: 8ch;
+  text-align: center;
+  letter-spacing: 0.3em;
+  font-family: "Departure Mono", ui-monospace, monospace;
+}
+
+/* Square, because round is the one shape this system forbids. Inset shadows
+   paint outside-in with earlier ones on top: the first draws a 0-2px --brand-2
+   ring, the second fills 2-5px with --surface behind it, and `background` shows
+   through as a crisp 6x6 --brand core. Both purples stay fills. */
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0 10px 0 0;
+  vertical-align: -2px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--gray);
+  border-radius: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+input[type="radio"]:checked {
+  background: var(--brand);
+  box-shadow: inset 0 0 0 2px var(--brand-2), inset 0 0 0 5px var(--surface);
+}
+
+/* ---------- password reveal ---------- */
+
+/* Must follow the field rules above: `.password-field input` is (0,1,1), the
+   same as `input[type="password"]`, so source order decides the padding. */
+.password-field {
+  position: relative;
+  display: block;
+}
+
+.password-field input {
+  padding-right: 44px;
+}
+
+.password-field .reveal-btn {
+  position: absolute;
+  top: 50%;
+  right: var(--px);
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  font: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+  z-index: 1;
+  pointer-events: auto;
+}
+
+.password-field .reveal-btn:hover {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+/* Only the offset is overridden, so the global 3px accent ring hugs the 32px
+   square inside the input's right padding instead of spilling over the field.
+   The old sheet's `outline: 2px solid var(--primary)` had to go rather than be
+   ported: --primary does not exist here, and an outline shorthand with an
+   invalid custom property resolves to `unset` and suppresses the ring entirely. */
+.password-field .reveal-btn:focus-visible {
+  outline-offset: 0;
+}
+
+/* The toggle in portal_base.html sets `style.display = revealed ? '' : 'none'`,
+   and the empty-string branch falls back to this rule. Without it the SVG
+   reverts to `inline`, gains a baseline gap and sits off-centre. */
+.password-field .reveal-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+/* min-height reserves the live region's line so the form does not jump when the
+   match message appears. */
+.password-match {
+  margin-top: 6px;
+  min-height: 1.1em;
+  font-size: 0.8125rem;
+}
+
+.password-match.ok {
+  color: var(--ok);
+}
+
+.password-match.bad {
+  color: var(--danger);
+}
+
+/* ---------- auth divider and the Google button surround ---------- */
+
+/* 2px rules, not 1px: every rule in site.css is 2px and a hairline would be the
+   only one in the system. */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 8px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gray);
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  background: var(--surface-2);
+}
+
+/* Never give this row (or any ancestor of the GIS container) a transform,
+   filter or clip-path: it becomes a containing block and breaks the Google
+   popup's positioning. The button itself is a cross-origin iframe, so its small
+   corner radius is unreachable from here — `shape: 'rectangular'` in
+   _portal_google_button.html is as square as Google allows. */
+.gis-row {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.reauth-panel {
+  margin-top: 16px;
+}
+
+/* pointer-events on the wrapper blocks clicks before they reach the iframe. */
+.google-verify-wrapper {
+  display: inline-block;
+  transition: opacity 0.15s;
+}
+
+.google-verify-wrapper[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ---------- tables ---------- */
+
+/* A wrapper rather than `table { display: block }`, which would break width:100%
+   column distribution. The account page's agents table carries a UUID in a
+   <code> and overflowed the page on a narrow phone without this. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+thead {
+  background: var(--surface);
+}
+
+th {
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+th,
+td {
+  padding: 10px 14px;
+  border-bottom: 2px solid var(--surface-2);
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+td {
+  font-size: 0.9375rem;
+  color: var(--text-muted);
+}
+
+/* A plate rather than floating text, because it occupies the slot a table would. */
+.empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--gray);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+/* ---------- choice fieldsets (delete-account modal) ---------- */
+
+/* min-width: 0 is required — a fieldset's UA `min-inline-size: min-content` can
+   push it past a narrow modal's edge. */
+fieldset.choice-set {
+  border: 0;
+  padding: 0;
+  margin: 20px 0 8px;
+  min-width: 0;
+}
+
+.choice-set legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.choice-option {
+  display: block;
+  padding: 12px 14px;
+  /* Overrides the `label` margin above, which would otherwise leave 18px
+     between every option. */
+  margin: 0 0 8px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--rule);
+  cursor: pointer;
+}
+
+.choice-option strong {
+  display: inline;
+  font-weight: 600;
+}
+
+.choice-option .choice-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+/* The old light sheet tinted the selected row (rgba(13,110,253,.05)); a dark
+   surface has no analogue, so selection is a surface step instead.
+   --brand-2 as a ring on --bg-2 is 2.77:1, under 1.4.11's 3:1 — the state is
+   carried redundantly by the radio's own --gray ring (5.26:1), its --brand
+   checked fill, and this background step, so the ring is reinforcement rather
+   than the only cue. var(--accent) would measure 10.5:1 but competes visually
+   with the focus ring. */
+.choice-option:has(input:checked) {
+  background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--brand-2);
+}
+
+.choice-option.danger:has(input:checked) {
+  color: var(--danger);
+  box-shadow: inset 0 0 0 2px var(--danger);
+}
+
+.choice-option.danger:has(input:checked) strong,
+.choice-option.danger:has(input:checked) .choice-note {
+  color: inherit;
+}
+
+.delete-mode-hint {
+  margin: 0 0 8px;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.delete-mode-hint.danger {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ---------- modals ---------- */
+
+/* #modal-root is a direct child of <body>, so the overlay's `position: fixed`
+   is anchored to the viewport. Never add transform, filter or contain to <body>
+   or the chrome: that changes the containing block and the overlay stops
+   covering the page. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: auto;
+  /* 0.72, not the old 0.45: a 45% black scrim over a #121212 page barely
+     separates the layers. */
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 22px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2), var(--px) var(--px) 0 0 #000;
+}
+
+/* ---------- legal document (privacy policy) ---------- */
+
+/* The body is markdown rendered by central_server.legal.loader, so everything
+   here selects plain elements. No `.legal-body a` rules: site.css already gives
+   links --accent with a 1px underline at 3px offset and a #fff hover. */
+.legal-doc {
+  display: block;
+}
+
+.legal-body {
+  max-width: 780px;
+}
+
+.legal-body > :first-child {
+  margin-top: 0;
+}
+
+.legal-body h1 {
+  margin: 0 0 8px;
+}
+
+.legal-body h1 + p {
+  color: var(--gray);
+  font-size: 0.9375rem;
+  padding-bottom: 16px;
+  margin-bottom: 32px;
+  border-bottom: 2px solid var(--surface-2);
+}
+
+.legal-body h2,
+.legal-body h3 {
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-weight: 400;
+  /* site.css's html { scroll-padding-top: 88px } already clears the sticky
+     header on an anchor jump, so this only needs to add breathing room. */
+  scroll-margin-top: 8px;
+}
+
+.legal-body h2 {
+  margin: 44px 0 12px;
+  font-size: var(--pix-md);
+  line-height: 1.3;
+  color: var(--accent);
+}
+
+.legal-body h3 {
+  margin: 28px 0 8px;
+  font-size: 17px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.legal-body p,
+.legal-body li {
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.legal-body ol,
+.legal-body ul {
+  padding-left: 22px;
+}
+
+.legal-body ul {
+  list-style: square;
+}
+
+.legal-body li + li {
+  margin-top: 6px;
+}
+
+.legal-body hr {
+  border: 0;
+  border-top: 2px solid var(--surface-2);
+  margin: 40px 0;
+}
+
+/* The three-column data-schedule tables would overflow the reading column on a
+   narrow viewport. These are generated markdown we cannot wrap in a div, so the
+   display: block trick stands in for .table-scroll. */
+.legal-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.legal-body code {
+  overflow-wrap: break-word;
+}
+
+.legal-toc {
+  margin-bottom: 24px;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.legal-toc-details {
+  padding: 10px 16px;
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 2px var(--surface-2);
+}
+
+/* Same +/- glyph pair as site.css's .faq summary, so both accordions in the
+   product behave identically. */
+.legal-toc-details > summary {
+  padding: 4px 0;
+  font-family: "Departure Mono", ui-monospace, monospace;
+  font-size: var(--pix-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.legal-toc-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.legal-toc-details > summary::before {
+  content: "+";
+  display: inline-block;
+  width: 1.4em;
+  color: var(--gray);
+}
+
+.legal-toc-details[open] > summary::before {
+  content: "\2212";
+}
+
+.legal-toc .toc {
+  padding: 0;
+}
+
+.legal-toc .toc > ul,
+.legal-toc .toc ul ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 8px 0 0;
+}
+
+.legal-toc .toc li {
+  margin: 6px 0;
+  line-height: 1.4;
+}
+
+.legal-toc .toc a {
+  display: block;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 2px 0 2px 10px;
+  margin-left: -10px;
+  border-left: 2px solid transparent;
+}
+
+.legal-toc .toc a:hover {
+  color: var(--accent);
+  border-left-color: var(--brand);
+}
+
+/* ---------- motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-danger,
+  .google-verify-wrapper {
+    transition: none;
+  }
+}
+
+/* ---------- responsive ---------- */
+
+/* site.css's own two breakpoints. Do not introduce a third. */
+@media (min-width: 900px) {
+  .legal-doc {
+    display: grid;
+    grid-template-columns: minmax(0, 780px) 220px;
+    column-gap: 3rem;
+    align-items: start;
+  }
+
+  .legal-body {
+    grid-column: 1;
+    grid-row: 1;
+    max-width: none;
+  }
+
+  /* 96px, not the old 1.5rem: .site-head is sticky here (it was static on the
+     old portal), so a smaller offset slides the sidebar under it. The header is
+     ~70px — 14px padding x2, a 40px wordmark, a 2px border. */
+  .legal-toc {
+    grid-column: 2;
+    grid-row: 1;
+    position: sticky;
+    top: 96px;
+    align-self: start;
+    max-height: calc(100vh - 112px);
+    overflow-y: auto;
+    margin-bottom: 0;
+  }
+
+  .legal-toc-details {
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .legal-toc-details > summary {
+    cursor: default;
+    padding: 0 0 8px;
+  }
+
+  .legal-toc-details > summary::before {
+    content: none;
+  }
+}
+
+@media (max-width: 560px) {
+  /* Matches site.css's own nav collapse at this width. */
+  .site-nav .user {
+    display: none;
+  }
+
+  .modal-card {
+    padding: 16px;
+  }
+
+  .btn-row {
+    gap: 8px;
+  }
+}

@@ -348,3 +348,98 @@ class TestPortalGoogleAuthInputValidation:
         )
 
         assert resp.status_code == 403
+
+
+class TestPasswordFormErrorsWithGoogleConfigured:
+    """The password form's own error re-renders, exercised with Google enabled.
+
+    ``portal_login.html`` and ``portal_signup.html`` mount the GIS button behind
+    ``{% if google_client_id %}``, and the partial does
+    ``{{ google_nonce | tojson }}``. Any re-render that forgets
+    ``issue_google_nonce=True`` therefore hands Jinja an ``Undefined`` and raises
+    ``TypeError: Object of type Undefined is not JSON serializable`` — a 500 on
+    the most common error path on the sign-in page.
+
+    The default ``client`` fixture leaves ``google_client_id`` unset, so the
+    partial renders nothing there and cannot catch this. These tests exist
+    specifically to cover the configured case, which is production.
+    """
+
+    async def test_wrong_password_rerenders_the_login_page(
+        self, google_client
+    ) -> None:
+        csrf_token, _nonce = await _grab_csrf_and_nonce(google_client)
+
+        resp = await google_client.post(
+            "/portal/login",
+            data={
+                "csrf_token": csrf_token,
+                "email": "nobody@example.test",
+                "password": "definitely-wrong",
+            },
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 401
+        assert "Invalid email or password." in resp.text
+        # A fresh nonce must reach the re-rendered GIS button, otherwise the
+        # Google path on the error page is dead even when the page renders.
+        assert "portal_google_nonce" in resp.headers.get("set-cookie", "")
+
+    async def test_mismatched_passwords_rerender_the_signup_page(
+        self, google_client
+    ) -> None:
+        csrf_token, _nonce = await _grab_csrf_and_nonce(google_client)
+
+        resp = await google_client.post(
+            "/portal/signup",
+            data={
+                "csrf_token": csrf_token,
+                "email": "new-user@example.test",
+                "password": "hunter2hunter2",
+                "confirm_password": "hunter2hunter3",
+            },
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 400
+        assert "Passwords don&#39;t match." in resp.text
+
+    async def test_missing_fields_rerender_the_signup_page(
+        self, google_client
+    ) -> None:
+        csrf_token, _nonce = await _grab_csrf_and_nonce(google_client)
+
+        resp = await google_client.post(
+            "/portal/signup",
+            data={"csrf_token": csrf_token, "email": "", "password": ""},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 400
+        assert "Email and password are required." in resp.text
+
+    async def test_duplicate_email_rerenders_the_signup_page(
+        self, google_client
+    ) -> None:
+        csrf_token, _nonce = await _grab_csrf_and_nonce(google_client)
+        dupe = {
+            "csrf_token": csrf_token,
+            "email": "dupe@example.test",
+            "password": "hunter2hunter2",
+            "confirm_password": "hunter2hunter2",
+        }
+        first = await google_client.post(
+            "/portal/signup", data=dupe, follow_redirects=False
+        )
+        assert first.status_code == 303
+
+        # Reuse the same token rather than re-harvesting: ``ensure_csrf_cookie``
+        # reuses a valid cookie instead of re-issuing it, so a second
+        # ``_grab_csrf_and_nonce`` would find no ``portal_csrf`` in Set-Cookie.
+        resp = await google_client.post(
+            "/portal/signup", data=dupe, follow_redirects=False
+        )
+
+        assert resp.status_code == 409
+        assert "Email already registered" in resp.text

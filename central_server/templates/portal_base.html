@@ -9,9 +9,32 @@
        re-rendered HTML with embedded error context on 4xx, so we override
        the default to swap 4xx into the target too. #}
     <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}'>
+    <meta name="theme-color" content="#121212">
     <title>{% block title %}Mobaide{% endblock %}</title>
     {% block extra_head %}{% endblock %}
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="/static/site/img/favicon.ico" sizes="16x16 32x32 48x48">
+    {# href must be byte-identical to the @font-face url() in site.css and must
+       carry NO ?v= — preload matching keys on the full URL including the query,
+       so a version here downloads the 22.5 KB font twice and defeats the
+       preload. This is the second place in the repo with that constraint
+       (marketing_landing.html is the first); see docs/website.md. #}
+    <link rel="preload" href="/static/site/fonts/DepartureMono-Regular.woff2"
+          as="font" type="font/woff2" crossorigin>
+    {# The portal shares the marketing design system: site.css owns the tokens,
+       the webfont and the pixel kit, and portal.css adds the form, table, modal
+       and legal-document styles it deliberately lacks. Order matters —
+       portal.css extends and overrides site.css.
+
+       Both carry the same ?v= content hash the landing page stamps
+       (app.state.asset_version), so a landing → portal navigation reuses the
+       7-day-cached copies instead of refetching them under a different query.
+
+       site.js is deliberately NOT loaded: nothing here uses [data-reveal] or
+       [data-typewriter], and its first act is to set a `js` class that would arm
+       site.css's opacity:0 animation start-states. Without that class no
+       site.css motion rule can ever hide portal content. #}
+    <link rel="stylesheet" href="/static/site/site.css?v={{ asset_version }}">
+    <link rel="stylesheet" href="/static/site/portal.css?v={{ asset_version }}">
     {# Vendored htmx 2.0.4 — served from same origin (no CDN) so a compromised
        CDN cannot inject JS into the end-user-facing portal. SRI hash is
        computed from the bundled bytes; if you upgrade the vendored file,
@@ -31,25 +54,36 @@
     {% endif %}
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
-    <header>
-        <nav>
-            <a href="/" class="logo">Mobaide</a>
-            <div class="nav-right">
-                {% block nav_right %}
-                <a href="/portal/login" class="btn btn-sm">Sign in</a>
-                {% endblock %}
-            </div>
+    <a class="skip" href="#main">Skip to content</a>
+    {# Same chrome markup as marketing_landing.html, so .site-head, .brand-mark,
+       .site-nav, .site-foot and .foot-nav all come from site.css and the portal
+       header is indistinguishable from the landing page's. The wordmark keeps
+       its light plate because it is dark purple ink drawn for one. #}
+    <header class="site-head">
+        <a class="brand" href="/" aria-label="Mobaide home">
+            <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
+                 width="227" height="40" alt="Mobaide">
+        </a>
+        <nav class="site-nav" aria-label="Site">
+            {% block nav_right %}
+            <a href="/portal/login" class="btn btn-ghost">Sign in</a>
+            {% endblock %}
         </nav>
     </header>
-    <main>
+    <main class="portal-main" id="main">
         {% block content %}{% endblock %}
     </main>
-    <footer style="max-width: 960px; margin: 3rem auto 2rem; padding: 1rem 1.5rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.85rem; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
-        <span>&copy; Mobaide</span>
-        <span>
-            <a href="/portal/delete-account-info" style="color: var(--text-muted); text-decoration: none; margin-right: 1rem;">Account deletion</a>
-            <a href="/privacy.html" style="color: var(--text-muted); text-decoration: none;">Privacy policy</a>
-        </span>
+    <footer class="site-foot">
+        <div class="foot-top">
+            <img class="brand-mark" src="/static/site/img/wordmark.png?v={{ asset_version }}"
+                 width="227" height="40" alt="Mobaide">
+            <nav class="foot-nav" aria-label="Footer">
+                <a href="/">Home</a>
+                <a href="/privacy.html">Privacy policy</a>
+                <a href="/portal/delete-account-info">Account deletion</a>
+            </nav>
+        </div>
+        <p class="disclaimer">&copy; Mobaide</p>
     </footer>
     <div id="modal-root"></div>
     <script>

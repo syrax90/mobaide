@@ -1,6 +1,6 @@
 {% extends "portal_base.html" %}
 {% block title %}Create account — Mobaide{% endblock %}
-{% block nav_right %}<a href="/portal/login" class="btn btn-sm">Sign in</a>{% endblock %}
+{% block nav_right %}<a href="/portal/login" class="btn btn-ghost">Sign in</a>{% endblock %}
 {% block content %}
 <div class="card login-card">
     <h2>Create your account</h2>
@@ -18,7 +18,7 @@
                 submit_btn_id="signup-submit" %}
         {% include "_portal_password_with_confirm.html" %}
         {% endwith %}
-        <button type="submit" id="signup-submit" class="btn btn-primary">Create account</button>
+        <button type="submit" id="signup-submit" class="btn">Create account</button>
     </form>
     {% if google_client_id %}
     <div class="auth-divider"><span>or</span></div>
@@ -26,7 +26,7 @@
     {% include "_portal_google_button.html" with context %}
     {% endwith %}
     {% endif %}
-    <p style="margin-top: 1rem; font-size: 0.9rem;">
+    <p class="card-links">
         Already have an account? <a href="/portal/login">Sign in</a>.
     </p>
 </div>

@@ -361,9 +361,13 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
     # production), which would put the wrong host in canonical and OG URLs.
     _site_origin = config.site_base_url.rstrip("/")
     _static_dir = resolve_static_dir()
-    app.state.marketing_html = render_landing(
-        _site_origin, asset_version(_static_dir, __version__)
-    )
+    # Hoisted onto app.state because three render paths now stamp it: this
+    # pre-render, portal/router.py::_portal_context and legal/router.py. The
+    # portal shares site.css with the landing page, so a divergent query would
+    # re-key the stylesheet and the wordmark per surface and make a
+    # landing -> portal navigation refetch two 7-day-cached assets.
+    app.state.asset_version = asset_version(_static_dir, __version__)
+    app.state.marketing_html = render_landing(_site_origin, app.state.asset_version)
     app.state.marketing_robots = render_robots(_site_origin)
     app.state.marketing_sitemap = render_sitemap(_site_origin)
 

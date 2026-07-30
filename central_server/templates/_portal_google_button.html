@@ -22,13 +22,13 @@
                          alongside `credential`
 #}
 {% if google_client_id %}
-<form id="{{ button_id }}-form" method="post" action="{{ post_url }}" style="margin-top: 1rem;">
+<form id="{{ button_id }}-form" method="post" action="{{ post_url }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="credential" value="">
     {% for field in extra_fields or [] %}
     <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
     {% endfor %}
-    <div id="{{ button_id }}" style="display:flex; justify-content:center;"></div>
+    <div id="{{ button_id }}" class="gis-row"></div>
 </form>
 <script>
 (function () {
@@ -52,7 +52,12 @@
         });
         window.google.accounts.id.renderButton(btnEl, {
             type: 'standard',
-            theme: 'outline',
+            // filled_black, not outline: the portal is a #121212 surface, on
+            // which outline renders a white slab. It is one of Google's own
+            // sanctioned themes, so the branding rules still hold. The small
+            // corner radius Google applies inside the cross-origin iframe is
+            // unreachable from our CSS — 'rectangular' is as square as it goes.
+            theme: 'filled_black',
             size: 'large',
             shape: 'rectangular',
             logo_alignment: 'left',
