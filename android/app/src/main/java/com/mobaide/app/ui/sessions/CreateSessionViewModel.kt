@@ -217,6 +217,29 @@ val CreateSessionUiState.claudeEnabled: Boolean get() = claudeAvailable != false
 val CreateSessionUiState.codexEnabled: Boolean get() = codexAvailable != false
 val CreateSessionUiState.antigravityEnabled: Boolean get() = antigravityAvailable != false
 
+/**
+ * Auto Scan additionally needs a Linear API key on the selected stored project
+ * — the agent scans Linear for that project's issues. A custom path or no
+ * selection can never satisfy it.
+ */
+val CreateSessionUiState.autoScanEnabled: Boolean
+    get() = claudeEnabled &&
+        projects.firstOrNull { it.name == selectedProjectName }?.has_linear_key == true
+
+/**
+ * Whether tapping this mode-picker card can commit. Terminal and custom agent
+ * types launch through the login shell, so no CLI probe gates them; a
+ * stale/deleted type surfaces via the create-time 404.
+ */
+fun CreateSessionUiState.isModeEnabled(mode: CreateSessionMode): Boolean = when (mode) {
+    CreateSessionMode.Standard -> claudeEnabled
+    CreateSessionMode.AutoScan -> autoScanEnabled
+    CreateSessionMode.Codex -> codexEnabled
+    CreateSessionMode.Antigravity -> antigravityEnabled
+    CreateSessionMode.CustomShell -> true
+    is CreateSessionMode.Custom -> true
+}
+
 @HiltViewModel
 class CreateSessionViewModel @Inject constructor(
     private val projectsRepository: ProjectsRepository,
@@ -465,6 +488,30 @@ class CreateSessionViewModel @Inject constructor(
         _uiState.update { it.copy(selectedMode = mode) }
     }
 
+    /**
+     * Commit a mode-picker card tap. The picker has no confirm button — one tap
+     * both records the choice and advances, so this records the selection and
+     * then runs that mode's commit step. Terminal and custom agent types on a
+     * non-git target launch straight away (see [selectTerminalMode]).
+     *
+     * The [CreateSessionUiState.submitting] guard blocks a second tap on a
+     * *different* card from advancing the wizard while such a launch is in
+     * flight — [submitPlainTerminal]'s own guard only stops a double submit.
+     */
+    fun chooseMode(mode: CreateSessionMode) {
+        val state = _uiState.value
+        if (state.submitting || !state.isModeEnabled(mode)) return
+        pickMode(mode)
+        when (mode) {
+            CreateSessionMode.Standard -> selectStandardMode()
+            CreateSessionMode.Codex -> selectCodexMode()
+            CreateSessionMode.Antigravity -> selectAntigravityMode()
+            CreateSessionMode.AutoScan -> selectAutoScanMode()
+            CreateSessionMode.CustomShell -> selectTerminalMode()
+            is CreateSessionMode.Custom -> selectCustomAgentMode(mode.typeId)
+        }
+    }
+
     fun selectStandardMode() = _uiState.update {
         if (it.claudeEnabled) it.copy(step = CreateSessionStep.StandardConfig) else it
     }
@@ -478,7 +525,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Continue from the mode picker for Terminal mode. A stored git project
+     * Commit the mode picker's Terminal card. A stored git project
      * opens the Terminal session page (worktree toggle); anything else
      * (non-git project, custom path) has nothing to configure, so the shell
      * session is created immediately rather than showing an empty sheet.
@@ -496,7 +543,7 @@ class CreateSessionViewModel @Inject constructor(
     }
 
     /**
-     * Continue from the mode picker for a custom agent type. Identical flow to
+     * Commit the mode picker's card for a custom agent type. Identical flow to
      * [selectTerminalMode] — custom types are plain-terminal sessions, so a
      * stored git project opens the Terminal config page (worktree toggle) and
      * anything else launches immediately.

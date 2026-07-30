@@ -738,10 +738,8 @@ class CreateSessionViewModelTest {
         vm.pickMode(CreateSessionMode.CustomShell)
         advanceUntilIdle()
 
-        // pickMode no longer auto-submits Terminal mode — Continue
-        // (selectTerminalMode) drives the next step now. Picking only records
-        // the selected mode; the wizard stays on ModePick and no session is
-        // created.
+        // pickMode only records the selected mode — chooseMode is what advances
+        // the wizard. The wizard stays on ModePick and no session is created.
         assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
         assertEquals(CreateSessionMode.CustomShell, vm.uiState.value.selectedMode)
         coVerify(exactly = 0) { fx.sessionRepo.createSession(any()) }
@@ -2847,5 +2845,224 @@ class CreateSessionViewModelTest {
         assertTrue(vm.uiState.value.error!!.startsWith("Failed to create session"))
         // Only init's cold-start seed — no reconcile for non-custom launches.
         coVerify(exactly = 1) { fx.customTypesRepo.refreshTypes() }
+    }
+
+    @Test
+    fun chooseMode_Standard_recordsSelectionAndAdvances_inOneTap() = runTest {
+        // The picker has no Continue button any more: a single card tap must
+        // both record the mode and move the wizard on.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+
+        vm.chooseMode(CreateSessionMode.Standard)
+
+        val s = vm.uiState.value
+        assertEquals(CreateSessionMode.Standard, s.selectedMode)
+        assertEquals(CreateSessionStep.StandardConfig, s.step)
+    }
+
+    @Test
+    fun chooseMode_CustomShell_nonGitProject_launchesShellInOneTap() = runTest {
+        // Terminal on a non-git target has nothing to configure, so the tap
+        // goes all the way to a created session.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-tap-shell", "starting", "2026-07-30T00:00:00Z")
+
+        vm.selectProject("beta") // is_git = false
+        vm.confirmProject()
+
+        vm.chooseMode(CreateSessionMode.CustomShell)
+        advanceUntilIdle()
+
+        assertEquals(CreateSessionMode.CustomShell, vm.uiState.value.selectedMode)
+        coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
+        assertNull("plain Terminal must not carry a custom cli", requestSlot.captured.cli)
+    }
+
+    @Test
+    fun chooseMode_Custom_nonGitProject_launchesWithThatTypesCli() = runTest {
+        // The tapped card's type id has to survive the dispatch — a custom
+        // card must never launch as a plain shell or as another type.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val requestSlot = slot<CreateSessionRequest>()
+        coEvery { fx.sessionRepo.createSession(capture(requestSlot)) } returns
+            SessionResponse("sess-tap-custom", "starting", "2026-07-30T00:00:00Z")
+
+        vm.selectProject("beta") // is_git = false
+        vm.confirmProject()
+
+        vm.chooseMode(CreateSessionMode.Custom("ab12cd34ef56"))
+        advanceUntilIdle()
+
+        assertEquals(CreateSessionMode.Custom("ab12cd34ef56"), vm.uiState.value.selectedMode)
+        assertEquals("custom_ab12cd34ef56", requestSlot.captured.cli)
+    }
+
+    @Test
+    fun chooseMode_Standard_claudeUnavailable_doesNotSelectOrAdvance() = runTest {
+        // A card tap is the only commit path now, so chooseMode itself has to
+        // enforce the CLI gate — including not leaving a selected highlight on
+        // a card that can never commit.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = false, codex = true)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.chooseMode(CreateSessionMode.Standard)
+
+        val s = vm.uiState.value
+        assertEquals(CreateSessionStep.ModePick, s.step)
+        assertNull("a blocked tap must not leave a card selected", s.selectedMode)
+    }
+
+    @Test
+    fun chooseMode_Codex_codexUnavailable_isBlocked_whileStandardStillAdvances() = runTest {
+        // isModeEnabled must key each card off its own CLI flag: a crosswired
+        // Codex -> claudeEnabled mapping would let the Codex card through here.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        coEvery { fx.sessionRepo.getAgentVersion() } returns
+            versionResponse(claude = true, codex = false)
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.refreshCliAvailability()
+        advanceUntilIdle()
+
+        vm.chooseMode(CreateSessionMode.Codex)
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+        assertNull(vm.uiState.value.selectedMode)
+
+        vm.chooseMode(CreateSessionMode.Standard)
+        assertEquals(CreateSessionStep.StandardConfig, vm.uiState.value.step)
+    }
+
+    @Test
+    fun chooseMode_AutoScan_projectWithLinearKey_advancesToAutoScanConfig() = runTest {
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(
+                    name = "linear",
+                    path = "/p/linear",
+                    is_git = true,
+                    has_linear_key = true,
+                ),
+            ),
+            autoScanPrompt = "seed",
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("linear")
+        vm.confirmProject()
+
+        vm.chooseMode(CreateSessionMode.AutoScan)
+
+        val s = vm.uiState.value
+        assertTrue(s.autoScanEnabled)
+        assertEquals(CreateSessionMode.AutoScan, s.selectedMode)
+        assertEquals(CreateSessionStep.AutoScanConfig, s.step)
+    }
+
+    @Test
+    fun chooseMode_AutoScan_projectWithoutLinearKey_isBlocked() = runTest {
+        // Auto Scan reads the selected project's Linear issues, so a project
+        // with no stored key must not commit — and must not seed the config.
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha") // has_linear_key defaults to false
+        vm.confirmProject()
+
+        vm.chooseMode(CreateSessionMode.AutoScan)
+
+        val s = vm.uiState.value
+        assertFalse(s.autoScanEnabled)
+        assertEquals(CreateSessionStep.ModePick, s.step)
+        assertNull(s.selectedMode)
+        assertNull("a blocked tap must not seed the Auto Scan config", s.autoScanConfigInitializedFor)
+    }
+
+    @Test
+    fun chooseMode_AutoScan_customPath_isBlocked_despiteALinearKeyedProject() = runTest {
+        // The key must be read off the SELECTED stored project — a custom path
+        // has none, and another project's key must not stand in for it.
+        val fx = newFixture(
+            initialProjects = listOf(
+                ProjectInfo(
+                    name = "linear",
+                    path = "/p/linear",
+                    is_git = true,
+                    has_linear_key = true,
+                ),
+            ),
+        )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectCustomPath()
+        vm.setCustomPathDraft(hostAbsolutePath)
+        vm.confirmProject()
+        advanceUntilIdle()
+        assertEquals(CreateSessionStep.ModePick, vm.uiState.value.step)
+
+        vm.chooseMode(CreateSessionMode.AutoScan)
+
+        val s = vm.uiState.value
+        assertFalse(s.autoScanEnabled)
+        assertNull(s.selectedMode)
+        assertNull(s.autoScanConfigInitializedFor)
+    }
+
+    @Test
+    fun chooseMode_whileSubmitting_isIgnored_soAnInFlightLaunchIsNotOvertaken() = runTest {
+        // Terminal and custom types launch straight from the picker; until that
+        // create returns, a tap on a different card must not advance the wizard
+        // out from under it.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val gate = CompletableDeferred<SessionResponse>()
+        coEvery { fx.sessionRepo.createSession(any()) } coAnswers { gate.await() }
+
+        vm.selectProject("beta") // non-git -> launches on tap
+        vm.confirmProject()
+        vm.chooseMode(CreateSessionMode.CustomShell)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.submitting)
+
+        vm.chooseMode(CreateSessionMode.Standard)
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals(CreateSessionStep.ModePick, s.step)
+        assertEquals(CreateSessionMode.CustomShell, s.selectedMode)
+
+        gate.complete(SessionResponse("sess-gated", "starting", "2026-07-30T00:00:00Z"))
+        advanceUntilIdle()
+        coVerify(exactly = 1) { fx.sessionRepo.createSession(any()) }
     }
 }
