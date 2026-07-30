@@ -48,6 +48,7 @@ from .relay.envelope import (
     SUPPORTED_PROTOCOL_VERSIONS,
 )
 from .relay.routing import RoutingTable
+from .security_headers import SecurityHeadersMiddleware
 
 logger = get_logger(__name__)
 
@@ -344,6 +345,14 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         CorrelationIdMiddleware,
         header_name="X-Request-ID",
         generator=_generate_correlation_id,
+    )
+
+    # Registered last so it is the outermost of the three and stamps responses
+    # the inner two generate, not just the router's.
+    app.add_middleware(
+        SecurityHeadersMiddleware,
+        google_client_id=config.google_client_id,
+        report_only=config.csp_report_only,
     )
 
     app.state.config = config

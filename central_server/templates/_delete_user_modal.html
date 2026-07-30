@@ -1,15 +1,18 @@
-<div class="modal-overlay"
-     onclick="if(event.target===this)document.getElementById('modal-root').innerHTML=''">
+{# Dismissal and the type-to-confirm gate live in static/dashboard.js, which
+   listens for [data-modal-close], for a click landing on .modal-overlay itself,
+   and for input on [data-confirm-target]. The gate used to be an `hx-on:input`
+   attribute — htmx compiles those with `new Function()`, so it needs
+   script-src 'unsafe-eval', which the dashboard policy does not grant (and a
+   nonce could not authorise). #}
+<div class="modal-overlay">
     <div class="modal-card">
         <h2>Unregister user</h2>
         {% if is_seed_admin %}
         <div class="alert alert-error">
             This is the seed admin account and cannot be deleted.
         </div>
-        <div style="text-align:right">
-            <button type="button"
-                    class="btn"
-                    onclick="document.getElementById('modal-root').innerHTML=''">
+        <div class="text-right">
+            <button type="button" class="btn" data-modal-close>
                 Close
             </button>
         </div>
@@ -17,10 +20,8 @@
         <div class="alert alert-error">
             You cannot delete your own account while logged in.
         </div>
-        <div style="text-align:right">
-            <button type="button"
-                    class="btn"
-                    onclick="document.getElementById('modal-root').innerHTML=''">
+        <div class="text-right">
+            <button type="button" class="btn" data-modal-close>
                 Close
             </button>
         </div>
@@ -40,13 +41,11 @@
                    id="confirm-email-{{ user.id }}"
                    name="confirm_email"
                    data-expected="{{ user.email }}"
+                   data-confirm-target="confirm-delete-{{ user.id }}"
                    autocomplete="off"
-                   autofocus
-                   hx-on:input="document.getElementById('confirm-delete-{{ user.id }}').disabled = this.value !== this.dataset.expected">
-            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem">
-                <button type="button"
-                        class="btn"
-                        onclick="document.getElementById('modal-root').innerHTML=''">
+                   autofocus>
+            <div class="btn-row btn-row-end">
+                <button type="button" class="btn" data-modal-close>
                     Cancel
                 </button>
                 <button type="submit"

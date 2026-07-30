@@ -28,38 +28,20 @@ _FAVICON_CACHE_CONTROL = "public, max-age=86400"
 # be picked up quickly after a deploy.
 _CRAWLER_CACHE_CONTROL = "public, max-age=3600"
 
-# Cheap and unconditionally safe, so every response in this router gets it —
-# `/sitemap.xml` and `/robots.txt` are the ones that actually benefit, being
-# attacker-uncontrolled text served to browsers.
-_NOSNIFF = {"X-Content-Type-Options": "nosniff"}
-
-# Scoped to the landing response, NOT installed as middleware. A global CSP would
-# break `/portal/login`, which loads Google Sign-In from accounts.google.com
-# (templates/portal_base.html) and has inline <script>/style= that a policy
-# without 'unsafe-inline' would block. Site-wide headers are tracked separately.
-#
-# The landing page needs no relaxations to satisfy this policy: its CSS and JS
-# are external same-origin files, its icons are inline <svg> markup rather than
-# data: URIs, its font is same-origin, and the JSON-LD block is a data block
-# that CSP does not treat as executable script.
-_SECURITY_HEADERS = {
-    "Content-Security-Policy": (
-        "default-src 'self'; "
-        "base-uri 'none'; "
-        "form-action 'none'; "
-        "object-src 'none'; "
-        "frame-ancestors 'none'"
-    ),
-    **_NOSNIFF,
-    "Referrer-Policy": "strict-origin-when-cross-origin",
-}
+# Security headers for every path here come from the `_SITE_PATHS` bucket of
+# `security_headers.SecurityHeadersMiddleware`. The landing page needs no
+# relaxation to satisfy that policy: its CSS and JS are external same-origin
+# files, its icons are inline <svg> markup rather than data: URIs, its font is
+# same-origin, and the JSON-LD block is a data block that CSP does not treat as
+# executable script. Keep it that way — `test_marketing.py` scans the rendered
+# page for inline `<script>` and `style=` precisely to catch a copy edit that
+# would need `'unsafe-inline'`.
 
 
 @router.api_route("/", methods=_PUBLIC_METHODS, response_class=HTMLResponse)
 async def landing_page(request: Request) -> HTMLResponse:
     response = HTMLResponse(request.app.state.marketing_html)
     response.headers["Cache-Control"] = _CACHE_CONTROL
-    response.headers.update(_SECURITY_HEADERS)
     return response
 
 
@@ -69,7 +51,6 @@ async def landing_page(request: Request) -> HTMLResponse:
 async def robots_txt(request: Request) -> PlainTextResponse:
     response = PlainTextResponse(request.app.state.marketing_robots)
     response.headers["Cache-Control"] = _CRAWLER_CACHE_CONTROL
-    response.headers.update(_NOSNIFF)
     return response
 
 
@@ -80,7 +61,6 @@ async def sitemap_xml(request: Request) -> Response:
         media_type="application/xml",
     )
     response.headers["Cache-Control"] = _CRAWLER_CACHE_CONTROL
-    response.headers.update(_NOSNIFF)
     return response
 
 
@@ -102,5 +82,4 @@ async def favicon(request: Request) -> Response:
         return Response(status_code=404)
     response = Response(icon, media_type="image/x-icon")
     response.headers["Cache-Control"] = _FAVICON_CACHE_CONTROL
-    response.headers.update(_NOSNIFF)
     return response

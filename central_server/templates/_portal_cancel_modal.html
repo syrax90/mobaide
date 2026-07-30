@@ -1,5 +1,8 @@
-<div class="modal-overlay"
-     onclick="if(event.target===this)document.getElementById('modal-root').innerHTML=''">
+{# Dismissal is handled by static/site/portal.js, which listens for
+   [data-modal-close] and for a click landing on .modal-overlay itself. An
+   onclick= attribute would not run: `/portal/*` is served with a script-src
+   that has no 'unsafe-inline'. #}
+<div class="modal-overlay">
     <div class="modal-card">
         <h2>Keep your account active?</h2>
         <p>
@@ -15,9 +18,7 @@
               hx-swap="none">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <div class="btn-row btn-row-end">
-                <button type="button"
-                        class="btn btn-ghost"
-                        onclick="document.getElementById('modal-root').innerHTML=''">
+                <button type="button" class="btn btn-ghost" data-modal-close>
                     Dismiss
                 </button>
                 <button type="submit" class="btn">

@@ -13,11 +13,33 @@
 # In this TLS mode Caddy provisions a separate Let's Encrypt cert for this host
 # over ACME HTTP-01, so www.mobaide.com needs a DNS record pointing here and
 # must be "DNS only" (gray cloud) like the apex.
+
+# HSTS — the `header Strict-Transport-Security` line in both site blocks below.
+#
+# It lives here, not in the app: central-server is reached over plain HTTP on
+# the compose network, and browsers ignore Strict-Transport-Security on a
+# non-HTTPS response. Caddy terminates TLS, so this is the only layer that can
+# emit it truthfully.
+#
+# max-age=300 is the FIRST RUNG of a deliberate ratchet, not the target value.
+# HSTS is effectively irreversible: once a browser has cached a max-age,
+# lowering it only reaches clients that come back before the old one expires, so
+# the short rung proves the header is emitted correctly without committing
+# anyone to a year. No includeSubDomains (it would bind api.mobaide.com,
+# get.mobaide.com on GitHub Pages, and every future subdomain) and no preload.
+# The full ladder and the audit it requires are in docs/deployment.md and
+# tracked in CLA-172.
+#
+# If the per-host site blocks land first, this directive belongs inside each of
+# them rather than in a shared block.
+
 www.mobaide.com {
+    header Strict-Transport-Security "max-age=300"
     redir https://mobaide.com{uri} 308
 }
 
 mobaide.com, api.mobaide.com {
+    header Strict-Transport-Security "max-age=300"
     encode zstd gzip
     reverse_proxy central-server:9000
 }

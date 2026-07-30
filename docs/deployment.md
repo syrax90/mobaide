@@ -62,6 +62,65 @@ Routers that serve HTML rather than an API (`/dashboard/*`, `/portal/*`, `/priva
 
 The agent has the same knob with the same name and the same default. It matters more there than it looks: the agent binds `0.0.0.0` so DIRECT mode works over the LAN, so stock FastAPI docs would hand its whole session/project/git surface to anything on the same network. Leave it off outside local development.
 
+### Security response headers
+
+Three headers go on **every** response, from `central_server/central_server/security_headers.py` (a pure-ASGI middleware, registered last in `create_app` so it is the outermost of the three and stamps what the inner two produce):
+
+| Header | Value |
+| --- | --- |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `X-Frame-Options` | `DENY` |
+
+`X-Frame-Options` duplicates every policy's `frame-ancestors 'none'` and exists only for browsers that predate CSP framing control. `/portal/cancel-deletion` overrides the referrer policy to `no-referrer` with a document `<meta>`, which wins over the header — that page carries a cancellation token in its URL.
+
+One gap, deliberate and worth knowing: an **unhandled** exception is turned into a 500 by Starlette's `ServerErrorMiddleware`, which wraps the entire user middleware stack, so that one response carries none of these. Everything else does, including every `HTTPException` (404 / 403 / 405) and every static file.
+
+#### Content-Security-Policy per surface
+
+Headers are applied with `setdefault`, so a route that sets its own value still wins. The policy is chosen by path:
+
+| Surface | Policy |
+| --- | --- |
+| `/`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`, `/privacy.html` | `default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'` |
+| `/portal/*` | `default-src 'none'` + `script-src 'self' https://accounts.google.com/gsi/client` + `style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style` + `img-src`/`font-src`/`connect-src` `'self'` (+ `https://accounts.google.com/gsi/` for connect) + `frame-src https://accounts.google.com/gsi/` + `form-action 'self'` |
+| `/dashboard/*` | the same shape with **no** Google origins and **no** `'unsafe-inline'` |
+| everything else — `/api/*`, `/proxy/*`, `/relay/*`, `/static/*`, 404s | `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
+| `/docs`, `/redoc` | **no CSP** — see below |
+
+`script-src` grants no `'unsafe-inline'` and no `'unsafe-eval'` on any surface. That is why no template contains an inline `<script>`, an `onclick=` attribute or an `hx-on:` attribute any more — the portal's behaviour lives in `static/site/portal.js`, the dashboard's in `static/dashboard.js`, and per-request values reach them through `data-` attributes. Adding any of those three forms back does not degrade a page, it silently breaks it.
+
+`'unsafe-inline'` appears in exactly one place — `style-src` on `/portal/*`, and only when `GOOGLE_CLIENT_ID` is set. The Google Identity Services client appends an inline `<style>` to the parent document the moment it loads, on top of the `accounts.google.com/gsi/style` sheet Google documents. With no client id configured, `portal_base.html` emits no Google tag and the middleware serves the portal the strict same-origin policy instead.
+
+`/docs` and `/redoc` are exempt on purpose. FastAPI renders both from a `cdn.jsdelivr.net` bundle with an inline bootstrap script, so any policy strict enough to be worth setting would break them, and one loose enough to fit is a list of third-party origins we do not control. Both stay unregistered unless `ENABLE_API_DOCS` is set, and admin-gated when it is. They still get the three universal headers.
+
+#### Rolling out a CSP change — the report-only soak
+
+Deployment is manual and a bad CSP does not trigger the `/api/health` rollback, so it can break a page while the deploy reports success. Before changing any policy:
+
+1. Set `CSP_REPORT_ONLY=1` in `/opt/mobaide/.env` and deploy. The middleware emits `Content-Security-Policy-Report-Only` instead — violations are reported and nothing is blocked. **Four paths are the exception and stay enforced through a soak:** `/`, `/robots.txt`, `/sitemap.xml` and `/favicon.ico`. A soak is for a policy nobody has run yet; those already served this exact policy enforced from `marketing/router.py`, so de-enforcing them buys nothing and costs a live protection. Everything else soaks, `/privacy.html` included — `legal/router.py` set no security header before this middleware, so that page's policy is exactly as new as the portal's.
+2. Walk the surfaces in a browser with devtools open and confirm a clean console. Any `Refused to …` line is a violation. Cover at minimum: `/portal/login` (password reveal, Google button), `/portal/signup` (live password-match — its submit button stays disabled until JS arms, so a broken policy locks the form), `/portal/account` → delete-account modal (htmx swap, mode radios, email gate, Google re-auth), `/dashboard/users` (row expand, search swap, delete-user modal), `/privacy.html`, `/`.
+3. Remove `CSP_REPORT_ONLY` and deploy again.
+
+The default is **enforce** (`csp_report_only: bool = False`). A report-only default would mean the policy silently protects nobody if the flag is never flipped. There is no violation-collection endpoint — the soak is browser-console-based; server-side collection is tracked in CLA-174.
+
+#### HSTS
+
+`Strict-Transport-Security` is emitted by **Caddy**, not the app: `central-server` is reached over plain HTTP on the compose network, and browsers ignore HSTS on a non-HTTPS response. Both `deploy/prod/Caddyfile.LetsEncrypt` and `deploy/prod/Caddyfile.CloudflareOrigin` carry `header Strict-Transport-Security "max-age=300"` in each site block.
+
+**`max-age=300` is the first rung of a ratchet, not the target.** HSTS is effectively irreversible — once a browser caches a `max-age`, lowering it only reaches clients that come back before the old value expires, and there is no way to reach the rest. Advance one rung per deploy, verifying between each (CLA-172):
+
+1. `max-age=31536000`, still no `includeSubDomains`. Soak a week.
+2. Audit every subdomain for HTTPS-only serving. `api.mobaide.com` and `www.mobaide.com` are this same Caddy; `get.mobaide.com` is GitHub Pages and needs "Enforce HTTPS" confirmed there.
+3. Add `includeSubDomains` — it binds every current *and future* `*.mobaide.com` name, including any short-lived staging host. Soak a month.
+4. Consider `preload` only after that, and only accepting that removal takes months.
+
+On `CloudflareOrigin`, leave Cloudflare's own HSTS setting **off**: two sources for one header is how you lose track of what is actually pinned.
+
+#### CORS — deliberately absent
+
+`CORSMiddleware` is not installed, and its absence is a decision rather than an oversight. The Android and iOS clients use OkHttp and `URLSession`, which are not browsers and do not preflight, so nothing today needs a CORS policy. Should a browser-based client ever be built, it needs an explicit allow-list decided at that point — not a permissive default inherited from a framework example.
+
 ### Client IP behind Caddy
 
 `docker-compose.prod.yml` sets `FORWARDED_ALLOW_IPS=*` on `central-server`. Caddy runs as a separate container, so its bridge IP — not `127.0.0.1` — is the peer uvicorn sees; at uvicorn's default the `X-Forwarded-For` header is ignored and every request is attributed to Caddy. That collapses the per-IP password-reset quota onto one shared bucket (locking out real users while doing nothing to an attacker) and fills the access log with `172.x` addresses. The wildcard is safe here only because `central-server` is `expose`-only and never published, so Caddy on the compose network is the only possible peer. Do not copy it to the dev `docker-compose.yml`, which publishes `9000:9000` directly.

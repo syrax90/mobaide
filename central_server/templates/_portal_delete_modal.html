@@ -1,5 +1,10 @@
-<div class="modal-overlay"
-     onclick="if(event.target===this)document.getElementById('modal-root').innerHTML=''">
+{# Dismissal, the mode/method wiring and the Google re-auth button are all in
+   static/site/portal.js: this fragment is swapped into #modal-root by htmx, and
+   `/portal/*` runs under a script-src with no 'unsafe-inline', so neither an
+   inline <script> nor an onclick= attribute would execute here. portal.js
+   listens for [data-modal-close] and for a click landing on .modal-overlay
+   itself, and initialises this form from htmx.onLoad. #}
+<div class="modal-overlay">
     <div class="modal-card">
         <h2>Delete your account</h2>
         {% if is_seed_admin %}
@@ -7,9 +12,7 @@
             The seed admin account cannot be self-deleted.
         </div>
         <div class="btn-row btn-row-end">
-            <button type="button"
-                    class="btn btn-ghost"
-                    onclick="document.getElementById('modal-root').innerHTML=''">
+            <button type="button" class="btn btn-ghost" data-modal-close>
                 Close
             </button>
         </div>
@@ -33,6 +36,8 @@
         {% endif %}
 
         <form id="delete-account-form"
+              data-delete-account-form
+              data-grace-days="{{ grace_days }}"
               hx-post="/portal/account/delete"
               hx-target="#modal-root"
               hx-swap="innerHTML">
@@ -97,15 +102,15 @@
                 <div id="confirm-delete-google-wrapper"
                      class="google-verify-wrapper"
                      aria-disabled="true">
-                    <div id="confirm-delete-google-btn"></div>
+                    <div id="confirm-delete-google-btn"
+                         data-gis-client-id="{{ google_client_id or '' }}"
+                         data-gis-nonce="{{ google_nonce or '' }}"></div>
                 </div>
             </div>
             {% endif %}
 
             <div class="btn-row btn-row-end">
-                <button type="button"
-                        class="btn btn-ghost"
-                        onclick="document.getElementById('modal-root').innerHTML=''">
+                <button type="button" class="btn btn-ghost" data-modal-close>
                     Cancel
                 </button>
                 {% if has_password %}
@@ -120,141 +125,6 @@
                 {% endif %}
             </div>
         </form>
-
-        <script>
-        (function () {
-            var form = document.getElementById('delete-account-form');
-            if (!form) return;
-            var emailInput = document.getElementById('confirm-email');
-            var pwBtn = document.getElementById('confirm-delete-btn');
-            var pwPanel = document.getElementById('reauth-password-panel');
-            var gPanel = document.getElementById('reauth-google-panel');
-            var gWrapper = document.getElementById('confirm-delete-google-wrapper');
-            var gBtnContainer = document.getElementById('confirm-delete-google-btn');
-            var gHint = document.getElementById('confirm-delete-google-hint');
-            var hasPassword = {{ 'true' if has_password else 'false' }};
-            var hasGoogle = {{ 'true' if has_google else 'false' }};
-            var hasBoth = hasPassword && hasGoogle;
-            var graceDays = {{ grace_days | tojson }};
-            var googleClientId = {{ (google_client_id or '') | tojson }};
-            var googleNonce = {{ (google_nonce or '') | tojson }};
-
-            function selectedMethod() {
-                if (!hasBoth) return hasPassword ? 'password' : 'google';
-                var checked = form.querySelector('input[name="method"]:checked');
-                return checked ? checked.value : 'password';
-            }
-            function selectedMode() {
-                var checked = form.querySelector('input[name="mode"]:checked');
-                return checked ? checked.value : 'scheduled';
-            }
-            function emailMatches() {
-                return emailInput && emailInput.value === emailInput.dataset.expected;
-            }
-            function refreshPwLabel() {
-                if (!pwBtn) return;
-                var lbl = pwBtn.getAttribute('data-label-' + selectedMode());
-                if (lbl) pwBtn.textContent = lbl;
-            }
-            function refreshGoogleHint() {
-                if (!gHint) return;
-                if (selectedMode() === 'immediate') {
-                    gHint.textContent =
-                        'Click below to verify with Google to delete your account ' +
-                        'immediately. This cannot be undone.';
-                    gHint.classList.add('danger');
-                } else {
-                    gHint.textContent =
-                        'Click below to verify with Google to schedule deletion ' +
-                        'in ' + graceDays + ' days. You can cancel any time ' +
-                        'before then.';
-                    gHint.classList.remove('danger');
-                }
-            }
-            function refreshVisibility() {
-                var method = selectedMethod();
-                var usePw = method === 'password' && hasPassword;
-                var useG = method === 'google' && hasGoogle;
-                if (pwPanel) pwPanel.style.display = usePw ? '' : 'none';
-                if (pwBtn) pwBtn.style.display = usePw ? '' : 'none';
-                if (gPanel) gPanel.style.display = useG ? '' : 'none';
-            }
-            function refreshSubmitState() {
-                var match = emailMatches();
-                if (pwBtn) pwBtn.disabled = !match;
-                if (gWrapper) {
-                    gWrapper.setAttribute('aria-disabled', match ? 'false' : 'true');
-                }
-            }
-
-            if (emailInput) emailInput.addEventListener('input', refreshSubmitState);
-            form.querySelectorAll('input[name="mode"]').forEach(function (r) {
-                r.addEventListener('change', function () {
-                    refreshPwLabel();
-                    refreshGoogleHint();
-                });
-            });
-            form.querySelectorAll('input[name="method"]').forEach(function (r) {
-                r.addEventListener('change', refreshVisibility);
-            });
-            refreshPwLabel();
-            refreshGoogleHint();
-            refreshVisibility();
-            refreshSubmitState();
-
-            if (hasGoogle && googleClientId && gBtnContainer) {
-                var gisRetryTimer = null;
-                var gisRetriesLeft = 200;
-                function cancelGisRetry() {
-                    if (gisRetryTimer !== null) {
-                        clearTimeout(gisRetryTimer);
-                        gisRetryTimer = null;
-                    }
-                    gisRetriesLeft = 0;
-                }
-                function initGis() {
-                    gisRetryTimer = null;
-                    if (!window.google || !window.google.accounts) {
-                        if (gisRetriesLeft-- > 0) {
-                            gisRetryTimer = setTimeout(initGis, 50);
-                        }
-                        return;
-                    }
-                    window.google.accounts.id.initialize({
-                        client_id: googleClientId,
-                        nonce: googleNonce,
-                        ux_mode: 'popup',
-                        callback: function (response) {
-                            if (!emailMatches()) return;
-                            form.querySelector('input[name="credential"]').value = response.credential;
-                            if (hasBoth) {
-                                var g = form.querySelector('input[name="method"][value="google"]');
-                                if (g) g.checked = true;
-                            }
-                            window.htmx.trigger(form, 'submit');
-                        },
-                    });
-                    window.google.accounts.id.renderButton(gBtnContainer, {
-                        type: 'standard',
-                        // Matches _portal_google_button.html: outline renders a
-                        // white slab on this dark surface.
-                        theme: 'filled_black',
-                        size: 'large',
-                        shape: 'rectangular',
-                        text: 'continue_with',
-                        width: 320,
-                        logo_alignment: 'left',
-                    });
-                }
-                initGis();
-                form.querySelectorAll('[onclick*="modal-root"]').forEach(function (el) {
-                    el.addEventListener('click', cancelGisRetry);
-                });
-                var overlay = form.closest('.modal-overlay');
-                if (overlay) overlay.addEventListener('click', cancelGisRetry);
-            }
-        })();
-        </script>
         {% endif %}
     </div>
 </div>

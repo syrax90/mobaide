@@ -3,8 +3,10 @@
 Covers the contract documented in ``docs/website.md``:
 
 - ``GET /`` serves the pre-rendered landing page with its cache and
-  route-scoped hardening headers, and the strict CSP stays scoped (``/portal/login``
-  must keep working — it loads Google Sign-In and has inline script/style).
+  route-scoped hardening headers, now applied site-wide by
+  ``SecurityHeadersMiddleware`` — see ``TestSecurityHeaderScope`` for the
+  guarantee that keeps the marketing policy and the portal's separately
+  scoped rather than one silently becoming the other.
 - **Copy accuracy.** Several Play-listing claims are contradicted by the code
   ("end-to-end", 32 sessions as a per-type cap, unqualified worktrees). The page
   must not repeat them and must keep the qualifiers that make the true claims
@@ -165,16 +167,32 @@ class TestLandingPageResponse:
 
 
 class TestSecurityHeaderScope:
-    async def test_portal_login_keeps_no_csp(self, client) -> None:
-        """The landing CSP is set per response, never as middleware. The portal
-        would break under it three ways: the Google Sign-In script and frames come
-        from ``accounts.google.com``, four partials ship inline ``<script>``, and
-        the two modal partials dismiss themselves through inline ``onclick=``.
-        (The inline-``style=`` reason is gone — the pixel restyle removed all but
-        one — so those ``onclick`` handlers are the remaining hard blocker.)"""
+    """The site-wide ``SecurityHeadersMiddleware`` (``security_headers.py``)
+    scopes a separate CSP to every surface — see ``test_security_headers.py``
+    for the full per-path matrix. The one invariant that belongs here, the
+    marketing regression guard, is that the rollout kept the two surfaces
+    apart: neither the marketing policy pinned above nor the portal's own was
+    unified into, or copied over, the other."""
+
+    async def test_portal_login_carries_a_csp_distinct_from_the_marketing_policy(
+        self, client
+    ) -> None:
+        """Before ``SecurityHeadersMiddleware`` existed, ``/portal/login`` ran
+        with no CSP at all: the marketing policy above was set per response by
+        this router alone, never as middleware, and the portal loads Google
+        Sign-In plus (pre-restyle) inline script/style that policy would have
+        blocked. The site-wide rollout deliberately reverses that — every
+        surface now gets a policy, the portal included. What still belongs in
+        this file, rather than in ``test_security_headers.py`` which pins the
+        portal's exact string, is the scoping guarantee: the portal's CSP must
+        be present and different from — and, once Google Sign-In is
+        configured, looser than (``test_security_headers.TestGoogleSignInRelaxations``
+        covers that case) — the marketing ``EXPECTED_CSP`` pinned above, so the
+        two surfaces never silently collapse into one."""
         response = await client.get("/portal/login")
         assert response.status_code == 200
-        assert "Content-Security-Policy" not in response.headers
+        assert "Content-Security-Policy" in response.headers
+        assert response.headers["Content-Security-Policy"] != EXPECTED_CSP
 
 
 class TestLandingCopyAccuracy:
@@ -397,12 +415,17 @@ class TestStaticAssetCaching:
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "public, max-age=3600"
 
-    async def test_sri_pinned_assets_get_the_revalidate_tier(self, client) -> None:
+    async def test_the_sri_pinned_bundle_gets_the_revalidate_tier(self, client) -> None:
         """``portal_base.html`` pins an SRI ``integrity`` hash on this bundle and
         the filename carries no version. If a client could reuse a cached copy
         without revalidating, the next htmx upgrade would pair new HTML (new
         hash) with stale JS, the browser would block htmx, and every portal form
-        would silently stop working until the entry expired."""
+        would silently stop working until the entry expired.
+
+        ``dashboard.js`` shares this ``_MUST_REVALIDATE_ASSETS`` tier for an
+        unrelated reason — a ``data-`` attribute contract with per-request
+        markup, not SRI — covered instead by
+        ``test_security_headers.TestExternalisedBundlesAreServed``."""
         response = await client.get("/static/htmx.min.js")
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "no-cache"

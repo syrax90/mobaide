@@ -32,34 +32,10 @@
 
 {% include "_users_table.html" %}
 
-<div hx-get="/dashboard/agents-status"
+<div class="is-hidden"
+     hx-get="/dashboard/agents-status"
      hx-trigger="every 10s"
-     hx-swap="none"
-     style="display:none"></div>
+     hx-swap="none"></div>
 
 <div id="modal-root"></div>
-
-<script>
-// Toggle a user row's inline detail expansion. If the detail row exists,
-// remove it (collapse); otherwise fetch and insert it via htmx.ajax with
-// hx-swap="afterend" so HTMX still processes the response normally.
-// Implemented in JS rather than as a row hx-get because hx-swap="afterend"
-// has no toggle semantics — repeated clicks would otherwise pile duplicate
-// detail rows into the DOM.
-function toggleUserRow(userId) {
-    const row = document.getElementById('user-row-' + userId);
-    if (!row) return;
-    const detail = document.getElementById('user-detail-' + userId);
-    if (detail) {
-        detail.remove();
-        row.setAttribute('aria-expanded', 'false');
-        return;
-    }
-    row.setAttribute('aria-expanded', 'true');
-    htmx.ajax('GET', '/dashboard/users/' + userId + '/agents', {
-        target: '#user-row-' + userId,
-        swap: 'afterend'
-    });
-}
-</script>
 {% endblock %}

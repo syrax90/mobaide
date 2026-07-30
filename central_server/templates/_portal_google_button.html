@@ -20,6 +20,13 @@
                          per their branding rules.
    * extra_fields      — optional list of {name, value} hidden inputs sent
                          alongside `credential`
+
+   The initialiser lives in static/site/portal.js, which picks this container up
+   by `data-gis-button` and reads the config off the `data-` attributes below.
+   That is a CSP requirement, not a preference: `/portal/*` is served with a
+   script-src that has no 'unsafe-inline', so an inline block here would not run.
+   It also means the client id and nonce go through Jinja's HTML autoescaping
+   rather than being spliced into a JS literal.
 #}
 {% if google_client_id %}
 <form id="{{ button_id }}-form" method="post" action="{{ post_url }}">
@@ -28,44 +35,12 @@
     {% for field in extra_fields or [] %}
     <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
     {% endfor %}
-    <div id="{{ button_id }}" class="gis-row"></div>
+    <div id="{{ button_id }}"
+         class="gis-row"
+         data-gis-button
+         data-gis-form="{{ button_id }}-form"
+         data-gis-client-id="{{ google_client_id }}"
+         data-gis-nonce="{{ google_nonce }}"
+         data-gis-text="{{ gis_text or 'continue_with' }}"></div>
 </form>
-<script>
-(function () {
-    function init() {
-        if (!window.google || !window.google.accounts) {
-            setTimeout(init, 50);
-            return;
-        }
-        var formEl = document.getElementById({{ (button_id ~ '-form') | tojson }});
-        var btnEl  = document.getElementById({{ button_id | tojson }});
-        if (!formEl || !btnEl) return;
-
-        window.google.accounts.id.initialize({
-            client_id: {{ google_client_id | tojson }},
-            nonce: {{ google_nonce | tojson }},
-            ux_mode: 'popup',
-            callback: function (response) {
-                formEl.querySelector('input[name="credential"]').value = response.credential;
-                formEl.submit();
-            },
-        });
-        window.google.accounts.id.renderButton(btnEl, {
-            type: 'standard',
-            // filled_black, not outline: the portal is a #121212 surface, on
-            // which outline renders a white slab. It is one of Google's own
-            // sanctioned themes, so the branding rules still hold. The small
-            // corner radius Google applies inside the cross-origin iframe is
-            // unreachable from our CSS — 'rectangular' is as square as it goes.
-            theme: 'filled_black',
-            size: 'large',
-            shape: 'rectangular',
-            logo_alignment: 'left',
-            text: {{ (gis_text or 'continue_with') | tojson }},
-            width: 320,
-        });
-    }
-    init();
-})();
-</script>
 {% endif %}

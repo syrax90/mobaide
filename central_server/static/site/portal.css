@@ -452,13 +452,30 @@ input[type="radio"]:checked {
   outline-offset: 0;
 }
 
-/* The toggle in portal_base.html sets `style.display = revealed ? '' : 'none'`,
-   and the empty-string branch falls back to this rule. Without it the SVG
-   reverts to `inline`, gains a baseline gap and sits off-centre. */
+/* Without `display: block` the SVG reverts to `inline`, gains a baseline gap and
+   sits off-centre. */
 .password-field .reveal-icon {
   display: block;
   width: 20px;
   height: 20px;
+}
+
+/* Which of the two icons shows is derived from the button's own aria-pressed
+   state, which portal.js flips — so the accessible state and the visual state
+   cannot drift apart, and neither needs a style= attribute (the portal's CSP
+   drops those, and the eye-off icon's used to be load-bearing: without it BOTH
+   icons rendered). Source order matters: `.password-field .reveal-icon-hide`
+   ties with `.password-field .reveal-icon` above on specificity. */
+.password-field .reveal-icon-hide {
+  display: none;
+}
+
+.password-field .reveal-btn[aria-pressed="true"] .reveal-icon-show {
+  display: none;
+}
+
+.password-field .reveal-btn[aria-pressed="true"] .reveal-icon-hide {
+  display: block;
 }
 
 /* min-height reserves the live region's line so the form does not jump when the
@@ -475,6 +492,24 @@ input[type="radio"]:checked {
 
 .password-match.bad {
   color: var(--danger);
+}
+
+/* ---------- htmx indicators ---------- */
+
+/* htmx normally writes these three rules into <head> as an inline <style> at
+   init, unconditionally. portal_base.html turns that off
+   (`includeIndicatorStyles`) because that one block is what would otherwise
+   force 'unsafe-inline' into style-src on /privacy.html, which shares this
+   shell. Kept verbatim from htmx so behaviour is unchanged; without them a
+   future hx-indicator would be silently dead. */
+.htmx-indicator {
+  opacity: 0;
+}
+
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator {
+  opacity: 1;
+  transition: opacity 200ms ease-in;
 }
 
 /* ---------- auth divider and the Google button surround ---------- */
@@ -505,7 +540,7 @@ input[type="radio"]:checked {
    filter or clip-path: it becomes a containing block and breaks the Google
    popup's positioning. The button itself is a cross-origin iframe, so its small
    corner radius is unreachable from here — `shape: 'rectangular'` in
-   _portal_google_button.html is as square as Google allows. */
+   static/site/portal.js is as square as Google allows. */
 .gis-row {
   display: flex;
   justify-content: center;
