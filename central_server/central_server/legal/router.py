@@ -24,7 +24,16 @@ async def privacy_page(request: Request) -> HTMLResponse:
     response = templates.TemplateResponse(
         request,
         "privacy.html",
-        {"policy_html": policy_html, "policy_toc_html": policy_toc_html},
+        {
+            "policy_html": policy_html,
+            "policy_toc_html": policy_toc_html,
+            # This page extends portal_base.html, which stamps the shared ``?v=``
+            # on both stylesheets and the wordmark. ``Jinja2Templates`` uses the
+            # permissive default ``Undefined``, so omitting this key renders a
+            # bare ``?v=`` and silently disables cache busting on a page whose
+            # assets carry a 7-day TTL.
+            "asset_version": request.app.state.asset_version,
+        },
     )
     response.headers["Cache-Control"] = _CACHE_CONTROL
     return response

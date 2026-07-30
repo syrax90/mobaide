@@ -11,8 +11,8 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <input type="hidden" name="email" value="{{ email }}">
         <label for="code">Verification code</label>
-        <input type="text" id="code" name="code" required autofocus inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
-        <button type="submit" class="btn btn-primary">Verify</button>
+        <input type="text" id="code" name="code" class="otp-input" required autofocus inputmode="numeric" pattern="[0-9]{6}" maxlength="6">
+        <button type="submit" class="btn">Verify</button>
     </form>
 </div>
 {% endblock %}

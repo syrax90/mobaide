@@ -166,9 +166,12 @@ class TestLandingPageResponse:
 
 class TestSecurityHeaderScope:
     async def test_portal_login_keeps_no_csp(self, client) -> None:
-        """The landing CSP is set per response, never as middleware: it forbids
-        inline script and third-party sources, both of which ``/portal/login``
-        needs for Google Sign-In."""
+        """The landing CSP is set per response, never as middleware. The portal
+        would break under it three ways: the Google Sign-In script and frames come
+        from ``accounts.google.com``, four partials ship inline ``<script>``, and
+        the two modal partials dismiss themselves through inline ``onclick=``.
+        (The inline-``style=`` reason is gone — the pixel restyle removed all but
+        one — so those ``onclick`` handlers are the remaining hard blocker.)"""
         response = await client.get("/portal/login")
         assert response.status_code == 200
         assert "Content-Security-Policy" not in response.headers
@@ -377,9 +380,19 @@ class TestStaticAssetCaching:
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "public, max-age=604800"
 
+    async def test_the_portal_sheet_gets_the_long_tier(self, client) -> None:
+        """``portal.css`` lives under ``static/site/`` precisely so the ``?v=``
+        content hash — which covers the whole tree — busts it on every edit. That
+        is what earns it the 7-day TTL rather than the 1-hour default."""
+        response = await client.get("/static/site/portal.css")
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "public, max-age=604800"
+
     async def test_other_static_assets_get_the_short_tier(self, client) -> None:
-        """The dashboard sheet carries no ``?v=`` query, so its TTL has to be
-        short enough for a deploy to propagate on its own."""
+        """The ADMIN DASHBOARD sheet carries no ``?v=`` query, so its TTL has to
+        be short enough for a deploy to propagate on its own. The end-user portal
+        is deliberately not on this tier — it loads the two versioned sheets
+        under ``static/site/``."""
         response = await client.get("/static/style.css")
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "public, max-age=3600"

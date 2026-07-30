@@ -13,17 +13,22 @@ from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 from starlette.types import Scope
 
-# Marketing-site assets are versioned by a ``?v=`` query the landing template
-# appends, whose value is a content hash over the whole ``site/`` tree
-# (``marketing.loader.asset_version``) — so an asset edit busts them immediately
-# and this TTL only bounds how long an unversioned request may serve a stale
-# copy. Kept off ``immutable`` deliberately: the filenames themselves are not
-# content-hashed, so an in-place edit to an immutable asset would be
-# uncorrectable for a year.
+# Design-system assets — shared by the landing page and the end-user portal —
+# are versioned by a ``?v=`` query both templates append, whose value is a
+# content hash over the whole ``site/`` tree (``marketing.loader.asset_version``)
+# — so an asset edit busts them immediately and this TTL only bounds how long an
+# unversioned request may serve a stale copy. That whole-tree hash is also why
+# ``portal.css`` lives here rather than beside ``style.css``: every edit to it
+# busts both sheets automatically. Kept off ``immutable`` deliberately: the
+# filenames themselves are not content-hashed, so an in-place edit to an
+# immutable asset would be uncorrectable for a year.
 _SITE_CACHE_CONTROL = "public, max-age=604800"
 
-# The dashboard/portal sheet is referenced without a version query, so it gets a
-# TTL short enough that a deploy propagates on its own.
+# The ADMIN DASHBOARD sheet (``static/style.css``, loaded by
+# ``templates/base.html``) is referenced without a version query, so it gets a
+# TTL short enough that a deploy propagates on its own. The end-user portal
+# deliberately does not live here: it loads ``site/site.css`` + ``site/portal.css``,
+# both stamped with the content hash, which puts them in the versioned tier above.
 _DEFAULT_CACHE_CONTROL = "public, max-age=3600"
 
 # `templates/portal_base.html` loads the vendored htmx with a pinned SRI

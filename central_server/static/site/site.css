@@ -28,6 +28,13 @@
   --text-muted: #ccc2dc;
   --gray: #8b8b8b;
 
+  /* Semantic status colours, used as text AND as 2px ring fills. Both are
+     light-on-dark on purpose: a dark error container (#8C1D18) reads as only
+     1.83:1 against --surface and would fail WCAG 1.4.11 as a border. Measured
+     on --bg-2: --danger 10.5:1, --ok 9.0:1. */
+  --danger: #f2b8b5;
+  --ok: #23d18b;
+
   --rule: #625b71;
   --plate: #f4f4f4;
 
@@ -431,7 +438,7 @@ h1 {
 }
 
 .c-ok {
-  color: #23d18b;
+  color: var(--ok);
 }
 
 .c-accent {

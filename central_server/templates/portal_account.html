@@ -2,19 +2,18 @@
 {% block title %}Account — Mobaide{% endblock %}
 {% block nav_right %}
 <span class="user">{{ user.email }}</span>
-<form method="post" action="/portal/logout" style="display:inline">
+<form method="post" action="/portal/logout">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit" class="btn btn-sm">Sign out</button>
+    <button type="submit" class="btn btn-ghost btn-sm">Sign out</button>
 </form>
 {% endblock %}
 {% block content %}
 {% if user.scheduled_deletion_at %}
-<div class="alert alert-error" style="margin-bottom: 1.5rem;">
+<div class="alert alert-error">
     <strong>Account scheduled for deletion on {{ user.scheduled_deletion_at }}.</strong>
-    <p style="margin: 0.5rem 0 0;">Changed your mind? You can restore your account any time before the grace window expires.</p>
+    <p>Changed your mind? You can restore your account any time before the grace window expires.</p>
     <button type="button"
-            class="btn btn-primary"
-            style="margin-top: 0.75rem;"
+            class="btn"
             hx-get="/portal/account/cancel-deletion-modal"
             hx-target="#modal-root"
             hx-swap="innerHTML">
@@ -23,12 +22,10 @@
 </div>
 {% endif %}
 
-<div class="page-header">
-    <h1>Your account</h1>
-</div>
+<h1>Your account</h1>
 
-<div class="card" style="max-width: 100%;">
-    <h2 style="margin-top: 0;">Profile</h2>
+<div class="card">
+    <h2>Profile</h2>
     <p><strong>Email:</strong> {{ user.email }}</p>
     <p><strong>Sign-in method:</strong>
         {% if user.password_hash and user.google_sub %}Password + Google
@@ -39,8 +36,9 @@
     <p><strong>Created:</strong> {{ user.created_at }}</p>
 </div>
 
-<h2 style="margin-top: 2rem;">Your agents</h2>
+<h2 class="h-pixel">Your agents</h2>
 {% if agents %}
+<div class="table-scroll">
 <table>
     <thead>
         <tr>
@@ -61,13 +59,17 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
 {% else %}
 <p class="empty">You don't have any agents registered.</p>
 {% endif %}
 
-<h2 style="margin-top: 2rem; color: var(--danger);">Danger zone</h2>
-<div class="card" style="max-width: 100%; border-color: var(--danger);">
-    <p style="margin-top: 0;">Deleting your account is irreversible after the grace period. All your agents, pairings, and sessions will be permanently removed.</p>
+<h2 class="h-pixel h-danger">Danger zone</h2>
+{# .card-danger rather than an inline border-color: site.css's .card draws its
+   boundary with an inset box-shadow and sets no `border`, so a border-color
+   override paints nothing at all. #}
+<div class="card card-danger">
+    <p>Deleting your account is irreversible after the grace period. All your agents, pairings, and sessions will be permanently removed.</p>
     {% if user.scheduled_deletion_at %}
     <p><em>Deletion is already scheduled for {{ user.scheduled_deletion_at }}.</em></p>
     {% else %}

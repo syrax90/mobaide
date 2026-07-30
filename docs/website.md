@@ -7,6 +7,12 @@ this page, `https://mobaide.com/` answered `{"detail":"Not Found"}`.
 It is served by `central_server`, not by a separate static host, so it ships and
 deploys with the relay and needs no extra infrastructure.
 
+**This doc also governs the design system itself, not just the landing page.**
+`site.css` is shared by the apex page *and* the end-user portal (`/portal/**`,
+`/privacy.html`) — see *Portal styling* below. The internal admin dashboard
+(`/dashboard/**`, `templates/base.html`) is a separate light Bootstrap-flavoured
+sheet (`static/style.css`) and is deliberately not part of this system.
+
 ## Where things live
 
 | Path | What |
@@ -14,10 +20,14 @@ deploys with the relay and needs no extra infrastructure.
 | `central_server/central_server/marketing/router.py` | Routes: `GET /`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`. Owns the response headers. |
 | `central_server/central_server/marketing/loader.py` | Renders the page + crawler files once at startup. |
 | `central_server/templates/marketing_landing.html` | **All page copy.** Edit here. |
-| `central_server/static/site/site.css` | Stylesheet (the "modern pixel" design system). |
-| `central_server/static/site/site.js` | Reveal-on-scroll + hero typewriter. |
+| `central_server/static/site/site.css` | Stylesheet (the "modern pixel" design system) — **shared by the landing page and the portal.** Owns every token, the `@font-face`, the pixel kit, `.btn`, `.card` and the `.site-head`/`.site-foot` chrome. |
+| `central_server/static/site/portal.css` | Portal-only additions: forms, alerts, tables, modals, choice fieldsets, legal-doc layout. Loaded **after** `site.css`. Declares no tokens and no `@font-face`. |
+| `central_server/templates/portal_base.html` | Portal shell — loads both sheets and carries the shared chrome markup. |
+| `central_server/static/style.css` | **Admin dashboard only.** Light sheet (`--primary: #0d6efd`, `--radius: 6px`), not part of this design system. |
+| `central_server/static/site/site.js` | Reveal-on-scroll + hero typewriter. Landing page only — the portal deliberately does not load it. |
 | `central_server/static/site/img/`, `fonts/` | Assets — see *Regenerating assets*. |
 | `central_server/tests/test_marketing.py` | Route, header, and copy-accuracy tests. |
+| `central_server/tests/test_portal_assets.py` | Portal asset stamping + the `portal.css` invariants. |
 | `central_server/central_server/static_files.py` | `CachedStaticFiles` + static-dir resolution, shared with the dashboard mount. |
 
 The page is **pre-rendered once in `create_app()`** into `app.state.marketing_html`
@@ -67,10 +77,21 @@ Set in `marketing/router.py`, **scoped to the marketing responses only**:
 - `Content-Security-Policy: default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'`
 - `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`
 
-**Do not promote this CSP to middleware.** `/portal/login` loads Google Sign-In
-from `accounts.google.com` and `portal_base.html` contains inline `<script>` and
-`style=` attributes, all of which this policy would block. Site-wide headers are
-tracked separately in CLA-171.
+**Do not promote this CSP to middleware.** The portal would break under it three
+ways:
+
+1. Google Sign-In loads its script and frames from `accounts.google.com`.
+2. Four partials ship inline `<script>`: the password-reveal delegation in
+   `portal_base.html`, the match checker in `_portal_password_with_confirm.html`,
+   and the GIS initialisers in `_portal_google_button.html` and
+   `_portal_delete_modal.html`.
+3. The two modal partials dismiss themselves through inline `onclick=`.
+
+The inline-`style=` reason is gone — the pixel restyle left exactly one
+(`_portal_password_input.html`'s `display:none`) — so (3) is the remaining hard
+blocker. The path to a portal CSP is nonce-ing the four scripts and converting
+those `onclick`s to delegated listeners. Site-wide headers are tracked separately
+in CLA-171.
 
 `/robots.txt` disallows only `/api/` and `/portal/`, with one carve-out: an
 `Allow: /portal/delete-account-info` line **emitted before the disallows**. That
@@ -97,8 +118,8 @@ tiers:
 | Path | Value | Why |
 |---|---|---|
 | `static/htmx.min.js` | `no-cache` | **Do not raise this.** `portal_base.html` pins an SRI `integrity` hash on it and the filename carries no version. If a client may reuse a cached copy without revalidating, an htmx upgrade hands it new HTML plus stale JS, the hashes disagree, and the browser blocks htmx — every portal form silently breaks until the entry expires. `no-cache` still stores and still 304s; it only forbids reuse without asking. |
-| `static/site/**` | 7 days | Versioned by a `?v=` query the template appends, so an asset edit busts them immediately. |
-| everything else | 1 hour | Referenced without a version query, so the TTL is what propagates a deploy. |
+| `static/site/**` | 7 days | Versioned by a `?v=` query the templates append, so an asset edit busts them immediately. Covers `portal.css` too — which is exactly why it lives here rather than beside `style.css`: the hash spans the whole tree, so editing it busts both sheets automatically. |
+| `static/style.css` (admin dashboard) | 1 hour | Referenced without a version query, so the TTL is what propagates a deploy. |
 
 That `?v=` value is a **content hash over the whole `static/site/` tree**
 (`marketing.loader.asset_version`), not the package version. It has to be:
@@ -108,6 +129,16 @@ assets under one version, and a repeat visitor would pair fresh HTML (5-minute
 TTL) with week-stale CSS or images. If the tree is missing the helper degrades to
 the package version rather than failing startup.
 
+It is computed once in `create_app()` and hoisted to `app.state.asset_version`,
+because **three** render paths now stamp it: `marketing.loader.render_landing` at
+startup, `portal/router.py::_portal_context`, and `legal/router.py`. All three
+must stamp the identical query — a divergent one re-keys the cache entries per
+surface, so a landing → portal navigation refetches a 7-day-cached `site.css` and
+wordmark the browser already holds. Note that the two routers use
+`Jinja2Templates`' permissive default `Undefined` (unlike `marketing/loader.py`,
+which uses `StrictUndefined`), so a forgotten context key degrades to a bare
+`?v=` **silently** rather than raising. `test_portal_assets.py` is the guard.
+
 It hashes the **whole tree**, not an enumerated file list, on purpose: an
 over-broad hash only busts a few extra URLs, whereas a list that drifts out of
 sync with the template silently reintroduces the week-stale bug for whatever it
@@ -116,11 +147,13 @@ missed — which is exactly what happened when it hashed only `site.css` and
 
 Three `static/site/` assets carry **no** `?v=` query, each deliberately:
 
-- **The font**, in both the `<link rel="preload">` and the `@font-face` `url()`.
-  Required, not an oversight: preload matching keys on the full URL including the
-  query string, and a static stylesheet cannot carry a template variable — so a
-  `?v=` on the preload alone would download the 22.5 KB font twice and defeat the
-  preload. Keep the two URLs byte-identical and rename the file if it is replaced.
+- **The font**, in **all three** places it appears: the `@font-face` `url()` in
+  `site.css`, the `<link rel="preload">` in `marketing_landing.html`, and the
+  `<link rel="preload">` in `portal_base.html`. Required, not an oversight:
+  preload matching keys on the full URL including the query string, and a static
+  stylesheet cannot carry a template variable — so a `?v=` on a preload alone
+  would download the 22.5 KB font twice and defeat the preload. Keep all three
+  URLs byte-identical and rename the file if it is replaced.
 - **`og.png`**, referenced only from `og:image` / `twitter:image` / JSON-LD. It is
   fetched by third-party scrapers, never by a visitor, and those platforms cache
   OG data in their own scrape caches independently of `Cache-Control` — so a
@@ -151,12 +184,30 @@ are `loading="lazy"` below the fold. Measure by summing the HTML plus every
 same-origin URL it references; the four WebP screenshots dominate, so that is
 where to look first if the budget is at risk.
 
+The budget covers the **landing page only**. Portal pages ship none of the
+screenshots but do add the vendored htmx bundle (~52 KB) and `portal.css`
+(~23 KB raw, ~7.6 KB gzipped — comments are only ~1 KB of that; the bulk is the
+form, table, modal and legal-document rules, in the same expanded one-property-
+per-line format as `site.css`). Every portal page is well inside 200 KB. If
+`portal.css` starts approaching `site.css`'s size, that is the signal a rule
+belongs in `site.css` instead.
+
 ## Accessibility invariants
 
 - **`--brand` (`#6008AC`) and `--brand-2` (`#6650A4`) are fill and border
   colours only.** `#6650A4` on `#1E1E1E` is ~2.6:1 and fails WCAG AA. Text uses
   `--accent` / `--text` / `--text-muted`; the worst text pair on the page is
-  4.6:1. Re-check any new pair before merging.
+  4.6:1. Re-check any new pair before merging. The portal components honour this
+  by keeping the purples structural: the checked choice-row ring, the radio's
+  checked fill, and `.h-pixel`'s underline bar.
+- **Form-control boundaries use `--gray` (`#8B8B8B`, 5.26:1 on `--bg-2`), not
+  `--rule` (`#625B71`, 2.78:1).** WCAG 1.4.11 wants 3:1 for the boundary of a UI
+  component the user has to find, and `--rule` misses it. `--rule` remains correct
+  for decorative frames and plates (`.px-frame`, `.chip`, `.alert`).
+- **`--danger` (`#F2B8B5`, 10.5:1) and `--ok` (`#23D18B`, 9.0:1)**, both measured
+  on `--bg-2`, are used as text *and* as 2px ring fills. They are light-on-dark on
+  purpose: the obvious dark alternative, a `#8C1D18` error container, measures
+  1.83:1 as a ring on `--surface` and would fail 1.4.11.
 - The wordmark keeps its light plate because it is dark purple ink drawn for a
   light background (it is lifted from the app icon).
 - All motion is gated on `prefers-reduced-motion: reduce`.
@@ -165,6 +216,51 @@ where to look first if the budget is at risk.
   path (finished, reduced-motion, no `IntersectionObserver`, or a 2.5s
   watchdog). **Never add a hidden-by-default state that only a successful
   animation can undo.**
+
+## Portal styling
+
+The end-user portal (`/portal/**` and `/privacy.html`, everything extending
+`templates/portal_base.html`) renders in this same design system, so a visitor
+crossing from the landing page into sign-in sees no seam.
+
+**Two sheets, in this order:**
+
+1. `static/site/site.css` — tokens, `@font-face`, the pixel kit, `.btn` /
+   `.btn-ghost`, `.card`, and the `.site-head` / `.site-foot` chrome.
+2. `static/site/portal.css` — only what `site.css` lacks, because the landing page
+   has no forms: inputs, labels, radios, alerts, the auth divider, the password
+   reveal, tables, choice fieldsets, modals, and the legal-document layout.
+
+**Placement rule:** a rule any dark Mobaide surface could want goes in `site.css`;
+a rule only a form or portal page wants goes in `portal.css`. `portal.css` declares
+no `:root` block and no `@font-face` — duplicating either is the drift that reusing
+`site.css` exists to prevent. `test_portal_assets.py` enforces that, the
+no-non-zero-`border-radius` rule, the brand-as-fill-only rule, and the
+`--gray` form-boundary rule.
+
+**Button vocabulary.** `style.css` and `site.css` disagree about what bare `.btn`
+means — in the old light sheet it was the *secondary* outline button, here it is
+the *filled brand* one. The portal uses:
+
+| Class | Role |
+|---|---|
+| `.btn` | Primary action (Sign in, Create account, Delete confirm-step) |
+| `.btn btn-ghost` | Secondary / Cancel / Dismiss / No |
+| `.btn btn-danger` | Destructive (Delete my account) |
+| `.btn btn-sm` | Small mono chrome action, e.g. header Sign out |
+
+There is no `.btn-primary` — reintroducing it would silently render an unstyled
+button. `.btn:disabled` is not polish: three portal submits start `disabled`, and
+without it a brand-filled button looks fully enabled.
+
+`site.js` is deliberately **not** loaded in the portal. Nothing there uses
+`[data-reveal]` or `[data-typewriter]`, and its first act is to set a `js` class
+that would arm `site.css`'s `opacity: 0` animation start-states. Without that
+class no `site.css` motion rule can ever hide portal content.
+
+`.badge*`, `.info-grid`, `.qr-*`, `.token-display`, `.search-bar`, `.user-row` and
+`.detail-row` are intentionally **not** ported: no portal template uses them, and
+they stay in `static/style.css` for the admin dashboard.
 
 ## Store badge rules
 

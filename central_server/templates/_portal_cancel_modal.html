@@ -14,13 +14,13 @@
         <form hx-post="/portal/account/cancel-deletion"
               hx-swap="none">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem">
+            <div class="btn-row btn-row-end">
                 <button type="button"
-                        class="btn"
+                        class="btn btn-ghost"
                         onclick="document.getElementById('modal-root').innerHTML=''">
                     Dismiss
                 </button>
-                <button type="submit" class="btn btn-primary">
+                <button type="submit" class="btn">
                     Keep account active
                 </button>
             </div>
