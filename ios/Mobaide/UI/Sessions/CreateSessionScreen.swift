@@ -165,12 +165,16 @@ private struct CreateSessionContent: View {
         Section("Mode") {
             ForEach(CreateSessionModel.Mode.builtIn, id: \.self) { mode in
                 Button { model.selectMode(mode) } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(model.modeTitle(mode))
-                            .foregroundStyle(model.isEnabled(mode) ? colors.primary : .secondary)
-                        Text(model.reason(for: mode))
-                            .font(.caption)
-                            .foregroundStyle(model.isEnabled(mode) ? Color.secondary : MobaideColors.warningYellow)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(model.modeTitle(mode))
+                                .foregroundStyle(model.isEnabled(mode) ? colors.primary : .secondary)
+                            Text(model.reason(for: mode))
+                                .font(.caption)
+                                .foregroundStyle(model.isEnabled(mode) ? Color.secondary : MobaideColors.warningYellow)
+                        }
+                        Spacer()
+                        modeChevron
                     }
                 }
                 .disabled(!model.isEnabled(mode))
@@ -195,6 +199,15 @@ private struct CreateSessionContent: View {
         }
     }
 
+    /// Trailing disclosure chevron: tapping a mode row commits and moves on
+    /// (the mode step has no confirm button). Not shown on "Add custom
+    /// agent…", which opens the editor rather than advancing the wizard.
+    private var modeChevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.tertiary)
+    }
+
     /// Mode card for one account-scoped custom agent type. Tap selects the
     /// mode; the context menu carries Edit/Delete (iOS affordance for
     /// Android's long-press menu). Never `.disabled` — a disabled row would
@@ -204,13 +217,17 @@ private struct CreateSessionContent: View {
         Button {
             model.selectMode(.custom(type.id))
         } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(type.name)
-                    .foregroundStyle(colors.primary)
-                Text(type.command)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(type.name)
+                        .foregroundStyle(colors.primary)
+                    Text(type.command)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                modeChevron
             }
         }
         .contextMenu {

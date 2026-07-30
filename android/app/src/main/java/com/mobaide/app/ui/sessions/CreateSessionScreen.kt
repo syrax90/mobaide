@@ -17,6 +17,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
@@ -31,6 +32,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardColors
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -193,17 +195,14 @@ fun CreateSessionScreen(
                 is ProjectSelection.Stored -> ModeHeader(
                     title = storedProject?.name ?: sel.name,
                     subtitle = storedProject?.path,
-                    showAutoScan = storedProject?.has_linear_key == true,
                 )
                 is ProjectSelection.CustomPath -> ModeHeader(
                     title = "Custom path",
                     subtitle = sel.path,
-                    showAutoScan = false,
                 )
                 ProjectSelection.None -> ModeHeader(
                     title = "",
                     subtitle = null,
-                    showAutoScan = false,
                 )
             }
 
@@ -225,22 +224,13 @@ fun CreateSessionScreen(
                     claudeEnabled = state.claudeEnabled,
                     codexEnabled = state.codexEnabled,
                     antigravityEnabled = state.antigravityEnabled,
+                    autoScanEnabled = state.autoScanEnabled,
+                    submitting = state.submitting,
                     customTypes = state.customTypes,
-                    onPickMode = viewModel::pickMode,
+                    onChooseMode = viewModel::chooseMode,
                     onAddCustomType = { viewModel.openTypeEditor(null) },
                     onEditCustomType = viewModel::openTypeEditor,
                     onDeleteCustomType = viewModel::requestDeleteType,
-                    onCommit = {
-                        when (val mode = state.selectedMode) {
-                            CreateSessionMode.Standard -> viewModel.selectStandardMode()
-                            CreateSessionMode.Codex -> viewModel.selectCodexMode()
-                            CreateSessionMode.Antigravity -> viewModel.selectAntigravityMode()
-                            CreateSessionMode.AutoScan -> viewModel.selectAutoScanMode()
-                            CreateSessionMode.CustomShell -> viewModel.selectTerminalMode()
-                            is CreateSessionMode.Custom -> viewModel.selectCustomAgentMode(mode.typeId)
-                            null -> Unit
-                        }
-                    },
                 )
                 CreateSessionStep.StandardConfig -> StandardConfigSection(
                     state = state,
@@ -617,29 +607,14 @@ private fun CustomPathPanel(
 private data class ModeHeader(
     val title: String,
     val subtitle: String?,
-    val showAutoScan: Boolean,
 )
 
-/** Continue is enabled only when the chosen mode is available (its CLI is
- *  installed, and for Auto Scan the project also has a Linear key), so a card
- *  that flipped to disabled after selection can't be committed. */
-private fun modeEnabled(
-    mode: CreateSessionMode,
-    claudeEnabled: Boolean,
-    codexEnabled: Boolean,
-    antigravityEnabled: Boolean,
-    autoScanEnabled: Boolean,
-): Boolean = when (mode) {
-    CreateSessionMode.Standard -> claudeEnabled
-    CreateSessionMode.AutoScan -> autoScanEnabled
-    CreateSessionMode.Codex -> codexEnabled
-    CreateSessionMode.Antigravity -> antigravityEnabled
-    CreateSessionMode.CustomShell -> true
-    // Custom types launch through the login shell like Terminal — no CLI
-    // probe gates them; a stale/deleted type surfaces via the create-time 404.
-    is CreateSessionMode.Custom -> true
-}
-
+/**
+ * Mode picker. There is no confirm button: a card tap commits the choice and
+ * moves the wizard on (`onChooseMode`), so each card carries a trailing chevron
+ * to read as navigation. The selected highlight survives for the return trip
+ * via Back.
+ */
 @Composable
 private fun ModePickerSection(
     header: ModeHeader,
@@ -647,12 +622,13 @@ private fun ModePickerSection(
     claudeEnabled: Boolean,
     codexEnabled: Boolean,
     antigravityEnabled: Boolean,
+    autoScanEnabled: Boolean,
+    submitting: Boolean,
     customTypes: List<CustomAgentTypeDto>,
-    onPickMode: (CreateSessionMode) -> Unit,
+    onChooseMode: (CreateSessionMode) -> Unit,
     onAddCustomType: () -> Unit,
     onEditCustomType: (CustomAgentTypeDto) -> Unit,
     onDeleteCustomType: (CustomAgentTypeDto) -> Unit,
-    onCommit: () -> Unit,
 ) {
     Text(
         text = header.title,
@@ -679,18 +655,33 @@ private fun ModePickerSection(
         containerColor = Color.Transparent,
         headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         supportingColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        leadingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        trailingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
     )
     val disabledReasonList = ListItemDefaults.colors(
         containerColor = Color.Transparent,
         headlineColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
         supportingColor = WarningYellow,
+        leadingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        trailingIconColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
     )
+    // A card the agent can't run keeps the yellow reason text; one greyed only
+    // because a launch is already in flight is plainly inert.
+    val listColorsFor: (Boolean) -> ListItemColors = { available ->
+        when {
+            !available -> disabledReasonList
+            submitting -> disabledList
+            else -> enabledList
+        }
+    }
 
     ElevatedCard(
-        onClick = { if (claudeEnabled) onPickMode(CreateSessionMode.Standard) },
-        enabled = claudeEnabled,
+        onClick = { onChooseMode(CreateSessionMode.Standard) },
+        enabled = claudeEnabled && !submitting,
         colors = if (selectedMode == CreateSessionMode.Standard) selectedColors else CardDefaults.elevatedCardColors(),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("mode_card_standard"),
     ) {
         ListItem(
             headlineContent = { Text("Claude code session") },
@@ -700,15 +691,18 @@ private fun ModePickerSection(
                     else "Claude CLI is not installed on the agent.",
                 )
             },
-            colors = if (claudeEnabled) enabledList else disabledReasonList,
+            trailingContent = { ModeChevron() },
+            colors = listColorsFor(claudeEnabled),
         )
     }
 
     ElevatedCard(
-        onClick = { if (codexEnabled) onPickMode(CreateSessionMode.Codex) },
-        enabled = codexEnabled,
+        onClick = { onChooseMode(CreateSessionMode.Codex) },
+        enabled = codexEnabled && !submitting,
         colors = if (selectedMode == CreateSessionMode.Codex) selectedColors else CardDefaults.elevatedCardColors(),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("mode_card_codex"),
     ) {
         ListItem(
             headlineContent = { Text("Codex session") },
@@ -718,15 +712,18 @@ private fun ModePickerSection(
                     else "Codex CLI is not installed on the agent.",
                 )
             },
-            colors = if (codexEnabled) enabledList else disabledReasonList,
+            trailingContent = { ModeChevron() },
+            colors = listColorsFor(codexEnabled),
         )
     }
 
     ElevatedCard(
-        onClick = { if (antigravityEnabled) onPickMode(CreateSessionMode.Antigravity) },
-        enabled = antigravityEnabled,
+        onClick = { onChooseMode(CreateSessionMode.Antigravity) },
+        enabled = antigravityEnabled && !submitting,
         colors = if (selectedMode == CreateSessionMode.Antigravity) selectedColors else CardDefaults.elevatedCardColors(),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("mode_card_antigravity"),
     ) {
         ListItem(
             headlineContent = { Text("Antigravity session") },
@@ -736,16 +733,18 @@ private fun ModePickerSection(
                     else "Antigravity CLI (agy) is not installed on the agent.",
                 )
             },
-            colors = if (antigravityEnabled) enabledList else disabledReasonList,
+            trailingContent = { ModeChevron() },
+            colors = listColorsFor(antigravityEnabled),
         )
     }
 
-    val autoScanEnabled = claudeEnabled && header.showAutoScan
     ElevatedCard(
-        onClick = { if (autoScanEnabled) onPickMode(CreateSessionMode.AutoScan) },
-        enabled = autoScanEnabled,
+        onClick = { onChooseMode(CreateSessionMode.AutoScan) },
+        enabled = autoScanEnabled && !submitting,
         colors = if (selectedMode == CreateSessionMode.AutoScan) selectedColors else CardDefaults.elevatedCardColors(),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("mode_card_autoscan"),
     ) {
         ListItem(
             headlineContent = { Text("Auto Scan mode") },
@@ -753,19 +752,23 @@ private fun ModePickerSection(
                 Text(
                     when {
                         !claudeEnabled -> "Auto Scan needs the Claude CLI, which isn't installed on the agent."
-                        !header.showAutoScan -> "Auto Scan needs a Linear API key for this project."
+                        !autoScanEnabled -> "Auto Scan needs a Linear API key for this project."
                         else -> "Scan Linear for matching issues and launch sessions."
                     },
                 )
             },
-            colors = if (autoScanEnabled) enabledList else disabledReasonList,
+            trailingContent = { ModeChevron() },
+            colors = listColorsFor(autoScanEnabled),
         )
     }
 
     ElevatedCard(
-        onClick = { onPickMode(CreateSessionMode.CustomShell) },
+        onClick = { onChooseMode(CreateSessionMode.CustomShell) },
+        enabled = !submitting,
         colors = if (selectedMode == CreateSessionMode.CustomShell) selectedColors else CardDefaults.elevatedCardColors(),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("mode_card_terminal"),
     ) {
         ListItem(
             headlineContent = { Text("Terminal") },
@@ -776,7 +779,8 @@ private fun ModePickerSection(
                     contentDescription = null,
                 )
             },
-            colors = enabledList,
+            trailingContent = { ModeChevron() },
+            colors = listColorsFor(true),
         )
     }
 
@@ -786,8 +790,8 @@ private fun ModePickerSection(
                 type = type,
                 selected = selectedMode == CreateSessionMode.Custom(type.id),
                 selectedColors = selectedColors,
-                listColors = enabledList,
-                onPick = { onPickMode(CreateSessionMode.Custom(type.id)) },
+                listColors = listColorsFor(true),
+                onPick = { onChooseMode(CreateSessionMode.Custom(type.id)) },
                 onEdit = { onEditCustomType(type) },
                 onDelete = { onDeleteCustomType(type) },
             )
@@ -798,6 +802,7 @@ private fun ModePickerSection(
     // list can be stale); the editor surfaces the server's 409 inline instead.
     ElevatedCard(
         onClick = onAddCustomType,
+        enabled = !submitting,
         modifier = Modifier
             .fillMaxWidth()
             .testTag("add_custom_type_card"),
@@ -811,23 +816,51 @@ private fun ModePickerSection(
                     contentDescription = null,
                 )
             },
-            colors = enabledList,
+            colors = listColorsFor(true),
         )
     }
 
-    Button(
-        onClick = onCommit,
-        enabled = selectedMode != null && modeEnabled(selectedMode, claudeEnabled, codexEnabled, antigravityEnabled, autoScanEnabled),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Continue")
+    // Terminal and custom agent types on a non-git target launch straight from
+    // this step, so it needs its own progress affordance — the config steps'
+    // "Creating…" button never renders on that path.
+    if (submitting) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("mode_pick_submitting"),
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+            )
+            Text(
+                text = "Creating session…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
+/** Trailing disclosure chevron: tapping a mode card commits and moves on. */
+@Composable
+private fun ModeChevron() {
+    Icon(
+        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+        contentDescription = null,
+    )
+}
+
 /**
- * Mode-picker card for one account-scoped custom agent type. Tap selects the
+ * Mode-picker card for one account-scoped custom agent type. Tap commits the
  * mode; long-press opens the Edit/Delete context menu (`ElevatedCard`'s
  * clickable overload has no long-press support, hence `combinedClickable`).
+ *
+ * The card is never disabled — that would swallow the long-press menu too. A
+ * launch already in flight is conveyed by [listColors] and enforced by
+ * `CreateSessionViewModel.chooseMode`.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -869,6 +902,7 @@ private fun CustomAgentTypeCard(
                         contentDescription = null,
                     )
                 },
+                trailingContent = { ModeChevron() },
                 colors = listColors,
             )
         }
