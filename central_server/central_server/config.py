@@ -61,6 +61,14 @@ class CentralServerConfig:
     # True registers them behind an admin session; see app._register_api_docs.
     enable_api_docs: bool = False
 
+    # CSP enforcement mode (CSP_REPORT_ONLY). False emits
+    # `Content-Security-Policy`; True emits `Content-Security-Policy-Report-Only`,
+    # which reports violations to the browser console without blocking anything.
+    # Enforcing is the default on purpose — a report-only default would mean the
+    # policy silently never protects anyone if nobody remembers to flip it. The
+    # soak is one deploy with this set; see docs/deployment.md.
+    csp_report_only: bool = False
+
     # Admin seeding (optional — only takes effect on first startup)
     admin_seed_email: str | None = None
     admin_seed_password: str | None = None
@@ -229,6 +237,7 @@ class CentralServerConfig:
             jwt_secret_key=secret,
             env=env,
             enable_api_docs=_env_bool("ENABLE_API_DOCS", False),
+            csp_report_only=_env_bool("CSP_REPORT_ONLY", False),
             admin_seed_email=os.getenv("ADMIN_SEED_EMAIL"),
             admin_seed_password=os.getenv("ADMIN_SEED_PASSWORD"),
             google_client_id=os.getenv("GOOGLE_CLIENT_ID"),

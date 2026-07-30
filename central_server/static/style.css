@@ -132,10 +132,25 @@ code { background: var(--bg); padding: 0.15rem 0.35rem; border-radius: 3px; font
 .text-muted { color: var(--text-muted); font-size: 0.85rem; }
 .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem; margin-bottom: 1rem; }
 section { margin-bottom: 2rem; }
+/* Utilities. These exist because /dashboard/* is served with `style-src 'self'`
+   and no 'unsafe-inline', so a style= attribute in a template is dropped by the
+   browser rather than merely being untidy. */
+.is-hidden { display: none; }
+.text-right { text-align: right; }
+.form-inline { display: inline; }
+/* htmx normally writes these three rules into <head> as an inline <style> at
+   init, unconditionally. base.html turns that off (`includeIndicatorStyles`)
+   because that one block is the only thing that would force 'unsafe-inline'
+   into style-src; without the rules here, a future hx-indicator would be
+   silently dead. Kept verbatim from htmx so behaviour is unchanged. */
+.htmx-indicator { opacity: 0; }
+.htmx-request .htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
+.htmx-request.htmx-indicator { opacity: 1; transition: opacity 200ms ease-in; }
 /* Users dashboard */
 .search-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
 .search-bar input { flex: 1; padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem; }
 .search-bar select { padding: 0.5rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem; background: var(--surface); color: var(--text); }
+.user-row { cursor: pointer; }
 .user-row:hover { background: var(--bg); }
 .expand-arrow { display: inline-block; transition: transform 0.15s ease; color: var(--text-muted); }
 .user-row[aria-expanded="true"] .expand-arrow { transform: rotate(90deg); }
@@ -146,6 +161,8 @@ section { margin-bottom: 2rem; }
 .modal-card { background: var(--surface); padding: 1.5rem; border-radius: var(--radius); max-width: 520px; width: 90%; max-height: 90vh; overflow: auto; }
 .modal-card h2 { margin-top: 0; }
 .modal-card code { background: var(--bg); padding: 0.15rem 0.4rem; }
+.btn-row { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.btn-row-end { justify-content: flex-end; }
 /* Auth — divider between the password form and the Google button. */
 .auth-divider { display: flex; align-items: center; gap: 0.5rem; margin: 1.25rem 0 0.5rem; color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }

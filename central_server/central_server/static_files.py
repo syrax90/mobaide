@@ -31,16 +31,30 @@ _SITE_CACHE_CONTROL = "public, max-age=604800"
 # both stamped with the content hash, which puts them in the versioned tier above.
 _DEFAULT_CACHE_CONTROL = "public, max-age=3600"
 
-# `templates/portal_base.html` loads the vendored htmx with a pinned SRI
-# `integrity` hash, and the filename carries no version or content hash. If a
-# client may reuse a cached copy WITHOUT revalidating, then an htmx upgrade —
-# which changes both the bytes and the hash in the HTML — hands that client new
-# HTML plus stale JS, the hashes disagree, and the browser blocks htmx outright:
-# every portal form silently stops working until the entry expires. `no-cache`
-# still stores the response and still gets the 304 bandwidth saving; it only
-# forbids reuse without asking, which is the property a pinned hash depends on.
+# Two unversioned filenames whose bytes must stay in lockstep with per-request
+# HTML, for different reasons:
+#
+#   * ``htmx.min.js`` — loaded by both base templates with a pinned SRI
+#     `integrity` hash. If a client may reuse a cached copy WITHOUT
+#     revalidating, an htmx upgrade — which changes both the bytes and the hash
+#     in the HTML — hands that client new HTML plus stale JS, the hashes
+#     disagree, and the browser blocks htmx outright: every form silently stops
+#     working until the entry expires.
+#   * ``dashboard.js`` — the admin dashboard's behaviour, which used to be an
+#     inline <script> in users.html and so could never drift from the markup
+#     that shipped it. It now contracts with that markup through `data-`
+#     attributes (`data-user-id`, `data-no-row-toggle`, `data-confirm-target`,
+#     `data-modal-close`). Rename one on both sides and an admin holding a
+#     cached copy gets new markup plus stale JS: rows stop expanding, modals
+#     stop dismissing, the delete-user confirm gate stops arming — with no
+#     server-side symptom. The portal's ``site/portal.js`` is immune because the
+#     whole-tree `?v=` hash busts it; this file sits at the static root and has
+#     no such query.
+#
+# `no-cache` still stores the response and still gets the 304 bandwidth saving;
+# it only forbids reuse without asking, which is the property both cases need.
 _REVALIDATE_CACHE_CONTROL = "no-cache"
-_SRI_PINNED_ASSETS = frozenset({"htmx.min.js"})
+_MUST_REVALIDATE_ASSETS = frozenset({"htmx.min.js", "dashboard.js"})
 
 _SITE_PREFIX = "site/"
 
@@ -58,7 +72,7 @@ def _cache_control_for(path: str) -> str:
     # Starlette builds ``path`` with ``os.path.join``, so normalise separators
     # before the prefix test rather than assuming POSIX.
     normalised = path.replace("\\", "/")
-    if normalised.rpartition("/")[2] in _SRI_PINNED_ASSETS:
+    if normalised.rpartition("/")[2] in _MUST_REVALIDATE_ASSETS:
         return _REVALIDATE_CACHE_CONTROL
     if normalised.startswith(_SITE_PREFIX):
         return _SITE_CACHE_CONTROL

@@ -4,8 +4,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Central Server{% endblock %}</title>
+    {# See portal_base.html for what each of these three keys is protecting;
+       they matter more here, because /dashboard/* runs under the strictest
+       policy in the app — script-src 'self', style-src 'self', nothing else. #}
+    <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
     <link rel="stylesheet" href="/static/style.css">
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    {# The vendored bundle, not unpkg: a dashboard CSP is not worth having if it
+       still has to trust a CDN with script execution on the admin surface. Same
+       file and same SRI hash portal_base.html pins — see the note there and
+       _MUST_REVALIDATE_ASSETS in static_files.py for why it must stay on
+       no-cache — which is also where dashboard.js below is held, for the
+       template-contract reason documented there. #}
+    <script src="/static/htmx.min.js"
+            integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+"
+            crossorigin="anonymous"></script>
+    {# The row toggle, modal dismissal and type-to-confirm gate the dashboard
+       templates used to ship inline. Under script-src 'self' none of those
+       inline forms executes. #}
+    <script src="/static/dashboard.js"></script>
 </head>
 <body>
     <header>
@@ -14,7 +30,7 @@
             {% if username %}
             <div class="nav-right">
                 <span class="user">{{ username }}</span>
-                <form method="post" action="/dashboard/logout" style="display:inline">
+                <form class="form-inline" method="post" action="/dashboard/logout">
                     <button type="submit" class="btn btn-sm">Logout</button>
                 </form>
             </div>

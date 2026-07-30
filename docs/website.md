@@ -71,27 +71,41 @@ Spell the products **Claude Code**, **Codex CLI**, **Antigravity CLI**.
 
 ## Response headers
 
-Set in `marketing/router.py`, **scoped to the marketing responses only**:
+`marketing/router.py` sets only `Cache-Control: public, max-age=300` on `/` (same
+rationale as `/privacy.html`) and the two crawler/favicon TTLs.
 
-- `Cache-Control: public, max-age=300` on `/` (same rationale as `/privacy.html`).
-- `Content-Security-Policy: default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'`
-- `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`
+Everything else is set site-wide by
+`central_server/central_server/security_headers.py`, which serves this router's
+paths — `/`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`, plus `/privacy.html`
+— the same policy the router used to attach per response:
 
-**Do not promote this CSP to middleware.** The portal would break under it three
-ways:
+```
+Content-Security-Policy: default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'
+X-Content-Type-Options: nosniff
+Referrer-Policy: strict-origin-when-cross-origin
+X-Frame-Options: DENY
+```
 
-1. Google Sign-In loads its script and frames from `accounts.google.com`.
-2. Four partials ship inline `<script>`: the password-reveal delegation in
-   `portal_base.html`, the match checker in `_portal_password_with_confirm.html`,
-   and the GIS initialisers in `_portal_google_button.html` and
-   `_portal_delete_modal.html`.
-3. The two modal partials dismiss themselves through inline `onclick=`.
+**This policy must not be loosened**, and on the four marketing paths it is the
+one thing `CSP_REPORT_ONLY` cannot de-enforce — they already ran it enforced in
+production, so a soak has nothing to learn from them. (`/privacy.html` shares the
+policy but not that exemption: it carried no security header before the
+middleware, so it soaks like any other new surface.) It is the strictest of the
+four policies the middleware emits, and the landing page satisfies it with no
+relaxation at all:
+its CSS and JS are external same-origin files, its icons are inline `<svg>`
+markup rather than `data:` URIs, its font is same-origin, and the JSON-LD block
+is a data block CSP does not treat as executable script. The tests in
+`central_server/tests/test_marketing.py` pin the exact header values and scan the
+rendered page for inline `<script>` and `style=`; they are what stops a copy edit
+from quietly needing `'unsafe-inline'`.
 
-The inline-`style=` reason is gone — the pixel restyle left exactly one
-(`_portal_password_input.html`'s `display:none`) — so (3) is the remaining hard
-blocker. The path to a portal CSP is nonce-ing the four scripts and converting
-those `onclick`s to delegated listeners. Site-wide headers are tracked separately
-in CLA-171.
+The portal and dashboard get their own, looser policies — see the per-surface
+table under "Security response headers" in
+[`docs/deployment.md`](deployment.md). Making that possible is why no template in
+this repo contains an inline `<script>`, an `onclick=` or an `hx-on:` any more:
+the portal's behaviour lives in `static/site/portal.js`, the dashboard's in
+`static/dashboard.js`.
 
 `/robots.txt` disallows only `/api/` and `/portal/`, with one carve-out: an
 `Allow: /portal/delete-account-info` line **emitted before the disallows**. That
@@ -117,7 +131,8 @@ tiers:
 
 | Path | Value | Why |
 |---|---|---|
-| `static/htmx.min.js` | `no-cache` | **Do not raise this.** `portal_base.html` pins an SRI `integrity` hash on it and the filename carries no version. If a client may reuse a cached copy without revalidating, an htmx upgrade hands it new HTML plus stale JS, the hashes disagree, and the browser blocks htmx — every portal form silently breaks until the entry expires. `no-cache` still stores and still 304s; it only forbids reuse without asking. |
+| `static/htmx.min.js` | `no-cache` | **Do not raise this.** Both base templates pin an SRI `integrity` hash on it and the filename carries no version. If a client may reuse a cached copy without revalidating, an htmx upgrade hands it new HTML plus stale JS, the hashes disagree, and the browser blocks htmx — every portal *and dashboard* form silently breaks until the entry expires. `no-cache` still stores and still 304s; it only forbids reuse without asking. |
+| `static/dashboard.js` | `no-cache` | **Do not raise this either**, for an unrelated reason: it contracts with the dashboard templates through `data-` attributes (`data-user-id`, `data-no-row-toggle`, `data-confirm-target`, `data-modal-close`) and the filename carries no version. Rename one on both sides and an admin holding a cached copy gets new markup plus stale JS — rows stop expanding, modals stop dismissing, the delete-user confirm gate stops arming — with no server-side symptom. `site/portal.js` needs no entry here: the tree-wide `?v=` hash below busts it. |
 | `static/site/**` | 7 days | Versioned by a `?v=` query the templates append, so an asset edit busts them immediately. Covers `portal.css` too — which is exactly why it lives here rather than beside `style.css`: the hash spans the whole tree, so editing it busts both sheets automatically. |
 | `static/style.css` (admin dashboard) | 1 hour | Referenced without a version query, so the TTL is what propagates a deploy. |
 
@@ -185,12 +200,12 @@ same-origin URL it references; the four WebP screenshots dominate, so that is
 where to look first if the budget is at risk.
 
 The budget covers the **landing page only**. Portal pages ship none of the
-screenshots but do add the vendored htmx bundle (~52 KB) and `portal.css`
-(~23 KB raw, ~7.6 KB gzipped — comments are only ~1 KB of that; the bulk is the
-form, table, modal and legal-document rules, in the same expanded one-property-
-per-line format as `site.css`). Every portal page is well inside 200 KB. If
-`portal.css` starts approaching `site.css`'s size, that is the signal a rule
-belongs in `site.css` instead.
+screenshots but do add the vendored htmx bundle (~52 KB), `portal.js` (~13 KB)
+and `portal.css` (~23 KB raw, ~7.6 KB gzipped — comments are only ~1 KB of that;
+the bulk is the form, table, modal and legal-document rules, in the same
+expanded one-property-per-line format as `site.css`). Every portal page is well
+inside 200 KB. If `portal.css` starts approaching `site.css`'s size, that is the
+signal a rule belongs in `site.css` instead.
 
 ## Accessibility invariants
 
@@ -257,6 +272,25 @@ without it a brand-filled button looks fully enabled.
 `[data-reveal]` or `[data-typewriter]`, and its first act is to set a `js` class
 that would arm `site.css`'s `opacity: 0` animation start-states. Without that
 class no `site.css` motion rule can ever hide portal content.
+
+**`static/site/portal.js`, by contrast, is loaded on every portal page.** It
+holds every behaviour the portal templates
+used to ship as an inline `<script>` or an `onclick=`: the password reveal, modal
+dismissal, the password-match indicator, the Google Sign-In bootstrap and the
+delete-account modal controller. It loads after htmx and registers its
+per-element initialisers through `htmx.onLoad`, so swapped-in fragments (the two
+modals) get wired too; each initialiser is idempotent behind a `data-*-ready`
+marker. Per-request values reach it as `data-` attributes rather than being
+spliced into JS. This is a hard requirement of the portal CSP, not a style
+preference — `script-src` there has no `'unsafe-inline'`, so inline code on these
+pages does not run at all. The same applies to the admin dashboard and
+`static/dashboard.js`.
+
+Both base templates also set `includeIndicatorStyles: false` in their
+`htmx-config` meta, because htmx otherwise injects an inline `<style>` block at
+init that would force `'unsafe-inline'` into `style-src` on every htmx page. The
+three rules it would have written are in `portal.css` and `style.css` instead —
+delete them and any future `hx-indicator` is silently dead.
 
 `.badge*`, `.info-grid`, `.qr-*`, `.token-display`, `.search-bar`, `.user-row` and
 `.detail-row` are intentionally **not** ported: no portal template uses them, and
