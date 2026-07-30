@@ -372,7 +372,7 @@ input:-webkit-autofill:active {
 /* `input.otp-input`, not `.otp-input`: input[type="text"] is (0,1,1) and would
    beat a bare class on `width`. */
 input.otp-input {
-  width: 8ch;
+  width: 12ch;
   text-align: center;
   letter-spacing: 0.3em;
   font-family: "Departure Mono", ui-monospace, monospace;
