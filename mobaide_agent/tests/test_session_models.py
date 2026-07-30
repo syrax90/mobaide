@@ -26,10 +26,10 @@ def test_skip_permissions_explicit_false_round_trips():
 
 def test_options_model_omits_skip_permissions_uses_default():
     """JSON body that does not mention skip_permissions at all must still
-    deserialize with the False default intact."""
+    deserialize with the True default intact."""
     payload = {"plan_mode": False, "no_memory": True}
     opts = ClaudeOptionsModel.model_validate(payload)
-    assert opts.skip_permissions is False
+    assert opts.skip_permissions is True
     assert opts.no_memory is True
 
 

@@ -7,7 +7,13 @@ import kotlinx.serialization.Serializable
 data class ClaudeOptionsModel(
     val plan_mode: Boolean = false,
     val no_memory: Boolean = false,
-    val skip_permissions: Boolean = false,
+    // Deliberately kept true (matching the server's wire-absence default),
+    // even though CreateSessionUiState.skipPermissions now starts false: the
+    // request builder always passes that state value explicitly, and RestApi's
+    // Json has encodeDefaults=false, so a matching default here would make the
+    // common "toggle left off" case silently omit the field — indistinguishable
+    // from an old pre-update client that never sends it at all.
+    val skip_permissions: Boolean = true,
     val initial_prompt: String? = null,
     val worktree: Boolean = false,
     val branch_name: String? = null,

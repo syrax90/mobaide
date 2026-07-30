@@ -101,7 +101,12 @@ class ClaudeOptions:
 
     plan_mode: bool = False
     no_memory: bool = False
-    skip_permissions: bool = False
+    # Stays True: this is the wire-absence fallback, not the mobile UI default
+    # (that toggle now starts off — see CreateSessionUiState.skipPermissions /
+    # CreateSessionModel.skipPermissions). Changing it here would make an
+    # agent paired with a not-yet-updated mobile client silently misread that
+    # client's omitted-because-matches-its-own-default `true` as `false`.
+    skip_permissions: bool = True
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None

@@ -17,26 +17,30 @@ def _make_project(path: str, *, key: str | None = None, conda: str | None = None
 
 @pytest.mark.asyncio
 async def test_argv_minimal_adds_bypass(tmp_path: Path):
-    """Default options no longer force bypass mode — skip_permissions defaults
-    to False, so a bare session leaves Claude's normal approval flow intact.
-    The default effort is ``high`` (the CLI default), so no ``--effort`` flag."""
+    """Default options force bypass mode — the mobile client cannot mediate
+    approval dialogs, so a session with no explicit choice always skips
+    permissions at the wire/launch layer (the mobile UI's own toggle starts
+    off, but always sends its choice explicitly — see the ClaudeOptionsModel
+    comments on both platforms). The default effort is ``high`` (the CLI
+    default), so no ``--effort`` flag."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)), ClaudeOptions()
     )
     assert spec.argv == [
         "claude", "--debug",
+        "--dangerously-skip-permissions",
     ]
 
 
 @pytest.mark.asyncio
-async def test_argv_plan_mode_with_skip_permissions_enabled(tmp_path: Path):
-    """When plan_mode is on and skip_permissions is explicitly True, both
-    --permission-mode plan and --allow-dangerously-skip-permissions are passed."""
+async def test_argv_plan_mode_with_default_skip_permissions(tmp_path: Path):
+    """When plan_mode is on and skip_permissions is True (the default),
+    both --permission-mode plan and --allow-dangerously-skip-permissions are passed."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)),
-        ClaudeOptions(plan_mode=True, skip_permissions=True),
+        ClaudeOptions(plan_mode=True),
     )
     assert spec.argv == [
         "claude", "--debug",
@@ -94,7 +98,6 @@ async def test_argv_all_flags(tmp_path: Path):
         ClaudeOptions(
             plan_mode=True,
             no_memory=True,
-            skip_permissions=True,
             model="opus",
             effort="xhigh",
             append_system_prompt="be terse",

@@ -617,6 +617,37 @@ class TestProcessIssueForwardsClientOptions:
         )
 
     @pytest.mark.asyncio
+    async def test_process_issue_forces_skip_permissions_true_even_if_client_disables_it(
+        self, tmp_path,
+    ):
+        """Auto Scan's build() call carries no session_id, so it never gets the
+        permission-attention hooks a live terminal relies on — an unattended
+        scan that hit a real approval prompt would hang forever. The scanner
+        must force bypass mode regardless of what the client submitted."""
+        from mobaide.core.claude_launcher import ClaudeOptions
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
+
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+        inst._client_options = ClaudeOptions(skip_permissions=False)
+
+        await inst._process_issue(_make_issue(issue_id="uuid-noskip", identifier="CLA-NOSKIP"))
+
+        call = launcher.build.await_args
+        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
+        assert forwarded.skip_permissions is True
+
+    @pytest.mark.asyncio
     async def test_process_issue_uses_project_prompt_when_no_client_prompt(
         self, tmp_path,
     ):

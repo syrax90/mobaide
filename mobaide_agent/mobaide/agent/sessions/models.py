@@ -23,7 +23,11 @@ class ClaudeOptionsModel(BaseModel):
 
     plan_mode: bool = False
     no_memory: bool = False
-    skip_permissions: bool = False
+    # See the matching comment on core.claude_launcher.ClaudeOptions: this
+    # wire-absence default intentionally stays True even though the mobile
+    # UI's own toggle now starts off, to keep old-client/new-agent pairings
+    # (and vice versa) from silently flipping an omitted field's meaning.
+    skip_permissions: bool = True
     initial_prompt: str | None = None
     worktree: bool = False
     branch_name: str | None = None
