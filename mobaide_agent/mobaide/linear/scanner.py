@@ -405,6 +405,13 @@ class AutoScanInstance:
                 else (project.auto_scan_prompt or self._config.auto_scan_prompt)
             ),
             worktree=True,
+            # Auto Scan always forces bypass: this build() call runs with no
+            # session_id, so _maybe_write_hooks never installs the permission-
+            # attention hooks a live terminal relies on. Honouring skip_permissions
+            # =False here (whether it's the client's default or an explicit
+            # choice) would hang the scan at the first protected tool call with
+            # no one able to approve it.
+            skip_permissions=True,
         )
 
         self._emit_issue(issue, "worktree_create", "started")

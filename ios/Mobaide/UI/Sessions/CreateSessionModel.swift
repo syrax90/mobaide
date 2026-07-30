@@ -113,7 +113,7 @@ final class CreateSessionModel {
     var claudeFastMode = false
     var claudeUltracode = false
     var claudeAppendSystemPrompt = ""
-    var skipPermissions = true
+    var skipPermissions = false
     var noMemory = false
 
     // Codex

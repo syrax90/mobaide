@@ -110,7 +110,7 @@ data class CreateSessionUiState(
     val antigravityModels: List<String>? = null,
     val planMode: Boolean = false,
     val noMemory: Boolean = false,
-    val skipPermissions: Boolean = true,
+    val skipPermissions: Boolean = false,
     // Claude reasoning controls (replace the old boolean "Max effort"). model is
     // a curated alias or null (account default); effort "high" == omit the flag.
     val claudeModel: String? = null,
@@ -603,7 +603,12 @@ class CreateSessionViewModel @Inject constructor(
                 val options = ClaudeOptionsModel(
                     plan_mode = state.planMode,
                     no_memory = state.noMemory,
-                    skip_permissions = state.skipPermissions,
+                    // Always true, regardless of the toggle: Auto Scan sessions run
+                    // unattended (no session_id, no attention hooks), so there is no
+                    // way to honour a request for approval prompts — the agent forces
+                    // this too (linear/scanner.py), but the client must not display or
+                    // send a value it can't actually deliver on.
+                    skip_permissions = true,
                     model = state.claudeModel,
                     effort = state.claudeEffort,
                     fast_mode = state.claudeFastMode,

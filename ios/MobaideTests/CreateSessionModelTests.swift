@@ -83,7 +83,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.codex_options)
         XCTAssertNil(request.antigravity_options)
         XCTAssertEqual(request.claude_options?.effort, "high", "wizard state default differs from DTO nil default")
-        XCTAssertEqual(request.claude_options?.skip_permissions, true)
+        XCTAssertEqual(request.claude_options?.skip_permissions, false)
         XCTAssertEqual(request.claude_options?.worktree, false)
     }
 

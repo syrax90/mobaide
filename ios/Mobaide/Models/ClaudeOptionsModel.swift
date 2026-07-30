@@ -18,6 +18,9 @@ struct ClaudeOptionsModel: Codable, Equatable, Sendable {
     init(
         plan_mode: Bool = false,
         no_memory: Bool = false,
+        // Kept true, matching the server's wire-absence default — the mobile
+        // UI's own toggle (CreateSessionModel.skipPermissions) is what starts
+        // off; see the matching comment on Android's ClaudeOptionsModel.kt.
         skip_permissions: Bool = true,
         initial_prompt: String? = nil,
         worktree: Bool = false,

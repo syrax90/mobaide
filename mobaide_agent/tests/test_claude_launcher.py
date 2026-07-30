@@ -18,8 +18,11 @@ def _make_project(path: str, *, key: str | None = None, conda: str | None = None
 @pytest.mark.asyncio
 async def test_argv_minimal_adds_bypass(tmp_path: Path):
     """Default options force bypass mode — the mobile client cannot mediate
-    approval dialogs, so sessions always start with permissions skipped. The
-    default effort is ``high`` (the CLI default), so no ``--effort`` flag."""
+    approval dialogs, so a session with no explicit choice always skips
+    permissions at the wire/launch layer (the mobile UI's own toggle starts
+    off, but always sends its choice explicitly — see the ClaudeOptionsModel
+    comments on both platforms). The default effort is ``high`` (the CLI
+    default), so no ``--effort`` flag."""
     launcher = ClaudeLauncher()
     spec = await launcher.build(
         _make_project(str(tmp_path)), ClaudeOptions()
