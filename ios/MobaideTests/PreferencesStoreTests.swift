@@ -55,6 +55,25 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertNil(store.getLastUsedClaudeOptions())
     }
 
+    func testClaudeLaunchPrefsRoundTripSkipPermissionsAndNoMemory() {
+        store.setLastUsedClaudeOptions(ClaudeLaunchPrefs(skipPermissions: true, noMemory: true))
+        let saved = store.getLastUsedClaudeOptions()
+        XCTAssertEqual(saved?.skipPermissions, true)
+        XCTAssertEqual(saved?.noMemory, true)
+
+        // A blob persisted before the toggle fields existed must decode and
+        // materialize them false — not fail and reset every other pref.
+        defaults.set(
+            #"{"model":"opus","effort":"max","fastMode":true,"ultracode":false,"appendSystemPrompt":"sys"}"#,
+            forKey: PreferencesStore.keyLastUsedClaudeOptions
+        )
+        let legacy = store.getLastUsedClaudeOptions()
+        XCTAssertEqual(legacy?.model, "opus")
+        XCTAssertEqual(legacy?.fastMode, true)
+        XCTAssertEqual(legacy?.skipPermissions, false)
+        XCTAssertEqual(legacy?.noMemory, false)
+    }
+
     func testDynamicKeysUseDoubleColonSeparator() {
         XCTAssertEqual(PreferencesStore.linearLabelsKey(projectName: "p"), "linear_labels::p")
         XCTAssertEqual(PreferencesStore.linearStatesKey(projectName: "p"), "linear_states::p")

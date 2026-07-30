@@ -23,6 +23,7 @@ class PreferencesStore(private val context: Context) {
     private val keyLastClaudeOptions = stringPreferencesKey("last_used_claude_options")
     private val keyLastCodexOptions = stringPreferencesKey("last_used_codex_options")
     private val keyLastAntigravityOptions = stringPreferencesKey("last_used_antigravity_options")
+    private val keyLastAutoScanOptions = stringPreferencesKey("last_used_auto_scan_options")
     private val keyTerminalDisplayMode = stringPreferencesKey("terminal_display_mode")
     private val keyTerminalStaticColumns = intPreferencesKey("terminal_static_columns")
 
@@ -93,6 +94,21 @@ class PreferencesStore(private val context: Context) {
     suspend fun setLastUsedClaudeOptions(prefs: ClaudeLaunchPrefs) {
         val payload = cacheJson.encodeToString(ClaudeLaunchPrefs.serializer(), prefs)
         context.dataStore.edit { it[keyLastClaudeOptions] = payload }
+    }
+
+    // Auto Scan reuses the ClaudeLaunchPrefs shape but persists under its own
+    // key, so scan choices never pre-fill the Claude Code sheet (or vice versa).
+    suspend fun getLastUsedAutoScanOptions(): ClaudeLaunchPrefs? {
+        val raw = context.dataStore.data.map { it[keyLastAutoScanOptions] }.first()
+            ?: return null
+        return runCatching {
+            cacheJson.decodeFromString(ClaudeLaunchPrefs.serializer(), raw)
+        }.getOrNull()
+    }
+
+    suspend fun setLastUsedAutoScanOptions(prefs: ClaudeLaunchPrefs) {
+        val payload = cacheJson.encodeToString(ClaudeLaunchPrefs.serializer(), prefs)
+        context.dataStore.edit { it[keyLastAutoScanOptions] = payload }
     }
 
     suspend fun getLastUsedCodexOptions(): CodexLaunchPrefs? {

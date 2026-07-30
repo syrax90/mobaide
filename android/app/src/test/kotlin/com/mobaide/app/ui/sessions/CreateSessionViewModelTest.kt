@@ -103,6 +103,8 @@ class CreateSessionViewModelTest {
         coEvery { prefs.setLastUsedSessionId(any()) } just Runs
         coEvery { prefs.getLastUsedClaudeOptions() } returns null
         coEvery { prefs.setLastUsedClaudeOptions(any()) } just Runs
+        coEvery { prefs.getLastUsedAutoScanOptions() } returns null
+        coEvery { prefs.setLastUsedAutoScanOptions(any()) } just Runs
         coEvery { prefs.getLastUsedCodexOptions() } returns null
         coEvery { prefs.setLastUsedCodexOptions(any()) } just Runs
         coEvery { prefs.getLastUsedAntigravityOptions() } returns null
@@ -282,6 +284,8 @@ class CreateSessionViewModelTest {
         vm.setClaudeEffort("max")
         vm.setClaudeAppendSystemPrompt("be terse")
         vm.toggleClaudeUltracode(true)
+        vm.toggleSkipPermissions(true)
+        vm.toggleNoMemory(true)
         vm.submit()
         advanceUntilIdle()
 
@@ -291,11 +295,14 @@ class CreateSessionViewModelTest {
         assertEquals("max", opts.effort)
         assertTrue(opts.ultracode)
         assertEquals("be terse", opts.append_system_prompt)
-        // The same selections are persisted for the next launch.
+        // The same selections are persisted for the next launch — including
+        // the skip-permissions / no-memory toggles that used to reset.
         assertEquals("opus", prefsSlot.captured.model)
         assertEquals("max", prefsSlot.captured.effort)
         assertTrue(prefsSlot.captured.ultracode)
         assertEquals("be terse", prefsSlot.captured.appendSystemPrompt)
+        assertTrue(prefsSlot.captured.skipPermissions)
+        assertTrue(prefsSlot.captured.noMemory)
     }
 
     @Test
@@ -329,7 +336,13 @@ class CreateSessionViewModelTest {
     fun init_seedsClaudeControlsFromPersistedPrefs() = runTest {
         val fx = newFixture()
         coEvery { fx.prefs.getLastUsedClaudeOptions() } returns
-            ClaudeLaunchPrefs(model = "fable", effort = "xhigh", ultracode = true)
+            ClaudeLaunchPrefs(
+                model = "fable",
+                effort = "xhigh",
+                ultracode = true,
+                skipPermissions = true,
+                noMemory = true,
+            )
         val vm = fx.buildVm()
         advanceUntilIdle()
 
@@ -337,6 +350,53 @@ class CreateSessionViewModelTest {
         assertEquals("fable", s.claudeModel)
         assertEquals("xhigh", s.claudeEffort)
         assertTrue(s.claudeUltracode)
+        assertTrue(s.skipPermissions)
+        assertTrue(s.noMemory)
+    }
+
+    @Test
+    fun init_seedsAutoScanControlsFromPersistedPrefs() = runTest {
+        // The Auto Scan bucket seeds only the autoScan* fields — the Standard
+        // Claude controls keep their own defaults (per-kind isolation).
+        val fx = newFixture()
+        coEvery { fx.prefs.getLastUsedAutoScanOptions() } returns
+            ClaudeLaunchPrefs(
+                model = "sonnet",
+                effort = "low",
+                appendSystemPrompt = "scan sys",
+                skipPermissions = false,
+                noMemory = true,
+                planMode = true,
+            )
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertEquals("sonnet", s.autoScanClaudeModel)
+        assertEquals("low", s.autoScanClaudeEffort)
+        assertEquals("scan sys", s.autoScanClaudeAppendSystemPrompt)
+        assertFalse("a saved OFF choice must override the ON default", s.autoScanSkipPermissions)
+        assertTrue(s.autoScanNoMemory)
+        assertTrue(s.autoScanPlanMode)
+        // No bleed into the Standard Claude controls.
+        assertNull(s.claudeModel)
+        assertEquals("high", s.claudeEffort)
+        assertFalse(s.skipPermissions)
+        assertFalse(s.noMemory)
+    }
+
+    @Test
+    fun init_noSavedAutoScanPrefs_skipPermissionsDefaultsOn() = runTest {
+        // Unattended scans default to bypass; the compile-time state default
+        // applies when nothing was ever persisted for the Auto Scan bucket.
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val s = vm.uiState.value
+        assertTrue(s.autoScanSkipPermissions)
+        // The Standard toggle stays off-by-default — asymmetric on purpose.
+        assertFalse(s.skipPermissions)
     }
 
     @Test
@@ -422,9 +482,29 @@ class CreateSessionViewModelTest {
 
         val s = vm.uiState.value
         assertEquals(CreateSessionStep.AutoScanConfig, s.step)
-        assertTrue("AutoScan preset must enable worktree", s.worktree)
+        assertTrue("Auto Scan skip-permissions defaults ON", s.autoScanSkipPermissions)
         assertEquals("scan everything", s.initialPrompt)
         assertEquals("alpha", s.autoScanConfigInitializedFor)
+    }
+
+    @Test
+    fun selectAutoScanMode_thenGoBack_leavesSharedWorktreeUntouched() = runTest {
+        // Regression guard for the worktree-bleed: entering AutoScan config
+        // must not flip the shared worktree flag that Standard mode reads —
+        // the Auto Scan request hardcodes worktree=true on its own.
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        vm.goBack()
+
+        assertFalse(
+            "bouncing through AutoScan config must not leave worktree forced on",
+            vm.uiState.value.worktree,
+        )
     }
 
     @Test
@@ -437,13 +517,13 @@ class CreateSessionViewModelTest {
         vm.confirmProject()
         vm.selectAutoScanMode() // seeds defaults
         vm.setInitialPrompt("user edit")
-        vm.toggleNoMemory(true)
+        vm.toggleAutoScanNoMemory(true)
         vm.goBack()
         vm.selectAutoScanMode() // same project → must NOT re-seed (preserve edits)
 
         val s = vm.uiState.value
         assertEquals("user edit", s.initialPrompt)
-        assertTrue(s.noMemory)
+        assertTrue(s.autoScanNoMemory)
     }
 
     @Test
@@ -535,7 +615,7 @@ class CreateSessionViewModelTest {
 
         vm.selectProject("alpha")
         vm.confirmProject()
-        vm.selectAutoScanMode() // seeds worktree=true, initialPrompt="seed"
+        vm.selectAutoScanMode() // seeds initialPrompt="seed"; request hardcodes worktree=true
 
         vm.navigateToAutoScan.test {
             vm.submitAutoScan()
@@ -547,8 +627,8 @@ class CreateSessionViewModelTest {
 
         val opts = optsSlot.captured
         assertTrue(
-            "Auto Scan always forces skip_permissions=true — it runs unattended " +
-                "and can't honour a request for approval prompts",
+            "with nothing persisted, Auto Scan skip_permissions defaults ON " +
+                "(unattended scans) — the live toggle can turn it off per scan",
             opts.skip_permissions,
         )
         assertEquals("Auto Scan effort defaults to high", "high", opts.effort)
@@ -557,12 +637,43 @@ class CreateSessionViewModelTest {
         assertNull(opts.branch_name)
         assertEquals("seed", opts.initial_prompt)
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
-        coVerify(exactly = 1) { fx.prefs.setLastUsedClaudeOptions(any()) }
+        // Auto Scan persists into its own bucket, never the Claude Code one.
+        coVerify(exactly = 1) { fx.prefs.setLastUsedAutoScanOptions(any()) }
+        coVerify(exactly = 0) { fx.prefs.setLastUsedClaudeOptions(any()) }
         assertFalse(vm.uiState.value.autoScanStarting)
     }
 
     @Test
-    fun submitAutoScan_ignoresSkipPermissionsToggle_alwaysSendsTrue() = runTest {
+    fun submitAutoScan_skipPermissionsOff_sendsFalse_andPersistsIt() = runTest {
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val optsSlot = slot<ClaudeOptionsModel>()
+        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
+        val prefsSlot = slot<ClaudeLaunchPrefs>()
+        coEvery { fx.prefs.setLastUsedAutoScanOptions(capture(prefsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        vm.toggleAutoScanSkipPermissions(false)
+        vm.toggleAutoScanPlanMode(true)
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertFalse(
+            "the toggle is live now — the agent installs attention hooks, so " +
+                "an OFF choice must reach the wire instead of being forced true",
+            optsSlot.captured.skip_permissions,
+        )
+        assertTrue(optsSlot.captured.plan_mode)
+        assertFalse(prefsSlot.captured.skipPermissions)
+        assertTrue(prefsSlot.captured.planMode)
+    }
+
+    @Test
+    fun submitAutoScan_standardSkipPermissionsToggle_doesNotLeakIntoRequest() = runTest {
         val fx = newFixture(autoScanPrompt = "seed")
         val vm = fx.buildVm()
         advanceUntilIdle()
@@ -573,13 +684,13 @@ class CreateSessionViewModelTest {
         vm.selectProject("alpha")
         vm.confirmProject()
         vm.selectAutoScanMode()
-        vm.toggleSkipPermissions(false) // e.g. carried over from Standard mode's own toggle
+        vm.toggleSkipPermissions(false) // the STANDARD toggle, a different kind
         vm.submitAutoScan()
         advanceUntilIdle()
 
         assertTrue(
-            "the Auto Scan config screen no longer exposes an interactive toggle for " +
-                "this — whatever state.skipPermissions holds must not leak into the request",
+            "Auto Scan reads its own autoScanSkipPermissions (still the ON " +
+                "default) — Standard-mode edits must not bleed across kinds",
             optsSlot.captured.skip_permissions,
         )
     }
@@ -596,13 +707,62 @@ class CreateSessionViewModelTest {
         vm.selectProject("alpha")
         vm.confirmProject()
         vm.selectAutoScanMode()
-        vm.setClaudeModel("opus")
-        vm.setClaudeEffort("xhigh")
+        vm.setAutoScanClaudeModel("opus")
+        vm.setAutoScanClaudeEffort("xhigh")
         vm.submitAutoScan()
         advanceUntilIdle()
 
         assertEquals("opus", optsSlot.captured.model)
         assertEquals("xhigh", optsSlot.captured.effort)
+    }
+
+    @Test
+    fun standardAndAutoScanClaudeControls_areIsolated() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setClaudeModel("haiku")
+        vm.setAutoScanClaudeModel("opus")
+        vm.setAutoScanClaudeEffort("xhigh")
+        vm.toggleNoMemory(true)
+
+        val s = vm.uiState.value
+        assertEquals("haiku", s.claudeModel)
+        assertEquals("opus", s.autoScanClaudeModel)
+        assertEquals("xhigh", s.autoScanClaudeEffort)
+        assertEquals("Standard effort untouched by the autoScan setter", "high", s.claudeEffort)
+        assertTrue(s.noMemory)
+        assertFalse("Standard no-memory must not flip the autoScan copy", s.autoScanNoMemory)
+    }
+
+    @Test
+    fun toggleAutoScanClaudeFastMode_locksModelToOpus() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setAutoScanClaudeModel("sonnet")
+        vm.toggleAutoScanClaudeFastMode(true)
+
+        val s = vm.uiState.value
+        assertEquals("opus", s.autoScanClaudeModel)
+        assertTrue(s.autoScanClaudeFastMode)
+        assertNull("the Standard model stays untouched", s.claudeModel)
+    }
+
+    @Test
+    fun setAutoScanClaudeModel_toNonXhighModel_clampsEffortToHigh() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        vm.setAutoScanClaudeModel("opus")
+        vm.setAutoScanClaudeEffort("max")
+        // haiku doesn't support xhigh/max, so the invalid level must clamp.
+        vm.setAutoScanClaudeModel("haiku")
+
+        assertEquals("high", vm.uiState.value.autoScanClaudeEffort)
     }
 
     @Test

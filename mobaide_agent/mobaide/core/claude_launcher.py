@@ -34,7 +34,7 @@ from .cli_launcher import (
 # Re-exported (explicit ``as`` alias) only so ``test_claude_resolver`` can
 # reference ``claude_launcher._nvm_version_key`` directly.
 from .cli_launcher import _nvm_version_key as _nvm_version_key
-from .hook_settings import write_session_hooks
+from .hook_settings import remove_session_hooks, write_session_hooks
 from .projects_config import ProjectConfig
 from .projects_store import safe_path_exists
 
@@ -166,9 +166,10 @@ class ClaudeLauncher:
         self._worktree_mgr: WorktreeManager | None = worktree_mgr
         self._claude_bin_override = claude_bin_override
         self._resolved_binary: str | None = None
-        # When both are set, interactive sessions (those built with a
-        # ``session_id``) get a per-session ``--settings`` file wiring Claude
-        # Code attention hooks back to the agent's ``/internal/hook`` endpoint.
+        # When both are set, sessions built with a ``session_id`` (interactive
+        # and Auto Scan alike) get a per-session ``--settings`` file wiring
+        # Claude Code attention hooks back to the agent's ``/internal/hook``
+        # endpoint.
         self._hook_port = hook_port
         self._hook_token = hook_token
 
@@ -195,15 +196,26 @@ class ClaudeLauncher:
         # missing CLI would leak an orphan worktree directory on every
         # scan cycle.
         #
-        # ``session_id`` is supplied only by the interactive/ad-hoc create path
-        # (``SessionManager``); the Auto Scan scanner omits it, so autonomous
-        # sessions never get attention hooks and never raise notifications.
+        # ``session_id`` is supplied by both the interactive/ad-hoc create path
+        # (``SessionManager``) and the Auto Scan scanner; whenever the launcher
+        # is hook-capable the session gets attention hooks and can raise
+        # notifications.
         cli_settings = self._cli_settings(options)
         hooks_path = self._maybe_write_hooks(session_id, cli_settings)
-        argv = self._build_argv(options, hooks_path, cli_settings)
-        cwd = await self._resolve_cwd(target, options)
-        env = self._build_env(target, options, session_id)
-        created = self._write_project_files(target, cwd)
+        try:
+            argv = self._build_argv(options, hooks_path, cli_settings)
+            cwd = await self._resolve_cwd(target, options)
+            env = self._build_env(target, options, session_id)
+            created = self._write_project_files(target, cwd)
+        except BaseException:
+            # A build that dies after the hooks write (missing CLI binary,
+            # worktree failure) must not orphan the settings file — the
+            # ``SessionEnd`` hook that normally deletes it will never fire
+            # for a session that never spawned. (session_id check is type
+            # narrowing only: a written hooks_path implies a truthy id.)
+            if hooks_path is not None and session_id is not None:
+                self.discard_session_hooks(session_id)
+            raise
         if hooks_path is not None:
             created.append(str(hooks_path))
         return LaunchSpec(argv=argv, cwd=cwd, env=env, created_files=created)
@@ -230,9 +242,9 @@ class ClaudeLauncher:
         ``extra`` (the fast-mode / ultracode ``--settings`` keys) is merged into
         the same file so the launch needs only one ``--settings`` flag. Returns
         the file path, or ``None`` when hooks are not configured (no
-        ``session_id``, or the launcher was built without a hook port/token —
-        e.g. the scanner) or the write failed (a hookless session still runs; the
-        caller then emits ``extra`` as an inline ``--settings``).
+        ``session_id``, or the launcher was built without a hook port/token)
+        or the write failed (a hookless session still runs; the caller then
+        emits ``extra`` as an inline ``--settings``).
         """
         if not session_id or self._hook_port is None or not self._hook_token:
             return None
@@ -247,6 +259,17 @@ class ClaudeLauncher:
                 exc_info=True,
             )
             return None
+
+    def discard_session_hooks(self, session_id: str) -> None:
+        """Best-effort removal of a session's hooks settings file.
+
+        For callers that build a spec but fail to spawn the session (e.g. the
+        Auto Scan scanner): the ``SessionEnd`` hook that normally deletes the
+        file never fires for a session that never started.
+        """
+        if self._hook_port is None:
+            return
+        remove_session_hooks(session_id, self._hook_port)
 
     def _build_argv(
         self,

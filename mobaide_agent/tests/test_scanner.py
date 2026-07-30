@@ -7,6 +7,7 @@ Mocks the Linear client, worktree manager, and session manager.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -617,13 +618,13 @@ class TestProcessIssueForwardsClientOptions:
         )
 
     @pytest.mark.asyncio
-    async def test_process_issue_forces_skip_permissions_true_even_if_client_disables_it(
+    async def test_process_issue_honors_client_skip_permissions_false(
         self, tmp_path,
     ):
-        """Auto Scan's build() call carries no session_id, so it never gets the
-        permission-attention hooks a live terminal relies on — an unattended
-        scan that hit a real approval prompt would hang forever. The scanner
-        must force bypass mode regardless of what the client submitted."""
+        """The scanner no longer forces bypass: every build carries a
+        ``session_id``, so attention hooks install and a non-bypass session
+        raises ``awaiting_permission`` instead of hanging unattended. The
+        client's explicit ``skip_permissions=False`` must reach the launcher."""
         from mobaide.core.claude_launcher import ClaudeOptions
 
         client = AsyncMock()
@@ -645,7 +646,69 @@ class TestProcessIssueForwardsClientOptions:
 
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
+        assert forwarded.skip_permissions is False
+        # The enabling half of the contract: a session_id was pre-minted and
+        # handed to build(), so the launcher can install attention hooks.
+        session_id = call.kwargs["session_id"]
+        assert re.fullmatch(r"[0-9a-f]{12}", session_id)
+
+    @pytest.mark.asyncio
+    async def test_process_issue_no_client_options_still_bypasses(
+        self, tmp_path,
+    ):
+        """An optionless start (no mobile client submitted preferences) must
+        keep the unattended-scan default: ``skip_permissions=True`` via the
+        ``ClaudeOptions`` wire-absence default, not a scanner-side force."""
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
+
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+        assert inst._client_options is None
+
+        await inst._process_issue(_make_issue(issue_id="uuid-bypass", identifier="CLA-BYPASS"))
+
+        call = launcher.build.await_args
+        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
         assert forwarded.skip_permissions is True
+
+    @pytest.mark.asyncio
+    async def test_process_issue_forces_worktree_true_even_if_client_disables_it(
+        self, tmp_path,
+    ):
+        """Worktree isolation stays forced per issue — unlike skip_permissions
+        it is not the client's choice, because concurrent scans in the project
+        root would trample each other."""
+        from mobaide.core.claude_launcher import ClaudeOptions
+
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
+
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+        inst._client_options = ClaudeOptions(worktree=False)
+
+        await inst._process_issue(_make_issue(issue_id="uuid-nowt", identifier="CLA-NOWT"))
+
+        call = launcher.build.await_args
+        forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
+        assert forwarded.worktree is True
 
     @pytest.mark.asyncio
     async def test_process_issue_uses_project_prompt_when_no_client_prompt(
@@ -728,6 +791,95 @@ class TestProcessIssueForwardsClientOptions:
         call = launcher.build.await_args
         forwarded = call.args[1] if len(call.args) > 1 else call.kwargs["options"]
         assert forwarded.initial_prompt == "PER SCAN PROMPT"
+
+
+class TestProcessIssueSessionIdLifecycle:
+    """The scanner now pre-mints one ``session_id`` per issue BEFORE
+    ``launcher.build``: the same id must reach the build call (so
+    attention hooks install), the ``SessionConfig`` handed to
+    ``create_session``, and the emitted ``session`` ScanEvent. When the spawn
+    fails after a successful build, the scanner must discard the now-orphaned
+    hooks settings file via ``launcher.discard_session_hooks``."""
+
+    @staticmethod
+    def _spawn_fixture(tmp_path):
+        client = AsyncMock()
+        client.update_issue_state.return_value = True
+        client.remove_issue_label.return_value = True
+
+        sess_mgr = AsyncMock()
+        sess_mgr.create_session.return_value = MagicMock(pid=1)
+
+        launcher = _launcher_with_worktree(str(tmp_path / "worktree"))
+        # Production ``discard_session_hooks`` is synchronous — keep the stub
+        # sync too so a call from the scanner doesn't leave an unawaited
+        # coroutine behind.
+        launcher.discard_session_hooks = MagicMock()
+        return client, sess_mgr, launcher
+
+    @pytest.mark.asyncio
+    async def test_preminted_session_id_reaches_build_config_and_event(self, tmp_path):
+        from mobaide.core.models import SessionConfig
+
+        client, sess_mgr, launcher = self._spawn_fixture(tmp_path)
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+
+        await inst._process_issue(_make_issue(issue_id="uuid-sid", identifier="CLA-SID"))
+
+        build_call = launcher.build.await_args
+        session_id = build_call.kwargs["session_id"]
+        assert re.fullmatch(r"[0-9a-f]{12}", session_id)
+
+        spawn_call = sess_mgr.create_session.await_args
+        config: SessionConfig = (
+            spawn_call.args[0] if spawn_call.args else spawn_call.kwargs["config"]
+        )
+        assert config.session_id == session_id
+
+        session_events = [e for e in inst._recent_events if e.type == "session"]
+        assert len(session_events) == 1
+        assert session_events[0].payload["session_id"] == session_id
+
+        # Successful spawn: the hooks file stays (SessionEnd deletes it later).
+        launcher.discard_session_hooks.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_two_issues_get_distinct_session_ids(self, tmp_path):
+        client, sess_mgr, launcher = self._spawn_fixture(tmp_path)
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+
+        await inst._process_issue(_make_issue(issue_id="uuid-a", identifier="CLA-A"))
+        await inst._process_issue(_make_issue(issue_id="uuid-b", identifier="CLA-B"))
+
+        ids = [c.kwargs["session_id"] for c in launcher.build.await_args_list]
+        assert len(ids) == 2
+        assert ids[0] != ids[1]
+
+    @pytest.mark.asyncio
+    async def test_spawn_failure_discards_session_hooks(self, tmp_path):
+        client, sess_mgr, launcher = self._spawn_fixture(tmp_path)
+        sess_mgr.create_session.side_effect = RuntimeError("spawn fail")
+        inst = _make_instance(
+            tmp_path, client=client,
+            session_manager=sess_mgr, launcher=launcher,
+        )
+
+        await inst._process_issue(_make_issue(issue_id="uuid-df", identifier="CLA-DF"))
+
+        session_id = launcher.build.await_args.kwargs["session_id"]
+        launcher.discard_session_hooks.assert_called_once_with(session_id)
+        steps = [
+            (e.payload["step"], e.payload["status"])
+            for e in inst._recent_events
+            if e.type == "issue"
+        ]
+        assert ("session_spawn", "failed") in steps
 
 
 class TestWorktreeCleanup:

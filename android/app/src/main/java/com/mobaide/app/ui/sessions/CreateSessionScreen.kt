@@ -942,7 +942,18 @@ private fun StandardConfigSection(
     showWorktreeToggle: Boolean,
     viewModel: CreateSessionViewModel,
 ) {
-    ClaudeOptionControls(state, viewModel)
+    ClaudeOptionControls(
+        model = state.claudeModel,
+        effort = state.claudeEffort,
+        fastMode = state.claudeFastMode,
+        ultracode = state.claudeUltracode,
+        appendSystemPrompt = state.claudeAppendSystemPrompt,
+        onModelSelect = viewModel::setClaudeModel,
+        onEffortSelect = viewModel::setClaudeEffort,
+        onFastModeToggle = viewModel::toggleClaudeFastMode,
+        onUltracodeToggle = viewModel::toggleClaudeUltracode,
+        onAppendSystemPromptChange = viewModel::setClaudeAppendSystemPrompt,
+    )
     ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
@@ -1239,16 +1250,24 @@ private fun AntigravityConfigSection(
  */
 @Composable
 private fun ClaudeOptionControls(
-    state: CreateSessionUiState,
-    viewModel: CreateSessionViewModel,
+    model: String?,
+    effort: String,
+    fastMode: Boolean,
+    ultracode: Boolean,
+    appendSystemPrompt: String,
+    onModelSelect: (String?) -> Unit,
+    onEffortSelect: (String) -> Unit,
+    onFastModeToggle: (Boolean) -> Unit,
+    onUltracodeToggle: (Boolean) -> Unit,
+    onAppendSystemPromptChange: (String) -> Unit,
 ) {
     Text("Model", style = MaterialTheme.typography.labelLarge)
     ClaudeModelDropdown(
-        selected = state.claudeModel,
-        enabled = !state.claudeFastMode,
-        onSelect = viewModel::setClaudeModel,
+        selected = model,
+        enabled = !fastMode,
+        onSelect = onModelSelect,
     )
-    if (state.claudeFastMode) {
+    if (fastMode) {
         Text(
             text = "Fast mode runs on Opus.",
             style = MaterialTheme.typography.bodySmall,
@@ -1258,12 +1277,12 @@ private fun ClaudeOptionControls(
 
     Text("Effort", style = MaterialTheme.typography.labelLarge)
     ClaudeEffortDropdown(
-        selected = state.claudeEffort,
-        model = state.claudeModel,
-        enabled = !state.claudeUltracode,
-        onSelect = viewModel::setClaudeEffort,
+        selected = effort,
+        model = model,
+        enabled = !ultracode,
+        onSelect = onEffortSelect,
     )
-    if (state.claudeUltracode) {
+    if (ultracode) {
         Text(
             text = "ultracode runs at xhigh.",
             style = MaterialTheme.typography.bodySmall,
@@ -1283,11 +1302,11 @@ private fun ClaudeOptionControls(
         Text("Advanced")
     }
     if (advancedExpanded) {
-        ToggleRow("Fast mode (Opus only)", state.claudeFastMode, viewModel::toggleClaudeFastMode)
-        ToggleRow("ultracode", state.claudeUltracode, viewModel::toggleClaudeUltracode)
+        ToggleRow("Fast mode (Opus only)", fastMode, onFastModeToggle)
+        ToggleRow("ultracode", ultracode, onUltracodeToggle)
         OutlinedTextField(
-            value = state.claudeAppendSystemPrompt,
-            onValueChange = viewModel::setClaudeAppendSystemPrompt,
+            value = appendSystemPrompt,
+            onValueChange = onAppendSystemPromptChange,
             label = { Text("Append system prompt (optional)") },
             modifier = Modifier.fillMaxWidth(),
             minLines = 2,
@@ -1412,16 +1431,31 @@ private fun AutoScanConfigSection(
     state: CreateSessionUiState,
     viewModel: CreateSessionViewModel,
 ) {
-    ClaudeOptionControls(state, viewModel)
-    ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
-    ToggleRow("Skip permissions", checked = true, onChange = {}, enabled = false)
+    ClaudeOptionControls(
+        model = state.autoScanClaudeModel,
+        effort = state.autoScanClaudeEffort,
+        fastMode = state.autoScanClaudeFastMode,
+        ultracode = state.autoScanClaudeUltracode,
+        appendSystemPrompt = state.autoScanClaudeAppendSystemPrompt,
+        onModelSelect = viewModel::setAutoScanClaudeModel,
+        onEffortSelect = viewModel::setAutoScanClaudeEffort,
+        onFastModeToggle = viewModel::toggleAutoScanClaudeFastMode,
+        onUltracodeToggle = viewModel::toggleAutoScanClaudeUltracode,
+        onAppendSystemPromptChange = viewModel::setAutoScanClaudeAppendSystemPrompt,
+    )
+    ToggleRow("Plan mode", state.autoScanPlanMode, viewModel::toggleAutoScanPlanMode)
+    ToggleRow(
+        "Skip permissions",
+        state.autoScanSkipPermissions,
+        viewModel::toggleAutoScanSkipPermissions,
+    )
     Text(
-        text = "Auto Scan always runs unattended and skips permission prompts — " +
-            "there is no way to pause a background scan for approval.",
+        text = "When off, the scan pauses at permission prompts — you'll get a " +
+            "notification and can open the session to approve.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
+    ToggleRow("No memory", state.autoScanNoMemory, viewModel::toggleAutoScanNoMemory)
 
     OutlinedTextField(
         value = state.initialPrompt,
