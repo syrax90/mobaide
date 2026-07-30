@@ -108,7 +108,6 @@ data class CreateSessionUiState(
     // companion constants.
     val codexModels: List<String>? = null,
     val antigravityModels: List<String>? = null,
-    val planMode: Boolean = false,
     val noMemory: Boolean = false,
     val skipPermissions: Boolean = false,
     // Claude reasoning controls (replace the old boolean "Max effort"). model is
@@ -118,6 +117,20 @@ data class CreateSessionUiState(
     val claudeFastMode: Boolean = false,
     val claudeUltracode: Boolean = false,
     val claudeAppendSystemPrompt: String = "",
+    // Auto Scan's own copies of the Claude controls: each kind remembers its
+    // own persisted defaults, and in-flight edits must not bleed between the
+    // Standard and Auto Scan config steps within one wizard run.
+    // skipPermissions defaults ON here (scans usually run unattended); turning
+    // it off makes the scan pause at permission prompts and raise attention
+    // notifications instead.
+    val autoScanPlanMode: Boolean = false,
+    val autoScanNoMemory: Boolean = false,
+    val autoScanSkipPermissions: Boolean = true,
+    val autoScanClaudeModel: String? = null,
+    val autoScanClaudeEffort: String = "high",
+    val autoScanClaudeFastMode: Boolean = false,
+    val autoScanClaudeUltracode: Boolean = false,
+    val autoScanClaudeAppendSystemPrompt: String = "",
     // Codex launch options (CodexConfig step). Defaults reflect the "Auto" preset.
     val codexModel: String? = null,
     val codexSandbox: String = "workspace-write",
@@ -190,6 +203,20 @@ private fun CreateSessionUiState.toClaudeLaunchPrefs() = ClaudeLaunchPrefs(
     fastMode = claudeFastMode,
     ultracode = claudeUltracode,
     appendSystemPrompt = claudeAppendSystemPrompt,
+    skipPermissions = skipPermissions,
+    noMemory = noMemory,
+)
+
+/** Snapshot of the Auto Scan launch controls for its own per-kind bucket. */
+private fun CreateSessionUiState.toAutoScanLaunchPrefs() = ClaudeLaunchPrefs(
+    model = autoScanClaudeModel,
+    effort = autoScanClaudeEffort,
+    fastMode = autoScanClaudeFastMode,
+    ultracode = autoScanClaudeUltracode,
+    appendSystemPrompt = autoScanClaudeAppendSystemPrompt,
+    skipPermissions = autoScanSkipPermissions,
+    noMemory = autoScanNoMemory,
+    planMode = autoScanPlanMode,
 )
 
 /** Snapshot of the Codex launch controls for persistence / re-defaulting. */
@@ -274,6 +301,25 @@ class CreateSessionViewModel @Inject constructor(
                         claudeFastMode = saved.fastMode,
                         claudeUltracode = saved.ultracode,
                         claudeAppendSystemPrompt = saved.appendSystemPrompt,
+                        skipPermissions = saved.skipPermissions,
+                        noMemory = saved.noMemory,
+                    )
+                }
+            }
+            // Auto Scan has its own bucket so scan choices never pre-fill the
+            // Claude Code sheet (or vice versa). With no saved blob the state
+            // defaults apply — notably skipPermissions ON for unattended scans.
+            preferencesStore.getLastUsedAutoScanOptions()?.let { saved ->
+                _uiState.update {
+                    it.copy(
+                        autoScanClaudeModel = saved.model,
+                        autoScanClaudeEffort = saved.effort,
+                        autoScanClaudeFastMode = saved.fastMode,
+                        autoScanClaudeUltracode = saved.ultracode,
+                        autoScanClaudeAppendSystemPrompt = saved.appendSystemPrompt,
+                        autoScanSkipPermissions = saved.skipPermissions,
+                        autoScanNoMemory = saved.noMemory,
+                        autoScanPlanMode = saved.planMode,
                     )
                 }
             }
@@ -588,7 +634,6 @@ class CreateSessionViewModel @Inject constructor(
             it.copy(
                 step = CreateSessionStep.AutoScanConfig,
                 autoScanConfigInitializedFor = projectName,
-                worktree = true,
                 initialPrompt = savedPrompt ?: autoScanRepository.getAutoScanPrompt() ?: "",
             )
         }
@@ -601,25 +646,20 @@ class CreateSessionViewModel @Inject constructor(
             _uiState.update { it.copy(autoScanStarting = true) }
             try {
                 val options = ClaudeOptionsModel(
-                    plan_mode = state.planMode,
-                    no_memory = state.noMemory,
-                    // Always true, regardless of the toggle: Auto Scan sessions run
-                    // unattended (no session_id, no attention hooks), so there is no
-                    // way to honour a request for approval prompts — the agent forces
-                    // this too (linear/scanner.py), but the client must not display or
-                    // send a value it can't actually deliver on.
-                    skip_permissions = true,
-                    model = state.claudeModel,
-                    effort = state.claudeEffort,
-                    fast_mode = state.claudeFastMode,
-                    ultracode = state.claudeUltracode,
-                    append_system_prompt = state.claudeAppendSystemPrompt.takeIf { it.isNotBlank() },
+                    plan_mode = state.autoScanPlanMode,
+                    no_memory = state.autoScanNoMemory,
+                    skip_permissions = state.autoScanSkipPermissions,
+                    model = state.autoScanClaudeModel,
+                    effort = state.autoScanClaudeEffort,
+                    fast_mode = state.autoScanClaudeFastMode,
+                    ultracode = state.autoScanClaudeUltracode,
+                    append_system_prompt = state.autoScanClaudeAppendSystemPrompt.takeIf { it.isNotBlank() },
                     worktree = true,
                     initial_prompt = state.initialPrompt.takeIf { it.isNotBlank() },
                 )
                 autoScanRepository.startScan(projectName, options)
                 preferencesStore.setLastUsedProjectName(projectName)
-                preferencesStore.setLastUsedClaudeOptions(state.toClaudeLaunchPrefs())
+                preferencesStore.setLastUsedAutoScanOptions(state.toAutoScanLaunchPrefs())
                 _uiState.update { it.copy(autoScanStarting = false) }
                 _navigateToAutoScan.tryEmit(projectName)
             } catch (e: Exception) {
@@ -648,7 +688,6 @@ class CreateSessionViewModel @Inject constructor(
         }
     }
 
-    fun togglePlanMode(v: Boolean) = _uiState.update { it.copy(planMode = v) }
     fun toggleNoMemory(v: Boolean) = _uiState.update { it.copy(noMemory = v) }
     fun toggleSkipPermissions(v: Boolean) = _uiState.update { it.copy(skipPermissions = v) }
     fun setClaudeModel(v: String?) = _uiState.update {
@@ -669,6 +708,35 @@ class CreateSessionViewModel @Inject constructor(
     fun toggleClaudeUltracode(v: Boolean) = _uiState.update { it.copy(claudeUltracode = v) }
 
     fun setClaudeAppendSystemPrompt(v: String) = _uiState.update { it.copy(claudeAppendSystemPrompt = v) }
+
+    // Auto Scan copies of the Claude control setters, including the same
+    // coupling rules (effort clamp, fast-mode Opus lock).
+    fun toggleAutoScanPlanMode(v: Boolean) = _uiState.update { it.copy(autoScanPlanMode = v) }
+    fun toggleAutoScanNoMemory(v: Boolean) = _uiState.update { it.copy(autoScanNoMemory = v) }
+    fun toggleAutoScanSkipPermissions(v: Boolean) =
+        _uiState.update { it.copy(autoScanSkipPermissions = v) }
+
+    fun setAutoScanClaudeModel(v: String?) = _uiState.update {
+        val efforts = claudeEffortsFor(v)
+        it.copy(
+            autoScanClaudeModel = v,
+            autoScanClaudeEffort = if (it.autoScanClaudeEffort in efforts) it.autoScanClaudeEffort else "high",
+        )
+    }
+
+    fun setAutoScanClaudeEffort(v: String) = _uiState.update { it.copy(autoScanClaudeEffort = v) }
+
+    fun toggleAutoScanClaudeFastMode(v: Boolean) = _uiState.update {
+        if (v) it.copy(autoScanClaudeFastMode = true, autoScanClaudeModel = "opus")
+        else it.copy(autoScanClaudeFastMode = false)
+    }
+
+    fun toggleAutoScanClaudeUltracode(v: Boolean) =
+        _uiState.update { it.copy(autoScanClaudeUltracode = v) }
+
+    fun setAutoScanClaudeAppendSystemPrompt(v: String) =
+        _uiState.update { it.copy(autoScanClaudeAppendSystemPrompt = v) }
+
     fun toggleWorktree(v: Boolean) = _uiState.update { it.copy(worktree = v) }
     fun setBranchName(v: String) = _uiState.update { it.copy(branchName = v) }
     fun setInitialPrompt(v: String) = _uiState.update { it.copy(initialPrompt = v) }

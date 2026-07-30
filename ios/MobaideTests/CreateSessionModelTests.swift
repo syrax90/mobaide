@@ -45,7 +45,10 @@ final class CreateSessionModelTests: XCTestCase {
         )
     }
 
-    private func stubbedModel(typesRepo: CustomAgentTypesRepository? = nil) -> CreateSessionModel {
+    private func stubbedModel(
+        prefs: PreferencesStore? = nil,
+        typesRepo: CustomAgentTypesRepository? = nil
+    ) -> CreateSessionModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
             webSocketFactory: WebSocketCoreFactory.live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
@@ -58,7 +61,7 @@ final class CreateSessionModelTests: XCTestCase {
         return CreateSessionModel(
             agentAPI: agentAPI,
             sessionRepository: repo,
-            preferencesStore: isolatedPrefs(),
+            preferencesStore: prefs ?? isolatedPrefs(),
             customAgentTypesRepository: typesRepo ?? makeTypesRepo()
         )
     }
@@ -297,7 +300,8 @@ final class CreateSessionModelTests: XCTestCase {
     func testPrefillFromPreferences() {
         let prefs = isolatedPrefs()
         prefs.setLastUsedClaudeOptions(ClaudeLaunchPrefs(
-            model: "sonnet", effort: "low", fastMode: false, ultracode: false, appendSystemPrompt: "sys"
+            model: "sonnet", effort: "low", fastMode: false, ultracode: false, appendSystemPrompt: "sys",
+            skipPermissions: true, noMemory: true
         ))
         prefs.setLastUsedCodexOptions(CodexLaunchPrefs(
             model: "gpt-5.4", sandbox: "read-only", approval: "never", fullAuto: true, reasoningEffort: "medium"
@@ -306,9 +310,32 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(model.claudeModel, "sonnet")
         XCTAssertEqual(model.claudeEffort, "low")
         XCTAssertEqual(model.claudeAppendSystemPrompt, "sys")
+        XCTAssertTrue(model.skipPermissions, "the persisted toggle must pre-set the sheet")
+        XCTAssertTrue(model.noMemory)
         XCTAssertEqual(model.codexModel, "gpt-5.4")
         XCTAssertEqual(model.codexApproval, "never")
         XCTAssertTrue(model.codexFullAuto)
+    }
+
+    func testCreatePersistsSkipPermissionsAndNoMemory() async {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.selection = .stored("a")
+        model.mode = .standard
+        model.skipPermissions = true
+        model.noMemory = true
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        let saved = prefs.getLastUsedClaudeOptions()
+        XCTAssertEqual(saved?.skipPermissions, true, "the toggles now survive into the next launch")
+        XCTAssertEqual(saved?.noMemory, true)
     }
 
     // MARK: - Custom agent types: validation / sanitization statics

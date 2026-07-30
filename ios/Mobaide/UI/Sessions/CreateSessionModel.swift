@@ -621,7 +621,9 @@ final class CreateSessionModel {
                 effort: effectiveClaudeEffort,
                 fastMode: claudeFastMode,
                 ultracode: claudeUltracode,
-                appendSystemPrompt: claudeAppendSystemPrompt
+                appendSystemPrompt: claudeAppendSystemPrompt,
+                skipPermissions: skipPermissions,
+                noMemory: noMemory
             ))
         case .codex:
             preferencesStore.setLastUsedCodexOptions(CodexLaunchPrefs(
@@ -651,6 +653,8 @@ final class CreateSessionModel {
             claudeFastMode = claude.fastMode
             claudeUltracode = claude.ultracode
             claudeAppendSystemPrompt = claude.appendSystemPrompt
+            skipPermissions = claude.skipPermissions
+            noMemory = claude.noMemory
         }
         if let codex = preferencesStore.getLastUsedCodexOptions() {
             codexModel = codex.model

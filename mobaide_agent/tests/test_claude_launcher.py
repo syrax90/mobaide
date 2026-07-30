@@ -629,8 +629,9 @@ async def test_adhoc_launch_argv_matches_project_launch(tmp_path: Path):
 
 # When (and only when) a ``session_id`` is supplied AND the launcher was built
 # with both ``hook_port`` and ``hook_token``, ``build`` writes a per-session
-# ``--settings`` file and injects MOBAIDE_* env vars. The Auto Scan scanner
-# builds without a session_id, so autonomous sessions get no hooks.
+# ``--settings`` file and injects MOBAIDE_* env vars. Both the interactive
+# create path and the Auto Scan scanner now supply a session_id; a build
+# without one (or on a hookless launcher) still gets no hooks.
 
 
 @pytest.fixture
@@ -680,7 +681,7 @@ async def test_settings_flag_precedes_prompt_separator(
 
 @pytest.mark.asyncio
 async def test_no_hooks_without_session_id(tmp_path: Path, _isolated_hooks_tempdir):
-    # The Auto Scan scanner builds without a session_id → no hooks, no env.
+    # A build without a session_id → no hooks, no env.
     launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
     spec = await launcher.build(_make_project(str(tmp_path)), ClaudeOptions())
 
@@ -748,6 +749,86 @@ async def test_settings_file_merges_fast_and_ultracode(
     assert doc["fastMode"] is True
     assert doc["ultracode"] is True
     assert "hooks" in doc
+
+
+@pytest.mark.asyncio
+async def test_hooks_file_removed_when_binary_resolution_fails(
+    tmp_path: Path, _isolated_hooks_tempdir, monkeypatch,
+):
+    """A build that dies after the hooks write must unlink the just-written
+    settings file before re-raising — the ``SessionEnd`` hook that normally
+    deletes it never fires for a session that never spawned."""
+    from mobaide.core import claude_launcher
+    from mobaide.core.claude_launcher import ClaudeBinaryNotFoundError
+
+    def _raise(override=None):
+        raise ClaudeBinaryNotFoundError(searched_paths=["PATH:claude"])
+
+    monkeypatch.setattr(claude_launcher, "_resolve_claude_binary", _raise)
+
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    with pytest.raises(ClaudeBinaryNotFoundError):
+        await launcher.build(
+            _make_project(str(tmp_path)), ClaudeOptions(), session_id="sid-orphan",
+        )
+
+    hooks_dir = tmp_path / "mobaide_hooks_9001"
+    assert hooks_dir.is_dir(), "the hooks file was written before the failure"
+    assert not (hooks_dir / "sid-orphan.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_hooks_file_removed_when_worktree_creation_fails(
+    tmp_path: Path, _isolated_hooks_tempdir,
+):
+    from mobaide.linear.worktree import WorktreeCreationError
+
+    class _FailingMgr:
+        async def create_worktree(self, slug, project_root, *, branch_name=None):
+            raise WorktreeCreationError(
+                branch=branch_name or slug, path="/x", stderr="boom"
+            )
+
+    (tmp_path / ".git").mkdir()
+    launcher = ClaudeLauncher(
+        worktree_mgr=_FailingMgr(),  # type: ignore[arg-type]
+        hook_port=9001, hook_token="tok-1",
+    )
+    with pytest.raises(WorktreeCreationError):
+        await launcher.build(
+            _make_project(str(tmp_path)),
+            ClaudeOptions(worktree=True, branch_name="my-branch"),
+            session_id="sid-wt-fail",
+        )
+
+    hooks_dir = tmp_path / "mobaide_hooks_9001"
+    assert hooks_dir.is_dir(), "the hooks file was written before the failure"
+    assert not (hooks_dir / "sid-wt-fail.json").exists()
+
+
+def test_discard_session_hooks_removes_file(_isolated_hooks_tempdir):
+    """The scanner calls this when ``create_session`` fails after a successful
+    build — the orphaned hooks settings file must go away."""
+    from mobaide.core.hook_settings import write_session_hooks
+
+    path = write_session_hooks("sid-discard", 9001, "tok-1")
+    assert path.exists()
+
+    launcher = ClaudeLauncher(hook_port=9001, hook_token="tok-1")
+    launcher.discard_session_hooks("sid-discard")
+    assert not path.exists()
+
+    # Best-effort contract: a second discard (file already gone) must not raise.
+    launcher.discard_session_hooks("sid-discard")
+
+
+def test_discard_session_hooks_noop_without_hook_port(_isolated_hooks_tempdir):
+    launcher = ClaudeLauncher()
+    launcher.discard_session_hooks("sid-none")
+
+    assert list(_isolated_hooks_tempdir.iterdir()) == [], (
+        "a hookless launcher must not touch (or create) any hooks directory"
+    )
 
 
 def test_resolve_binary_delegates_to_private_resolver():

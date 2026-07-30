@@ -404,19 +404,17 @@ class AutoScanInstance:
                 # prompt-less starts still use the project's own prompt.
                 else (project.auto_scan_prompt or self._config.auto_scan_prompt)
             ),
+            # Worktree isolation stays forced per issue; skip_permissions is
+            # the client's choice — the build below carries a session_id, so
+            # attention hooks install and a non-bypass session raises
+            # awaiting_permission instead of hanging unattended.
             worktree=True,
-            # Auto Scan always forces bypass: this build() call runs with no
-            # session_id, so _maybe_write_hooks never installs the permission-
-            # attention hooks a live terminal relies on. Honouring skip_permissions
-            # =False here (whether it's the client's default or an explicit
-            # choice) would hang the scan at the first protected tool call with
-            # no one able to approve it.
-            skip_permissions=True,
         )
 
+        session_id = uuid.uuid4().hex[:12]
         self._emit_issue(issue, "worktree_create", "started")
         try:
-            spec = await self._launcher.build(project, opts)
+            spec = await self._launcher.build(project, opts, session_id=session_id)
         except WorktreeCreationError as exc:
             self._emit_issue(issue, "worktree_create", "failed", error=str(exc))
             logger.error(
@@ -462,6 +460,18 @@ class AutoScanInstance:
             identifier=issue.identifier, path=str(spec.cwd),
         )))
 
+        if not opts.skip_permissions and not any(
+            f.endswith(f"{session_id}.json") for f in spec.created_files
+        ):
+            # Hookless launcher (or a failed hooks write): nothing will ever
+            # notify anyone about a permission prompt, so this non-bypass
+            # session can stall silently.
+            logger.warning(
+                "autoscan.no_attention_hooks session=%s id=%s — non-bypass "
+                "session may stall at a permission prompt with no notification",
+                session_id, issue.identifier,
+            )
+
         if self._config.auto_remove_worktrees and spec.cwd != project.path:
             try:
                 added = await self._workitems_store.add(
@@ -482,7 +492,6 @@ class AutoScanInstance:
                 )
 
         self._emit_issue(issue, "session_spawn", "started")
-        session_id = uuid.uuid4().hex[:12]
         try:
             config = SessionConfig(
                 session_id=session_id,
@@ -503,6 +512,9 @@ class AutoScanInstance:
             logger.error(
                 "Failed to start session for %s", issue.identifier, exc_info=True
             )
+            # The SessionEnd hook that normally deletes the hooks settings
+            # file never fires for a session that failed to spawn.
+            self._launcher.discard_session_hooks(session_id)
 
         self._last_activity_at = time.time()
 
