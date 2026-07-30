@@ -1,7 +1,7 @@
 # Privacy Policy for Mobaide
 
 **Effective date:** 22 May 2026
-**Last updated:** 27 June 2026
+**Last updated:** 30 July 2026
 
 This Privacy Policy describes how the Mobaide mobile application ("**Mobaide**", "**the app**", "**we**", "**our**") collects, uses, stores, and discloses information about you ("**you**", "**user**") when you install and use the app on an Android device, and when you use the supporting Mobaide central server hosted at `api.mobaide.com`.
 
@@ -94,7 +94,7 @@ The following information stays on your phone and is not transmitted to the cent
 
 The app includes an in-app **Help & Support** screen (reachable from the Login and Settings screens, including when you are signed out). It offers two actions:
 
-- **Email support.** When you tap "Email support", the app opens *your own email client* with a message pre-filled to our support address (this does **not** go through the Mobaide central server). The body includes a short diagnostics block to help us troubleshoot: the **app version**, your **device model** (manufacturer and model name, e.g. "Google Pixel 8"), the random **device identifier (UUID)** described in Section 3.2, and — **only if you are signed in** — your **account email address**. You can read and edit the whole message before sending, and **nothing is sent unless you yourself send the email**. If no email app is installed, the app only copies the support address to your clipboard and sends nothing. Support emails are processed by us (and our email-delivery provider) solely to answer your request.
+- **Email support.** When you tap "Email support", the app opens *your own email client* with a message pre-filled to our support address (`support@mobaide.com`) (this does **not** go through the Mobaide central server). The body includes a short diagnostics block to help us troubleshoot: the **app version**, your **device model** (manufacturer and model name, e.g. "Google Pixel 8"), the random **device identifier (UUID)** described in Section 3.2, and — **only if you are signed in** — your **account email address**. You can read and edit the whole message before sending, and **nothing is sent unless you yourself send the email**. If no email app is installed, the app only copies the support address to your clipboard and sends nothing. Support emails are processed by us (and our email-delivery provider) solely to answer your request.
 - **Ask the community.** When you tap "Ask the community", the app opens our public **GitHub Discussions** page in an in-app browser tab. This is a third-party service operated by GitHub, Inc.; the app sends it none of your data. Reading is anonymous; posting requires a GitHub account. Your activity there is governed by [GitHub's Privacy Statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement).
 
 ### 3.7 Information we do **not** collect
@@ -259,6 +259,10 @@ We may update this Privacy Policy from time to time. When we do, we will change 
 
 ## 14. Contact
 
-For any question about this policy or about your personal data, please email:
+For general questions or support, please email:
+
+**`support@mobaide.com`**
+
+For questions about this policy or about your personal data (including exercising the rights described in Section 10), please email:
 
 **`paveltimonin90@gmail.com`**
