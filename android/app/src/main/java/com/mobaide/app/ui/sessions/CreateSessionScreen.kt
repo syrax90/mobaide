@@ -1380,7 +1380,13 @@ private fun AutoScanConfigSection(
 ) {
     ClaudeOptionControls(state, viewModel)
     ToggleRow("Plan mode", state.planMode, viewModel::togglePlanMode)
-    ToggleRow("Skip permissions", state.skipPermissions, viewModel::toggleSkipPermissions)
+    ToggleRow("Skip permissions", checked = true, onChange = {}, enabled = false)
+    Text(
+        text = "Auto Scan always runs unattended and skips permission prompts — " +
+            "there is no way to pause a background scan for approval.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     ToggleRow("No memory", state.noMemory, viewModel::toggleNoMemory)
 
     OutlinedTextField(

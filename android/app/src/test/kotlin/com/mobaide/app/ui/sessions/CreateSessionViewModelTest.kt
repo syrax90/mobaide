@@ -546,7 +546,11 @@ class CreateSessionViewModelTest {
         }
 
         val opts = optsSlot.captured
-        assertFalse(opts.skip_permissions)
+        assertTrue(
+            "Auto Scan always forces skip_permissions=true — it runs unattended " +
+                "and can't honour a request for approval prompts",
+            opts.skip_permissions,
+        )
         assertEquals("Auto Scan effort defaults to high", "high", opts.effort)
         assertNull(opts.model)
         assertTrue(opts.worktree)
@@ -555,6 +559,29 @@ class CreateSessionViewModelTest {
         coVerify(exactly = 1) { fx.prefs.setLastUsedProjectName("alpha") }
         coVerify(exactly = 1) { fx.prefs.setLastUsedClaudeOptions(any()) }
         assertFalse(vm.uiState.value.autoScanStarting)
+    }
+
+    @Test
+    fun submitAutoScan_ignoresSkipPermissionsToggle_alwaysSendsTrue() = runTest {
+        val fx = newFixture(autoScanPrompt = "seed")
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+
+        val optsSlot = slot<ClaudeOptionsModel>()
+        coEvery { fx.autoScanRepo.startScan("alpha", capture(optsSlot)) } just Runs
+
+        vm.selectProject("alpha")
+        vm.confirmProject()
+        vm.selectAutoScanMode()
+        vm.toggleSkipPermissions(false) // e.g. carried over from Standard mode's own toggle
+        vm.submitAutoScan()
+        advanceUntilIdle()
+
+        assertTrue(
+            "the Auto Scan config screen no longer exposes an interactive toggle for " +
+                "this — whatever state.skipPermissions holds must not leak into the request",
+            optsSlot.captured.skip_permissions,
+        )
     }
 
     @Test
