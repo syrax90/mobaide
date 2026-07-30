@@ -100,20 +100,34 @@ tiers:
 | `static/site/**` | 7 days | Versioned by a `?v=` query the template appends, so an asset edit busts them immediately. |
 | everything else | 1 hour | Referenced without a version query, so the TTL is what propagates a deploy. |
 
-That `?v=` value is a **content hash** over `site.css` + `site.js`
+That `?v=` value is a **content hash over the whole `static/site/` tree**
 (`marketing.loader.asset_version`), not the package version. It has to be:
 `deploy_central.py` ships whatever is in the working tree, while `__version__`
-only moves when release-please bumps it — so two deploys can carry different CSS
-under one version, and a repeat visitor would pair fresh HTML (5-minute TTL) with
-week-stale CSS. If an asset is missing the helper degrades to the package version
-rather than failing startup.
+only moves when release-please bumps it — so two deploys can carry different
+assets under one version, and a repeat visitor would pair fresh HTML (5-minute
+TTL) with week-stale CSS or images. If the tree is missing the helper degrades to
+the package version rather than failing startup.
 
-The font is the one `static/site/` asset with **no** `?v=` query, in both the
-`<link rel="preload">` and the `@font-face` `url()`. That is required, not an
-oversight: preload matching keys on the full URL including the query string, and
-a static stylesheet cannot carry a template variable — so a `?v=` on the preload
-alone would download the 22.5 KB font twice and defeat the preload. Keep the two
-URLs byte-identical and rename the file if it is ever replaced.
+It hashes the **whole tree**, not an enumerated file list, on purpose: an
+over-broad hash only busts a few extra URLs, whereas a list that drifts out of
+sync with the template silently reintroduces the week-stale bug for whatever it
+missed — which is exactly what happened when it hashed only `site.css` and
+`site.js` while the template also stamped `?v=` on seven images.
+
+Three `static/site/` assets carry **no** `?v=` query, each deliberately:
+
+- **The font**, in both the `<link rel="preload">` and the `@font-face` `url()`.
+  Required, not an oversight: preload matching keys on the full URL including the
+  query string, and a static stylesheet cannot carry a template variable — so a
+  `?v=` on the preload alone would download the 22.5 KB font twice and defeat the
+  preload. Keep the two URLs byte-identical and rename the file if it is replaced.
+- **`og.png`**, referenced only from `og:image` / `twitter:image` / JSON-LD. It is
+  fetched by third-party scrapers, never by a visitor, and those platforms cache
+  OG data in their own scrape caches independently of `Cache-Control` — so a
+  query string would re-key a 144 KB image for conservative scrapers on every
+  deploy that touches any site asset, while doing nothing about the cache that
+  actually holds a stale card. Swap artwork with a platform re-scrape tool.
+- **`favicon.ico`**, which is also served from the root `/favicon.ico` route.
 
 ## Canonical origin
 
