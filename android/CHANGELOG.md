@@ -1,5 +1,22 @@
 # Android Changelog
 
+## [3.2.0](https://github.com/syrax90/claude_mobile/compare/android-v3.1.0...android-v3.2.0) (2026-07-30)
+
+
+### Features
+
+* **sessions:** remember per-kind launch prefs, live Auto Scan skip-permissions ([7e2721f](https://github.com/syrax90/claude_mobile/commit/7e2721f826346d2512b4dc736f44a49015b8dc3d))
+
+
+### Bug Fixes
+
+* **android:** commit mode selection on tap, remove Continue button ([28bf9e2](https://github.com/syrax90/claude_mobile/commit/28bf9e22def1de902ab8d7e9cbbc2c98dc20ba20))
+* **android:** default Claude skip-permissions toggle to off ([610ea47](https://github.com/syrax90/claude_mobile/commit/610ea47adf456bbdf5c2aa26d764d7031426d1ea))
+* **android:** remember per-kind launch prefs, live Auto Scan skip-permissions ([9754e2b](https://github.com/syrax90/claude_mobile/commit/9754e2b694e10aa7759f9b06f8dbf71740240c2c))
+* **sessions:** default Claude skip-permissions toggle to off ([4f169dc](https://github.com/syrax90/claude_mobile/commit/4f169dce665ea7ed57f98d4102172c6daf88aaf0))
+* **sessions:** don't display a Skip-permissions control Auto Scan can't honour ([6dfcbe2](https://github.com/syrax90/claude_mobile/commit/6dfcbe21ceb33cf959b0a26d33a7079d4e900a4d))
+* **sessions:** keep wire-absence default true, force bypass for Auto Scan ([9ad4b69](https://github.com/syrax90/claude_mobile/commit/9ad4b69ba38f5f7be0e030b2d9c71a35777f399f))
+
 ## [3.1.0](https://github.com/syrax90/claude_mobile/compare/android-v3.0.1...android-v3.1.0) (2026-07-28)
 
 
