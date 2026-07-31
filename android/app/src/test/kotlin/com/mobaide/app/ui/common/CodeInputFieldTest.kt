@@ -1,5 +1,8 @@
 package com.mobaide.app.ui.common
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Surface
 import androidx.compose.ui.test.assertCountEquals
@@ -7,12 +10,14 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 /**
@@ -122,5 +127,53 @@ class CodeInputFieldTest {
         // it — otherwise the parameter would be silently ignored and both screens would read alike.
         composeRule.onNodeWithContentDescription("Verification code", substring = true)
             .assertDoesNotExist()
+    }
+
+    @Test
+    fun pasteButton_hidden_whenClipboardHasNoText() {
+        composeRule.setContent {
+            Surface {
+                CodeInputField(value = "", onValueChange = {}, autoFocus = false)
+            }
+        }
+
+        // Nothing to paste — the affordance must not advertise an empty clipboard.
+        composeRule.onNodeWithText("Paste code").assertDoesNotExist()
+    }
+
+    @Test
+    fun pasteButton_forwardsClipboardTextVerbatim() {
+        val clipboard = RuntimeEnvironment.getApplication()
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("label", "Your code is 123 456"))
+
+        val captured = mutableListOf<String>()
+        composeRule.setContent {
+            Surface {
+                CodeInputField(value = "", onValueChange = { captured += it }, autoFocus = false)
+            }
+        }
+
+        composeRule.onNodeWithText("Paste code").performClick()
+
+        // The component stays presentation-only: the raw clip goes to the ViewModel, which
+        // owns digit-filtering and capping.
+        assertEquals(listOf("Your code is 123 456"), captured)
+    }
+
+    @Test
+    fun pasteButton_hidden_whenFieldDisabled() {
+        val clipboard = RuntimeEnvironment.getApplication()
+            .getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("label", "123456"))
+
+        composeRule.setContent {
+            Surface {
+                CodeInputField(value = "", onValueChange = {}, autoFocus = false, enabled = false)
+            }
+        }
+
+        // Submitting is in flight; offering a paste that the field would reject is misleading.
+        composeRule.onNodeWithText("Paste code").assertDoesNotExist()
     }
 }
