@@ -132,6 +132,24 @@ scrollback is unreachable on the normal buffer while a program has mouse
 reporting on, and a program that exits without restoring terminal modes
 leaves the emulator in alt/mouse mode, so a scroll gesture writes arrow
 keys or a mouse report to the shell prompt underneath.
+Lifting the finger starts a momentum tail (Android `TerminalView.onFling`):
+`TerminalWheelScroll.flingRows` turns the lift-off velocity into rows —
+Android's `0.25` scale, but divided by the cell height and clamped to
+`±rows/2` — and `flingSteps` spreads them over at most twelve 40ms frames
+on a decelerating curve. A cancellable `Task` walks that schedule, aborting
+if the ladder arm changes underneath it (Android's
+`mouseTrackingAtStartOfFling` check, widened to the whole ladder so leaving
+the alternate screen aborts too), if the view leaves its window, or on the
+next touch — tap-to-stop is a deliberate divergence from Android, which has
+none. The threshold below which nothing coasts is restated in this
+formula's units (250pt/s) rather than borrowed from Android's 50dp/s, which
+only means anything without the cell-height division.
+Each frame's rows leave as a single write: `MobaideTerminalView` overrides
+SwiftTerm's `send(source:data:)` to coalesce the mouse reports one
+`sendEvent` burst produces, so a fling costs one WebSocket frame per step
+instead of one per row. It flushes through that same override rather than
+`send(data:)`, whose `ensureCaretIsVisible()` would yank a paused viewport
+back to the tail on every step of a wheel-arm scroll over the normal buffer.
 Follow mode is driven from the terminal's own scroll view rather than from
 SwiftTerm (`TerminalFollowScroll` plus a `UIScrollViewDelegate` on
 `MobaideTerminalView`). SwiftTerm's iOS renderer draws from `contentOffset`

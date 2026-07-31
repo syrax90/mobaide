@@ -418,7 +418,18 @@ final class TerminalHostGestureTests: XCTestCase {
         Data([0x69]) + Data(text.utf8)
     }
 
-    func testWheelModeSendsOneReportPerRowPinnedToTheTouchCell() async throws {
+    /// Wheel reports carried by one input frame, which batching now packs many
+    /// to a frame.
+    private func wheelReportCount(in frame: Data) -> Int {
+        let payload = String(decoding: frame.dropFirst(), as: UTF8.self)
+        return payload.components(separatedBy: "\u{1B}[<").count - 1
+    }
+
+    private func wheelReportCount(in frames: [Data]) -> Int {
+        frames.reduce(0) { $0 + wheelReportCount(in: $1) }
+    }
+
+    func testWheelModeBatchesOneReportPerRowIntoOneWrite() async throws {
         let (model, connection) = try await wiredModel()
         let terminal = model.terminalView
         enterAlternateScreen(terminal)
@@ -427,11 +438,11 @@ final class TerminalHostGestureTests: XCTestCase {
 
         terminal.emitVerticalScroll(rowsDown: 3, at: anchor)
 
-        let frames = await waitForInputFrames(connection, atLeast: 3)
-        let expected = inputFrame("\u{1B}[<65;6;4M")
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        let report = "\u{1B}[<65;6;4M"
         XCTAssertEqual(
-            frames, [expected, expected, expected],
-            "three rows are three wheel-down reports, every one at the cell the drag began on"
+            frames, [inputFrame(String(repeating: report, count: 3))],
+            "three rows are three wheel-down reports at the cell the drag began on, but one frame on the wire"
         )
     }
 
@@ -495,13 +506,13 @@ final class TerminalHostGestureTests: XCTestCase {
 
         terminal.emitVerticalScroll(rowsDown: 1000, at: .zero)
 
-        let frames = await waitForInputFrames(connection, atLeast: rows)
+        let frames = await waitForInputFrames(connection, atLeast: 1)
         try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(inputFrames(connection).count, 1, "one callback is one batched write")
         XCTAssertEqual(
-            inputFrames(connection).count, rows,
-            "a stalled main thread delivers one huge delta; each report costs a round trip plus a full repaint"
+            frames.first.map { wheelReportCount(in: $0) }, rows,
+            "a stalled main thread delivers one huge delta; each report costs the program a full repaint"
         )
-        XCTAssertEqual(frames.count, rows)
     }
 
     func testEmissionSwitchesLadderArmWhenTheProgramTurnsMouseReportingOn() async throws {
@@ -533,6 +544,164 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertTrue(
             inputFrames(connection).isEmpty,
             "wheel reports travel the gated terminal-byte path, like every other terminal-originated byte"
+        )
+    }
+
+    // MARK: - Fling
+
+    /// A flick strong enough to saturate the `±rows/2` clamp, so the expected
+    /// travel does not depend on the harness's measured cell height.
+    private let hardFlickUp = CGPoint(x: 0, y: -20_000)
+
+    /// Emitted rows reach the fake socket through the model's outbound stream,
+    /// so a frame count read the instant the fling ends is still short.
+    private func drain() async {
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+
+    private func flungTerminal(_ terminal: MobaideTerminalView) async {
+        terminal.startFling(velocity: hardFlickUp)
+        await terminal.flingTask?.value
+        await drain()
+    }
+
+    /// Runs a fling into its third frame, stops it the given way, and returns
+    /// the rows that had already been emitted once everything has settled.
+    private func interruptedFling(
+        _ terminal: MobaideTerminalView,
+        _ connection: FakeWebSocketConnection,
+        by stop: (MobaideTerminalView) -> Void
+    ) async -> Int {
+        terminal.startFling(velocity: hardFlickUp)
+        try? await Task.sleep(for: TerminalWheelScroll.flingFrameInterval * 2)
+        stop(terminal)
+        await terminal.flingTask?.value
+        await drain()
+        return wheelReportCount(in: inputFrames(connection))
+    }
+
+    func testFlingKeepsScrollingAfterTheFingerLifts() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+
+        await flungTerminal(terminal)
+
+        let frames = inputFrames(connection)
+        XCTAssertGreaterThan(
+            wheelReportCount(in: frames), 1,
+            "momentum is the whole point: a flick has to outrun the finger that started it"
+        )
+        XCTAssertGreaterThan(frames.count, 1, "and it has to arrive spread over time, not as one jump")
+    }
+
+    func testFlingTravelStaysWithinHalfAPage() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+        let rows = terminal.getTerminal().getDims().rows
+
+        await flungTerminal(terminal)
+
+        XCTAssertEqual(
+            wheelReportCount(in: inputFrames(connection)), rows / 2,
+            "Android's clamp, and the cost ceiling for one flick: each row is a round trip plus a full repaint"
+        )
+    }
+
+    func testFlingDecelerates() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+
+        await flungTerminal(terminal)
+
+        let perFrame = inputFrames(connection).map { wheelReportCount(in: $0) }
+        XCTAssertGreaterThan(perFrame.count, 2)
+        XCTAssertGreaterThan(
+            perFrame[0], perFrame[perFrame.count - 1],
+            "a fling that keeps its pace to the last frame reads as a jump, not momentum"
+        )
+    }
+
+    func testFlingStopsWhenTheProgramLeavesTheAlternateScreen() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+
+        let emitted = await interruptedFling(terminal, connection) {
+            $0.feed(text: "\u{1B}[?1000l\u{1B}[?1049l")
+        }
+
+        XCTAssertGreaterThan(emitted, 0, "the abort must cut a fling short, not stop it from ever starting")
+        XCTAssertLessThan(
+            wheelReportCount(in: inputFrames(connection)), terminal.getTerminal().getDims().rows / 2,
+            "Android aborts on a mouse-tracking flip; the rows left over must not land on whatever replaced the TUI"
+        )
+    }
+
+    func testNewTouchCancelsAnInFlightFling() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+
+        let caught = await interruptedFling(terminal, connection) {
+            $0.touchesBegan(Set<UITouch>(), with: nil)
+        }
+
+        try await Task.sleep(for: TerminalWheelScroll.flingFrameInterval * 6)
+        XCTAssertEqual(
+            wheelReportCount(in: inputFrames(connection)), caught,
+            "tap-to-stop, the UIScrollView convention — Android has none and always runs the fling out"
+        )
+        XCTAssertLessThan(caught, terminal.getTerminal().getDims().rows / 2, "the fling must have been cut short")
+    }
+
+    func testLeavingTheScreenCancelsAnInFlightFling() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+
+        let caught = await interruptedFling(terminal, connection) { $0.willMove(toWindow: nil) }
+
+        try await Task.sleep(for: TerminalWheelScroll.flingFrameInterval * 6)
+        XCTAssertEqual(
+            wheelReportCount(in: inputFrames(connection)), caught,
+            "the terminal view outlives the screen, so a fling left running would write to a session the user left"
+        )
+        XCTAssertLessThan(caught, terminal.getTerminal().getDims().rows / 2, "the fling must have been cut short")
+    }
+
+    func testSlowLiftDoesNotFling() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+
+        terminal.startFling(velocity: CGPoint(x: 0, y: -200))
+        await terminal.flingTask?.value
+
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(inputFrames(connection).isEmpty, "a drag that ends slowly stops where the finger left it")
+    }
+
+    func testNormalBufferNeverFlings() async throws {
+        let (model, connection) = try await wiredModel()
+        let terminal = model.terminalView
+
+        terminal.startFling(velocity: hardFlickUp)
+        await terminal.flingTask?.value
+
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(
+            inputFrames(connection).isEmpty,
+            "a plain shell keeps SwiftTerm's own scroll view, which already decelerates by itself"
         )
     }
 
