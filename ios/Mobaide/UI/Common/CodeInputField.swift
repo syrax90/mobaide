@@ -55,6 +55,11 @@ struct CodeInputField: View {
                                 code = Self.sanitized(raw, length: length)
                             }
                             .labelStyle(.titleAndIcon)
+                            // `.disabled(!enabled)` on the field does not reach
+                            // toolbar content, so a submit in flight would
+                            // otherwise still accept a paste and desync the
+                            // shown code from the one being verified.
+                            .disabled(!enabled)
                             Spacer()
                             Button("Done") { focused = false }
                         }

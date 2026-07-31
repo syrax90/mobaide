@@ -26,10 +26,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -44,8 +46,6 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 
 private const val DEFAULT_CODE_LENGTH = 6
 
@@ -85,9 +85,14 @@ fun CodeInputField(
     val context = LocalContext.current
     var clipboardHasText by remember { mutableStateOf(context.hasClipboardText()) }
 
-    // The code is usually copied in another app, so re-check on the way back in.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
-        clipboardHasText = context.hasClipboardText()
+    // The code is usually copied in another app, so re-check on the way back.
+    // Keyed on window focus, not ON_RESUME: API 29+ refuses clipboard reads to
+    // an unfocused app, and resume is delivered before focus returns — the
+    // recheck would see nothing. Focus also changes without a resume in
+    // multi-window.
+    val isWindowFocused = LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(isWindowFocused) {
+        if (isWindowFocused) clipboardHasText = context.hasClipboardText()
     }
 
     if (autoFocus) {
@@ -147,7 +152,13 @@ fun CodeInputField(
         )
 
         if (enabled && clipboardHasText) {
-            TextButton(onClick = { context.readClipboardText()?.let(onValueChange) }) {
+            // Sits directly below the field, so it would otherwise swallow the
+            // reset screen's IME Next (`moveFocus(Down)`) on its way to the
+            // password field. Still clickable — only skipped by traversal.
+            TextButton(
+                onClick = { context.readClipboardText()?.let(onValueChange) },
+                modifier = Modifier.focusProperties { canFocus = false },
+            ) {
                 Text("Paste code")
             }
         }
