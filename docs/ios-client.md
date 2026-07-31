@@ -126,6 +126,39 @@ scrollback is unreachable on the normal buffer while a program has mouse
 reporting on, and a program that exits without restoring terminal modes
 leaves the emulator in alt/mouse mode, so a scroll gesture writes arrow
 keys or a mouse report to the shell prompt underneath.
+Follow mode is driven from the terminal's own scroll view rather than from
+SwiftTerm (`TerminalFollowScroll` plus a `UIScrollViewDelegate` on
+`MobaideTerminalView`). SwiftTerm's iOS renderer draws from `contentOffset`
+while its `scrollPosition` and `getLine(row:)` read `buffer.yDisp`, and nothing
+in the package maps a drag onto `yDisp` — so `TerminalViewDelegate.scrolled`
+never fired for a touch, the jump-to-bottom button was unreachable and
+`jumpToBottom()` was a no-op. The app claims the scroll-view `delegate` slot
+(SwiftTerm declares the conformance but implements no method of it and never
+assigns it) and reports a position only while `isDragging`/`isDecelerating`,
+which is the same feedback-loop guard as the Android fork's rule that
+`setTopRow` must not report; the emulator-driven `scrolled` callback is now the
+unread-row tally instead (Android `unreadRows`, badge capped at "999+"); like
+Android's `scrollCounter` it counts every emulator scroll, so scrolling inside
+a DECSTBM region counts rows the viewport never lost (CLA-183). While
+follow mode is paused, an override of the `open var contentOffset` refuses
+SwiftTerm's snap-to-tail writes (`updateScroller()` on every scrolled line,
+`ensureCaretIsVisible()` on every byte sent — both `internal`, so unreachable
+otherwise), matching Android's `TerminalEmulator.isAutoScrollDisabled`. Those
+writes are told apart from a drag by a flag raised around the `feed` call
+rather than by the gesture state alone: SwiftTerm snaps synchronously inside
+`feed`, and UIKit reports the result as an ordinary scroll — so a line landing
+mid-drag would otherwise read as the user returning to the tail. One
+limitation is accepted: once the scrollback ring is full SwiftTerm trims from
+the top without growing `contentSize`, so a held viewport drifts up a row per
+trimmed line — Android compensates via `mTopRow`, which needs an index iOS
+cannot read. Row hit-testing re-points `buffer.yDisp` at the rows actually on
+screen for the duration of the synchronous `getLine` read, so tapping a prompt
+still resolves the rendered line while scrolled into history; a tap below the
+last line — the blank overscroll band — resolves nothing rather than folding
+onto that line, since a tap is what executes it. That drawn-equals-resolved
+guarantee holds against `terminal.buffer` and is suspended while a program
+holds synchronized output (DEC mode 2026), where SwiftTerm draws a frozen deep
+copy the app cannot reach (CLA-182).
 CLA-136/CLA-138 port Android's terminal custom keyboard shortcuts: the
 control-key row (now gated on `canSendTerminalBytes`, matching the wire)
 gains a trailing "Custom shortcut" ellipsis trigger that opens a
