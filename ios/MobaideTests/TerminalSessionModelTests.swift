@@ -398,12 +398,15 @@ final class TerminalSessionModelTests: XCTestCase {
         XCTAssertTrue(model.followMode)
         XCTAssertFalse(model.hasUnread)
 
-        model.onScroll(position: 0.5) // user scrolled up into scrollback
+        model.onUserScrolled(position: 0.5) // user scrolled up into scrollback
         XCTAssertFalse(model.followMode, "leaving the bottom pauses follow-mode")
 
+        // "late line" carries no newline, so it never scrolls the emulator's
+        // buffer — the unread tally is driven by the emulator's own scroll
+        // signal (`onEmulatorScrolled`), not by output frames arriving.
         connection.emit(.binary(Data([0x6F]) + Data("late line".utf8))) // output
-        let unread = await poll { model.hasUnread }
-        XCTAssertTrue(unread, "output while paused must raise the unread flag")
+        model.onEmulatorScrolled() // the terminal pushed a row past the bottom
+        XCTAssertTrue(model.hasUnread, "output that scrolls the buffer while paused must raise the unread flag")
         XCTAssertFalse(model.followMode, "incoming output must not silently resume follow-mode")
     }
 
@@ -418,24 +421,89 @@ final class TerminalSessionModelTests: XCTestCase {
     }
 
     func testScrollBackToBottomResumesFollowAndClearsUnread() async throws {
-        let (model, connection) = try await connectedModel()
-        model.onScroll(position: 0.5)
-        connection.emit(.binary(Data([0x6F]) + Data("x".utf8)))
-        _ = await poll { model.hasUnread }
+        let (model, _) = try await connectedModel()
+        model.onUserScrolled(position: 0.5)
+        model.onEmulatorScrolled() // the terminal pushed a row past the bottom while paused
+        XCTAssertTrue(model.hasUnread, "the tally must be genuinely non-zero before the resume")
 
-        model.onScroll(position: 1.0) // returned to the bottom
+        model.onUserScrolled(position: 1.0) // returned to the bottom
         XCTAssertTrue(model.followMode)
         XCTAssertFalse(model.hasUnread, "returning to the bottom clears unread")
     }
 
     func testJumpToBottomResumesFollowAndClearsUnread() async throws {
-        let (model, connection) = try await connectedModel()
-        model.onScroll(position: 0.5)
-        connection.emit(.binary(Data([0x6F]) + Data("x".utf8)))
-        _ = await poll { model.hasUnread }
+        let (model, _) = try await connectedModel()
+        model.onUserScrolled(position: 0.5)
+        model.onEmulatorScrolled() // the terminal pushed a row past the bottom while paused
+        XCTAssertTrue(model.hasUnread, "the tally must be genuinely non-zero before the resume")
 
         model.jumpToBottom()
         XCTAssertTrue(model.followMode)
         XCTAssertFalse(model.hasUnread)
+    }
+
+    // MARK: - Unread rows
+
+    /// Follow mode is driven by the view and the emulator, not the socket.
+    private func offlineModel() -> TerminalSessionModel {
+        makeModel(factory: FakeWebSocketTransportFactory())
+    }
+
+    func testEmulatorScrollsAccrueUnreadRowsOnlyWhilePaused() {
+        let model = offlineModel()
+
+        model.onEmulatorScrolled()
+        XCTAssertEqual(model.unreadRows, 0, "a following viewer is already looking at the row that scrolled by")
+
+        model.onUserScrolled(position: 0.5)
+        model.onEmulatorScrolled()
+        model.onEmulatorScrolled()
+        model.onEmulatorScrolled()
+
+        XCTAssertEqual(
+            model.unreadRows, 3,
+            "SwiftTerm reports one scrolled line at a time — Android accrues the same tally from its scrollCounter delta"
+        )
+        XCTAssertTrue(model.hasUnread)
+    }
+
+    func testUnreadRowsSaturateAtTheDisplayCap() {
+        let model = offlineModel()
+        model.onUserScrolled(position: 0.5)
+
+        for _ in 0..<(TerminalSessionModel.maxUnreadRows + 25) {
+            model.onEmulatorScrolled()
+        }
+
+        XCTAssertEqual(
+            model.unreadRows, TerminalSessionModel.maxUnreadRows,
+            "a runaway producer must not grow the badge without bound"
+        )
+    }
+
+    func testScrollingBackToTheTailClearsTheTallyAndLiftsSnapSuppression() {
+        let model = offlineModel()
+        model.onUserScrolled(position: 0.5)
+        model.onEmulatorScrolled()
+        XCTAssertTrue(model.terminalView.isAutoScrollSuppressed)
+
+        model.onUserScrolled(position: 1.0)
+
+        XCTAssertEqual(model.unreadRows, 0)
+        XCTAssertFalse(
+            model.terminalView.isAutoScrollSuppressed,
+            "the flag and the view's snap suppression are written together or a resumed viewport stays frozen"
+        )
+    }
+
+    func testSubmittingInputResumesFollowAndClearsTheTally() async throws {
+        let (model, _) = try await connectedModel()
+        model.onUserScrolled(position: 0.5)
+        model.onEmulatorScrolled()
+
+        model.sendInput("ls")
+
+        XCTAssertTrue(model.followMode, "typing is a resume trigger — the answer has to be visible")
+        XCTAssertEqual(model.unreadRows, 0)
     }
 }

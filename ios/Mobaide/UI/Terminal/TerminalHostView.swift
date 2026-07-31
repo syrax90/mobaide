@@ -9,10 +9,6 @@ import UIKit
 /// built-in input accessory (the persistent sticky-Ctrl toggle) stays removed;
 /// the app's per-kind control-key row is the only accessory surface.
 final class MobaideTerminalView: TerminalView {
-    /// Visible row count, tracked from the `sizeChanged` delegate so row
-    /// hit-testing can derive cell height without SwiftTerm's internal metrics.
-    var visibleRows = 24
-
     /// Explicit-only keyboard gate: opened by the model just before it calls
     /// `becomeFirstResponder()`, closed on every resign or failed raise. While
     /// closed, nothing — including any UIKit responder plumbing — can raise
@@ -56,6 +52,8 @@ final class MobaideTerminalView: TerminalView {
         // here — before the view can ever become first responder — is final.
         inputAccessoryView = nil
         installVerticalScrollGesture()
+        userScrollObserver.terminal = self
+        delegate = userScrollObserver
     }
 
     /// SwiftTerm's per-cell dimensions. The caret is exactly one cell, so its
@@ -77,20 +75,63 @@ final class MobaideTerminalView: TerminalView {
     /// nil for rows without a recognizable prompt prefix so taps on plain
     /// output never execute anything.
     func resolveRow(at point: CGPoint) -> (text: String, isCurrentInput: Bool)? {
-        let cellHeight = frame.height > 0 ? frame.height / CGFloat(max(1, visibleRows)) : ceil(font.lineHeight)
-        guard cellHeight > 0 else { return nil }
-        let viewportRow = Int((point.y - contentOffset.y) / cellHeight)
-        guard viewportRow >= 0 else { return nil }
+        let cellHeight = cellSize.height
+        guard cellHeight > 0, point.y >= 0 else { return nil }
+        // A single floor over the absolute content position. Flooring the
+        // viewport row and the window origin separately drops a row whenever
+        // the offset is not cell-aligned — which a drag, and the sub-cell
+        // remainder `scrollToBottom()` lands on, both make the normal case.
+        let contentRow = Int(point.y / cellHeight)
         let terminal = getTerminal()
-        guard let line = terminal.getLine(row: viewportRow) else { return nil }
+        // `yDisp` is pinned to `yBase`, so it is the first row of the active
+        // region as well as the largest legal scrollback window origin.
+        let activeRegionTop = terminal.buffer.yDisp
+        guard let line = lineOnScreen(contentRow: contentRow, cellHeight: cellHeight) else { return nil }
         guard let command = Self.promptCommand(line.translateToString(trimRight: true)) else { return nil }
         let (_, cursorY) = terminal.getCursorLocation()
-        // `getCursorLocation()` is relative to the active region (yBase) while
-        // `viewportRow` is relative to the scrolled viewport (yDisp); they only
-        // share a frame at the bottom. So a tapped row can be the current input
-        // only when following — scrolled into history, every prompt is historical.
-        let isCurrentInput = scrollPosition >= 0.999 && viewportRow == cursorY
+        // `getCursorLocation()` is relative to the active region, so the tapped
+        // row is the live input only when it is that region's cursor row — and
+        // only while following: scrolled into history every prompt is historical.
+        let isCurrentInput = isScrolledToBottom && contentRow - activeRegionTop == cursorY
         return (command, isCurrentInput)
+    }
+
+    /// The buffer line rendered at absolute content row `contentRow`, or nil
+    /// when nothing is drawn there.
+    ///
+    /// `getLine(row:)` counts from `buffer.yDisp`, but the iOS renderer counts
+    /// from `contentOffset`, and SwiftTerm never moves `yDisp` for a user drag
+    /// (`Terminal.userScrolling` is never set, so `yDisp` stays pinned to
+    /// `yBase`) — once scrolled up the two name different lines. `yDisp` is
+    /// public and `getLine` is a synchronous pure read, so the window is
+    /// re-pointed at the rows actually on screen for the lookup and restored
+    /// before any SwiftTerm code can observe it.
+    ///
+    /// The equality holds against `terminal.buffer`. SwiftTerm draws
+    /// `displayBuffer`, which diverges into a frozen deep copy while a program
+    /// holds synchronized output (DEC mode 2026); that buffer is `internal`, so
+    /// a tap taken during such a freeze reads the live line rather than the
+    /// drawn one.
+    private func lineOnScreen(contentRow: Int, cellHeight: CGFloat) -> BufferLine? {
+        let terminal = getTerminal()
+        let buffer = terminal.buffer
+        let restore = buffer.yDisp
+        let visibleTop = min(max(0, Int(contentOffset.y / cellHeight)), restore)
+        // `getLine` addresses exactly `rows` lines from the window origin, so an
+        // origin a fraction of a cell above the tail — where `scrollToBottom()`
+        // parks — would push the bottom-most line out of reach. Raise the window
+        // just far enough to cover the tapped row, but never past `yDisp`:
+        // beyond it `row + yDisp` runs off the end of `lines`, and
+        // `CircularList` wraps instead of trapping, so an `ESC[3J` scrollback
+        // wipe (which leaves `contentSize` stale) could otherwise resolve a
+        // recycled line.
+        let topRow = min(max(visibleTop, contentRow - terminal.getDims().rows + 1), restore)
+        let row = contentRow - topRow
+        guard row >= 0 else { return nil }
+        guard topRow != restore else { return terminal.getLine(row: row) }
+        buffer.yDisp = topRow
+        defer { buffer.yDisp = restore }
+        return terminal.getLine(row: row)
     }
 
     /// Android `getPromptPrefixLength`: `❯` + NBSP, `❯` + space, or ASCII `> `.
@@ -268,6 +309,121 @@ final class MobaideTerminalView: TerminalView {
             break
         }
     }
+
+    // MARK: - Follow mode
+
+    private let userScrollObserver = UserScrollObserver()
+
+    /// Reports the scroll position of a user-driven drag or fling. Programmatic
+    /// offset writes never reach it — see `handleScrollViewDidScroll`.
+    var onUserScroll: ((Double) -> Void)?
+
+    /// While true, SwiftTerm's snap-to-tail writes are refused so a paused
+    /// viewport stays where the user left it (Android
+    /// `TerminalEmulator.isAutoScrollDisabled`). Owned by the session model,
+    /// which keeps it in lockstep with follow mode.
+    var isAutoScrollSuppressed = false
+
+    /// True while PTY bytes are being handed to the emulator. SwiftTerm's
+    /// snap-to-tail runs synchronously inside that call (`Terminal.scroll` →
+    /// `scrolled(source:yDisp:)` → `updateScroller()`), and this is the only way
+    /// to tell it apart from a genuine drag: UIKit reports both as a scroll of
+    /// the same scroll view, so a line that lands mid-gesture would otherwise
+    /// read as the user returning to the tail and silently resume follow mode.
+    private(set) var isApplyingEmulatorOutput = false
+
+    /// Feed PTY bytes to the emulator, attributing any offset move they cause.
+    func applyingEmulatorOutput(_ body: () -> Void) {
+        isApplyingEmulatorOutput = true
+        defer { isApplyingEmulatorOutput = false }
+        body()
+    }
+
+    var maxScrollOffsetY: CGFloat {
+        TerminalFollowScroll.maxOffsetY(contentHeight: contentSize.height, viewportHeight: bounds.height)
+    }
+
+    var followPosition: Double {
+        TerminalFollowScroll.position(offsetY: contentOffset.y, maxOffsetY: maxScrollOffsetY)
+    }
+
+    var isScrolledToBottom: Bool {
+        TerminalFollowScroll.isAtBottom(position: followPosition)
+    }
+
+    /// SwiftTerm's `updateScroller()` and `ensureCaretIsVisible()` yank the
+    /// offset to the tail on every scrolled line and every byte sent, and both
+    /// are `internal`. `contentOffset` is `open`, so the snap is refused here
+    /// instead — before it applies, so a held viewport never flickers.
+    override var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set {
+            // A snap arriving mid-gesture has to be refused too, so the
+            // emulator attribution stands alongside the quiescent case rather
+            // than replacing it. The gesture clause still lets UIKit drive the
+            // offset freely: a drag back to the tail is a write to the tail
+            // from above, which is exactly what `holdsOffset` refuses.
+            guard isAutoScrollSuppressed,
+                  isApplyingEmulatorOutput || (!isDragging && !isDecelerating && !isTracking) else {
+                super.contentOffset = newValue
+                return
+            }
+            let current = super.contentOffset
+            let holds = TerminalFollowScroll.holdsOffset(
+                incomingY: newValue.y,
+                currentY: current.y,
+                maxOffsetY: maxScrollOffsetY
+            )
+            super.contentOffset = holds ? CGPoint(x: newValue.x, y: current.y) : newValue
+        }
+    }
+
+    /// Replaces SwiftTerm's `scroll(toPosition: 1.0)`, which cannot work on iOS:
+    /// it routes through `scrollTo(row:)`, whose body is guarded by
+    /// `row != yDisp` — and `yDisp` is already pinned to the tail.
+    func scrollToBottom() {
+        let maxY = maxScrollOffsetY
+        // Tolerance, not equality: SwiftTerm parks the tail at
+        // `(lines.count - rows) * cellHeight`, which overshoots `maxScrollOffsetY`
+        // by the viewport's sub-cell remainder, so an exact comparison never
+        // matches and every sent byte would jitter the viewport by up to a row
+        // and force a full-terminal repaint.
+        guard contentOffset.y < maxY - TerminalFollowScroll.bottomTolerance else { return }
+        contentOffset = CGPoint(x: contentOffset.x, y: maxY)
+    }
+
+    /// - Parameter isUserDriven: whether the offset moved because of a touch.
+    ///   The gate is the feedback-loop guard, and the direct analogue of the
+    ///   Android fork rule that `setTopRow` must not report a position
+    ///   (`docs/terminal-view-fork-changes.md`): UIKit delivers
+    ///   `scrollViewDidScroll` for plain `contentOffset` assignments too, so
+    ///   without it SwiftTerm's snap-to-tail — and `scrollToBottom()` itself —
+    ///   would resume follow mode behind the user's back.
+    func handleScrollViewDidScroll(isUserDriven: Bool) {
+        guard isUserDriven, !isApplyingEmulatorOutput else { return }
+        onUserScroll?(followPosition)
+    }
+}
+
+/// Turns the terminal's own scroll view into the follow-mode signal SwiftTerm
+/// never provides: it declares `UIScrollViewDelegate` conformance but implements
+/// no method of it and never claims the `delegate` slot, so a drag moves
+/// `contentOffset` — which is what the iOS renderer draws from — without ever
+/// reaching `TerminalViewDelegate.scrolled`.
+///
+/// A separate object rather than the view itself, matching
+/// `ExclusiveVerticalPanDelegate`: `MobaideTerminalView` inherits SwiftTerm's
+/// empty conformance, so answering the protocol on the view would silently make
+/// every unimplemented callback the scroll view's own.
+@MainActor
+private final class UserScrollObserver: NSObject, UIScrollViewDelegate {
+    weak var terminal: MobaideTerminalView?
+
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        terminal?.handleScrollViewDidScroll(
+            isUserDriven: scrollView.isDragging || scrollView.isDecelerating
+        )
+    }
 }
 
 /// Denies simultaneous recognition for the vertical-scroll pan so exactly one of
@@ -372,6 +528,20 @@ struct TerminalHostView: UIViewRepresentable {
             view.addGestureRecognizer(singleTap)
             view.installVerticalScrollGesture()
             view.neutralizeSwiftTermGestures()
+            // The view outlives every visit, so the callback must not retain
+            // this Coordinator: view → closure → Coordinator → model → view.
+            view.onUserScroll = { [weak self] position in
+                self?.userScrolled(to: position)
+            }
+        }
+
+        /// The only thing that moves follow mode, mirroring Android where
+        /// `onScrollPositionChanged` is fired from `doScroll` alone.
+        private func userScrolled(to position: Double) {
+            model.onUserScrolled(position: position)
+            // The keyboard counter-pan is computed from `contentOffset`, so it
+            // has to be re-evaluated whenever the user moves it.
+            panHost?.caretDidMove()
         }
 
         @objc private func handleSingleTap(_ gesture: UITapGestureRecognizer) {
@@ -393,12 +563,19 @@ struct TerminalHostView: UIViewRepresentable {
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
-            (source as? MobaideTerminalView)?.visibleRows = newRows
             model.resize(rows: newRows, cols: newCols)
         }
 
+        /// Emulator-driven, fired once per line the terminal pushes past the
+        /// bottom (`Terminal.scroll`) — the iOS counterpart of Android's
+        /// per-update `emulator.scrollCounter` delta, and so the unread tally.
+        ///
+        /// It deliberately does *not* touch follow mode: `position` comes from
+        /// SwiftTerm's `scrollPosition`, which is derived from the tail-pinned
+        /// `yDisp` and hardcoded to `0` on the alternate buffer — so honoring it
+        /// would pause follow mode every time a TUI repaints.
         func scrolled(source: TerminalView, position: Double) {
-            model.onScroll(position: position)
+            model.onEmulatorScrolled()
             panHost?.caretDidMove()
         }
 

@@ -155,14 +155,27 @@ private struct TerminalScreenContent: View {
                             .font(.system(size: 34))
                             .symbolRenderingMode(.hierarchical)
                     }
+                    .accessibilityLabel("Jump to bottom")
                     .padding(16)
                     .overlay(alignment: .topTrailing) {
                         if model.hasUnread {
-                            Circle().fill(MobaideColors.warningYellow).frame(width: 10, height: 10)
+                            unreadBadge(model.unreadRows)
                         }
                     }
                 }
             }
         }
+    }
+
+    /// Rows missed while paused (Android `JumpToBottomFab`'s badge). The label
+    /// saturates well below the model's own cap so the pill keeps its size.
+    private func unreadBadge(_ rows: Int) -> some View {
+        Text(rows > 999 ? "999+" : "\(rows)")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(MobaideColors.warningYellow))
+            .accessibilityLabel("\(rows) unread rows")
     }
 }

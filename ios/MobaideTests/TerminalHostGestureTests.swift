@@ -409,4 +409,402 @@ final class TerminalHostGestureTests: XCTestCase {
             "a dying wrapper must not detach a terminal a newer wrapper already owns"
         )
     }
+
+    // MARK: - Follow mode
+
+    /// Buffer index of the prompt line `feedTranscript` puts into history.
+    private static let historyPromptRow = 6
+
+    /// More output than one screen holds, so `contentSize` really exceeds the
+    /// viewport and there is scrollback to leave — plus a prompt row parked in
+    /// history and another one left under the cursor for row hit-testing.
+    private func feedTranscript(_ terminal: MobaideTerminalView) {
+        var text = ""
+        for index in 0..<200 {
+            text += index == Self.historyPromptRow ? "> echo history\r\n" : "line \(index)\r\n"
+        }
+        terminal.feed(text: text + "> echo tail")
+    }
+
+    private func layOutWithScrollback(_ terminal: MobaideTerminalView) {
+        // An unlaid-out view leaves SwiftTerm on a one-row grid whose whole
+        // buffer fits the viewport — there would be no scroll range at all, and
+        // every position would read as the tail.
+        terminal.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        terminal.layoutIfNeeded()
+        feedTranscript(terminal)
+        XCTAssertGreaterThan(terminal.maxScrollOffsetY, 0, "the harness must have real scrollback to leave")
+    }
+
+    private func scrolledBackTerminal() -> MobaideTerminalView {
+        let terminal = makeTerminal()
+        terminal.configureAppearance()
+        layOutWithScrollback(terminal)
+        return terminal
+    }
+
+    /// A model wired to its Coordinator exactly as `makeUIView` does, so both
+    /// scroll chains are real: a drag travels scroll view → view → model, and an
+    /// emulator scroll travels `Terminal.scroll` → `TerminalView.scrolled` →
+    /// Coordinator → model. SwiftTerm holds `terminalDelegate` weakly, hence the
+    /// retained Coordinator.
+    private func scrollableModel() -> TerminalSessionModel {
+        let model = makeModel()
+        let coordinator = TerminalHostView.Coordinator(model: model)
+        retainedCoordinator = coordinator
+        model.terminalView.terminalDelegate = coordinator
+        coordinator.attachGestures(to: model.terminalView)
+        layOutWithScrollback(model.terminalView)
+        return model
+    }
+
+    private func scrollUp(_ terminal: MobaideTerminalView) {
+        terminal.contentOffset = CGPoint(x: 0, y: terminal.maxScrollOffsetY / 2)
+        terminal.handleScrollViewDidScroll(isUserDriven: true)
+    }
+
+    func testConfigureAppearanceClaimsTheScrollViewDelegate() {
+        let terminal = makeTerminal()
+        XCTAssertNil(
+            terminal.delegate,
+            "SwiftTerm declares UIScrollViewDelegate conformance but implements no method of it and never claims the slot"
+        )
+
+        terminal.configureAppearance()
+
+        XCTAssertNotNil(terminal.delegate, "a drag reaches the app through the scroll view or not at all")
+        XCTAssertFalse(
+            terminal.delegate === terminal,
+            "answering the protocol on the view itself would silently adopt SwiftTerm's empty conformance"
+        )
+    }
+
+    func testUserDrivenScrollIntoHistoryPausesFollowMode() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+
+        scrollUp(terminal)
+
+        XCTAssertFalse(model.followMode, "the whole defect: a drag never reached the model")
+        XCTAssertTrue(
+            terminal.isAutoScrollSuppressed,
+            "a paused viewport must also stop being yanked back to the tail"
+        )
+    }
+
+    func testNonUserDrivenScrollReportIsDropped() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        terminal.contentOffset = CGPoint(x: 0, y: terminal.maxScrollOffsetY / 2)
+
+        terminal.handleScrollViewDidScroll(isUserDriven: false)
+
+        XCTAssertTrue(
+            model.followMode,
+            "only a touch may pause follow mode — every other offset write is the app's or SwiftTerm's own"
+        )
+    }
+
+    func testProgrammaticOffsetWriteNeverMovesFollowMode() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+
+        terminal.contentOffset = .zero
+
+        XCTAssertEqual(terminal.contentOffset.y, 0, accuracy: 0.5, "the write must actually land")
+        XCTAssertTrue(
+            model.followMode,
+            "UIKit delivers scrollViewDidScroll for plain assignments too, so the guard has to live in the observer"
+        )
+    }
+
+    func testSuppressedViewportHoldsItsOffsetWhileOutputArrives() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        scrollUp(terminal)
+        let held = terminal.contentOffset.y
+        XCTAssertLessThan(held, terminal.maxScrollOffsetY, "the viewport has to be away from the tail to be held there")
+
+        terminal.feed(text: "fresh output\r\n")
+
+        XCTAssertEqual(
+            terminal.contentOffset.y, held, accuracy: 0.5,
+            "SwiftTerm's updateScroller snaps to the tail on every scrolled line; a paused reader must not be yanked along"
+        )
+    }
+
+    func testFollowingViewportIsStillPulledToTheTailByOutput() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        terminal.contentOffset = .zero
+        XCTAssertTrue(model.followMode)
+        XCTAssertFalse(terminal.isScrolledToBottom, "the offset has to start away from the tail for the snap to show")
+
+        terminal.feed(text: "fresh output\r\n")
+
+        XCTAssertTrue(
+            terminal.isScrolledToBottom,
+            "suppression is scoped to a paused viewport — following output must keep working"
+        )
+    }
+
+    func testJumpToBottomLandsAtTheTailAndClearsTheUnreadTally() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        scrollUp(terminal)
+        model.onEmulatorScrolled()
+        model.onEmulatorScrolled()
+        XCTAssertEqual(model.unreadRows, 2)
+
+        model.jumpToBottom()
+
+        XCTAssertEqual(
+            terminal.contentOffset.y, terminal.maxScrollOffsetY, accuracy: 0.5,
+            "scroll(toPosition: 1.0) is guarded by `row != yDisp` and yDisp is already at the tail, so the button did nothing"
+        )
+        XCTAssertTrue(model.followMode)
+        XCTAssertEqual(model.unreadRows, 0)
+        XCTAssertFalse(terminal.isAutoScrollSuppressed)
+    }
+
+    /// The tally has one and only one producer — the SwiftTerm delegate chain —
+    /// so calling `onEmulatorScrolled()` by hand proves nothing about whether
+    /// real output ever reaches it. Feeding actual bytes is what closes the same
+    /// blind spot that let the follow-mode defect ship green.
+    func testEmulatorOutputWhilePausedAccruesOneUnreadRowPerScrolledLine() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        scrollUp(terminal)
+        XCTAssertEqual(model.unreadRows, 0, "output before this point arrived while following")
+        // `yDisp` is pinned to `yBase`, so its delta counts the lines the
+        // emulator actually pushed into the scrollback.
+        let originBefore = terminal.getTerminal().buffer.yDisp
+
+        terminal.feed(text: "a\r\nb\r\n")
+
+        XCTAssertEqual(
+            terminal.getTerminal().buffer.yDisp - originBefore, 2,
+            "two line feeds on the bottom row push exactly two lines past the bottom"
+        )
+        XCTAssertEqual(
+            model.unreadRows, 2,
+            "Terminal.scroll → TerminalView.scrolled → Coordinator.scrolled → onEmulatorScrolled, once per pushed line"
+        )
+    }
+
+    // MARK: - Emulator auto-replies
+
+    private func outputFrame(_ text: String) -> Data {
+        Data([0x6F]) + Data(text.utf8)
+    }
+
+    /// `wiredModel` wires SwiftTerm's own delegate but not the scroll-view
+    /// callback `makeUIView` installs alongside it, and follow mode moves
+    /// through that callback alone — so the pause has to travel the real drag
+    /// chain rather than being poked into the model.
+    private func pausedWiredModel() async throws
+        -> (TerminalSessionModel, FakeWebSocketConnection, TerminalHostView.Coordinator) {
+        let (model, connection) = try await wiredModel()
+        let coordinator = try XCTUnwrap(retainedCoordinator)
+        coordinator.attachGestures(to: model.terminalView)
+        layOutWithScrollback(model.terminalView)
+        scrollUp(model.terminalView)
+        XCTAssertFalse(model.followMode, "the harness must be paused before anything is delivered to it")
+        return (model, connection, coordinator)
+    }
+
+    /// SwiftTerm answers `ESC[6n` (DSR — cursor position) synchronously while
+    /// it parses inbound output, and the reply travels the same
+    /// `TerminalViewDelegate.send` chain a typed key does. Prompt frameworks
+    /// emit that query routinely, so a reply that resumed follow mode would let
+    /// a program yank a paused reader back to the tail on its own. The bytes go
+    /// in through the `o` frame rather than `feed` because `handleBinary` is
+    /// where the emulator-output attribution is raised.
+    func testEmulatorAutoReplyReachesThePtyWithoutResumingFollowMode() async throws {
+        let (model, connection, _) = try await pausedWiredModel()
+        let terminal = model.terminalView
+        connection.emit(.binary(outputFrame("a\r\nb\r\n")))
+        let accrued = await poll { model.unreadRows == 2 }
+        XCTAssertTrue(accrued, "the paused viewport needs a real tally before the query, or clearing it would not show")
+
+        connection.emit(.binary(outputFrame("\u{1B}[5;3H\u{1B}[6n")))
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(
+            frames, [inputFrame("\u{1B}[5;3R")],
+            "only the follow-mode resume is dropped — the cursor-position report still has to reach the PTY"
+        )
+        XCTAssertFalse(model.followMode, "a program answering its own query is not the user returning to the tail")
+        XCTAssertEqual(model.unreadRows, 2, "resuming would have wiped the tally the reader has not caught up on")
+        XCTAssertTrue(
+            terminal.isAutoScrollSuppressed,
+            "and lifted the hold that keeps the viewport where the finger left it"
+        )
+    }
+
+    /// The gate is scoped to bytes the emulator generated while parsing; the
+    /// identical delegate call outside an output frame is a real keystroke and
+    /// must still resume.
+    func testTypedKeyOutsideAnOutputFrameStillResumesFollowMode() async throws {
+        let (model, connection, coordinator) = try await pausedWiredModel()
+        let terminal = model.terminalView
+        connection.emit(.binary(outputFrame("a\r\n")))
+        let accrued = await poll { model.unreadRows == 1 }
+        XCTAssertTrue(accrued, "the tally has to be non-zero for the clear to be observable")
+
+        coordinator.send(source: terminal, data: Array("ls".utf8)[...])
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(frames, [inputFrame("ls")])
+        XCTAssertTrue(model.followMode, "typing is a resume trigger — the answer has to be visible")
+        XCTAssertEqual(model.unreadRows, 0)
+        XCTAssertFalse(terminal.isAutoScrollSuppressed)
+    }
+
+    // MARK: - resolveRow
+
+    func testResolveRowReadsTheRenderedLineWhileScrolledIntoHistory() {
+        let terminal = scrolledBackTerminal()
+        let cellHeight = terminal.cellSize.height
+        let yDispBefore = terminal.getTerminal().buffer.yDisp
+        terminal.contentOffset = .zero
+
+        let resolved = terminal.resolveRow(
+            at: CGPoint(x: 20, y: CGFloat(Self.historyPromptRow) * cellHeight + cellHeight / 2)
+        )
+
+        XCTAssertEqual(
+            resolved?.text, "echo history",
+            "getLine counts from the tail-pinned yDisp while the renderer counts from contentOffset"
+        )
+        XCTAssertEqual(resolved?.isCurrentInput, false, "scrolled into history, every prompt is historical")
+        XCTAssertEqual(
+            terminal.getTerminal().buffer.yDisp, yDispBefore,
+            "the re-pointed read window must be restored before any SwiftTerm code observes it"
+        )
+    }
+
+    func testResolveRowAtTheTailIsTheCurrentInput() {
+        let terminal = scrolledBackTerminal()
+        let cellHeight = terminal.cellSize.height
+        let lastRow = terminal.getTerminal().getDims().rows - 1
+
+        let resolved = terminal.resolveRow(
+            at: CGPoint(x: 20, y: terminal.contentOffset.y + CGFloat(lastRow) * cellHeight + cellHeight / 2)
+        )
+
+        XCTAssertEqual(resolved?.text, "echo tail")
+        XCTAssertEqual(resolved?.isCurrentInput, true, "the cursor row at the tail is the live input line")
+    }
+
+    func testOverscrolledTapBelowTheContentResolvesNothing() {
+        let terminal = scrolledBackTerminal()
+        let cellHeight = terminal.cellSize.height
+        let yDispBefore = terminal.getTerminal().buffer.yDisp
+        let lastRow = terminal.getTerminal().getDims().rows - 1
+        // A rubber-band bounce at the tail drives the offset past the content.
+        // SwiftTerm's own renderer draws nothing past the last real line
+        // (`AppleTerminalView.drawTerminalContents` skips rows past the
+        // buffer), so this tap — ten rows below the last line — lands on
+        // blank background, not on "echo tail" folded up to meet it.
+        terminal.contentOffset = CGPoint(x: 0, y: terminal.maxScrollOffsetY + 10 * cellHeight)
+
+        let resolved = terminal.resolveRow(
+            at: CGPoint(x: 20, y: terminal.contentOffset.y + CGFloat(lastRow) * cellHeight + cellHeight / 2)
+        )
+
+        XCTAssertNil(resolved, "a rubber-band bounce draws blank below the last line; a tap there must not resolve a command")
+        XCTAssertEqual(
+            terminal.getTerminal().buffer.yDisp, yDispBefore,
+            "the read window must be restored even when nothing resolves"
+        )
+    }
+
+    func testOverscrolledTapOnTheLastLineStillResolves() {
+        let terminal = scrolledBackTerminal()
+        let cellHeight = terminal.cellSize.height
+        let yDispBefore = terminal.getTerminal().buffer.yDisp
+        // A small overscroll past `maxScrollOffsetY` — but the tap below
+        // targets a point that is still genuinely inside the rendered
+        // content, so the window still has to clamp onto the last real line.
+        terminal.contentOffset = CGPoint(x: 0, y: terminal.maxScrollOffsetY + 2 * cellHeight)
+        let lineCount = terminal.getTerminal().buffer.yDisp + terminal.getTerminal().getDims().rows
+
+        let resolved = terminal.resolveRow(
+            at: CGPoint(x: 20, y: (CGFloat(lineCount - 1) + 0.5) * cellHeight)
+        )
+
+        XCTAssertEqual(
+            resolved?.text, "echo tail",
+            "the read window still clamps to the last real line when the tap is genuinely inside it"
+        )
+        XCTAssertEqual(
+            terminal.getTerminal().buffer.yDisp, yDispBefore,
+            "the re-pointed read window must be restored before any SwiftTerm code observes it"
+        )
+    }
+
+    /// A drag routinely leaves `contentOffset` mid-cell rather than on a cell
+    /// boundary. The pre-fix math floored the viewport row and the window
+    /// origin separately — `floor(0.6) + floor(0.5)` here — landing one row
+    /// short of the tap; a single floor of the absolute position —
+    /// `floor(0.6 + 0.5)` — lands on the row actually under the finger.
+    func testNonCellAlignedOffsetResolvesTheRowUnderTheFingerNotOneRowShort() {
+        let terminal = scrolledBackTerminal()
+        let cellHeight = terminal.cellSize.height
+        let topRow = Self.historyPromptRow - 1
+        terminal.contentOffset = CGPoint(x: 0, y: (CGFloat(topRow) + 0.6) * cellHeight)
+
+        let resolved = terminal.resolveRow(
+            at: CGPoint(x: 20, y: terminal.contentOffset.y + 0.5 * cellHeight)
+        )
+
+        XCTAssertEqual(
+            resolved?.text, "echo history",
+            "the tap lands 1.1 cells below row \(topRow)'s top — inside row \(Self.historyPromptRow), not row \(topRow)"
+        )
+    }
+
+    /// Absolute content y of the vertical middle of the bottom-most buffer line.
+    private func lastLineMidY(_ terminal: MobaideTerminalView) -> CGFloat {
+        let lineCount = terminal.getTerminal().buffer.yDisp + terminal.getTerminal().getDims().rows
+        return (CGFloat(lineCount - 1) + 0.5) * terminal.cellSize.height
+    }
+
+    /// The offset `scrollToBottom()` parks at is a sub-cell floor *below*
+    /// SwiftTerm's own tail — `contentSize.height - bounds.height` against a
+    /// viewport whose height is not a whole number of cells. Flooring it gave a
+    /// window origin of `yDisp - 1`, and since `getLine(row:)` addresses exactly
+    /// `rows` lines from that origin, the last buffer line — the live prompt —
+    /// fell out of reach and every tap on it after a jump-to-bottom did nothing.
+    func testResolveRowReachesTheLiveInputAtTheParkedTailOffset() {
+        let terminal = scrolledBackTerminal()
+        let cellHeight = terminal.cellSize.height
+        let parked = terminal.maxScrollOffsetY
+        XCTAssertNotEqual(
+            parked.truncatingRemainder(dividingBy: cellHeight), 0, accuracy: 0.01,
+            "the harness must park sub-cell-misaligned, or the regression cannot reproduce here"
+        )
+        terminal.contentOffset = CGPoint(x: 0, y: parked)
+
+        let resolved = terminal.resolveRow(at: CGPoint(x: 20, y: lastLineMidY(terminal)))
+
+        XCTAssertEqual(
+            resolved?.text, "echo tail",
+            "the window has to be raised to cover the tapped row, not left at the floored viewport top"
+        )
+        XCTAssertEqual(resolved?.isCurrentInput, true, "parked at the tail, the cursor row is the live input line")
+    }
+
+    func testResolveRowReachesTheLiveInputAfterAJumpToBottom() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        scrollUp(terminal)
+
+        model.jumpToBottom()
+
+        let resolved = terminal.resolveRow(at: CGPoint(x: 20, y: lastLineMidY(terminal)))
+        XCTAssertEqual(resolved?.text, "echo tail", "the prompt must stay tappable after the button returns to the tail")
+        XCTAssertEqual(resolved?.isCurrentInput, true)
+    }
 }

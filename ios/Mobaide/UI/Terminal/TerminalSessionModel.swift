@@ -35,6 +35,9 @@ final class TerminalSessionModel {
         case closed
     }
 
+    /// Android `MAX_UNREAD_DISPLAY`.
+    static let maxUnreadRows = 9999
+
     /// `ESC[H ESC[2J ESC[3J` — cursor home, erase display, erase scrollback.
     /// Fed before applying each replay buffer (Android `CLEAR_BEFORE_REPLAY`).
     static let clearBeforeReplay: [UInt8] = [
@@ -57,7 +60,11 @@ final class TerminalSessionModel {
     private(set) var connectionState: ConnectionState = .reconnecting
     private(set) var sessionStatus: String?
     private(set) var followMode = true
-    private(set) var hasUnread = false
+    /// Rows the terminal pushed past the bottom while follow mode was paused
+    /// (Android `TerminalViewModel.unreadRows`), capped so a runaway producer
+    /// cannot grow the badge without bound.
+    private(set) var unreadRows = 0
+    var hasUnread: Bool { unreadRows > 0 }
     /// Purely user-controlled composer visibility (Android parity): hidden
     /// sticks across TUI episodes and reconnects — nothing in the connection
     /// or replay machinery may resurrect it.
@@ -215,12 +222,15 @@ final class TerminalSessionModel {
         switch frame {
         case .output(let bytes):
             guard !bytes.isEmpty else { return }
-            terminalView.feed(byteArray: Array(bytes)[...])
-            if !followMode { hasUnread = true }
+            terminalView.applyingEmulatorOutput {
+                terminalView.feed(byteArray: Array(bytes)[...])
+            }
         case .state(let json):
             sessionStatus = Self.parseStatus(json) ?? sessionStatus
         case .replayStart:
-            terminalView.feed(byteArray: Self.clearBeforeReplay[...])
+            terminalView.applyingEmulatorOutput {
+                terminalView.feed(byteArray: Self.clearBeforeReplay[...])
+            }
             inReplay = true
             setFollowMode(true)
             connectionState = .replayingBuffer
@@ -258,8 +268,19 @@ final class TerminalSessionModel {
     /// stayed up, and replay-era auto-replies must not reach the live PTY as
     /// stale duplicates. Composer submits and control keys are deliberately
     /// not gated here — their buttons disable instead.
+    ///
+    /// A reply the emulator generated while parsing inbound output still goes
+    /// on the wire, but skips the resume: it is the program talking to itself,
+    /// not the user typing, so letting it run `setFollowMode(true)` would let a
+    /// bare cursor-position query (`ESC[6n`, which prompt frameworks emit
+    /// routinely) yank a paused viewport back to the tail and wipe the unread
+    /// tally — the exact hijack follow mode exists to prevent.
     func sendTerminalBytes(_ data: Data) {
         guard canSendTerminalBytes else { return }
+        guard !terminalView.isApplyingEmulatorOutput else {
+            enqueue(.input(data))
+            return
+        }
         sendBytes(data)
     }
 
@@ -331,32 +352,50 @@ final class TerminalSessionModel {
 
     // MARK: - Follow mode
 
+    /// Set follow mode, additionally pulling the viewport back to the tail when
+    /// resuming — every caller resumes, but the pause direction stays available
+    /// for parity with Android's `setFollowMode(enabled:)`.
     func setFollowMode(_ follow: Bool) {
+        applyFollowMode(follow)
         if follow {
-            hasUnread = false
-            terminalView.scroll(toPosition: 1.0)
-        }
-        if followMode != follow {
-            followMode = follow
+            // After the suppression is lifted, or the view would refuse its own
+            // snap as if it were SwiftTerm's.
+            terminalView.scrollToBottom()
         }
     }
 
-    /// Driven by the SwiftTerm `scrolled` delegate. Position `1.0` is the
-    /// bottom of the scrollback (following); anything less means the user
-    /// scrolled into history and follow-mode pauses.
-    func onScroll(position: Double) {
-        if position >= 0.999 {
-            if !followMode {
-                followMode = true
-                hasUnread = false
-            }
-        } else if followMode {
-            followMode = false
-        }
+    /// Driven by the terminal's scroll view for user-initiated drags only.
+    /// Position `1.0` is the tail (following); anything less means the user
+    /// scrolled into history and follow mode pauses. Deliberately does not move
+    /// the viewport — the user's finger already did.
+    func onUserScrolled(position: Double) {
+        applyFollowMode(TerminalFollowScroll.isAtBottom(position: position))
+    }
+
+    /// One line the terminal pushed past the bottom. Android accrues the same
+    /// tally from `emulator.scrollCounter` per screen update; SwiftTerm reports
+    /// it one line at a time through the `scrolled` delegate.
+    func onEmulatorScrolled() {
+        guard !followMode, unreadRows < Self.maxUnreadRows else { return }
+        unreadRows += 1
     }
 
     func jumpToBottom() {
         setFollowMode(true)
+    }
+
+    /// The sole writer of the follow-mode triple, so the flag, the unread tally
+    /// and the view's snap suppression cannot drift apart. Every write is
+    /// equality-guarded: the resume path runs on each sent byte, and `@Observable`
+    /// notifies on assignment rather than on change.
+    private func applyFollowMode(_ follow: Bool) {
+        if follow, unreadRows != 0 {
+            unreadRows = 0
+        }
+        terminalView.isAutoScrollSuppressed = !follow
+        if followMode != follow {
+            followMode = follow
+        }
     }
 
     // MARK: - Composer / terminal keyboard
