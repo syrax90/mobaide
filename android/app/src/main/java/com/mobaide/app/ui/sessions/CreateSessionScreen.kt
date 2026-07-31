@@ -9,10 +9,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -184,6 +189,11 @@ fun CreateSessionScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .padding(16.dp)
+                // The app is edge-to-edge, so adjustResize never shrinks the window: the
+                // keyboard arrives only as an inset. Consume it above verticalScroll so the
+                // viewport shrinks and the focused field scrolls clear of the keyboard.
+                // Scaffold already inset this content by systemBars — add only the excess.
+                .windowInsetsPadding(WindowInsets.ime.exclude(WindowInsets.systemBars))
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
