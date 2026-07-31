@@ -51,6 +51,11 @@ final class MobaideTerminalView: TerminalView {
         // the accessory is installed exactly once at init, so a one-time nil
         // here — before the view can ever become first responder — is final.
         inputAccessoryView = nil
+        // Tap-to-stop has to kill a fling on touch-down, not 150ms later. The
+        // delay only ever shielded interactive content subviews, and SwiftTerm
+        // gives this scroll view none — caret, Metal layer and progress bar all
+        // set `isUserInteractionEnabled = false`.
+        delaysContentTouches = false
         installVerticalScrollGesture()
         userScrollObserver.terminal = self
         delegate = userScrollObserver
@@ -279,6 +284,9 @@ final class MobaideTerminalView: TerminalView {
     @objc private func handleVerticalScroll(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
+            // `touchesBegan` already stopped any momentum; this covers a pan
+            // that begins from a touch the view never saw.
+            cancelFling()
             wheelAccumulator.reset()
             wheelAnchor = gesture.location(in: self)
             // Consume the slop travel too, matching Android's GestureDetector
@@ -286,7 +294,10 @@ final class MobaideTerminalView: TerminalView {
             consumeVerticalScroll(gesture)
         case .changed:
             consumeVerticalScroll(gesture)
-        case .ended, .cancelled, .failed:
+        case .ended:
+            wheelAccumulator.reset()
+            startFling(velocity: gesture.velocity(in: self))
+        case .cancelled, .failed:
             wheelAccumulator.reset()
         default:
             break
@@ -323,8 +334,10 @@ final class MobaideTerminalView: TerminalView {
         switch mode {
         case .wheel:
             let flags = TerminalWheelScroll.wheelFlags(down: down)
-            for _ in 0 ..< steps {
-                terminal.sendEvent(buttonFlags: flags, x: cell.col, y: cell.row)
+            batchingEmulatorWrites {
+                for _ in 0 ..< steps {
+                    terminal.sendEvent(buttonFlags: flags, x: cell.col, y: cell.row)
+                }
             }
         case .cursorKeys:
             // Concatenated into one write: a PTY is a byte stream, so N arrows in
@@ -346,6 +359,94 @@ final class MobaideTerminalView: TerminalView {
         case .localScrollback:
             break
         }
+    }
+
+    private var emulatorWriteBatch: [UInt8]?
+
+    /// Collects everything the emulator writes back during `body` and delivers
+    /// it as a single write, so a burst of wheel reports costs one WebSocket
+    /// frame instead of one per row — the wheel arm's counterpart of the
+    /// concatenation the cursor-key arm does inline.
+    ///
+    /// `send(source:data:)` also carries the emulator's automatic replies
+    /// (DA, DSR), but only a synchronous run of `sendEvent` is ever wrapped
+    /// here and nothing feeds the emulator inside one, so no reply can be
+    /// swallowed into a batch.
+    private func batchingEmulatorWrites(_ body: () -> Void) {
+        emulatorWriteBatch = []
+        body()
+        let batch = emulatorWriteBatch ?? []
+        emulatorWriteBatch = nil
+        guard !batch.isEmpty else { return }
+        // The un-batched exit, deliberately not `send(data:)` — that one adds
+        // `ensureCaretIsVisible()`, a snap-to-caret the per-row path never ran.
+        super.send(source: getTerminal(), data: batch[...])
+    }
+
+    override func send(source: Terminal, data: ArraySlice<UInt8>) {
+        guard emulatorWriteBatch != nil else {
+            super.send(source: source, data: data)
+            return
+        }
+        emulatorWriteBatch?.append(contentsOf: data)
+    }
+
+    // MARK: - Fling
+
+    private(set) var flingTask: Task<Void, Never>?
+
+    /// Momentum after the finger lifts, Android `onFling`.
+    ///
+    /// The ladder arm is snapshotted rather than re-derived per frame: a
+    /// program that leaves the alternate screen or drops mouse reporting
+    /// mid-fling must have the remaining rows dropped, not re-routed onto
+    /// whatever replaced it (Android `mouseTrackingAtStartOfFling`).
+    func startFling(velocity: CGPoint) {
+        cancelFling()
+        let arm = wheelScrollMode
+        // `.localScrollback` needs nothing: there the touch belongs to
+        // SwiftTerm's own scroll view, which decelerates by itself.
+        guard arm != .localScrollback else { return }
+        let steps = TerminalWheelScroll.flingSteps(
+            rows: TerminalWheelScroll.flingRows(
+                velocityY: velocity.y,
+                cellHeight: cellSize.height,
+                rows: getTerminal().getDims().rows
+            )
+        )
+        guard !steps.isEmpty else { return }
+        let anchor = wheelAnchor
+        flingTask = Task { [weak self] in
+            for step in steps {
+                try? await Task.sleep(for: TerminalWheelScroll.flingFrameInterval)
+                guard !Task.isCancelled, let self, self.wheelScrollMode == arm else { return }
+                self.emitVerticalScroll(rowsDown: step, at: anchor)
+            }
+        }
+    }
+
+    func cancelFling() {
+        flingTask?.cancel()
+        flingTask = nil
+    }
+
+    /// Tap-to-stop, the `UIScrollView` convention the outer
+    /// `TerminalPanScrollView` already honors for its own fling. It has to hang
+    /// off the touch rather than off a recognizer: `TerminalWheelScroll.claimsPan`
+    /// refuses a zero sample, so a stationary tap never reaches the pan at all.
+    ///
+    /// Deliberately not Android, which has no tap-to-stop — its `onDown`
+    /// returns false and a fling always runs to completion.
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        cancelFling()
+        super.touchesBegan(touches, with: event)
+    }
+
+    /// The terminal view is model-owned and outlives the screen, so a fling
+    /// left running would keep writing to a session the user has left.
+    override func willMove(toWindow newWindow: UIWindow?) {
+        if newWindow == nil { cancelFling() }
+        super.willMove(toWindow: newWindow)
     }
 
     // MARK: - Follow mode

@@ -55,6 +55,78 @@ enum TerminalWheelScroll {
         down ? wheelDownFlags : wheelUpFlags
     }
 
+    // MARK: - Fling
+
+    /// Android `onFling`'s `SCALE`.
+    static let flingVelocityScale: CGFloat = 0.25
+    /// Lift-off speed below which nothing coasts, so a deliberate stop-then-lift
+    /// ends the drag where the finger left it.
+    ///
+    /// Deliberately not Android's 50 dp/s
+    /// `ViewConfiguration.getScaledMinimumFlingVelocity()`: that number is only
+    /// a threshold because Android skips the cell-height division below, where
+    /// it already buys a dozen rows. Divided by a real cell it buys none, so the
+    /// threshold has to be restated in this formula's units — 250 pt/s is the
+    /// first speed worth more than three rows.
+    static let minimumFlingVelocity: CGFloat = 250
+    static let flingMaxFrames = 12
+    static let flingFrameInterval: Duration = .milliseconds(40)
+
+    /// Rows a lift-off should keep scrolling, Android `onFling`'s
+    /// `-(int)(velocityY * SCALE)` clamped to `±rows / 2`.
+    ///
+    /// Android feeds pixels-per-second straight into a row-space `Scroller`
+    /// with no font-height division, so any real flick saturates that clamp.
+    /// Dividing by the cell height instead makes the travel proportional to the
+    /// flick, which matters more here: every row is a WebSocket round trip plus
+    /// a full repaint from the program, where Android's events hit a local PTY.
+    ///
+    /// - Parameter velocityY: UIKit pan velocity, positive when the finger
+    ///   moved down the screen.
+    /// - Returns: rows toward newer content — positive means wheel-down — the
+    ///   sign convention `TerminalWheelAccumulator.rowsDown` uses.
+    static func flingRows(velocityY: CGFloat, cellHeight: CGFloat, rows: Int) -> Int {
+        guard cellHeight > 0, velocityY.isFinite, abs(velocityY) >= minimumFlingVelocity else { return 0 }
+        let travel = -velocityY * flingVelocityScale / cellHeight
+        guard travel.isFinite else { return 0 }
+        // Clamped before the conversion, not after: `Int(_: CGFloat)` traps on
+        // anything past `Int.max`, which a cell height of a fraction of a point
+        // reaches — the same class of trap as `maxEncodableCoordinate` above.
+        let limit = CGFloat(max(1, rows / 2))
+        return Int(min(limit, max(-limit, travel)))
+    }
+
+    /// Splits a fling's rows into per-frame counts that decelerate, the shape
+    /// Android gets from `Scroller`'s spline.
+    ///
+    /// Quadratic ease-out on the *cumulative* travel — the distance a constant
+    /// deceleration covers, which is what `Scroller` integrates. Differencing a
+    /// rounded cumulative rather than rounding each step makes the steps sum to
+    /// `rows` exactly, so `±rows / 2` is the real travel budget and not an
+    /// approximation of one.
+    ///
+    /// At most two rows per frame, capped again at `flingMaxFrames`: a frame
+    /// carrying less than a row is a 40ms stall rather than deceleration, and a
+    /// long fling should coarsen into bigger steps instead of stretching into a
+    /// longer stream of single-row round trips.
+    static func flingSteps(rows: Int) -> [Int] {
+        let total = abs(rows)
+        guard total > 0 else { return [] }
+        let frames = min(flingMaxFrames, (total + 1) / 2)
+        let sign = rows > 0 ? 1 : -1
+        var steps: [Int] = []
+        steps.reserveCapacity(frames)
+        var emitted = 0
+        for frame in 1 ... frames {
+            let remaining = 1 - Double(frame) / Double(frames)
+            let travelled = Int((Double(total) * (1 - remaining * remaining)).rounded())
+            defer { emitted = travelled }
+            guard travelled != emitted else { continue }
+            steps.append(sign * (travelled - emitted))
+        }
+        return steps
+    }
+
     static func cursorKeyBytes(down: Bool, applicationCursor: Bool) -> [UInt8] {
         if down {
             return applicationCursor ? EscapeSequences.moveDownApp : EscapeSequences.moveDownNormal
