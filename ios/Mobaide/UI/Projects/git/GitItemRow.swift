@@ -1,20 +1,12 @@
 import SwiftUI
 
-/// One git branch/worktree row (Android `GitItemRow`): a selection glyph in
-/// selection mode, the primary/secondary labels, and status chips.
+/// One git branch/worktree row (Android `GitItemRow`): the primary/secondary
+/// labels and status chips. Selection is rendered by the enclosing `List`.
 struct GitItemRow: View {
     let item: GitItem
-    let inSelectionMode: Bool
-    let isSelected: Bool
-
-    @Environment(\.mobaideColors) private var colors
 
     var body: some View {
         HStack(spacing: 12) {
-            if inSelectionMode && item.isDeletable {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? colors.primary : colors.onSurfaceVariant)
-            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(GitItemDisplay.primaryLabel(item))
                     .font(.body)
@@ -28,11 +20,11 @@ struct GitItemRow: View {
                 }
                 let chips = GitItemDisplay.chips(item)
                 if !chips.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(Array(chips.enumerated()), id: \.offset) { pair in
-                                GitChip(text: pair.element.text, style: pair.element.style)
-                            }
+                    // A horizontal ScrollView here would install its own pan
+                    // recognizer and swallow the row's trailing swipe.
+                    HStack(spacing: 6) {
+                        ForEach(Array(chips.enumerated()), id: \.offset) { pair in
+                            GitChip(text: pair.element.text, style: pair.element.style)
                         }
                     }
                 }

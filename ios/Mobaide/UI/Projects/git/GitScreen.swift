@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// Git branches/worktrees management (Android `GitScreen`), the real body for
-/// the `gitManagement` route. Long-press enters multi-select; the batch delete
-/// runs through a 5s Undo window, then branches on `force_required` (re-prompt +
-/// re-send with force) and 409-busy (holder list).
+/// the `gitManagement` route. A row is deleted by swipe or from its context
+/// menu; "Select" enters edit mode for a batch delete. Every delete runs through
+/// a 5s Undo window, then branches on `force_required` (re-prompt + re-send with
+/// force) and 409-busy (holder list).
 struct GitScreen: View {
     let projectName: String
 
@@ -19,8 +20,10 @@ struct GitScreen: View {
 private struct GitContent: View {
     @State private var model: GitScreenModel
     @State private var toast: ToastMessage?
-
-    @Environment(\.mobaideColors) private var colors
+    // Owned rather than driven by `EditButton`: this view reads edit mode for
+    // its title and toolbar, which the ambient `\.editMode` binding does not
+    // reliably propagate to the view that installs the toolbar.
+    @State private var editMode: EditMode = .inactive
 
     init(container: AppContainer, projectName: String) {
         _model = State(initialValue: GitScreenModel(
@@ -32,19 +35,10 @@ private struct GitContent: View {
 
     var body: some View {
         content
-            .navigationTitle(model.inSelectionMode ? "\(model.selected.count) selected" : "Git")
+            .environment(\.editMode, $editMode)
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if model.inSelectionMode {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Close") { model.exitSelection() }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Delete", role: .destructive) { model.requestDelete() }
-                            .disabled(model.selected.isEmpty)
-                    }
-                }
-            }
+            .toolbar { toolbarContent }
             .refreshable { await model.load() }
             .confirmationDialog(
                 "Force delete?",
@@ -75,11 +69,42 @@ private struct GitContent: View {
                     model.message = nil
                 }
             }
+            .onChange(of: editMode) { _, newValue in
+                if !newValue.isEditing { model.clearSelection() }
+            }
+            .onChange(of: model.hasDeletableItems) { _, newValue in
+                if !newValue { editMode = .inactive }
+            }
+    }
+
+    private var title: String {
+        guard editMode.isEditing else { return "Git" }
+        return model.selected.isEmpty ? "Select items" : "\(model.selected.count) selected"
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if editMode.isEditing {
+                Button("Delete", role: .destructive) {
+                    withAnimation {
+                        model.requestDelete()
+                        editMode = .inactive
+                    }
+                }
+                .disabled(model.selected.isEmpty)
+            }
+            if model.hasDeletableItems {
+                Button(editMode.isEditing ? "Done" : "Select") {
+                    withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                }
+            }
+        }
     }
 
     @ViewBuilder
     private var content: some View {
-        if model.items.isEmpty {
+        if model.visibleItems.isEmpty {
             if model.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -87,25 +112,49 @@ private struct GitContent: View {
                 ContentUnavailableView("No branches or worktrees", systemImage: "arrow.triangle.branch")
             }
         } else {
-            List {
-                ForEach(model.items, id: \.id) { item in
-                    GitItemRow(
-                        item: item,
-                        inSelectionMode: model.inSelectionMode,
-                        isSelected: model.selected.contains(item.id)
-                    )
-                    .listRowBackground(model.selected.contains(item.id) ? colors.primary.opacity(0.12) : nil)
-                    .contentShape(Rectangle())
-                    .onTapGesture { model.rowTapped(item) }
-                    .onLongPressGesture { model.rowLongPressed(item) }
+            List(selection: $model.selected) {
+                ForEach(model.visibleItems, id: \.id) { item in
+                    row(item)
                 }
             }
             .listStyle(.plain)
         }
     }
 
+    @ViewBuilder
+    private func row(_ item: GitItem) -> some View {
+        if item.isDeletable {
+            GitItemRow(item: item)
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        withAnimation { model.delete(item) }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                }
+                .contextMenu {
+                    Button(role: .destructive) {
+                        withAnimation { model.delete(item) }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    Button {
+                        model.select(item)
+                        withAnimation { editMode = .active }
+                    } label: {
+                        Label("Select", systemImage: "checkmark.circle")
+                    }
+                }
+        } else {
+            GitItemRow(item: item)
+                .selectionDisabled()
+        }
+    }
+
     private var forcePresented: Binding<Bool> {
         Binding(
+            // Only the dialog's own buttons decide the outcome: SwiftUI writes
+            // this binding on dismissal, which may land before the action runs.
             get: { model.forcePrompt != nil },
             set: { if !$0 { model.forcePrompt = nil } }
         )

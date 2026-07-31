@@ -3,12 +3,16 @@ package com.mobaide.app.ui.projects.git
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mobaide.app.data.network.dto.GitDeleteResultItem
 import com.mobaide.app.data.network.dto.GitDeleteItem
 import com.mobaide.app.data.network.dto.GitItem
 import com.mobaide.app.data.repository.GitBusyException
 import com.mobaide.app.data.repository.GitRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -25,12 +29,15 @@ import javax.inject.Inject
  *
  *  - Server-authoritative: every successful delete triggers a server-side
  *    `git.changed` event that flows back through [GitRepository.changed] and
- *    re-fetches the list. The screen never mutates [items] locally.
- *  - Selection mode is entered on long-press; a back press exits it.
- *  - Safe deletes (`force=false`) emit a [GitUiEvent.DeletedWithUndo]; the
- *    network call only fires after the snackbar dismisses. Tapping Undo
- *    cancels the call entirely (no compensating create — no destructive
- *    action ever reached the server).
+ *    re-fetches the list. The screen never mutates [GitUiState.items] locally.
+ *  - Rows are deleted by swipe, or in bulk from selection mode (entered by
+ *    long-press or the "Select" action; a back press exits it).
+ *  - A delete hides its rows at once and opens a 5s undo window owned here, not
+ *    by the snackbar: a delete raised while the window is open joins the pending
+ *    batch instead of replacing it. Undo cancels the window entirely — no
+ *    compensating create, because no destructive action ever reached the server.
+ *  - `force_required` results re-prompt and re-send with `force=true`; a 409
+ *    restores every row, because the server rejects the batch whole.
  */
 @HiltViewModel
 class GitViewModel @Inject constructor(
@@ -50,6 +57,18 @@ class GitViewModel @Inject constructor(
     )
     val events: SharedFlow<GitUiEvent> = _events.asSharedFlow()
 
+    /** The not-yet-sent batch, in request order. */
+    private var pendingBatch: List<PendingDelete> = emptyList()
+
+    /**
+     * The undo countdown only — never the in-flight request. The agent
+     * publishes `git.changed` *before* it replies, so a reload can land while a
+     * delete is still awaiting its response; cancelling that job would abort
+     * response handling and leave failed rows hidden with no force prompt.
+     */
+    private var undoWindow: Job? = null
+    private var undoSequence = 0L
+
     init {
         viewModelScope.launch { reload() }
         viewModelScope.launch {
@@ -65,12 +84,23 @@ class GitViewModel @Inject constructor(
         _uiState.update { it.copy(isLoading = true, errorMessage = null) }
         try {
             val items = gitRepository.listGitItems(projectName)
+            val surviving = items.map(GitItem::id).toSet()
+            // Rows the server already dropped stay dropped; anything still
+            // listed and no longer queued comes back into view.
+            pendingBatch = pendingBatch.filter { it.id in surviving }
+            if (pendingBatch.isEmpty()) {
+                undoWindow?.cancel()
+                undoWindow = null
+            }
             _uiState.update {
+                val hidden = it.pendingDeleteIds intersect surviving
                 it.copy(
                     items = items,
                     isLoading = false,
                     errorMessage = null,
-                    selected = it.selected.intersect(items.map(GitItem::id).toSet()),
+                    pendingDeleteIds = hidden,
+                    selected = it.selected intersect (surviving - hidden),
+                    undoPrompt = if (pendingBatch.isEmpty()) null else it.undoPrompt,
                 )
             }
         } catch (e: Exception) {
@@ -85,24 +115,26 @@ class GitViewModel @Inject constructor(
 
     fun enterSelection(itemId: String) {
         _uiState.update {
-            if (it.items.firstOrNull { item -> item.id == itemId }?.isDeletable != true) it
+            if (it.visibleItems.firstOrNull { item -> item.id == itemId }?.isDeletable != true) it
             else it.copy(inSelectionMode = true, selected = it.selected + itemId)
         }
     }
 
+    /** Enter selection mode from the top bar, with nothing selected yet. */
+    fun enterSelectionMode() {
+        _uiState.update { if (it.hasDeletableItems) it.copy(inSelectionMode = true) else it }
+    }
+
     fun toggle(itemId: String) {
         _uiState.update { state ->
-            val item = state.items.firstOrNull { it.id == itemId } ?: return@update state
+            val item = state.visibleItems.firstOrNull { it.id == itemId } ?: return@update state
             if (!item.isDeletable) return@update state
             val newSelected = if (itemId in state.selected) {
                 state.selected - itemId
             } else {
                 state.selected + itemId
             }
-            state.copy(
-                selected = newSelected,
-                inSelectionMode = newSelected.isNotEmpty(),
-            )
+            state.copy(selected = newSelected)
         }
     }
 
@@ -118,54 +150,151 @@ class GitViewModel @Inject constructor(
         _uiState.update { it.copy(forceDeletePrompt = null) }
     }
 
-    /** Begin a soft delete: announce undo snackbar; deletion fires on dismiss. */
-    fun requestDelete() {
-        val state = _uiState.value
-        val targets = state.items.filter { it.id in state.selected && it.isDeletable }
-        if (targets.isEmpty()) return
-        val request = targets.map(::toDeleteItem)
-        _events.tryEmit(GitUiEvent.DeletedWithUndo(request))
-        _uiState.update { it.copy(inSelectionMode = false, selected = emptySet()) }
+    /** Single-row delete from a swipe. */
+    fun deleteItem(itemId: String) {
+        val item = _uiState.value.items.firstOrNull { it.id == itemId } ?: return
+        enqueue(listOf(item))
     }
 
-    /** Perform the actual deletion after the undo snackbar dismissed. */
-    fun confirmDelete(items: List<GitDeleteItem>) {
-        viewModelScope.launch { sendDelete(items) }
+    /** Batch delete of the current selection. */
+    fun requestDelete() {
+        val state = _uiState.value
+        val targets = state.visibleItems.filter { it.id in state.selected && it.isDeletable }
+        _uiState.update { it.copy(inSelectionMode = false, selected = emptySet()) }
+        enqueue(targets)
+    }
+
+    private fun enqueue(targets: List<GitItem>) {
+        val hidden = _uiState.value.pendingDeleteIds
+        val queued = targets.filter { it.isDeletable && it.id !in hidden }
+        if (queued.isEmpty()) return
+        pendingBatch = pendingBatch + queued.map { PendingDelete(it.id, toDeleteItem(it)) }
+        undoSequence += 1
+        val queuedIds = queued.map(GitItem::id).toSet()
+        _uiState.update {
+            it.copy(
+                pendingDeleteIds = it.pendingDeleteIds + queuedIds,
+                selected = it.selected - queuedIds,
+                undoPrompt = UndoPrompt(id = undoSequence, count = pendingBatch.size),
+            )
+        }
+        // Restarting the window is safe: the payload lives in `pendingBatch`,
+        // not in the cancelled job, so a second delete extends the batch
+        // instead of discarding the first one.
+        undoWindow?.cancel()
+        undoWindow = viewModelScope.launch {
+            delay(UNDO_WINDOW_MS)
+            commitPendingBatch()
+        }
+    }
+
+    /** The undo snackbar was dismissed by hand: send without waiting out the window. */
+    fun commitNow() {
+        undoWindow?.cancel()
+        undoWindow = null
+        // Deliberately not held in `undoWindow`: on `Dispatchers.Main.immediate`
+        // the body runs before `launch` returns, so storing it would re-expose
+        // the request to reload's cancellation.
+        viewModelScope.launch { commitPendingBatch() }
+    }
+
+    private suspend fun commitPendingBatch() {
+        val batch = pendingBatch
+        pendingBatch = emptyList()
+        // Detach from the countdown before awaiting: from here on this job is
+        // the request, and a concurrent reload must not cancel it.
+        undoWindow = null
+        _uiState.update { it.copy(undoPrompt = null) }
+        sendDelete(batch)
+    }
+
+    fun undo() {
+        undoWindow?.cancel()
+        undoWindow = null
+        val queuedIds = pendingBatch.map(PendingDelete::id).toSet()
+        pendingBatch = emptyList()
+        _uiState.update {
+            it.copy(undoPrompt = null, pendingDeleteIds = it.pendingDeleteIds - queuedIds)
+        }
     }
 
     /** Re-issue a delete with `force=true` for the items the server flagged unmerged. */
     fun confirmForceDelete() {
         val prompt = _uiState.value.forceDeletePrompt ?: return
-        _uiState.update { it.copy(forceDeletePrompt = null) }
-        val forced = prompt.items.map { it.copy(force = true) }
+        val forced = prompt.items.map { PendingDelete(it.id, it.item.copy(force = true)) }
+        _uiState.update {
+            it.copy(
+                forceDeletePrompt = null,
+                pendingDeleteIds = it.pendingDeleteIds + forced.map(PendingDelete::id),
+            )
+        }
         viewModelScope.launch { sendDelete(forced) }
     }
 
-    private suspend fun sendDelete(items: List<GitDeleteItem>) {
-        if (items.isEmpty()) return
+    private suspend fun sendDelete(batch: List<PendingDelete>) {
+        if (batch.isEmpty()) return
         _uiState.update { it.copy(deleting = true) }
         try {
-            val response = gitRepository.deleteGitItems(projectName, items)
-            _uiState.update { it.copy(deleting = false) }
-            _events.tryEmit(GitUiEvent.DeleteResults(response.results))
-            val unmerged = response.results
-                .mapIndexedNotNull { index, result ->
-                    if (result.error == "force_required") items.getOrNull(index) else null
-                }
-            if (unmerged.isNotEmpty()) {
-                _uiState.update {
-                    it.copy(
-                        forceDeletePrompt = ForceDeletePrompt(
-                            items = unmerged,
-                            refs = unmerged.mapNotNull { it.branch ?: it.worktree_path },
-                        ),
-                    )
+            val response = gitRepository.deleteGitItems(projectName, batch.map(PendingDelete::item))
+            val unmerged = mutableListOf<PendingDelete>()
+            val failures = mutableListOf<GitDeleteResultItem>()
+            val restore = mutableSetOf<String>()
+            response.results.forEachIndexed { index, result ->
+                val pending = batch.getOrNull(index) ?: return@forEachIndexed
+                when {
+                    result.error == "force_required" -> {
+                        // Nothing was deleted, so the row comes back while the
+                        // prompt names it; confirming re-hides it.
+                        unmerged += pending
+                        restore += pending.id
+                    }
+                    !result.ok -> {
+                        failures += result
+                        restore += pending.id
+                    }
                 }
             }
+            // A short `results` array leaves those items unreported — treat them
+            // as un-deleted so their rows come back.
+            if (response.results.size < batch.size) {
+                restore += batch.drop(response.results.size).map(PendingDelete::id)
+            }
+            _uiState.update {
+                it.copy(
+                    deleting = false,
+                    pendingDeleteIds = it.pendingDeleteIds - restore,
+                    forceDeletePrompt = if (unmerged.isEmpty()) {
+                        it.forceDeletePrompt
+                    } else {
+                        ForceDeletePrompt(
+                            items = unmerged,
+                            refs = unmerged.mapNotNull { p -> p.item.branch ?: p.item.worktree_path },
+                        )
+                    },
+                )
+            }
+            if (failures.isNotEmpty()) {
+                _events.tryEmit(GitUiEvent.Message(deleteFailureMessage(failures)))
+            }
         } catch (e: GitBusyException) {
-            _uiState.update { it.copy(deleting = false, busyDialog = e.busyBy) }
+            // The busy guard is all-or-nothing: nothing was processed.
+            _uiState.update {
+                it.copy(
+                    deleting = false,
+                    busyDialog = e.busyBy,
+                    pendingDeleteIds = it.pendingDeleteIds - batch.map(PendingDelete::id),
+                )
+            }
+        } catch (e: CancellationException) {
+            // The scope is going away — never report that as a delete failure.
+            throw e
         } catch (e: Exception) {
-            _uiState.update { it.copy(deleting = false) }
+            _uiState.update {
+                it.copy(
+                    deleting = false,
+                    pendingDeleteIds = it.pendingDeleteIds - batch.map(PendingDelete::id),
+                )
+            }
             _events.tryEmit(GitUiEvent.Message("Delete failed: ${e.message ?: "unknown error"}"))
         }
     }
@@ -176,4 +305,8 @@ class GitViewModel @Inject constructor(
         worktree_path = item.worktree_path,
         force = false,
     )
+
+    private companion object {
+        const val UNDO_WINDOW_MS = 5_000L
+    }
 }
