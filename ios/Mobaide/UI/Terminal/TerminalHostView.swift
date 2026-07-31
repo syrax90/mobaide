@@ -213,22 +213,60 @@ final class MobaideTerminalView: TerminalView {
         verticalScrollGesture = pan
     }
 
+    /// Whether SwiftTerm's own scrollback pan may own a touch.
+    ///
+    /// Mouse-reporting and alternate-screen programs own the vertical axis
+    /// (Android `doScroll` ladder), so the scrollback pan must not also run —
+    /// in the alternate buffer it has nothing to scroll anyway.
+    ///
+    /// The nested pans recognize simultaneously, so in Static mode an
+    /// outer-claimed horizontal drag would otherwise also drag the scrollback.
+    /// Refusing exactly the drags the outer claims is the child half of that
+    /// split (Android `requestDisallowInterceptTouchEvent` on a vertically
+    /// dominant `onScroll`). It replaces `isDirectionalLockEnabled` on this
+    /// view, which latched onto whichever axis started dominant — including the
+    /// horizontal one, where this view has no overflow to scroll — and then
+    /// swallowed the rest of the touch.
+    static func allowsScrollbackPan(
+        mode: TerminalWheelScroll.Mode,
+        outerClaimsHorizontalPan: Bool
+    ) -> Bool {
+        mode == .localScrollback && !outerClaimsHorizontalPan
+    }
+
+    /// The same decision resolved against live state: the emulator's current
+    /// ladder arm, and the host found through the view hierarchy rather than a
+    /// cached back-reference — SwiftUI can keep an outgoing wrapper alive after
+    /// a newer one has re-parented this shared view. A drag with no host is
+    /// uncontested and stays the scrollback's.
+    func allowsScrollbackPan(velocity: CGPoint, translation: CGPoint) -> Bool {
+        let host = superview as? TerminalPanScrollView
+        return Self.allowsScrollbackPan(
+            mode: wheelScrollMode,
+            outerClaimsHorizontalPan: host?.wouldClaimHorizontalPan(
+                velocity: velocity,
+                translation: translation
+            ) ?? false
+        )
+    }
+
     /// Vertical-axis arbitration, decided per touch rather than stored. UIKit
     /// asks the view this for every recognizer attached to it, so it can refuse
     /// SwiftTerm's own scrollback pan without touching `isScrollEnabled` — which
     /// would have to be re-asserted on buffer switches that `mouseModeChanged`
     /// never reports.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        let mode = wheelScrollMode
         if gestureRecognizer === panGestureRecognizer {
-            // Mouse-reporting and alternate-screen programs own the vertical
-            // axis (Android `doScroll` ladder), so the scrollback pan must not
-            // also run — in the alternate buffer it has nothing to scroll anyway.
-            guard mode == .localScrollback else { return false }
+            // Sampled from *this* recognizer — the one UIKit is asking to begin,
+            // and so the only one certain to be live at this moment.
+            guard allowsScrollbackPan(
+                velocity: panGestureRecognizer.velocity(in: self),
+                translation: panGestureRecognizer.translation(in: self)
+            ) else { return false }
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
         if gestureRecognizer === verticalScrollGesture {
-            guard mode != .localScrollback,
+            guard wheelScrollMode != .localScrollback,
                   let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
             return TerminalWheelScroll.claimsPan(
                 velocity: pan.velocity(in: self),

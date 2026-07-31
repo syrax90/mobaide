@@ -67,6 +67,78 @@ final class TerminalPanScrollViewTests: XCTestCase {
         ))
     }
 
+    // MARK: - Axis arbitration
+
+    func testInnerTerminalCarriesNoDirectionalLock() {
+        for mode in TerminalDisplayMode.allCases {
+            let (scroll, terminal) = makeViews(mode: mode)
+
+            XCTAssertFalse(
+                terminal.isDirectionalLockEnabled,
+                "\(mode): the lock latched the inner view onto whichever axis started dominant — including the horizontal one, where it has no overflow to scroll and the scrollback stayed dead for the rest of the touch"
+            )
+            XCTAssertTrue(
+                scroll.isDirectionalLockEnabled,
+                "\(mode): only the inner lock is gone; the outer keeps its own"
+            )
+        }
+    }
+
+    func testIdleOuterClaimsNothingSoTheInnerKeepsTheTouch() {
+        for mode in TerminalDisplayMode.allCases {
+            let (scroll, _) = makeViews(mode: mode)
+
+            XCTAssertFalse(
+                scroll.claimsHorizontalPan(),
+                "\(mode): a resting recognizer is no drag to claim, and the inner asks this on every touch"
+            )
+        }
+    }
+
+    func testSampledClaimTracksTheDominantAxisInStaticMode() {
+        let (scroll, _) = makeViews(mode: .static)
+
+        XCTAssertTrue(
+            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 90, y: 12), translation: .zero),
+            "a horizontally dominant drag is the outer's, so the inner has to yield its scrollback pan"
+        )
+        XCTAssertFalse(
+            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 12, y: 90), translation: .zero),
+            "a vertically dominant drag stays the scrollback's"
+        )
+        XCTAssertFalse(
+            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 70, y: 70), translation: .zero),
+            "Android parity: claim iff dx > dy, so an exact tie belongs to the scrollback"
+        )
+    }
+
+    func testFullModeClaimsNothingFromEvenAHorizontalSample() {
+        let (scroll, _) = makeViews(mode: .full)
+
+        XCTAssertFalse(
+            scroll.wouldClaimHorizontalPan(velocity: CGPoint(x: 90, y: 12), translation: .zero),
+            "Full mode has no horizontal overflow to pan, so the inner is never asked to yield"
+        )
+    }
+
+    func testAmbiguousSampleYieldsTheTouchInsteadOfDeadLockingIt() {
+        let (scroll, _) = makeViews(mode: .static)
+
+        XCTAssertFalse(
+            scroll.wouldClaimHorizontalPan(velocity: .zero, translation: .zero),
+            "the deliberate divergence from the outer's own form: a sample carrying no direction must not refuse the inner's pan, or the touch is dead on both views"
+        )
+    }
+
+    func testStaticModeStillRefusesTheHorizontalPanItDoesNotClaim() {
+        let (scroll, _) = makeViews(mode: .static)
+
+        XCTAssertFalse(
+            scroll.gestureRecognizerShouldBegin(scroll.panGestureRecognizer),
+            "the outer's own refusal has to survive being rerouted through claimsHorizontalPan()"
+        )
+    }
+
     // MARK: - Layout
 
     func testFullModeSizesTerminalToViewport() {

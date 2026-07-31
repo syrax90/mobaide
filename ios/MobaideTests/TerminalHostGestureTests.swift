@@ -165,6 +165,160 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
+    // MARK: - Horizontal-axis handoff
+
+    func testScrollbackPanYieldsExactlyTheDragsTheOuterClaims() {
+        XCTAssertTrue(
+            MobaideTerminalView.allowsScrollbackPan(mode: .localScrollback, outerClaimsHorizontalPan: false),
+            "the outer claims iff dx > dy, so every remaining direction — diagonal ties included — is the scrollback's"
+        )
+        XCTAssertFalse(
+            MobaideTerminalView.allowsScrollbackPan(mode: .localScrollback, outerClaimsHorizontalPan: true),
+            "the nested pans recognize simultaneously; without this the outer's horizontal drag would jiggle the scrollback too"
+        )
+    }
+
+    func testWheelLadderModesRefuseTheScrollbackPanWhicheverWayTheOuterDecides() {
+        for mode in [TerminalWheelScroll.Mode.wheel, .cursorKeys] {
+            for outerClaims in [true, false] {
+                XCTAssertFalse(
+                    MobaideTerminalView.allowsScrollbackPan(mode: mode, outerClaimsHorizontalPan: outerClaims),
+                    "\(mode) owns the vertical axis whatever the horizontal split decides (outer claims: \(outerClaims))"
+                )
+            }
+        }
+    }
+
+    /// A near-diagonal drag with horizontal drift: the shape the removed
+    /// directional lock used to latch onto an axis the inner view cannot
+    /// scroll, killing the scrollback for the rest of the touch.
+    private static let horizontallyDominantDrag = CGPoint(x: 90, y: 12)
+
+    /// Its mirror — a vertical drag carrying sideways drift.
+    private static let verticallyDominantDrag = CGPoint(x: 12, y: 90)
+
+    /// Mounts the terminal in a real wrapper, so the child half resolves its
+    /// host through the live view hierarchy the way a touch does.
+    private func hostedTerminal(mode: TerminalDisplayMode) -> (TerminalPanScrollView, MobaideTerminalView) {
+        let terminal = makeTerminal()
+        terminal.configureAppearance()
+        let scroll = TerminalPanScrollView(
+            terminalView: terminal,
+            displayConfig: TerminalDisplayConfig(mode: mode, staticColumns: 120)
+        )
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+        // Second pass with a settled cellSize, which the Static width derives from.
+        scroll.setNeedsLayout()
+        scroll.layoutIfNeeded()
+        feedTranscript(terminal)
+        XCTAssertGreaterThan(terminal.maxScrollOffsetY, 0, "the harness must have real scrollback for the pan to be worth beginning")
+        return (scroll, terminal)
+    }
+
+    func testFullModeHostLeavesTheScrollbackPanToTheTerminal() {
+        let (scroll, terminal) = hostedTerminal(mode: .full)
+
+        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertTrue(
+            terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer),
+            "Full mode never arbitrates, so a drag starting with horizontal drift must still reach the scrollback"
+        )
+    }
+
+    func testStaticModeHostLeavesAnUnclaimedDragToTheTerminal() {
+        let (scroll, terminal) = hostedTerminal(mode: .static)
+
+        // Binding the host matters: nothing else retains it, and a released
+        // wrapper would null `superview` and route this through the no-host
+        // fallback instead of the Static-mode claim it means to exercise.
+        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertTrue(
+            terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer),
+            "the outer claims only horizontally dominant drags; every other one stays the scrollback's"
+        )
+    }
+
+    func testHostedTerminalOnTheAlternateBufferStillRefusesTheScrollbackPan() {
+        let (scroll, terminal) = hostedTerminal(mode: .full)
+        enterAlternateScreen(terminal)
+
+        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertFalse(
+            terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer),
+            "the horizontal split is an extra refusal, never a licence — the wheel ladder still owns the axis"
+        )
+    }
+
+    /// The whole join — host lookup, display mode, wheel-ladder arm and the
+    /// `outerClaimsHorizontalPan:` polarity — answered on a hosted terminal for
+    /// a drag the test supplies. The recognizer path cannot be driven this way:
+    /// `UIScrollViewPanGestureRecognizer` refuses a planted `setTranslation`
+    /// and `velocity(in:)` is unsettable, so the sampled overload is where the
+    /// arbitration becomes observable outside a device.
+    func testStaticHostRefusesTheScrollbackPanOnAHorizontallyDominantDrag() {
+        let (scroll, terminal) = hostedTerminal(mode: .static)
+
+        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertFalse(
+            terminal.allowsScrollbackPan(velocity: Self.horizontallyDominantDrag, translation: .zero),
+            "the nested pans recognize simultaneously, so a drag the outer pans sideways must not also jiggle the scrollback"
+        )
+    }
+
+    func testStaticHostKeepsTheScrollbackPanForAVerticallyDominantDrag() {
+        let (scroll, terminal) = hostedTerminal(mode: .static)
+
+        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertTrue(
+            terminal.allowsScrollbackPan(velocity: Self.verticallyDominantDrag, translation: .zero),
+            "sideways drift on a vertical drag is not a claim — the touch stays the scrollback's"
+        )
+    }
+
+    func testStaticHostGivesAnExactDiagonalTieToTheScrollback() {
+        let (scroll, terminal) = hostedTerminal(mode: .static)
+
+        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertTrue(
+            terminal.allowsScrollbackPan(velocity: CGPoint(x: 70, y: 70), translation: .zero),
+            "Android parity: the outer claims iff dx > dy, so the tie is the scrollback's"
+        )
+    }
+
+    /// The dead-lock fix and the polarity guard in one: the identical sample
+    /// has to come out the other way once the host stops arbitrating. Inverting
+    /// the `outerClaimsHorizontalPan:` argument at the call site flips both
+    /// answers, so this pair and the Static refusal above fail together.
+    func testFullModeHostKeepsTheHorizontalDragTheStaticHostRefuses() {
+        let (fullScroll, fullTerminal) = hostedTerminal(mode: .full)
+        let (staticScroll, staticTerminal) = hostedTerminal(mode: .static)
+        XCTAssertTrue(fullTerminal.superview === fullScroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertTrue(staticTerminal.superview === staticScroll)
+
+        XCTAssertTrue(
+            fullTerminal.allowsScrollbackPan(velocity: Self.horizontallyDominantDrag, translation: .zero),
+            "Full mode has no horizontal overflow and never arbitrates, so a drag starting with horizontal drift must still reach the scrollback"
+        )
+        XCTAssertFalse(
+            staticTerminal.allowsScrollbackPan(velocity: Self.horizontallyDominantDrag, translation: .zero),
+            "and the mode gate is what makes the difference — one sample, two hosts, opposite answers"
+        )
+    }
+
+    func testHostedAlternateBufferRefusesEvenTheDragsTheOuterLeavesAlone() {
+        let (scroll, terminal) = hostedTerminal(mode: .static)
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+
+        XCTAssertTrue(terminal.superview === scroll, "the host is resolved per touch from the live hierarchy")
+        XCTAssertEqual(terminal.wheelScrollMode, .wheel)
+        XCTAssertFalse(
+            terminal.allowsScrollbackPan(velocity: Self.verticallyDominantDrag, translation: .zero),
+            "the wheel ladder outranks the horizontal split: a drag the outer would leave alone is still not the scrollback's here"
+        )
+    }
+
     // MARK: - Vertical-scroll recognizer lifecycle
 
     func testConfigureAppearanceInstallsExactlyOneVerticalScrollGesture() {
