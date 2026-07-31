@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
@@ -23,9 +24,12 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -35,7 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.BusyHolder
-import kotlinx.coroutines.withTimeoutOrNull
+import com.mobaide.app.ui.common.DeleteSwipeBackground
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -50,31 +54,25 @@ fun GitScreen(
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
-                is GitUiEvent.DeletedWithUndo -> {
-                    val result = withTimeoutOrNull(5_000L) {
-                        snackbarHostState.showSnackbar(
-                            message = "Deleting ${event.requestItems.size} item(s)…",
-                            actionLabel = "Undo",
-                            withDismissAction = true,
-                            duration = SnackbarDuration.Indefinite,
-                        )
-                    }
-                    snackbarHostState.currentSnackbarData?.dismiss()
-                    if (result != SnackbarResult.ActionPerformed) {
-                        viewModel.confirmDelete(event.requestItems)
-                    }
-                }
-                is GitUiEvent.Message -> {
-                    snackbarHostState.showSnackbar(event.text)
-                }
-                is GitUiEvent.DeleteResults -> {
-                    val failed = event.results.count { !it.ok && it.error != "force_required" }
-                    if (failed > 0) {
-                        snackbarHostState.showSnackbar("$failed item(s) failed to delete")
-                    }
-                }
+                is GitUiEvent.Message -> snackbarHostState.showSnackbar(event.text)
             }
         }
+    }
+
+    // The undo window is owned by the ViewModel: when it elapses, `undoPrompt`
+    // clears, this effect is cancelled and the snackbar goes away without either
+    // branch running. A second delete raises a new id, replacing the snackbar
+    // with the coalesced count.
+    val undoPrompt = state.undoPrompt
+    LaunchedEffect(undoPrompt?.id) {
+        if (undoPrompt == null) return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Deleting ${undoPrompt.count} item(s)…",
+            actionLabel = "Undo",
+            withDismissAction = true,
+            duration = SnackbarDuration.Indefinite,
+        )
+        if (result == SnackbarResult.ActionPerformed) viewModel.undo() else viewModel.commitNow()
     }
 
     BackHandler(enabled = state.inSelectionMode) { viewModel.exitSelection() }
@@ -109,6 +107,13 @@ fun GitScreen(
                             )
                         }
                     },
+                    actions = {
+                        if (state.hasDeletableItems) {
+                            IconButton(onClick = viewModel::enterSelectionMode) {
+                                Icon(Icons.Default.Checklist, contentDescription = "Select items")
+                            }
+                        }
+                    },
                 )
             }
         },
@@ -119,18 +124,19 @@ fun GitScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            val visibleItems = state.visibleItems
             when {
-                state.isLoading && state.items.isEmpty() -> {
+                state.isLoading && visibleItems.isEmpty() -> {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }
-                state.errorMessage != null && state.items.isEmpty() -> {
+                state.errorMessage != null && visibleItems.isEmpty() -> {
                     Text(
                         text = state.errorMessage.orEmpty(),
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.align(Alignment.Center).padding(24.dp),
                     )
                 }
-                state.items.isEmpty() -> {
+                visibleItems.isEmpty() -> {
                     Text(
                         text = "No branches or worktrees.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -142,16 +148,41 @@ fun GitScreen(
                         contentPadding = PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        items(state.items, key = { it.id }) { item ->
-                            GitItemRow(
-                                item = item,
-                                selected = item.id in state.selected,
-                                inSelectionMode = state.inSelectionMode,
-                                onTap = {
-                                    if (state.inSelectionMode) viewModel.toggle(item.id)
-                                },
-                                onLongPress = { viewModel.enterSelection(item.id) },
-                            )
+                        items(visibleItems, key = { it.id }) { item ->
+                            val row: @Composable () -> Unit = {
+                                GitItemRow(
+                                    item = item,
+                                    selected = item.id in state.selected,
+                                    inSelectionMode = state.inSelectionMode,
+                                    onTap = {
+                                        if (state.inSelectionMode) viewModel.toggle(item.id)
+                                    },
+                                    onLongPress = { viewModel.enterSelection(item.id) },
+                                )
+                            }
+                            if (item.isDeletable && !state.inSelectionMode) {
+                                val dismissState = rememberSwipeToDismissBoxState(
+                                    confirmValueChange = { value ->
+                                        if (value == SwipeToDismissBoxValue.EndToStart) {
+                                            viewModel.deleteItem(item.id)
+                                        }
+                                        // Return false so the row isn't locked in the
+                                        // dismissed position: the VM hides it via
+                                        // pendingDeleteIds, and Undo must restore it.
+                                        false
+                                    },
+                                )
+                                SwipeToDismissBox(
+                                    state = dismissState,
+                                    enableDismissFromStartToEnd = false,
+                                    enableDismissFromEndToStart = true,
+                                    backgroundContent = { DeleteSwipeBackground() },
+                                ) {
+                                    row()
+                                }
+                            } else {
+                                row()
+                            }
                         }
                     }
                 }

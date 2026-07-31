@@ -133,6 +133,62 @@ final class GitItemDisplayTests: XCTestCase {
         )
     }
 
+    // MARK: - deleteFailureMessage
+
+    private func failure(target: String, error: String?, detail: String? = nil) -> GitDeleteResultItem {
+        GitDeleteResultItem(
+            kind: GitItem.kindBranchOnly,
+            target: target,
+            ok: false,
+            error: error,
+            error_detail: detail
+        )
+    }
+
+    func testDeleteFailureMessageNamesTargetAndReason() {
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureMessage([failure(target: "wt", error: "locked")]),
+            "Couldn't delete wt: the worktree is locked"
+        )
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "not_found")]),
+            "Couldn't delete b: it no longer exists"
+        )
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "invalid")]),
+            "Couldn't delete b: the request was invalid"
+        )
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "error")]),
+            "Couldn't delete b: unknown error"
+        )
+    }
+
+    func testDeleteFailureMessagePrefersErrorDetailFirstLine() {
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureMessage([
+                failure(target: "b", error: "error", detail: "  fatal: branch 'b' is checked out at '/wt'  \nhint: use --force"),
+            ]),
+            "Couldn't delete b: fatal: branch 'b' is checked out at '/wt'"
+        )
+    }
+
+    func testDeleteFailureMessageTruncatesLongDetail() {
+        let detail = String(repeating: "x", count: 200)
+        let message = GitItemDisplay.deleteFailureMessage([failure(target: "b", error: "error", detail: detail)])
+        XCTAssertEqual(message, "Couldn't delete b: " + String(repeating: "x", count: 120))
+    }
+
+    func testDeleteFailureMessageFallsBackToACountForSeveralFailures() {
+        XCTAssertEqual(
+            GitItemDisplay.deleteFailureMessage([
+                failure(target: "b1", error: "locked"),
+                failure(target: "b2", error: "error"),
+            ]),
+            "2 item(s) failed to delete"
+        )
+    }
+
     func testChipOrderIsStableAcrossAllStatuses() {
         let item = GitItem(
             kind: GitItem.kindBranchWithWorktree,
