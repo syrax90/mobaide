@@ -1130,4 +1130,155 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertEqual(resolved?.text, "echo tail", "the prompt must stay tappable after the button returns to the tail")
         XCTAssertEqual(resolved?.isCurrentInput, true)
     }
+
+    // MARK: - Tap ownership ladder
+
+    /// A recognizer that never saw a finger answers `.zero` for every location,
+    /// so only the point is stubbed — the view it reports, the handler it
+    /// reaches and the emulator it reads all stay real.
+    private final class StubTapGesture: UITapGestureRecognizer {
+        var point: CGPoint = .zero
+        override func location(in view: UIView?) -> CGPoint { point }
+    }
+
+    /// Invokes a Coordinator tap handler through the very selector the
+    /// `#selector` in `attachGestures` resolves to, so what runs is the shipped
+    /// gate rather than a copy of it in the test.
+    private func fire(
+        _ selectorName: String,
+        on coordinator: TerminalHostView.Coordinator,
+        view: MobaideTerminalView,
+        at point: CGPoint
+    ) {
+        let gesture = StubTapGesture()
+        gesture.point = point
+        view.addGestureRecognizer(gesture)
+        let selector = NSSelectorFromString(selectorName)
+        XCTAssertTrue(coordinator.responds(to: selector), "\(selectorName) is a recognizer action — renaming it unhooks the tap")
+        _ = coordinator.perform(selector, with: gesture)
+        view.removeGestureRecognizer(gesture)
+    }
+
+    /// One real tap. UIKit hands it to both single-tap recognizers — the click
+    /// at once, the row tap when the double-tap window closes — so what the tap
+    /// does is what the pair of them does together.
+    private func tapTerminal(
+        on coordinator: TerminalHostView.Coordinator,
+        view: MobaideTerminalView,
+        at point: CGPoint
+    ) {
+        fire("handleMouseTap:", on: coordinator, view: view, at: point)
+        fire("handleSingleTap:", on: coordinator, view: view, at: point)
+    }
+
+    /// Every frame a tap can produce: the click and the CR ride `i`, an
+    /// historical prompt rides `x`.
+    private func tapFrames(_ connection: FakeWebSocketConnection) -> [Data] {
+        connection.sentBinaries.filter { $0.first == 0x69 || $0.first == 0x78 }
+    }
+
+    private func tappableModel() async throws
+        -> (TerminalSessionModel, FakeWebSocketConnection, TerminalHostView.Coordinator) {
+        let (model, connection) = try await wiredModel()
+        let coordinator = try XCTUnwrap(retainedCoordinator)
+        coordinator.attachGestures(to: model.terminalView)
+        return (model, connection, coordinator)
+    }
+
+    /// The live prompt row of whichever buffer is current, drawn at content row
+    /// 0 with the cursor still on it — what Claude Code's Ink prompt looks like
+    /// to the row resolver.
+    private func promptRowPoint(_ terminal: MobaideTerminalView) -> CGPoint {
+        terminal.feed(text: "> echo hi")
+        return CGPoint(x: terminal.cellSize.width * 5.5, y: terminal.cellSize.height * 0.5)
+    }
+
+    func testMouseReportingTapClicksTheTappedCellAndNeverSubmitsTheRow() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        enableMouseReporting(terminal)
+        let point = promptRowPoint(terminal)
+        XCTAssertEqual(
+            terminal.resolveRow(at: point)?.text, "echo hi",
+            "the row must still resolve, or nothing but the gate could be keeping the CR off the wire"
+        )
+
+        tapTerminal(on: coordinator, view: terminal, at: point)
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(
+            frames,
+            [inputFrame("\u{1B}[<0;6;1M\u{1B}[<0;6;1m")],
+            "left button (0, not SwiftTerm's middle-button 1) pressed and released on the tapped cell, "
+                + "1-based on the wire, coalesced into the one write a single gesture deserves"
+        )
+        XCTAssertEqual(
+            tapFrames(connection).count, 1,
+            "the click is the whole tap — the CR on top of it is what submitted the half-typed message"
+        )
+    }
+
+    func testBareAlternateScreenTapNeitherClicksNorSubmits() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        enterAlternateScreen(terminal) // `less`, `man`, plain vim: no mouse reporting
+        let point = promptRowPoint(terminal)
+        XCTAssertEqual(terminal.resolveRow(at: point)?.text, "echo hi", "the row resolves; only the gate stops the tap")
+
+        tapTerminal(on: coordinator, view: terminal, at: point)
+
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(
+            tapFrames(connection).isEmpty,
+            "the rows are the program's own chrome — submitting one Ctrl+Cs it, and it asked for no clicks"
+        )
+    }
+
+    func testPlainShellTapStillSubmitsTheLiveInput() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        let point = promptRowPoint(terminal)
+
+        tapTerminal(on: coordinator, view: terminal, at: point)
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(
+            frames, [inputFrame("\r")],
+            "the untouched arm: on the normal buffer the app owns the pointer and a tap re-runs the row"
+        )
+    }
+
+    func testX10OnlyProgramGetsNeitherAClickNorASubmit() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        terminal.feed(text: "\u{1B}[?9h") // DECSET 9 — X10 press-only reporting
+        let point = promptRowPoint(terminal)
+
+        tapTerminal(on: coordinator, view: terminal, at: point)
+
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(
+            tapFrames(connection).isEmpty,
+            "SwiftTerm suppresses the press in X10 itself, so mirroring its rule is what keeps a half-report off the wire"
+        )
+    }
+
+    func testAttachGesturesKeepsExactlyOneLiveMouseTapPerVisit() {
+        let model = makeModel()
+        let terminal = model.terminalView
+        TerminalHostView.Coordinator(model: model).attachGestures(to: terminal)
+        let first = recognizers(named: "mobaide.mouseTap", on: terminal)
+
+        TerminalHostView.Coordinator(model: model).attachGestures(to: terminal)
+
+        let second = recognizers(named: "mobaide.mouseTap", on: terminal)
+        XCTAssertEqual(first.count, 1)
+        XCTAssertEqual(second.count, 1, "a second visit must replace the recognizer, not report two clicks per tap")
+        XCTAssertFalse(second[0] === first[0], "it targets the Coordinator, so a stale one would click into the previous visit")
+        XCTAssertEqual((second[0] as? UITapGestureRecognizer)?.numberOfTapsRequired, 1)
+        XCTAssertTrue(
+            second[0].isEnabled,
+            "attachGestures ends in neutralizeSwiftTermGestures, which disables every tap not named mobaide.*"
+        )
+    }
 }

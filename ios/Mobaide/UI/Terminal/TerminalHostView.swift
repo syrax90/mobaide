@@ -449,6 +449,51 @@ final class MobaideTerminalView: TerminalView {
         super.willMove(toWindow: newWindow)
     }
 
+    // MARK: - Pointer reporting
+
+    /// Reports a tap to a mouse-tracking program so the click lands on the cell
+    /// the user touched — which is how Claude Code, vim and htop move their own
+    /// cursor — instead of the tap being resolved into a row the app submits.
+    ///
+    /// SwiftTerm's own single tap does this, but it is disabled by
+    /// `neutralizeSwiftTermGestures()` and reports only while the view is first
+    /// responder, which `keyboardGate` deliberately prevents. Android has always
+    /// sent the click from its `onUp` fast path.
+    ///
+    /// Press and release are batched into one write: they are a single gesture,
+    /// and a program that repaints on the press would otherwise see the release
+    /// a WebSocket round trip later.
+    ///
+    /// - Returns: true when the tap was reported to the program.
+    @discardableResult
+    func sendMouseClick(at point: CGPoint) -> Bool {
+        let terminal = getTerminal()
+        guard TerminalWheelScroll.reportsClick(terminal.mouseMode) else { return false }
+        let dims = terminal.getDims()
+        let cell = TerminalWheelScroll.cell(
+            at: point,
+            contentOffset: contentOffset,
+            cellSize: cellSize,
+            cols: dims.cols,
+            rows: dims.rows
+        )
+        batchingEmulatorWrites {
+            for release in [false, true] {
+                // Button 0 is the left button. SwiftTerm's own `encodeFlags`
+                // hardcodes button 1 — the middle button, which repositions nothing.
+                let flags = terminal.encodeButton(
+                    button: 0,
+                    release: release,
+                    shift: false,
+                    meta: false,
+                    control: false
+                )
+                terminal.sendEvent(buttonFlags: flags, x: cell.col, y: cell.row)
+            }
+        }
+        return true
+    }
+
     // MARK: - Follow mode
 
     private let userScrollObserver = UserScrollObserver()
@@ -583,6 +628,26 @@ private final class ExclusiveVerticalPanDelegate: NSObject, UIGestureRecognizerD
     }
 }
 
+/// Lets the immediate click tap coexist with the delayed row tap and the double
+/// tap, rather than racing them.
+///
+/// UIKit consults this only when recognition by one would otherwise *block* the
+/// other, and a `true` from either side is documented to guarantee simultaneous
+/// recognition. Two single-tap recognizers on one view are observed to both
+/// fire, so this is a no-op in practice — but the click tap deliberately has no
+/// `require(toFail:)`, and it always recognizes first, so without an explicit
+/// answer the plain-shell row tap and the double-tap copy-to-composer would be
+/// left depending on that unwritten default.
+@MainActor
+private final class SimultaneousTapDelegate: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        otherGestureRecognizer is UITapGestureRecognizer
+    }
+}
+
 /// Bridges the retained `MobaideTerminalView` into SwiftUI, wrapped in a
 /// `TerminalPanScrollView` that applies the Full/Static display mode. The
 /// terminal instance is model-owned (never a fresh one) so emulator state
@@ -630,6 +695,19 @@ struct TerminalHostView: UIViewRepresentable {
     final class Coordinator: NSObject, @MainActor TerminalViewDelegate {
         private let model: TerminalSessionModel
         weak var panHost: TerminalPanScrollView?
+        private let simultaneousTapDelegate = SimultaneousTapDelegate()
+
+        /// Which arm of the tap ladder owned the touch when it lifted.
+        ///
+        /// The click fires at touch-up but the row tap only after the double-tap
+        /// timeout, and the state the ladder reads is written by the program in
+        /// the PTY — which the click itself tells that a tap just happened. A
+        /// program could answer it by dropping mouse mode and painting a fake
+        /// prompt on the tapped row, turning the delayed tap into an `execute`
+        /// frame (Ctrl+C, retype, CR) it chose the text for. Latching at lift and
+        /// requiring both evaluations to agree makes the gate fail closed; it
+        /// also covers the benign case of a TUI simply exiting inside the window.
+        private var lastTapOwnedByProgram = false
 
         init(model: TerminalSessionModel) {
             self.model = model
@@ -641,9 +719,11 @@ struct TerminalHostView: UIViewRepresentable {
         /// here would kill terminal scrolling from the second visit onwards.
         private static let rowTapGestureName = "mobaide.rowTap"
         private static let rowDoubleTapGestureName = "mobaide.rowDoubleTap"
+        private static let mouseTapGestureName = "mobaide.mouseTap"
         private static let coordinatorGestureNames: Set<String> = [
             rowTapGestureName,
             rowDoubleTapGestureName,
+            mouseTapGestureName,
         ]
 
         /// The recognizers live on the retained terminal view but each screen
@@ -663,8 +743,17 @@ struct TerminalHostView: UIViewRepresentable {
             singleTap.numberOfTapsRequired = 1
             singleTap.name = Self.rowTapGestureName
             singleTap.require(toFail: doubleTap)
+            // Deliberately not waiting on `doubleTap`: a click is a pointer event
+            // and must land as promptly as Android's `onUp` fast path sends it.
+            // The two tap handlers are mutually exclusive by mouse mode, so only
+            // one of them ever acts on a given tap.
+            let mouseTap = UITapGestureRecognizer(target: self, action: #selector(handleMouseTap(_:)))
+            mouseTap.numberOfTapsRequired = 1
+            mouseTap.name = Self.mouseTapGestureName
+            mouseTap.delegate = simultaneousTapDelegate
             view.addGestureRecognizer(doubleTap)
             view.addGestureRecognizer(singleTap)
+            view.addGestureRecognizer(mouseTap)
             view.installVerticalScrollGesture()
             view.neutralizeSwiftTermGestures()
             // The view outlives every visit, so the callback must not retain
@@ -683,8 +772,20 @@ struct TerminalHostView: UIViewRepresentable {
             panHost?.caretDidMove()
         }
 
+        @objc private func handleMouseTap(_ gesture: UITapGestureRecognizer) {
+            guard let view = gesture.view as? MobaideTerminalView else { return }
+            lastTapOwnedByProgram = view.wheelScrollMode != .localScrollback
+            view.sendMouseClick(at: gesture.location(in: view))
+        }
+
+        /// Row-tap submit is a shell affordance: it only applies where the app
+        /// owns the pointer. A mouse-tracking program got the tap as a click
+        /// instead, and on a bare alternate screen the rows are the program's own
+        /// chrome — submitting one would Ctrl+C it and retype the text.
         @objc private func handleSingleTap(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view as? MobaideTerminalView,
+                  !lastTapOwnedByProgram,
+                  view.wheelScrollMode == .localScrollback,
                   let (text, isCurrent) = view.resolveRow(at: gesture.location(in: view)) else { return }
             model.sendTappedRow(text: text, isCurrentInput: isCurrent)
         }

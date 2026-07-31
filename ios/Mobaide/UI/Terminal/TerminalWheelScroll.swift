@@ -1,15 +1,17 @@
 import CoreGraphics
 import SwiftTerm
 
-/// Routing rules for a vertical drag over the terminal, mirroring Android
-/// `TerminalView.doScroll`.
+/// Routing rules for a touch over the terminal, mirroring Android
+/// `TerminalView.doScroll` for drags and its `onUp`/`onSingleTapUp` split for
+/// taps.
 ///
 /// A full-screen TUI runs on the alternate screen buffer, which SwiftTerm
 /// creates with no scrollback at all — so its scroll view has nothing to move
 /// and a drag is silently discarded. The fix is the same three-way ladder
 /// Android has always used: report the drag to the program as wheel events when
 /// it tracks the mouse, fall back to cursor keys on a bare alternate screen, and
-/// only scroll SwiftTerm's own scrollback on the normal buffer.
+/// only scroll SwiftTerm's own scrollback on the normal buffer. A tap ladders on
+/// the same three states — click, nothing, row-tap submit.
 enum TerminalWheelScroll {
     /// Where a vertical drag's rows are delivered.
     enum Mode: Equatable {
@@ -38,6 +40,21 @@ enum TerminalWheelScroll {
         if isMouseReporting { return .wheel }
         if isAlternateBuffer { return .cursorKeys }
         return .localScrollback
+    }
+
+    /// Whether a tap should be reported to the program as a click.
+    ///
+    /// Deliberately stricter than `mode(isMouseReporting:)`, which routes every
+    /// mode but `.off` to `.wheel`: SwiftTerm's `MouseMode.sendButtonPress()` is
+    /// internal, so its rule is mirrored here, and it suppresses `.x10` presses.
+    /// An `.x10` program therefore gets no click — and, because the tap still
+    /// counts as mouse-reporting for the ladder, no row-tap submit either. An
+    /// unrecognized future mode reports nothing rather than guessing.
+    static func reportsClick(_ mode: Terminal.MouseMode) -> Bool {
+        switch mode {
+        case .vt200, .buttonEventTracking, .anyEvent: return true
+        default: return false
+        }
     }
 
     /// Vertical counterpart of `TerminalPanScrollView.shouldClaimHorizontalPan`,
