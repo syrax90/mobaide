@@ -1,5 +1,13 @@
 # central_server Changelog
 
+## [0.2.9](https://github.com/syrax90/claude_mobile/compare/server-v0.2.8...server-v0.2.9) (2026-07-31)
+
+
+### Bug Fixes
+
+* **central_server:** widen verification code input field ([7d9eb4b](https://github.com/syrax90/claude_mobile/commit/7d9eb4be1741f85f0cb06c275d3f15e0ecaad312))
+* **central_server:** widen verification code input field ([8d50bac](https://github.com/syrax90/claude_mobile/commit/8d50bace3a911fb09965196b8cddde713f1aeb8b))
+
 ## [0.2.8](https://github.com/syrax90/claude_mobile/compare/server-v0.2.7...server-v0.2.8) (2026-07-30)
 
 

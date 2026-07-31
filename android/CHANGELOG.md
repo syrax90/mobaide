@@ -1,5 +1,22 @@
 # Android Changelog
 
+## [3.3.0](https://github.com/syrax90/claude_mobile/compare/android-v3.2.0...android-v3.3.0) (2026-07-31)
+
+
+### Features
+
+* **mobile:** make git branch/worktree deletion discoverable ([874942a](https://github.com/syrax90/claude_mobile/commit/874942a74d24b81679a9f7ebcf44ee837dea2a4f))
+
+
+### Bug Fixes
+
+* **android:** keep a reload from cancelling the in-flight git delete ([696bbe0](https://github.com/syrax90/claude_mobile/commit/696bbe0d874079e81313ce6486cd37bdef0bc27b))
+* **android:** keep form fields above the soft keyboard ([cb40fc2](https://github.com/syrax90/claude_mobile/commit/cb40fc2b8e84ffa4d1e2dfbc58e957d13e898b78))
+* **mobile:** address Codex review on the paste affordances ([45ed7b5](https://github.com/syrax90/claude_mobile/commit/45ed7b52faafd91c101ccf24817db472a0cf1401))
+* **mobile:** allow pasting the verification code ([8f5814c](https://github.com/syrax90/claude_mobile/commit/8f5814cd8bb819bfb8c36eba097e5e38654ad86a))
+* **mobile:** stop a terminal tap submitting the message, report it as a click ([684ea5e](https://github.com/syrax90/claude_mobile/commit/684ea5ed21e65c1997c79dc2ade92a885957d040))
+* **mobile:** stop a terminal tap submitting the message, report it as a click ([b96c94e](https://github.com/syrax90/claude_mobile/commit/b96c94e09f0b5c20f92cfc2858b5dcc38221cd87))
+
 ## [3.2.0](https://github.com/syrax90/claude_mobile/compare/android-v3.1.0...android-v3.2.0) (2026-07-30)
 
 
