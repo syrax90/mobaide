@@ -150,6 +150,28 @@ SwiftTerm's `send(source:data:)` to coalesce the mouse reports one
 instead of one per row. It flushes through that same override rather than
 `send(data:)`, whose `ensureCaretIsVisible()` would yank a paused viewport
 back to the tail on every step of a wheel-arm scroll over the normal buffer.
+A single tap ladders on the same three states. While the program tracks the
+mouse, `MobaideTerminalView.sendMouseClick(at:)` reports a left-button press
+and release on the tapped cell (reusing `TerminalWheelScroll.cell`, so the
+X10 coordinate clamp applies, and the same batching override so the pair
+costs one write), which is how Claude Code, vim and htop move their own
+cursor; SwiftTerm's equivalent cannot serve here because
+`neutralizeSwiftTermGestures()` disables its taps and it reports only while
+first responder, which the explicit-only keyboard forbids. The
+`mobaide.mouseTap` recognizer deliberately does not wait on the double-tap
+timeout, matching the promptness of Android's `onUp` fast path, and carries
+a delegate granting simultaneous recognition so it cannot block the delayed
+row tap or the double tap. Row-tap submit is therefore confined to the
+plain-shell arm: on the alternate screen and under mouse reporting the rows
+are the program's own chrome, and submitting one would Ctrl+C it and retype
+the text. Because the click leaves at touch-up but the row tap only arrives
+after the double-tap timeout — and the program that just learned of the tap
+is the one writing the state the ladder reads — the arm is latched at lift
+and both evaluations must agree before anything is submitted. Two taps are
+still reported as two clicks (Android parity), and double-tap
+copy-to-composer stays available in every mode as the way to re-run an
+earlier message. An `.x10`-only program gets neither a click (SwiftTerm
+suppresses presses in that mode) nor a submit.
 Follow mode is driven from the terminal's own scroll view rather than from
 SwiftTerm (`TerminalFollowScroll` plus a `UIScrollViewDelegate` on
 `MobaideTerminalView`). SwiftTerm's iOS renderer draws from `contentOffset`
@@ -184,10 +206,10 @@ cannot read. Row hit-testing re-points `buffer.yDisp` at the rows actually on
 screen for the duration of the synchronous `getLine` read, so tapping a prompt
 still resolves the rendered line while scrolled into history; a tap below the
 last line — the blank overscroll band — resolves nothing rather than folding
-onto that line, since a tap is what executes it. That drawn-equals-resolved
-guarantee holds against `terminal.buffer` and is suspended while a program
-holds synchronized output (DEC mode 2026), where SwiftTerm draws a frozen deep
-copy the app cannot reach (CLA-182).
+onto that line, since on the plain-shell arm a tap is what executes it. That
+drawn-equals-resolved guarantee holds against `terminal.buffer` and is
+suspended while a program holds synchronized output (DEC mode 2026), where
+SwiftTerm draws a frozen deep copy the app cannot reach (CLA-182).
 CLA-136/CLA-138 port Android's terminal custom keyboard shortcuts: the
 control-key row (now gated on `canSendTerminalBytes`, matching the wire)
 gains a trailing "Custom shortcut" ellipsis trigger that opens a

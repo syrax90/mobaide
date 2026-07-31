@@ -146,9 +146,25 @@ public final class TerminalView extends View {
 
             boolean scrolledWithFinger;
 
+            /**
+             * Which arm of the tap ladder owned the touch when it lifted.
+             * <p>
+             * The click goes out here on ACTION_UP but the row tap only arrives at
+             * onSingleTapConfirmed ~300ms later, and the state the ladder reads is
+             * written by the program in the PTY — which the click itself tells that
+             * a tap just happened. A program could answer it by dropping mouse mode
+             * and painting a fake prompt on the tapped row, turning the delayed tap
+             * into an execute frame (Ctrl+C, retype, CR) it chose the text for.
+             * Latching at lift and requiring both evaluations to agree makes the
+             * gate fail closed; it also covers the benign case of a TUI simply
+             * exiting inside the window.
+             */
+            boolean pointerOwnedAtUp;
+
             @Override
             public boolean onUp(MotionEvent event) {
                 mScrollRemainder = 0.0f;
+                pointerOwnedAtUp = programOwnsPointer();
                 // Tap-to-raise gate (see docs/terminal-view-fork-changes.md): while the
                 // composer-hidden raise gate is active, skip the mouse-tracking fast path —
                 // it would click the remote TUI immediately, before the confirmed single
@@ -180,6 +196,15 @@ public final class TerminalView extends View {
                 // input-row resolution, so tapping the TUI's own prompt row can never submit.
                 // See docs/terminal-view-fork-changes.md.
                 if (mClient.onTerminalTapToRaiseKeyboard()) return true;
+
+                // Pointer-owning programs resolve their own taps: onUp already delivered
+                // this one as a click, so resolving a row here would submit a CR on top of
+                // it. Either evaluation is enough to refuse — see pointerOwnedAtUp and
+                // docs/terminal-view-fork-changes.md.
+                if (pointerOwnedAtUp || programOwnsPointer()) {
+                    requestFocus();
+                    return true;
+                }
 
                 if (!dispatchInputRowGesture(event, false /* copyToInput */)) {
                     requestFocus();
@@ -488,6 +513,20 @@ public final class TerminalView extends View {
     /** Row range of the last successful {@link #findInputMessage} call. */
     private int mLastInputStartRow = Integer.MIN_VALUE;
     private int mLastInputEndRow = Integer.MIN_VALUE;
+
+    /**
+     * Whether the running program, rather than the app, owns pointer input.
+     * <p>
+     * True while the program tracks the mouse — the tap already reached it as a
+     * click from the gesture listener's {@code onUp} fast path, and a full-screen
+     * TUI (Claude Code, vim, htop) positions its own cursor from that click — or
+     * while it holds the alternate screen, whose rows are program-drawn chrome
+     * rather than shell history. Same priority order as {@link #doScroll}.
+     */
+    private boolean programOwnsPointer() {
+        return mEmulator != null
+                && (mEmulator.isMouseTrackingActive() || mEmulator.isAlternateBufferActive());
+    }
 
     /**
      * Resolves the tapped row to an input message via {@link #findInputMessage}
