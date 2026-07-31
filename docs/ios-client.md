@@ -121,7 +121,13 @@ a bare alternate screen (`less`, `man`, `vim` — honoring
 application-cursor mode), else scrolls SwiftTerm's own scrollback exactly
 as before (plain shells are unchanged); a `gestureRecognizerShouldBegin`
 override refuses SwiftTerm's scrollback pan whenever a program owns the
-vertical axis. Two consequences match Android and are deliberate: local
+vertical axis, and — in Static mode — on exactly the horizontal drags
+the outer `TerminalPanScrollView` claims, so precisely one of the two
+nested pans owns any touch; this is the child half of Android's
+`requestDisallowInterceptTouchEvent` arbitration, replacing an inner
+`isDirectionalLockEnabled` that latched onto whichever axis started
+dominant — including one with no overflow to scroll. Two
+consequences match Android and are deliberate: local
 scrollback is unreachable on the normal buffer while a program has mouse
 reporting on, and a program that exits without restoring terminal modes
 leaves the emulator in alt/mouse mode, so a scroll gesture writes arrow

@@ -56,10 +56,6 @@ final class TerminalPanScrollView: UIScrollView {
 
         terminalView.showsHorizontalScrollIndicator = false
         terminalView.contentInsetAdjustmentBehavior = .never
-        // Nested UIScrollView pans recognize simultaneously; directional lock
-        // on the inner keeps an outer-claimed horizontal pan from also
-        // jiggling the scrollback vertically on near-diagonal drags.
-        terminalView.isDirectionalLockEnabled = true
 
         addSubview(terminalView)
     }
@@ -158,6 +154,47 @@ final class TerminalPanScrollView: UIScrollView {
         return abs(sample.x) > abs(sample.y)
     }
 
+    /// What this view *would* claim for a drag someone else sampled — the outer
+    /// half of the terminal's axis split, so `MobaideTerminalView` can refuse its
+    /// scrollback pan on exactly those drags. Deliberately not named
+    /// `claimsHorizontalPan`: it answers a hypothetical about a supplied sample
+    /// and drops the live-fling term below, so the two are not interchangeable.
+    ///
+    /// The child passes its *own* recognizer's numbers rather than reading this
+    /// view's: UIKit asks a recognizer to begin only once that recognizer has
+    /// seen enough travel, so its own sample is the only one guaranteed live at
+    /// its decision moment — the outer's pan can still be sitting in `.possible`
+    /// reporting zero for both, the same hazard `shouldClaimHorizontalPan`
+    /// documents above.
+    ///
+    /// A zero sample therefore yields the touch to the scrollback instead of
+    /// refusing it, matching `TerminalWheelScroll.claimsPan`: `isDecelerating`
+    /// answers "should the outer catch its own fling?", which is not a question
+    /// about which axis owns a drag, and inheriting it would let a decelerating
+    /// horizontal fling swallow a vertical drag for its whole touch.
+    ///
+    /// Full mode has no horizontal overflow and never arbitrates, so the outer
+    /// claims nothing there.
+    func wouldClaimHorizontalPan(velocity: CGPoint, translation: CGPoint) -> Bool {
+        guard displayConfig.mode == .static else { return false }
+        return Self.shouldClaimHorizontalPan(
+            velocity: velocity,
+            translation: translation,
+            isDecelerating: false
+        )
+    }
+
+    /// The same split answered for this view's own pan, where a stationary touch
+    /// must still catch an in-flight fling.
+    func claimsHorizontalPan() -> Bool {
+        guard displayConfig.mode == .static else { return false }
+        return Self.shouldClaimHorizontalPan(
+            velocity: panGestureRecognizer.velocity(in: self),
+            translation: panGestureRecognizer.translation(in: self),
+            isDecelerating: isDecelerating
+        )
+    }
+
     /// Direction-aware arbitration so vertical scrollback still reaches the
     /// inner SwiftTerm view. `isDirectionalLockEnabled` only constrains this
     /// scroll view's own axis *after* its pan has begun; it does not stop a
@@ -165,16 +202,17 @@ final class TerminalPanScrollView: UIScrollView {
     /// horizontal pan and cancelling the terminal's vertical scroll. A refused
     /// pan stays refused for the rest of the touch sequence, so the per-touch
     /// decision is itself the Android-style latch.
+    ///
+    /// The `.static` check is not redundant with `claimsHorizontalPan()`'s own
+    /// mode guard: that guard answers on behalf of the *inner* view, for which
+    /// Full mode means "nothing to yield to". Refusing on `!claimsHorizontalPan()`
+    /// alone would also refuse this view's own pan in Full mode, where it is
+    /// allowed today.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        if displayConfig.mode == .static, gestureRecognizer === panGestureRecognizer {
-            let claims = Self.shouldClaimHorizontalPan(
-                velocity: panGestureRecognizer.velocity(in: self),
-                translation: panGestureRecognizer.translation(in: self),
-                isDecelerating: isDecelerating
-            )
-            if !claims {
-                return false
-            }
+        if displayConfig.mode == .static,
+           gestureRecognizer === panGestureRecognizer,
+           !claimsHorizontalPan() {
+            return false
         }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
