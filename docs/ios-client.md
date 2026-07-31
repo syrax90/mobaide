@@ -147,7 +147,12 @@ otherwise), matching Android's `TerminalEmulator.isAutoScrollDisabled`. Those
 writes are told apart from a drag by a flag raised around the `feed` call
 rather than by the gesture state alone: SwiftTerm snaps synchronously inside
 `feed`, and UIKit reports the result as an ordinary scroll — so a line landing
-mid-drag would otherwise read as the user returning to the tail. One
+mid-drag would otherwise read as the user returning to the tail. That same
+flag keeps SwiftTerm's automatic replies (DA/DECRQM, and the cursor-position
+report answering `ESC[6n`, which prompt frameworks emit routinely) off the
+resume path: they still reach the PTY, but sending them no longer counts as
+the user typing, which would otherwise let a program's own query un-pause the
+viewport. Android resumes on those replies today (CLA-184). One
 limitation is accepted: once the scrollback ring is full SwiftTerm trims from
 the top without growing `contentSize`, so a held viewport drifts up a row per
 trimmed line — Android compensates via `mTopRow`, which needs an index iOS

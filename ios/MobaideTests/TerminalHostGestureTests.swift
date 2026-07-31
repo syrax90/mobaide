@@ -592,6 +592,75 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
+    // MARK: - Emulator auto-replies
+
+    private func outputFrame(_ text: String) -> Data {
+        Data([0x6F]) + Data(text.utf8)
+    }
+
+    /// `wiredModel` wires SwiftTerm's own delegate but not the scroll-view
+    /// callback `makeUIView` installs alongside it, and follow mode moves
+    /// through that callback alone — so the pause has to travel the real drag
+    /// chain rather than being poked into the model.
+    private func pausedWiredModel() async throws
+        -> (TerminalSessionModel, FakeWebSocketConnection, TerminalHostView.Coordinator) {
+        let (model, connection) = try await wiredModel()
+        let coordinator = try XCTUnwrap(retainedCoordinator)
+        coordinator.attachGestures(to: model.terminalView)
+        layOutWithScrollback(model.terminalView)
+        scrollUp(model.terminalView)
+        XCTAssertFalse(model.followMode, "the harness must be paused before anything is delivered to it")
+        return (model, connection, coordinator)
+    }
+
+    /// SwiftTerm answers `ESC[6n` (DSR — cursor position) synchronously while
+    /// it parses inbound output, and the reply travels the same
+    /// `TerminalViewDelegate.send` chain a typed key does. Prompt frameworks
+    /// emit that query routinely, so a reply that resumed follow mode would let
+    /// a program yank a paused reader back to the tail on its own. The bytes go
+    /// in through the `o` frame rather than `feed` because `handleBinary` is
+    /// where the emulator-output attribution is raised.
+    func testEmulatorAutoReplyReachesThePtyWithoutResumingFollowMode() async throws {
+        let (model, connection, _) = try await pausedWiredModel()
+        let terminal = model.terminalView
+        connection.emit(.binary(outputFrame("a\r\nb\r\n")))
+        let accrued = await poll { model.unreadRows == 2 }
+        XCTAssertTrue(accrued, "the paused viewport needs a real tally before the query, or clearing it would not show")
+
+        connection.emit(.binary(outputFrame("\u{1B}[5;3H\u{1B}[6n")))
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(
+            frames, [inputFrame("\u{1B}[5;3R")],
+            "only the follow-mode resume is dropped — the cursor-position report still has to reach the PTY"
+        )
+        XCTAssertFalse(model.followMode, "a program answering its own query is not the user returning to the tail")
+        XCTAssertEqual(model.unreadRows, 2, "resuming would have wiped the tally the reader has not caught up on")
+        XCTAssertTrue(
+            terminal.isAutoScrollSuppressed,
+            "and lifted the hold that keeps the viewport where the finger left it"
+        )
+    }
+
+    /// The gate is scoped to bytes the emulator generated while parsing; the
+    /// identical delegate call outside an output frame is a real keystroke and
+    /// must still resume.
+    func testTypedKeyOutsideAnOutputFrameStillResumesFollowMode() async throws {
+        let (model, connection, coordinator) = try await pausedWiredModel()
+        let terminal = model.terminalView
+        connection.emit(.binary(outputFrame("a\r\n")))
+        let accrued = await poll { model.unreadRows == 1 }
+        XCTAssertTrue(accrued, "the tally has to be non-zero for the clear to be observable")
+
+        coordinator.send(source: terminal, data: Array("ls".utf8)[...])
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(frames, [inputFrame("ls")])
+        XCTAssertTrue(model.followMode, "typing is a resume trigger — the answer has to be visible")
+        XCTAssertEqual(model.unreadRows, 0)
+        XCTAssertFalse(terminal.isAutoScrollSuppressed)
+    }
+
     // MARK: - resolveRow
 
     func testResolveRowReadsTheRenderedLineWhileScrolledIntoHistory() {

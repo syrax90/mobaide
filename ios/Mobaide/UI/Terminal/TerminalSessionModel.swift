@@ -268,8 +268,19 @@ final class TerminalSessionModel {
     /// stayed up, and replay-era auto-replies must not reach the live PTY as
     /// stale duplicates. Composer submits and control keys are deliberately
     /// not gated here — their buttons disable instead.
+    ///
+    /// A reply the emulator generated while parsing inbound output still goes
+    /// on the wire, but skips the resume: it is the program talking to itself,
+    /// not the user typing, so letting it run `setFollowMode(true)` would let a
+    /// bare cursor-position query (`ESC[6n`, which prompt frameworks emit
+    /// routinely) yank a paused viewport back to the tail and wipe the unread
+    /// tally — the exact hijack follow mode exists to prevent.
     func sendTerminalBytes(_ data: Data) {
         guard canSendTerminalBytes else { return }
+        guard !terminalView.isApplyingEmulatorOutput else {
+            enqueue(.input(data))
+            return
+        }
         sendBytes(data)
     }
 
