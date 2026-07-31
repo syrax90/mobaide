@@ -55,6 +55,7 @@ final class MobaideTerminalView: TerminalView {
         // the accessory is installed exactly once at init, so a one-time nil
         // here — before the view can ever become first responder — is final.
         inputAccessoryView = nil
+        installVerticalScrollGesture()
     }
 
     /// SwiftTerm's per-cell dimensions. The caret is exactly one cell, so its
@@ -102,8 +103,8 @@ final class MobaideTerminalView: TerminalView {
     }
 
     /// Disables SwiftTerm's own gesture recognizers that would steal touches
-    /// from the app's surfaces, keeping the `mobaide.*` taps and the scroll
-    /// views' own pans intact:
+    /// from the app's surfaces, keeping the `mobaide.*` recognizers and the
+    /// scroll views' own pans intact:
     /// - SwiftTerm's single-tap calls `becomeFirstResponder()` (raising the
     ///   keyboard from a terminal touch — the exact behavior the explicit-only
     ///   keyboard model forbids) and, while first responder, sends mouse click
@@ -135,6 +136,155 @@ final class MobaideTerminalView: TerminalView {
     override func mouseModeChanged(source: Terminal) {
         super.mouseModeChanged(source: source)
         neutralizeSwiftTermGestures()
+    }
+
+    // MARK: - Vertical scrolling
+
+    static let verticalScrollGestureName = "mobaide.verticalScroll"
+
+    private(set) var verticalScrollGesture: UIPanGestureRecognizer?
+    private let verticalScrollDelegate = ExclusiveVerticalPanDelegate()
+    private var wheelAccumulator = TerminalWheelAccumulator()
+    /// The cell the current drag started on. Every wheel event of a gesture
+    /// reports it, so a drag that leaves the pane it began in keeps scrolling
+    /// that pane (Android pins identically).
+    private var wheelAnchor: CGPoint = .zero
+
+    /// Where this drag's rows go, re-read from the emulator on every touch so
+    /// nothing has to be re-asserted on replay, reconnect or a screen revisit.
+    var wheelScrollMode: TerminalWheelScroll.Mode {
+        let terminal = getTerminal()
+        return TerminalWheelScroll.mode(
+            isMouseReporting: terminal.mouseMode != .off,
+            isAlternateBuffer: terminal.isCurrentBufferAlternate
+        )
+    }
+
+    /// Idempotent: the recognizer targets this view rather than the per-visit
+    /// Coordinator, so it survives screen revisits untouched.
+    func installVerticalScrollGesture() {
+        if let existing = verticalScrollGesture, existing.view === self { return }
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleVerticalScroll(_:)))
+        pan.name = Self.verticalScrollGestureName
+        pan.delegate = verticalScrollDelegate
+        pan.maximumNumberOfTouches = 1
+        addGestureRecognizer(pan)
+        verticalScrollGesture = pan
+    }
+
+    /// Vertical-axis arbitration, decided per touch rather than stored. UIKit
+    /// asks the view this for every recognizer attached to it, so it can refuse
+    /// SwiftTerm's own scrollback pan without touching `isScrollEnabled` — which
+    /// would have to be re-asserted on buffer switches that `mouseModeChanged`
+    /// never reports.
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        let mode = wheelScrollMode
+        if gestureRecognizer === panGestureRecognizer {
+            // Mouse-reporting and alternate-screen programs own the vertical
+            // axis (Android `doScroll` ladder), so the scrollback pan must not
+            // also run — in the alternate buffer it has nothing to scroll anyway.
+            guard mode == .localScrollback else { return false }
+            return super.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+        if gestureRecognizer === verticalScrollGesture {
+            guard mode != .localScrollback,
+                  let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            return TerminalWheelScroll.claimsPan(
+                velocity: pan.velocity(in: self),
+                translation: pan.translation(in: self)
+            )
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+
+    @objc private func handleVerticalScroll(_ gesture: UIPanGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            wheelAccumulator.reset()
+            wheelAnchor = gesture.location(in: self)
+            // Consume the slop travel too, matching Android's GestureDetector
+            // whose first `onScroll` already includes it.
+            consumeVerticalScroll(gesture)
+        case .changed:
+            consumeVerticalScroll(gesture)
+        case .ended, .cancelled, .failed:
+            wheelAccumulator.reset()
+        default:
+            break
+        }
+    }
+
+    private func consumeVerticalScroll(_ gesture: UIPanGestureRecognizer) {
+        let deltaY = gesture.translation(in: self).y
+        gesture.setTranslation(.zero, in: self)
+        let rows = wheelAccumulator.rowsDown(panDeltaY: deltaY, cellHeight: cellSize.height)
+        guard rows != 0 else { return }
+        emitVerticalScroll(rowsDown: rows, at: wheelAnchor)
+    }
+
+    /// Emits one scroll step per row. The ladder arm is re-derived per call, so
+    /// output that flips the buffer or mouse mode mid-drag is honored.
+    func emitVerticalScroll(rowsDown: Int, at point: CGPoint) {
+        let mode = wheelScrollMode
+        guard mode != .localScrollback, rowsDown != 0 else { return }
+        let terminal = getTerminal()
+        let dims = terminal.getDims()
+        // A stalled main thread can deliver one huge delta; capping at a page
+        // keeps a single callback from flushing hundreds of events down the
+        // WebSocket. Android has no cap because its PTY is local.
+        let steps = min(abs(rowsDown), max(1, dims.rows))
+        let down = rowsDown > 0
+        let cell = TerminalWheelScroll.cell(
+            at: point,
+            contentOffset: contentOffset,
+            cellSize: cellSize,
+            cols: dims.cols,
+            rows: dims.rows
+        )
+        switch mode {
+        case .wheel:
+            let flags = TerminalWheelScroll.wheelFlags(down: down)
+            for _ in 0 ..< steps {
+                terminal.sendEvent(buttonFlags: flags, x: cell.col, y: cell.row)
+            }
+        case .cursorKeys:
+            // Concatenated into one write: a PTY is a byte stream, so N arrows in
+            // one write are indistinguishable from N writes to the program, while
+            // one write costs one WebSocket frame instead of `steps` of them.
+            // `send(data:)` also runs SwiftTerm's snap-to-bottom, which is a
+            // no-op here: this arm only runs on the alternate screen, whose
+            // buffer has no scrollback to be snapped away from.
+            let bytes = TerminalWheelScroll.cursorKeyBytes(
+                down: down,
+                applicationCursor: terminal.applicationCursor
+            )
+            var batch: [UInt8] = []
+            batch.reserveCapacity(bytes.count * steps)
+            for _ in 0 ..< steps {
+                batch.append(contentsOf: bytes)
+            }
+            send(data: batch[...])
+        case .localScrollback:
+            break
+        }
+    }
+}
+
+/// Denies simultaneous recognition for the vertical-scroll pan so exactly one of
+/// {outer horizontal pan, SwiftTerm scrollback pan, this} drives a touch.
+///
+/// It is a separate object on purpose: `MobaideTerminalView` is a `UIScrollView`,
+/// which is the delegate of its own pan through a private implementation, and
+/// `shouldRecognizeSimultaneouslyWith` is an optional protocol method with no
+/// callable `super` — answering it on the view would replace UIKit's nested-pan
+/// rule and break the Static-mode horizontal arbitration.
+@MainActor
+private final class ExclusiveVerticalPanDelegate: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        false
     }
 }
 
@@ -190,24 +340,37 @@ struct TerminalHostView: UIViewRepresentable {
             self.model = model
         }
 
+        /// Recognizers that target this Coordinator, and so must be rebuilt on
+        /// every screen visit. Deliberately not every `mobaide.*` recognizer:
+        /// the vertical-scroll pan targets the view itself, and sweeping it away
+        /// here would kill terminal scrolling from the second visit onwards.
+        private static let rowTapGestureName = "mobaide.rowTap"
+        private static let rowDoubleTapGestureName = "mobaide.rowDoubleTap"
+        private static let coordinatorGestureNames: Set<String> = [
+            rowTapGestureName,
+            rowDoubleTapGestureName,
+        ]
+
         /// The recognizers live on the retained terminal view but each screen
         /// visit brings a fresh Coordinator, and a UIGestureRecognizer retains
-        /// its target — so stale `mobaide.*` recognizers are replaced instead
-        /// of kept, both re-targeting the callbacks and releasing the previous
-        /// visit's Coordinator.
+        /// its target — so the Coordinator's own recognizers are replaced
+        /// instead of kept, both re-targeting the callbacks and releasing the
+        /// previous visit's Coordinator.
         func attachGestures(to view: MobaideTerminalView) {
-            for recognizer in view.gestureRecognizers ?? [] where recognizer.name?.hasPrefix("mobaide.") == true {
+            for recognizer in view.gestureRecognizers ?? []
+            where Self.coordinatorGestureNames.contains(recognizer.name ?? "") {
                 view.removeGestureRecognizer(recognizer)
             }
             let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
             doubleTap.numberOfTapsRequired = 2
-            doubleTap.name = "mobaide.rowDoubleTap"
+            doubleTap.name = Self.rowDoubleTapGestureName
             let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap(_:)))
             singleTap.numberOfTapsRequired = 1
-            singleTap.name = "mobaide.rowTap"
+            singleTap.name = Self.rowTapGestureName
             singleTap.require(toFail: doubleTap)
             view.addGestureRecognizer(doubleTap)
             view.addGestureRecognizer(singleTap)
+            view.installVerticalScrollGesture()
             view.neutralizeSwiftTermGestures()
         }
 

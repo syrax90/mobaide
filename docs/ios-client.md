@@ -109,6 +109,23 @@ column by the keyboard overlap (`TerminalKeyboardObserver`), and
 slack rows stays visible (`TerminalKeyboardPan` math) — the grid never
 resizes on keyboard show/hide, so keyboard transitions send no PTY resize
 frames and no SIGWINCH.
+A vertical-drag scroll ladder (`TerminalWheelScroll` plus a
+`mobaide.verticalScroll` pan on `MobaideTerminalView`) ports Android
+`TerminalView.doScroll`: full-screen TUIs (Claude Code, Codex, Gemini,
+vim, less, htop) run on the alternate screen, which SwiftTerm creates
+with no scrollback, so the terminal's own scroll view had nothing to
+move and vertical drags did nothing in either display mode. A drag now
+sends xterm wheel buttons 64/65 while the program has mouse reporting on
+(coordinates pinned to the cell the drag started on), else arrow keys on
+a bare alternate screen (`less`, `man`, `vim` — honoring
+application-cursor mode), else scrolls SwiftTerm's own scrollback exactly
+as before (plain shells are unchanged); a `gestureRecognizerShouldBegin`
+override refuses SwiftTerm's scrollback pan whenever a program owns the
+vertical axis. Two consequences match Android and are deliberate: local
+scrollback is unreachable on the normal buffer while a program has mouse
+reporting on, and a program that exits without restoring terminal modes
+leaves the emulator in alt/mouse mode, so a scroll gesture writes arrow
+keys or a mouse report to the shell prompt underneath.
 CLA-136/CLA-138 port Android's terminal custom keyboard shortcuts: the
 control-key row (now gated on `canSendTerminalBytes`, matching the wire)
 gains a trailing "Custom shortcut" ellipsis trigger that opens a
@@ -174,10 +191,10 @@ ios/
 │   │                             # PushEnvironment (iOS-10 APNs)
 │   ├── UI/                       # Theme, Navigation (Router, RootView), Common, Onboarding,
 │   │                             # Connections, Sessions (list + create wizard), Terminal
-│   │                             # (SwiftTerm host, InputBar, keyboard pan, shortcut picker,
-│   │                             # session model/store), and the feature screens (Agents,
-│   │                             # Projects, Devices, Templates, AutoScan, Settings, Support,
-│   │                             # Update)
+│   │                             # (SwiftTerm host, InputBar, keyboard pan, wheel scroll,
+│   │                             # shortcut picker, session model/store), and the feature
+│   │                             # screens (Agents, Projects, Devices, Templates, AutoScan,
+│   │                             # Settings, Support, Update)
 │   └── Support/                  # Info.plist (protocol keys, CentralServerURL, Google client ids,
 │                                 # reversed-client-id URL scheme) + Mobaide.entitlements (SIWA)
 └── MobaideTests/                 # unit tests + fixture round-trip suites
