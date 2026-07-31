@@ -9,6 +9,7 @@ import com.mobaide.app.data.network.dto.GitItem
 import com.mobaide.app.data.repository.GitBusyException
 import com.mobaide.app.data.repository.GitRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
@@ -58,7 +59,14 @@ class GitViewModel @Inject constructor(
 
     /** The not-yet-sent batch, in request order. */
     private var pendingBatch: List<PendingDelete> = emptyList()
-    private var deferredCommit: Job? = null
+
+    /**
+     * The undo countdown only — never the in-flight request. The agent
+     * publishes `git.changed` *before* it replies, so a reload can land while a
+     * delete is still awaiting its response; cancelling that job would abort
+     * response handling and leave failed rows hidden with no force prompt.
+     */
+    private var undoWindow: Job? = null
     private var undoSequence = 0L
 
     init {
@@ -81,8 +89,8 @@ class GitViewModel @Inject constructor(
             // listed and no longer queued comes back into view.
             pendingBatch = pendingBatch.filter { it.id in surviving }
             if (pendingBatch.isEmpty()) {
-                deferredCommit?.cancel()
-                deferredCommit = null
+                undoWindow?.cancel()
+                undoWindow = null
             }
             _uiState.update {
                 val hidden = it.pendingDeleteIds intersect surviving
@@ -173,8 +181,8 @@ class GitViewModel @Inject constructor(
         // Restarting the window is safe: the payload lives in `pendingBatch`,
         // not in the cancelled job, so a second delete extends the batch
         // instead of discarding the first one.
-        deferredCommit?.cancel()
-        deferredCommit = viewModelScope.launch {
+        undoWindow?.cancel()
+        undoWindow = viewModelScope.launch {
             delay(UNDO_WINDOW_MS)
             commitPendingBatch()
         }
@@ -182,20 +190,27 @@ class GitViewModel @Inject constructor(
 
     /** The undo snackbar was dismissed by hand: send without waiting out the window. */
     fun commitNow() {
-        deferredCommit?.cancel()
-        deferredCommit = viewModelScope.launch { commitPendingBatch() }
+        undoWindow?.cancel()
+        undoWindow = null
+        // Deliberately not held in `undoWindow`: on `Dispatchers.Main.immediate`
+        // the body runs before `launch` returns, so storing it would re-expose
+        // the request to reload's cancellation.
+        viewModelScope.launch { commitPendingBatch() }
     }
 
     private suspend fun commitPendingBatch() {
         val batch = pendingBatch
         pendingBatch = emptyList()
+        // Detach from the countdown before awaiting: from here on this job is
+        // the request, and a concurrent reload must not cancel it.
+        undoWindow = null
         _uiState.update { it.copy(undoPrompt = null) }
         sendDelete(batch)
     }
 
     fun undo() {
-        deferredCommit?.cancel()
-        deferredCommit = null
+        undoWindow?.cancel()
+        undoWindow = null
         val queuedIds = pendingBatch.map(PendingDelete::id).toSet()
         pendingBatch = emptyList()
         _uiState.update {
@@ -270,6 +285,9 @@ class GitViewModel @Inject constructor(
                     pendingDeleteIds = it.pendingDeleteIds - batch.map(PendingDelete::id),
                 )
             }
+        } catch (e: CancellationException) {
+            // The scope is going away — never report that as a delete failure.
+            throw e
         } catch (e: Exception) {
             _uiState.update {
                 it.copy(

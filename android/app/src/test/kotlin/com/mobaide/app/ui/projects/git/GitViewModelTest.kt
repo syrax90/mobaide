@@ -15,6 +15,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.advanceTimeBy
@@ -455,6 +456,35 @@ class GitViewModelTest {
             cancelAndIgnoreRemainingEvents()
         }
         assertEquals(setOf(staleId), f.vm.uiState.value.pendingDeleteIds)
+    }
+
+    @Test
+    fun reloadDuringAnInFlightDelete_doesNotCancelResponseHandling() = runTest {
+        // The agent publishes `git.changed` before it replies, so a reload can
+        // land while the delete is still awaiting its response. Cancelling that
+        // request would drop the force prompt and strand the failed row hidden.
+        val f = newFixture()
+        advanceUntilIdle()
+        val reply = CompletableDeferred<GitDeleteResponse>()
+        coEvery { f.repo.deleteGitItems("alpha", any()) } coAnswers { reply.await() }
+
+        f.vm.deleteItem(staleId)
+        advanceUntilIdle()
+        coVerify(exactly = 1) { f.repo.deleteGitItems("alpha", any()) }
+
+        f.changed.emit("alpha")
+        advanceUntilIdle()
+
+        reply.complete(
+            GitDeleteResponse(
+                results = listOf(failedResult(GitItem.KIND_BRANCH_ONLY, "stale", "force_required")),
+            ),
+        )
+        advanceUntilIdle()
+
+        val state = f.vm.uiState.value
+        assertNotNull("the force prompt must survive the concurrent reload", state.forceDeletePrompt)
+        assertTrue("the un-deleted row must come back", state.visibleItems.any { it.id == staleId })
     }
 
     @Test
