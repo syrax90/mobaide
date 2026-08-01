@@ -915,6 +915,87 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
+    /// A DECSTBM region scroll reports through the very same `scrolled` callback
+    /// as an ordinary one, and used to be counted: three line feeds inside
+    /// `ESC[2;5r` reached a tally of 3 while the tail had not moved at all. The
+    /// second half is what keeps the new gate honest — a predicate that answered
+    /// `false` to everything would pass the first three assertions alone.
+    func testRegionScrollWhilePausedAccruesNothingButFullWidthOutputStillCounts() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        scrollUp(terminal)
+        XCTAssertEqual(model.unreadRows, 0, "output before this point arrived while following")
+        let originBefore = terminal.getTerminal().buffer.yDisp
+
+        terminal.feed(text: "\u{1B}[2;5r\u{1B}[5;1H")
+        terminal.feed(text: "x\r\ny\r\nz\r\n")
+
+        XCTAssertEqual(
+            terminal.getTerminal().buffer.yDisp, originBefore,
+            "three line feeds on the bottom row of a rows 2-5 region push nothing past the bottom"
+        )
+        XCTAssertEqual(
+            model.unreadRows, 0,
+            "the badge promised three rows the reader could never scroll back to"
+        )
+
+        // DECSTBM homes the cursor, so it has to be walked back down to the last
+        // row before a line feed can scroll anything again.
+        let rows = terminal.getTerminal().getDims().rows
+        terminal.feed(text: "\u{1B}[r\u{1B}[\(rows);1H")
+        terminal.feed(text: "d\r\ne\r\n")
+
+        XCTAssertEqual(
+            terminal.getTerminal().buffer.yDisp - originBefore, 2,
+            "back on the full screen the tail moves again, two lines' worth"
+        )
+        XCTAssertEqual(
+            model.unreadRows, 2,
+            "and the tally has to move with it — a gate that counts nothing is not a fix"
+        )
+    }
+
+    /// The scrollback gate reads no margin value at all — see
+    /// `TerminalFollowScroll.pushesRowIntoScrollback` for why neither one stands
+    /// in for the `marginMode` SwiftTerm actually branches on. This reproduces
+    /// both strands that make them wrong, so a reintroduced margin term fails
+    /// here with the reason attached rather than as a bare count downstream.
+    ///
+    /// `marginRight` is stranded low for the whole session; `marginLeft` is left
+    /// raised by `ESC[?69l`, which is the worse of the two — after it, SwiftTerm
+    /// is back on the arm that really does fill the scrollback, so a
+    /// `marginLeft == 0` term would pin the badge at zero for good.
+    func testStrandedMarginsDoNotSuppressTheUnreadTally() {
+        let model = scrollableModel()
+        let terminal = model.terminalView
+        let buffer = terminal.getTerminal().buffer
+        XCTAssertLessThan(
+            buffer.marginRight, terminal.getTerminal().getDims().cols - 1,
+            "the harness has to reproduce the strand, or there is no hazard here to guard"
+        )
+        // DECLRMM on, a left margin set, DECLRMM back off: margin mode is false
+        // again but marginLeft keeps the value, and nothing ever lowers it.
+        terminal.feed(text: "\u{1B}[?69h\u{1B}[3;40s\u{1B}[?69l")
+        XCTAssertGreaterThan(
+            buffer.marginLeft, 0,
+            "ESC[?69l drops margin mode without restoring the margins it was gating"
+        )
+        scrollUp(terminal)
+
+        // Column 5 is inside the stranded margins on purpose. `cmdLineFeedBasic`
+        // gates scrolling on `buffer.x` falling between them and — alone among
+        // SwiftTerm's margin reads — never checks `marginMode` first, so a line
+        // feed from column 0 is swallowed entirely and this would assert against
+        // a scroll that never happened. Drop the placement once that gate is
+        // fixed; it is a separate defect, filed.
+        terminal.feed(text: "\u{1B}[5Ga\n")
+
+        XCTAssertEqual(
+            model.unreadRows, 1,
+            "margins stranded by a two-column startup grid and by ESC[?69l must not decide what a full-size session counts"
+        )
+    }
+
     // MARK: - Emulator auto-replies
 
     private func outputFrame(_ text: String) -> Data {

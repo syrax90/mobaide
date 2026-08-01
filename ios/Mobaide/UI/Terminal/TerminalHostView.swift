@@ -806,16 +806,22 @@ struct TerminalHostView: UIViewRepresentable {
             model.resize(rows: newRows, cols: newCols)
         }
 
-        /// Emulator-driven, fired once per line the terminal pushes past the
-        /// bottom (`Terminal.scroll`) — the iOS counterpart of Android's
-        /// per-update `emulator.scrollCounter` delta, and so the unread tally.
+        /// Emulator-driven, fired at the end of every `Terminal.scroll` — the
+        /// iOS counterpart of Android's per-update `emulator.scrollCounter`
+        /// delta, and so the unread tally. Only scrolls that reached the
+        /// scrollback feed it, apart from the narrow-margin arm the predicate
+        /// cannot see; the caret moved either way.
         ///
         /// It deliberately does *not* touch follow mode: `position` comes from
         /// SwiftTerm's `scrollPosition`, which is derived from the tail-pinned
         /// `yDisp` and hardcoded to `0` on the alternate buffer — so honoring it
         /// would pause follow mode every time a TUI repaints.
         func scrolled(source: TerminalView, position: Double) {
-            model.onEmulatorScrolled()
+            if TerminalFollowScroll.pushesRowIntoScrollback(
+                scrollTop: source.getTerminal().buffer.scrollTop
+            ) {
+                model.onEmulatorScrolled()
+            }
             panHost?.caretDidMove()
         }
 

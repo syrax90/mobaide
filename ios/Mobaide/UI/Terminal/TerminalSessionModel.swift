@@ -373,8 +373,11 @@ final class TerminalSessionModel {
     }
 
     /// One line the terminal pushed past the bottom. Android accrues the same
-    /// tally from `emulator.scrollCounter` per screen update; SwiftTerm reports
-    /// it one line at a time through the `scrolled` delegate.
+    /// tally from `emulator.scrollCounter` per screen update; on iOS SwiftTerm
+    /// reports *every* scroll through the `scrolled` delegate, and
+    /// `TerminalHostView.Coordinator.scrolled` screens those through
+    /// `TerminalFollowScroll.pushesRowIntoScrollback` so that, the narrow-margin
+    /// arm aside, only the ones that reached the scrollback arrive here.
     func onEmulatorScrolled() {
         guard !followMode, unreadRows < Self.maxUnreadRows else { return }
         unreadRows += 1

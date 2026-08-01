@@ -267,6 +267,52 @@ class TerminalViewModelFollowModeTest {
     }
 
     @Test
+    fun unreadRows_scrollRegionScroll_countsTheRowsThatEnterTheTranscript() {
+        val vm = createViewModel()
+        val emulator = requireNotNull(vm.session.emulator)
+        vm.setFollowMode(false)
+        val transcriptBefore = emulator.screen.activeTranscriptRows
+
+        emulator.append(SCROLL_REGION_FEED, SCROLL_REGION_FEED.size)
+        vm.sessionCallback.onTextChanged(vm.session)
+
+        assertEquals(
+            "DECSTBM rotates mScreenFirstRow and parks the scrolled-out region row as the newest " +
+                "transcript row, so three region line feeds really do add three reachable rows",
+            3,
+            emulator.screen.activeTranscriptRows - transcriptBefore,
+        )
+        assertEquals(
+            "the badge is the transcript growth — a paused reader can scroll back to every one of these rows",
+            3,
+            vm.unreadRows.value,
+        )
+    }
+
+    @Test
+    fun unreadRows_narrowMarginScroll_countsNothing() {
+        val vm = createViewModel()
+        val emulator = requireNotNull(vm.session.emulator)
+        vm.setFollowMode(false)
+        val transcriptBefore = emulator.screen.activeTranscriptRows
+
+        emulator.append(NARROW_MARGIN_FEED, NARROW_MARGIN_FEED.size)
+        vm.sessionCallback.onTextChanged(vm.session)
+
+        assertEquals(
+            "the DECLRMM branch blockCopies within the margin columns and blanks the bottom row — " +
+                "it never touches the ring buffer",
+            0,
+            emulator.screen.activeTranscriptRows - transcriptBefore,
+        )
+        assertEquals(
+            "nothing left the screen, so there is nothing for the reader to have missed",
+            0,
+            vm.unreadRows.value,
+        )
+    }
+
+    @Test
     fun unreadRows_isCappedAtMaxDisplay() {
         val vm = createViewModel()
         val emulator = requireNotNull(vm.session.emulator)
@@ -287,5 +333,15 @@ class TerminalViewModelFollowModeTest {
         const val REPLAY_MARKER_FRAME_TYPE: Byte = 'b'.code.toByte()
         val NEWLINES_30 = ByteArray(30) { '\n'.code.toByte() }
         val NEWLINES_LARGE = ByteArray(MAX_UNREAD_DISPLAY + 200) { '\n'.code.toByte() }
+
+        /** DECSTBM rows 2..5, cursor parked on the region's bottom row, then three line feeds. */
+        val SCROLL_REGION_FEED = "\u001B[2;5r\u001B[5;1H\r\n\r\n\r\n".toByteArray(Charsets.US_ASCII)
+
+        /**
+         * DECLRMM on, DECSLRM columns 3..40, cursor on the screen's bottom row, then three line
+         * feeds. The emulator is 80x24, so row 24 is the bottom margin and each feed scrolls.
+         */
+        val NARROW_MARGIN_FEED =
+            "\u001B[?69h\u001B[3;40s\u001B[24;5H\r\n\r\n\r\n".toByteArray(Charsets.US_ASCII)
     }
 }
