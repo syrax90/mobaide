@@ -221,9 +221,15 @@ positive costs one ignored tap while a false negative reopens the hole. The
 window closes on `ESC[?2026l` at once (Ink brackets every frame, so anything
 slower would deaden the affordance for whole sessions) and otherwise expires
 on SwiftTerm's own one-second snapshot timeout plus slack for main-queue
-delivery order. Android has no second buffer — its renderer and row lookup
-share one screen — but it defers the *paint* for up to 150 ms, so it refuses
-the same way while `TerminalSession.isScreenUpdateDeferred()` holds
+delivery order. Because the row tap only arrives a double-tap timeout after the
+finger lifts — long enough for a program to drop the mode and leave the row it
+swapped in both drawn and resolvable — the frozen state is also latched at lift
+(`lastTapDuringFrozenDisplay`, beside `lastTapOwnedByProgram`) and both
+evaluations must agree, the same rule the pointer-ownership ladder already
+follows. Android has no second buffer — its renderer and row lookup share one
+screen — but it defers the *paint* for up to 150 ms, so it refuses the same way
+while `TerminalSession.isScreenUpdateDeferred()` holds, latched at touch-up for
+the same reason (its 150 ms safety flush lands inside the ~300 ms confirm gap)
 (CLA-182).
 CLA-136/CLA-138 port Android's terminal custom keyboard shortcuts: the
 control-key row (now gated on `canSendTerminalBytes`, matching the wire)

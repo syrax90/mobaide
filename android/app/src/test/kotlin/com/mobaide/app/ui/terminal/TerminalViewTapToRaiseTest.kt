@@ -43,7 +43,10 @@ import java.time.Duration
  * but deliberately not painted yet, the drawn rows are older than the ones the lookup
  * reads, so both the single-tap submit and the double-tap copy-to-input refuse rather
  * than resolve a line the user never saw — and both come back at the safety flush,
- * which is the only thing that bounds how far the glass can lag.
+ * which is the only thing that bounds how far the glass can lag. That reading is taken
+ * twice, at touch-up and again at dispatch, because the 150 ms flush lands inside the
+ * ~300 ms the recognizer holds the tap: only the latched one still describes the glass
+ * the finger actually landed on.
  *
  * Real [MotionEvent]s are driven through [TerminalView.onTouchEvent]; the gesture
  * recognizer maps single taps to `onSingleTapConfirmed`, which arrives via a delayed
@@ -123,6 +126,35 @@ class TerminalViewTapToRaiseTest {
             it.recycle()
         }
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(1_000))
+    }
+
+    /**
+     * Two taps on the top text row spaced far enough apart in main-looper time for a
+     * pending safety flush to fire between the first lift and the confirmed double tap,
+     * yet still inside the double-tap window. Returns whether a paint was still deferred
+     * when the second tap started — i.e. what the dispatch-time half of the gate sees.
+     */
+    private fun doubleTapAcrossTheFlush(): Boolean {
+        val firstDown = SystemClock.uptimeMillis()
+        listOf(
+            MotionEvent.obtain(firstDown, firstDown, MotionEvent.ACTION_DOWN, 10f, 1f, 0),
+            MotionEvent.obtain(firstDown, firstDown + 20, MotionEvent.ACTION_UP, 10f, 1f, 0),
+        ).forEach {
+            view.onTouchEvent(it)
+            it.recycle()
+        }
+        advanceTime(SYNC_TIMEOUT_MS + 20)
+        val deferredAtSecondTap = session.isScreenUpdateDeferred
+        val secondDown = SystemClock.uptimeMillis()
+        listOf(
+            MotionEvent.obtain(secondDown, secondDown, MotionEvent.ACTION_DOWN, 10f, 1f, 0),
+            MotionEvent.obtain(secondDown, secondDown + 20, MotionEvent.ACTION_UP, 10f, 1f, 0),
+        ).forEach {
+            view.onTouchEvent(it)
+            it.recycle()
+        }
+        advanceTime(1_000)
+        return deferredAtSecondTap
     }
 
     private fun recordSentBytes(): StringBuilder {
@@ -287,18 +319,59 @@ class TerminalViewTapToRaiseTest {
         )
     }
 
-    /** Control for [deferredPaint_promptRowTap_doesNotSubmit]: same setup, flush first. */
+    /**
+     * The interleaving Codex found: the finger lifts while the paint is deferred, the
+     * 150 ms flush lands inside the ~300 ms the recognizer holds the tap, and the
+     * confirmed tap arrives with the gate already reopened. The dispatch-time read on
+     * its own waves that through, so what has to refuse is the reading taken at lift.
+     *
+     * Control: [afterTheSafetyFlush_promptRowTap_submitsAgain], where the whole touch
+     * happens after the flush.
+     */
+    @Test
+    fun theFlushLandingInsideTheConfirmGap_promptRowTap_doesNotSubmit() {
+        feed("> echo hi")
+        client.tapToRaise = false
+        emitOutput(SYNC_OUTPUT_ON)
+        assertTrue("precondition: the finger must lift inside the window", session.isScreenUpdateDeferred)
+        var deferredWhenTapLanded: Boolean? = null
+        client.onConfirmedTap = { deferredWhenTapLanded = session.isScreenUpdateDeferred }
+
+        pressAndLiftTopRow()
+        advanceTime(1_000)
+
+        assertEquals(
+            "the interleaving is the whole test: the flush has to land before the confirmed tap, " +
+                "leaving the dispatch-time half of the gate nothing to refuse on",
+            false,
+            deferredWhenTapLanded,
+        )
+        assertTrue(
+            "what the user decided against is the glass as it looked at lift — a row swapped in " +
+                "behind the deferred paint is not a row anyone tapped",
+            client.tappedRows.isEmpty(),
+        )
+    }
+
+    /**
+     * Control for [deferredPaint_promptRowTap_doesNotSubmit] and for
+     * [theFlushLandingInsideTheConfirmGap_promptRowTap_doesNotSubmit]: the flush lands
+     * before the finger goes down, which is the whole of what "the gate reopened" can
+     * mean once the reading is latched at lift.
+     */
     @Test
     fun afterTheSafetyFlush_promptRowTap_submitsAgain() {
         feed("> echo hi")
         client.tapToRaise = false
         emitOutput(SYNC_OUTPUT_ON)
-        assertTrue(session.isScreenUpdateDeferred)
+        assertTrue("precondition: the paint starts out deferred", session.isScreenUpdateDeferred)
+        advanceTime(SYNC_TIMEOUT_MS)
+        assertFalse(session.isScreenUpdateDeferred)
 
         singleTapTopRow()
 
         assertEquals(
-            "the flush lands before the confirmed tap, so the gate has to reopen with it",
+            "a touch that starts after the flush sees the painted rows, so it must submit as before",
             listOf("echo hi"),
             client.tappedRows,
         )
@@ -321,6 +394,35 @@ class TerminalViewTapToRaiseTest {
         assertTrue(
             "onDoubleTap resolves on the second touch-down, still inside the window; spoofed text " +
                 "in the composer is the first half of the same attack",
+            client.copiedRows.isEmpty(),
+        )
+    }
+
+    /**
+     * [theFlushLandingInsideTheConfirmGap_promptRowTap_doesNotSubmit] for the other
+     * gesture that goes through `dispatchInputRowGesture`. The double tap resolves on
+     * the second touch-down, so a flush landing between the two taps clears the gate
+     * just as the confirm gap does for the single tap — and the latch from the first
+     * lift is again the only thing left holding.
+     *
+     * Control: [afterTheSafetyFlush_doubleTap_copiesToInputAgain].
+     */
+    @Test
+    fun theFlushLandingBetweenTheTaps_doubleTap_doesNotCopyToInput() {
+        feed("> echo hi")
+        client.tapToRaise = false
+        emitOutput(SYNC_OUTPUT_ON)
+        assertTrue("precondition: the first finger must lift inside the window", session.isScreenUpdateDeferred)
+
+        val deferredAtSecondTap = doubleTapAcrossTheFlush()
+
+        assertFalse(
+            "the interleaving is the whole test: the flush has to land between the two taps",
+            deferredAtSecondTap,
+        )
+        assertTrue(
+            "spoofed text in the composer is the first half of the same attack, so it fails closed " +
+                "on the same latched reading",
             client.copiedRows.isEmpty(),
         )
     }

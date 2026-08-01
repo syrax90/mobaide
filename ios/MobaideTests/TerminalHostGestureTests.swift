@@ -1305,6 +1305,31 @@ final class TerminalHostGestureTests: XCTestCase {
         return await poll { terminal.isSynchronizedOutputActive }
     }
 
+    private func thaw(
+        _ connection: FakeWebSocketConnection, _ terminal: MobaideTerminalView
+    ) async -> Bool {
+        deliver("\u{1B}[?2026l", to: connection)
+        return await poll { !terminal.isSynchronizedOutputActive }
+    }
+
+    /// One tap whose click lands while the display is frozen but whose row gesture
+    /// only runs after the program has released the freeze. `require(toFail:)` holds
+    /// the row gesture for the whole double-tap interval, and that gap is all the room
+    /// a program needs to drop mode 2026 — leaving the row it swapped in both drawn
+    /// and resolvable by the time the gate runs. Returns whether the release landed.
+    private func tapReleasingTheFreezeBeforeTheRowGesture(
+        _ rowGesture: String,
+        on coordinator: TerminalHostView.Coordinator,
+        view: MobaideTerminalView,
+        at point: CGPoint,
+        through connection: FakeWebSocketConnection
+    ) async -> Bool {
+        fire("handleMouseTap:", on: coordinator, view: view, at: point)
+        let thawed = await thaw(connection, view)
+        fire(rowGesture, on: coordinator, view: view, at: point)
+        return thawed
+    }
+
     func testTapWhileTheDisplayIsFrozenResolvesNothing() async throws {
         let (model, connection, coordinator) = try await tappableModel()
         let terminal = model.terminalView
@@ -1331,6 +1356,10 @@ final class TerminalHostGestureTests: XCTestCase {
         )
     }
 
+    /// The freeze is released before the finger goes down, which is the whole of what
+    /// "the gate reopened" can mean once the reading is latched at lift — a release
+    /// that lands mid-tap instead is
+    /// [testFreezeReleasedInsideTheTapGapStillResolvesNothing].
     func testTapSubmitsAgainOnceTheProgramEndsSynchronizedOutput() async throws {
         let (model, connection, coordinator) = try await tappableModel()
         let terminal = model.terminalView
@@ -1338,8 +1367,7 @@ final class TerminalHostGestureTests: XCTestCase {
         let frozen = await freeze(connection, terminal)
         XCTAssertTrue(frozen)
 
-        deliver("\u{1B}[?2026l", to: connection)
-        let thawed = await poll { !terminal.isSynchronizedOutputActive }
+        let thawed = await thaw(connection, terminal)
         XCTAssertTrue(thawed, "Ink brackets every frame, so a window outliving its own `l` kills the affordance")
         tapTerminal(on: coordinator, view: terminal, at: point)
 
@@ -1366,6 +1394,71 @@ final class TerminalHostGestureTests: XCTestCase {
             frames, [inputFrame("\r")],
             "the gate expires with the emulator's own snapshot, so holding the mode set cannot deaden "
                 + "the affordance for good"
+        )
+    }
+
+    /// The bypass: the click recognizes at lift, the row tap only a double-tap timeout
+    /// later, and a program that releases the freeze in between leaves `resolveRow`'s
+    /// own check with nothing to refuse on. Control:
+    /// [testPlainShellTapStillSubmitsTheLiveInput], the same tap with no freeze at all.
+    func testFreezeReleasedInsideTheTapGapStillResolvesNothing() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        let point = promptRowPoint(terminal)
+        let frozen = await freeze(connection, terminal)
+        XCTAssertTrue(frozen, "the finger has to lift while the snapshot is still what the user sees")
+
+        let thawed = await tapReleasingTheFreezeBeforeTheRowGesture(
+            "handleSingleTap:", on: coordinator, view: terminal, at: point, through: connection
+        )
+
+        XCTAssertTrue(thawed, "the interleaving is the whole test: the row tap must run with the live check clear")
+        XCTAssertEqual(
+            terminal.resolveRow(at: point)?.text, "echo hi",
+            "and with the row resolving again, so only the reading latched at lift can be refusing"
+        )
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(
+            tapFrames(connection).isEmpty,
+            "what the user decided against is the screen at lift — a row swapped in behind the "
+                + "snapshot is not a row anyone tapped"
+        )
+    }
+
+    /// Control for [testDoubleTapAfterAFreezeReleasedInsideTheTapGapCopiesNothing].
+    func testDoubleTapCopiesTheTappedRowToTheComposer() async throws {
+        let (model, _, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        let point = promptRowPoint(terminal)
+
+        fire("handleMouseTap:", on: coordinator, view: terminal, at: point)
+        fire("handleDoubleTap:", on: coordinator, view: terminal, at: point)
+
+        XCTAssertEqual(
+            model.inputText, "echo hi",
+            "the untouched arm: copy-to-composer is the non-destructive way to re-run a message"
+        )
+    }
+
+    /// [testFreezeReleasedInsideTheTapGapStillResolvesNothing] for the other gesture the
+    /// latch guards — a double tap is preceded by the same prompt click, so the same
+    /// mid-tap release leaves it reading a row the user never saw.
+    func testDoubleTapAfterAFreezeReleasedInsideTheTapGapCopiesNothing() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        let point = promptRowPoint(terminal)
+        let frozen = await freeze(connection, terminal)
+        XCTAssertTrue(frozen)
+
+        let thawed = await tapReleasingTheFreezeBeforeTheRowGesture(
+            "handleDoubleTap:", on: coordinator, view: terminal, at: point, through: connection
+        )
+
+        XCTAssertTrue(thawed, "the release has to land before the gesture, or resolveRow would refuse on its own")
+        XCTAssertEqual(
+            model.inputText, "",
+            "spoofed text in the composer is the first half of the same attack, so it fails closed "
+                + "on the same latched reading"
         )
     }
 }

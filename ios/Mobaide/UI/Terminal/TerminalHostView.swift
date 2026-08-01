@@ -740,6 +740,16 @@ struct TerminalHostView: UIViewRepresentable {
         /// also covers the benign case of a TUI simply exiting inside the window.
         private var lastTapOwnedByProgram = false
 
+        /// Whether the emulator was drawing a synchronized-output snapshot when the
+        /// touch lifted.
+        ///
+        /// `resolveRow` re-reads that state, but a program can clear mode 2026 in
+        /// the gap before the delayed row tap — leaving the row it swapped in both
+        /// drawn and resolvable by the time the gate runs. The reading that matches
+        /// what the user saw is the one taken at lift, so as with
+        /// `lastTapOwnedByProgram` both evaluations have to agree.
+        private var lastTapDuringFrozenDisplay = false
+
         init(model: TerminalSessionModel) {
             self.model = model
         }
@@ -806,6 +816,11 @@ struct TerminalHostView: UIViewRepresentable {
         @objc private func handleMouseTap(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view as? MobaideTerminalView else { return }
             lastTapOwnedByProgram = view.wheelScrollMode != .localScrollback
+            // This recognizer fires at lift; the row tap only arrives a double-tap
+            // timeout later, by which point the program can have released the
+            // freeze and left the row it swapped in both drawn and resolvable.
+            // What the user decided against is the screen at lift.
+            lastTapDuringFrozenDisplay = view.isSynchronizedOutputActive
             view.sendMouseClick(at: gesture.location(in: view))
         }
 
@@ -816,6 +831,7 @@ struct TerminalHostView: UIViewRepresentable {
         @objc private func handleSingleTap(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view as? MobaideTerminalView,
                   !lastTapOwnedByProgram,
+                  !lastTapDuringFrozenDisplay,
                   view.wheelScrollMode == .localScrollback,
                   let (text, isCurrent) = view.resolveRow(at: gesture.location(in: view)) else { return }
             model.sendTappedRow(text: text, isCurrentInput: isCurrent)
@@ -823,6 +839,7 @@ struct TerminalHostView: UIViewRepresentable {
 
         @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
             guard let view = gesture.view as? MobaideTerminalView,
+                  !lastTapDuringFrozenDisplay,
                   let (text, _) = view.resolveRow(at: gesture.location(in: view)) else { return }
             model.setInput(text, requestFocus: true)
         }
