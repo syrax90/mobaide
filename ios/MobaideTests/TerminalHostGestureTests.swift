@@ -1281,4 +1281,91 @@ final class TerminalHostGestureTests: XCTestCase {
             "attachGestures ends in neutralizeSwiftTermGestures, which disables every tap not named mobaide.*"
         )
     }
+
+    // MARK: - Synchronized output
+
+    /// Stand-in for `ProcessInfo.systemUptime`. A reference type, so the closure
+    /// the view keeps reads whatever the test has moved it to.
+    private final class StepClock {
+        var now: TimeInterval = 1_000
+    }
+
+    /// Emulator output as the app really receives it: an `o` frame, so
+    /// `handleBinary` routes the bytes through `feedTrackingSynchronizedOutput`.
+    /// The priming helpers deliberately use `feed(text:)`, which bypasses the
+    /// scanner — a hand-set flag would prove nothing about the shipped path.
+    private func deliver(_ text: String, to connection: FakeWebSocketConnection) {
+        connection.emit(.binary(outputFrame(text)))
+    }
+
+    private func freeze(
+        _ connection: FakeWebSocketConnection, _ terminal: MobaideTerminalView
+    ) async -> Bool {
+        deliver("\u{1B}[?2026h", to: connection)
+        return await poll { terminal.isSynchronizedOutputActive }
+    }
+
+    func testTapWhileTheDisplayIsFrozenResolvesNothing() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        let point = promptRowPoint(terminal)
+        XCTAssertEqual(
+            terminal.resolveRow(at: point)?.text, "echo hi",
+            "the row must resolve before the freeze, or nothing but the gate could be keeping it off the wire"
+        )
+        let frozen = await freeze(connection, terminal)
+        XCTAssertTrue(frozen, "real DECSET 2026 bytes have to reach the scanner through handleBinary")
+
+        tapTerminal(on: coordinator, view: terminal, at: point)
+
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(
+            tapFrames(connection).isEmpty,
+            "SwiftTerm is drawing a deep copy the app cannot read, so the tapped line is not the drawn "
+                + "one — an `x` execute frame here runs text the user never saw"
+        )
+        XCTAssertNil(
+            terminal.resolveRow(at: point),
+            "the refusal belongs in resolveRow, which double-tap-to-composer shares — spoofed text in "
+                + "the composer is the first half of the same attack"
+        )
+    }
+
+    func testTapSubmitsAgainOnceTheProgramEndsSynchronizedOutput() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        let point = promptRowPoint(terminal)
+        let frozen = await freeze(connection, terminal)
+        XCTAssertTrue(frozen)
+
+        deliver("\u{1B}[?2026l", to: connection)
+        let thawed = await poll { !terminal.isSynchronizedOutputActive }
+        XCTAssertTrue(thawed, "Ink brackets every frame, so a window outliving its own `l` kills the affordance")
+        tapTerminal(on: coordinator, view: terminal, at: point)
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(frames, [inputFrame("\r")], "the untouched arm has to come back exactly as it was")
+    }
+
+    func testTapSubmitsAgainOnceTheFreezeDeadlinePasses() async throws {
+        let (model, connection, coordinator) = try await tappableModel()
+        let terminal = model.terminalView
+        let clock = StepClock()
+        terminal.synchronizedOutputNow = { clock.now }
+        let point = promptRowPoint(terminal)
+        // The program arms the mode and never resets it — the shape that would
+        // otherwise disable row taps for as long as the session lives.
+        let frozen = await freeze(connection, terminal)
+        XCTAssertTrue(frozen)
+
+        clock.now += TerminalSynchronizedOutput.emulatorTimeout + TerminalSynchronizedOutput.expiryGrace
+        tapTerminal(on: coordinator, view: terminal, at: point)
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(
+            frames, [inputFrame("\r")],
+            "the gate expires with the emulator's own snapshot, so holding the mode set cannot deaden "
+                + "the affordance for good"
+        )
+    }
 }

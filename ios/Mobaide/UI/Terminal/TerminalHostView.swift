@@ -75,11 +75,42 @@ final class MobaideTerminalView: TerminalView {
         return CGSize(width: snap(measured.width), height: snap(measured.height))
     }
 
+    /// Monotonic clock behind the synchronized-output deadline. Same
+    /// `mach_absolute_time` family as the `DispatchTime` SwiftTerm schedules its
+    /// own expiry against, so the two pause and resume together when the app is
+    /// suspended.
+    var synchronizedOutputNow: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+
+    private var synchronizedOutput = TerminalSynchronizedOutput()
+
+    /// Whether the emulator may still be drawing a synchronized-output snapshot
+    /// rather than the buffer `resolveRow` reads.
+    var isSynchronizedOutputActive: Bool {
+        synchronizedOutput.isActive(at: synchronizedOutputNow())
+    }
+
+    /// The only tracked way to hand emulator output to SwiftTerm.
+    ///
+    /// The inherited `feed(byteArray:)` and `feed(text:)` are declared in an
+    /// extension, so they are statically dispatched and cannot be overridden —
+    /// nothing in production may reach the emulator through them, or the row
+    /// lookup loses track of what is actually being drawn.
+    func feedTrackingSynchronizedOutput(_ bytes: ArraySlice<UInt8>) {
+        feed(byteArray: bytes)
+        synchronizedOutput.scan(bytes, at: synchronizedOutputNow())
+    }
+
     /// Resolves a tap point (in this view's content coordinates) to a prompt
     /// row's command text and whether that row holds the current input. Returns
     /// nil for rows without a recognizable prompt prefix so taps on plain
     /// output never execute anything.
     func resolveRow(at point: CGPoint) -> (text: String, isCurrentInput: Bool)? {
+        // While the emulator holds a synchronized-output snapshot the drawn row
+        // is not the row `getLine` returns, and the drawn one is unreachable —
+        // so resolve nothing rather than a line the user never saw. This also
+        // covers the tap ladder reading a live `mouseMode` and
+        // `isCurrentBufferAlternate` the renderer has frozen past.
+        guard !isSynchronizedOutputActive else { return nil }
         let cellHeight = cellSize.height
         guard cellHeight > 0, point.y >= 0 else { return nil }
         // A single floor over the absolute content position. Flooring the
@@ -115,8 +146,8 @@ final class MobaideTerminalView: TerminalView {
     /// The equality holds against `terminal.buffer`. SwiftTerm draws
     /// `displayBuffer`, which diverges into a frozen deep copy while a program
     /// holds synchronized output (DEC mode 2026); that buffer is `internal`, so
-    /// a tap taken during such a freeze reads the live line rather than the
-    /// drawn one.
+    /// `resolveRow` refuses for the duration instead — see
+    /// `TerminalSynchronizedOutput`.
     private func lineOnScreen(contentRow: Int, cellHeight: CGFloat) -> BufferLine? {
         let terminal = getTerminal()
         let buffer = terminal.buffer

@@ -3,6 +3,7 @@ package com.mobaide.app.ui.terminal
 import android.os.Looper
 import com.termux.terminal.TerminalSession
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,6 +96,41 @@ class TerminalSessionSyncFlushTest {
             "timeout renders but must NOT clear the mode — only ESU/RIS do",
             requireNotNull(session.emulator).isSynchronizedOutputActive,
         )
+    }
+
+    @Test
+    fun screenUpdateDeferred_holdsUntilTheSafetyFlush() {
+        assertFalse(session.isScreenUpdateDeferred)
+
+        emit(SYNC_ON + "stuck frame")
+
+        assertTrue(
+            "the chunk is parsed into the screen but not on the glass, so resolving a touch to " +
+                "screen content now would read a row the user cannot see",
+            session.isScreenUpdateDeferred,
+        )
+
+        advanceTime(SYNC_TIMEOUT_MS)
+
+        assertFalse(
+            "the drawn pixels only lag the screen until the forced paint",
+            session.isScreenUpdateDeferred,
+        )
+        assertTrue(
+            "and the mode bit outlives it — a gate reading that instead would never reopen for a " +
+                "program that simply never sends ESU",
+            requireNotNull(session.emulator).isSynchronizedOutputActive,
+        )
+    }
+
+    @Test
+    fun screenUpdateDeferred_clearsAtTheEsuChunk() {
+        emit(SYNC_ON + "frame")
+        assertTrue(session.isScreenUpdateDeferred)
+
+        emit("frame end" + SYNC_OFF)
+
+        assertFalse("the completed frame painted, so glass and screen agree again", session.isScreenUpdateDeferred)
     }
 
     @Test

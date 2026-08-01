@@ -539,6 +539,13 @@ public final class TerminalView extends View {
      * @return {@code true} when an input message was found and dispatched
      */
     private boolean dispatchInputRowGesture(MotionEvent event, boolean copyToInput) {
+        // A synchronized-output frame is parsed into the screen before it is
+        // painted, so resolving a row now could hand back content that is not on
+        // the glass — the tap must own the line the user actually saw. Refusing
+        // like an unresolvable row, and only while a paint is genuinely pending,
+        // so the 150 ms safety flush ends it: the mode bit itself has no timeout
+        // and a program holding it would otherwise kill row taps for good.
+        if (mTermSession != null && mTermSession.isScreenUpdateDeferred()) return false;
         int[] colAndRow = getColumnAndRow(event, true);
         int row = colAndRow[1];
         String inputMessage = findInputMessage(row);

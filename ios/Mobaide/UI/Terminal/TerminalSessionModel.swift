@@ -223,13 +223,13 @@ final class TerminalSessionModel {
         case .output(let bytes):
             guard !bytes.isEmpty else { return }
             terminalView.applyingEmulatorOutput {
-                terminalView.feed(byteArray: Array(bytes)[...])
+                terminalView.feedTrackingSynchronizedOutput(Array(bytes)[...])
             }
         case .state(let json):
             sessionStatus = Self.parseStatus(json) ?? sessionStatus
         case .replayStart:
             terminalView.applyingEmulatorOutput {
-                terminalView.feed(byteArray: Self.clearBeforeReplay[...])
+                terminalView.feedTrackingSynchronizedOutput(Self.clearBeforeReplay[...])
             }
             inReplay = true
             setFollowMode(true)
