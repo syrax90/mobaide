@@ -270,8 +270,12 @@ public final class TerminalEmulator {
     int mEffect;
 
     /**
-     * The number of scrolled lines since last calling {@link #clearScrollCounter()}. Used for moving selection up along
-     * with the scrolling text.
+     * The number of times the screen window rotated over the buffer since last calling {@link #clearScrollCounter()}.
+     * Used for moving selection up along with the scrolling text, and read by the host as the unread-row tally.
+     * <p>
+     * A scroll confined to horizontal margins relocates rows inside the screen without rotating anything, so it must
+     * leave both consumers alone. On the main screen a rotation is also a transcript row; the alternate screen has no
+     * transcript to grow, but its rows still move.
      */
     private int mScrollCounter = 0;
 
@@ -2242,7 +2246,6 @@ public final class TerminalEmulator {
     }
 
     private void scrollDownOneLine() {
-        mScrollCounter++;
         long currentStyle = getStyle();
         if (mLeftMargin != 0 || mRightMargin != mColumns) {
             // Horizontal margin: Do not put anything into scroll history, just non-margin part of screen up.
@@ -2250,6 +2253,7 @@ public final class TerminalEmulator {
             // .. and blank bottom row between margins:
             mScreen.blockSet(mLeftMargin, mBottomMargin - 1, mRightMargin - mLeftMargin, 1, ' ', currentStyle);
         } else {
+            mScrollCounter++;
             mScreen.scrollDownOneLine(mTopMargin, mBottomMargin, currentStyle);
         }
     }
