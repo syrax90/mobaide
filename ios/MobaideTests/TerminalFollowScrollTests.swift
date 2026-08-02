@@ -107,4 +107,23 @@ final class TerminalFollowScrollTests: XCTestCase {
             "with the whole buffer on screen every offset is the tail, so holding would pin a stale origin"
         )
     }
+
+    // MARK: - pushesRowIntoScrollback
+
+    /// The three arms of `Terminal.scroll` all report through the same `scrolled`
+    /// callback, so the predicate has to re-derive which one ran from the state
+    /// the arms themselves branch on.
+    func testFullWidthScrollFromTheTopOfTheScreenReachesTheScrollback() {
+        XCTAssertTrue(
+            TerminalFollowScroll.pushesRowIntoScrollback(scrollTop: 0),
+            "the ordinary shell scroll — the only arm that pushes a line the paused reader has to scroll back for"
+        )
+    }
+
+    func testScrollRegionBelowTheFirstRowReachesNothing() {
+        XCTAssertFalse(
+            TerminalFollowScroll.pushesRowIntoScrollback(scrollTop: 1),
+            "a DECSTBM region shifts in place and overwrites its own top row — nothing leaves the viewport"
+        )
+    }
 }

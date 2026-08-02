@@ -1,7 +1,7 @@
 import CoreGraphics
 
-/// Scroll-position math for terminal follow mode, derived from the scroll view
-/// rather than from the emulator.
+/// Scroll math for terminal follow mode: where the user's viewport sits, and
+/// which emulator scrolls actually moved the tail away from it.
 ///
 /// SwiftTerm's iOS renderer picks the first visible row straight out of
 /// `contentOffset` (`AppleTerminalView.drawTerminalContents`), but its
@@ -9,7 +9,9 @@ import CoreGraphics
 /// package maps a drag onto `yDisp` (`Terminal.userScrolling` is never written
 /// outside SwiftTerm's own tests, so `yDisp` stays pinned to `yBase`). The scroll
 /// view is therefore the only honest source for "how far up is the user", which
-/// makes every rule here a function of `contentOffset` / `contentSize` / bounds.
+/// makes every viewport rule here a function of `contentOffset` / `contentSize`
+/// / bounds. `pushesRowIntoScrollback` is the one exception — it answers from
+/// emulator state, because only the emulator knows whether a row was produced.
 enum TerminalFollowScroll {
     /// A position at or above this counts as following the tail. The two
     /// at-the-bottom constants work in different spaces and are not
@@ -53,5 +55,49 @@ enum TerminalFollowScroll {
         guard maxOffsetY > 0, incomingY.isFinite, currentY.isFinite else { return false }
         let bottom = maxOffsetY - bottomTolerance
         return incomingY >= bottom && currentY < bottom
+    }
+
+    /// Whether the scroll `Terminal.scroll` just performed pushed a row into the
+    /// scrollback — the only kind a paused reader actually missed, and so the
+    /// only kind the unread badge may count.
+    ///
+    /// `Terminal.scroll` has three arms and reports all of them through the same
+    /// `scrolled` callback. Two of them relocate rows inside the viewport and
+    /// leave the tail exactly where it was: the narrow-margin arm (DECLRMM
+    /// block-copies within the margin columns) and the `scrollTop != 0` arm (a
+    /// DECSTBM region shifts in place, overwriting its own top row). Only the
+    /// remaining arm reaches the line list, which is why this is its entry
+    /// condition rather than anything read after the fact — `buffer.yDisp` stops
+    /// moving the moment the ring fills (`linesTop`, the counter that keeps
+    /// going, is `internal`), so a delta would silently stop counting a few
+    /// hundred lines into any real session.
+    ///
+    /// The narrow-margin arm is deliberately not detected, so DECLRMM scrolls
+    /// still count. Nothing about that arm is legible from outside the package:
+    /// `marginMode`, which SwiftTerm ands into its own test, is `internal`, and
+    /// neither margin value stands in for it. `Buffer.resize` clamps
+    /// `marginRight` **downward only**, and a `UIViewRepresentable` is built
+    /// before SwiftUI hands it a frame, so the two-column grid `Terminal.setup()`
+    /// runs on strands `marginRight` at 1 for the session — which both makes a
+    /// `marginRight < cols - 1` term true forever and collapses SwiftTerm's own
+    /// test to bare `marginMode`. `marginLeft` is worse: `ESC[?69l` leaves it
+    /// raised, and the only write that could lower it clamps toward that
+    /// stranded `marginRight`, so a program that sets a left margin and then
+    /// drops DECLRMM would pin the badge at zero for the rest of the session —
+    /// twelve bytes from the PTY silently disabling the indicator.
+    ///
+    /// So the residual error is biased entirely toward over-counting, which is
+    /// the direction that cannot hide output from the reader.
+    ///
+    /// Android applies the same rule from inside its emulator, where the arms
+    /// are unambiguous: `TerminalEmulator.scrollDownOneLine` bumps
+    /// `mScrollCounter` only on the branch that rotates the screen window, so it
+    /// catches the narrow-margin case this cannot. It also deliberately reaches
+    /// a different number for DECSTBM — there the region's top row is parked in
+    /// the transcript (`TerminalBuffer.scrollDownOneLine` rotates
+    /// `mScreenFirstRow` and grows `mActiveTranscriptRows`) where SwiftTerm
+    /// overwrites it in place. The rule is in parity; the count is not.
+    static func pushesRowIntoScrollback(scrollTop: Int) -> Bool {
+        scrollTop == 0
     }
 }

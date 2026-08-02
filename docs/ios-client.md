@@ -183,9 +183,15 @@ never fired for a touch, the jump-to-bottom button was unreachable and
 assigns it) and reports a position only while `isDragging`/`isDecelerating`,
 which is the same feedback-loop guard as the Android fork's rule that
 `setTopRow` must not report; the emulator-driven `scrolled` callback is now the
-unread-row tally instead (Android `unreadRows`, badge capped at "999+"); like
-Android's `scrollCounter` it counts every emulator scroll, so scrolling inside
-a DECSTBM region counts rows the viewport never lost (CLA-183). While
+unread-row tally instead (Android `unreadRows`, badge capped at "999+"), and it
+counts only the scrolls that pushed a row into the scrollback
+(`TerminalFollowScroll.pushesRowIntoScrollback`, entry condition `scrollTop ==
+0`) — a DECSTBM region shifts in place, overwriting its own top row, so it no
+longer inflates the badge (CLA-183). Android applies the same rule from inside
+its emulator, where the arms are unambiguous: it also catches the DECLRMM
+narrow-margin arm, which is illegible from outside SwiftTerm, and still counts
+DECSTBM, whose scrolled-out row Termux parks in the transcript. The rule is in
+parity; the count is not. While
 follow mode is paused, an override of the `open var contentOffset` refuses
 SwiftTerm's snap-to-tail writes (`updateScroller()` on every scrolled line,
 `ensureCaretIsVisible()` on every byte sent — both `internal`, so unreachable
