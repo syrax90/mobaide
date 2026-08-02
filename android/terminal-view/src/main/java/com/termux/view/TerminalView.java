@@ -165,6 +165,7 @@ public final class TerminalView extends View {
             public boolean onUp(MotionEvent event) {
                 mScrollRemainder = 0.0f;
                 pointerOwnedAtUp = programOwnsPointer();
+                mScreenUpdateDeferredAtUp = screenUpdateDeferred();
                 // Tap-to-raise gate (see docs/terminal-view-fork-changes.md): while the
                 // composer-hidden raise gate is active, skip the mouse-tracking fast path —
                 // it would click the remote TUI immediately, before the confirmed single
@@ -515,6 +516,23 @@ public final class TerminalView extends View {
     private int mLastInputEndRow = Integer.MIN_VALUE;
 
     /**
+     * Whether a synchronized-output paint was still pending when the touch lifted.
+     * <p>
+     * The 150 ms safety flush normally fires before {@code onSingleTapConfirmed}
+     * delivers the row tap ~300 ms after touch-down, so by dispatch time the row
+     * the user never saw is both painted and resolvable — the dispatch-time check
+     * alone would wave it through. What the user decided against is the glass as
+     * it looked at lift, so that reading has to be latched, for the same reason
+     * as {@code pointerOwnedAtUp}.
+     */
+    private boolean mScreenUpdateDeferredAtUp;
+
+    /** Whether output is parsed into the screen but not yet painted. */
+    private boolean screenUpdateDeferred() {
+        return mTermSession != null && mTermSession.isScreenUpdateDeferred();
+    }
+
+    /**
      * Whether the running program, rather than the app, owns pointer input.
      * <p>
      * True while the program tracks the mouse — the tap already reached it as a
@@ -539,6 +557,15 @@ public final class TerminalView extends View {
      * @return {@code true} when an input message was found and dispatched
      */
     private boolean dispatchInputRowGesture(MotionEvent event, boolean copyToInput) {
+        // A synchronized-output frame is parsed into the screen before it is
+        // painted, so resolving a row now could hand back content that is not on
+        // the glass — the tap must own the line the user actually saw. Either
+        // evaluation is enough to refuse: the flush usually lands between the two,
+        // so only the latch sees the frame the user was actually looking at.
+        // Refusing like an unresolvable row, and only while a paint is genuinely
+        // pending, so the 150 ms safety flush ends it: the mode bit itself has no
+        // timeout and a program holding it would otherwise kill row taps for good.
+        if (mScreenUpdateDeferredAtUp || screenUpdateDeferred()) return false;
         int[] colAndRow = getColumnAndRow(event, true);
         int row = colAndRow[1];
         String inputMessage = findInputMessage(row);

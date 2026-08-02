@@ -177,6 +177,25 @@ public final class TerminalSession extends TerminalOutput {
         return mEmulator;
     }
 
+    /**
+     * Whether output has been parsed into the screen but deliberately not painted
+     * yet, because {@link #emitOutput} is holding it for a synchronized-output
+     * (DECSET 2026) frame.
+     * <p>
+     * While this is true the drawn pixels are older than {@link #getEmulator()}'s
+     * screen, so anything resolving a touch to screen content must refuse rather
+     * than read content the user cannot see. {@link TerminalEmulator#append} has
+     * exactly one caller — {@link #emitOutput} — so this covers every byte.
+     * Self-clearing at the safety flush, unlike
+     * {@link TerminalEmulator#isSynchronizedOutputActive()}, which stays set for
+     * as long as the program holds the mode.
+     * <p>
+     * Main thread only.
+     */
+    public boolean isScreenUpdateDeferred() {
+        return mSyncFlushPending;
+    }
+
     protected void notifyScreenUpdate() {
         if (mClient != null) mClient.onTextChanged(this);
     }

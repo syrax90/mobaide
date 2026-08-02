@@ -213,9 +213,30 @@ screen for the duration of the synchronous `getLine` read, so tapping a prompt
 still resolves the rendered line while scrolled into history; a tap below the
 last line — the blank overscroll band — resolves nothing rather than folding
 onto that line, since on the plain-shell arm a tap is what executes it. That
-drawn-equals-resolved guarantee holds against `terminal.buffer` and is
-suspended while a program holds synchronized output (DEC mode 2026), where
-SwiftTerm draws a frozen deep copy the app cannot reach (CLA-182).
+drawn-equals-resolved guarantee is enforced rather than assumed: while a
+program holds synchronized output (DEC mode 2026) SwiftTerm draws a frozen
+deep copy of the buffer, so the row `getLine` returns is not the row on the
+glass, and the copy is `internal` — `resolveRow` therefore resolves nothing
+at all for the duration, refusing both the single-tap execute and the
+double-tap copy-to-composer. `displayBuffer` and the emulator's
+`synchronizedOutputChanged` callback are both unreachable from another
+module, so `TerminalSynchronizedOutput` recognizes the mode from the output
+bytes the app already holds, mirroring the subset of SwiftTerm's parser that
+can reach DECSET/DECRST 2026 — a deliberate superset of it, since a false
+positive costs one ignored tap while a false negative reopens the hole. The
+window closes on `ESC[?2026l` at once (Ink brackets every frame, so anything
+slower would deaden the affordance for whole sessions) and otherwise expires
+on SwiftTerm's own one-second snapshot timeout plus slack for main-queue
+delivery order. Because the row tap only arrives a double-tap timeout after the
+finger lifts — long enough for a program to drop the mode and leave the row it
+swapped in both drawn and resolvable — the frozen state is also latched at lift
+(`lastTapDuringFrozenDisplay`, beside `lastTapOwnedByProgram`) and both
+evaluations must agree, the same rule the pointer-ownership ladder already
+follows. Android has no second buffer — its renderer and row lookup share one
+screen — but it defers the *paint* for up to 150 ms, so it refuses the same way
+while `TerminalSession.isScreenUpdateDeferred()` holds, latched at touch-up for
+the same reason (its 150 ms safety flush lands inside the ~300 ms confirm gap)
+(CLA-182).
 CLA-136/CLA-138 port Android's terminal custom keyboard shortcuts: the
 control-key row (now gated on `canSendTerminalBytes`, matching the wire)
 gains a trailing "Custom shortcut" ellipsis trigger that opens a
