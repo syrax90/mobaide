@@ -1,0 +1,82 @@
+name: Web CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Declare contents:read so actions/checkout's GITHUB_TOKEN reliably has
+# the scope it needs to fetch the repo, regardless of the repo's default
+# token policy. Same mitigation as protocol-integrity.yml.
+permissions:
+  contents: read
+
+# No paths filter on purpose: schema drift is caused by central_server/ and
+# mobaide_agent/ route changes, not just web/ edits, so the gate must run on
+# every PR (same policy as protocol-integrity.yml).
+jobs:
+  web-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install both packages with dev extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e 'mobaide_agent[dev]'
+          python -m pip install -e 'central_server[dev]'
+
+      - name: Schema drift gate (Python sources -> committed JSON)
+        run: |
+          python web/scripts/dump_openapi.py
+          if [ -n "$(git status --porcelain -- web/openapi/)" ]; then
+            git diff -- web/openapi/
+            echo "::error::web/openapi/*.json is stale — run 'npm run schema:dump' in web/ and commit."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Type drift gate (committed JSON -> committed generated TS)
+        working-directory: web
+        run: |
+          npm run schema:generate
+          if [ -n "$(git status --porcelain -- src/api/generated/)" ]; then
+            git diff -- src/api/generated/
+            echo "::error::web/src/api/generated/*.ts is stale — run 'npm run schema:generate' in web/ and commit."
+            exit 1
+          fi
+
+      - name: Typecheck
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
+      - name: Unit tests
+        working-directory: web
+        run: npm test
+
+      - name: Build
+        working-directory: web
+        run: npm run build

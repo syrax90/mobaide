@@ -1,6 +1,6 @@
 # Mobaide
 
-A mobile application (Android/iOS) for remotely controlling [Claude Code](https://claude.ai/code) sessions running on an agent, with full terminal I/O streaming and multi-session support.
+Mobile (Android/iOS) and web clients for remotely controlling [Claude Code](https://claude.ai/code) sessions running on an agent, with full terminal I/O streaming and multi-session support.
 
 ## The Problem
 
@@ -12,6 +12,7 @@ Mobaide bridges this gap with a client-agent architecture:
 
 - **Agent (Python / FastAPI)** — Runs on your workstation (Windows/Linux). Reimplements the `claude_auto_executor.ps1` logic natively in Python: manages cross-platform PTY terminal sessions (pywinpty on Windows, stdlib pty on Linux), streams I/O over WebSocket, handles Linear integration, git worktrees, and Auto Scan mode. Supports multiple concurrent Claude sessions.
 - **Client (Android / Kotlin)** — Connects to the central server via WSS (OkHttp), which relays traffic to the paired agent. Provides a multi-session terminal UI to start, monitor, and interact with Claude Code sessions in real time. Built with Jetpack Compose and Material 3.
+- **Web Client (React / TypeScript)** — Browser SPA (in progress under `web/`) served same-origin with the central server; talks to the same relay APIs and WebSockets as the mobile apps, no CORS involved.
 - **Central Server (Python / FastAPI)** — Public relay hub (e.g. `mobaide.com`). The Android app talks to it over WSS/JSON, and each agent dials OUT to it over an authenticated WebSocket. No inbound ports, public IP, or reverse tunnel are needed on the workstation running the agent.
 
 ## Key Features
@@ -38,7 +39,7 @@ Mobaide bridges this gap with a client-agent architecture:
 ## Architecture
 
 ```
-[ Android App ]          (Kotlin / Compose, OkHttp)
+[ Android / iOS / Web Client ]   (Kotlin / Swift / React)
       |
       |  WSS / JSON
       v
@@ -72,6 +73,7 @@ Mobaide bridges this gap with a client-agent architecture:
 | `mobaide/linear/` | Python (gql) | Linear GraphQL client, Auto Scan engine, worktree manager |
 | `android/` | Kotlin / Compose | Android app — OkHttp WebSocket client, multi-session UI, terminal view |
 | `ios/` | Swift / SwiftUI | iOS app (in progress) — wire DTOs, REST clients, reconnecting WebSocket core, terminal framing |
+| `web/` | React 19 / TypeScript / Vite | Web client (in progress) — SPA shell, typed OpenAPI clients for the relay and agent APIs |
 | `central_server/` | Python 3.12+ / FastAPI | Multi-tenant relay hub; auth, projects, and agent↔client WebSocket broker |
 
 ## Configuration Profiles
@@ -108,14 +110,14 @@ The iOS app's sign-in setup (a separate **iOS application** OAuth client ID via 
 
 ## Releases, versioning, and auto-update
 
-Each component (Android, `mobaide_agent`, `central_server`) ships on its own
-semver cadence; a single integer `protocol_version` is the only compatibility
-signal between them.
+Each component (Android, `mobaide_agent`, `central_server`, `web`) ships on
+its own semver cadence; a single integer `protocol_version` is the only
+compatibility signal between them.
 
 **To cut a release, the PR title is the trigger.** Use `feat(agent): …` /
 `fix(agent): …` for `mobaide_agent`, `feat(server): …` / `fix(server): …`
-for `central_server`, and `feat(android): …` / `fix(android): …` for the
-Android app. The repo enforces **squash-only merging** (merge and rebase
+for `central_server`, `feat(android): …` / `fix(android): …` for the
+Android app, and `feat(web): …` / `fix(web): …` for the web client. The repo enforces **squash-only merging** (merge and rebase
 merges are disabled) with the squash title = PR title and a blank squash
 body, so each PR lands as exactly one commit on `main` carrying the PR
 title — the single source release-please reads; branch commit messages are
@@ -134,6 +136,9 @@ corresponding workflow:
 | `agent-vX.Y.Z` | `release-agent.yml` | `uv build` wheel + sdist, Ed25519-signed manifest, GitHub Release in the public sibling repo `syrax90/mobaide-agent-releases`, manifest POSTed to `central_server`. |
 | `server-vX.Y.Z` | `release-server.yml` | Docker image to GHCR, manual-approval-gated deploy step (`environment: production`). |
 
+`web-vX.Y.Z` tags version the web client but trigger no workflow yet — the
+SPA ships with the central-server deploy (Caddy serving, tracked in WEB-02).
+
 See [docs/versioning-and-updates.md](docs/versioning-and-updates.md) for the
 staged-binary auto-updater, signed-manifest format, install one-liners,
 Android update flows, and full operator runbook (including the CI secret
@@ -142,4 +147,4 @@ chaining). [PROTOCOL.md](PROTOCOL.md) tracks `protocol_version` history.
 
 ## Status
 
-Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client and Linear Auto Scan are in progress. Tracked in Linear.
+Early development. Agent core (PTY sessions, WebSocket streaming, JWT auth, projects-aware sessions, structured logging) and agent↔central-server relay are in place; Android client, web client (`web/`), and Linear Auto Scan are in progress. Tracked in Linear.

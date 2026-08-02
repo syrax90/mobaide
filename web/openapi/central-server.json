@@ -1,0 +1,2864 @@
+{
+  "components": {
+    "schemas": {
+      "AgentSummary": {
+        "description": "Agent listing response \u2014 no token.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_protocol_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Protocol Version"
+          },
+          "agent_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Version"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "online": {
+            "title": "Online",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name",
+          "online",
+          "created_at",
+          "last_seen_at"
+        ],
+        "title": "AgentSummary",
+        "type": "object"
+      },
+      "AppleAuthRequest": {
+        "description": "Sign in with Apple identity-token exchange.\n\n``nonce`` is required (unlike the Google mobile path): the iOS client\nalways embeds its generated nonce verbatim in the identity token, so the\nserver can bind the token to this request and reject replays.",
+        "properties": {
+          "id_token": {
+            "minLength": 1,
+            "title": "Id Token",
+            "type": "string"
+          },
+          "nonce": {
+            "minLength": 1,
+            "title": "Nonce",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id_token",
+          "nonce"
+        ],
+        "title": "AppleAuthRequest",
+        "type": "object"
+      },
+      "AuthTokenResponse": {
+        "description": "Response for register / login / verify-email / google.\n\nWhen ``status == \"verification_required\"`` (returned by /register when the\nserver enforces verification), ``access_token`` is ``None`` and the client\nmust call /verify-email with the code from the OTP email to obtain the JWT.\nFor all other ``status`` values (currently just ``\"ok\"``) a valid\n``access_token`` is always present.\n\n``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is\nin the soft-delete grace window \u2014 clients surface a \"cancel scheduled\ndeletion\" banner so the user can restore the account.",
+        "properties": {
+          "access_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Token"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "scheduled_deletion_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Deletion At"
+          },
+          "status": {
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "email",
+          "role"
+        ],
+        "title": "AuthTokenResponse",
+        "type": "object"
+      },
+      "CancelAccountDeletionResponse": {
+        "properties": {
+          "scheduled_deletion_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled Deletion At"
+          },
+          "status": {
+            "default": "cancelled",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "CancelAccountDeletionResponse",
+        "type": "object"
+      },
+      "CreateAgentRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateAgentRequest",
+        "type": "object"
+      },
+      "CreateAgentResponse": {
+        "description": "Returned once on creation \u2014 includes raw token.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "name",
+          "token"
+        ],
+        "title": "CreateAgentResponse",
+        "type": "object"
+      },
+      "CreateCustomAgentTypeRequest": {
+        "properties": {
+          "command": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Command",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "command"
+        ],
+        "title": "CreateCustomAgentTypeRequest",
+        "type": "object"
+      },
+      "CreateShortcutRequest": {
+        "properties": {
+          "chord_token": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Chord Token",
+            "type": "string"
+          },
+          "kind": {
+            "pattern": "^[a-z0-9_]{1,32}$",
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "kind",
+          "chord_token"
+        ],
+        "title": "CreateShortcutRequest",
+        "type": "object"
+      },
+      "CreateTemplateRequest": {
+        "properties": {
+          "body": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "body"
+        ],
+        "title": "CreateTemplateRequest",
+        "type": "object"
+      },
+      "CustomAgentTypeSummary": {
+        "description": "Wire shape for a custom agent type returned to clients.",
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "command",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CustomAgentTypeSummary",
+        "type": "object"
+      },
+      "DeleteAccountRequest": {
+        "description": "Re-auth proof for ``POST /api/auth/me/delete``.\n\nThe client must supply ONE of:\n  * ``method=\"password\"`` with a non-empty ``password`` (password users)\n  * ``method=\"google\"`` with a fresh ``id_token`` + the ``nonce`` the\n    client used when obtaining it (Google-OAuth users)\n  * ``method=\"apple\"`` with a fresh ``id_token`` + ``nonce`` (Sign in\n    with Apple users)\n\n``mode`` chooses between the soft-delete grace window (``scheduled``,\ndefault \u2014 14 days, cancellable) and an irreversible cascade purge\n(``immediate``). Omitting ``mode`` preserves the legacy behavior for\nolder clients.\n\nExisting session JWT alone is rejected \u2014 re-auth is a hard requirement\nfor self-delete (Auth0 / Google Identity guidance).",
+        "properties": {
+          "id_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id Token"
+          },
+          "method": {
+            "enum": [
+              "password",
+              "google",
+              "apple"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "scheduled",
+                  "immediate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "scheduled",
+            "title": "Mode"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
+          },
+          "password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Password"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "title": "DeleteAccountRequest",
+        "type": "object"
+      },
+      "DeviceResponse": {
+        "description": "One entry in the user's ``GET /api/devices`` listing.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "device_id",
+          "name",
+          "created_at",
+          "last_seen_at"
+        ],
+        "title": "DeviceResponse",
+        "type": "object"
+      },
+      "ForgotPasswordRequest": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "ForgotPasswordRequest",
+        "type": "object"
+      },
+      "ForgotPasswordResponse": {
+        "properties": {
+          "status": {
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "ForgotPasswordResponse",
+        "type": "object"
+      },
+      "GoogleAuthRequest": {
+        "properties": {
+          "id_token": {
+            "title": "Id Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id_token"
+        ],
+        "title": "GoogleAuthRequest",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ManifestResponse": {
+        "properties": {
+          "body": {
+            "additionalProperties": true,
+            "title": "Body",
+            "type": "object"
+          },
+          "signature_b64": {
+            "title": "Signature B64",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "signature_b64"
+        ],
+        "title": "ManifestResponse",
+        "type": "object"
+      },
+      "MobileRefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "title": "Refresh Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "MobileRefreshRequest",
+        "type": "object"
+      },
+      "MobileTokenRequest": {
+        "description": "Body for ``POST /api/agents/{agent_id}/token``.\n\nThe mobile client identifies the *device* asking for tokens. The\n``user_id`` is taken from the dashboard JWT in the Authorization\nheader. ``mobile_device_name`` is an auto-generated label like\n``\"Google Pixel 8\"`` that the user sees on the \"My devices\" screen.\n\n``mobile_device_id`` is constrained to a canonical 36-char UUID\nstring (defence in depth: narrows the attack surface for\ncross-tenant collisions and prevents convenient short literals like\n``\"admin\"``).",
+        "properties": {
+          "mobile_device_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "title": "Mobile Device Id",
+            "type": "string"
+          },
+          "mobile_device_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile Device Name"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          }
+        },
+        "required": [
+          "mobile_device_id"
+        ],
+        "title": "MobileTokenRequest",
+        "type": "object"
+      },
+      "MobileTokenResponse": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "refresh_token": {
+            "title": "Refresh Token",
+            "type": "string"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token"
+        ],
+        "title": "MobileTokenResponse",
+        "type": "object"
+      },
+      "PairingClaimRequest": {
+        "description": "Mobile's claim request (authenticated).\n\n``mobile_device_id`` is constrained to a canonical 36-char UUID\nstring \u2014 same defence-in-depth check as ``MobileTokenRequest``.",
+        "properties": {
+          "friendly_name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Friendly Name"
+          },
+          "hostname_hint": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname Hint"
+          },
+          "mobile_device_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "title": "Mobile Device Id",
+            "type": "string"
+          },
+          "mobile_device_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile Device Name"
+          },
+          "nonce": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Nonce",
+            "type": "string"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          },
+          "trust_key_fp": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Trust Key Fp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nonce",
+          "trust_key_fp",
+          "mobile_device_id"
+        ],
+        "title": "PairingClaimRequest",
+        "type": "object"
+      },
+      "PairingClaimResponse": {
+        "description": "Server's reply to a successful claim \u2014 no token reaches the mobile.\n\n``ws_delivered`` is a diagnostic hint, not an authority signal. ``True``\nmeans the credential push was dispatched directly to the agent's pairing\nWebSocket (the agent was connected at claim time); ``False`` means the\npush was staged in the server-side recovery slot for the agent's next\nWS reconnect to consume. The mobile uses this to refine the timeout-error\ncopy when the agent does not subsequently come online \u2014 it does NOT\ntreat ``True`` as \"the agent is now paired\" (the agent could still fail\nto validate the signature, fail to write ``.env``, or fail to start its\nrelay client; only the routing-table ``agent.status_changed=true``\nevent is authoritative).",
+        "properties": {
+          "agent_friendly_name": {
+            "title": "Agent Friendly Name",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "ws_delivered": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ws Delivered"
+          }
+        },
+        "required": [
+          "agent_id",
+          "agent_friendly_name"
+        ],
+        "title": "PairingClaimResponse",
+        "type": "object"
+      },
+      "PairingInitiateRequest": {
+        "description": "Optional metadata the agent reports at initiate time.\n\nAll fields are advisory: the mobile UI uses ``hostname`` / ``os`` to\nlet the operator confirm they're claiming the right host;\n``current_agent_id`` distinguishes a re-pair (token rotation for the\nsame owner) from a first-pair (new ``agents`` row at claim). A claim by\na different account is rejected \u2014 ownership is not transferable by\npairing.",
+        "properties": {
+          "current_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Agent Id"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "os": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Os"
+          }
+        },
+        "title": "PairingInitiateRequest",
+        "type": "object"
+      },
+      "PairingInitiateResponse": {
+        "description": "Server's reply to ``POST /api/pairing/initiate``.\n\n``qr_payload`` is the canonical ``MOBA1|...`` text the agent renders.\n``trust_key_fp`` is the SHA-256 fingerprint of the server's manifest\nsigning public key \u2014 the agent cross-checks this against its own\npinned key before trusting the flow. The pairing WS URL is *not*\nreturned: the agent derives it locally from ``RELAY_SERVER_URL`` +\n``nonce`` so a deployment-skewed server cannot hand back a buggy\nscheme (``https://...``) that the websockets client would reject.",
+        "properties": {
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "nonce": {
+            "title": "Nonce",
+            "type": "string"
+          },
+          "qr_payload": {
+            "title": "Qr Payload",
+            "type": "string"
+          },
+          "relay_url": {
+            "title": "Relay Url",
+            "type": "string"
+          },
+          "trust_key_fp": {
+            "title": "Trust Key Fp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nonce",
+          "expires_at",
+          "trust_key_fp",
+          "relay_url",
+          "qr_payload"
+        ],
+        "title": "PairingInitiateResponse",
+        "type": "object"
+      },
+      "RegisterPushTokenRequest": {
+        "description": "Body of ``POST /api/devices/{device_id}/push-token``.",
+        "properties": {
+          "environment": {
+            "enum": [
+              "sandbox",
+              "production"
+            ],
+            "title": "Environment",
+            "type": "string"
+          },
+          "platform": {
+            "const": "ios",
+            "title": "Platform",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "platform",
+          "token",
+          "environment"
+        ],
+        "title": "RegisterPushTokenRequest",
+        "type": "object"
+      },
+      "ReregisterAgentResponse": {
+        "description": "Returned on credential rotation \u2014 includes new raw token.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "token"
+        ],
+        "title": "ReregisterAgentResponse",
+        "type": "object"
+      },
+      "ResendVerificationRequest": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "ResendVerificationRequest",
+        "type": "object"
+      },
+      "ResendVerificationResponse": {
+        "properties": {
+          "cooldown_seconds_remaining": {
+            "default": 0,
+            "title": "Cooldown Seconds Remaining",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ResendVerificationResponse",
+        "type": "object"
+      },
+      "ResetPasswordRequest": {
+        "properties": {
+          "code": {
+            "maxLength": 6,
+            "minLength": 6,
+            "pattern": "^\\d{6}$",
+            "title": "Code",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "new_password": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "New Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "code",
+          "new_password"
+        ],
+        "title": "ResetPasswordRequest",
+        "type": "object"
+      },
+      "ResetPasswordResponse": {
+        "properties": {
+          "status": {
+            "default": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "ResetPasswordResponse",
+        "type": "object"
+      },
+      "ShortcutSummary": {
+        "description": "Wire shape for a saved shortcut returned to clients.",
+        "properties": {
+          "chord_token": {
+            "title": "Chord Token",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "shortcut_id": {
+            "title": "Shortcut Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "shortcut_id",
+          "kind",
+          "chord_token",
+          "name",
+          "position",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "title": "ShortcutSummary",
+        "type": "object"
+      },
+      "TemplateSummary": {
+        "description": "Wire shape for a prompt template returned to clients.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "is_favorite": {
+            "title": "Is Favorite",
+            "type": "boolean"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "template_id": {
+            "title": "Template Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "template_id",
+          "name",
+          "body",
+          "is_favorite",
+          "last_used_at",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "title": "TemplateSummary",
+        "type": "object"
+      },
+      "TrustKeyResponse": {
+        "properties": {
+          "public_key_b64": {
+            "description": "Base64-encoded Ed25519 manifest-signing public key.",
+            "title": "Public Key B64",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_key_b64"
+        ],
+        "title": "TrustKeyResponse",
+        "type": "object"
+      },
+      "UpdateCustomAgentTypeRequest": {
+        "description": "Partial update: omitted/null fields stay unchanged. Unlike shortcut\nnames, ``name`` and ``command`` are mandatory attributes of a type, so\nthere is no empty-string-clears form \u2014 a provided-but-blank value is a\nvalidation error, and an empty body is rejected outright.",
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 60,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "UpdateCustomAgentTypeRequest",
+        "type": "object"
+      },
+      "UpdateShortcutRequest": {
+        "description": "Rename-only update. ``name`` is required so an empty body cannot\nsilently clear it; ``\"\"`` (or an explicit null) clears the name back to\nNULL \u2014 the Android client's JSON encoder omits null-valued defaults, so\nthe empty string is the only clear form it can express on the wire.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "UpdateShortcutRequest",
+        "type": "object"
+      },
+      "UpdateTemplateRequest": {
+        "description": "Partial update \u2014 every field is optional. The router rejects an\nall-None payload at the service layer.",
+        "properties": {
+          "body": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
+          },
+          "is_favorite": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Favorite"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "UpdateTemplateRequest",
+        "type": "object"
+      },
+      "UserLoginRequest": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "UserLoginRequest",
+        "type": "object"
+      },
+      "UserRegisterRequest": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "UserRegisterRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VerifyEmailRequest": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "code"
+        ],
+        "title": "VerifyEmailRequest",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Central Server",
+    "version": "0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/agents": {
+      "get": {
+        "description": "List agents owned by the authenticated user, with online status.",
+        "operationId": "list_agents_api_agents_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSummary"
+                  },
+                  "title": "Response List Agents Api Agents Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Agents",
+        "tags": [
+          "agents"
+        ]
+      },
+      "post": {
+        "description": "Create a new agent owned by the authenticated user. Returns credentials once.",
+        "operationId": "create_agent_api_agents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateAgentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}": {
+      "delete": {
+        "description": "Delete an agent and cascade all related data. Owner only.",
+        "operationId": "delete_agent_api_agents__agent_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/reregister": {
+      "post": {
+        "description": "Regenerate agent credentials. Owner only.",
+        "operationId": "reregister_agent_api_agents__agent_id__reregister_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReregisterAgentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reregister Agent",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/agents/{agent_id}/token": {
+      "post": {
+        "description": "Get mobile access + refresh tokens for an agent the user owns.\n\nThe mobile client supplies its per-install ``mobile_device_id`` so the\nissued JWT's ``sub`` claim and the refresh-token row are scoped to\nthat specific device, not to the user account.",
+        "operationId": "get_mobile_tokens_api_agents__agent_id__token_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Mobile Tokens",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/api/auth/apple": {
+      "post": {
+        "description": "Authenticate via Apple identity token (Sign in with Apple on iOS).",
+        "operationId": "apple_auth_api_auth_apple_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppleAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apple Auth",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/forgot-password": {
+      "post": {
+        "description": "Send a password-reset OTP by email. Always returns 200 to defeat enumeration.",
+        "operationId": "forgot_password_api_auth_forgot_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForgotPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgotPasswordResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forgot Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/google": {
+      "post": {
+        "description": "Authenticate via Google ID token (from Android Credential Manager).",
+        "operationId": "google_auth_api_auth_google_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Google Auth",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "description": "Authenticate a user with email + password.",
+        "operationId": "login_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me/delete": {
+      "post": {
+        "description": "Schedule or immediately purge the calling user's account.\n\n``body.mode`` chooses between ``'scheduled'`` (default \u2014 14-day soft-delete\nwith a cancel link) and ``'immediate'`` (irreversible cascade purge now).\nOlder clients that omit ``mode`` get the legacy scheduled behavior.\n\nRequires a fresh credential proof (current password OR fresh Google ID\ntoken with matching nonce) \u2014 the session JWT alone is rejected. On\nsuccess: writes the audit row, revokes refresh tokens, closes any live\nuser/agent WebSockets with code 4010, and (scheduled mode only) emails a\nsingle-use cancel link before returning 204.\n\nRefuses to act on the seed-admin account (mirrors the admin-path guard).",
+        "operationId": "request_account_deletion_api_auth_me_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Account Deletion",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me/delete/cancel": {
+      "post": {
+        "description": "Restore an account that is currently in the soft-delete grace window.\n\nIdempotent: succeeds even if no deletion was scheduled. The previous\n``scheduled_deletion_at`` (or None) is echoed back so the client can\nconfirm what was cancelled.",
+        "operationId": "cancel_account_deletion_api_auth_me_delete_cancel_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelAccountDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cancel Account Deletion",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "description": "Register a new user with email + password.\n\nWhen email verification is required, the response has\n``status=\"verification_required\"`` and ``access_token=None``; the client\nmust call ``/api/auth/verify-email`` with the code from the OTP email.",
+        "operationId": "register_api_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/resend-verification": {
+      "post": {
+        "description": "Issue a fresh verification code (rate-limited).",
+        "operationId": "resend_verification_api_auth_resend_verification_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResendVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResendVerificationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resend Verification",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/reset-password": {
+      "post": {
+        "description": "Consume a reset OTP and replace the user's password.",
+        "operationId": "reset_password_api_auth_reset_password_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetPasswordResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/verify-email": {
+      "post": {
+        "description": "Consume a verification code and return the JWT.",
+        "operationId": "verify_email_api_auth_verify_email_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Verify Email",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/custom-agent-types": {
+      "get": {
+        "description": "List the caller's non-deleted custom agent types.",
+        "operationId": "list_custom_agent_types_api_custom_agent_types_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CustomAgentTypeSummary"
+                  },
+                  "title": "Response List Custom Agent Types Api Custom Agent Types Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Custom Agent Types",
+        "tags": [
+          "custom-agent-types"
+        ]
+      },
+      "post": {
+        "operationId": "create_custom_agent_type_api_custom_agent_types_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomAgentTypeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomAgentTypeSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Custom Agent Type",
+        "tags": [
+          "custom-agent-types"
+        ]
+      }
+    },
+    "/api/custom-agent-types/{type_id}": {
+      "delete": {
+        "description": "Soft-delete the type and (server-side) its kind-scoped shortcuts.",
+        "operationId": "delete_custom_agent_type_api_custom_agent_types__type_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "type_id",
+            "required": true,
+            "schema": {
+              "title": "Type Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Custom Agent Type",
+        "tags": [
+          "custom-agent-types"
+        ]
+      },
+      "patch": {
+        "operationId": "update_custom_agent_type_api_custom_agent_types__type_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "type_id",
+            "required": true,
+            "schema": {
+              "title": "Type Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCustomAgentTypeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomAgentTypeSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Custom Agent Type",
+        "tags": [
+          "custom-agent-types"
+        ]
+      }
+    },
+    "/api/devices": {
+      "get": {
+        "description": "Return the authenticated user's non-revoked devices.",
+        "operationId": "list_devices_api_devices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceResponse"
+                  },
+                  "title": "Response List Devices Api Devices Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Devices",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/api/devices/{device_id}": {
+      "delete": {
+        "description": "Revoke one of the authenticated user's devices.\n\nIdempotency / safety: returns 404 if the device does not belong to the\nuser (or was already revoked). On success, also invalidates every\noutstanding refresh token bound to that device across all agents \u2014 the\nrevoked device fails on its next ``/api/mobile/refresh`` round-trip\nand signs out, while the user's other devices stay logged in.",
+        "operationId": "revoke_device_api_devices__device_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Device",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/api/devices/{device_id}/push-token": {
+      "delete": {
+        "description": "Clear the push token for one of the caller's devices (sign-out path).\n\nIdempotent for an owned device with no stored token; 404 when the device\ndoes not belong to the caller or is revoked.",
+        "operationId": "unregister_push_token_api_devices__device_id__push_token_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unregister Push Token",
+        "tags": [
+          "devices"
+        ]
+      },
+      "post": {
+        "description": "Store/replace the push token for one of the caller's devices.\n\nClients re-POST on every launch and on token rotation. Returns 404 when\nthe device does not belong to the caller or is revoked (same\nanti-enumeration shape as revoke).",
+        "operationId": "register_push_token_api_devices__device_id__push_token_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterPushTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Push Token",
+        "tags": [
+          "devices"
+        ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/mobile/refresh": {
+      "post": {
+        "description": "Exchange a refresh token for a new access+refresh pair.",
+        "operationId": "refresh_mobile_token_api_mobile_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MobileRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MobileTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Mobile Token"
+      }
+    },
+    "/api/pairing/claim": {
+      "post": {
+        "description": "Consume a pairing nonce; create or re-register the agent for its owner; push to the WS.\n\nAuthenticated as a non-admin user. The successful CAS-consume of the\nnonce is the single-flight authority: replays return 410 Gone.",
+        "operationId": "claim_pairing_api_pairing_claim_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingClaimResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Pairing",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/pairing/initiate": {
+      "post": {
+        "description": "Allocate a single-use pairing nonce and return its QR payload.\n\nAnonymous: the install scripts and the running agent both call this\nbefore any credentials exist. Replay-resistance comes from the\n192-bit nonce + the short TTL + the single-flight CAS at claim time.",
+        "operationId": "initiate_pairing_api_pairing_initiate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingInitiateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingInitiateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Initiate Pairing",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/shortcuts": {
+      "get": {
+        "description": "List the caller's non-deleted saved shortcuts (all session kinds).",
+        "operationId": "list_shortcuts_api_shortcuts_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ShortcutSummary"
+                  },
+                  "title": "Response List Shortcuts Api Shortcuts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Shortcuts",
+        "tags": [
+          "shortcuts"
+        ]
+      },
+      "post": {
+        "description": "Upsert: re-saving an existing (kind, chord_token) updates its name\ninstead of duplicating the button; the status stays 201 on both paths.",
+        "operationId": "create_shortcut_api_shortcuts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateShortcutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShortcutSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Shortcut",
+        "tags": [
+          "shortcuts"
+        ]
+      }
+    },
+    "/api/shortcuts/{shortcut_id}": {
+      "delete": {
+        "description": "Soft-delete the shortcut.",
+        "operationId": "delete_shortcut_api_shortcuts__shortcut_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shortcut_id",
+            "required": true,
+            "schema": {
+              "title": "Shortcut Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Shortcut",
+        "tags": [
+          "shortcuts"
+        ]
+      },
+      "patch": {
+        "operationId": "update_shortcut_api_shortcuts__shortcut_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shortcut_id",
+            "required": true,
+            "schema": {
+              "title": "Shortcut Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateShortcutRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShortcutSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Shortcut",
+        "tags": [
+          "shortcuts"
+        ]
+      }
+    },
+    "/api/templates": {
+      "get": {
+        "description": "List the caller's non-deleted prompt templates.",
+        "operationId": "list_templates_api_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateSummary"
+                  },
+                  "title": "Response List Templates Api Templates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Templates",
+        "tags": [
+          "templates"
+        ]
+      },
+      "post": {
+        "operationId": "create_template_api_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Template",
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/templates/{template_id}": {
+      "delete": {
+        "description": "Soft-delete the template. Idempotent: deleting an already-deleted\ntemplate still returns 204.",
+        "operationId": "delete_template_api_templates__template_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Template",
+        "tags": [
+          "templates"
+        ]
+      },
+      "patch": {
+        "operationId": "update_template_api_templates__template_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Template",
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/templates/{template_id}/touch": {
+      "post": {
+        "description": "Bump ``last_used_at`` for picker-tap recents tracking.",
+        "operationId": "touch_template_api_templates__template_id__touch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Touch Template",
+        "tags": [
+          "templates"
+        ]
+      }
+    },
+    "/api/v1/agent/manifest.json": {
+      "get": {
+        "operationId": "get_manifest_api_v1_agent_manifest_json_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManifestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Manifest",
+        "tags": [
+          "manifest"
+        ]
+      }
+    },
+    "/api/v1/agent/trust_key": {
+      "get": {
+        "description": "Return the manifest-signing public key for agent-side bootstrap.\n\nThe agent's auto-updater needs this key (pinned at\n``<prefix>/trust/central_server.pub``) to verify Ed25519 signatures on\nevery release manifest. The install scripts and the\n``mobaide-agent fetch-trust-key`` CLI fetch this endpoint when the\noperator hasn't pre-set ``MOBAIDE_AGENT_TRUST_KEY_B64``. Returns 503\nwhen ``MANIFEST_SIGNING_PUBLIC_KEY`` is unset on this server \u2014 agents\ncannot bootstrap auto-update against a server that has no signing key\nconfigured. Anonymous: matches the public ``manifest.json`` contract,\nso unpaired install hosts can fetch it before having any credentials.",
+        "operationId": "get_trust_key_api_v1_agent_trust_key_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustKeyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Trust Key",
+        "tags": [
+          "manifest"
+        ]
+      }
+    },
+    "/api/version": {
+      "get": {
+        "operationId": "version_info_api_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Version Info Api Version Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Version Info",
+        "tags": [
+          "version"
+        ]
+      }
+    },
+    "/proxy/{agent_id}/{path}": {
+      "delete": {
+        "description": "Forward any REST request to the agent through the relay tunnel.",
+        "operationId": "proxy_to_agent_proxy__agent_id___path__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy To Agent"
+      },
+      "get": {
+        "description": "Forward any REST request to the agent through the relay tunnel.",
+        "operationId": "proxy_to_agent_proxy__agent_id___path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy To Agent"
+      },
+      "patch": {
+        "description": "Forward any REST request to the agent through the relay tunnel.",
+        "operationId": "proxy_to_agent_proxy__agent_id___path__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy To Agent"
+      },
+      "post": {
+        "description": "Forward any REST request to the agent through the relay tunnel.",
+        "operationId": "proxy_to_agent_proxy__agent_id___path__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy To Agent"
+      },
+      "put": {
+        "description": "Forward any REST request to the agent through the relay tunnel.",
+        "operationId": "proxy_to_agent_proxy__agent_id___path__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Proxy To Agent"
+      }
+    }
+  }
+}

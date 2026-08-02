@@ -41,6 +41,8 @@ config/.active
 # store these under .pytest_cache/ (already ignored above); older/standalone
 # versions write a top-level .xprocess/. Ignore both.
 .xprocess/
+# Web client (web/) toolchain — installs and per-run artifacts, never sources
+**/node_modules/
 android/release.keystore
 android/signing.properties
 android/app/release/
