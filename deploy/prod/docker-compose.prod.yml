@@ -7,6 +7,12 @@
 #   ./.env                 secrets (NEVER synced; chmod 600; created once during bootstrap)
 #   ./tls/                 directory with origin-cert.pem/origin-key.pem when using
 #                          CloudflareOrigin TLS mode; empty otherwise
+#   ./secrets/             APNs auth key (.p8) when push is configured; mounted
+#                          read-only at /app/secrets, so APNS_KEY_PATH in .env
+#                          must be the container path, not the host one. Own it
+#                          by the container's `app` user or a 600 file is
+#                          unreadable. Absent/empty is fine — leaving the APNS_*
+#                          vars unset disables the dispatcher cleanly.
 #
 # Managed Docker volumes that survive upgrades (DO NOT run `compose down -v`):
 #   central-server-data    SQLite DB + Alembic state at /app/data
@@ -34,6 +40,7 @@ services:
       - FORWARDED_ALLOW_IPS=*
     volumes:
       - central-server-data:/app/data
+      - ./secrets:/app/secrets:ro
     expose:
       - "9000"
     # Failure isolation on the shared box (tunable for the actual VPS size):
