@@ -1,0 +1,9 @@
+apis:
+  central-server@v1:
+    root: ./openapi/central-server.json
+    x-openapi-ts:
+      output: ./src/api/generated/central-server.ts
+  agent@v1:
+    root: ./openapi/agent.json
+    x-openapi-ts:
+      output: ./src/api/generated/agent.ts

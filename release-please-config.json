@@ -27,6 +27,12 @@
       "extra-files": [
         "app/build.gradle.kts"
       ]
+    },
+    "web": {
+      "release-type": "node",
+      "package-name": "mobaide-web",
+      "component": "web",
+      "changelog-path": "CHANGELOG.md"
     }
   }
 }

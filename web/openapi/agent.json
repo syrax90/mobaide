@@ -1,0 +1,2550 @@
+{
+  "components": {
+    "schemas": {
+      "AntigravityOptionsModel": {
+        "description": "Wire DTO for Antigravity CLI launch options (see :class:`AntigravityOptions`).\n\n``model`` is free-form ``str`` \u2014 like the Claude/Codex DTOs \u2014 carrying the\nfull display name ``agy models`` prints (e.g. ``Gemini 3.1 Pro (Low)``);\nthe launcher forwards it verbatim as a single argv element.\n``skip_permissions`` (``--dangerously-skip-permissions``) and ``sandbox``\nare mutually exclusive \u2014 skip-permissions auto-approves ``bypassSandbox``\nactions, silently defeating the sandbox (google-antigravity/antigravity-cli\n#36) \u2014 so the combination is rejected with a 422 at the wire boundary. To\nkeep that guard airtight, ``model`` and each ``add_dirs`` entry (both\nforwarded verbatim as argv elements) are rejected when they look like a CLI\nflag (leading ``-``): otherwise a value such as\n``add_dirs=[\"--dangerously-skip-permissions\"]`` could smuggle the blocked\nflag past the pair check. No legitimate value is affected \u2014 model names\nstart with a letter and directories with ``/`` or a drive letter.\n``protected_namespaces=()`` silences pydantic's ``model_*`` guard for the\nlegitimately-named ``model`` field.",
+        "properties": {
+          "add_dirs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Add Dirs",
+            "type": "array"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "sandbox": {
+            "default": false,
+            "title": "Sandbox",
+            "type": "boolean"
+          },
+          "skip_permissions": {
+            "default": false,
+            "title": "Skip Permissions",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "AntigravityOptionsModel",
+        "type": "object"
+      },
+      "AutoScanFilterModel": {
+        "description": "Per-project Linear filter for Auto Scan Mode.\n\nMirrors :class:`mobaide.core.projects_config.AutoScanFilter`. Validation:\n\n* ``state_names`` and ``label_names`` must each contain at least one\n  non-empty string. An empty list would silently match every issue,\n  which is almost certainly not what the user wants \u2014 better to fail\n  loud at the API boundary.\n* ``active_state``, ``done_state``, ``removal_label`` must be non-empty.",
+        "properties": {
+          "active_state": {
+            "default": "In Progress",
+            "minLength": 1,
+            "title": "Active State",
+            "type": "string"
+          },
+          "done_state": {
+            "default": "Done",
+            "minLength": 1,
+            "title": "Done State",
+            "type": "string"
+          },
+          "label_names": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Label Names",
+            "type": "array"
+          },
+          "removal_label": {
+            "default": "AutoPipeline",
+            "minLength": 1,
+            "title": "Removal Label",
+            "type": "string"
+          },
+          "state_names": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "State Names",
+            "type": "array"
+          }
+        },
+        "title": "AutoScanFilterModel",
+        "type": "object"
+      },
+      "AutoScanInstanceDto": {
+        "properties": {
+          "current_seq": {
+            "default": 0,
+            "title": "Current Seq",
+            "type": "integer"
+          },
+          "cycle_number": {
+            "default": 0,
+            "title": "Cycle Number",
+            "type": "integer"
+          },
+          "last_activity_at": {
+            "title": "Last Activity At",
+            "type": "number"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "next_scan_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scan At"
+          },
+          "processed_count": {
+            "title": "Processed Count",
+            "type": "integer"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          },
+          "scan_interval_seconds": {
+            "title": "Scan Interval Seconds",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_name",
+          "status",
+          "started_at",
+          "last_activity_at",
+          "processed_count",
+          "scan_interval_seconds"
+        ],
+        "title": "AutoScanInstanceDto",
+        "type": "object"
+      },
+      "AutoScanInstanceStatusResponse": {
+        "properties": {
+          "current_seq": {
+            "default": 0,
+            "title": "Current Seq",
+            "type": "integer"
+          },
+          "cycle_number": {
+            "default": 0,
+            "title": "Cycle Number",
+            "type": "integer"
+          },
+          "last_activity_at": {
+            "title": "Last Activity At",
+            "type": "number"
+          },
+          "last_scan_time": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scan Time"
+          },
+          "next_scan_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scan At"
+          },
+          "processed_count": {
+            "title": "Processed Count",
+            "type": "integer"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          },
+          "recent_events": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Recent Events",
+            "type": "array"
+          },
+          "scan_interval_seconds": {
+            "title": "Scan Interval Seconds",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "number"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_name",
+          "status",
+          "started_at",
+          "last_activity_at",
+          "processed_count",
+          "scan_interval_seconds"
+        ],
+        "title": "AutoScanInstanceStatusResponse",
+        "type": "object"
+      },
+      "AutoScanListResponse": {
+        "properties": {
+          "auto_scan_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Scan Prompt"
+          },
+          "available_projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Projects",
+            "type": "array"
+          },
+          "capacity": {
+            "title": "Capacity",
+            "type": "integer"
+          },
+          "max_scans": {
+            "title": "Max Scans",
+            "type": "integer"
+          },
+          "scans": {
+            "items": {
+              "$ref": "#/components/schemas/AutoScanInstanceDto"
+            },
+            "title": "Scans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scans",
+          "capacity",
+          "max_scans",
+          "available_projects"
+        ],
+        "title": "AutoScanListResponse",
+        "type": "object"
+      },
+      "ClaudeOptionsModel": {
+        "description": "Wire DTO for Claude CLI launch options (see :class:`ClaudeOptions`).\n\n``effort`` is ``Literal``-typed so an invalid level is rejected with a 422 at\nthe wire boundary; ``model`` stays free-form (the client curates the alias\nlist). ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
+        "properties": {
+          "append_system_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Append System Prompt"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "xhigh",
+                  "max"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effort"
+          },
+          "fast_mode": {
+            "default": false,
+            "title": "Fast Mode",
+            "type": "boolean"
+          },
+          "identifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Identifier"
+          },
+          "initial_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Prompt"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "no_memory": {
+            "default": false,
+            "title": "No Memory",
+            "type": "boolean"
+          },
+          "plan_mode": {
+            "default": false,
+            "title": "Plan Mode",
+            "type": "boolean"
+          },
+          "skip_permissions": {
+            "default": true,
+            "title": "Skip Permissions",
+            "type": "boolean"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "ultracode": {
+            "default": false,
+            "title": "Ultracode",
+            "type": "boolean"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "ClaudeOptionsModel",
+        "type": "object"
+      },
+      "CodexLoginRequest": {
+        "description": "API-key login payload.\n\nThe key is a :class:`pydantic.SecretStr` so it is auto-redacted in logs and\n``repr``; it is piped to ``codex login --with-api-key`` via stdin and never\npersisted by the agent (Codex writes its own ``auth.json``).",
+        "properties": {
+          "api_key": {
+            "format": "password",
+            "minLength": 1,
+            "title": "Api Key",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "api_key"
+        ],
+        "title": "CodexLoginRequest",
+        "type": "object"
+      },
+      "CodexLoginResponse": {
+        "properties": {
+          "authenticated": {
+            "title": "Authenticated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "authenticated"
+        ],
+        "title": "CodexLoginResponse",
+        "type": "object"
+      },
+      "CodexOptionsModel": {
+        "description": "Wire DTO for Codex CLI launch options (see :class:`CodexOptions`).\n\nThe enum-like fields are ``Literal``-typed so an invalid value is rejected\nwith a 422 at the wire boundary rather than producing a broken ``codex``\nargv. ``protected_namespaces=()`` silences pydantic's ``model_*`` guard for\nthe legitimately-named ``model`` field.",
+        "properties": {
+          "approval": {
+            "default": "never",
+            "enum": [
+              "untrusted",
+              "on-request",
+              "never"
+            ],
+            "title": "Approval",
+            "type": "string"
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "full_auto": {
+            "default": false,
+            "title": "Full Auto",
+            "type": "boolean"
+          },
+          "initial_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Prompt"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "enum": [
+                  "minimal",
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "high",
+            "title": "Reasoning Effort"
+          },
+          "sandbox": {
+            "default": "workspace-write",
+            "enum": [
+              "read-only",
+              "workspace-write",
+              "danger-full-access"
+            ],
+            "title": "Sandbox",
+            "type": "string"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "CodexOptionsModel",
+        "type": "object"
+      },
+      "CreateSessionRequest": {
+        "properties": {
+          "antigravity_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AntigravityOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branch_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Name"
+          },
+          "claude_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClaudeOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cli": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cli"
+          },
+          "codex_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CodexOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cols": {
+            "default": 80,
+            "title": "Cols",
+            "type": "integer"
+          },
+          "command": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "env": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env"
+          },
+          "project_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Name"
+          },
+          "resolved_command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Command"
+          },
+          "resolved_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved Name"
+          },
+          "rows": {
+            "default": 24,
+            "title": "Rows",
+            "type": "integer"
+          },
+          "worktree": {
+            "default": false,
+            "title": "Worktree",
+            "type": "boolean"
+          }
+        },
+        "title": "CreateSessionRequest",
+        "type": "object"
+      },
+      "GitDeleteItem": {
+        "description": "One item in a delete request.\n\nThe wire shape mirrors :class:`GitItemRead`'s discriminator \u2014 clients\necho back the ``kind`` and the appropriate identifier (``branch`` for\nbranch kinds, ``worktree_path`` for worktree kinds; both for combined\ndeletions). ``force`` upgrades a branch delete from ``-d`` to ``-D`` and\nadds ``--force`` to a worktree removal so a worktree holding\nmodified/untracked files is deleted instead of refused.",
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "branch_with_worktree",
+              "branch_only",
+              "orphan_worktree"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "worktree_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worktree Path"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "GitDeleteItem",
+        "type": "object"
+      },
+      "GitDeleteRequest": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GitDeleteItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "title": "GitDeleteRequest",
+        "type": "object"
+      },
+      "GitDeleteResponse": {
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/GitDeleteResultItem"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "GitDeleteResponse",
+        "type": "object"
+      },
+      "GitDeleteResultItem": {
+        "description": "Per-item outcome.\n\n``error`` codes:\n    * ``force_required`` \u2014 branch is unmerged, or worktree holds\n      modified/untracked files; retry with ``force=True``.\n    * ``locked`` \u2014 worktree is locked.\n    * ``not_found`` \u2014 branch or worktree no longer exists.\n    * ``invalid`` \u2014 request payload missing the required identifier.\n    * ``error`` \u2014 other git failure (full message in ``error_detail``).",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "error_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Detail"
+          },
+          "kind": {
+            "enum": [
+              "branch_with_worktree",
+              "branch_only",
+              "orphan_worktree"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "target",
+          "ok"
+        ],
+        "title": "GitDeleteResultItem",
+        "type": "object"
+      },
+      "GitItemRead": {
+        "description": "One row in the unified git management list.\n\n``branch`` is set for ``branch_*`` kinds; ``worktree_path`` is set for\n``branch_with_worktree`` and ``orphan_worktree``. Status fields apply\nwhere relevant; clients should ignore irrelevant fields.",
+        "properties": {
+          "ahead": {
+            "default": 0,
+            "title": "Ahead",
+            "type": "integer"
+          },
+          "behind": {
+            "default": 0,
+            "title": "Behind",
+            "type": "integer"
+          },
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch"
+          },
+          "detached": {
+            "default": false,
+            "title": "Detached",
+            "type": "boolean"
+          },
+          "gone": {
+            "default": false,
+            "title": "Gone",
+            "type": "boolean"
+          },
+          "is_current": {
+            "default": false,
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "branch_with_worktree",
+              "branch_only",
+              "orphan_worktree"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "locked": {
+            "default": false,
+            "title": "Locked",
+            "type": "boolean"
+          },
+          "locked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked Reason"
+          },
+          "prunable": {
+            "default": false,
+            "title": "Prunable",
+            "type": "boolean"
+          },
+          "upstream": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upstream"
+          },
+          "worktree_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worktree Path"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "GitItemRead",
+        "type": "object"
+      },
+      "GitItemsResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GitItemRead"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "GitItemsResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LinearLabelModel": {
+        "description": "Linear label discovered via the per-project API key.",
+        "properties": {
+          "color": {
+            "default": "",
+            "title": "Color",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LinearLabelModel",
+        "type": "object"
+      },
+      "LinearStateModel": {
+        "description": "Linear workflow state discovered via the per-project API key.\n\n``type`` is one of Linear's documented state types (``backlog`` /\n``unstarted`` / ``started`` / ``completed`` / ``canceled`` / ``triage``).\nEmpty when the schema didn't include it (defensive \u2014 should not happen).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "default": "",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "LinearStateModel",
+        "type": "object"
+      },
+      "ProjectReadModel": {
+        "description": "Client-safe view of a single project.",
+        "properties": {
+          "auto_scan_filter": {
+            "$ref": "#/components/schemas/AutoScanFilterModel"
+          },
+          "auto_scan_prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Scan Prompt"
+          },
+          "conda_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conda Env"
+          },
+          "default_flags": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Default Flags",
+            "type": "object"
+          },
+          "has_linear_key": {
+            "title": "Has Linear Key",
+            "type": "boolean"
+          },
+          "is_git": {
+            "title": "Is Git",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "order": {
+            "title": "Order",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "path_exists": {
+            "title": "Path Exists",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "order",
+          "has_linear_key",
+          "is_git",
+          "path_exists"
+        ],
+        "title": "ProjectReadModel",
+        "type": "object"
+      },
+      "ProjectUpdateModel": {
+        "description": "Request body for ``PUT /api/projects/{name}``.\n\nThree-state semantics for ``linear_api_key`` and ``conda_env`` follow the\nGitHub/Stripe convention:\n\n* field omitted / ``null`` \u2192 keep the existing value,\n* empty string \u2192 clear (store ``None``),\n* non-empty string \u2192 replace.\n\nFor ``default_flags``: ``null``/omitted keeps, a dict replaces the whole\nmap. Use ``{}`` to clear all flags.\n\nFor ``auto_scan_filter``: ``null``/omitted keeps; a model replaces\nwholesale (no field-level merge \u2014 the whole filter is one logical unit).",
+        "properties": {
+          "auto_scan_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conda_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conda Env"
+          },
+          "default_flags": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Flags"
+          },
+          "linear_api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linear Api Key"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          }
+        },
+        "title": "ProjectUpdateModel",
+        "type": "object"
+      },
+      "ProjectWriteModel": {
+        "description": "Request body for ``POST /api/projects``.",
+        "properties": {
+          "auto_scan_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AutoScanFilterModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conda_env": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conda Env"
+          },
+          "default_flags": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "title": "Default Flags",
+            "type": "object"
+          },
+          "linear_api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Linear Api Key"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path"
+        ],
+        "title": "ProjectWriteModel",
+        "type": "object"
+      },
+      "RefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "title": "Refresh Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "RefreshRequest",
+        "type": "object"
+      },
+      "ReorderRequest": {
+        "description": "Request body for ``PATCH /api/projects/order``.",
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 0,
+            "title": "Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "title": "ReorderRequest",
+        "type": "object"
+      },
+      "RunNowRequest": {
+        "properties": {
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_name"
+        ],
+        "title": "RunNowRequest",
+        "type": "object"
+      },
+      "RunNowResponse": {
+        "properties": {
+          "next_scan_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Scan At"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "project_name"
+        ],
+        "title": "RunNowResponse",
+        "type": "object"
+      },
+      "ScrollbackResponse": {
+        "properties": {
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "session_id",
+          "lines",
+          "total"
+        ],
+        "title": "ScrollbackResponse",
+        "type": "object"
+      },
+      "SessionResponse": {
+        "description": "REST response for a single session.\n\nField set is the canonical wire shape \u2014 must stay in lockstep with\n:func:`mobaide.core.models.session_to_wire_dict` and the Android\n``SessionResponse`` DTO. Add or rename a field in one place only.",
+        "properties": {
+          "attention": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention"
+          },
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Command",
+            "type": "array"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cwd"
+          },
+          "exit_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Reason"
+          },
+          "kind": {
+            "default": "claude",
+            "title": "Kind",
+            "type": "string"
+          },
+          "kind_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind Label"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "project_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Name"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "session_id",
+          "state",
+          "created_at",
+          "pid",
+          "command",
+          "cwd"
+        ],
+        "title": "SessionResponse",
+        "type": "object"
+      },
+      "StartScanRequest": {
+        "properties": {
+          "claude_options": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClaudeOptionsModel"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_name"
+        ],
+        "title": "StartScanRequest",
+        "type": "object"
+      },
+      "StopScanRequest": {
+        "properties": {
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_name"
+        ],
+        "title": "StopScanRequest",
+        "type": "object"
+      },
+      "TokenRequest": {
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "TokenRequest",
+        "type": "object"
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "refresh_token": {
+            "title": "Refresh Token",
+            "type": "string"
+          },
+          "token_type": {
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token"
+        ],
+        "title": "TokenResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Mobaide Agent",
+    "version": "0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/agent/update/force_now": {
+      "post": {
+        "description": "Trigger the staged-binary updater immediately, bypassing idle deferral.\n\nReturns the updater outcome string verbatim (``\"staged\"``,\n``\"signature_failed\"``, ``\"no_change\"``, ``\"deferred\"``) so the client\ncan surface a meaningful toast. On ``\"staged\"`` the supervisor restart\nis scheduled as a FastAPI background task that runs *after* the HTTP\nresponse is flushed, so the client receives the 200 reliably before\nthe worker exits with code ``EXIT_RESTART_REQUESTED``.",
+        "operationId": "force_update_now_api_agent_update_force_now_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Force Update Now Api Agent Update Force Now Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Force Update Now",
+        "tags": [
+          "update"
+        ]
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "description": "Exchange a valid refresh token for a new token pair (rotation).",
+        "operationId": "refresh_api_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/token": {
+      "post": {
+        "description": "Validate credentials and return JWT access + refresh tokens.",
+        "operationId": "login_api_auth_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/autoscan/list": {
+      "get": {
+        "operationId": "list_scans_api_autoscan_list_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoScanListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Scans",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/run-now": {
+      "post": {
+        "description": "Trigger an immediate scan cycle for a running auto scan.\n\nReturns the freshly anchored ``next_scan_at`` so the caller can\nrebind its countdown synchronously, without waiting for the bus event.",
+        "operationId": "run_now_api_autoscan_run_now_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunNowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunNowResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Now",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/start": {
+      "post": {
+        "description": "Start an auto scan for a project. 409 if already running, 429 if at cap.",
+        "operationId": "start_scan_api_autoscan_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Start Scan Api Autoscan Start Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Scan",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/status": {
+      "get": {
+        "operationId": "scan_status_api_autoscan_status_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_name",
+            "required": true,
+            "schema": {
+              "title": "Project Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutoScanInstanceStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Scan Status",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/autoscan/stop": {
+      "post": {
+        "operationId": "stop_scan_api_autoscan_stop_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StopScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stop Scan Api Autoscan Stop Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Scan",
+        "tags": [
+          "autoscan"
+        ]
+      }
+    },
+    "/api/codex/login": {
+      "post": {
+        "description": "Authenticate the host's Codex CLI with an OpenAI API key.\n\nRuns ``codex login --with-api-key`` as a one-shot subprocess with the key on\nstdin (never argv, never persisted by us). The same configured binary and\n``CODEX_HOME`` the launcher uses are applied, so the credential lands where\nthe create-session auth guard reads it.",
+        "operationId": "codex_login_api_codex_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodexLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexLoginResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Codex Login",
+        "tags": [
+          "codex"
+        ]
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "description": "Return all configured projects (no secrets).",
+        "operationId": "list_projects_endpoint_api_projects_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectReadModel"
+                  },
+                  "title": "Response List Projects Endpoint Api Projects Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Projects Endpoint",
+        "tags": [
+          "projects"
+        ]
+      },
+      "post": {
+        "description": "Create a new project. Returns 409 if the name is already taken.",
+        "operationId": "create_project_endpoint_api_projects_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectWriteModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectReadModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Project Endpoint",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/projects/order": {
+      "patch": {
+        "description": "Atomically replace project ordering. 400 on set mismatch.",
+        "operationId": "reorder_projects_endpoint_api_projects_order_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectReadModel"
+                  },
+                  "title": "Response Reorder Projects Endpoint Api Projects Order Patch",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reorder Projects Endpoint",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/projects/{name}": {
+      "delete": {
+        "description": "Remove a project. 404 if unknown, 409 if a scan is active for it.",
+        "operationId": "delete_project_endpoint_api_projects__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Project Endpoint",
+        "tags": [
+          "projects"
+        ]
+      },
+      "put": {
+        "description": "Update a project. Supports rename via ``body.name``.\n\n* 404 if ``name`` is unknown.\n* 409 if renaming while an auto-scan is active for the old name, or if\n  the new name collides with another existing project.",
+        "operationId": "update_project_endpoint_api_projects__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectUpdateModel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectReadModel"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Project Endpoint",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/projects/{name}/git/items": {
+      "get": {
+        "description": "Return the unified list of local branches and worktrees.",
+        "operationId": "list_git_items_endpoint_api_projects__name__git_items_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitItemsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Git Items Endpoint",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/projects/{name}/git/items:delete": {
+      "post": {
+        "description": "Delete one or more branches/worktrees in a single batch.\n\nReturns 409 with ``{busy_by: [...]}`` if any worktree in the batch is\nheld by a running session or auto-scan work item; the client should\nsurface a busy-conflict dialog and refuse to retry until the user\nstops the holder. Per-item git failures (unmerged branch, locked\nworktree, etc.) are returned in the 200 body so the user can act on\neach row independently.",
+        "operationId": "delete_git_items_endpoint_api_projects__name__git_items_delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitDeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Git Items Endpoint",
+        "tags": [
+          "git"
+        ]
+      }
+    },
+    "/api/projects/{name}/linear/labels": {
+      "get": {
+        "description": "Return labels visible to the project's Linear API key, deduped by name.\n\nUsed by the Android project form to populate the multi-select chip\ngroup for trigger labels and the dropdown for the removal label.\n\n* 404 if the project is unknown.\n* 400 if the project has no Linear API key.\n* 502 if the upstream Linear API call fails.",
+        "operationId": "list_linear_labels_api_projects__name__linear_labels_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LinearLabelModel"
+                  },
+                  "title": "Response List Linear Labels Api Projects  Name  Linear Labels Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Linear Labels",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/projects/{name}/linear/states": {
+      "get": {
+        "description": "Return workflow states visible to the project's Linear API key.\n\nUsed by the Android project form to populate the multi-select chip\ngroup for trigger states and the dropdowns for active / done states.\n\n* 404 if the project is unknown.\n* 400 if the project has no Linear API key.\n* 502 if the upstream Linear API call fails.",
+        "operationId": "list_linear_states_api_projects__name__linear_states_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LinearStateModel"
+                  },
+                  "title": "Response List Linear States Api Projects  Name  Linear States Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Linear States",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
+    "/api/sessions": {
+      "get": {
+        "description": "List all active sessions.",
+        "operationId": "list_sessions_api_sessions_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SessionResponse"
+                  },
+                  "title": "Response List Sessions Api Sessions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Sessions",
+        "tags": [
+          "sessions"
+        ]
+      },
+      "post": {
+        "description": "Create a new PTY session.",
+        "operationId": "create_session_api_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}": {
+      "delete": {
+        "description": "Stop a session by ID.",
+        "operationId": "stop_session_api_sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/scrollback": {
+      "get": {
+        "description": "Return the scrollback buffer for a session (for reconnection).",
+        "operationId": "get_scrollback_api_sessions__session_id__scrollback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lines",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "title": "Lines",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScrollbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Scrollback",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/version": {
+      "get": {
+        "operationId": "version_info_api_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Version Info Api Version Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Version Info",
+        "tags": [
+          "version"
+        ]
+      }
+    },
+    "/internal/hook": {
+      "post": {
+        "description": "Apply a Claude Code hook to the addressed session's attention state.",
+        "operationId": "receive_hook_internal_hook_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "session_id",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "token",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Hook",
+        "tags": [
+          "internal"
+        ]
+      }
+    }
+  }
+}

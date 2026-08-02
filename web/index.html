@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Mobaide</title>
+    <script>
+      // Pre-paint theme boot: stamp data-theme from the persisted preference
+      // before first paint so the page never flashes the wrong theme.
+      // The persisted contract (key name, zustand persist envelope shape,
+      // value set) is owned by src/stores/themeStore.ts — change both
+      // together.
+      (function () {
+        var pref = 'system';
+        try {
+          var raw = localStorage.getItem('mobaide-theme');
+          if (raw) pref = JSON.parse(raw).state.preference;
+        } catch (e) {
+          pref = 'system';
+        }
+        if (pref !== 'light' && pref !== 'dark') {
+          pref = window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light';
+        }
+        document.documentElement.dataset.theme = pref;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

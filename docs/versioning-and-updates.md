@@ -1,6 +1,6 @@
 # Versioning & Auto-Update
 
-This document is the single reference for how Mobaide versions its three
+This document is the single reference for how Mobaide versions its four
 components, ships releases, and keeps deployed installations up to date.
 
 The system has **two orthogonal version concepts** and you should not conflate
@@ -8,7 +8,7 @@ them:
 
 | Concept | Type | Purpose |
 |--------|------|---------|
-| Component semver (`android-vX.Y.Z`, `agent-vX.Y.Z`, `server-vX.Y.Z`) | Independent semver per component | Human-facing release identity. Ships on its own cadence. **Does not** gate compatibility. |
+| Component semver (`android-vX.Y.Z`, `agent-vX.Y.Z`, `server-vX.Y.Z`, `web-vX.Y.Z`) | Independent semver per component | Human-facing release identity. Ships on its own cadence. **Does not** gate compatibility. |
 | `protocol_version` | Single shared integer | The only compatibility signal between Android, `mobaide_agent`, and `central_server`. Bumped when the wire contract changes. |
 
 Wire-contract details and the `protocol_version` history live in
@@ -25,6 +25,7 @@ dedicated workflow under `.github/workflows/`:
 | `android-vX.Y.Z` | Android app | `release-android.yml` | Signed `.aab`, uploaded to Play Console internal track. `inAppUpdatePriority` is derived from the `android/CHANGELOG.md` section release-please just generated for this tag (any breaking change → 5, else any `### Bug Fixes` → 3, else → 1). It is **not** read from the tagged commit subject — the tag sits on release-please's `chore: release main` commit, which is never a `feat`/`fix`. |
 | `agent-vX.Y.Z` | `mobaide_agent` | `release-agent.yml` | `uv build` wheel + source tarball, **Ed25519-signed manifest**, GitHub Release **published into the public sibling repo `$RELEASES_REPO`** (the source repo is private, so anonymous installs cannot reach release URLs there), an anonymous reachability gate (1-byte ranged GET, with retries to absorb CDN-propagation lag) over every URL in the manifest, manifest POSTed to `central_server` (with curl `--retry 5`), then a verify-after step asserts the served manifest matches. |
 | `server-vX.Y.Z` | `central_server` | `release-server.yml` | Docker image pushed to `ghcr.io/<owner>/<repo>-server:vX.Y.Z` (and `:latest`). No GitHub Release object is created on this repo — the GHCR image is the only artifact. A second `deploy` job gates the rollout via `environment: production` (manual approval required); host-side rollout is operator-driven (run `deploy/prod/deploy_central.py` or `docker compose pull && up -d` against the prod compose file). |
+| `web-vX.Y.Z` | Web client (`web/`) | _(none yet)_ | Nothing yet — the tag versions the `web/` workspace (release-please bumps `web/package.json` and prepends `web/CHANGELOG.md`; `release-type: node`), but no workflow fires on tag push. The SPA ships with the central-server deploy (same-origin Caddy serving, tracked in WEB-02). |
 | `proto-vN` | Wire contract | _(none)_ | Hand-pushed by a developer alongside the lockstep `PROTOCOL.md` + `envelope.py` bump. Serves as a changelog/anchor tag — no workflow fires on tag push and no Release object is created. Lockstep enforcement that **both** `mobaide_agent/.../envelope.py` AND `central_server/.../envelope.py` move together lives in `protocol-integrity.yml`, which runs on every PR and every push to `main`. |
 
 ### Cutting a release
@@ -36,6 +37,7 @@ The rule is one line: **the PR title is the release trigger.**
 | `mobaide_agent` | `feat(agent): …` (minor) or `fix(agent): …` (patch) |
 | `central_server` | `feat(server): …` or `fix(server): …` |
 | Android app | `feat(android): …` or `fix(android): …` |
+| Web client | `feat(web): …` or `fix(web): …` |
 | Anything else (CI, docs, refactor) | `chore: …`, `docs: …`, `refactor: …` — no release fires |
 
 The repo enforces **squash-only merging** (merge commits and rebase merges
@@ -67,22 +69,25 @@ What happens after merge:
 2. It opens (or updates) a release-PR for that component — bumps the
    per-component version in lockstep across:
    - `.release-please-manifest.json` (the manifest of record),
-   - `pyproject.toml` for `mobaide_agent` / `central_server`, or
+   - `pyproject.toml` for `mobaide_agent` / `central_server`,
      `android/app/build.gradle.kts` for android (the line annotated
      with `// x-release-please-version`; `versionCode` is derived from
-     `versionName` at gradle build time so it never drifts),
+     `versionName` at gradle build time so it never drifts), or
+     `web/package.json` for web,
    - the component's `CHANGELOG.md` (prepends a new `## [vX.Y.Z]`
      section).
 3. Merging that release-PR pushes the corresponding `agent-vX.Y.Z` /
-   `server-vX.Y.Z` / `android-vX.Y.Z` tag, which fires the matching
-   `release-*.yml` workflow. release-please-action v4 also creates an
-   empty GitHub Release object on this repo as a side-effect of the
-   tag push (its `manifest.createReleases()` couples tag and Release
+   `server-vX.Y.Z` / `android-vX.Y.Z` / `web-vX.Y.Z` tag, which fires
+   the matching `release-*.yml` workflow (no such workflow exists for
+   `web-v*` yet — see the tag table above). release-please-action v4
+   also creates an empty GitHub Release object on this repo as a
+   side-effect of the tag push (its `manifest.createReleases()`
+   couples tag and Release
    into one API call, and `skip-github-release: true` would silently
    skip both — see release-please-action issue #1034). A follow-up
    step in `release-please.yml` immediately deletes that Release
    while preserving the tag, so the Releases tab here stays empty for
-   `agent-v*` / `server-v*` / `android-v*`. The meaningful artifacts
+   `agent-v*` / `server-v*` / `android-v*` / `web-v*`. The meaningful artifacts
    live elsewhere: agent in the public `mobaide-agent-releases`
    sibling repo; server in GHCR; android in Play Console. You may
    briefly see the Release appear and then vanish while
