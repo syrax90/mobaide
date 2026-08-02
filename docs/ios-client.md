@@ -268,6 +268,7 @@ ios/
 │   ├── Data/                     # Auth (SessionManager, token/identity stores, SignInService,
 │   │                             # Google/Apple sign-in clients), Events (AgentEventBus,
 │   │                             # UserEventBus), Local, Security, Repository
+│   ├── PrivacyInfo.xcprivacy     # App Store privacy manifest (see below)
 │   ├── Models/                   # one Swift file per Android dto/*.kt file (wire DTOs)
 │   ├── Notifications/            # ForegroundSessionTracker, NotificationService,
 │   │                             # AttentionCoordinator/Content/Suppression (iOS-09),
@@ -289,6 +290,82 @@ Both `Mobaide/` and `MobaideTests/` are Xcode 16 synchronized folder groups:
 files added on disk join the right target automatically — no pbxproj edits.
 The test bundle pulls `tests/protocol_fixtures/` in wholesale through a folder
 reference, so new fixture files need no project changes either.
+
+## Device support
+
+`TARGETED_DEVICE_FAMILY = "1"` — iPhone only, on both the app and the test
+bundle (a family mismatch against `TEST_HOST` can fail simulator installs).
+Declaring iPad would oblige 13" iPad screenshots in App Store Connect *and* an
+app that genuinely works on iPad, or the submission takes a Guideline 2.1
+rejection. There is no iPad layout here — no `NavigationSplitView`, no size-class
+or `UIUserInterfaceIdiom` branches anywhere — so iPhone-only is the accurate
+declaration, not a shortcut. The default `"1,2"` was never a decision.
+
+This narrows the obligation, not the reach: iPad users can still install the app
+and run it in iPhone-compatibility mode. `TerminalKeyboardPan` and
+`TerminalKeyboardObserver` keep their undocked-keyboard and Split View / Stage
+Manager geometry handling for exactly that reason — both are idiom-agnostic
+math, not iPad support.
+
+`SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD` and `SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD`
+are `NO` (they default to **YES**), so the binary is never auto-published to the
+Mac App Store or Vision Pro — platforms nothing in this repo builds or tests
+against. `SUPPORTS_MACCATALYST = NO` restates a default for the same reason.
+
+Widening any of these back is the *last* step of building real iPad or Mac
+support and shooting its screenshots, never a standalone edit — and never an
+edit to `MobaideTests/DeviceFamilyTests.swift`, which asserts `UIDeviceFamily`
+and the absence of the iPad orientation key against the built bundle. One
+cosmetic leak survives: `actool` still expands the universal 1024×1024 icon into
+an `~ipad` slot, so the bundle carries a stray `CFBundleIcons~ipad`. It is inert
+— App Store Connect reads `UIDeviceFamily` for device support.
+
+## Privacy manifest
+
+`Mobaide/PrivacyInfo.xcprivacy` is copied to the bundle root by the synchronized
+folder group and is **required for upload**: App Store Connect rejects binaries
+(ITMS-91053) that touch a Required Reason API without declaring it. The app
+declares one — `NSPrivacyAccessedAPICategoryUserDefaults`, reason `CA92.1`
+(defaults readable only by this app), used by `PreferencesStore` and
+`TrustKeyPinning`. `CA92.1` is correct only because both use plain custom
+suites; adding an App Group entitlement would make `1C8F.1` the right reason.
+
+When adding an API from any Required Reason category (file timestamps, disk
+space, system boot time, active keyboard), add its declaration here too. The
+bundled SDKs ship their own manifests (GoogleSignIn and its transitive
+dependencies); SwiftTerm uses no Required Reason API and needs none.
+
+`NSPrivacyCollectedDataTypes` lists email address, user ID, and device ID — all
+app-functionality, linked to the user, non-tracking. It must stay consistent
+with the App Privacy answers in App Store Connect. Terminal I/O is relayed in
+real time and not retained server-side, so it is not "collected" under Apple's
+definition. `MobaideTests/PrivacyManifestTests.swift` asserts all of the above
+against the built bundle, so a dropped or edited manifest fails at test time
+rather than at upload time.
+
+## Export compliance
+
+`Info.plist` declares `ITSAppUsesNonExemptEncryption = false`. Without the key,
+App Store Connect parks every upload behind the manual export-compliance
+questionnaire before it can reach TestFlight — fine once, fatal for unattended
+release automation.
+
+`false` is the accurate answer, not a shortcut: the app's only cryptography is
+exempt. `SignInContract` hashes the sign-in nonce with CryptoKit `SHA256` (a
+hash, not encryption); transport security is OS-provided TLS through
+`URLSession`/`NWConnection`; secrets sit in the Keychain. The bundled SDKs add
+nothing non-exempt — GoogleSignIn/AppAuth use the same OS TLS plus a SHA-256
+PKCE challenge, and SwiftTerm has no crypto at all. Apple's exemption for
+encryption limited to OS-provided facilities and standard hashing covers all of
+it, so no annual self-classification report is owed.
+
+This holds only while that stays true. Encrypting terminal traffic beyond TLS,
+adding client-side data encryption, or vendoring a crypto library makes the
+declaration false and requires a real classification (and likely a CCATS or
+self-classification report) before the next upload.
+`MobaideTests/ExportComplianceTests.swift` asserts the key against the built
+bundle, so dropping it fails at test time rather than silently stalling a
+release.
 
 ## Build / test
 
