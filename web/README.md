@@ -7,7 +7,9 @@ architecture write-up.
 
 ## Prerequisites
 
-- Node ≥ 22.22 (react-router v8 baseline; Vite 8 needs ≥ 22.12)
+- Node `^22.22.2 || ^24.15.0 || >=26.0.0` (the intersection the committed
+  lockfile actually supports — jsdom is the tightest constraint; Node 23/25
+  are unsupported by the test stack)
 - For schema work only: Python 3.12 with both server packages installed
   editable from the repo root:
 
@@ -52,9 +54,12 @@ npm run schema:dump && npm run schema:generate
 
 and commit the result. Use Python 3.12 if the dump differs from CI.
 
-Auth: `src/api/auth.ts` exposes `setAuthTokenProvider()` — the middleware
-attaches `Authorization: Bearer <token>` to every request once a provider is
-registered (wired by the auth milestone, WEB-03).
+Auth — the two axes authenticate differently (same split as Android's
+`CentralAuthInterceptor` vs `AuthInterceptor`): `src/api/auth.ts` exposes
+`setUserTokenProvider()` (dashboard/user JWT, attached by `relayClient`) and
+`setAgentTokenProvider()` (per-agent `mobile_access` JWT, attached by each
+`createAgentClient(agentId)` for its own agent). Both are wired by the auth
+milestone, WEB-03.
 
 ## Deliberately deferred
 

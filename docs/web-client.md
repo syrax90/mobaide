@@ -27,7 +27,7 @@ Vite dev server mirrors this with a proxy to `http://localhost:9000`.
 
 | Concern | Choice |
 |---|---|
-| Build | Vite 8 (Rolldown), npm, Node ≥ 22.22 |
+| Build | Vite 8 (Rolldown), npm, Node `^22.22.2 \|\| ^24.15.0 \|\| >=26.0.0` (lockfile-supported intersection; jsdom is the tightest constraint) |
 | UI | React 19, TypeScript strict (6.x — deliberately not 7, typescript-eslint has no stable TS 7 API yet) |
 | Routing | React Router v8, **Data mode** (`createBrowserRouter`) |
 | Client state | Zustand 5 (persisted theme store, toast store) |
@@ -78,11 +78,22 @@ carries two generated type sets and two clients:
   `createAgentClient(agentId)` (base URL `/proxy/<agentId>`; the relay
   strips the prefix, so agent-schema paths resolve beneath it).
 
-Both clients share an openapi-fetch middleware that attaches
-`Authorization: Bearer <token>` from the provider registered via
-`src/api/auth.ts` (`setAuthTokenProvider`). WebSocket frame/event types are
-deliberately absent from both schemas; they are hand-written and owned by
-WEB-04.
+The two axes authenticate differently, mirroring the Android split
+(`CentralAuthInterceptor` vs `AuthInterceptor`): the relay's `get_mobile_user`
+guard on `/proxy/...` accepts only the per-agent `mobile_access` JWT, while
+central `/api/*` routes take the dashboard/user JWT. `src/api/auth.ts`
+therefore exposes two seams — `setUserTokenProvider()` (consumed by
+`relayClient`) and `setAgentTokenProvider(agentId => token)` (consumed by
+each `createAgentClient(agentId)`) — both wired by WEB-03.
+
+Caveat: the agent schema types the agent's **entire** REST surface, but the
+relay tunnel's agent-side dispatcher forwards only an allowlisted subset —
+a call can type-check yet 404 through `/proxy` (e.g. `/api/health`,
+`/api/auth/token`, `/internal/hook` are direct-only). Scoping the typed
+surface to the tunnel is tracked in CLA-201.
+
+WebSocket frame/event types are deliberately absent from both schemas; they
+are hand-written and owned by WEB-04.
 
 ### Schema pipeline
 
