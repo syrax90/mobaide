@@ -49,6 +49,9 @@ public final class TerminalSession extends TerminalOutput {
     /** Whether a deferred sync-mode flush is scheduled; main-thread only. */
     private boolean mSyncFlushPending;
 
+    /** Whether {@link TerminalEmulator#append} is currently parsing PTY output; main-thread only. */
+    private boolean mApplyingEmulatorOutput;
+
     private final Runnable mSyncFlushRunnable = new Runnable() {
         @Override
         public void run() {
@@ -113,7 +116,12 @@ public final class TerminalSession extends TerminalOutput {
             public void run() {
                 if (mEmulator == null) return;
                 final int resetsBefore = mEmulator.getSynchronizedOutputResets();
-                mEmulator.append(data, length);
+                mApplyingEmulatorOutput = true;
+                try {
+                    mEmulator.append(data, length);
+                } finally {
+                    mApplyingEmulatorOutput = false;
+                }
                 // An ESU inside this chunk means a frame completed even when a following
                 // BSU re-activated the mode (coalesced ESU..BSU writes) — paint it now
                 // rather than hiding the finished frame behind the safety timer; the next
@@ -194,6 +202,23 @@ public final class TerminalSession extends TerminalOutput {
      */
     public boolean isScreenUpdateDeferred() {
         return mSyncFlushPending;
+    }
+
+    /**
+     * Whether {@link TerminalEmulator#append} is currently parsing inbound PTY output.
+     * <p>
+     * {@link #write} is a single funnel with two semantically different sources: the user
+     * (typed keys, paste, mouse events — all reached from outside {@code append}) and the
+     * emulator answering a query the program sent it (DA, DSR/CPR, DECRQM, DECRQSS,
+     * XTGETTCAP, window ops, OSC colour reports — all emitted synchronously <em>inside</em>
+     * {@code append}). This tells the two apart, so a host can honour a reply on the wire
+     * without treating it as user activity. {@code append} has exactly one caller —
+     * {@link #emitOutput} — so this covers every parsed byte.
+     * <p>
+     * Main thread only.
+     */
+    public boolean isApplyingEmulatorOutput() {
+        return mApplyingEmulatorOutput;
     }
 
     protected void notifyScreenUpdate() {

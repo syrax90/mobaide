@@ -204,7 +204,8 @@ flag keeps SwiftTerm's automatic replies (DA/DECRQM, and the cursor-position
 report answering `ESC[6n`, which prompt frameworks emit routinely) off the
 resume path: they still reach the PTY, but sending them no longer counts as
 the user typing, which would otherwise let a program's own query un-pause the
-viewport. Android resumes on those replies today (CLA-184). One
+viewport. Android now does the same (CLA-184), raising the equivalent flag
+around `TerminalEmulator.append` inside `TerminalSession`. One
 limitation is accepted: once the scrollback ring is full SwiftTerm trims from
 the top without growing `contentSize`, so a held viewport drifts up a row per
 trimmed line — Android compensates via `mTopRow`, which needs an index iOS
