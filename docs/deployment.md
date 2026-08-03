@@ -73,8 +73,9 @@ Each deploy tars `web/dist`, extracts it to `/opt/mobaide/www/releases/<UTC-time
 First-time prerequisites, in order:
 
 1. Create the `app.mobaide.com` DNS record — **gray cloud in both TLS modes** (see [One-time setup](#one-time-setup)).
-2. Run `deploy_central.py` **without `--skip-build`** so the extract step creates `www/releases` before compose mounts `./www` (a compose-created mount would be root-owned) and Caddy picks up the new site block. This run recreates both containers — the one-time quiet window; every live WebSocket drops once and clients auto-reconnect (session replay covers the gap). Afterwards, Caddyfile-only changes ship via the deploy command's `caddy reload` step, which `stream_close_delay` makes non-disruptive.
-3. Wait ~30 s (the server's ufw limits SSH to 6 connections per 30 s), then run `deploy_web.py`.
+2. On a host bootstrapped **before** this feature landed, add `PAIRING_QR_TOKEN_TTL_SECONDS=600` to `/opt/mobaide/.env` by hand — bootstrap writes that line only into a freshly generated `.env`, and deploys never touch the file (operator-owned, never synced). It takes effect on the next `deploy_central.py` run (the container is recreated). Web pairing links assume the 600 s window; the 120 s code default is tuned for the scan-with-phone flow.
+3. Run `deploy_central.py` **without `--skip-build`** so the extract step creates `www/releases` before compose mounts `./www` (a compose-created mount would be root-owned) and Caddy picks up the new site block. This run recreates both containers — the one-time quiet window; every live WebSocket drops once and clients auto-reconnect (session replay covers the gap). Afterwards, Caddyfile-only changes ship via the deploy command's `caddy reload` step, which `stream_close_delay` makes non-disruptive.
+4. Wait ~30 s (the server's ufw limits SSH to 6 connections per 30 s), then run `deploy_web.py`.
 
 Hosts bootstrapped by the current `bootstrap-mobaide.sh` serve a placeholder page until the first web deploy; older hosts serve 404 on `/` of the app host between steps 2 and 3.
 
