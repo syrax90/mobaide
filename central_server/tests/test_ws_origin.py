@@ -8,6 +8,7 @@ the gate runs before authentication at every accept site.
 from __future__ import annotations
 
 import dataclasses
+import logging
 
 import pytest
 from starlette.testclient import TestClient
@@ -175,3 +176,24 @@ def test_custom_allow_list_replaces_the_default(app):
         _reject_code(app, "/ws/user-events", "https://app.mobaide.com")
         == WS_CLOSE_ORIGIN_FORBIDDEN
     )
+
+
+def test_rejected_pairing_path_redacts_nonce_to_8_char_prefix(app, caplog):
+    # The pairing nonce is a single-use bearer credential embedded in the
+    # path; the rejection WARN must log only its 8-char prefix (the pairing
+    # router's own nonce[:8] convention), never the claimable value.
+    nonce = "a1b2c3d4" + "f" * 56
+    with caplog.at_level(logging.WARNING, logger="central_server.ws_origin"):
+        code = _reject_code(app, f"/ws/pairing/{nonce}", EVIL_ORIGIN)
+    assert code == WS_CLOSE_ORIGIN_FORBIDDEN
+    assert nonce not in caplog.text
+    [record] = [r for r in caplog.records if r.name == "central_server.ws_origin"]
+    assert "path=/ws/pairing/a1b2c3d4…" in record.getMessage()
+
+
+def test_rejected_non_pairing_path_logs_verbatim(app, caplog):
+    with caplog.at_level(logging.WARNING, logger="central_server.ws_origin"):
+        code = _reject_code(app, "/ws/user-events", EVIL_ORIGIN)
+    assert code == WS_CLOSE_ORIGIN_FORBIDDEN
+    [record] = [r for r in caplog.records if r.name == "central_server.ws_origin"]
+    assert "path=/ws/user-events" in record.getMessage()

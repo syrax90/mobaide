@@ -60,9 +60,14 @@ async def enforce_ws_origin(websocket: WebSocket) -> bool:
         or _is_loopback(normalized)
     ):
         return True
-    logger.warning(
-        "ws_origin.rejected origin=%s path=%s", origin, websocket.url.path,
-    )
+    path = websocket.url.path
+    # The pairing route embeds the single-use claimable nonce in the path;
+    # log only its 8-char prefix, matching the pairing router's own
+    # nonce[:8] logging convention, so the credential never lands in
+    # operational logs while still claimable.
+    if path.startswith("/ws/pairing/"):
+        path = "/ws/pairing/" + path[len("/ws/pairing/"):][:8] + "…"
+    logger.warning("ws_origin.rejected origin=%s path=%s", origin, path)
     await websocket.close(
         code=WS_CLOSE_ORIGIN_FORBIDDEN, reason="origin_not_allowed",
     )

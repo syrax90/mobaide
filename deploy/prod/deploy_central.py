@@ -153,17 +153,42 @@ def info(msg: str) -> None:
     _emit(msg, CYAN)
 
 
-def wait_http(url: str, timeout_sec: int = 90, any_status: bool = False) -> None:
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Turns 3xx into HTTPError instead of following the Location header."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def wait_http(
+    url: str,
+    timeout_sec: int = 90,
+    any_status: bool = False,
+    follow_redirects: bool = True,
+) -> None:
     # TLS verification stays on (default context, OS trust store). No PS-5.1
     # protocol shim needed: Python's ssl negotiates TLS 1.2+ natively.
     # any_status=True succeeds on ANY HTTP response (404 included) — used by
     # deploy_web.py's preflight, where "the site block answered at all" is
     # the question and only a transport/TLS failure means not-deployed.
+    # follow_redirects=False makes 3xx a non-success (an HTTPError, so it
+    # keeps polling unless any_status) — used by deploy_web.py's post-swap
+    # probes, where a redirect to another (healthy) host must not count as
+    # proof the app host served the release.
+    opener = (
+        None
+        if follow_redirects
+        else urllib.request.build_opener(_NoRedirectHandler())
+    )
     deadline = time.monotonic() + timeout_sec
     cert_error: ssl.SSLCertVerificationError | None = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            with (
+                urllib.request.urlopen(url, timeout=5)
+                if opener is None
+                else opener.open(url, timeout=5)
+            ) as resp:
                 if any_status or resp.status == 200:
                     return
         except urllib.error.HTTPError:
@@ -319,11 +344,17 @@ def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     # command loudly) and, with stream_close_delay in the app site block,
     # non-disruptive to established WebSockets. When compose just recreated
     # the container the reload is a harmless re-read.
+    # The tls/ mount mirrors the compose caddy service: CloudflareOrigin's
+    # `tls <cert> <key>` directives load the PEMs at provision time, so
+    # validate fails without them. tls/ always exists (bootstrap and the
+    # extract script both create it), but keep the test -d guard so a
+    # missing dir fails loudly instead of docker creating it root-owned.
     return (
         f"cd {REMOTE_BASE}"
-        f" && test -f Caddyfile.{tls_mode}"
+        f" && test -f Caddyfile.{tls_mode} && test -d tls"
         f" && docker run --rm"
         f" -v {REMOTE_BASE}/Caddyfile.{tls_mode}:/etc/caddy/Caddyfile:ro"
+        f" -v {REMOTE_BASE}/tls:/etc/caddy/tls:ro"
         f" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile"
         f" && cp -f Caddyfile.{tls_mode} Caddyfile"
         f" && docker compose -f docker-compose.prod.yml {up_args}"

@@ -292,7 +292,9 @@ echo "current -> $prev"
     )
     for line in out.splitlines():
         info(line)
-    wait_http(APP_URL, 60)
+    # follow_redirects=False: a misconfigured DNS record redirecting to the
+    # (healthy) apex must not count as the app host serving the release.
+    wait_http(APP_URL, 60, follow_redirects=False)
     ok(f"Rollback live at {APP_URL}")
     return 0
 
@@ -317,7 +319,9 @@ def run(args: argparse.Namespace) -> int:
 
     step(f"Waiting for {APP_URL} to serve the release")
     try:
-        wait_http(APP_URL, 60)
+        # follow_redirects=False for the same reason as the rollback probe:
+        # only a 200 from the app host itself proves the release is live.
+        wait_http(APP_URL, 60, follow_redirects=False)
     except DeployError as e:
         # The swap already happened (atomically), so the operator needs the
         # rollback hint HERE, not only on the success path.
