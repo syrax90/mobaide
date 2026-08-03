@@ -97,14 +97,21 @@ export function getDeviceName(): string {
           : /Safari\//.test(ua)
             ? 'Safari'
             : null);
-  const os = /Windows/.test(ua)
-    ? 'Windows'
-    : /Mac OS X/.test(ua)
-      ? 'macOS'
-      : /Android/.test(ua)
-        ? 'Android'
-        : /(iPhone|iPad)/.test(ua)
-          ? 'iOS'
+  // Order matters: every iPhone/iPad user agent contains the string
+  // "like Mac OS X", so a generic /Mac OS X/ test placed first would claim
+  // every iPhone is a Mac. Android likewise contains "Linux". Test the most
+  // specific markers first.
+  //
+  // Not fixable here: iPadOS in desktop mode reports "Macintosh; Intel Mac OS
+  // X" with no iPad token at all, so it registers as macOS.
+  const os = /(iPhone|iPad|iPod)/.test(ua)
+    ? 'iOS'
+    : /Android/.test(ua)
+      ? 'Android'
+      : /Windows/.test(ua)
+        ? 'Windows'
+        : /Mac OS X/.test(ua)
+          ? 'macOS'
           : /Linux/.test(ua)
             ? 'Linux'
             : null;

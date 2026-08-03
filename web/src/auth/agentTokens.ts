@@ -70,9 +70,13 @@ function readStored(): AgentTokenMap {
 }
 
 function readAll(): AgentTokenMap {
-  // Memory wins: it holds this tab's most recent writes, which is what matters
-  // when a rotation could not be persisted.
-  return { ...readStored(), ...memoryTokens };
+  // Storage wins where it has a value: it is the shared surface, so a peer
+  // tab's newer rotation must not be shadowed by this tab's older copy —
+  // that sharing is the whole reason the cross-tab lock has something to
+  // protect. Memory only fills the gaps, which is exactly the storage-denied
+  // case it exists for (there `readStored()` is empty and memory supplies
+  // everything).
+  return { ...memoryTokens, ...readStored() };
 }
 
 function writeAll(map: AgentTokenMap): void {

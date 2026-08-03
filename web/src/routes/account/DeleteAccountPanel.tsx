@@ -105,9 +105,13 @@ export function DeleteAccountPanel({ email, onClose }: DeleteAccountPanelProps) 
               />
               <span>
                 <strong>Schedule for 14 days (recommended)</strong>
+                {/* Signing in does not itself cancel — it only surfaces the
+                    banner carrying the cancel button. Android and iOS both
+                    still offer "sign back in" as a cancellation method, which
+                    is false on the same evidence as the grace banner. */}
                 <small>
                   You can cancel any time during the grace window — sign back in
-                  or use the email link.
+                  and use the banner, or follow the emailed link.
                 </small>
               </span>
             </label>
