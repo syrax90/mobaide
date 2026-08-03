@@ -107,6 +107,11 @@ class SessionConfig:
     # ``TerminalSession.start`` pick the platform default (enabled on macOS,
     # disabled elsewhere); ``0`` disables it; tests set an explicit value.
     startup_stall_seconds: float | None = None
+    # Trailing-edge debounce applied to Claude Code's ``Stop`` hook before it
+    # becomes a "your move" attention (see ``core.attention_gate``). ``None``
+    # takes ``ATTENTION_QUIET_SECONDS``; ``0`` alerts without waiting; tests set
+    # an explicit value to avoid sleeping.
+    attention_quiet_seconds: float | None = None
 
 
 @dataclass

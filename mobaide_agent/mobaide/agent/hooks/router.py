@@ -2,9 +2,13 @@
 
 The agent spawns each interactive ``claude`` with a per-session ``--settings``
 file (see :mod:`mobaide.core.hook_settings`) whose ``http`` hooks POST here. The
-``session_id`` and a per-agent ``token`` are query params baked into the hook URL
-at spawn, so every hook routes to exactly the right :class:`TerminalSession`
-even under concurrent sessions sharing a cwd.
+``session_id``, a per-agent ``token`` and the gate-facing ``hook`` kind are query
+params baked into the hook URL at spawn, so every hook routes to exactly the
+right :class:`TerminalSession` even under concurrent sessions sharing a cwd, and
+classifies without the handler having to parse the body.
+
+Routing is all this layer does — whether a hook becomes a user-visible alert is
+:mod:`mobaide.core.attention_gate`'s decision.
 
 Security: the agent binds ``0.0.0.0``, so this endpoint is guarded by a loopback
 source check **and** the per-agent token. It carries no auth dependency on
@@ -20,6 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, status
 
+from mobaide.core.attention_gate import HookKind, resolve_hook_kind
 from mobaide.core.hook_settings import remove_session_hooks
 
 from ..logging import get_logger
@@ -33,20 +38,12 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 # defensive for hosts that resolve loopback differently.
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
 
-# Claude Code ``hook_event_name`` -> attention reason. ``Notification`` is
-# already scoped to permission prompts by the hook matcher.
-_EVENT_TO_ATTENTION = {
-    "Notification": "awaiting_permission",
-    "Stop": "turn_finished",
-    "SessionEnd": "ended",
-}
-
 
 @router.post("/hook")
 async def receive_hook(
-    request: Request, session_id: str = "", token: str = "",
+    request: Request, session_id: str = "", token: str = "", hook: str = "",
 ) -> Response:
-    """Apply a Claude Code hook to the addressed session's attention state."""
+    """Route a Claude Code hook to the addressed session's attention gate."""
     client = request.client
     if client is None or client.host not in _LOOPBACK_HOSTS:
         return Response(status_code=status.HTTP_403_FORBIDDEN)
@@ -60,11 +57,15 @@ async def receive_hook(
         return Response(status_code=status.HTTP_403_FORBIDDEN)
 
     try:
-        body: dict[str, Any] = await request.json()
+        parsed = await request.json()
     except Exception:
-        body = {}
-    attention = _EVENT_TO_ATTENTION.get(body.get("hook_event_name", ""))
-    if attention is None or not session_id:
+        parsed = None
+    # A hook body is always a JSON object, but the gate reads it field by field,
+    # so anything else is normalized away rather than allowed to raise here.
+    body: dict[str, Any] = parsed if isinstance(parsed, dict) else {}
+    event_name = body.get("hook_event_name", "")
+    kind = resolve_hook_kind(hook, event_name if isinstance(event_name, str) else "")
+    if kind is None or not session_id:
         return Response(status_code=status.HTTP_200_OK)
 
     session = await request.app.state.session_manager.get_session(session_id)
@@ -72,12 +73,14 @@ async def receive_hook(
         # Late hook fired after liveness cleanup removed the session — normal.
         return Response(status_code=status.HTTP_200_OK)
 
-    if attention == "ended":
-        reason = str(body.get("reason") or "other")
-        session.set_attention("ended", exit_reason=reason)
+    session.on_claude_hook(kind, body)
+    if kind is HookKind.END:
         remove_session_hooks(session_id, request.app.state.config.port)
-        logger.info("hook.session_ended", session_id=session_id, reason=reason)
+        logger.info(
+            "hook.session_ended",
+            session_id=session_id,
+            reason=str(body.get("reason") or "other"),
+        )
     else:
-        session.set_attention(attention)
-        logger.info("hook.attention", session_id=session_id, attention=attention)
+        logger.info("hook.received", session_id=session_id, hook=kind.value)
     return Response(status_code=status.HTTP_200_OK)

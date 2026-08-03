@@ -1,34 +1,41 @@
 """Tests for the local-only ``/internal/hook`` endpoint.
 
-The endpoint turns Claude Code ``http`` hooks into per-session attention
-state. It is reachable only from loopback and only with the per-agent
-``app.state.hook_token``; it routes by the ``session_id`` query param baked
-into each session's hook URL.
+The endpoint hands Claude Code ``http`` hooks to the addressed session's
+attention gate. It is reachable only from loopback and only with the per-agent
+``app.state.hook_token``; it routes by the ``session_id`` query param and
+classifies by the ``hook`` query param, both baked into each session's hook URL
+at spawn.
 
+Routing and classification are all this layer does — whether a hook becomes a
+user-visible alert is the gate's decision, covered in ``test_attention_gate.py``.
 These tests inject lightweight :class:`_FakeSession` stand-ins straight into
-``app.state.session_manager._sessions`` (the same dict ``get_session`` reads)
-so nothing spawns a real PTY — the contract under test is routing, guards,
-and ``hook_event_name`` mapping, not the PTY lifecycle.
+``app.state.session_manager._sessions`` (the same dict ``get_session`` reads) so
+nothing spawns a real PTY.
 """
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
 from httpx import ASGITransport, AsyncClient
+
+from mobaide.core.attention_gate import HookKind
 
 
 class _FakeSession:
-    """Records ``set_attention`` calls without owning a real PTY.
+    """Records ``on_claude_hook`` calls without owning a real PTY.
 
     ``app.state.session_manager.get_session`` only does a dict lookup, and the
-    hook handler only calls ``set_attention`` on the result, so this is a
+    hook handler only calls ``on_claude_hook`` on the result, so this is a
     faithful stand-in for the routing/guard behaviour under test.
     """
 
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
-        self.calls: list[tuple[str, str | None]] = []
+        self.hooks: list[tuple[HookKind, dict[str, Any]]] = []
 
-    def set_attention(self, attention: str, exit_reason: str | None = None) -> None:
-        self.calls.append((attention, exit_reason))
+    def on_claude_hook(self, kind: HookKind, payload: dict[str, Any]) -> None:
+        self.hooks.append((kind, payload))
 
     async def stop(self, force: bool = False) -> None:
         # The ``app`` fixture's teardown runs ``session_manager.shutdown()``,
@@ -45,6 +52,10 @@ def _register(app, *session_ids: str) -> dict[str, _FakeSession]:
 
 def _hook_token(app) -> str:
     return app.state.hook_token
+
+
+def _kinds(session: _FakeSession) -> list[HookKind]:
+    return [kind for kind, _ in session.hooks]
 
 
 async def _loopback_client(app, host: str = "127.0.0.1") -> AsyncClient:
@@ -64,7 +75,7 @@ class TestHookGuards:
         async with await _loopback_client(app, host="10.0.0.5") as c:
             resp = await c.post(
                 "/internal/hook",
-                params={"session_id": "s1", "token": _hook_token(app)},
+                params={"session_id": "s1", "token": _hook_token(app), "hook": "stop"},
                 json={"hook_event_name": "Stop"},
             )
         assert resp.status_code == 403
@@ -73,18 +84,20 @@ class TestHookGuards:
         sessions = _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "s1", "token": "not-the-real-token"},
+            params={
+                "session_id": "s1", "token": "not-the-real-token", "hook": "stop",
+            },
             json={"hook_event_name": "Stop"},
         )
         assert resp.status_code == 403
         # The guard must reject before mutating any session state.
-        assert sessions["s1"].calls == []
+        assert sessions["s1"].hooks == []
 
     async def test_empty_token_is_forbidden(self, app, client):
         _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "s1", "token": ""},
+            params={"session_id": "s1", "token": "", "hook": "stop"},
             json={"hook_event_name": "Stop"},
         )
         assert resp.status_code == 403
@@ -93,63 +106,92 @@ class TestHookGuards:
         sessions = _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app)},
+            params={"session_id": "s1", "token": _hook_token(app), "hook": "stop"},
             json={"hook_event_name": "Stop"},
         )
         assert resp.status_code == 200
-        assert sessions["s1"].calls == [("turn_finished", None)]
+        assert _kinds(sessions["s1"]) == [HookKind.STOP]
 
 
-class TestHookEventMapping:
-    async def test_notification_sets_awaiting_permission(self, app, client):
+class TestHookKindRouting:
+    @pytest.mark.parametrize("kind", list(HookKind))
+    async def test_every_baked_kind_routes(self, app, client, kind):
         sessions = _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app)},
+            params={
+                "session_id": "s1", "token": _hook_token(app), "hook": kind.value,
+            },
             json={"hook_event_name": "Notification"},
         )
         assert resp.status_code == 200
-        assert sessions["s1"].calls == [("awaiting_permission", None)]
+        assert _kinds(sessions["s1"]) == [kind]
 
-    async def test_stop_sets_turn_finished(self, app, client):
+    async def test_baked_kind_wins_over_the_event_name(self, app, client):
+        # Both ``Notification`` matchers post the same event name, so the URL
+        # param is the only thing that can tell a permission prompt from an
+        # idle one.
         sessions = _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app)},
-            json={"hook_event_name": "Stop"},
+            params={"session_id": "s1", "token": _hook_token(app), "hook": "idle"},
+            json={"hook_event_name": "Notification"},
         )
         assert resp.status_code == 200
-        assert sessions["s1"].calls == [("turn_finished", None)]
+        assert _kinds(sessions["s1"]) == [HookKind.IDLE]
 
-    async def test_session_end_sets_ended_with_reason(self, app, client):
+    async def test_payload_reaches_the_session_verbatim(self, app, client):
+        # The gate's whole decision is payload fields, so the handler must not
+        # filter or reshape them.
+        sessions = _register(app, "s1")
+        body = {
+            "hook_event_name": "Stop",
+            "prompt_id": "p-1",
+            "stop_hook_active": False,
+            "background_tasks": [{"status": "running"}],
+        }
+        resp = await client.post(
+            "/internal/hook",
+            params={"session_id": "s1", "token": _hook_token(app), "hook": "stop"},
+            json=body,
+        )
+        assert resp.status_code == 200
+        assert sessions["s1"].hooks == [(HookKind.STOP, body)]
+
+    @pytest.mark.parametrize(
+        ("event_name", "kind"),
+        [
+            ("Notification", HookKind.PERMISSION),
+            ("Stop", HookKind.STOP),
+            ("UserPromptSubmit", HookKind.PROMPT_SUBMIT),
+            ("SessionEnd", HookKind.END),
+        ],
+    )
+    async def test_settings_without_the_param_fall_back_to_the_event_name(
+        self, app, client, event_name, kind,
+    ):
+        # A session spawned before the agent upgraded has no ``hook`` param in
+        # its URLs and must keep working for the rest of its life.
         sessions = _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
             params={"session_id": "s1", "token": _hook_token(app)},
+            json={"hook_event_name": event_name},
+        )
+        assert resp.status_code == 200
+        assert _kinds(sessions["s1"]) == [kind]
+
+    async def test_session_end_reaches_the_session_with_its_reason(self, app, client):
+        sessions = _register(app, "s1")
+        resp = await client.post(
+            "/internal/hook",
+            params={"session_id": "s1", "token": _hook_token(app), "hook": "end"},
             json={"hook_event_name": "SessionEnd", "reason": "clear"},
         )
         assert resp.status_code == 200
-        assert sessions["s1"].calls == [("ended", "clear")]
-
-    async def test_session_end_missing_reason_falls_back_to_other(self, app, client):
-        sessions = _register(app, "s1")
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app)},
-            json={"hook_event_name": "SessionEnd"},
-        )
-        assert resp.status_code == 200
-        assert sessions["s1"].calls == [("ended", "other")]
-
-    async def test_session_end_empty_reason_falls_back_to_other(self, app, client):
-        sessions = _register(app, "s1")
-        resp = await client.post(
-            "/internal/hook",
-            params={"session_id": "s1", "token": _hook_token(app)},
-            json={"hook_event_name": "SessionEnd", "reason": ""},
-        )
-        assert resp.status_code == 200
-        assert sessions["s1"].calls == [("ended", "other")]
+        assert sessions["s1"].hooks == [
+            (HookKind.END, {"hook_event_name": "SessionEnd", "reason": "clear"}),
+        ]
 
 
 class TestHookNoOps:
@@ -158,12 +200,26 @@ class TestHookNoOps:
         # normal and must not error.
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "ghost", "token": _hook_token(app)},
+            params={"session_id": "ghost", "token": _hook_token(app), "hook": "stop"},
             json={"hook_event_name": "Stop"},
         )
         assert resp.status_code == 200
 
-    async def test_unknown_event_name_is_200_noop(self, app, client):
+    async def test_unknown_hook_param_is_200_noop(self, app, client):
+        # An unroutable kind must not silently fall back to the event name: a
+        # future hook we deliberately do not handle would then be mis-alerted.
+        sessions = _register(app, "s1")
+        resp = await client.post(
+            "/internal/hook",
+            params={
+                "session_id": "s1", "token": _hook_token(app), "hook": "subagent_stop",
+            },
+            json={"hook_event_name": "Stop"},
+        )
+        assert resp.status_code == 200
+        assert sessions["s1"].hooks == []
+
+    async def test_unknown_event_name_without_a_param_is_200_noop(self, app, client):
         sessions = _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
@@ -171,9 +227,9 @@ class TestHookNoOps:
             json={"hook_event_name": "PreToolUse"},
         )
         assert resp.status_code == 200
-        assert sessions["s1"].calls == []
+        assert sessions["s1"].hooks == []
 
-    async def test_missing_event_name_is_200_noop(self, app, client):
+    async def test_missing_event_name_without_a_param_is_200_noop(self, app, client):
         sessions = _register(app, "s1")
         resp = await client.post(
             "/internal/hook",
@@ -181,18 +237,18 @@ class TestHookNoOps:
             json={"some": "other"},
         )
         assert resp.status_code == 200
-        assert sessions["s1"].calls == []
+        assert sessions["s1"].hooks == []
 
     async def test_empty_session_id_is_200_noop(self, app, client):
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "", "token": _hook_token(app)},
+            params={"session_id": "", "token": _hook_token(app), "hook": "stop"},
             json={"hook_event_name": "Stop"},
         )
         assert resp.status_code == 200
 
     async def test_non_json_body_does_not_500(self, app, client):
-        # A malformed/empty body must be treated as an unknown event (no
+        # A malformed body must be treated as an unknown event (no
         # hook_event_name) → 200 no-op, never a 500 that would block Claude.
         sessions = _register(app, "s1")
         resp = await client.post(
@@ -202,11 +258,27 @@ class TestHookNoOps:
             headers={"content-type": "application/json"},
         )
         assert resp.status_code == 200
-        assert sessions["s1"].calls == []
+        assert sessions["s1"].hooks == []
+
+    @pytest.mark.parametrize("body", [["Stop"], "Stop", 7, None])
+    async def test_non_object_json_body_routes_with_an_empty_payload(
+        self, app, client, body,
+    ):
+        # The kind comes from the URL, so a body that is valid JSON but not an
+        # object still routes — normalized to ``{}`` rather than blowing up on
+        # the first ``.get``.
+        sessions = _register(app, "s1")
+        resp = await client.post(
+            "/internal/hook",
+            params={"session_id": "s1", "token": _hook_token(app), "hook": "stop"},
+            json=body,
+        )
+        assert resp.status_code == 200
+        assert sessions["s1"].hooks == [(HookKind.STOP, {})]
 
 
 class TestMultiSessionCorrelation:
-    """A hook addressed to session A must mutate A only.
+    """A hook addressed to session A must reach A only.
 
     Session correlation is solved by baking the literal ``session_id`` into
     each session's hook URL (here, the query param). With two concurrent
@@ -214,19 +286,23 @@ class TestMultiSessionCorrelation:
     touch the other session.
     """
 
-    async def test_hook_for_a_sets_attention_on_a_only(self, app, client):
+    async def test_hook_for_a_reaches_a_only(self, app, client):
         sessions = _register(app, "session-A", "session-B")
 
         resp = await client.post(
             "/internal/hook",
-            params={"session_id": "session-A", "token": _hook_token(app)},
+            params={
+                "session_id": "session-A",
+                "token": _hook_token(app),
+                "hook": "permission",
+            },
             json={"hook_event_name": "Notification"},
         )
 
         assert resp.status_code == 200
-        assert sessions["session-A"].calls == [("awaiting_permission", None)]
+        assert _kinds(sessions["session-A"]) == [HookKind.PERMISSION]
         # The crux: session B must be completely untouched.
-        assert sessions["session-B"].calls == []
+        assert sessions["session-B"].hooks == []
 
     async def test_interleaved_hooks_route_independently(self, app, client):
         sessions = _register(app, "session-A", "session-B")
@@ -234,22 +310,21 @@ class TestMultiSessionCorrelation:
 
         await client.post(
             "/internal/hook",
-            params={"session_id": "session-A", "token": token},
+            params={"session_id": "session-A", "token": token, "hook": "stop"},
             json={"hook_event_name": "Stop"},
         )
         await client.post(
             "/internal/hook",
-            params={"session_id": "session-B", "token": token},
+            params={"session_id": "session-B", "token": token, "hook": "end"},
             json={"hook_event_name": "SessionEnd", "reason": "logout"},
         )
         await client.post(
             "/internal/hook",
-            params={"session_id": "session-A", "token": token},
+            params={"session_id": "session-A", "token": token, "hook": "permission"},
             json={"hook_event_name": "Notification"},
         )
 
-        assert sessions["session-A"].calls == [
-            ("turn_finished", None),
-            ("awaiting_permission", None),
+        assert _kinds(sessions["session-A"]) == [HookKind.STOP, HookKind.PERMISSION]
+        assert sessions["session-B"].hooks == [
+            (HookKind.END, {"hook_event_name": "SessionEnd", "reason": "logout"}),
         ]
-        assert sessions["session-B"].calls == [("ended", "logout")]

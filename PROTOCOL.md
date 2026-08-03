@@ -329,10 +329,11 @@ cadence; they do **not** gate compatibility.
     ``awaiting_os_permission`` (the agent's macOS startup-stall watchdog: a
     spawned child producing no output is most likely blocked on an invisible
     host-desktop TCC file-access modal — additive within proto-v4, no version
-    bump), ``turn_finished`` (Stop — your move), or ``ended`` (SessionEnd). It is a
-    one-shot notification trigger; clients that miss it (the in-process
-    ``EventBus`` drops on a full queue) still recover from the snapshot field
-    below. Older clients ignore the unknown type (forward-compatible).
+    bump), ``turn_finished`` (your move — see the attention-gate delta below),
+    or ``ended`` (SessionEnd). It is a one-shot notification trigger; clients
+    that miss it (the in-process ``EventBus`` drops on a full queue) still
+    recover from the snapshot field below. Older clients ignore the unknown
+    type (forward-compatible).
   * The single-session wire dict (``session_to_wire_dict`` — used by
     ``sessions.changed``, ``session.updated``, the ``/ws/sessions`` snapshot and
     the ``/sessions`` REST list) gains two nullable fields:
@@ -345,6 +346,40 @@ cadence; they do **not** gate compatibility.
     per-session ``--settings`` file wiring ``http`` hooks to a local
     ``POST /internal/hook`` endpoint (loopback + per-agent token guarded); the
     old terminal-buffer ``PromptDetector`` heuristic is retired.
+* Additive delta within proto-v4 (2026-08-03, attention gate): **agent-side
+  only — no wire change, no version bump.** The reason enum, the
+  ``session.attention`` event and both snapshot fields are untouched; what
+  changes is *when* the agent raises ``turn_finished``.
+  * Claude Code's ``Stop`` fires once per model turn, including every
+    re-invocation a completing background task or subagent causes, so mapping it
+    straight to ``turn_finished`` alerted N+1 times for a session that fanned out
+    N background agents. It is now debounced and deduped by
+    ``mobaide/core/attention_gate.py`` before it reaches
+    ``TerminalSession.set_attention``: a ``Stop`` whose payload reports
+    ``stop_hook_active``, in-flight ``background_tasks``, or pending
+    ``session_crons`` is dropped, and ``prompt_id`` dedupes repeat stops within
+    one turn. A suppressed hook never writes the public ``attention`` field,
+    so a client resyncing from a snapshot cannot resurrect a withheld alert.
+  * The per-session settings file now registers ``Notification``
+    (``permission_prompt`` **and** ``idle_prompt``), ``Stop``,
+    ``UserPromptSubmit`` and ``SessionEnd``, and bakes a ``hook=<kind>`` query
+    param into each URL alongside ``session_id``/``token`` so the endpoint
+    classifies without parsing the body. ``idle_prompt`` is the backstop that
+    still alerts when the payload-driven suppression was wrong.
+    ``UserPromptSubmit`` is the turn boundary: it resets the gate and clears
+    the public ``attention`` field, so a turn answered on the host cannot
+    leave a stale badge that mutes later turns.
+  * ``set_attention`` gained an equality guard: re-raising the reason already
+    pending refreshes state without re-emitting the one-shot event. A changed
+    ``exit_reason`` still emits, so the second ``ended`` that a ``/clear``
+    produces (``SessionEnd`` reason ``clear``, PTY still running) still
+    reaches clients.
+  * **Registration constraint** (``hook_settings.REGISTERED_HOOK_EVENTS``):
+    Claude Code strips an unrecognised ``hooks.<Event>`` key with a validation
+    *warning* and raises a blocking invalid-settings dialog for any validation
+    record when interactive, so registering an event newer than the oldest
+    supported CLI would hang every session at a modal. Matcher values and
+    optional payload fields are safe; new event keys are not.
 * Additive delta within proto-v4 (2026-06-12, Send-button submit fix): the
   PTY frame set on ``/ws/session/<id>`` and the ``CH_SESSION_IO`` channel
   gains one C->S type and one semantic change. No version bump: the frame

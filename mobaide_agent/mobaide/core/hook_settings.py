@@ -1,20 +1,26 @@
 """Per-session Claude Code hook settings for attention notifications.
 
 The agent injects a dedicated ``--settings`` file when it spawns the Claude CLI
-for an interactive session. The file registers three ``http`` hooks that POST
-the hook's stdin JSON to the agent's local ``/internal/hook`` endpoint:
+for an interactive session. The file registers ``http`` hooks that POST the
+hook's stdin JSON to the agent's local ``/internal/hook`` endpoint:
 
 * ``Notification`` (matcher ``permission_prompt``) -> Claude needs approval
-* ``Stop``                                          -> turn finished / your move
+* ``Notification`` (matcher ``idle_prompt``)       -> genuinely idle, your move
+* ``Stop``                                          -> turn ended (debounced)
+* ``UserPromptSubmit``                              -> new turn, reset the gate
 * ``SessionEnd``                                    -> session ended (+ reason)
 
-The ``session_id`` and a per-agent ``token`` are baked **literally** into each
-hook URL, so the endpoint can route the event to the right ``TerminalSession``
-even when several concurrent sessions share a working directory — without
-relying on Claude Code's hook env-var interpolation. ``http`` hooks need no
-shell or external binary, so they behave identically on Windows and POSIX
-(unlike a ``command``+``curl`` hook, which PowerShell would mangle by aliasing
-``curl`` to ``Invoke-WebRequest``).
+``Stop`` is not an alert on its own — see :mod:`mobaide.core.attention_gate` for
+why and for what each registration means downstream.
+
+The ``session_id``, a per-agent ``token`` and the gate-facing ``hook`` kind are
+baked **literally** into each hook URL, so the endpoint can route the event to
+the right ``TerminalSession`` and classify it without parsing the body — even
+when several concurrent sessions share a working directory, and without relying
+on Claude Code's hook env-var interpolation. ``http`` hooks need no shell or
+external binary, so they behave identically on Windows and POSIX (unlike a
+``command``+``curl`` hook, which PowerShell would mangle by aliasing ``curl`` to
+``Invoke-WebRequest``).
 
 Files live under a per-port temp directory so two agents on one host don't sweep
 each other's files. They are removed on ``SessionEnd`` and swept on startup;
@@ -29,12 +35,29 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
+from .attention_gate import HookKind
+
 logger = logging.getLogger(__name__)
 
 # Short timeout so an unreachable/slow endpoint never stalls Claude. ``http``
 # hook timeouts surface as a non-blocking error; the endpoint itself returns
 # 200 immediately after an in-memory enqueue, so this is only a failsafe.
 _HOOK_TIMEOUT_SECONDS = 5
+
+# The hook *events* this file may ever register.
+#
+# Claude Code strips an unrecognised ``hooks.<Event>`` key with a validation
+# *warning*, and its startup path raises a blocking "invalid settings" dialog for
+# any validation record regardless of severity whenever the process is
+# interactive — which a PTY session always is. Registering an event newer than
+# the oldest CLI we support would therefore hang every session at a modal, and
+# the startup-stall watchdog would not catch it because the dialog renders far
+# more than ``STARTUP_STALL_MIN_BYTES``.
+#
+# Only add a key at least as old as the ones already here. Anything else belongs
+# in a matcher value or an optional payload field: an unknown matcher simply
+# never fires, and a missing field reads as absent.
+REGISTERED_HOOK_EVENTS = ("Notification", "Stop", "UserPromptSubmit", "SessionEnd")
 
 
 def _hooks_dir(port: int) -> Path:
@@ -46,18 +69,26 @@ def _settings_path(port: int, session_id: str) -> Path:
 
 
 def _build_settings(session_id: str, port: int, token: str) -> dict:
-    url = (
-        f"http://127.0.0.1:{port}/internal/hook"
-        f"?session_id={quote(session_id, safe='')}&token={quote(token, safe='')}"
-    )
-    http_hook = {"type": "http", "url": url, "timeout": _HOOK_TIMEOUT_SECONDS}
+    def hook(kind: HookKind) -> dict:
+        url = (
+            f"http://127.0.0.1:{port}/internal/hook"
+            f"?session_id={quote(session_id, safe='')}"
+            f"&token={quote(token, safe='')}"
+            f"&hook={kind.value}"
+        )
+        return {"type": "http", "url": url, "timeout": _HOOK_TIMEOUT_SECONDS}
+
     return {
         "hooks": {
             "Notification": [
-                {"matcher": "permission_prompt", "hooks": [http_hook]},
+                {"matcher": "permission_prompt", "hooks": [hook(HookKind.PERMISSION)]},
+                {"matcher": "idle_prompt", "hooks": [hook(HookKind.IDLE)]},
             ],
-            "Stop": [{"matcher": "*", "hooks": [http_hook]}],
-            "SessionEnd": [{"matcher": "*", "hooks": [http_hook]}],
+            "Stop": [{"matcher": "*", "hooks": [hook(HookKind.STOP)]}],
+            "UserPromptSubmit": [
+                {"matcher": "*", "hooks": [hook(HookKind.PROMPT_SUBMIT)]},
+            ],
+            "SessionEnd": [{"matcher": "*", "hooks": [hook(HookKind.END)]}],
         },
     }
 
