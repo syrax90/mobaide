@@ -415,6 +415,33 @@ final class TerminalSelectionGestureTests: XCTestCase {
         )
     }
 
+    /// A scrollback wipe renumbers every absolute row, and `getText` clamps
+    /// rather than trapping — so without a staleness guard Copy silently
+    /// returns whatever now sits at those coordinates. Rows below `rows` are
+    /// the hard case: `bufferLine` resolves them happily, because its window
+    /// origin collapses to 0.
+    func testCopyRefusesAfterAScrollbackWipeRenumbersTheRows() throws {
+        let (model, terminal) = wiredTerminal()
+        for line in 0..<100 { terminal.feed(text: "line\(line)\r\n") }
+        // A low row, deep in the transcript — the case the row-existence guard
+        // cannot catch on its own.
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 3, col: 1, on: terminal)))
+        XCTAssertEqual(terminal.selectionController.selectedText(), "line3")
+
+        terminal.feed(text: "\u{1B}[3J")
+
+        XCTAssertNotEqual(
+            terminal.selectionController.selectedText(),
+            "line67",
+            "row 3 now names entirely different content — Copy must not lift it"
+        )
+        XCTAssertNil(
+            terminal.selectionController.selectedText(),
+            "a selection whose transcript was trimmed underneath it copies nothing rather than the wrong thing"
+        )
+        withExtendedLifetime(model) {}
+    }
+
     // MARK: - Renderer geometry
 
     /// The whole selection model assumes content row R is drawn at

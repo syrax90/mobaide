@@ -45,6 +45,10 @@ final class TerminalSelectionController: NSObject {
     private var draggingHandle: TerminalSelectionHandle?
     /// `yDisp` as of the last emulator scroll, for the trim-shift decision.
     private var lastYDisp: Int?
+    /// `yDisp` when the selection started. Within one buffer at one size it
+    /// only ever grows (and freezes once the scrollback ring fills), so seeing
+    /// it *lower* means the transcript was trimmed underneath the selection.
+    private var startYDisp = 0
 
     /// Publishes selection geometry to the session model for the SwiftUI toolbar.
     var onChange: ((TerminalSelectionUi?) -> Void)?
@@ -70,6 +74,7 @@ final class TerminalSelectionController: NSObject {
         range = word
         draggingHandle = nil
         lastYDisp = view.getTerminal().buffer.yDisp
+        startYDisp = view.getTerminal().buffer.yDisp
         refresh()
         return true
     }
@@ -259,12 +264,21 @@ final class TerminalSelectionController: NSObject {
     /// end column is *exclusive*, hence the `+ 1` off our inclusive end.
     func selectedText() -> String? {
         guard let current = range else { return nil }
-        // Both endpoints must still resolve to a drawn line. A scrollback wipe
-        // (`ESC[3J`) trims the line list and renumbers every absolute row, and
-        // `getText` neither traps nor wraps on stale input — it clamps and
-        // returns whatever now sits there, so Copy would silently lift
-        // unrelated lines. `bufferLine` already refuses rows outside the
-        // `yDisp`-derived window, which is the same guard the drawing path uses.
+        // A scrollback wipe (`ESC[3J`) trims the line list and renumbers every
+        // absolute row, and `getText` neither traps nor wraps on stale input —
+        // it clamps and returns whatever now sits there, so Copy would silently
+        // lift unrelated lines. Two guards, because neither alone is enough:
+        //
+        // `bufferLine` refuses rows outside the `yDisp`-derived window, which
+        // catches endpoints left *above* the shrunken transcript. It cannot
+        // catch low rows: for any row < `rows` its window origin collapses to
+        // 0, so row 3 keeps resolving happily to whatever line 3 now is.
+        //
+        // A drop in `yDisp` is what catches those. Within one buffer at one
+        // size it only ever grows and then freezes at ring-full, so a lower
+        // value means the transcript was trimmed under us. Buffer switches and
+        // resizes — the other two ways it can drop — already cancel outright.
+        guard view.getTerminal().buffer.yDisp >= startYDisp else { return nil }
         guard view.bufferLine(atContentRow: current.start.row) != nil,
               view.bufferLine(atContentRow: current.end.row) != nil else { return nil }
         let text = view.getTerminal().getText(
