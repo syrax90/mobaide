@@ -6,9 +6,11 @@ import logging
 import re
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
+from typing import Any
 
+from .attention_gate import AttentionGate, HookKind
 from .da_responder import DaResponder
 from .macos_access import full_disk_access
 from .models import SessionConfig, SessionEvent, SessionInfo, SessionState
@@ -173,6 +175,16 @@ class TerminalSession:
         # badge even if it missed the one-shot ``session.attention`` event.
         self._attention: str | None = None
         self._exit_reason: str | None = None
+        # Decides which Claude Code hooks actually become an alert. ``Stop``
+        # fires once per model turn — including every re-invocation a completing
+        # background task causes — so it is debounced and deduped here rather
+        # than raised straight as attention.
+        self._attention_gate = AttentionGate(
+            on_alert=self.set_attention,
+            is_running=lambda: self._state == SessionState.RUNNING,
+            current_attention=lambda: self._attention,
+            quiet_seconds=config.attention_quiet_seconds,
+        )
         # Startup-stall watchdog state (see STARTUP_STALL_SECONDS). The reader
         # loop tallies output bytes; the watchdog raises an
         # ``awaiting_os_permission`` attention if the child stays silent, which
@@ -417,6 +429,41 @@ class TerminalSession:
         for start in range(0, len(snapshot), chunk_size):
             yield snapshot[start : start + chunk_size]
 
+    def on_claude_hook(self, kind: HookKind, payload: Mapping[str, Any]) -> None:
+        """Feed one Claude Code hook to the attention gate.
+
+        The gate decides whether it becomes a user-visible attention; a
+        suppressed hook leaves the public ``attention`` field untouched, so a
+        client resyncing from a full-state snapshot cannot resurrect an alert
+        this session deliberately withheld.
+
+        ``UserPromptSubmit`` additionally drops the public badge, and that is
+        what keeps a session alerting past its first turn. ``attention`` is
+        otherwise cleared only by a client PTY write, so a user who answers on
+        the host — or an unattended Auto Scan session — would leave
+        ``turn_finished`` latched, and the gate's own "already on screen" guard
+        would then mute every later turn. A prompt submission proves the
+        composer is live, so any badge still standing is stale by construction.
+        """
+        self._attention_gate.handle(kind, payload)
+        if kind is HookKind.PROMPT_SUBMIT:
+            self.clear_attention()
+
+    def cancel_attention_window(self) -> None:
+        """Drop a pending debounce without forgetting the turn.
+
+        What a keystroke warrants: the user is plainly present, so a queued
+        "your move" should not fire — but client input is not proof of a *new*
+        turn. Both apps push terminal scrolling through the same PTY-write path
+        as typing, so treating any input as a turn boundary would let a scroll
+        gesture discard the dedupe key and re-open the alert storm while
+        background work is still draining. The turn boundary is
+        ``UserPromptSubmit`` alone; the reader loop's ``awaiting_os_permission``
+        auto-clear is not one either, since resumed output is not the user
+        acting.
+        """
+        self._attention_gate.cancel()
+
     def set_attention(self, attention: str, exit_reason: str | None = None) -> None:
         """Record an attention trigger and emit an attention event.
 
@@ -425,11 +472,23 @@ class TerminalSession:
         endpoint) or ``awaiting_os_permission`` (the startup-stall watchdog).
         ``exit_reason`` is supplied only for ``ended``. Always called on the
         event loop, so the ``put_nowait`` enqueue is safe.
+
+        Re-raising the reason already pending refreshes the stored state without
+        re-emitting: the event is a one-shot notification trigger, and the
+        clients collapse per session, so a repeat would re-alert for something
+        the user is already being shown. A *changed* ``exit_reason`` still
+        emits — ``SessionEnd`` fires with reason ``clear`` for ``/clear`` while
+        the PTY keeps running, so the session can legitimately end again later
+        and that second ending must still reach the user.
         """
+        changed = attention != self._attention or (
+            exit_reason is not None and exit_reason != self._exit_reason
+        )
         self._attention = attention
         if exit_reason is not None:
             self._exit_reason = exit_reason
-        self._emit_attention(attention)
+        if changed:
+            self._emit_attention(attention)
 
     def clear_attention(self) -> None:
         """Clear attention once the user has responded.
@@ -478,6 +537,7 @@ class TerminalSession:
         # permission prompt". Also suppress the startup-stall watchdog: a user
         # who is typing is plainly not staring at a frozen screen.
         self._user_input_seen = True
+        self.cancel_attention_window()
         self.clear_attention()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._backend.write, data)
@@ -528,6 +588,8 @@ class TerminalSession:
 
         self._state = SessionState.STOPPING
         logger.info("Stopping session %s (force=%s)", self.session_id, force)
+
+        self._attention_gate.cancel()
 
         loop = asyncio.get_running_loop()
         await self._terminate_child(loop, force)

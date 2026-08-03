@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, call, patch
 
 import pytest
 
+from mobaide.core.attention_gate import HookKind
 from mobaide.core.da_responder import DA1_REPLY
 from mobaide.core.models import SessionConfig, SessionEvent, SessionState
 from mobaide.core.pty_backend import PtyBackend
@@ -673,13 +674,20 @@ class TestIterRingChunks:
         assert len(chunks[1]) == 10
 
 
-def _attention_config() -> SessionConfig:
+def _attention_config(
+    *,
+    session_id: str = "attn-session",
+    startup_stall_seconds: float | None = None,
+    attention_quiet_seconds: float | None = None,
+) -> SessionConfig:
     return SessionConfig(
-        session_id="attn-session",
+        session_id=session_id,
         command=["does-not-run"],
         rows=24,
         cols=80,
         scrollback_size=100,
+        startup_stall_seconds=startup_stall_seconds,
+        attention_quiet_seconds=attention_quiet_seconds,
     )
 
 
@@ -789,6 +797,252 @@ class TestTerminalSessionAttention:
         await session.write(b"ls\n")
         assert _drain_attention_events(session) == []
         assert backend._writes == [b"ls\n"]
+
+
+class TestSetAttentionEqualityGuard:
+    """The ``attention`` event is a one-shot notification trigger — the fanout
+    turns every emission into an alert on every device — so re-raising the
+    reason already pending must refresh the stored state without re-emitting.
+    """
+
+    async def test_same_reason_twice_emits_once(self) -> None:
+        session = TerminalSession(_attention_config())
+        session.set_attention("turn_finished")
+        session.set_attention("turn_finished")
+        assert session.to_info().attention == "turn_finished"
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "turn_finished",
+        ]
+
+    async def test_a_different_reason_still_emits(self) -> None:
+        session = TerminalSession(_attention_config())
+        session.set_attention("turn_finished")
+        session.set_attention("awaiting_permission")
+        assert session.to_info().attention == "awaiting_permission"
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "turn_finished", "awaiting_permission",
+        ]
+
+    async def test_the_same_reason_after_a_clear_emits_again(self) -> None:
+        # The guard is about the reason currently pending, not a permanent
+        # latch: once the badge is gone the same reason is news again.
+        session = TerminalSession(_attention_config())
+        session.set_attention("awaiting_permission")
+        session.clear_attention()
+        session.set_attention("awaiting_permission")
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "awaiting_permission", None, "awaiting_permission",
+        ]
+
+    async def test_a_changed_exit_reason_emits_again(self) -> None:
+        # ``SessionEnd`` fires with reason ``clear`` for ``/clear`` while the
+        # PTY keeps running, so ``ended`` is left publicly set and a genuine
+        # end arrives as a repeat. Refreshing ``exit_reason`` silently would
+        # cost the user the only "Session ended" push they get.
+        session = TerminalSession(_attention_config())
+        session.set_attention("ended", exit_reason="clear")
+        session.set_attention("ended", exit_reason="logout")
+        assert session.to_info().exit_reason == "logout"
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "ended", "ended",
+        ]
+
+    async def test_an_identical_end_repeat_still_emits_once(self) -> None:
+        # Only a *changed* reason is news; the same end re-raised is the
+        # one-shot trigger the guard exists to swallow.
+        session = TerminalSession(_attention_config())
+        session.set_attention("ended", exit_reason="clear")
+        session.set_attention("ended", exit_reason="clear")
+        assert session.to_info().exit_reason == "clear"
+        assert [e.attention for e in _drain_attention_events(session)] == ["ended"]
+
+
+def _running_hook_session(
+    attention_quiet_seconds: float, backend: _ScriptedPtyBackend | None = None,
+) -> TerminalSession:
+    """A session the gate sees as live, without spawning a PTY.
+
+    ``start()`` would spawn a real child; the gate only reads the state, so it
+    is set in place as in ``TestStartupStallWatchdog``.
+    """
+    session = TerminalSession(
+        _attention_config(
+            session_id="hook-session",
+            startup_stall_seconds=0.0,
+            attention_quiet_seconds=attention_quiet_seconds,
+        ),
+        backend=cast(PtyBackend, backend or _ScriptedPtyBackend([])),
+    )
+    session._state = SessionState.RUNNING
+    return session
+
+
+@pytest.mark.timeout(15)
+class TestClaudeHookAttention:
+    """``on_claude_hook`` is what the ``/internal/hook`` endpoint calls. The
+    quiet window is configured to zero here so a decision is observable without
+    scheduling; the gate's own timing and suppression rules are covered in
+    ``test_attention_gate.py``.
+    """
+
+    async def test_stop_hook_raises_turn_finished(self) -> None:
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+        assert session.to_info().attention == "turn_finished"
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "turn_finished",
+        ]
+
+    async def test_suppressed_stop_leaves_the_public_attention_unset(self) -> None:
+        # The public field is what a full-state snapshot carries, and clients
+        # re-post a notification for any session that arrives carrying one — so
+        # a suppressed turn must not write it, only skip the event.
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(
+            HookKind.STOP,
+            {"prompt_id": "p1", "background_tasks": [{"status": "running"}]},
+        )
+        assert session.to_info().attention is None
+        assert _drain_attention_events(session) == []
+
+    async def test_permission_hook_still_alerts_immediately(self) -> None:
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.PERMISSION, {})
+        assert session.to_info().attention == "awaiting_permission"
+
+    async def test_session_end_hook_records_the_exit_reason(self) -> None:
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.END, {"reason": "clear"})
+        info = session.to_info()
+        assert info.attention == "ended"
+        assert info.exit_reason == "clear"
+
+    async def test_user_input_does_not_reopen_the_turn(self) -> None:
+        # ``write`` is the sink for every input frame, and both apps push
+        # terminal *scrolling* through it as arrow/wheel escape sequences. A
+        # scroll gesture discarding the dedupe key would re-open the storm
+        # while background agents are still draining, so the badge clears but
+        # the turn stays alerted.
+        backend = _ScriptedPtyBackend([])
+        session = _running_hook_session(0.0, backend)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        await session.write(b"\x1b[A")
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        assert session.to_info().attention is None
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "turn_finished", None,
+        ]
+        assert backend._writes == [b"\x1b[A"]
+
+    async def test_user_input_cancels_a_pending_quiet_window(self) -> None:
+        # The other half of the keystroke contract: a queued "your move" must
+        # not fire at someone who is demonstrably already at the terminal.
+        backend = _ScriptedPtyBackend([])
+        session = _running_hook_session(60.0, backend)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+        window = session._attention_gate._timer
+        assert window is not None
+
+        await session.write(b"\x1b[B")
+
+        assert window.cancelled()
+        assert session._attention_gate._timer is None
+        assert _drain_attention_events(session) == []
+
+    async def test_prompt_submit_reopens_the_turn(self) -> None:
+        # ``UserPromptSubmit`` is the one unambiguous new-turn signal. The same
+        # ``prompt_id`` alerting twice is what proves the dedupe key was
+        # dropped here and not by the PTY write ahead of it.
+        backend = _ScriptedPtyBackend([])
+        session = _running_hook_session(0.0, backend)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        await session.write(b"go on\n")
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {})
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        assert session.to_info().attention == "turn_finished"
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "turn_finished", None, "turn_finished",
+        ]
+        assert backend._writes == [b"go on\n"]
+
+    async def test_answering_on_the_host_does_not_mute_later_turns(self) -> None:
+        # The scenario is a user who replied to Claude at the host terminal
+        # instead of from the app — or an unattended Auto Scan session — so
+        # there is deliberately no ``write`` here and the PTY-write clear never
+        # runs. ``UserPromptSubmit`` has to drop the badge itself: otherwise
+        # ``turn_finished`` stays latched and the gate's "already on screen"
+        # guard mutes every turn after the first, permanently and silently.
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p2"})
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p2"})
+
+        assert session.to_info().attention == "turn_finished"
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "turn_finished", None, "turn_finished",
+        ]
+
+    async def test_ended_badge_does_not_mute_later_turns(self) -> None:
+        # ``ended`` is the gate's other blocking reason, and ``/clear`` reaches
+        # it with the PTY still running, so the session keeps taking turns
+        # underneath a latched badge. Again no ``write``: the prompt submission
+        # is the only thing that can clear it.
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.END, {"reason": "clear"})
+
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {"prompt_id": "p1"})
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        assert session.to_info().attention == "turn_finished"
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "ended", None, "turn_finished",
+        ]
+
+    async def test_prompt_submit_also_drops_a_pending_quiet_window(self) -> None:
+        session = _running_hook_session(60.0)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+        window = session._attention_gate._timer
+        assert window is not None
+
+        session.on_claude_hook(HookKind.PROMPT_SUBMIT, {})
+
+        assert window.cancelled()
+        assert _drain_attention_events(session) == []
+
+    async def test_reader_auto_clear_does_not_reopen_the_turn(self) -> None:
+        # The reader loop calls ``clear_attention`` on its own when output
+        # resumes after an ``awaiting_os_permission`` stall. That is the host
+        # waking up, not the user acting, so the turn must stay deduped —
+        # otherwise the storm returns through the back door.
+        session = _running_hook_session(0.0)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        session.clear_attention()
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+
+        assert session.to_info().attention is None
+        assert [e.attention for e in _drain_attention_events(session)] == [
+            "turn_finished", None,
+        ]
+
+    async def test_stop_cancels_a_pending_quiet_window(self) -> None:
+        # A window surviving teardown would alert for a session already gone.
+        # The handle is read back because a cancelled ``TimerHandle`` is the
+        # only trace an unfired window leaves.
+        session = _running_hook_session(60.0)
+        session.on_claude_hook(HookKind.STOP, {"prompt_id": "p1"})
+        window = session._attention_gate._timer
+        assert window is not None
+
+        await session.stop(force=True)
+
+        assert window.cancelled()
+        assert _drain_attention_events(session) == []
 
 
 @pytest.mark.timeout(15)

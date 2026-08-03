@@ -1,9 +1,10 @@
 """Tests for per-session Claude Code hook settings files.
 
 ``write_session_hooks`` writes a ``--settings`` file whose ``http`` hooks
-POST to the agent's ``/internal/hook`` with the ``session_id`` and ``token``
-baked literally into each URL — the mechanism that makes multi-concurrent-
-session correlation independent of cwd and hook env-var interpolation.
+POST to the agent's ``/internal/hook`` with the ``session_id``, ``token`` and
+gate-facing ``hook`` kind baked literally into each URL — the mechanism that
+makes multi-concurrent-session correlation independent of cwd and hook env-var
+interpolation, and that classifies each hook without parsing its body.
 
 Files live under a per-port temp dir so two agents on one host don't sweep
 each other's files. These tests redirect that temp dir into ``tmp_path`` via
@@ -18,6 +19,16 @@ import pytest
 
 from mobaide.core import hook_settings
 
+# Every ``(event, matcher)`` registration the settings file must carry, and the
+# ``hook`` kind its URL must be baked with.
+EXPECTED_REGISTRATIONS = {
+    ("Notification", "permission_prompt"): "permission",
+    ("Notification", "idle_prompt"): "idle",
+    ("Stop", "*"): "stop",
+    ("UserPromptSubmit", "*"): "prompt_submit",
+    ("SessionEnd", "*"): "end",
+}
+
 
 @pytest.fixture(autouse=True)
 def _isolated_tempdir(monkeypatch, tmp_path):
@@ -30,6 +41,20 @@ def _load(path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _registrations(doc: dict) -> dict[tuple[str, str], dict]:
+    """Flatten ``hooks`` into ``(event, matcher) -> the single hook dict``."""
+    flat: dict[tuple[str, str], dict] = {}
+    for event, entries in doc["hooks"].items():
+        for entry in entries:
+            assert len(entry["hooks"]) == 1
+            flat[(event, entry["matcher"])] = entry["hooks"][0]
+    return flat
+
+
+def _query(hook: dict) -> dict[str, list[str]]:
+    return parse_qs(urlsplit(hook["url"]).query)
+
+
 class TestWriteSessionHooks:
     def test_creates_file_under_per_port_dir(self, tmp_path):
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
@@ -37,37 +62,62 @@ class TestWriteSessionHooks:
         assert path.parent == tmp_path / "mobaide_hooks_9001"
         assert path.name == "sid-1.json"
 
-    def test_registers_three_hook_events(self):
+    def test_registers_every_expected_registration(self):
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
-        doc = _load(path)
-        assert set(doc["hooks"]) == {"Notification", "Stop", "SessionEnd"}
+        assert set(_registrations(_load(path))) == set(EXPECTED_REGISTRATIONS)
 
-    def test_notification_matcher_is_permission_prompt(self):
+    def test_registered_events_stay_inside_the_frozen_allow_list(self):
+        # Claude Code strips an unrecognised ``hooks.<Event>`` key with a
+        # validation *warning*, and its startup path raises a blocking
+        # invalid-settings dialog for any validation record whenever the process
+        # is interactive — which a PTY session always is. Registering an event
+        # newer than the oldest CLI we support would therefore hang every
+        # session at a modal, and the startup-stall watchdog would not catch it
+        # because the dialog renders far more than ``STARTUP_STALL_MIN_BYTES``.
+        # Widening this set is a compatibility decision, not a refactor: read
+        # ``REGISTERED_HOOK_EVENTS`` before touching either side.
+        assert set(hook_settings.REGISTERED_HOOK_EVENTS) == {
+            "Notification", "Stop", "UserPromptSubmit", "SessionEnd",
+        }
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
-        doc = _load(path)
-        notification = doc["hooks"]["Notification"][0]
-        assert notification["matcher"] == "permission_prompt"
+        assert set(_load(path)["hooks"]) <= set(hook_settings.REGISTERED_HOOK_EVENTS)
+
+    def test_each_registration_bakes_its_own_hook_kind(self):
+        # Sub-classification rides in the URL so it never depends on the body.
+        # On a current CLI the two ``Notification`` matchers are mutually
+        # exclusive — ``notification_type`` is required in the hook input schema
+        # and supplies the match query, and matching is exact membership — so
+        # exactly one registration fires per notification. The URL param covers
+        # the case that is otherwise undecidable: upstream skips matcher
+        # filtering entirely when an event carries no match query, and a CLI
+        # that omits ``notification_type`` would then fire both registrations
+        # with a body that carries no discriminator to tell them apart.
+        path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
+        kinds = {
+            key: _query(hook)["hook"]
+            for key, hook in _registrations(_load(path)).items()
+        }
+        assert kinds == {key: [k] for key, k in EXPECTED_REGISTRATIONS.items()}
 
     def test_hooks_are_http_type_with_timeout(self):
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
-        doc = _load(path)
-        for event in ("Notification", "Stop", "SessionEnd"):
-            hook = doc["hooks"][event][0]["hooks"][0]
+        for hook in _registrations(_load(path)).values():
             assert hook["type"] == "http"
             assert isinstance(hook["timeout"], int)
             assert hook["timeout"] > 0
 
-    def test_url_bakes_session_id_and_token(self):
+    def test_every_url_bakes_session_id_and_token(self):
+        # Each registration now carries its own hook dict, so the correlation
+        # params have to be re-checked on all of them, not just the first.
         path = hook_settings.write_session_hooks("sid-abc", port=9100, token="tok-xyz")
-        doc = _load(path)
-        url = doc["hooks"]["Stop"][0]["hooks"][0]["url"]
-        parts = urlsplit(url)
-        assert parts.hostname == "127.0.0.1"
-        assert parts.port == 9100
-        assert parts.path == "/internal/hook"
-        query = parse_qs(parts.query)
-        assert query["session_id"] == ["sid-abc"]
-        assert query["token"] == ["tok-xyz"]
+        for hook in _registrations(_load(path)).values():
+            parts = urlsplit(hook["url"])
+            assert parts.hostname == "127.0.0.1"
+            assert parts.port == 9100
+            assert parts.path == "/internal/hook"
+            query = parse_qs(parts.query)
+            assert query["session_id"] == ["sid-abc"]
+            assert query["token"] == ["tok-xyz"]
 
     def test_special_characters_are_percent_encoded_in_url(self):
         # A session id or token containing reserved chars must survive as a
@@ -105,7 +155,7 @@ class TestWriteSessionHooksExtra:
         assert doc["fastMode"] is True
         assert doc["ultracode"] is True
         # The merge augments the document — it must not displace ``hooks``.
-        assert set(doc["hooks"]) == {"Notification", "Stop", "SessionEnd"}
+        assert set(_registrations(doc)) == set(EXPECTED_REGISTRATIONS)
 
     def test_single_extra_key_rides_independently(self):
         path = hook_settings.write_session_hooks(
