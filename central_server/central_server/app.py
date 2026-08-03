@@ -466,6 +466,14 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             "protocol_versions": list(SUPPORTED_PROTOCOL_VERSIONS),
             "min_client_version": MIN_CLIENT_PROTOCOL_VERSION,
             "capabilities": {},
+            # The browser SPA needs this to initialise Google Identity
+            # Services, and it has no build-time config channel — it is
+            # served as static files from the same origin. An OAuth client
+            # id for a public client is not a secret (the portal already
+            # renders it into anonymous HTML); serving it here lets the
+            # SPA's single anonymous bootstrap call cover both the version
+            # gate and the sign-in config.
+            "google_client_id": app.state.config.google_client_id,
             "latest_agent_version": manifest.body.get("version") if manifest else None,
         }
 

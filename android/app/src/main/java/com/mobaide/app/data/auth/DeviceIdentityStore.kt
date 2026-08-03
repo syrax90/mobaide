@@ -62,6 +62,13 @@ class DeviceIdentityStore(context: Context) {
 
     companion object {
         const val DATASTORE_FILE_NAME = "device_identity"
+
+        /**
+         * Reported when registering this device, so the devices screen can
+         * label it. iOS sends "ios" and the web client "web".
+         */
+        const val DEVICE_PLATFORM = "android"
+
         private val KEY_DEVICE_UUID = stringPreferencesKey("device_uuid")
     }
 }

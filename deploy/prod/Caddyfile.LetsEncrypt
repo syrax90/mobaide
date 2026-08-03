@@ -70,8 +70,17 @@
         # theme-boot inline <script> in web/index.html; editing that script
         # without updating the hash in BOTH Caddyfiles silently disables it
         # (theme flash, nothing worse) — deploy_web.py preflights the match.
+        #
+        # The accounts.google.com entries are what Google Identity Services
+        # needs for the sign-in button, and they mirror what
+        # security_headers.portal_csp() already concedes for /portal/*. The
+        # style-src 'unsafe-inline' is not optional: the GIS client appends
+        # an inline <style> to <head> as it loads, and renderButton({width})
+        # emits an inline style= attribute. img-src stays 'self' — the
+        # button and its Google logo render inside a cross-origin iframe, so
+        # they are governed by Google's policy, not ours.
         header {
-            Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DQjnNfb9BFsBDwtrOfOC9aSi5NaqDDr+KkPgo0PMtbY='; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DQjnNfb9BFsBDwtrOfOC9aSi5NaqDDr+KkPgo0PMtbY=' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self'; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
             X-Frame-Options "DENY"
             X-Content-Type-Options "nosniff"
             Referrer-Policy "strict-origin-when-cross-origin"

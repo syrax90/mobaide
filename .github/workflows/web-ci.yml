@@ -80,3 +80,14 @@ jobs:
       - name: Build
         working-directory: web
         run: npm run build
+
+      # Real user flows exist from WEB-03 onward, so Playwright joins the gate.
+      # The specs stub /api/** with page.route — CI has no relay to talk to,
+      # and the point is the client's own routing, guards and forms.
+      - name: Install Playwright browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: End-to-end tests
+        working-directory: web
+        run: npm run test:e2e

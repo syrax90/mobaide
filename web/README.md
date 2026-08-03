@@ -58,14 +58,24 @@ Auth — the two axes authenticate differently (same split as Android's
 `CentralAuthInterceptor` vs `AuthInterceptor`): `src/api/auth.ts` exposes
 `setUserTokenProvider()` (dashboard/user JWT, attached by `relayClient`) and
 `setAgentTokenProvider()` (per-agent `mobile_access` JWT, attached by each
-`createAgentClient(agentId)` for its own agent). Both are wired by the auth
-milestone, WEB-03.
+`createAgentClient(agentId)` for its own agent). Both are filled in at
+startup by `src/auth/install.ts` (WEB-03).
+
+## Auth
+
+`src/auth/` owns the session: the user JWT in `sessionStorage` (per-tab,
+handed to new tabs over a `BroadcastChannel`), per-agent tokens in
+`localStorage`, and a single-flight refresh against `POST /api/auth/refresh`
+under `navigator.locks`. Routes are guarded by React Router middleware
+(`src/app/guards.tsx`), which preserves the wanted path as `?next=`. The
+Google Sign-In client id arrives from `GET /api/version` at runtime, so
+there is no build-time env var — but the origin you serve from must be
+listed under **Authorized JavaScript origins** on the Google OAuth client
+(`http://localhost:5173` for `npm run dev`), or the button fails to render.
+See the "App shell" section of `docs/web-client.md` for the full model.
 
 ## Deliberately deferred
 
-- react-hook-form + Zod: locked for the series, first consumer is the WEB-03
-  auth forms.
-- Playwright in CI: joins `web-ci.yml` once real user flows exist (WEB-03+).
 - Prettier, TanStack Query devtools: adopt when the team wants them.
 
 ## WebSockets

@@ -48,4 +48,5 @@ data class MobileTokenResponse(
 data class MobileTokenRequest(
     val mobile_device_id: String,
     val mobile_device_name: String? = null,
+    val platform: String? = null,
 )

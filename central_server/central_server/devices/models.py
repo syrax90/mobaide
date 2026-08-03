@@ -7,12 +7,18 @@ from pydantic import BaseModel, Field
 
 
 class DeviceResponse(BaseModel):
-    """One entry in the user's ``GET /api/devices`` listing."""
+    """One entry in the user's ``GET /api/devices`` listing.
+
+    ``platform`` is the free-form label the device sent when it last minted
+    agent tokens (``"ios"``, ``"android"``, ``"web"``); it is null for rows
+    registered by a client that omitted the field.
+    """
 
     device_id: str
     name: str | None
     created_at: str
     last_seen_at: str | None
+    platform: str | None = None
 
 
 class RegisterPushTokenRequest(BaseModel):

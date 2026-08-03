@@ -93,7 +93,7 @@ See [`docs/configuration-profiles.md`](docs/configuration-profiles.md) for the f
 The Android "Sign in with Google" button uses the Credential Manager API and requires an OAuth 2.0 **Web** client ID provisioned in Google Cloud Console:
 
 1. In Google Cloud Console → **APIs & Services → Credentials**, create (or reuse) a project and add two OAuth 2.0 client IDs:
-   - **Web application** — copy its client ID (format `NNN-xxxxx.apps.googleusercontent.com`). This is the ID the Android app asks Credential Manager for AND the ID the server verifies ID tokens against.
+   - **Web application** — copy its client ID (format `NNN-xxxxx.apps.googleusercontent.com`). This is the ID the Android app asks Credential Manager for AND the ID the server verifies ID tokens against. The browser client uses it too — it fetches the id at runtime from `GET /api/version`, so it needs no build-time value, but every origin the SPA is served from (`https://app.mobaide.com`, plus `http://localhost:5173` for `npm run dev`) must be listed under this client's **Authorized JavaScript origins** or the web Sign in with Google button fails to render.
    - **Android application** — register package `com.mobaide.app` and your debug + release signing-certificate SHA-1 fingerprints. Required by Google Play Services before any credential is returned even though the app only passes the Web client ID.
 2. Put the Web client ID in your profile's `android.local.properties`:
    ```

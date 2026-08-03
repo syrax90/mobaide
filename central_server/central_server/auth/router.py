@@ -19,6 +19,7 @@ from .models import (
     ResetPasswordRequest,
     ResetPasswordResponse,
     UserLoginRequest,
+    UserRefreshRequest,
     UserRegisterRequest,
     UserTokenPayload,
     VerifyEmailRequest,
@@ -40,6 +41,31 @@ from .service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+async def _apply_refreshable_session(
+    auth_service, response: AuthTokenResponse, *, refreshable: bool
+) -> AuthTokenResponse:
+    """Upgrade a freshly minted session to a refreshable one when asked.
+
+    A no-op unless the client opted in, and also when the response carries
+    no access token at all — the ``verification_required`` branch of
+    ``/register`` has no session yet, so there is nothing to refresh and
+    handing out a refresh token there would let an unverified account mint
+    access tokens.
+    """
+    if not refreshable or response.access_token is None:
+        return response
+    access, refresh, expires_in = await auth_service.issue_refreshable_session(
+        response.user_id, response.email, response.role
+    )
+    return response.model_copy(
+        update={
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_in": expires_in,
+        }
+    )
 
 
 @router.post("/register", response_model=AuthTokenResponse)
@@ -64,12 +90,16 @@ async def register(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         )
-    return AuthTokenResponse(
-        access_token=result.access_token,
-        user_id=result.user_id,
-        email=result.email,
-        role=result.role,
-        status=result.status,
+    return await _apply_refreshable_session(
+        auth_service,
+        AuthTokenResponse(
+            access_token=result.access_token,
+            user_id=result.user_id,
+            email=result.email,
+            role=result.role,
+            status=result.status,
+        ),
+        refreshable=body.refreshable,
     )
 
 
@@ -91,12 +121,16 @@ async def login(request: Request, body: UserLoginRequest):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
-    return AuthTokenResponse(
-        access_token=token,
-        user_id=user_id,
-        email=body.email,
-        role=role,
-        scheduled_deletion_at=scheduled_deletion_at,
+    return await _apply_refreshable_session(
+        auth_service,
+        AuthTokenResponse(
+            access_token=token,
+            user_id=user_id,
+            email=body.email,
+            role=role,
+            scheduled_deletion_at=scheduled_deletion_at,
+        ),
+        refreshable=body.refreshable,
     )
 
 
@@ -115,12 +149,16 @@ async def google_auth(request: Request, body: GoogleAuthRequest):
             detail=str(exc),
         )
     user = await db.get_user_by_id(user_id)
-    return AuthTokenResponse(
-        access_token=token,
-        user_id=user_id,
-        email=user["email"],
-        role=role,
-        scheduled_deletion_at=user.get("scheduled_deletion_at"),
+    return await _apply_refreshable_session(
+        auth_service,
+        AuthTokenResponse(
+            access_token=token,
+            user_id=user_id,
+            email=user["email"],
+            role=role,
+            scheduled_deletion_at=user.get("scheduled_deletion_at"),
+        ),
+        refreshable=body.refreshable,
     )
 
 
@@ -139,12 +177,44 @@ async def apple_auth(request: Request, body: AppleAuthRequest):
             detail=str(exc),
         )
     user = await db.get_user_by_id(user_id)
+    return await _apply_refreshable_session(
+        auth_service,
+        AuthTokenResponse(
+            access_token=token,
+            user_id=user_id,
+            email=user["email"],
+            role=role,
+            scheduled_deletion_at=user.get("scheduled_deletion_at"),
+        ),
+        refreshable=body.refreshable,
+    )
+
+
+@router.post("/refresh", response_model=AuthTokenResponse)
+async def refresh_session(request: Request, body: UserRefreshRequest):
+    """Rotate a user-session refresh token into a fresh access token.
+
+    Unauthenticated by design: the refresh token is the credential, and the
+    access token this call replaces has usually already expired. The
+    presented refresh token is consumed, so a replay returns 401 — clients
+    must serialize concurrent refreshes rather than racing them.
+    """
+    auth_service = request.app.state.auth_service
+    result = await auth_service.refresh_user_session(body.refresh_token)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        )
+    user, access, refresh, expires_in = result
     return AuthTokenResponse(
-        access_token=token,
-        user_id=user_id,
+        access_token=access,
+        user_id=user["id"],
         email=user["email"],
-        role=role,
+        role=user["role"],
         scheduled_deletion_at=user.get("scheduled_deletion_at"),
+        refresh_token=refresh,
+        expires_in=expires_in,
     )
 
 
@@ -171,12 +241,16 @@ async def verify_email(request: Request, body: VerifyEmailRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "verification_code_invalid"},
         )
-    return AuthTokenResponse(
-        access_token=token,
-        user_id=user_id,
-        email=body.email,
-        role=role,
-        scheduled_deletion_at=scheduled_deletion_at,
+    return await _apply_refreshable_session(
+        auth_service,
+        AuthTokenResponse(
+            access_token=token,
+            user_id=user_id,
+            email=body.email,
+            role=role,
+            scheduled_deletion_at=scheduled_deletion_at,
+        ),
+        refreshable=body.refreshable,
     )
 
 

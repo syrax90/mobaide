@@ -134,7 +134,9 @@ without the flag does NOT start it. Production deployments never bring it up.
   else's inbox.
 * **Mobile refresh tokens are bulk-revoked** for every agent the user
   owns. A compromised mobile session can't outlast the password rotation
-  past the access-token TTL.
+  past the access-token TTL. The same call revokes the user's browser
+  session refresh tokens (the opt-in `refreshable: true` sessions the web
+  client mints), so a hijacked tab dies on its next rotation too.
 * **Password-changed notification email** is fired on every successful
   reset so the legitimate owner sees the event even if their primary
   inbox is the only thing the attacker hasn't compromised.

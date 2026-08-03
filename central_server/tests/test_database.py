@@ -984,7 +984,7 @@ class TestPushColumnsMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 17
+        assert (await cursor.fetchone())[0] == 18
         cursor = await db.conn.execute("PRAGMA table_info(mobile_devices)")
         columns = {r[1] for r in await cursor.fetchall()}
         assert {"platform", "push_token", "push_environment"} <= columns
@@ -1110,7 +1110,7 @@ class TestAdminOwnedAgentPurgeMigration:
 
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 17
+        assert row[0] == 18
 
         # v4 purges admin-owned agents + their cascade rows.
         assert await db.get_agent(admin_agent_id) is None
@@ -1140,7 +1140,7 @@ class TestAdminOwnedAgentPurgeMigration:
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
         row = await cursor.fetchone()
-        assert row[0] == 17
+        assert row[0] == 18
         await db.close()
 
 
@@ -1946,7 +1946,7 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 17
+        assert (await cursor.fetchone())[0] == 18
 
         # Table is usable and the NOCASE unique index came back with it.
         row = await db.create_custom_agent_type(owner, "Aider", "c1")
@@ -1960,6 +1960,6 @@ class TestCustomAgentTypesMigration:
         db = Database(db_path)
         await db.connect()
         cursor = await db.conn.execute("PRAGMA user_version")
-        assert (await cursor.fetchone())[0] == 17
+        assert (await cursor.fetchone())[0] == 18
         assert await db.get_custom_agent_type(row["id"]) is not None
         await db.close()

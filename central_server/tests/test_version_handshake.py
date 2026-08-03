@@ -7,13 +7,17 @@ from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from httpx import ASGITransport, AsyncClient
 
 from central_server import __version__
+from central_server.app import create_app
+from central_server.config import CentralServerConfig
 from central_server.manifest.store import ManifestStore, canonical_json
 from central_server.relay.envelope import (
     MIN_CLIENT_PROTOCOL_VERSION,
     SUPPORTED_PROTOCOL_VERSIONS,
 )
+from tests.conftest import TEST_JWT_SECRET
 
 
 def _signed_manifest(tmp_path: Path) -> tuple[Ed25519PrivateKey, str, dict, str]:
@@ -46,6 +50,40 @@ async def test_get_version_without_manifest(client) -> None:
     # over the relay WebSocket; it is not echoed back through ``/api/version``.
     assert "manifest_url" not in body
     assert "manifest_signature" not in body
+
+
+async def test_get_version_reports_no_google_client_id_when_unconfigured(
+    client,
+) -> None:
+    response = await client.get("/api/version")
+    # Present-but-null, not absent: the SPA's bootstrap parses the key and
+    # hides the Google button when it is null.
+    assert response.json()["google_client_id"] is None
+
+
+async def test_get_version_carries_the_configured_google_client_id(tmp_path) -> None:
+    """The browser SPA is served as static files with no build-time config
+    channel, so one anonymous probe has to cover the GIS client id too."""
+    config = CentralServerConfig(
+        jwt_secret_key=TEST_JWT_SECRET,
+        db_path=str(tmp_path / "gis.db"),
+        log_level="DEBUG",
+        log_format="console",
+        google_client_id="web-client.apps.googleusercontent.com",
+        manifest_store_path=str(tmp_path / "manifest.json"),
+    )
+    application = create_app(config=config)
+    application.state.manifest_store = ManifestStore(config.manifest_store_path)
+
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="https://test") as anon:
+        response = await anon.get("/api/version")
+
+    assert response.status_code == 200
+    assert (
+        response.json()["google_client_id"]
+        == "web-client.apps.googleusercontent.com"
+    )
 
 
 async def test_get_version_with_manifest(client, app, tmp_path) -> None:

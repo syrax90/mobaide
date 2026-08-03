@@ -76,6 +76,11 @@
             "minLength": 1,
             "title": "Nonce",
             "type": "string"
+          },
+          "refreshable": {
+            "default": false,
+            "title": "Refreshable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -86,7 +91,7 @@
         "type": "object"
       },
       "AuthTokenResponse": {
-        "description": "Response for register / login / verify-email / google.\n\nWhen ``status == \"verification_required\"`` (returned by /register when the\nserver enforces verification), ``access_token`` is ``None`` and the client\nmust call /verify-email with the code from the OTP email to obtain the JWT.\nFor all other ``status`` values (currently just ``\"ok\"``) a valid\n``access_token`` is always present.\n\n``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is\nin the soft-delete grace window \u2014 clients surface a \"cancel scheduled\ndeletion\" banner so the user can restore the account.",
+        "description": "Response for register / login / verify-email / google.\n\nWhen ``status == \"verification_required\"`` (returned by /register when the\nserver enforces verification), ``access_token`` is ``None`` and the client\nmust call /verify-email with the code from the OTP email to obtain the JWT.\nFor all other ``status`` values (currently just ``\"ok\"``) a valid\n``access_token`` is always present.\n\n``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is\nin the soft-delete grace window \u2014 clients surface a \"cancel scheduled\ndeletion\" banner so the user can restore the account.\n\n``refresh_token`` and ``expires_in`` are non-null only when the request\nasked for a refreshable session (see ``RefreshableSessionRequest``). This\nis also the response of ``POST /api/auth/refresh``, where ``status`` is\nalways ``\"ok\"``.",
         "properties": {
           "access_token": {
             "anyOf": [
@@ -102,6 +107,28 @@
           "email": {
             "title": "Email",
             "type": "string"
+          },
+          "expires_in": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires In"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
           },
           "role": {
             "title": "Role",
@@ -380,7 +407,7 @@
         "type": "object"
       },
       "DeviceResponse": {
-        "description": "One entry in the user's ``GET /api/devices`` listing.",
+        "description": "One entry in the user's ``GET /api/devices`` listing.\n\n``platform`` is the free-form label the device sent when it last minted\nagent tokens (``\"ios\"``, ``\"android\"``, ``\"web\"``); it is null for rows\nregistered by a client that omitted the field.",
         "properties": {
           "created_at": {
             "title": "Created At",
@@ -411,6 +438,17 @@
               }
             ],
             "title": "Name"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
           }
         },
         "required": [
@@ -451,6 +489,11 @@
           "id_token": {
             "title": "Id Token",
             "type": "string"
+          },
+          "refreshable": {
+            "default": false,
+            "title": "Refreshable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1102,6 +1145,11 @@
           "password": {
             "title": "Password",
             "type": "string"
+          },
+          "refreshable": {
+            "default": false,
+            "title": "Refreshable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1109,6 +1157,21 @@
           "password"
         ],
         "title": "UserLoginRequest",
+        "type": "object"
+      },
+      "UserRefreshRequest": {
+        "description": "Body for ``POST /api/auth/refresh``.\n\nUnauthenticated by design \u2014 the refresh token *is* the credential, so\npresenting a dead access token alongside it must not matter.",
+        "properties": {
+          "refresh_token": {
+            "minLength": 1,
+            "title": "Refresh Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "UserRefreshRequest",
         "type": "object"
       },
       "UserRegisterRequest": {
@@ -1120,6 +1183,11 @@
           "password": {
             "title": "Password",
             "type": "string"
+          },
+          "refreshable": {
+            "default": false,
+            "title": "Refreshable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1178,6 +1246,11 @@
           "email": {
             "title": "Email",
             "type": "string"
+          },
+          "refreshable": {
+            "default": false,
+            "title": "Refreshable",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1613,6 +1686,48 @@
           }
         },
         "summary": "Cancel Account Deletion",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "description": "Rotate a user-session refresh token into a fresh access token.\n\nUnauthenticated by design: the refresh token is the credential, and the\naccess token this call replaces has usually already expired. The\npresented refresh token is consumed, so a replay returns 401 \u2014 clients\nmust serialize concurrent refreshes rather than racing them.",
+        "operationId": "refresh_session_api_auth_refresh_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserRefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Session",
         "tags": [
           "auth"
         ]

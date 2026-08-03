@@ -1,7 +1,14 @@
 import { expect, test } from '@playwright/test';
+import { signIn, stubRelay } from './fixtures';
 
-test('home page renders the heading and nav brand', async ({ page }) => {
-  await page.goto('/');
+test('home page renders the heading and nav brand for a signed-in visitor', async ({
+  page,
+}) => {
+  await stubRelay(page);
+
+  await page.goto('/login');
+  await signIn(page);
+  await expect(page).toHaveURL(/:\d+\/$/);
 
   await expect(
     page.getByRole('heading', { level: 1, name: 'Mobaide Web' }),
@@ -12,7 +19,10 @@ test('home page renders the heading and nav brand', async ({ page }) => {
 });
 
 test('theme toggle cycles the preference and stamps html[data-theme]', async ({ page }) => {
-  await page.goto('/');
+  // The toggle lives in the shared ThemeToggle component rendered by both
+  // AuthLayout and RootLayout, so /login (reachable while signed out) is
+  // enough — no sign-in round trip needed for this assertion.
+  await page.goto('/login');
 
   const html = page.locator('html');
   const toggle = page.getByRole('button', { name: /^Theme:/ });
