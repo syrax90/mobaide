@@ -44,23 +44,27 @@ let consecutiveFailures = 0;
 let declaredOffline = false;
 let lastRestReachableAt = 0;
 let probeTimer: ReturnType<typeof setInterval> | null = null;
-let probeInFlight = false;
+let pendingProbe: Promise<boolean> | null = null;
 let probeFetch: typeof fetch = (...args) => fetch(...args);
+
+/**
+ * Bumped by every piece of positive evidence, including when the app is already
+ * online.
+ *
+ * `goOnline()` returns early in that case and would otherwise leave no trace an
+ * in-flight confirmation probe could observe — so a probe that rejected *after*
+ * the socket came back would still declare the app offline, with a healthy
+ * connection open and nothing to correct it until the next interval tick.
+ */
+let reachabilityGeneration = 0;
 
 function stopProbing(): void {
   if (probeTimer === null) return;
   clearInterval(probeTimer);
   probeTimer = null;
-  probeInFlight = false;
 }
 
-/** Resolves true when the server answered. */
-async function probeOnce(): Promise<boolean> {
-  // A blackholed network leaves a fetch pending far longer than the interval,
-  // so without both guards probes stack up for the whole outage and land as a
-  // burst when connectivity returns.
-  if (probeInFlight) return false;
-  probeInFlight = true;
+async function runProbe(): Promise<boolean> {
   try {
     // Any status at all is proof the server answered; only a rejected fetch
     // means still unreachable.
@@ -73,11 +77,28 @@ async function probeOnce(): Promise<boolean> {
     goOnline();
     return true;
   } catch {
-    // Still down — the next tick tries again.
     return false;
-  } finally {
-    probeInFlight = false;
   }
+}
+
+/**
+ * Probe, sharing one in-flight request between concurrent callers.
+ *
+ * Sharing rather than declining matters: a caller told "another probe is
+ * running" cannot tell that from "the server did not answer", and the offline
+ * decision reads exactly that boolean. A blackholed network — the case the gate
+ * exists to arbitrate — leaves the first probe pending for the full timeout,
+ * which is precisely when a second caller arrives.
+ */
+function probeOnce(): Promise<boolean> {
+  const existing = pendingProbe;
+  if (existing !== null) return existing;
+  const probe = runProbe();
+  pendingProbe = probe;
+  void probe.finally(() => {
+    if (pendingProbe === probe) pendingProbe = null;
+  });
+  return probe;
 }
 
 function startProbing(): void {
@@ -99,6 +120,7 @@ function restRecentlyReachable(): boolean {
 
 function goOnline(): void {
   consecutiveFailures = 0;
+  reachabilityGeneration += 1;
   if (!declaredOffline) return;
   declaredOffline = false;
   stopProbing();
@@ -130,8 +152,12 @@ function recordFailure(): void {
 
 async function confirmOfflineByProbe(): Promise<void> {
   if (declaredOffline) return;
+  const generation = reachabilityGeneration;
   const reachable = await probeOnce();
-  if (reachable || declaredOffline) return;
+  // Anything positive that landed while this was in flight outranks a stale
+  // negative — the socket opening, a REST response, or a concurrent probe
+  // succeeding.
+  if (reachable || declaredOffline || generation !== reachabilityGeneration) return;
   declaredOffline = true;
   onlineManager.setOnline(false);
   startProbing();
@@ -183,6 +209,8 @@ export function resetReachability(fetchImpl: typeof fetch = (...args) => fetch(.
   consecutiveFailures = 0;
   declaredOffline = false;
   lastRestReachableAt = 0;
+  reachabilityGeneration += 1;
+  pendingProbe = null;
   stopProbing();
   probeFetch = fetchImpl;
   onlineManager.setOnline(true);

@@ -182,3 +182,61 @@ describe('reachability recovery', () => {
     expect(onlineManager.isOnline()).toBe(false);
   });
 });
+
+describe('reachability probe races', () => {
+  /** A probe whose settlement the test controls, so overlap is deterministic. */
+  function deferredProbe() {
+    const settlers: { resolve: () => void; reject: () => void }[] = [];
+    const state = { calls: 0 };
+    const probeFetch: typeof fetch = () =>
+      new Promise<Response>((resolve, reject) => {
+        state.calls += 1;
+        settlers.push({
+          resolve: () => {
+            resolve(new Response(null, { status: 200 }));
+          },
+          reject: () => {
+            reject(new Error('unreachable'));
+          },
+        });
+      });
+    return { state, probeFetch, settlers };
+  }
+
+  it('does not go offline off a probe that is merely already in flight', async () => {
+    // Two callers overlap inside the 5 s probe timeout — the second used to be
+    // told "false" meaning "busy" and read it as "the server is gone".
+    const deferred = deferredProbe();
+    resetReachability(deferred.probeFetch);
+    const channel = fakeChannel();
+
+    channel.emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
+    channel.emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // One shared request, and nothing decided while it is pending.
+    expect(deferred.state.calls).toBe(1);
+    expect(onlineManager.isOnline()).toBe(true);
+
+    deferred.settlers[0]?.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onlineManager.isOnline()).toBe(true);
+  });
+
+  it('lets the socket coming back outrank a probe that rejects afterwards', async () => {
+    const deferred = deferredProbe();
+    resetReachability(deferred.probeFetch);
+    const channel = fakeChannel();
+
+    channel.emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Newer positive evidence lands while the confirmation is still pending.
+    channel.emit({ kind: 'connected' });
+    deferred.settlers[0]?.reject();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onlineManager.isOnline()).toBe(true);
+  });
+});

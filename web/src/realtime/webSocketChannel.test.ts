@@ -446,3 +446,60 @@ describe('WebSocketChannel agent credential rotation', () => {
     expect(h.channel.currentState.status).toBe('connecting');
   });
 });
+
+describe('WebSocketChannel unbuildable agent URLs', () => {
+  it('stops retrying a mint that keeps failing, instead of looping forever', async () => {
+    // `ensureAgentToken` collapses every error to null, including the permanent
+    // 403 that follows a 4003 "user does not own this agent" close.
+    const timers = fakeScheduler();
+    const { sockets, socketFactory } = recordingSocketFactory();
+    const channel = new WebSocketChannel({
+      name: 'agent-events:A1',
+      axis: 'agent',
+      buildUrl: () => Promise.resolve(null),
+      scheduler: timers.scheduler,
+      random: () => 1,
+      socketFactory,
+    });
+
+    channel.connect();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await settle();
+      if (timers.pending.length === 0) break;
+      timers.runNext();
+    }
+
+    expect(sockets).toHaveLength(0);
+    expect(timers.pending).toHaveLength(0);
+    expect(channel.currentState.status).toBe('stopped');
+  });
+
+  it('forgets earlier mint failures once one succeeds', async () => {
+    const timers = fakeScheduler();
+    const { sockets, socketFactory } = recordingSocketFactory();
+    let mintFails = 3;
+    const channel = new WebSocketChannel({
+      name: 'agent-events:A1',
+      axis: 'agent',
+      buildUrl: () => {
+        if (mintFails > 0) {
+          mintFails -= 1;
+          return Promise.resolve(null);
+        }
+        return Promise.resolve('ws://relay.test/relay/ws/events/A1?token=t');
+      },
+      scheduler: timers.scheduler,
+      random: () => 1,
+      socketFactory,
+    });
+
+    channel.connect();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await settle();
+      if (timers.pending.length > 0) timers.runNext();
+    }
+    await settle();
+
+    expect(sockets).toHaveLength(1);
+  });
+});

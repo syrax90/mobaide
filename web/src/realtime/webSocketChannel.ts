@@ -9,9 +9,11 @@
  *   superseded socket, so a stale one cannot emit a phantom `disconnected` or
  *   trigger a reconnect.
  * - `buildUrl` is re-evaluated on every (re)connect attempt, so a rotated token
- *   is picked up without rebuilding the channel. Resolving to `null` emits
- *   `disconnected` and schedules **no** reconnect (logged out, or no agent
- *   token available); throwing emits `error` and likewise stops.
+ *   is picked up without rebuilding the channel. Resolving to `null` means
+ *   different things per axis: on the user axis it is "signed out" and stops,
+ *   while on the agent axis it usually means the network token mint failed, so
+ *   it retries — bounded, because a permanent 403 looks identical. Throwing
+ *   emits `error` and stops.
  * - Terminal outcomes ride the event stream (iOS's shape) instead of Android's
  *   constructor callbacks.
  * - Subscribe before calling `connect()`: the whole cold-start burst —
@@ -103,6 +105,19 @@ const WS_READY_OPEN = 1;
  */
 const PRE_OPEN_FAILURES_BEFORE_REMINT = 3;
 
+/**
+ * How many times the agent axis retries a URL it could not build before giving
+ * up.
+ *
+ * A null URL there usually means the token mint hit the network and failed, so
+ * retrying is right — but `ensureAgentToken` collapses every error to null,
+ * including the permanent `403 Not the owner of this agent` that follows a 4003
+ * close. Without a bound that becomes one `/token` POST per backoff interval
+ * forever. `connectAgentEvents` re-arms a stopped channel, so this is a pause,
+ * not a dead end.
+ */
+const MAX_UNBUILDABLE_URL_ATTEMPTS = 5;
+
 function defaultSocketFactory(url: string): WebSocketLike {
   return new WebSocket(url) as unknown as WebSocketLike;
 }
@@ -123,6 +138,7 @@ export class WebSocketChannel {
   private generation = 0;
   private openedThisCycle = false;
   private preOpenFailures = 0;
+  private unbuildableUrlAttempts = 0;
   private state: ChannelState = { status: 'idle', attempt: 0, lastCloseCode: null };
 
   constructor(options: WebSocketChannelOptions) {
@@ -260,19 +276,25 @@ export class WebSocketChannel {
 
     if (url === null) {
       this.emit({ kind: 'disconnected' });
+      this.unbuildableUrlAttempts += 1;
       // The two axes mean different things by "no URL". On the user axis it is
       // the mobile semantic — logged out, nothing to reconnect to — so stop
       // rather than burn the ladder. On the agent axis the token is minted over
-      // the network, so a null usually means the mint just failed; stopping
-      // there would strand the channel on a blip, which is exactly what the
-      // token-rotation path below would otherwise cause.
-      if (this.options.axis === 'user') {
+      // the network, so a null usually means the mint just failed and stopping
+      // would strand the channel on a blip; but the mint collapses a permanent
+      // 403 into the same null, so the retry has to be bounded.
+      if (
+        this.options.axis === 'user' ||
+        this.unbuildableUrlAttempts >= MAX_UNBUILDABLE_URL_ATTEMPTS
+      ) {
+        this.shouldReconnect = false;
         this.setState({ ...this.state, status: 'stopped' });
         return;
       }
       this.scheduleReconnect(null);
       return;
     }
+    this.unbuildableUrlAttempts = 0;
 
     let socket: WebSocketLike;
     try {

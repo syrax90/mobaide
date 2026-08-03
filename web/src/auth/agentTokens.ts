@@ -48,11 +48,24 @@ function isTokenPair(value: unknown): value is AgentTokenPair {
  */
 let memoryTokens: AgentTokenMap = {};
 
+/**
+ * False once `localStorage` has actually refused this page.
+ *
+ * The memory mirror may only *substitute* for storage, never merge with it. A
+ * revoked token deleted from storage by one tab would otherwise be resurrected
+ * in a peer that still held it in memory — and since a `mobile_access` JWT
+ * carries no `exp`, nothing would ever rotate it away again; the peer would
+ * keep presenting the dead credential and write it back to shared storage on
+ * its next rotation.
+ */
+let storageUsable = true;
+
 function readStored(): AgentTokenMap {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(STORAGE_KEY);
   } catch {
+    storageUsable = false;
     return {};
   }
   if (raw === null) return {};
@@ -70,13 +83,13 @@ function readStored(): AgentTokenMap {
 }
 
 function readAll(): AgentTokenMap {
-  // Storage wins where it has a value: it is the shared surface, so a peer
-  // tab's newer rotation must not be shadowed by this tab's older copy —
-  // that sharing is the whole reason the cross-tab lock has something to
-  // protect. Memory only fills the gaps, which is exactly the storage-denied
-  // case it exists for (there `readStored()` is empty and memory supplies
-  // everything).
-  return { ...memoryTokens, ...readStored() };
+  // Storage is authoritative whenever it works: it is the shared surface, so a
+  // peer tab's newer rotation must not be shadowed by this tab's older copy —
+  // and, just as importantly, a *deletion* by a peer must not be undone by this
+  // tab's memory. Memory is the whole answer only when storage has refused us,
+  // never a per-key fallback.
+  const stored = readStored();
+  return storageUsable ? stored : { ...memoryTokens, ...stored };
 }
 
 function writeAll(map: AgentTokenMap): void {
@@ -84,8 +97,11 @@ function writeAll(map: AgentTokenMap): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
-    // Storage denied — the memory mirror above keeps the axis working for this
-    // page, at the cost of not sharing it with other tabs.
+    // Storage denied — Safari-style "reads work, writes throw" included, which
+    // is why the flag is set here and not only on a failed read. The memory
+    // mirror keeps the axis working for this page, at the cost of not sharing
+    // it with other tabs.
+    storageUsable = false;
   }
 }
 

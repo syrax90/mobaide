@@ -66,9 +66,11 @@ export function closePolicyFor(
         : STOP;
 
     // The token was minted for a different agent, or ownership changed. Dropping
-    // it and reconnecting re-mints on the next attempt; if ownership really is
-    // gone the mint itself fails, the URL resolves to null, and the channel
-    // stops without a further reconnect.
+    // it and reconnecting re-mints on the next attempt. If ownership really is
+    // gone the mint keeps failing (`POST /api/agents/{id}/token` answers 403),
+    // and the channel stops after `MAX_UNBUILDABLE_URL_ATTEMPTS` — the agent
+    // axis retries a null URL because it usually means a transient mint
+    // failure, so the bound is what keeps a permanent 403 from looping.
     case WS_CLOSE.tokenNotValidForAgent:
       return axis === 'agent'
         ? { reconnect: true, terminal: null, clearAgentToken: true }

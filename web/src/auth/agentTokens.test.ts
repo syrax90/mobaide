@@ -67,3 +67,20 @@ describe('clearAgentToken', () => {
     expect(getAgentToken('a1')).toBe('access-a1');
   });
 });
+
+describe('cross-tab deletion', () => {
+  it('does not resurrect a pair a peer tab deleted from shared storage', () => {
+    // Storage is the shared surface. Memory used to gap-fill any key missing
+    // from it, so a revoked credential came straight back — and with no `exp`
+    // on a mobile_access JWT nothing would ever rotate it away again.
+    seed('a1', 'a2');
+    // A write in this tab, which is what populates its in-memory mirror.
+    clearAgentToken('a2');
+    expect(getAgentToken('a1')).toBe('access-a1');
+
+    // The peer tab's delete, landing in storage behind this tab's back.
+    seed();
+
+    expect(getAgentToken('a1')).toBeNull();
+  });
+});
