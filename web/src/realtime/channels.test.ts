@@ -4,21 +4,27 @@ import {
   recordingSocketFactory,
   settle,
 } from './__testing__/fakeSocket';
+import { useSessionStore } from '../auth/sessionStore';
 import { useConnectionStore } from './connectionStore';
 import { disposeAllChannels } from './liveChannels';
 
 // The credential seams are the only part of WEB-03 these channels touch, and
 // both would go to the network. Everything else in the graph is the real thing.
-const auth = vi.hoisted<{ userToken: string | null; agentToken: string | null }>(() => ({
+const auth = vi.hoisted<{
+  userToken: string | null;
+  agentToken: string | null;
+  refreshOutcome: { kind: string };
+}>(() => ({
   userToken: 'user-jwt',
   agentToken: 'agent-jwt',
+  refreshOutcome: { kind: 'success' },
 }));
 
 vi.mock('../auth/sessionTransport', () => ({
   getAccessToken: () => auth.userToken,
 }));
 vi.mock('../auth/userTokens', () => ({
-  ensureFreshUserToken: () => Promise.resolve(),
+  ensureFreshUserToken: () => Promise.resolve(auth.refreshOutcome),
 }));
 vi.mock('../auth/agentTokens', () => ({
   ensureAgentToken: () => Promise.resolve(auth.agentToken),
@@ -63,6 +69,7 @@ function byteFrame(value: string | ArrayBufferView | undefined): number[] {
 beforeEach(() => {
   auth.userToken = 'user-jwt';
   auth.agentToken = 'agent-jwt';
+  auth.refreshOutcome = { kind: 'success' };
 });
 
 describe('channel URLs', () => {
@@ -273,5 +280,37 @@ describe('disposable channel registry', () => {
     expect(() => {
       disposeAllChannels();
     }).not.toThrow();
+  });
+});
+
+describe('user channel credential outcome', () => {
+  it('ends the session when the refresh reports it is terminal', async () => {
+    // /api/auth/refresh is in UNAUTHENTICATED_PATHS so its 401 never reaches
+    // the REST teardown, and 4001 is sent pre-accept so it arrives as 1006 —
+    // this outcome is the only place a dead session is observable here.
+    auth.refreshOutcome = { kind: 'terminal' };
+    const invalidate = vi.fn();
+    vi.spyOn(useSessionStore, 'getState').mockReturnValue({
+      invalidateUserSession: invalidate,
+    } as unknown as ReturnType<typeof useSessionStore.getState>);
+    const seams = testSeams();
+
+    createUserEventsChannel(seams.overrides).connect();
+    await settle();
+
+    expect(invalidate).toHaveBeenCalledWith('tokenRejected');
+    expect(seams.sockets).toHaveLength(0);
+    vi.restoreAllMocks();
+  });
+
+  it('keeps reconnecting when the refresh is merely transient', async () => {
+    auth.refreshOutcome = { kind: 'transient' };
+    const seams = testSeams();
+
+    createUserEventsChannel(seams.overrides).connect();
+    await settle();
+
+    // A flaky network must not sign anyone out; the cached token still goes out.
+    expect(seams.sockets).toHaveLength(1);
   });
 });

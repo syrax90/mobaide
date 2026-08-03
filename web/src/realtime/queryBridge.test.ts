@@ -147,10 +147,13 @@ describe('applyAgentEvent', () => {
 });
 
 describe('refresh on connect', () => {
-  it('reconciles the four account lists the user channel keeps fresh', () => {
+  it('reconciles the account lists and re-probes the version gate', () => {
     refreshOnUserEventsConnect(client);
 
+    // server-info is pinned at staleTime: Infinity and 4002 never reaches a
+    // user socket, so reconnect is the only thing that re-evaluates the gate.
     expect(invalidated).toEqual([
+      ['server-info'],
       ['agents'],
       ['templates'],
       ['shortcuts'],

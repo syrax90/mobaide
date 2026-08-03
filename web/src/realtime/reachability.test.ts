@@ -59,10 +59,25 @@ describe('observeReachability', () => {
     expect(onlineManager.isOnline()).toBe(true);
   });
 
-  it('declares offline on the second consecutive pre-open failure', () => {
+  it('declares offline once a probe confirms the server is gone', async () => {
+    // Two pre-open failures raise the question; the probe answers it. A failing
+    // socket on its own is never enough, because that is also what a blocked
+    // WebSocket upgrade over a healthy network looks like.
     fakeChannel().emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
 
+    expect(probe.state.calls).toBe(1);
     expect(onlineManager.isOnline()).toBe(false);
+  });
+
+  it('stays online when the confirming probe finds the server answering', async () => {
+    // The blocked-upgrade case: HTTP works, so the app must not go offline at
+    // all — not go offline and get rescued by the next probe.
+    probe.state.answers = true;
+    fakeChannel().emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onlineManager.isOnline()).toBe(true);
   });
 
   it('does not count a dropped established connection as a failure', () => {
@@ -92,6 +107,7 @@ describe('observeReachability', () => {
 describe('reachability recovery', () => {
   it('goes back online when a REST call answers, and stops probing', async () => {
     fakeChannel().emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
     const probesBeforeRecovery = probe.state.calls;
 
     reportRestReachable();
@@ -116,9 +132,9 @@ describe('reachability recovery', () => {
     // the app offline forever, because TanStack pauses the requests that would
     // clear the flag.
     fakeChannel().emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
 
-    // Probed at once rather than only on the first tick: TanStack pauses
-    // mutations while offline, so an arming delay is dead UI time.
+    // The confirming probe failed, so the interval takes over from here.
     expect(probe.state.calls).toBe(1);
     expect(onlineManager.isOnline()).toBe(false);
 
@@ -133,10 +149,8 @@ describe('reachability recovery', () => {
     expect(onlineManager.isOnline()).toBe(true);
   });
 
-  it('disbelieves a WebSocket-only failure while HTTP is proven reachable', () => {
-    // The blocked-upgrade case: without this the app would flip offline every
-    // time the socket failed twice, and back online on the next probe, forever
-    // — each flip firing a full refetch sweep.
+  it('disbelieves a WebSocket-only failure without even probing', () => {
+    // Fresh REST evidence already answers the question, so no probe is spent.
     reportRestReachable();
     fakeChannel().emit({ kind: 'disconnected' }, { kind: 'disconnected' });
 
@@ -144,11 +158,26 @@ describe('reachability recovery', () => {
     expect(probe.state.calls).toBe(0);
   });
 
-  it('stops disbelieving once the REST evidence goes stale', () => {
+  it('keeps honouring the two-failure rule after suppressing a transition', () => {
+    // The suppressing branch has to reset the counter, or the first failure
+    // after the trust window expired would flip offline on its own.
+    reportRestReachable();
+    const channel = fakeChannel();
+    channel.emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    vi.advanceTimersByTime(61_000);
+
+    channel.emit({ kind: 'disconnected' });
+
+    expect(probe.state.calls).toBe(0);
+    expect(onlineManager.isOnline()).toBe(true);
+  });
+
+  it('probes again once the REST evidence goes stale', async () => {
     reportRestReachable();
     vi.advanceTimersByTime(61_000);
 
     fakeChannel().emit({ kind: 'disconnected' }, { kind: 'disconnected' });
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(onlineManager.isOnline()).toBe(false);
   });

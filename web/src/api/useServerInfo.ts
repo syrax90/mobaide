@@ -7,9 +7,12 @@ import { fetchServerInfo, type ServerInfo } from './bootstrap';
  * Google button.
  *
  * `staleTime: Infinity` because the answer only changes when the server is
- * redeployed — and the WebSocket 4002 close is the backstop that catches an
- * upgrade landing mid-session (WEB-04). A failed probe must not block the app,
- * so callers treat `undefined` as "no gate".
+ * redeployed. What catches a redeploy landing mid-session is the user-events
+ * channel reconnecting — `refreshOnUserEventsConnect` invalidates this key,
+ * and a redeploy necessarily drops the socket. Not close code 4002: no server
+ * path sends it to a user socket (it is the relay↔agent handshake only), so
+ * the 4002 handler is parity, not a backstop. A failed probe must not block the
+ * app, so callers treat `undefined` as "no gate".
  */
 export function useServerInfo() {
   return useQuery<ServerInfo>({

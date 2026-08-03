@@ -176,6 +176,22 @@ per-agent tokens are always re-mintable — 4001 and 4003 additionally drop
 the cached token so the next connect re-mints. 4011, 4012 (the ordinary
 attach-to-an-offline-agent case) and 1013 always reconnect.
 
+The 4002 branch is parity, not a live path: no server route sends it to a
+user socket (it is the relay↔agent handshake only). What actually catches a
+redeploy landing mid-session is the reconnect itself — a redeploy drops the
+socket, and `refreshOnUserEventsConnect` invalidates `['server-info']`, whose
+query is otherwise pinned at `staleTime: Infinity`. Android re-probes on every
+launch for the same reason.
+
+Because the relay only authenticates at handshake and a per-agent JWT is
+minted without an `exp`, a rejected agent credential is otherwise invisible
+and never rotated. Three consecutive failures to open an agent channel
+therefore drop the cached token so the next attempt re-mints. This is also
+why a null URL is treated differently per axis: on the user axis it means
+signed out and the channel stops, while on the agent axis it usually means the
+mint itself just failed, so the channel keeps backing off rather than
+stranding on a blip.
+
 **Known browser limitation:** the server sends 4001/4010 *before*
 `websocket.accept()`, ASGI turns that into an HTTP 403 handshake rejection,
 and the WebSocket API exposes no upgrade status — so those two normally

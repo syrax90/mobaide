@@ -385,3 +385,64 @@ describe('WebSocketChannel error reporting', () => {
     expect(message).toContain('token=<redacted>');
   });
 });
+
+describe('WebSocketChannel agent credential rotation', () => {
+  function agentHarness(buildUrl: () => Promise<string | null>) {
+    const { sockets, socketFactory } = recordingSocketFactory();
+    const timers = fakeScheduler();
+    let cleared = 0;
+    const channel = new WebSocketChannel({
+      name: 'agent-events:A1',
+      axis: 'agent',
+      buildUrl,
+      scheduler: timers.scheduler,
+      random: () => 1,
+      socketFactory,
+      onClearAgentToken: () => {
+        cleared += 1;
+      },
+    });
+    return { channel, sockets, timers, cleared: () => cleared };
+  }
+
+  it('drops the cached token after three failures to even open', async () => {
+    // A per-agent JWT is minted without an exp, so nothing else ever rotates
+    // it, and the relay's 4001 arrives as an opaque 1006.
+    const h = agentHarness(() => Promise.resolve('ws://relay.test/relay/ws/events/A1?token=t'));
+
+    h.channel.connect();
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await settle();
+      h.sockets.at(-1)?.serverClose(1006);
+      if (attempt < 3) h.timers.runNext();
+    }
+
+    expect(h.cleared()).toBe(1);
+  });
+
+  it('does not rotate on a socket that opened before dropping', async () => {
+    const h = agentHarness(() => Promise.resolve('ws://relay.test/relay/ws/events/A1?token=t'));
+
+    h.channel.connect();
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await settle();
+      h.sockets.at(-1)?.accept();
+      h.sockets.at(-1)?.serverClose(1006);
+      if (attempt < 3) h.timers.runNext();
+    }
+
+    expect(h.cleared()).toBe(0);
+  });
+
+  it('keeps backing off when a mint fails, rather than stranding the channel', async () => {
+    // On the agent axis a null URL usually means the network mint just failed,
+    // unlike the user axis where it means signed out.
+    const h = agentHarness(() => Promise.resolve(null));
+
+    h.channel.connect();
+    await settle();
+
+    expect(h.timers.pending).toHaveLength(1);
+    expect(h.channel.currentState.status).toBe('connecting');
+  });
+});

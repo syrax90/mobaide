@@ -15,6 +15,7 @@
  */
 import { getAccessToken } from '../auth/sessionTransport';
 import { clearAgentToken, ensureAgentToken } from '../auth/agentTokens';
+import { useSessionStore } from '../auth/sessionStore';
 import { ensureFreshUserToken } from '../auth/userTokens';
 import { AutoScanCursor, buildSubscribeMessage } from '../protocol/autoscanFrames';
 import { buildWebSocketUrl } from '../protocol/relayUrls';
@@ -60,7 +61,20 @@ type ChannelOverrides = Partial<
 async function userToken(): Promise<string | null> {
   // Pre-emptive, like the mobile URL providers: a token that expires seconds
   // after the handshake would strand the socket until the next close.
-  await ensureFreshUserToken();
+  //
+  // The outcome has to be honoured, not discarded. `/api/auth/refresh` is in
+  // `UNAUTHENTICATED_PATHS`, so its 401 never reaches the REST teardown — and
+  // the close code that would say so never reaches a browser either (4001 is
+  // sent pre-accept and arrives as 1006). This is the only place a dead
+  // session is observable on this axis; without it the channel would reconnect
+  // forever presenting a token the server has already rejected, behind a UI
+  // that still looks signed in. Only `terminal` acts: `transient` is a flaky
+  // network and must not sign anyone out.
+  const outcome = await ensureFreshUserToken();
+  if (outcome.kind === 'terminal') {
+    useSessionStore.getState().invalidateUserSession('tokenRejected');
+    return null;
+  }
   return getAccessToken();
 }
 

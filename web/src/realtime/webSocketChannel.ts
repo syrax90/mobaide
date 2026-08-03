@@ -96,6 +96,13 @@ export interface WebSocketChannelOptions {
 
 const WS_READY_OPEN = 1;
 
+/**
+ * Consecutive failures to even open before the agent credential is assumed
+ * stale. Above one so a plain relay outage does not burn a good token, low
+ * enough that recovery costs a few seconds of backoff rather than a reload.
+ */
+const PRE_OPEN_FAILURES_BEFORE_REMINT = 3;
+
 function defaultSocketFactory(url: string): WebSocketLike {
   return new WebSocket(url) as unknown as WebSocketLike;
 }
@@ -114,6 +121,8 @@ export class WebSocketChannel {
   private shouldReconnect = false;
   private connecting = false;
   private generation = 0;
+  private openedThisCycle = false;
+  private preOpenFailures = 0;
   private state: ChannelState = { status: 'idle', attempt: 0, lastCloseCode: null };
 
   constructor(options: WebSocketChannelOptions) {
@@ -250,11 +259,18 @@ export class WebSocketChannel {
     if (myGeneration !== this.generation || !this.shouldReconnect) return;
 
     if (url === null) {
-      // Not connectable right now — logged out, or no agent token could be
-      // minted. Mirrors the mobile URL providers: emit disconnected and stop
-      // rather than burning the backoff ladder on a URL that cannot exist.
       this.emit({ kind: 'disconnected' });
-      this.setState({ ...this.state, status: 'stopped' });
+      // The two axes mean different things by "no URL". On the user axis it is
+      // the mobile semantic — logged out, nothing to reconnect to — so stop
+      // rather than burn the ladder. On the agent axis the token is minted over
+      // the network, so a null usually means the mint just failed; stopping
+      // there would strand the channel on a blip, which is exactly what the
+      // token-rotation path below would otherwise cause.
+      if (this.options.axis === 'user') {
+        this.setState({ ...this.state, status: 'stopped' });
+        return;
+      }
+      this.scheduleReconnect(null);
       return;
     }
 
@@ -296,6 +312,8 @@ export class WebSocketChannel {
 
     socket.onopen = () => {
       if (myGeneration !== this.generation) return;
+      this.openedThisCycle = true;
+      this.preOpenFailures = 0;
       this.backoff.reset();
       this.setState({ status: 'connected', attempt: 0, lastCloseCode: null });
       this.options.onOpen?.((data) => this.send(data));
@@ -331,8 +349,24 @@ export class WebSocketChannel {
     this.socket = null;
     this.emit({ kind: 'disconnected' });
 
+    const openedThisCycle = this.openedThisCycle;
+    this.openedThisCycle = false;
+    if (!openedThisCycle) this.preOpenFailures += 1;
+
     const policy = closePolicyFor(code, this.options.axis, reason);
-    if (policy.clearAgentToken) this.options.onClearAgentToken?.();
+    // A per-agent `mobile_access` JWT is minted without an `exp`, so
+    // `ensureAgentToken`'s freshness check never rotates it — and the relay
+    // rejects a bad one with 4001/4010 *before* accept, which a browser only
+    // sees as 1006. Without this the channel would re-present the same dead
+    // credential forever. Repeated failures to even open are the closest signal
+    // a browser gets, so treat them as the rejection the close code cannot
+    // deliver; the next connect re-mints.
+    const rotateCredential =
+      this.options.axis === 'agent' && this.preOpenFailures >= PRE_OPEN_FAILURES_BEFORE_REMINT;
+    if (policy.clearAgentToken || rotateCredential) {
+      this.preOpenFailures = 0;
+      this.options.onClearAgentToken?.();
+    }
     if (policy.terminal !== null) this.emit(policy.terminal);
 
     if (!policy.reconnect) {

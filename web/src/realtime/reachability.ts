@@ -5,16 +5,18 @@
  * Marking the app offline pauses **mutations** as well as queries, so the
  * policy is deliberately conservative:
  *
- * - offline only after two consecutive *pre-open* failures of the user-events
- *   channel, so a single blip does not freeze the UI;
+ * - two consecutive *pre-open* failures of the user-events channel are what
+ *   raise the question, so a single blip does not freeze the UI;
+ * - a failing WebSocket alone never answers it. Either HTTP was proven
+ *   reachable moments ago, or the anonymous `/api/version` endpoint is probed
+ *   before the app is declared offline — so a WebSocket upgrade blocked by a
+ *   proxy while HTTP works fine does not take the app offline at all, rather
+ *   than taking it offline and undoing that on the next probe;
  * - back online the instant the socket opens, on any REST response, and
  *   whenever the channel is intentionally stopped — which is the signed-out
  *   state, where the login mutations must never be paused;
- * - while offline, a periodic probe of the anonymous `/api/version` endpoint
- *   is the escape hatch. It is not optional: once offline, TanStack pauses the
- *   very requests whose responses would otherwise clear the flag, so a
- *   WebSocket upgrade blocked by a proxy while HTTP works fine would
- *   otherwise pin the app offline permanently.
+ * - while offline the probe repeats on an interval, because TanStack pauses the
+ *   very requests whose responses would otherwise clear the flag.
  */
 import { onlineManager } from '@tanstack/react-query';
 import type { ChannelEvent } from './webSocketChannel';
@@ -52,11 +54,12 @@ function stopProbing(): void {
   probeInFlight = false;
 }
 
-async function probeOnce(): Promise<void> {
+/** Resolves true when the server answered. */
+async function probeOnce(): Promise<boolean> {
   // A blackholed network leaves a fetch pending far longer than the interval,
   // so without both guards probes stack up for the whole outage and land as a
   // burst when connectivity returns.
-  if (probeInFlight) return;
+  if (probeInFlight) return false;
   probeInFlight = true;
   try {
     // Any status at all is proof the server answered; only a rejected fetch
@@ -68,8 +71,10 @@ async function probeOnce(): Promise<void> {
     });
     markRestReachable();
     goOnline();
+    return true;
   } catch {
     // Still down — the next tick tries again.
+    return false;
   } finally {
     probeInFlight = false;
   }
@@ -77,10 +82,8 @@ async function probeOnce(): Promise<void> {
 
 function startProbing(): void {
   if (probeTimer !== null) return;
-  // Probe immediately, not just on the first interval tick: TanStack pauses
-  // mutations while offline, so an arming delay is a window in which a user
-  // action sits silently frozen.
-  void probeOnce();
+  // No immediate probe here: going offline is already gated on one that just
+  // failed, so firing another straight away would only duplicate it.
   probeTimer = setInterval(() => {
     void probeOnce();
   }, OFFLINE_PROBE_INTERVAL_MS);
@@ -105,9 +108,30 @@ function goOnline(): void {
 function recordFailure(): void {
   consecutiveFailures += 1;
   if (declaredOffline || consecutiveFailures < OFFLINE_AFTER_FAILURES) return;
+
   // The WebSocket is the primary signal, but it is not the only transport. If
   // HTTP answered moments ago the socket is what is broken, not the network.
-  if (restRecentlyReachable()) return;
+  //
+  // Resetting the counter here is what keeps the "two consecutive failures"
+  // contract honest: leaving it climbing meant the first failure after the
+  // trust window expired flipped offline on its own.
+  if (restRecentlyReachable()) {
+    consecutiveFailures = 0;
+    return;
+  }
+
+  // No fresh HTTP evidence either way, so ask before declaring. Probing first
+  // rather than flipping offline and probing afterwards is what stops a
+  // WS-blocked-but-HTTP-fine network from oscillating: there, the probe
+  // succeeds and the app simply never goes offline.
+  consecutiveFailures = 0;
+  void confirmOfflineByProbe();
+}
+
+async function confirmOfflineByProbe(): Promise<void> {
+  if (declaredOffline) return;
+  const reachable = await probeOnce();
+  if (reachable || declaredOffline) return;
   declaredOffline = true;
   onlineManager.setOnline(false);
   startProbing();

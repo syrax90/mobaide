@@ -168,6 +168,13 @@ export function applyAgentEvent(
  */
 export function refreshOnUserEventsConnect(client: QueryClient): void {
   invalidate(client, [
+    // Re-probe the version gate. `useServerInfo` pins `staleTime: Infinity`, so
+    // without this a long-lived tab would never re-evaluate it — and close code
+    // 4002 cannot cover the gap: no server path sends it to a user socket (it
+    // is the relay↔agent handshake only). A relay redeploy necessarily drops
+    // this socket, which makes reconnect the honest trigger, and matches
+    // Android re-probing on every launch.
+    queryKeys.serverInfo(),
     queryKeys.agents(),
     queryKeys.templates(),
     queryKeys.shortcuts(),
