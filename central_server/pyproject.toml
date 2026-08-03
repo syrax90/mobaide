@@ -9,7 +9,9 @@ description = "Central relay server for Mobaide — WebSocket relay with user-ow
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",
-    "uvicorn[standard]",
+    # >=0.49: first release with the "websockets-sansio" ws implementation
+    # key that __main__.py pins; an older cached uvicorn dies at startup.
+    "uvicorn[standard]>=0.49",
     "PyJWT",
     "aiosqlite",
     "structlog>=24.1",

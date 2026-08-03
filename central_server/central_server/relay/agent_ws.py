@@ -14,6 +14,8 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .. import __version__
+from ..monitoring import record_send_queue_drop
+from ..ws_origin import enforce_ws_origin
 from .envelope import (
     CH_AUTOSCAN,
     CH_CONTROL,
@@ -59,6 +61,12 @@ _unknown_control_type_total = 0
 @router.websocket("/ws/agent-tunnel")
 async def agent_tunnel(websocket: WebSocket) -> None:
     """Long-lived multiplexed tunnel for a single agent."""
+    # Origin gate must precede accept(): this endpoint authenticates via an
+    # in-band frame *after* the handshake, so it is the one WS route where
+    # a browser page could otherwise complete a connection unauthenticated.
+    if not await enforce_ws_origin(websocket):
+        return
+
     await websocket.accept()
 
     app = websocket.app
@@ -478,7 +486,10 @@ def _try_enqueue(client: MobileClient, payload: bytes, *, binary: bool) -> None:
         else:
             client.send_queue.put_nowait(payload.decode("utf-8"))
     except asyncio.QueueFull:
-        pass
+        # No log: this is the agent→mobile fan-out hot path, and a slow
+        # mobile would turn every dropped frame into a log line. The
+        # counter surfaces the rate in monitoring.sample instead.
+        record_send_queue_drop("agent_to_mobile")
 
 
 def _enqueue_attach(conn, session_id: str) -> None:

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 
+from ..monitoring import record_send_queue_drop
+
 
 class PairingWsRegistry:
     """Single-flight registry; one waiter per nonce."""
@@ -49,5 +51,6 @@ class PairingWsRegistry:
         try:
             queue.put_nowait(payload)
         except asyncio.QueueFull:
+            record_send_queue_drop("pairing_push")
             return False
         return True

@@ -7,6 +7,8 @@
 #             /opt/mobaide/tls/origin-cert.pem
 #             /opt/mobaide/tls/origin-key.pem
 #           (both chmod 600, owner matches the user running docker compose).
+#           EXCEPTION: app.mobaide.com stays "DNS only" (gray cloud) with an
+#           ACME HTTP-01 cert — see the comment on its site block below.
 
 # Send www to the apex. Without this block Caddy matches no site for the www
 # host and answers its default empty 200, which is what www.mobaide.com did
@@ -39,8 +41,67 @@
 # its own HSTS. Two sources for one header is a way to lose track of what is
 # actually pinned — leave Cloudflare's HSTS off and keep this file authoritative.
 #
-# If the per-host site blocks land first, this directive belongs inside each of
-# them rather than in a shared block.
+# Each site block, including the (app_mobaide) snippet below, carries its own
+# copy of the header rather than inheriting it from a shared block.
+
+# app.mobaide.com — the browser SPA (web/), served same-origin with the relay
+# so CORS never enters the picture. This snippet MUST stay byte-identical in
+# Caddyfile.LetsEncrypt and Caddyfile.CloudflareOrigin: the deploy copies
+# exactly one of these files to the server whole, so there is no cross-file
+# include to share it.
+(app_mobaide) {
+    header Strict-Transport-Security "max-age=300"
+    encode zstd gzip
+
+    # Backend prefixes — same upstream as the apex/api block. Everything the
+    # SPA talks to is same-origin: fetch to /api, WebSockets to /ws and
+    # /relay, and the /proxy HTTP+WS agent passthrough. The list mirrors
+    # web/vite.config.ts's dev proxy — change both together.
+    @backend path /api /api/* /ws /ws/* /relay /relay/* /proxy /proxy/*
+    handle @backend {
+        reverse_proxy central-server:9000 {
+            # On a graceful `caddy reload`, keep already-established proxied
+            # streams (terminal WebSockets, agent tunnels) alive under the
+            # old config for up to this long instead of force-closing them
+            # the moment the config swaps. Only reloads benefit — container
+            # restarts still drop everything.
+            stream_close_delay 5m
+        }
+    }
+
+    # Everything else is the SPA: static files from the current release
+    # symlink, unknown paths rewritten to index.html for client-side routing.
+    handle {
+        root * /srv/www/current
+
+        # Static files never pass through central_server's security-header
+        # middleware, so this block carries its own copies of the universal
+        # headers plus the SPA CSP. The script-src hash pins the pre-paint
+        # theme-boot inline <script> in web/index.html; editing that script
+        # without updating the hash in BOTH Caddyfiles silently disables it
+        # (theme flash, nothing worse) — deploy_web.py preflights the match.
+        header {
+            Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DQjnNfb9BFsBDwtrOfOC9aSi5NaqDDr+KkPgo0PMtbY='; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            X-Frame-Options "DENY"
+            X-Content-Type-Options "nosniff"
+            Referrer-Policy "strict-origin-when-cross-origin"
+            Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        }
+
+        # route {} forces listed order: the cache headers must run AFTER the
+        # try_files rewrite so the /assets/* matcher sees the final path.
+        route {
+            try_files {path} /index.html
+            # index.html and unhashed public/ files (favicon.svg) must
+            # revalidate on every load so a deploy is visible immediately
+            # (file_server's ETag/Last-Modified make that a cheap 304);
+            # Vite's content-hashed /assets/* are immutable by construction.
+            header Cache-Control "no-cache, must-revalidate"
+            header /assets/* Cache-Control "public, max-age=31536000, immutable"
+            file_server
+        }
+    }
+}
 
 www.mobaide.com {
     tls /etc/caddy/tls/origin-cert.pem /etc/caddy/tls/origin-key.pem
@@ -52,5 +113,24 @@ mobaide.com, api.mobaide.com {
     tls /etc/caddy/tls/origin-cert.pem /etc/caddy/tls/origin-key.pem
     header Strict-Transport-Security "max-age=300"
     encode zstd gzip
-    reverse_proxy central-server:9000
+    reverse_proxy central-server:9000 {
+        # Same rationale as in (app_mobaide): every deploy now runs
+        # `caddy reload`, and without this delay a reload would force-close
+        # every established native-client WebSocket (agent tunnels, Android/
+        # iOS relay sockets) the moment the config swaps.
+        stream_close_delay 5m
+    }
+}
+
+# The SPA host. DELIBERATELY no `tls` directive and DELIBERATELY gray-cloud
+# (DNS only) even though the rest of this mode is proxied: orange cloud would
+# put Cloudflare's ~100 s proxy idle timeout in the path of every relay
+# WebSocket, and a gray-cloud host cannot serve the Cloudflare Origin cert
+# (browsers do not trust the Origin CA). Caddy ACME-issues a Let's Encrypt
+# certificate for this one host over HTTP-01 instead — port 80 is already
+# open. If Cloudflare fronting is ever required here, orange cloud + the
+# origin cert does work: the app-level ws_ping_interval (20 s) beats the
+# 100 s idle timeout.
+app.mobaide.com {
+    import app_mobaide
 }

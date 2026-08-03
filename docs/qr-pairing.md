@@ -75,7 +75,9 @@ MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}
   key (the same Ed25519 key the agent's auto-updater pins for manifest
   verification, exposed at `GET /api/v1/agent/trust_key`).
 * `exp_unix` — absolute expiry as Unix seconds. Default TTL: 120s
-  (`PAIRING_QR_TOKEN_TTL_SECONDS`).
+  (`PAIRING_QR_TOKEN_TTL_SECONDS`); production sets 600s so a pairing
+  link survives the human hop to a browser on another device (the nonce
+  stays single-use, so the wider window adds no replay exposure).
 
 The token is never carried in the QR. The server mints it server-side
 and pushes it to the agent over the pairing WebSocket.
@@ -279,7 +281,7 @@ to operate the QR pairing flow:
 |---|---|---|
 | `MANIFEST_SIGNING_PUBLIC_KEY` | trust-key endpoint, manifest verification, QR initiate | `GET /api/v1/agent/trust_key` returns 503; QR initiate returns 503 |
 | `MANIFEST_SIGNING_PRIVATE_KEY` | QR initiate, claim push signing | `POST /api/pairing/initiate` returns 503 |
-| `PAIRING_QR_TOKEN_TTL_SECONDS` | nonce TTL (default `120`) | uses default |
+| `PAIRING_QR_TOKEN_TTL_SECONDS` | nonce TTL (default `120`; prod sets `600` for cross-device pairing links) | uses default |
 | `PUBLIC_BASE_URL` | QR `relay_url` field | falls back to request `Host` header |
 
 > **Note on private-key residency.** The manifest signing private key

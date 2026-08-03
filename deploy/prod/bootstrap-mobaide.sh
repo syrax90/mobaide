@@ -19,7 +19,9 @@
 #   2. Verifies Docker Engine + Compose plugin are usable.
 #   3. Adds the invoking (sudo) user to the `docker` group for scp/ssh deploys.
 #   4. Configures ufw: default deny-in/allow-out, limit 22/tcp, allow 80/tcp+443/tcp.
-#   5. Creates /opt/mobaide/{,tls,backups} owned by the deploy user.
+#   5. Creates /opt/mobaide/{,tls,backups,www/releases} owned by the deploy
+#      user, plus a placeholder web release so app.mobaide.com serves a page
+#      before the first deploy_web.py run.
 #   6. Generates a skeleton /opt/mobaide/.env with a random JWT_SECRET_KEY.
 #
 # What this does NOT do:
@@ -168,6 +170,48 @@ chmod 0755 "$INSTALL_DIR" "$INSTALL_DIR/backups"
 chmod 0700 "$INSTALL_DIR/tls"
 ok "$INSTALL_DIR, $INSTALL_DIR/tls (0700), $INSTALL_DIR/backups ready"
 
+# Web SPA releases (served by Caddy at app.mobaide.com; deployed by
+# deploy_web.py as www/releases/<tag>/ + an atomic `current` symlink).
+# Creating www/ here — before docker compose ever mounts it — keeps it
+# owned by the deploy user; if compose mounted a missing path first,
+# dockerd would create it root-owned and deploy_web.py would hit
+# permission errors. The placeholder release means the site block serves
+# a real page (not a 404) between the Caddy deploy and the first web
+# deploy; its tag sorts before any timestamped release, so the normal
+# keep-last-5 pruning retires it naturally.
+WWW_DIR="$INSTALL_DIR/www"
+PLACEHOLDER_REL="releases/00000000T000000Z-bootstrap"
+mkdir -p "$WWW_DIR/$PLACEHOLDER_REL"
+if [[ ! -f "$WWW_DIR/$PLACEHOLDER_REL/index.html" ]]; then
+    # Bare HTML on purpose: the production CSP allows only 'self'
+    # stylesheets and one hashed inline script, so no <style>/<script>.
+    cat > "$WWW_DIR/$PLACEHOLDER_REL/index.html" <<'EOF'
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mobaide</title>
+  </head>
+  <body>
+    <h1>Mobaide</h1>
+    <p>The web app has not been deployed to this server yet.
+       Run <code>python deploy/prod/deploy_web.py</code> from your workstation.</p>
+  </body>
+</html>
+EOF
+fi
+# -L guard as well as -e: -e alone is false for a dangling symlink, and a
+# bare `ln -s` onto one would fail with EEXIST.
+if [[ ! -e "$WWW_DIR/current" && ! -L "$WWW_DIR/current" ]]; then
+    # RELATIVE target — must resolve inside the caddy container's /srv/www
+    # bind mount, where $INSTALL_DIR does not exist.
+    ln -s "$PLACEHOLDER_REL" "$WWW_DIR/current"
+fi
+chown -R "${DEPLOY_USER}:${DEPLOY_GROUP}" "$WWW_DIR"
+chmod 0755 "$WWW_DIR"
+ok "$WWW_DIR ready (placeholder release + current symlink)"
+
 # --- 6. /opt/mobaide/.env skeleton ---
 
 section "6/6  Environment file ($ENV_FILE)"
@@ -204,6 +248,13 @@ JWT_SECRET_KEY=${JWT_SECRET}
 # RELEASE_AUTH_TOKEN=
 # MANIFEST_SIGNING_PUBLIC_KEY=
 
+# Web pairing links: the QR pairing nonce must survive the human hop from
+# a terminal QR on one machine to a browser on another (copy link, switch
+# device, log in, open). 600s closes that race; the nonce stays
+# single-use, so the wider window adds no replay exposure. Code default
+# is 120s (scan-with-phone flow).
+PAIRING_QR_TOKEN_TTL_SECONDS=600
+
 # HOST, PORT, DB_PATH are set by docker-compose.prod.yml - do not duplicate here.
 EOF
     chown "${DEPLOY_USER}:${DEPLOY_GROUP}" "$ENV_FILE"
@@ -229,4 +280,6 @@ ls -la "$INSTALL_DIR" | sed 's/^/  /'
 echo
 ok "Bootstrap complete. Next, on your workstation:"
 echo "      python deploy/prod/deploy_central.py"
+echo "      # then, ~30s later (ufw SSH rate limit), the web SPA:"
+echo "      python deploy/prod/deploy_web.py"
 echo

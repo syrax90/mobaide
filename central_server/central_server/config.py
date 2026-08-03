@@ -7,6 +7,13 @@ from dataclasses import dataclass
 
 _DEFAULT_SITE_BASE_URL = "https://mobaide.com"
 
+# Browser origins allowed to open relay WebSockets. Native clients (Android,
+# iOS, the agent's Python client) send no Origin header and are always
+# admitted; this list only gates browsers, where the header is
+# attacker-independent. Loopback origins are structurally allowed at the
+# check site (ws_origin.py) so Vite dev/preview servers need no env config.
+_DEFAULT_WS_ALLOWED_ORIGINS = ("https://app.mobaide.com",)
+
 # Scheme + host (+ optional port) only, no path. An origin is concatenated
 # straight into canonical/OG/JSON-LD URLs, the sitemap and robots.txt, so a
 # malformed value would emit relative links or malformed XML rather than fail
@@ -40,6 +47,61 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None or raw == "":
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def normalize_origin(raw: str) -> str | None:
+    """Canonicalize an origin for equality comparison, or None if malformed.
+
+    String-based rather than ``_ORIGIN_RE`` because the WS gate must also
+    canonicalize bracketed IPv6 loopback origins (``http://[::1]:5173``),
+    which the hostname character class deliberately rejects for the
+    marketing-URL fields. Scheme and host are case-folded per RFC 6454 §4
+    and a default port is dropped, so ``HTTPS://App.Mobaide.com:443``
+    compares equal to ``https://app.mobaide.com``. ``"null"`` (the opaque
+    origin browsers send from sandboxed contexts) and non-http(s) schemes
+    normalize to None — callers treat that as not-allowed.
+    """
+    candidate = raw.strip().rstrip("/").lower()
+    scheme, sep, host = candidate.partition("://")
+    if not sep or scheme not in ("http", "https") or not host or "/" in host:
+        return None
+    head, colon, port = host.rpartition(":")
+    # isascii() guards the int(): str.isdigit() alone admits non-decimal
+    # Unicode digits like "²" (valid obs-text in an HTTP header, so it can
+    # arrive in an unauthenticated Origin) that int() rejects — without the
+    # guard a crafted header would raise instead of falling through to the
+    # never-matches-the-allow-list path.
+    if colon and port.isascii() and port.isdigit():
+        if not 1 <= int(port) <= 65535:
+            return None
+        if (scheme, port) in (("https", "443"), ("http", "80")):
+            host = head
+    return f"{scheme}://{host}"
+
+
+def _env_origin_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read a comma-separated origin list, dropping malformed elements.
+
+    Follows ``_env_origin``'s degrade-don't-raise philosophy per element; an
+    unset/blank var or an all-invalid list falls back to ``default``. Entries
+    are stored pre-normalized so the per-handshake check is a plain tuple
+    membership test.
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    out: list[str] = []
+    for part in raw.split(","):
+        candidate = part.strip().rstrip("/")
+        # _ORIGIN_RE keeps operator input to the same shape _env_origin
+        # accepts (hostname origins only); runtime headers go through the
+        # more permissive normalize_origin at the check site instead.
+        if _ORIGIN_RE.fullmatch(candidate) is None:
+            continue
+        normalized = normalize_origin(candidate)
+        if normalized is not None:
+            out.append(normalized)
+    return tuple(dict.fromkeys(out)) or default
 
 
 @dataclass(frozen=True)
@@ -101,17 +163,24 @@ class CentralServerConfig:
     port: int = 9000
     log_level: str = "INFO"
     log_format: str = "json"  # "json" | "console"
-    pairing_token_ttl_seconds: int = 300  # 5 minutes
     # NIST SP 800-63B sweet-spot for short-lived on-screen secrets: 60s is
     # too tight for scan latency over an SSH session; 300s is too generous
-    # for an authenticator-bound code rendered to a terminal.
+    # for an authenticator-bound code rendered to a terminal. Production
+    # raises this to 600 via env (bootstrap .env): the web pairing link must
+    # survive the human hop from a terminal QR to a browser on another
+    # device, and the nonce is single-use so the wider window adds no
+    # replay exposure.
     pairing_qr_token_ttl_seconds: int = 120
     ws_ping_interval: int = 20  # seconds, within 15-30s spec
+    ws_allowed_origins: tuple[str, ...] = _DEFAULT_WS_ALLOWED_ORIGINS
     agent_disconnect_timeout: int = 30
     # How often in-memory agent heartbeats are batch-flushed to the DB in a
     # single transaction. Bounds `agents.last_seen_at` staleness for ONLINE
     # agents; offline timestamps stay exact (flushed on disconnect).
     heartbeat_flush_interval_seconds: int = 60
+    # Cadence of the monitoring.sample capacity log line (loop lag, cgroup
+    # RSS vs cap, fds, routing gauges, send-queue drop counters).
+    monitoring_interval_seconds: int = 60
 
     # SMTP (optional unless email_verification_required=True)
     smtp_host: str = "localhost"
@@ -259,18 +328,21 @@ class CentralServerConfig:
             port=int(os.getenv("PORT", "9000")),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             log_format=os.getenv("LOG_FORMAT", "json"),
-            pairing_token_ttl_seconds=int(
-                os.getenv("PAIRING_TOKEN_TTL_SECONDS", "300"),
-            ),
             pairing_qr_token_ttl_seconds=int(
                 os.getenv("PAIRING_QR_TOKEN_TTL_SECONDS", "120"),
             ),
             ws_ping_interval=int(os.getenv("WS_PING_INTERVAL", "20")),
+            ws_allowed_origins=_env_origin_list(
+                "WS_ALLOWED_ORIGINS", _DEFAULT_WS_ALLOWED_ORIGINS,
+            ),
             agent_disconnect_timeout=int(
                 os.getenv("AGENT_DISCONNECT_TIMEOUT", "30"),
             ),
             heartbeat_flush_interval_seconds=int(
                 os.getenv("HEARTBEAT_FLUSH_INTERVAL_SECONDS", "60"),
+            ),
+            monitoring_interval_seconds=int(
+                os.getenv("MONITORING_INTERVAL_SECONDS", "60"),
             ),
             smtp_host=os.getenv("SMTP_HOST", "localhost"),
             smtp_port=int(os.getenv("SMTP_PORT", "1025")),

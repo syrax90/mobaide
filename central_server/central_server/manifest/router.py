@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..monitoring import record_send_queue_drop
 from ..relay.envelope import CH_CONTROL, encode
 from ..relay.routing import RoutingTable
 from .store import (
@@ -166,6 +167,7 @@ def broadcast_manifest_update(
             conn.send_queue.put_nowait(envelope)
             delivered += 1
         except asyncio.QueueFull:
+            record_send_queue_drop("manifest_broadcast")
             logger.warning(
                 "manifest_broadcast.queue_full agent_id=%s — agent will pick up at next auth_ok",
                 conn.agent_id,

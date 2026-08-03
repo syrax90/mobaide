@@ -21,7 +21,11 @@ Server-side artifacts (survive across runs):
     /opt/mobaide/central_server.prev/    previous source (rollback target)
     /opt/mobaide/.env                    secrets (NEVER synced)
     /opt/mobaide/.last_tag               short git sha of current deploy
+    /opt/mobaide/www/                    SPA releases (owned by deploy_web.py)
     docker volumes: central-server-data, caddy-data, caddy-config
+
+The browser SPA at app.mobaide.com ships separately via deploy_web.py — a
+web deploy swaps a symlink and never touches containers.
 """
 
 from __future__ import annotations
@@ -149,18 +153,47 @@ def info(msg: str) -> None:
     _emit(msg, CYAN)
 
 
-def wait_http(url: str, timeout_sec: int = 90) -> None:
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Turns 3xx into HTTPError instead of following the Location header."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def wait_http(
+    url: str,
+    timeout_sec: int = 90,
+    any_status: bool = False,
+    follow_redirects: bool = True,
+) -> None:
     # TLS verification stays on (default context, OS trust store). No PS-5.1
     # protocol shim needed: Python's ssl negotiates TLS 1.2+ natively.
+    # any_status=True succeeds on ANY HTTP response (404 included) — used by
+    # deploy_web.py's preflight, where "the site block answered at all" is
+    # the question and only a transport/TLS failure means not-deployed.
+    # follow_redirects=False makes 3xx a non-success (an HTTPError, so it
+    # keeps polling unless any_status) — used by deploy_web.py's post-swap
+    # probes, where a redirect to another (healthy) host must not count as
+    # proof the app host served the release.
+    opener = (
+        None
+        if follow_redirects
+        else urllib.request.build_opener(_NoRedirectHandler())
+    )
     deadline = time.monotonic() + timeout_sec
     cert_error: ssl.SSLCertVerificationError | None = None
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
-                if resp.status == 200:
+            with (
+                urllib.request.urlopen(url, timeout=5)
+                if opener is None
+                else opener.open(url, timeout=5)
+            ) as resp:
+                if any_status or resp.status == 200:
                     return
         except urllib.error.HTTPError:
-            pass
+            if any_status:
+                return
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLCertVerificationError):
                 cert_error = e.reason
@@ -273,7 +306,7 @@ def build_extract_script(tag: str) -> str:
     return f"""set -e
 cd {REMOTE_BASE}
 rm -rf central_server.new
-mkdir -p central_server.new tls
+mkdir -p central_server.new tls www/releases
 tar -xf central_server.new.tar -C central_server.new --strip-components=1
 rm -f central_server.new.tar
 if [ -d central_server ]; then
@@ -287,14 +320,47 @@ echo {tag} > .last_tag
 
 def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     up_args = "up -d --remove-orphans" if skip_build else "up -d --build --remove-orphans"
-    # One SSH round-trip does: (a) copy Caddyfile.<TlsMode> -> Caddyfile so
-    # docker-compose can mount it, (b) compose up (streaming), (c) compose ps.
-    # Strict `cp -f`: if Caddyfile.<TlsMode> is missing (e.g. --skip-build on a
-    # never-deployed TLS mode), the deploy fails loudly instead of silently
-    # running the wrong TLS mode against a stale Caddyfile.
+    # One SSH round-trip does: (a) validate the incoming Caddyfile in a
+    # throwaway container, (b) copy Caddyfile.<TlsMode> -> Caddyfile so
+    # docker-compose can mount it, (c) compose up (streaming), (d) caddy
+    # reload, (e) compose ps.
+    # Validate BEFORE cp: the auto-rollback path swaps source dirs only, so
+    # a rejected config copied over the live Caddyfile would stay mounted —
+    # the running caddy keeps its in-memory config, but the next container
+    # or host restart would take down all ingress. Validating the candidate
+    # file first means the live Caddyfile is never replaced by a config the
+    # reload would refuse. The throwaway container uses the same image tag
+    # compose runs, so validation and runtime agree on the Caddy version.
+    # Strict `test -f` + `cp -f`: if Caddyfile.<TlsMode> is missing (e.g.
+    # --skip-build on a never-deployed TLS mode), the deploy fails loudly
+    # instead of silently running the wrong TLS mode against a stale
+    # Caddyfile. The guard must run BEFORE the docker-run mount: `-v` with a
+    # missing host source creates it as a root-owned DIRECTORY, which would
+    # poison every later deploy of that TLS mode until manually removed.
+    # The reload step exists because compose never restarts a running caddy
+    # container for a bind-mounted file's CONTENT change — without it a
+    # Caddyfile-only deploy silently keeps serving the old config. Reload is
+    # atomic (a parse failure keeps the old config live and fails this
+    # command loudly) and, with stream_close_delay on both proxied site
+    # blocks (apex/api and app), non-disruptive to established WebSockets.
+    # When compose just recreated the container the reload is a harmless
+    # re-read.
+    # The tls/ mount mirrors the compose caddy service: CloudflareOrigin's
+    # `tls <cert> <key>` directives load the PEMs at provision time, so
+    # validate fails without them. tls/ always exists (bootstrap and the
+    # extract script both create it), but keep the test -d guard so a
+    # missing dir fails loudly instead of docker creating it root-owned.
     return (
-        f"cd {REMOTE_BASE} && cp -f Caddyfile.{tls_mode} Caddyfile"
+        f"cd {REMOTE_BASE}"
+        f" && test -f Caddyfile.{tls_mode} && test -d tls"
+        f" && docker run --rm"
+        f" -v {REMOTE_BASE}/Caddyfile.{tls_mode}:/etc/caddy/Caddyfile:ro"
+        f" -v {REMOTE_BASE}/tls:/etc/caddy/tls:ro"
+        f" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile"
+        f" && cp -f Caddyfile.{tls_mode} Caddyfile"
         f" && docker compose -f docker-compose.prod.yml {up_args}"
+        f" && docker compose -f docker-compose.prod.yml exec -T caddy"
+        f" caddy reload --config /etc/caddy/Caddyfile"
         f" && docker compose -f docker-compose.prod.yml ps"
     )
 
