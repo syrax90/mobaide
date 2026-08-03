@@ -116,20 +116,8 @@ class TerminalViewModel @Inject constructor(
             // 80x24 default until the View measures itself and calls resize().
             it.updateSize(80, 24, 12, 24)
             it.setOnInputListener { data, offset, count ->
-                // Bytes the emulator / view want to send to the (remote) PTY — wrap in an
-                // 'i' frame. Gated on Live AND a running session (mirrors sendTappedRow
-                // plus the visible controls' running gate): an IME raised on the terminal
-                // surface must not keep feeding a PTY that stopped or crashed while the
-                // WS stayed connected, and emulator auto-replies (DECRQM/DA) to escape
-                // sequences re-parsed from the replay ring must not reach the live PTY as
-                // stale duplicates.
-                if (_connectionState.value != ConnectionState.Live ||
-                    _sessionState.value != "running"
-                ) {
-                    return@setOnInputListener
-                }
                 val slice = if (offset == 0 && count == data.size) data else data.copyOfRange(offset, offset + count)
-                sendBytes(slice)
+                sendTerminalBytes(slice)
             }
         }
         connect()
@@ -387,7 +375,45 @@ class TerminalViewModel @Inject constructor(
     /** Send raw bytes (Ctrl-C, Esc, arrow keys, ...) to the PTY. */
     fun sendBytes(bytes: ByteArray) {
         setFollowMode(true)
+        enqueueInput(bytes)
+    }
+
+    /** Queue [bytes] for the PTY as an `'i'` (input) frame — the raw-byte path shared by
+     *  [sendBytes] and [sendTerminalBytes]. */
+    private fun enqueueInput(bytes: ByteArray) {
         sendChannel.trySend(TerminalProtocol.encodeInput(bytes))
+    }
+
+    /**
+     * Bytes originating from the terminal surface itself: keys typed while it holds the
+     * IME, an ActionMode paste, and the emulator's automatic replies (DA, DSR/CPR,
+     * DECRQM, ...) to escape sequences it parsed out of inbound output.
+     *
+     * Gated on Live AND a running session (mirrors [sendTappedRow] plus the visible
+     * controls' running gate): an IME raised on the terminal surface must not keep
+     * feeding a PTY that stopped or crashed while the WS stayed connected, and
+     * auto-replies to sequences re-parsed from the replay ring must not reach the live
+     * PTY as stale duplicates.
+     *
+     * A reply the emulator generated while parsing inbound output still goes on the
+     * wire, but skips the follow-mode resume: that is the program answering its own
+     * query, not the user typing, so letting it run `setFollowMode(true)` would let a
+     * bare cursor-position report (`ESC[6n`, which prompt frameworks like powerlevel10k
+     * and starship emit routinely) yank a paused viewport back to the tail and wipe the
+     * unread tally — the exact hijack follow mode exists to prevent. Mirrors iOS
+     * `TerminalSessionModel.sendTerminalBytes`.
+     */
+    private fun sendTerminalBytes(bytes: ByteArray) {
+        if (_connectionState.value != ConnectionState.Live ||
+            _sessionState.value != "running"
+        ) {
+            return
+        }
+        if (session.isApplyingEmulatorOutput) {
+            enqueueInput(bytes)
+            return
+        }
+        sendBytes(bytes)
     }
 
     private suspend fun loadShortcutRecents(kindKey: String) {
