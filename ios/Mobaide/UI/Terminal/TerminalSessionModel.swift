@@ -77,9 +77,18 @@ final class TerminalSessionModel {
     /// Per-kind MRU chords, parsed from the device-local store on demand
     /// (empty until `refreshShortcutRecents` first runs — Android parity).
     private(set) var shortcutRecents: [KeyChord] = []
-    /// Transient shortcut save/rename/remove/load failure surface, rendered
-    /// as a toast by both the terminal screen and the picker sheet.
-    var shortcutMessage: ToastMessage?
+    /// Transient failure surface for terminal actions — shortcut
+    /// save/rename/remove/load and refused pastes — rendered as a toast by both
+    /// the terminal screen and the picker sheet.
+    var terminalMessage: ToastMessage?
+
+    /// Geometry of the live terminal text selection, or nil when there is none.
+    /// Fed by the view's selection controller; drives the floating toolbar.
+    var selectionUi: TerminalSelectionUi?
+
+    /// Clipboard read seam, so paste is testable without touching the shared
+    /// pasteboard (cf. `synchronizedOutputNow`).
+    var clipboardReader: () -> String? = { Clipboard.readText() }
     /// All kinds' saved shortcuts, fed by the repository subscription.
     private var allShortcuts: [ShortcutDto] = []
 
@@ -228,6 +237,11 @@ final class TerminalSessionModel {
         case .state(let json):
             sessionStatus = Self.parseStatus(json) ?? sessionStatus
         case .replayStart:
+            // The transcript the selection's rows name is about to be erased and
+            // refilled, so those coordinates would silently come to mean other
+            // content — a reconnect mid-selection must not let Copy lift text
+            // the user never selected.
+            endSelection()
             terminalView.applyingEmulatorOutput {
                 terminalView.feedTrackingSynchronizedOutput(Self.clearBeforeReplay[...])
             }
@@ -256,6 +270,12 @@ final class TerminalSessionModel {
     }
 
     func sendBytes(_ data: Data) {
+        // Any user-originated write dismisses a live selection (Android drops
+        // it from `onKeyDown` and on every IME commit). Deliberately here and
+        // not in `sendTerminalBytes`: emulator auto-replies produced while
+        // parsing output take that function's `isApplyingEmulatorOutput` branch
+        // and bypass this, so a bare `ESC[6n` cannot kill a selection.
+        endSelection()
         enqueue(.input(data))
         setFollowMode(true)
     }
@@ -286,6 +306,52 @@ final class TerminalSessionModel {
 
     func sendControlKey(_ bytes: [UInt8]) {
         sendBytes(Data(bytes))
+    }
+
+    // MARK: - Text selection
+
+    func endSelection() {
+        terminalView.selectionController.endSelection()
+    }
+
+    /// Selection → system clipboard. Marked sensitive, like the OSC 52 sink:
+    /// terminal output routinely carries tokens and paths.
+    func copySelection() {
+        guard let text = terminalView.selectionController.selectedText() else { return }
+        Clipboard.copy(text, isSensitive: true)
+        endSelection()
+    }
+
+    /// Selection → composer, for editing before resend (Android "Send to Input").
+    /// Never submits and never touches the clipboard.
+    func sendSelectionToInput() {
+        guard let text = terminalView.selectionController.selectedText() else { return }
+        endSelection()
+        setInput(text, requestFocus: true)
+    }
+
+    /// Clipboard → PTY, through the one sanitizing encoder.
+    ///
+    /// Dismisses the selection first (Android calls `stopTextSelectionMode()`
+    /// before its paste sink), then gates on Live+running so pasted bytes obey
+    /// the same rule as every other terminal-originated write.
+    ///
+    /// Deliberately not `sendInput`: that builds an `m` submit frame with a
+    /// clear-input-line prefix and wraps multi-line bodies unconditionally, so
+    /// routing paste through it would double-wrap the bracketed markers and
+    /// render literal `200~`/`201~` in Claude Code. Paste is `i` frames only.
+    func pasteFromClipboard() {
+        endSelection()
+        guard canSendTerminalBytes else { return }
+        guard let raw = clipboardReader(), !raw.isEmpty else { return }
+        guard raw.utf8.count <= TerminalPaste.maxPasteBytes else {
+            terminalMessage = ToastMessage(text: "Clipboard is too large to paste")
+            return
+        }
+        let bracketed = terminalView.getTerminal().bracketedPasteMode
+        for write in TerminalPaste.writes(for: raw, bracketed: bracketed) {
+            sendBytes(Data(write))
+        }
     }
 
     /// Single-tap on a terminal row. The current input row re-submits with a
@@ -358,6 +424,14 @@ final class TerminalSessionModel {
     func setFollowMode(_ follow: Bool) {
         applyFollowMode(follow)
         if follow {
+            // Resuming follow means leaving the history the selection was taken
+            // in, so drop it — and drop it *before* the snap. A live selection
+            // also pins the viewport through `holdsAutoScroll`, which would
+            // otherwise make `scrollToBottom()` a silent no-op while the badge
+            // cleared and the jump-to-bottom button disappeared. This is also
+            // what makes composer submits honour the dismiss-on-send contract:
+            // `sendInput` never routes through `sendBytes`.
+            endSelection()
             // After the suppression is lifted, or the view would refuse its own
             // snap as if it were SwiftTerm's.
             terminalView.scrollToBottom()
@@ -556,7 +630,7 @@ final class TerminalSessionModel {
             do {
                 try await self?.shortcutsRepository.refreshShortcuts()
             } catch {
-                self?.shortcutMessage = ToastMessage(text: "Failed to load saved shortcuts")
+                self?.terminalMessage = ToastMessage(text: "Failed to load saved shortcuts")
             }
         }
     }
@@ -591,13 +665,13 @@ final class TerminalSessionModel {
             defer { self?.savesInFlight.remove(token) }
             guard let self else { return }
             guard let kind = await self.resolveSessionKind() else {
-                self.shortcutMessage = ToastMessage(text: "Failed to save shortcut: session type not known yet")
+                self.terminalMessage = ToastMessage(text: "Failed to save shortcut: session type not known yet")
                 return
             }
             do {
                 try await self.shortcutsRepository.createShortcut(kind: kind.wireName, chordToken: token)
             } catch {
-                self.shortcutMessage = ToastMessage(text: "Failed to save shortcut")
+                self.terminalMessage = ToastMessage(text: "Failed to save shortcut")
             }
         }
     }
@@ -609,7 +683,7 @@ final class TerminalSessionModel {
             do {
                 try await self.shortcutsRepository.renameShortcut(shortcutId: id, name: trimmed)
             } catch {
-                self.shortcutMessage = ToastMessage(text: "Failed to rename shortcut")
+                self.terminalMessage = ToastMessage(text: "Failed to rename shortcut")
             }
         }
     }
@@ -625,7 +699,7 @@ final class TerminalSessionModel {
                 // the user about a delete that effectively succeeded.
                 await self.shortcutsRepository.applyDeleted(shortcutId: id)
             } catch {
-                self.shortcutMessage = ToastMessage(text: "Failed to remove shortcut")
+                self.terminalMessage = ToastMessage(text: "Failed to remove shortcut")
             }
         }
     }

@@ -209,6 +209,12 @@ final class TerminalPanScrollView: UIScrollView {
     /// alone would also refuse this view's own pan in Full mode, where it is
     /// allowed today.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // This pan lives on the outer view, so the inner view's sticky-selection
+        // gate never sees it — a Static-mode horizontal drag would otherwise pan
+        // the terminal out from under a selection the user is extending.
+        if gestureRecognizer === panGestureRecognizer, terminalView.isSelectionActive {
+            return false
+        }
         if displayConfig.mode == .static,
            gestureRecognizer === panGestureRecognizer,
            !claimsHorizontalPan() {

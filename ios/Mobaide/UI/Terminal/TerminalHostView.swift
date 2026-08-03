@@ -57,6 +57,7 @@ final class MobaideTerminalView: TerminalView {
         // set `isUserInteractionEnabled = false`.
         delaysContentTouches = false
         installVerticalScrollGesture()
+        selectionController.install()
         userScrollObserver.terminal = self
         delegate = userScrollObserver
     }
@@ -73,6 +74,66 @@ final class MobaideTerminalView: TerminalView {
         let scale = UIScreen.main.scale
         let snap = { (value: CGFloat) in max(1, ceil(value * scale) / scale) }
         return CGSize(width: snap(measured.width), height: snap(measured.height))
+    }
+
+    // MARK: - Text selection
+
+    lazy var selectionController = TerminalSelectionController(view: self)
+
+    var isSelectionActive: Bool { selectionController.isActive }
+
+    /// The buffer line rendered at absolute content row `row`, or nil when
+    /// nothing is drawn there.
+    ///
+    /// `getLine(row:)` counts from `buffer.yDisp`, but the iOS renderer counts
+    /// from `contentOffset`, and SwiftTerm never moves `yDisp` for a user drag
+    /// (`Terminal.userScrolling` is never set, so `yDisp` stays pinned to
+    /// `yBase`) — once scrolled up the two name different lines. `yDisp` is
+    /// public and `getLine` is a synchronous pure read, so the window is
+    /// re-pointed at the row being looked up and restored before any SwiftTerm
+    /// code can observe it.
+    ///
+    /// The equality holds against `terminal.buffer`. SwiftTerm draws
+    /// `displayBuffer`, which diverges into a frozen deep copy while a program
+    /// holds synchronized output (DEC mode 2026); that buffer is `internal`, so
+    /// both callers refuse for the duration instead — see
+    /// `TerminalSynchronizedOutput`.
+    func bufferLine(atContentRow row: Int) -> BufferLine? {
+        let terminal = getTerminal()
+        let buffer = terminal.buffer
+        let restore = buffer.yDisp
+        let rows = terminal.getDims().rows
+        // `getLine` addresses exactly `rows` lines from the window origin, so an
+        // origin a fraction of a cell above the tail — where `scrollToBottom()`
+        // parks — would push the bottom-most line out of reach. Raise the window
+        // just far enough to cover the wanted row, but never past `yDisp`:
+        // beyond it `row + yDisp` runs off the end of `lines`, and
+        // `CircularList` wraps instead of trapping, so an `ESC[3J` scrollback
+        // wipe (which leaves `contentSize` stale) could otherwise resolve a
+        // recycled line.
+        let topRow = min(max(0, row - rows + 1), restore)
+        let local = row - topRow
+        guard local >= 0, local < rows else { return nil }
+        guard topRow != restore else { return terminal.getLine(row: local) }
+        buffer.yDisp = topRow
+        defer { buffer.yDisp = restore }
+        return terminal.getLine(row: local)
+    }
+
+    /// One entry per terminal column of `row`, for word expansion and
+    /// wide-glyph snapping. `getCharacter(for:)` rather than
+    /// `CharData.getCharacter()` so extended grapheme clusters resolve.
+    func selectionCells(atContentRow row: Int) -> [TerminalSelection.Cell]? {
+        guard let line = bufferLine(atContentRow: row) else { return nil }
+        let terminal = getTerminal()
+        let cols = min(terminal.getDims().cols, line.count)
+        guard cols > 0 else { return nil }
+        return (0..<cols).map { column in
+            TerminalSelection.Cell(
+                character: terminal.getCharacter(for: line[column]),
+                width: line.getWidth(index: column)
+            )
+        }
     }
 
     /// Monotonic clock behind the synchronized-output deadline. Same
@@ -98,6 +159,10 @@ final class MobaideTerminalView: TerminalView {
     func feedTrackingSynchronizedOutput(_ bytes: ArraySlice<UInt8>) {
         feed(byteArray: bytes)
         synchronizedOutput.scan(bytes, at: synchronizedOutputNow())
+        // The renderer is now drawing a frozen snapshot while `getText` still
+        // reads the live buffer, so the highlight and the text it would yield
+        // name different content — drop the selection rather than lie.
+        selectionController.handleSynchronizedOutputChange()
     }
 
     /// Resolves a tap point (in this view's content coordinates) to a prompt
@@ -122,7 +187,7 @@ final class MobaideTerminalView: TerminalView {
         // `yDisp` is pinned to `yBase`, so it is the first row of the active
         // region as well as the largest legal scrollback window origin.
         let activeRegionTop = terminal.buffer.yDisp
-        guard let line = lineOnScreen(contentRow: contentRow, cellHeight: cellHeight) else { return nil }
+        guard let line = bufferLine(atContentRow: contentRow) else { return nil }
         guard let command = Self.promptCommand(line.translateToString(trimRight: true)) else { return nil }
         let (_, cursorY) = terminal.getCursorLocation()
         // `getCursorLocation()` is relative to the active region, so the tapped
@@ -130,44 +195,6 @@ final class MobaideTerminalView: TerminalView {
         // only while following: scrolled into history every prompt is historical.
         let isCurrentInput = isScrolledToBottom && contentRow - activeRegionTop == cursorY
         return (command, isCurrentInput)
-    }
-
-    /// The buffer line rendered at absolute content row `contentRow`, or nil
-    /// when nothing is drawn there.
-    ///
-    /// `getLine(row:)` counts from `buffer.yDisp`, but the iOS renderer counts
-    /// from `contentOffset`, and SwiftTerm never moves `yDisp` for a user drag
-    /// (`Terminal.userScrolling` is never set, so `yDisp` stays pinned to
-    /// `yBase`) — once scrolled up the two name different lines. `yDisp` is
-    /// public and `getLine` is a synchronous pure read, so the window is
-    /// re-pointed at the rows actually on screen for the lookup and restored
-    /// before any SwiftTerm code can observe it.
-    ///
-    /// The equality holds against `terminal.buffer`. SwiftTerm draws
-    /// `displayBuffer`, which diverges into a frozen deep copy while a program
-    /// holds synchronized output (DEC mode 2026); that buffer is `internal`, so
-    /// `resolveRow` refuses for the duration instead — see
-    /// `TerminalSynchronizedOutput`.
-    private func lineOnScreen(contentRow: Int, cellHeight: CGFloat) -> BufferLine? {
-        let terminal = getTerminal()
-        let buffer = terminal.buffer
-        let restore = buffer.yDisp
-        let visibleTop = min(max(0, Int(contentOffset.y / cellHeight)), restore)
-        // `getLine` addresses exactly `rows` lines from the window origin, so an
-        // origin a fraction of a cell above the tail — where `scrollToBottom()`
-        // parks — would push the bottom-most line out of reach. Raise the window
-        // just far enough to cover the tapped row, but never past `yDisp`:
-        // beyond it `row + yDisp` runs off the end of `lines`, and
-        // `CircularList` wraps instead of trapping, so an `ESC[3J` scrollback
-        // wipe (which leaves `contentSize` stale) could otherwise resolve a
-        // recycled line.
-        let topRow = min(max(visibleTop, contentRow - terminal.getDims().rows + 1), restore)
-        let row = contentRow - topRow
-        guard row >= 0 else { return nil }
-        guard topRow != restore else { return terminal.getLine(row: row) }
-        buffer.yDisp = topRow
-        defer { buffer.yDisp = restore }
-        return terminal.getLine(row: row)
     }
 
     /// Android `getPromptPrefixLength`: `❯` + NBSP, `❯` + space, or ASCII `> `.
@@ -205,6 +232,16 @@ final class MobaideTerminalView: TerminalView {
                 recognizer.isEnabled = false
             }
         }
+    }
+
+    /// Swapping the screen buffer renumbers every row: the alternate buffer runs
+    /// at `yDisp == 0` over `rows` lines while the normal one can sit thousands
+    /// deep. A selection's rows are content-absolute, so they would silently
+    /// come to name other content — and `getText` would hand Copy that text.
+    /// No scroll callback fires for a buffer swap, so this is the only hook.
+    override func bufferActivated(source: Terminal) {
+        super.bufferActivated(source: source)
+        selectionController.endSelection()
     }
 
     /// SwiftTerm adds its mouse-reporting pan lazily when the TUI turns mouse
@@ -292,6 +329,15 @@ final class MobaideTerminalView: TerminalView {
     /// would have to be re-asserted on buffer switches that `mouseModeChanged`
     /// never reports.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // Sticky selection owns the pointer for the whole episode. One gate
+        // suspends the scrollback pan, the wheel/cursor-key ladder (and so the
+        // fling), both row taps and the mouse-click tap — including any
+        // recognizer SwiftTerm adds later. Without it, extending a selection by
+        // dragging would lose arbitration to the wheel ladder in exactly the
+        // mouse-reporting TUIs this feature exists for.
+        if selectionController.isActive {
+            return selectionController.owns(gestureRecognizer)
+        }
         if gestureRecognizer === panGestureRecognizer {
             // Sampled from *this* recognizer — the one UIKit is asking to begin,
             // and so the only one certain to be live at this moment.
@@ -539,6 +585,14 @@ final class MobaideTerminalView: TerminalView {
     /// which keeps it in lockstep with follow mode.
     var isAutoScrollSuppressed = false
 
+    /// Whether the viewport is pinned. A live selection adds a second,
+    /// self-restoring term so incoming output cannot drag the highlight away
+    /// mid-drag (Android suppresses its auto-scroll while selecting for the same
+    /// reason). Kept separate from `isAutoScrollSuppressed`, whose sole writer is
+    /// the model's follow-mode sync — so leaving selection restores the model's
+    /// intent with no bookkeeping.
+    var holdsAutoScroll: Bool { isAutoScrollSuppressed || isSelectionActive }
+
     /// True while PTY bytes are being handed to the emulator. SwiftTerm's
     /// snap-to-tail runs synchronously inside that call (`Terminal.scroll` →
     /// `scrolled(source:yDisp:)` → `updateScroller()`), and this is the only way
@@ -578,7 +632,7 @@ final class MobaideTerminalView: TerminalView {
             // than replacing it. The gesture clause still lets UIKit drive the
             // offset freely: a drag back to the tail is a write to the tail
             // from above, which is exactly what `holdsOffset` refuses.
-            guard isAutoScrollSuppressed,
+            guard holdsAutoScroll,
                   isApplyingEmulatorOutput || (!isDragging && !isDecelerating && !isTracking) else {
                 super.contentOffset = newValue
                 return
@@ -615,6 +669,9 @@ final class MobaideTerminalView: TerminalView {
     ///   without it SwiftTerm's snap-to-tail — and `scrollToBottom()` itself —
     ///   would resume follow mode behind the user's back.
     func handleScrollViewDidScroll(isUserDriven: Bool) {
+        // The overlay tracks the visible content window, so it has to follow
+        // every offset move — programmatic ones included.
+        if isSelectionActive { selectionController.refreshOverlay() }
         guard isUserDriven, !isApplyingEmulatorOutput else { return }
         onUserScroll?(followPosition)
     }
@@ -796,12 +853,19 @@ struct TerminalHostView: UIViewRepresentable {
             view.addGestureRecognizer(singleTap)
             view.addGestureRecognizer(mouseTap)
             view.installVerticalScrollGesture()
+            view.selectionController.install()
             view.neutralizeSwiftTermGestures()
             // The view outlives every visit, so the callback must not retain
             // this Coordinator: view → closure → Coordinator → model → view.
             view.onUserScroll = { [weak self] position in
                 self?.userScrolled(to: position)
             }
+            view.selectionController.onChange = { [weak self] selection in
+                self?.model.selectionUi = selection
+            }
+            // A selection is per-visit UI, not session state: leaving the screen
+            // with one live would strand the toolbar on the next visit.
+            view.selectionController.endSelection()
         }
 
         /// The only thing that moves follow mode, mirroring Android where
@@ -851,6 +915,9 @@ struct TerminalHostView: UIViewRepresentable {
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+            // A new grid reflows the buffer, so the selection's row/column
+            // coordinates no longer name the text they were taken from.
+            model.endSelection()
             model.resize(rows: newRows, cols: newCols)
         }
 
@@ -869,6 +936,13 @@ struct TerminalHostView: UIViewRepresentable {
                 scrollTop: source.getTerminal().buffer.scrollTop
             ) {
                 model.onEmulatorScrolled()
+            }
+            // Keeps a live selection glued to its text, or cancels it when the
+            // text is overwritten rather than moved.
+            if let terminal = source as? MobaideTerminalView {
+                terminal.selectionController.handleEmulatorScroll(
+                    yDisp: terminal.getTerminal().buffer.yDisp
+                )
             }
             panHost?.caretDidMove()
         }

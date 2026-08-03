@@ -271,6 +271,76 @@ and run as plain terminal sessions; session cards label custom kinds via
 back to a kind-neutral 9-key set for custom (and not-yet-resolved) kinds;
 and `APP_PROTOCOL_VERSION` bumps 6 → 7, with four new central DTO fixtures
 registered in the golden-fixture registry.
+CLA-133 (plus the CLA-63 half that had no iOS issue) brings terminal text
+selection, copy and paste, which the client had lacked entirely — a long press
+did nothing. Long-pressing selects the word under the finger and latches a
+**sticky selection mode**: while it holds, drags move the two handles and the
+`gestureRecognizerShouldBegin` gate refuses the scrollback pan, the wheel/fling
+ladder, both row taps, the mouse-click tap and the outer Static-mode horizontal
+pan. That mode latch is a deliberate deviation from Android, which has none: on
+iOS the drag is already owned by `TerminalWheelScroll` whenever a TUI enables
+mouse reporting, so without it selection would be dead in exactly the Claude
+Code and Codex sessions the feature exists for. A floating SwiftUI toolbar
+offers **Send to Input · Copy · Paste** (Android's item set and order) plus a
+Cancel the latch needs; it is app-drawn rather than a `UIEditMenuInteraction` or
+`UIMenuController` because both source their items from the responder chain,
+which `keyboardGate` deliberately closes — a system menu would come up empty or
+raise the keyboard. Selection is app-owned end to end for the same class of
+reason the rest of the terminal is: SwiftTerm's `SelectionService` is an
+`internal` *class*, so none of its model is nameable here, and its only public
+entry (`select(_:)`) needs internal state set by that same deprecated menu flow.
+`TerminalSelection` holds the pure geometry (word expansion, handle pinning,
+highlight rects, edge autoscroll, trim shift) over **content-absolute** rows —
+the space `resolveRow` and `Terminal.getText` already share — and
+`TerminalSelectionController` owns the gestures plus a non-interactive overlay
+subview that draws the highlight and handles (`TerminalView.draw` is `public`,
+not `open`, so it cannot be overridden cross-module, and it early-returns under
+the Metal renderer; the overlay tracks the visible content window so it never
+rasterizes more than a screen). Text comes from `Terminal.getText`, which joins
+soft-wrapped rows without a newline and adds one on hard breaks — Android's
+`joinBackLines = true` — so a wrapped path copies back intact. A live selection
+also pins the viewport through `holdsAutoScroll`, a second self-restoring term
+beside the model-owned `isAutoScrollSuppressed`, and follows its text as the
+emulator scrolls: rows renumber only once the scrollback ring is full, detected
+by `yDisp` no longer advancing. The alternate buffer is permanently in that
+state — no scrollback, so the ring is full from the start and `yDisp` is pinned
+at 0 — which means a Claude Code or Codex selection shifts up one row per
+streamed line rather than being cancelled; cancelling there instead would kill
+the selection on the first line of output, in exactly the sessions the feature
+exists for. A selection is dropped outright whenever its content-absolute rows
+stop naming the text they were taken from: a region (DECSTBM) scroll that
+overlaps it, because those rows are overwritten in place rather than moved;
+scrolling out of the transcript; the onset of synchronized output, whose frozen
+snapshot `getText` cannot read; a screen-buffer swap (`bufferActivated`, the
+only hook — no scroll callback fires for it) which would otherwise let Copy lift
+unrelated text after a TUI exits; a grid resize, which reflows the buffer; a
+replay wipe on reconnect; and resuming follow mode, which both leaves the
+history the selection was taken in and would otherwise make jump-to-bottom a
+silent no-op against `holdsAutoScroll`.
+Paste routes through one canonical encoder, `TerminalPaste`, byte-exact with
+Android's `TerminalEmulator.paste()`: strip ESC and C1 **first** — so a
+clipboard carrying a live `ESC[201~` degrades to literal text instead of closing
+the bracket early and executing its tail — then `\r?\n` → `\r`, then wrap in
+`ESC[200~`/`ESC[201~` only when the program enabled DECSET 2004, as exactly
+three ordered `i` frames — two ordered passes, exactly as Android runs them,
+because a fused walk would turn `CR ESC LF` into two carriage returns instead of
+one. It deliberately never routes through `sendInput`, whose `m`-submit encoder
+wraps multi-line bodies unconditionally and would double-wrap the markers into
+literal `200~`/`201~`. One deliberate divergence from Android, which has no cap:
+pastes are refused above 1 MiB with a toast, because the agent opens its relay
+tunnel with `max_size=4 MB` and a single oversized frame trips `PayloadTooBig`,
+closing that tunnel with 1009 and disrupting **every** session on the agent. Paste has **two** entry
+points on iOS: the selection toolbar (Android parity) and a new Paste key in the
+control-key row that needs no selection at all — an iOS-first affordance, with
+the Android mirror tracked separately. `Clipboard` gains `hasText`
+(`UIPasteboard.hasStrings`, a description-level probe that never raises the
+paste banner, so toolbar gating is free) and `readText()`, which reads contents
+and is therefore only ever called from an explicit tap. Knowingly inherited from
+Android rather than fixed here: when the program has *not* enabled DECSET 2004,
+`\n` becomes `\r`, so a multi-line clipboard executes as a sequence of commands
+the moment Paste is tapped, with no confirmation — desktop terminals (iTerm2,
+GNOME Terminal, Windows Terminal) prompt in that case, and adding a prompt would
+be a parity decision to take on all three clients at once.
 Remaining feature screens land in later issues.
 
 ## Layout

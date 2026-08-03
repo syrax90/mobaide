@@ -146,6 +146,21 @@ struct InputBar: View {
                     // PTY.
                     .disabled(!model.canSendTerminalBytes)
                 }
+                // Paste without needing a selection first — an iOS-first
+                // affordance; Android reaches paste only through its long-press
+                // selection menu. Deliberately *not* also gated on
+                // `Clipboard.hasText`: the pasteboard is not observable, so the
+                // button would latch stale-disabled. An empty clipboard is a
+                // silent no-op instead.
+                Button {
+                    model.pasteFromClipboard()
+                } label: {
+                    Image(systemName: "doc.on.clipboard")
+                }
+                .buttonStyle(.bordered)
+                .font(.footnote)
+                .disabled(!model.canSendTerminalBytes)
+                .accessibilityLabel("Paste")
                 Button(action: onOpenShortcuts) {
                     Image(systemName: "ellipsis")
                 }

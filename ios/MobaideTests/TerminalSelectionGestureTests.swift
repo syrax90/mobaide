@@ -1,0 +1,428 @@
+import UIKit
+import XCTest
+@testable import Mobaide
+
+@MainActor
+final class TerminalSelectionGestureTests: XCTestCase {
+    private var retainedCoordinator: TerminalHostView.Coordinator?
+
+    private func makeTerminal() -> MobaideTerminalView {
+        let terminal = MobaideTerminalView(frame: CGRect(x: 0, y: 0, width: 390, height: 600))
+        terminal.configureAppearance()
+        terminal.layoutIfNeeded()
+        return terminal
+    }
+
+    private func recognizer(named name: String, on view: UIView) -> UIGestureRecognizer? {
+        (view.gestureRecognizers ?? []).first { $0.name == name }
+    }
+
+    /// A terminal with its Coordinator attached, so the emulator's `scrolled`
+    /// callback actually reaches the selection controller — the path that keeps
+    /// a highlight glued to its text while output streams.
+    private func wiredTerminal() -> (TerminalSessionModel, MobaideTerminalView) {
+        let model = TerminalTestSupport.model()
+        let terminal = model.terminalView
+        terminal.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        terminal.configureAppearance()
+        terminal.layoutIfNeeded()
+        let coordinator = TerminalHostView.Coordinator(model: model)
+        retainedCoordinator = coordinator
+        terminal.terminalDelegate = coordinator
+        return (model, terminal)
+    }
+
+    /// Drives the emulator the way a real TUI does, so arbitration is read from
+    /// live state rather than a flag the test sets.
+    private func enterAlternateScreen(_ terminal: MobaideTerminalView) {
+        terminal.feed(text: "\u{1B}[?1049h")
+    }
+
+    private func enableMouseReporting(_ terminal: MobaideTerminalView) {
+        terminal.feed(text: "\u{1B}[?1000h\u{1B}[?1006h")
+    }
+
+    /// A point inside the first row, in content coordinates.
+    private func point(row: Int, col: Int, on terminal: MobaideTerminalView) -> CGPoint {
+        let cell = terminal.cellSize
+        return CGPoint(
+            x: CGFloat(col) * cell.width + cell.width / 2,
+            y: CGFloat(row) * cell.height + cell.height / 2
+        )
+    }
+
+    // MARK: - Neutralization must not touch the selection recognizers
+
+    func testSelectionRecognizersSurviveNeutralizationAndMouseModeChanges() {
+        let terminal = makeTerminal()
+
+        terminal.neutralizeSwiftTermGestures()
+        terminal.mouseModeChanged(source: terminal.getTerminal())
+
+        for name in [
+            TerminalSelectionController.longPressGestureName,
+            TerminalSelectionController.dragGestureName,
+            TerminalSelectionController.dismissTapGestureName,
+        ] {
+            let gesture = recognizer(named: name, on: terminal)
+            XCTAssertNotNil(gesture, "\(name) must be installed")
+            XCTAssertTrue(
+                gesture?.isEnabled == true,
+                "\(name) carries the mobaide. prefix, so the sweep — which re-runs on every mouse-mode flip — must spare it"
+            )
+        }
+    }
+
+    func testSelectionRecognizersSurviveAScreenRevisit() {
+        let model = TerminalTestSupport.model()
+        let terminal = model.terminalView
+        terminal.configureAppearance()
+        let coordinator = TerminalHostView.Coordinator(model: model)
+        retainedCoordinator = coordinator
+
+        coordinator.attachGestures(to: terminal)
+        coordinator.attachGestures(to: terminal)
+
+        let longPresses = (terminal.gestureRecognizers ?? [])
+            .filter { $0.name == TerminalSelectionController.longPressGestureName }
+        XCTAssertEqual(
+            longPresses.count,
+            1,
+            "the recognizer is view-owned, so a second visit must neither drop nor duplicate it"
+        )
+    }
+
+    // MARK: - Sticky mode owns the pointer
+
+    func testSelectionSuspendsEveryOtherTerminalGesture() throws {
+        let terminal = makeTerminal()
+        terminal.feed(text: "hello world\r\n")
+        // The case the feature exists for: Claude Code / Codex run here.
+        enterAlternateScreen(terminal)
+        enableMouseReporting(terminal)
+        XCTAssertEqual(terminal.wheelScrollMode, .wheel, "the harness must reproduce a mouse-reporting TUI")
+
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal)))
+
+        let verticalScroll = try XCTUnwrap(
+            recognizer(named: MobaideTerminalView.verticalScrollGestureName, on: terminal)
+        )
+        XCTAssertFalse(
+            terminal.gestureRecognizerShouldBegin(verticalScroll),
+            "the wheel ladder would otherwise turn a handle drag into scroll reports"
+        )
+        XCTAssertFalse(terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer))
+
+        for name in ["mobaide.rowTap", "mobaide.rowDoubleTap", "mobaide.mouseTap"] {
+            let tap = UITapGestureRecognizer()
+            tap.name = name
+            terminal.addGestureRecognizer(tap)
+            XCTAssertFalse(
+                terminal.gestureRecognizerShouldBegin(tap),
+                "\(name) must not fire while a selection is live"
+            )
+        }
+    }
+
+    func testGesturesAreRestoredWhenSelectionEnds() throws {
+        let terminal = makeTerminal()
+        terminal.feed(text: "hello world\r\n")
+        terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal))
+
+        terminal.selectionController.endSelection()
+
+        let verticalScroll = try XCTUnwrap(
+            recognizer(named: MobaideTerminalView.verticalScrollGestureName, on: terminal)
+        )
+        // Back to the normal ladder: no mouse reporting here, so the wheel pan
+        // is refused on its own terms rather than by the selection gate.
+        XCTAssertFalse(terminal.isSelectionActive)
+        XCTAssertEqual(terminal.wheelScrollMode, .localScrollback)
+        XCTAssertFalse(terminal.gestureRecognizerShouldBegin(verticalScroll))
+        XCTAssertTrue(terminal.gestureRecognizerShouldBegin(terminal.panGestureRecognizer))
+    }
+
+    func testStaticModeHorizontalPanIsRefusedWhileSelecting() {
+        let terminal = makeTerminal()
+        let scroll = TerminalPanScrollView(
+            terminalView: terminal,
+            displayConfig: TerminalDisplayConfig(mode: .static, staticColumns: 120)
+        )
+        scroll.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        scroll.layoutIfNeeded()
+        scroll.setNeedsLayout()
+        scroll.layoutIfNeeded()
+        terminal.feed(text: "hello world\r\n")
+
+        terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal))
+
+        XCTAssertFalse(
+            scroll.gestureRecognizerShouldBegin(scroll.panGestureRecognizer),
+            "the outer pan lives on another view, so it needs its own gate or it pans the terminal out from under the selection"
+        )
+    }
+
+    func testSelectionHoldsTheViewportWithoutTouchingFollowMode() {
+        let terminal = makeTerminal()
+        terminal.feed(text: "hello world\r\n")
+        XCTAssertFalse(terminal.holdsAutoScroll)
+
+        terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal))
+        XCTAssertTrue(terminal.holdsAutoScroll, "incoming output must not drag the highlight away mid-drag")
+        XCTAssertFalse(terminal.isAutoScrollSuppressed, "follow mode is the model's to own")
+
+        terminal.selectionController.endSelection()
+        XCTAssertFalse(terminal.holdsAutoScroll, "the hold is self-restoring")
+    }
+
+    // MARK: - Synchronized output
+
+    func testSelectionIsRefusedAndCancelledWhileOutputIsFrozen() {
+        let terminal = makeTerminal()
+        var now: TimeInterval = 0
+        terminal.synchronizedOutputNow = { now }
+        terminal.feed(text: "hello world\r\n")
+
+        // Begin synchronized output (DEC mode 2026): the renderer now shows a
+        // frozen snapshot while getText still reads the live buffer.
+        terminal.feedTrackingSynchronizedOutput(Array("\u{1B}[?2026h".utf8)[...])
+        XCTAssertTrue(terminal.isSynchronizedOutputActive)
+
+        XCTAssertFalse(
+            terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal)),
+            "a selection started here would highlight one row and copy another"
+        )
+    }
+
+    func testActiveSelectionIsCancelledWhenOutputFreezes() {
+        let terminal = makeTerminal()
+        var now: TimeInterval = 0
+        terminal.synchronizedOutputNow = { now }
+        terminal.feed(text: "hello world\r\n")
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal)))
+
+        terminal.feedTrackingSynchronizedOutput(Array("\u{1B}[?2026h".utf8)[...])
+
+        XCTAssertFalse(terminal.isSelectionActive)
+    }
+
+    // MARK: - Extraction
+
+    func testSelectedTextIsTheWordUnderTheLongPress() {
+        let terminal = makeTerminal()
+        terminal.feed(text: "cd /usr/local/bin\r\n")
+
+        terminal.beginSelectionForTest(at: point(row: 0, col: 5, on: terminal))
+
+        XCTAssertEqual(terminal.selectionController.selectedText(), "/usr/local/bin")
+    }
+
+    func testWordExpansionStaysWithinItsRow() throws {
+        let terminal = makeTerminal()
+        let cols = terminal.getTerminal().getDims().cols
+        let path = String(repeating: "a", count: cols + 12)
+        terminal.feed(text: path)
+
+        terminal.beginSelectionForTest(at: point(row: 0, col: 0, on: terminal))
+
+        XCTAssertEqual(
+            try XCTUnwrap(terminal.selectionController.selectedText()).count,
+            cols,
+            "a long press selects the run on the touched row only — Android's expansion never crosses rows either"
+        )
+    }
+
+    func testSoftWrappedSelectionRejoinsWithoutANewline() throws {
+        let terminal = makeTerminal()
+        let cols = terminal.getTerminal().getDims().cols
+        // A path longer than one row, so the emulator soft-wraps it. Dragging
+        // the end handle onto the continuation row must copy it back seamlessly;
+        // a newline in the middle is the failure this guards.
+        let path = String(repeating: "a", count: cols + 12)
+        terminal.feed(text: path)
+        let controller = terminal.selectionController
+        controller.beginSelection(at: point(row: 0, col: 0, on: terminal))
+
+        controller.moveHandle(.end, to: point(row: 1, col: 11, on: terminal))
+
+        let text = try XCTUnwrap(controller.selectedText())
+        XCTAssertFalse(text.contains("\n"), "a soft-wrapped run must rejoin seamlessly")
+        XCTAssertEqual(text, path)
+    }
+
+    func testHardLineBreakKeepsItsNewline() throws {
+        let terminal = makeTerminal()
+        terminal.feed(text: "alpha\r\nbeta\r\n")
+        let controller = terminal.selectionController
+        controller.beginSelection(at: point(row: 0, col: 0, on: terminal))
+
+        controller.moveHandle(.end, to: point(row: 1, col: 3, on: terminal))
+
+        XCTAssertEqual(
+            try XCTUnwrap(controller.selectedText()),
+            "alpha\nbeta",
+            "a hard break is a real line ending and must survive the copy"
+        )
+    }
+
+    // MARK: - Selections must not outlive the buffer they were taken in
+
+    /// The whole point of the sticky mode is that selection works in Claude
+    /// Code and Codex, which stream on the alternate buffer. Cancelling on
+    /// every alt-buffer scroll would kill it on the first streamed line.
+    func testSelectionSurvivesStreamingOnTheAlternateBuffer() throws {
+        let (model, terminal) = wiredTerminal()
+        enterAlternateScreen(terminal)
+        let rows = terminal.getTerminal().getDims().rows
+        // Fill the alt screen exactly, so the next lines really scroll rather
+        // than just advancing the cursor.
+        for line in 0..<rows { terminal.feed(text: "line\(line)\r\n") }
+        // Select on the last row, which has room to travel upward.
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: rows - 1, col: 1, on: terminal)))
+        let before = try XCTUnwrap(terminal.selectionController.range)
+
+        terminal.feed(text: "more\r\nmore\r\n")
+
+        XCTAssertTrue(
+            terminal.isSelectionActive,
+            "streaming output must shift the highlight, not destroy it — this is the primary target case"
+        )
+        let after = try XCTUnwrap(terminal.selectionController.range)
+        XCTAssertEqual(
+            after.start.row,
+            before.start.row - 2,
+            "the alt buffer recycles rows with yDisp pinned at 0, so the selection follows its text upward"
+        )
+        withExtendedLifetime(model) {}
+    }
+
+    func testJumpToBottomStillWorksWithALiveSelection() throws {
+        let (model, terminal) = wiredTerminal()
+        for line in 0..<80 { terminal.feed(text: "line\(line)\r\n") }
+        terminal.layoutIfNeeded()
+        // Pause follow mode the way a user drag does, then select in history.
+        model.onUserScrolled(position: 0.1)
+        XCTAssertFalse(model.followMode)
+        terminal.contentOffset = CGPoint(x: 0, y: 0)
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 5, col: 1, on: terminal)))
+
+        model.jumpToBottom()
+
+        XCTAssertTrue(
+            terminal.isScrolledToBottom,
+            "a live selection pins the viewport via holdsAutoScroll, so jump-to-bottom must drop it first or silently do nothing"
+        )
+        XCTAssertFalse(terminal.isSelectionActive)
+    }
+
+    func testSelectionIsCancelledWhenTheScreenBufferSwitches() {
+        let terminal = makeTerminal()
+        enterAlternateScreen(terminal)
+        terminal.feed(text: "hello world\r\n")
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal)))
+
+        // Leaving the alt screen renumbers every row: the alt buffer runs at
+        // yDisp 0 over `rows` lines, the normal one can sit thousands deep.
+        terminal.feedTrackingSynchronizedOutput(Array("\u{1B}[?1049l".utf8)[...])
+
+        XCTAssertFalse(
+            terminal.isSelectionActive,
+            "a selection taken inside Claude Code or less must not survive the exit — Copy would lift unrelated text"
+        )
+    }
+
+    func testSelectionIsCancelledByAReplayWipe() async throws {
+        let factory = FakeWebSocketTransportFactory()
+        let model = TerminalTestSupport.model(transportFactory: factory)
+        model.terminalView.frame = CGRect(x: 0, y: 0, width: 390, height: 600)
+        model.terminalView.configureAppearance()
+        model.terminalView.layoutIfNeeded()
+        model.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+        model.terminalView.feed(text: "hello world\r\n")
+        XCTAssertTrue(model.terminalView.beginSelectionForTest(
+            at: point(row: 0, col: 1, on: model.terminalView)
+        ))
+
+        // 'b' — replayStart, over the real wire path. The transcript those rows
+        // name is about to be erased and refilled from the agent's ring buffer.
+        connection.emit(.binary(Data([0x62])))
+
+        let cleared = await poll { !model.terminalView.isSelectionActive }
+        XCTAssertTrue(
+            cleared,
+            "a reconnect mid-selection must not leave coordinates pointing at replacement content"
+        )
+    }
+
+    private func poll(_ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+
+    // MARK: - Renderer geometry
+
+    /// The whole selection model assumes content row R is drawn at
+    /// `y = R * cellHeight` and that the content is sized to the whole
+    /// scrollback. Both are SwiftTerm renderer behaviour, not API, so a minor
+    /// version bump could change them **silently** — every highlight would then
+    /// land on the wrong row with nothing failing to compile. Assert the
+    /// observable consequence instead.
+    func testContentGeometryMatchesTheRowMathSelectionIsBuiltOn() throws {
+        let terminal = makeTerminal()
+        let rows = terminal.getTerminal().getDims().rows
+        let extra = 20
+        for line in 0..<(rows + extra) {
+            terminal.feed(text: "line\(line)\r\n")
+        }
+        terminal.layoutIfNeeded()
+
+        let cellHeight = terminal.cellSize.height
+        let contentRows = Int((terminal.contentSize.height / cellHeight).rounded())
+        XCTAssertEqual(
+            contentRows,
+            rows + extra + 1,
+            "contentSize must span the whole buffer (scrollback + screen), or content rows do not index lines"
+        )
+
+        // Probe the mapping through the shipped path: a press at y = R*cellHeight
+        // must select the word that was written to line R. This covers rows deep
+        // in the scrollback, where the yDisp re-point in `bufferLine` is doing
+        // the work, as well as rows on screen.
+        for probe in [0, 7, rows, rows + extra - 1] {
+            terminal.selectionController.endSelection()
+            terminal.beginSelectionForTest(at: point(row: probe, col: 1, on: terminal))
+            XCTAssertEqual(
+                terminal.selectionController.selectedText(),
+                "line\(probe)",
+                "a press at y = \(probe) * cellHeight must land on buffer line \(probe)"
+            )
+        }
+    }
+
+    // MARK: - Keyboard regression
+
+    func testSelectingNeverRaisesTheKeyboard() {
+        let terminal = makeTerminal()
+        terminal.feed(text: "hello world\r\n")
+
+        terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal))
+        _ = terminal.selectionController.selectedText()
+
+        XCTAssertFalse(terminal.keyboardGate, "selection must not open the explicit-keyboard gate")
+        XCTAssertFalse(terminal.isFirstResponder, "no part of the selection path may become first responder")
+    }
+}
+
+private extension MobaideTerminalView {
+    /// Thin alias so the tests read as behavior, not plumbing.
+    @discardableResult
+    func beginSelectionForTest(at point: CGPoint) -> Bool {
+        selectionController.beginSelection(at: point)
+    }
+}
