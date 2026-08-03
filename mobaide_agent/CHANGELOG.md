@@ -1,5 +1,18 @@
 # mobaide_agent Changelog
 
+## [0.3.7](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.6...agent-v0.3.7) (2026-08-03)
+
+
+### Bug Fixes
+
+* **agent:** gate Claude Code Stop hook to stop notification flood ([b92241e](https://github.com/syrax90/claude_mobile/commit/b92241e529bc7aa32f62d74c9340933e629cbc7a))
+* **agent:** gate Claude Code Stop hook to stop notification flood ([a53908d](https://github.com/syrax90/claude_mobile/commit/a53908d6526b2bb13a6c35a99dcc297e7ea322af))
+
+
+### Documentation
+
+* **agent:** clarify why the hook kind rides in the URL, not the body ([8589381](https://github.com/syrax90/claude_mobile/commit/8589381f78363ecba61c7f0df8087c22590f6f46))
+
 ## [0.3.6](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.5...agent-v0.3.6) (2026-07-30)
 
 
