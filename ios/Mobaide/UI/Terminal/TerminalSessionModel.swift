@@ -349,9 +349,17 @@ final class TerminalSessionModel {
             return
         }
         let bracketed = terminalView.getTerminal().bracketedPasteMode
-        for write in TerminalPaste.writes(for: raw, bracketed: bracketed) {
-            sendBytes(Data(write))
-        }
+        let writes = TerminalPaste.writes(for: raw, bracketed: bracketed)
+        guard !writes.isEmpty else { return }
+        // One frame, not Android's three. Android writes to a local PTY fd where
+        // the three are effectively atomic; these cross a WebSocket and a relay,
+        // and the drain loop discards `send`'s result — so losing the closing
+        // `ESC[201~` alone would strand the program's line editor in
+        // paste-collect mode, swallowing every later keystroke as paste content
+        // and reading to the user as a dead keyboard. The PTY sees identical
+        // bytes either way; only the framing differs. `sendInput` already
+        // wraps its markers inline in a single frame for the same reason.
+        sendBytes(Data(writes.joined()))
     }
 
     /// Single-tap on a terminal row. The current input row re-submits with a

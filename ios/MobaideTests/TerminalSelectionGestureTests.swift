@@ -365,6 +365,41 @@ final class TerminalSelectionGestureTests: XCTestCase {
         return condition()
     }
 
+    func testEndingAVisibleSelectionRestoresTheTailWhenFollowing() {
+        let (model, terminal) = wiredTerminal()
+        for line in 0..<80 { terminal.feed(text: "line\(line)\r\n") }
+        terminal.layoutIfNeeded()
+        XCTAssertTrue(model.followMode)
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 2, col: 1, on: terminal)))
+        // Output arriving while the selection pins the viewport.
+        terminal.contentOffset = CGPoint(x: 0, y: 0)
+
+        model.copySelection()
+
+        XCTAssertTrue(
+            terminal.isScrolledToBottom,
+            "releasing the holdsAutoScroll pin does not itself move the viewport — following users would be stranded on a stale one with no unread badge and no jump-to-bottom button"
+        )
+    }
+
+    func testEndingASelectionLeavesAPausedViewportAlone() {
+        let (model, terminal) = wiredTerminal()
+        for line in 0..<80 { terminal.feed(text: "line\(line)\r\n") }
+        terminal.layoutIfNeeded()
+        // The user scrolled up: follow mode is off, so the tail must NOT be restored.
+        model.onUserScrolled(position: 0.1)
+        XCTAssertFalse(model.followMode)
+        terminal.contentOffset = CGPoint(x: 0, y: 0)
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 2, col: 1, on: terminal)))
+
+        model.copySelection()
+
+        XCTAssertFalse(
+            terminal.isScrolledToBottom,
+            "a paused viewport is the user's, and ending a selection must not yank it to the tail"
+        )
+    }
+
     func testLeavingTheScreenEndsTheSelection() {
         let (model, terminal) = wiredTerminal()
         terminal.feed(text: "hello world\r\n")

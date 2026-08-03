@@ -75,7 +75,14 @@ final class TerminalSessionModelPasteTests: XCTestCase {
         XCTAssertEqual(payloads(frames), ["a\rb\rc"])
     }
 
-    func testMultilinePasteWithBracketedModeOnSendsExactlyThreeFrames() async throws {
+    /// The markers and body travel in **one** frame, unlike Android's three.
+    /// Android writes to a local PTY fd where the three are effectively atomic;
+    /// these cross a WebSocket and a relay whose send result the drain loop
+    /// discards, so losing the closing marker alone would strand the program's
+    /// line editor in paste-collect mode — every later keystroke swallowed as
+    /// paste content, which reads as a dead keyboard. The PTY sees identical
+    /// bytes; only the framing differs.
+    func testMultilineBracketedPasteTravelsAsOneAtomicFrame() async throws {
         let (model, connection) = try await wiredModel()
         // DECSET 2004, the way a real CLI turns bracketed paste on.
         model.terminalView.feed(text: "\u{1B}[?2004h")
@@ -84,12 +91,9 @@ final class TerminalSessionModelPasteTests: XCTestCase {
 
         model.pasteFromClipboard()
 
-        let frames = await drainedFrames(connection, expected: 3)
-        XCTAssertEqual(
-            payloads(frames),
-            ["\u{1B}[200~", "a\rb", "\u{1B}[201~"],
-            "open marker, sanitized body, close marker — the shape Android's suite pins too"
-        )
+        let frames = await drainedFrames(connection, expected: 1)
+        XCTAssertEqual(frames.count, 1, "a partial bracketed paste must not be representable on the wire")
+        XCTAssertEqual(payloads(frames), ["\u{1B}[200~a\rb\u{1B}[201~"])
     }
 
     func testPasteIsDroppedWhenTheSessionIsNotRunning() async throws {

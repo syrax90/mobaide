@@ -259,6 +259,14 @@ final class TerminalSelectionController: NSObject {
     /// end column is *exclusive*, hence the `+ 1` off our inclusive end.
     func selectedText() -> String? {
         guard let current = range else { return nil }
+        // Both endpoints must still resolve to a drawn line. A scrollback wipe
+        // (`ESC[3J`) trims the line list and renumbers every absolute row, and
+        // `getText` neither traps nor wraps on stale input — it clamps and
+        // returns whatever now sits there, so Copy would silently lift
+        // unrelated lines. `bufferLine` already refuses rows outside the
+        // `yDisp`-derived window, which is the same guard the drawing path uses.
+        guard view.bufferLine(atContentRow: current.start.row) != nil,
+              view.bufferLine(atContentRow: current.end.row) != nil else { return nil }
         let text = view.getTerminal().getText(
             start: current.start,
             end: Position(col: current.end.col + 1, row: current.end.row)
@@ -275,6 +283,17 @@ final class TerminalSelectionController: NSObject {
         lastYDisp = nil
         lastOverlayGeometry = nil
         refresh()
+        // Releasing the `holdsAutoScroll` pin does not itself move the viewport,
+        // so a session that streamed while the selection was up would be left
+        // stale — and with follow mode on, no unread rows accrue and the
+        // jump-to-bottom button stays hidden, leaving no way back to the tail.
+        // `isAutoScrollSuppressed` mirrors the model's follow-mode intent, so
+        // this restores the tail exactly when the user was following. Placed
+        // here rather than in the model so the two view-side exits
+        // (`bufferActivated`, the per-visit reset) are covered too.
+        if !view.isAutoScrollSuppressed {
+            view.scrollToBottom()
+        }
     }
 
     /// Keeps the highlight glued to its text as the emulator scrolls.
