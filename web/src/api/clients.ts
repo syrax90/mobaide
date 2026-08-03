@@ -136,7 +136,15 @@ const userSessionMiddleware: Middleware = {
 
     original.headers.set('Authorization', `Bearer ${token}`);
     original.headers.set(RETRY_MARKER, '1');
-    return fetch(original);
+    const retried = await fetch(original);
+    // The replay is a bare `fetch`, so it never re-enters this middleware.
+    // A 401 on a genuinely rotated token means the session died between the
+    // refresh and the replay (account removed, admin unregister) — without
+    // this the SPA would keep an authenticated UI over a dead session.
+    if (retried.status === 401) {
+      onUserUnauthorized?.();
+    }
+    return retried;
   },
 };
 

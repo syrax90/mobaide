@@ -145,7 +145,13 @@ export function bootstrapSession(): Promise<void> {
         clearAgentTokens();
         useSessionStore.setState({
           session: null,
-          authState: { kind: 'unauthenticated' },
+          // Same precedence rule as the local `invalidateUserSession`: an
+          // incompatible-server takeover is a hard blocking screen and must
+          // outrank a sign-out, or a peer's logout would drop this tab back
+          // into the normal router against a server it cannot talk to.
+          ...(store.authState.kind === 'incompatibleServer'
+            ? {}
+            : { authState: { kind: 'unauthenticated' } as const }),
           lastInvalidation: message.reason,
         });
         return;

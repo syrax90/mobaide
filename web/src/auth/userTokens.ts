@@ -97,6 +97,24 @@ export function refreshUserSession(): Promise<RefreshOutcome> {
         return { kind: 'transient' };
       }
       if (response.status === 401) {
+        // A peer tab may have rotated while this one was queued on the
+        // cross-tab lock. `recheck` cannot see that reliably — it reads the
+        // in-memory session, which only advances when the peer's broadcast is
+        // delivered, and message delivery has no ordering guarantee against
+        // the lock handoff. So the token we just spent may simply have been
+        // consumed by the winner. Awaiting `fetch` drains the pending message,
+        // so by now the session holds the peer's token: a different refresh
+        // token means this 401 was a lost race, not a dead session. Reporting
+        // terminal here would sign out every tab, including the one that just
+        // refreshed successfully.
+        const current = readSession();
+        if (
+          current !== null &&
+          current.refreshToken !== null &&
+          current.refreshToken !== session.refreshToken
+        ) {
+          return { kind: 'success', session: current };
+        }
         return { kind: 'terminal' };
       }
       if (!response.ok) {

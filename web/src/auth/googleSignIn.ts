@@ -82,6 +82,10 @@ export function loadGoogleIdentity(): Promise<GisIdApi> {
           return;
         }
         if (Date.now() > deadline) {
+          // Drop the memoised promise so a later attempt can retry. Without
+          // this, one timeout makes Google Sign-In permanently unavailable
+          // for the rest of the page's life.
+          loader = null;
           reject(new Error('Google Sign-In did not finish loading'));
           return;
         }
@@ -102,7 +106,10 @@ export function loadGoogleIdentity(): Promise<GisIdApi> {
     script.defer = true;
     script.onload = settleWhenReady;
     script.onerror = () => {
-      // Reset so a retry (network restored, blocker disabled) can try again.
+      // Remove the dead element as well as resetting the memo: leaving it in
+      // the head makes the next attempt take the `already` branch above and
+      // wait out the full poll deadline against a script that never loaded.
+      script.remove();
       loader = null;
       reject(new Error('Google Sign-In could not be loaded'));
     };

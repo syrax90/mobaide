@@ -565,6 +565,13 @@ class Database:
             await self._conn.executescript(_SCHEMA)
             await self._conn.execute("PRAGMA user_version = 17")
 
+        if version < 18:
+            # Additive: user_refresh_tokens table + partial owner index
+            # (browser-session refresh tokens for the opt-in refreshable
+            # user session). Pure _SCHEMA re-run.
+            await self._conn.executescript(_SCHEMA)
+            await self._conn.execute("PRAGMA user_version = 18")
+
         await self._conn.commit()
 
     async def close(self) -> None:
