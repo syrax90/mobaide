@@ -83,10 +83,15 @@ class TestWriteSessionHooks:
         assert set(_load(path)["hooks"]) <= set(hook_settings.REGISTERED_HOOK_EVENTS)
 
     def test_each_registration_bakes_its_own_hook_kind(self):
-        # Sub-classification has to ride in the URL: upstream skips the matcher
-        # filter entirely when an event carries no match query, so both
-        # ``Notification`` registrations can fire for one prompt and the body
-        # alone cannot tell them apart.
+        # Sub-classification rides in the URL so it never depends on the body.
+        # On a current CLI the two ``Notification`` matchers are mutually
+        # exclusive — ``notification_type`` is required in the hook input schema
+        # and supplies the match query, and matching is exact membership — so
+        # exactly one registration fires per notification. The URL param covers
+        # the case that is otherwise undecidable: upstream skips matcher
+        # filtering entirely when an event carries no match query, and a CLI
+        # that omits ``notification_type`` would then fire both registrations
+        # with a body that carries no discriminator to tell them apart.
         path = hook_settings.write_session_hooks("sid-1", port=9001, token="tok")
         kinds = {
             key: _query(hook)["hook"]
