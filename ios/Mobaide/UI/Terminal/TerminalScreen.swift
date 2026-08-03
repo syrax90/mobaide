@@ -57,6 +57,7 @@ private struct TerminalScreenContent: View {
                         keyboardTransition: keyboard.transition
                     )
                     jumpToBottomButton
+                    selectionToolbar
                 }
                 InputBar(
                     model: model,
@@ -102,7 +103,7 @@ private struct TerminalScreenContent: View {
         // Failure surface for control-row shortcut actions (long-press
         // Rename/Remove) taken while the picker sheet is not up; the sheet
         // attaches its own copies of both for actions taken inside it.
-        .toast(Bindable(model).shortcutMessage)
+        .toast(Bindable(model).terminalMessage)
         .renameShortcutAlert(target: $renameShortcutTarget) { shortcut, name in
             model.renameShortcut(id: shortcut.id, name: name)
         }
@@ -139,6 +140,14 @@ private struct TerminalScreenContent: View {
             .padding(.vertical, 8)
             .background(Capsule().fill(background.opacity(0.85)))
             .padding(.top, 8)
+    }
+
+    /// Sits in the terminal's own ZStack, so the anchor rect the selection
+    /// controller reports in the host view's space maps straight to `.position`.
+    private var selectionToolbar: some View {
+        GeometryReader { proxy in
+            TerminalSelectionToolbar(model: model, container: proxy.size)
+        }
     }
 
     @ViewBuilder

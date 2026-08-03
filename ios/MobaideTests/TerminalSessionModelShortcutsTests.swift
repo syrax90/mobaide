@@ -321,8 +321,8 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         StubURLProtocol.enqueue(status: 500, body: "boom")
 
         harness.model.refreshSavedShortcuts()
-        await waitUntil { harness.model.shortcutMessage != nil }
-        XCTAssertEqual(harness.model.shortcutMessage?.text, "Failed to load saved shortcuts")
+        await waitUntil { harness.model.terminalMessage != nil }
+        XCTAssertEqual(harness.model.terminalMessage?.text, "Failed to load saved shortcuts")
 
         StubURLProtocol.enqueue(status: 200, body: #"[{"shortcut_id":"s-1","kind":"claude","chord_token":"ctrl+a","position":0,"created_at":"c","updated_at":"u","version":1}]"#)
         harness.model.refreshSavedShortcuts()
@@ -355,8 +355,8 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
 
         harness.model.saveShortcut(KeyChord(ctrl: true, key: "x"))
 
-        await waitUntil { harness.model.shortcutMessage != nil }
-        XCTAssertEqual(harness.model.shortcutMessage?.text, "Failed to save shortcut: session type not known yet")
+        await waitUntil { harness.model.terminalMessage != nil }
+        XCTAssertEqual(harness.model.terminalMessage?.text, "Failed to save shortcut: session type not known yet")
         XCTAssertTrue(StubURLProtocol.requests.isEmpty, "the repository must never be touched with an unresolved kind")
         XCTAssertNil(harness.model.resolvedKind, "an aborted save must not open the gate with the seeded default")
 
@@ -411,8 +411,8 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         let chord = KeyChord(ctrl: true, key: "x")
 
         harness.model.saveShortcut(chord)
-        await waitUntil { harness.model.shortcutMessage != nil }
-        XCTAssertEqual(harness.model.shortcutMessage?.text, "Failed to save shortcut")
+        await waitUntil { harness.model.terminalMessage != nil }
+        XCTAssertEqual(harness.model.terminalMessage?.text, "Failed to save shortcut")
 
         StubURLProtocol.enqueue(status: 201, body: #"{"shortcut_id":"s-1","kind":"claude","chord_token":"ctrl+x","position":0,"created_at":"c","updated_at":"u","version":1}"#)
         harness.model.saveShortcut(chord)
@@ -454,8 +454,8 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
 
         harness.model.renameShortcut(id: "s-1", name: "New")
 
-        await waitUntil { harness.model.shortcutMessage != nil }
-        XCTAssertEqual(harness.model.shortcutMessage?.text, "Failed to rename shortcut")
+        await waitUntil { harness.model.terminalMessage != nil }
+        XCTAssertEqual(harness.model.terminalMessage?.text, "Failed to rename shortcut")
     }
 
     // MARK: - removeShortcut
@@ -471,7 +471,7 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
         let request = try XCTUnwrap(StubURLProtocol.requests.first)
         XCTAssertEqual(request.httpMethod, "DELETE")
         XCTAssertEqual(request.url?.absoluteString, "https://central.test/api/shortcuts/s-1")
-        XCTAssertNil(harness.model.shortcutMessage)
+        XCTAssertNil(harness.model.terminalMessage)
     }
 
     func testRemoveShortcutAlreadyGone403PrunesSilently() async {
@@ -495,7 +495,7 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
 
         await waitUntil { harness.repo.currentShortcuts.isEmpty }
         XCTAssertTrue(harness.repo.currentShortcuts.isEmpty, "\(status) must reconcile the cache the failed call never pruned")
-        XCTAssertNil(harness.model.shortcutMessage, "\(status) is not a user-visible failure")
+        XCTAssertNil(harness.model.terminalMessage, "\(status) is not a user-visible failure")
     }
 
     func testRemoveShortcutOtherErrorSetsToastAndKeepsCache() async {
@@ -505,8 +505,8 @@ final class TerminalSessionModelShortcutsTests: XCTestCase {
 
         harness.model.removeShortcut(id: "s-1")
 
-        await waitUntil { harness.model.shortcutMessage != nil }
-        XCTAssertEqual(harness.model.shortcutMessage?.text, "Failed to remove shortcut")
+        await waitUntil { harness.model.terminalMessage != nil }
+        XCTAssertEqual(harness.model.terminalMessage?.text, "Failed to remove shortcut")
         XCTAssertEqual(
             harness.repo.currentShortcuts.map(\.shortcut_id), ["s-1"],
             "a 500 says nothing about the row's fate — the cache must be left alone"

@@ -28,6 +28,13 @@ enum MobaideColors {
     static let terminalOverlayReconnecting = Color(hex: 0x202020)
     static let terminalOverlayReplaying = Color(hex: 0x2A4D6E)
 
+    // Terminal text selection. The highlight is composited *over* the glyphs
+    // (it is a subview, while SwiftTerm draws the text into the view's own
+    // layer), so it must stay translucent or it would hide what it selects.
+    static let terminalSelectionHighlight = Color(hex: 0x4A9EFF)
+    static let terminalSelectionHandle = Color(hex: 0x4A9EFF)
+    static let terminalSelectionHighlightOpacity = 0.32
+
     /// The 16 standard ANSI palette entries (indices 0-15).
     static let ansiColors: [Color] = [
         Color(hex: 0x000000), // black

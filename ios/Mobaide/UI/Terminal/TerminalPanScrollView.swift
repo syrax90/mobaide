@@ -90,7 +90,19 @@ final class TerminalPanScrollView: UIScrollView {
         let dy = currentCounterPan(boxHeight: viewport.height)
         let targetFrame = CGRect(x: 0, y: dy, width: targetWidth, height: viewport.height)
         if terminalView.frame != targetFrame {
+            let originMoved = terminalView.frame.origin != targetFrame.origin
             terminalView.frame = targetFrame
+            // The selection overlay is a subview and rides the counter-pan for
+            // free, but the toolbar's anchor is reported in *this* view's space
+            // and would keep the pre-pan value, drifting by `dy`. Republished
+            // asynchronously because `refresh()` writes `@Observable` model
+            // state, which must not happen inside a layout pass.
+            if originMoved, terminalView.isSelectionActive {
+                DispatchQueue.main.async { [weak terminalView] in
+                    guard let terminalView, terminalView.isSelectionActive else { return }
+                    terminalView.selectionController.refresh()
+                }
+            }
         }
         let targetContent = CGSize(width: targetWidth, height: viewport.height)
         if contentSize != targetContent {
@@ -209,6 +221,12 @@ final class TerminalPanScrollView: UIScrollView {
     /// alone would also refuse this view's own pan in Full mode, where it is
     /// allowed today.
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        // This pan lives on the outer view, so the inner view's sticky-selection
+        // gate never sees it — a Static-mode horizontal drag would otherwise pan
+        // the terminal out from under a selection the user is extending.
+        if gestureRecognizer === panGestureRecognizer, terminalView.isSelectionActive {
+            return false
+        }
         if displayConfig.mode == .static,
            gestureRecognizer === panGestureRecognizer,
            !claimsHorizontalPan() {

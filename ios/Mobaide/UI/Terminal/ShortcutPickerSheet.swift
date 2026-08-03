@@ -50,7 +50,7 @@ struct ShortcutPickerSheet: View {
         // The sheet is its own presentation layer: the terminal screen's toast
         // overlay renders behind it, so failures triggered from here must
         // surface on the sheet itself.
-        .toast($model.shortcutMessage)
+        .toast($model.terminalMessage)
         .renameShortcutAlert(target: $renameTarget) { shortcut, name in
             model.renameShortcut(id: shortcut.id, name: name)
         }
