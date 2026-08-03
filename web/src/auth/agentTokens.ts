@@ -89,7 +89,13 @@ function readAll(): AgentTokenMap {
   // tab's memory. Memory is the whole answer only when storage has refused us,
   // never a per-key fallback.
   const stored = readStored();
-  return storageUsable ? stored : { ...memoryTokens, ...stored };
+  // Note the `!storageUsable` branch returns memory *alone*. Merging with
+  // `stored` would let a stale shared copy win over a change this page could
+  // not persist — resurrecting a token deleted while writes were failing, and
+  // discarding a freshly minted one. `writeAll` sets `memoryTokens` to the
+  // complete intended map before `setItem` can throw, so memory is always the
+  // whole picture by the time the flag flips.
+  return storageUsable ? stored : memoryTokens;
 }
 
 function writeAll(map: AgentTokenMap): void {

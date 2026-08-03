@@ -240,3 +240,17 @@ describe('reachability probe races', () => {
     expect(onlineManager.isOnline()).toBe(true);
   });
 });
+
+describe('ownership of onlineManager', () => {
+  it('does not let a browser offline event strand the app offline', () => {
+    // TanStack's default listener sets the flag directly. With it still
+    // installed, `goOnline()` took its already-online early return and never
+    // restored the flag — including on sign-out, which must never leave the
+    // login mutations paused.
+    onlineManager.setOnline(false);
+
+    reportRealtimeStopped();
+
+    expect(onlineManager.isOnline()).toBe(true);
+  });
+});

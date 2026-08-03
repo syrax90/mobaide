@@ -63,4 +63,17 @@ describe('toWireSeq', () => {
     expect(toWireSeq('12')).toBe(0n);
     expect(toWireSeq(Number.NaN)).toBe(0n);
   });
+
+  it('rejects a fractional seq rather than truncating it', () => {
+    // Truncating would advance the durable resume cursor past a sequence
+    // number that never arrived, and the real event would then be dropped as a
+    // replay and never re-sent.
+    expect(toWireSeq(5.9)).toBe(0n);
+    expect(toWireSeq(0.5)).toBe(0n);
+  });
+
+  it('still accepts a large seq that arrived as a rounded double', () => {
+    // The no-source-access fallback: integral but not a *safe* integer.
+    expect(toWireSeq(9007199254740994)).toBe(9007199254740994n);
+  });
 });

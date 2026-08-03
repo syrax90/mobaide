@@ -58,6 +58,37 @@ let probeFetch: typeof fetch = (...args) => fetch(...args);
  */
 let reachabilityGeneration = 0;
 
+/**
+ * Take ownership of `onlineManager`'s event source.
+ *
+ * TanStack installs its own `window` online/offline listener that calls
+ * `setOnline` directly, and leaving it in place desyncs this module from the
+ * flag it is trying to own — in both directions. A browser `offline` sets the
+ * flag false while `declaredOffline` stays false, so `goOnline()` takes its
+ * early return and never restores it, which would break the guarantee below
+ * that signing out can never leave login mutations paused. A browser `online`
+ * overrides a confirmed outage that `recordFailure()` can no longer re-assert.
+ *
+ * The browser's `online` event is still worth having as cheap positive
+ * evidence, so it is routed through `goOnline()` like every other positive
+ * signal. `offline` is deliberately ignored: an interface going down says
+ * nothing about whether the relay is reachable, and that is what the WebSocket
+ * and the probe are for.
+ */
+function takeOverOnlineManager(): void {
+  onlineManager.setEventListener(() => {
+    const handleOnline = (): void => {
+      goOnline();
+    };
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+    };
+  });
+}
+
+takeOverOnlineManager();
+
 function stopProbing(): void {
   if (probeTimer === null) return;
   clearInterval(probeTimer);
@@ -121,7 +152,15 @@ function restRecentlyReachable(): boolean {
 function goOnline(): void {
   consecutiveFailures = 0;
   reachabilityGeneration += 1;
-  if (!declaredOffline) return;
+  if (!declaredOffline) {
+    // Reconcile rather than assume. Taking over the event listener removes the
+    // only routine way the flag drifts from this module's view of it, but the
+    // flag is process-global and positive evidence should be able to correct it
+    // whatever set it — otherwise a `false` this module never recorded is one
+    // nothing can undo, and mutations stay paused for good.
+    if (!onlineManager.isOnline()) onlineManager.setOnline(true);
+    return;
+  }
   declaredOffline = false;
   stopProbing();
   onlineManager.setOnline(true);
@@ -213,5 +252,6 @@ export function resetReachability(fetchImpl: typeof fetch = (...args) => fetch(.
   pendingProbe = null;
   stopProbing();
   probeFetch = fetchImpl;
+  takeOverOnlineManager();
   onlineManager.setOnline(true);
 }

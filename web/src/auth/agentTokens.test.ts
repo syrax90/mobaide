@@ -84,3 +84,22 @@ describe('cross-tab deletion', () => {
     expect(getAgentToken('a1')).toBeNull();
   });
 });
+
+describe('when storage refuses writes', () => {
+  it('keeps a deletion that only memory could record', () => {
+    // Safari-style "reads work, writes throw": the delete lands in memory, and
+    // merging stale storage back over it would resurrect the credential.
+    // Kept last in the file: once a write throws, the module latches storage as
+    // unusable for the rest of the module's life, and Vitest's per-file
+    // isolation is what contains that.
+    seed('a1', 'a2');
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('quota exceeded');
+    });
+
+    clearAgentToken('a1');
+
+    expect(getAgentToken('a1')).toBeNull();
+    expect(getAgentToken('a2')).toBe('access-a2');
+  });
+});

@@ -80,11 +80,21 @@ export function stringifyWire(value: unknown): string {
  * are exact regardless of magnitude. Anything else (missing, null, a float, a
  * string) yields `0n` — the same "absent means zero" rule Android
  * (`?: 0L`) and iOS (`?? 0`) apply.
+ *
+ * Rejecting a fractional value rather than truncating it is deliberate, and is
+ * the one place this follows Android over iOS: the auto-scan cursor is durable,
+ * so truncating `5.9` to `5n` would advance the resume mark past a sequence
+ * number that has not arrived, and the real event 5 would then be dropped as a
+ * replay and never re-sent. iOS truncates here; Android drops the frame.
+ *
+ * `Number.isInteger`, not `Number.isSafeInteger`: on a runtime without
+ * `JSON.parse` source access a large `seq` arrives as a rounded double, which
+ * is integral but not safe, and must still be accepted.
  */
 export function toWireSeq(value: unknown): bigint {
   if (typeof value === 'bigint') return value;
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return BigInt(Math.trunc(value));
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    return BigInt(value);
   }
   return 0n;
 }
