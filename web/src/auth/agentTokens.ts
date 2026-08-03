@@ -48,11 +48,24 @@ function isTokenPair(value: unknown): value is AgentTokenPair {
  */
 let memoryTokens: AgentTokenMap = {};
 
+/**
+ * False once `localStorage` has actually refused this page.
+ *
+ * The memory mirror may only *substitute* for storage, never merge with it. A
+ * revoked token deleted from storage by one tab would otherwise be resurrected
+ * in a peer that still held it in memory — and since a `mobile_access` JWT
+ * carries no `exp`, nothing would ever rotate it away again; the peer would
+ * keep presenting the dead credential and write it back to shared storage on
+ * its next rotation.
+ */
+let storageUsable = true;
+
 function readStored(): AgentTokenMap {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(STORAGE_KEY);
   } catch {
+    storageUsable = false;
     return {};
   }
   if (raw === null) return {};
@@ -70,13 +83,19 @@ function readStored(): AgentTokenMap {
 }
 
 function readAll(): AgentTokenMap {
-  // Storage wins where it has a value: it is the shared surface, so a peer
-  // tab's newer rotation must not be shadowed by this tab's older copy —
-  // that sharing is the whole reason the cross-tab lock has something to
-  // protect. Memory only fills the gaps, which is exactly the storage-denied
-  // case it exists for (there `readStored()` is empty and memory supplies
-  // everything).
-  return { ...memoryTokens, ...readStored() };
+  // Storage is authoritative whenever it works: it is the shared surface, so a
+  // peer tab's newer rotation must not be shadowed by this tab's older copy —
+  // and, just as importantly, a *deletion* by a peer must not be undone by this
+  // tab's memory. Memory is the whole answer only when storage has refused us,
+  // never a per-key fallback.
+  const stored = readStored();
+  // Note the `!storageUsable` branch returns memory *alone*. Merging with
+  // `stored` would let a stale shared copy win over a change this page could
+  // not persist — resurrecting a token deleted while writes were failing, and
+  // discarding a freshly minted one. `writeAll` sets `memoryTokens` to the
+  // complete intended map before `setItem` can throw, so memory is always the
+  // whole picture by the time the flag flips.
+  return storageUsable ? stored : memoryTokens;
 }
 
 function writeAll(map: AgentTokenMap): void {
@@ -84,8 +103,11 @@ function writeAll(map: AgentTokenMap): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
-    // Storage denied — the memory mirror above keeps the axis working for this
-    // page, at the cost of not sharing it with other tabs.
+    // Storage denied — Safari-style "reads work, writes throw" included, which
+    // is why the flag is set here and not only on a failed read. The memory
+    // mirror keeps the axis working for this page, at the cost of not sharing
+    // it with other tabs.
+    storageUsable = false;
   }
 }
 
@@ -126,6 +148,24 @@ export function clearAgentTokens(): void {
     // Nothing further to do — a storage failure here cannot be surfaced
     // usefully, and the live copy is already gone.
   }
+}
+
+/**
+ * Drop one agent's pair, keeping the others.
+ *
+ * The WebSocket close policy calls this when the relay rejects the token for a
+ * specific agent (4001, or 4003 "token not valid for this agent"): the pair is
+ * provably useless, and leaving it cached would make every reconnect present
+ * the same rejected credential. The user session is untouched — unlike the user
+ * JWT, an agent token is always re-mintable.
+ */
+export function clearAgentToken(agentId: string): void {
+  const map = readAll();
+  // `Object.hasOwn`, not `in`: an agent id is externally supplied, and `in`
+  // reaches the prototype chain, so `'constructor'` would pass the guard.
+  if (!Object.hasOwn(map, agentId)) return;
+  delete map[agentId];
+  writeAll(map);
 }
 
 /**

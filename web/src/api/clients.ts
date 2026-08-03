@@ -64,6 +64,32 @@ export function setUserUnauthorizedHandler(handler: SessionInvalidator | null): 
   onUserUnauthorized = handler;
 }
 
+type ReachabilityReporter = () => void;
+
+let onServerReachable: ReachabilityReporter | null = null;
+
+/**
+ * Register the "the server answered" signal, wired by `installAuthProviders`
+ * to the realtime reachability tracker.
+ *
+ * A seam rather than a direct import for the reason stated at the top of this
+ * file: `clients.ts` stays free of anything that would drag app state into a
+ * request-shape test. It matters because the reachability signal is otherwise
+ * driven only by the WebSocket, and a proxy that blocks WS upgrades while
+ * passing HTTP would leave TanStack Query pinned offline.
+ */
+export function setServerReachableHandler(handler: ReachabilityReporter | null): void {
+  onServerReachable = handler;
+}
+
+const reachabilityMiddleware: Middleware = {
+  onResponse({ response }) {
+    // Any status at all — a 4xx is still proof the server is there.
+    onServerReachable?.();
+    return response;
+  },
+};
+
 function relayPath(url: string): string {
   return new URL(url, 'http://relay.invalid').pathname;
 }
@@ -170,6 +196,7 @@ export const relayClient = createClient<CentralServerPaths>({ baseUrl: '/' });
 // handler after the bearer — also what we want.)
 relayClient.use(userSessionMiddleware);
 relayClient.use(bearerMiddleware(getUserToken));
+relayClient.use(reachabilityMiddleware);
 
 /**
  * Agent-axis client: the relay's `/proxy/{agentId}/...` catch-all strips the
@@ -184,6 +211,7 @@ export function createAgentClient(agentId: string) {
     baseUrl: `/proxy/${encodeURIComponent(agentId)}`,
   });
   client.use(bearerMiddleware(() => getAgentToken(agentId)));
+  client.use(reachabilityMiddleware);
   // Deliberately no unauthorizedMiddleware: a 401 here means this agent's
   // token is stale, not that the user session died. Re-minting is the agent
   // axis's own recovery (see ensureAgentToken), and tearing down the user

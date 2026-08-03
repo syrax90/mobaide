@@ -78,7 +78,29 @@ See the "App shell" section of `docs/web-client.md` for the full model.
 
 - Prettier, TanStack Query devtools: adopt when the team wants them.
 
-## WebSockets
+## Realtime (WEB-04)
 
-WS frame/event types are hand-written and owned by the protocol milestone
-(WEB-04) — they are absent from both OpenAPI schemas by design.
+WS frame/event types are hand-written — they are absent from both OpenAPI
+schemas by design — and split in two:
+
+- `src/protocol/` is framework-free: the binary terminal codec, the relay
+  path/URL builder, the auto-scan frame decoder, and the Zod wire schemas.
+  Its tests read the cross-platform goldens in repo-root
+  `tests/protocol_fixtures/` directly (the same files the iOS test target
+  consumes), run under `// @vitest-environment node`, and assert hex
+  strings rather than typed arrays.
+- `src/realtime/` is the channel manager: generation-counted reconnect with
+  jittered 1 s→30 s backoff, the per-axis close-code policy, a Zustand
+  connection-state store, and the WS-event → TanStack Query bridge.
+  `RealtimeProvider` runs the user-events channel for as long as there is a
+  session.
+
+```sh
+npm run test:protocol   # protocol suite only (what protocol-integrity CI runs)
+```
+
+`web/src/protocol/__fixtures__/coverage.ts` classifies every fixture file as
+covered or deferred to a later milestone; adding a fixture without
+classifying it fails the suite. `APP_PROTOCOL_VERSION` in
+`src/api/bootstrap.ts` is compared against the Android and iOS constants by
+`protocol-integrity` — see PROTOCOL.md "How to bump".

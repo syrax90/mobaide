@@ -1,0 +1,176 @@
+/**
+ * Ownership of the long-lived channels.
+ *
+ * The user-events channel is a singleton owned by `RealtimeProvider` and runs
+ * for as long as there is a session. Agent-scoped channels are started on
+ * demand — WEB-07 will open one per selected agent, WEB-05 the session I/O
+ * channel, WEB-10 the auto-scan stream — and each one is registered here so a
+ * second request reuses the live socket instead of opening a rival.
+ *
+ * Kept out of `index.ts` so the barrel stays a barrel: `RealtimeProvider`
+ * imports these directly, and re-exporting the provider from a module it
+ * imports from would close an import cycle — the same trap `src/api/auth.ts`
+ * and `src/auth/install.ts` exist to avoid.
+ */
+import type { QueryClient } from '@tanstack/react-query';
+import { useSessionStore } from '../auth/sessionStore';
+import { createAgentEventsChannel, createUserEventsChannel } from './channels';
+import { useConnectionStore } from './connectionStore';
+import { disposeAllChannels } from './liveChannels';
+import {
+  applyAgentEvent,
+  applyUserEvent,
+  refreshOnAgentEventsConnect,
+  refreshOnUserEventsConnect,
+} from './queryBridge';
+import { observeReachability, reportRealtimeStopped } from './reachability';
+import type { WebSocketChannel } from './webSocketChannel';
+
+interface RunningChannel {
+  channel: WebSocketChannel;
+  dispose: () => void;
+}
+
+let userEvents: RunningChannel | null = null;
+const agentEvents = new Map<string, RunningChannel>();
+
+function tearDown(running: RunningChannel): void {
+  running.channel.disconnect();
+  running.dispose();
+  useConnectionStore.getState().forgetChannel(running.channel.name);
+}
+
+/**
+ * Start (or return) the user-scoped events channel.
+ *
+ * Listeners are attached before `connect()` so the burst that follows the open
+ * — `connected`, then whatever the server pushes immediately — is never missed.
+ */
+export function startUserEvents(client: QueryClient): WebSocketChannel {
+  const running = userEvents;
+  if (running !== null) {
+    // Re-arm rather than hand back whatever state it is in. A channel reaches a
+    // permanent stop whenever `buildUrl` resolves to null or throws — a token
+    // mint failing on a momentary blip is enough — and `connect()` is
+    // idempotent, so this is a no-op on a healthy channel and the only way out
+    // of a dead one short of a page reload.
+    running.channel.connect();
+    return running.channel;
+  }
+
+  const channel = createUserEventsChannel();
+  const unsubscribeEvents = channel.subscribe((event) => {
+    const session = useSessionStore.getState();
+    switch (event.kind) {
+      case 'connected':
+        refreshOnUserEventsConnect(client);
+        break;
+      case 'message':
+        applyUserEvent(client, event.data);
+        break;
+      case 'tokenRejected':
+        session.invalidateUserSession('tokenRejected');
+        break;
+      case 'accountRemoved':
+        session.invalidateUserSession('accountRemoved');
+        break;
+      case 'incompatibleServer':
+        // `minClientVersion: 0` matches iOS: a close frame carries only a
+        // reason string, and the takeover screen renders only the reason. The
+        // real number arrives with the next `/api/version` probe.
+        session.markIncompatibleServer({ reason: event.reason, minClientVersion: 0 });
+        break;
+      default:
+        break;
+    }
+  });
+  const unsubscribeReachability = observeReachability((listener) =>
+    channel.subscribe(listener),
+  );
+
+  userEvents = {
+    channel,
+    dispose: () => {
+      unsubscribeEvents();
+      unsubscribeReachability();
+    },
+  };
+  channel.connect();
+  return channel;
+}
+
+export function stopUserEvents(): void {
+  const running = userEvents;
+  if (running === null) return;
+  userEvents = null;
+  tearDown(running);
+  // Stopping on purpose is the signed-out state, where REST-only flows (login,
+  // register, password reset) must never be paused as "offline".
+  reportRealtimeStopped();
+}
+
+/**
+ * Start (or return) the per-agent events channel.
+ *
+ * A successful open promotes the session to `fullyConnected`. The reverse is
+ * deliberately not wired: `agentDisconnect()` clears *every* agent's tokens,
+ * which is right for an unpair (WEB-08) and wrong for a network blip the
+ * backoff loop is about to recover from.
+ */
+export function connectAgentEvents(
+  client: QueryClient,
+  agentId: string,
+): WebSocketChannel {
+  const existing = agentEvents.get(agentId);
+  if (existing !== undefined) {
+    existing.channel.connect();
+    return existing.channel;
+  }
+
+  const channel = createAgentEventsChannel(agentId);
+  const dispose = channel.subscribe((event) => {
+    switch (event.kind) {
+      case 'connected':
+        useSessionStore.getState().markAgentConnected();
+        refreshOnAgentEventsConnect(client, agentId);
+        break;
+      case 'message':
+        applyAgentEvent(client, agentId, event.data);
+        break;
+      default:
+        break;
+    }
+  });
+
+  agentEvents.set(agentId, { channel, dispose });
+  channel.connect();
+  return channel;
+}
+
+export function disconnectAgentEvents(agentId: string): void {
+  const running = agentEvents.get(agentId);
+  if (running === undefined) return;
+  agentEvents.delete(agentId);
+  tearDown(running);
+}
+
+/**
+ * Tear everything down — leaving the authenticated state, and the test seam.
+ *
+ * Agent channels must go too, not just the user channel: the relay authenticates
+ * a mobile socket only at handshake, so one left open after sign-out stays fully
+ * authorised for the previous account, and its reconnect loop would keep minting
+ * tokens against a session that no longer exists.
+ *
+ * Contract for WEB-05/07/10, which own the agent channels: `RealtimeProvider`
+ * calls this on every session change, so an agent channel is closed out from
+ * under a component that is still mounted. Re-establish on the session
+ * changing, not only on mount.
+ */
+export function stopAllRealtime(): void {
+  // Session I/O and auto-scan channels are constructed by their consumers, not
+  // here, so they are only reachable through the disposable registry.
+  disposeAllChannels();
+  for (const agentId of [...agentEvents.keys()]) disconnectAgentEvents(agentId);
+  stopUserEvents();
+}

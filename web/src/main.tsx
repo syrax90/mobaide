@@ -8,6 +8,7 @@ import { installAuthProviders } from './auth/install';
 import { bootstrapSession } from './auth/sessionStore';
 import { ToastViewport } from './components/toast/ToastViewport';
 import { queryClient } from './lib/queryClient';
+import { RealtimeProvider } from './realtime';
 import './styles/theme.css';
 import './styles/global.css';
 
@@ -26,10 +27,12 @@ createRoot(container).render(
   <StrictMode>
     <AppErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <AppGate />
-          <ToastViewport />
-        </ThemeProvider>
+        <RealtimeProvider>
+          <ThemeProvider>
+            <AppGate />
+            <ToastViewport />
+          </ThemeProvider>
+        </RealtimeProvider>
       </QueryClientProvider>
     </AppErrorBoundary>
   </StrictMode>,

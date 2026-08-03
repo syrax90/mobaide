@@ -602,7 +602,10 @@ Known deliberate deviations from Android's bytes (server-verified safe):
 ## Golden fixtures (`tests/protocol_fixtures/`)
 
 Language-neutral goldens every later iOS issue (and potentially Android)
-tests against:
+tests against. **The web client is a second consumer since WEB-04** —
+`web/src/protocol/` reads the same JSON off disk under Vitest and
+`protocol-integrity` runs that suite on every PR — so a fixture edit has to
+satisfy both arms:
 
 - `dto/{agent,central}/<TypeName>.json` — one file per DTO type:
   `cases[]` of `{name, wire, decoded_canonical?}`. Tests decode `wire`,
@@ -623,4 +626,13 @@ tests against:
 
 Adding a DTO type: create its fixture JSON and register the type in
 `ios/MobaideTests/Fixtures/FixtureRegistry.swift` — the DTO fixture test
-fails if either side is missing (bidirectional coverage check).
+fails if either side is missing (bidirectional coverage check) — and
+classify the new file in `web/src/protocol/__fixtures__/coverage.ts`, whose
+own gate fails until it is either asserted by a web test or given an owning
+milestone.
+
+One cross-arm constraint: Swift's `Codable` **drops** unknown keys on
+re-encode, while the web schemas use Zod's `z.looseObject` and **preserve**
+them. An unknown-extra-key round-trip case therefore cannot live in a shared
+fixture — it would fail iOS. Web-specific behaviour like that is asserted in
+TypeScript-only tests instead.

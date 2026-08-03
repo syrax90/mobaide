@@ -849,16 +849,25 @@ The Android client has three distinct update paths that work together:
    between the two, and (b) compares the live wire shape against
    `tests/protocol_golden.json`. Any handshake-shape change **must** update
    the golden file in the same commit.
-2. **iOS constants check:** extracts `APP_PROTOCOL_VERSION` and
-   `MIN_SERVER_PROTOCOL_VERSION` from `ios/Config/Protocol.xcconfig` and
-   asserts they equal the `buildConfigField` values in
-   `android/app/build.gradle.kts`, so a proto bump that misses `ios/`
-   fails here. The comparison is version-agnostic and needs no update on
+2. **Client constants check:** extracts `APP_PROTOCOL_VERSION` from
+   `ios/Config/Protocol.xcconfig` and from `web/src/api/bootstrap.ts` and
+   asserts both equal the `buildConfigField` value in
+   `android/app/build.gradle.kts`, so a proto bump that misses `ios/` or
+   `web/` fails here. `MIN_SERVER_PROTOCOL_VERSION` stays an iOS↔Android
+   comparison: the web version gate is set membership against the server's
+   advertised list (`checkVersionGate`) and carries no client-side floor of
+   its own. Both comparisons are version-agnostic and need no update on
    bumps.
 3. **Diff guard (PR-only):** if a PR modifies one of the two `envelope.py`
    files, it must modify the other. Comparison uses
    `${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}`
    so the check is base-branch-agnostic.
+4. **Web protocol fixtures** (separate `web-protocol-fixtures` job, Node 22
+   rather than Python, so it runs in parallel): `npm ci` + `npm run
+   test:protocol` in `web/`, which exercises the TypeScript arm of the
+   `tests/protocol_fixtures/` goldens — the same files the iOS test target
+   reads — plus a coverage manifest that fails when a new fixture file is
+   neither asserted by a web test nor assigned an owning milestone.
 
 This is the safety net that lets the two component packages duplicate
 `envelope.py` (a deliberate constraint — the two packages are independent

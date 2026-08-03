@@ -13,7 +13,10 @@ theming, error boundaries, toasts, state/data scaffolding, typed API
 clients, tests, and CI. WEB-03 (CLA-190) added the auth & account gate:
 login / register / verify-email / forgot-reset-password screens, a session
 that survives reload and refreshes silently, and the devices and account
-(incl. delete + 14-day cancel) screens. The series is tracked in
+(incl. delete + 14-day cancel) screens. WEB-04 (CLA-191) added the realtime
+protocol core — WebSocket channel manager, binary terminal codec, the
+TypeScript arm of the cross-platform golden fixtures, and the WS-event →
+TanStack Query bridge. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -55,8 +58,14 @@ web/
 │   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh, GIS loader
 │   ├── components/toast/     # zero-dependency toast primitives
 │   ├── components/form/      # react-hook-form fields (+ auth/ Google button, account/ grace banner)
+│   ├── protocol/             # framework-free wire layer (WEB-04): terminal codec,
+│   │                         #   relay URL/path builder, wire JSON + Zod schemas,
+│   │                         #   autoscan frames, __fixtures__/ golden-fixture loader
+│   ├── realtime/             # WS channel manager, close policy, connection store,
+│   │                         #   event→Query bridge, RealtimeProvider (WEB-04)
 │   ├── stores/               # Zustand stores (themeStore, toastStore)
 │   ├── lib/queryClient.ts    # TanStack Query defaults
+│   ├── lib/queryKeys.ts      # central query-key factory + wsBackedQueryOptions
 │   ├── api/
 │   │   ├── generated/*.ts    # committed openapi-typescript output — never hand-edited
 │   │   ├── auth.ts           # bearer-token provider seams (filled in by src/auth/install.ts)
@@ -101,7 +110,7 @@ a call can type-check yet 404 through `/proxy` (e.g. `/api/health`,
 surface to the tunnel is tracked in CLA-201.
 
 WebSocket frame/event types are deliberately absent from both schemas; they
-are hand-written and owned by WEB-04.
+are hand-written in `src/protocol/` (see *Realtime layer* below).
 
 ### Schema pipeline
 
@@ -133,6 +142,117 @@ one operationId whose embedded method suffix is drawn from a Python set, so
 raw dumps are both spec-invalid and nondeterministic across processes; the
 script rewrites them to `<base>_<method>`.
 
+## Realtime layer (WEB-04)
+
+Two modules, split by dependency weight. `src/protocol/` is plain TypeScript
+— no React, no TanStack — so it can be tested in a Node environment against
+the shared goldens; `src/realtime/` owns the sockets and is the only part
+that touches app state.
+
+**Channels and the relay asymmetry.** The SPA is same-origin with the relay,
+so every URL is built from `window.location.origin`. Agent channels
+(`ws/events`, `ws/session/{id}`, `ws/autoscan`) go through the relay path
+rewrite — note the agent id precedes the session id
+(`relay/ws/session/{agentId}/{sessionId}`) — while `ws/user-events` is built
+in `direct` mode against the same origin and is **never** rewritten. Both
+behaviours are golden rows in `relay/relay_mapping.json`. The token is
+appended raw: `URLSearchParams` would percent-encode a JWT's `+` and `=` and
+the relay would reject it.
+
+**Lifecycle.** Ported from Android `WebSocketConnection` and iOS
+`WebSocketCore`: backoff sleeps the current ladder value then doubles it
+(1 s → 30 s), reset on open and on `forceReconnect()`; a generation counter
+— incremented only by `forceReconnect()` — drops events from a superseded
+socket; `buildUrl` is re-evaluated on every attempt so a rotated token is
+picked up, and resolving to `null` stops without burning the ladder.
+**Deliberate divergence from mobile:** web adds 50–100 % jitter on top of
+the ladder, because a browser user commonly has several tabs and a relay
+restart would otherwise bring them all back in lockstep.
+
+**Close codes are per axis.** On the user axis 4001 → `tokenRejected`,
+4010 → `accountRemoved`, 4002 → the incompatible-server takeover. On the
+agent axis the same codes stop the loop but leave the session alone, because
+per-agent tokens are always re-mintable — 4001 and 4003 additionally drop
+the cached token so the next connect re-mints. 4011, 4012 (the ordinary
+attach-to-an-offline-agent case) and 1013 always reconnect.
+
+The 4002 branch is parity, not a live path: no server route sends it to a
+user socket (it is the relay↔agent handshake only). What actually catches a
+redeploy landing mid-session is the reconnect itself — a redeploy drops the
+socket, and `refreshOnUserEventsConnect` invalidates `['server-info']`, whose
+query is otherwise pinned at `staleTime: Infinity`. Android re-probes on every
+launch for the same reason.
+
+Because the relay only authenticates at handshake and a per-agent JWT is
+minted without an `exp`, a rejected agent credential is otherwise invisible
+and never rotated. Three consecutive failures to open an agent channel
+therefore drop the cached token so the next attempt re-mints. This is also
+why a null URL is treated differently per axis: on the user axis it means
+signed out and the channel stops, while on the agent axis it usually means the
+mint itself just failed, so the channel keeps backing off rather than
+stranding on a blip.
+
+**Known browser limitation:** the server sends 4001/4010 *before*
+`websocket.accept()`, ASGI turns that into an HTTP 403 handshake rejection,
+and the WebSocket API exposes no upgrade status — so those two normally
+reach a browser as `1006`, indistinguishable from a network failure. The
+mitigation is that every connect attempt mints a fresh token through the
+WEB-03 seams; the REST 401 path remains the authoritative session teardown.
+Browsers also expose no ping API, unlike both mobile clients (CLA-219).
+
+**Resume hooks.** The session I/O channel re-asserts the cached PTY size on
+every open — the client is the sole size authority and the agent spawns at
+24×80 — and exposes `resendCachedSize()` for the two further re-assert
+points WEB-05's replay state machine owns. The auto-scan channel sends
+`{subscribe, resume_from_seq}` as the first thing on every open (the agent's
+grace window is 200 ms direct, 1 s through the relay), rebuilt from a live
+per-project cursor so a reconnect resumes at the true high-water mark; it
+also drops `seq <= cursor` because the server's replay is best-effort.
+
+**Wire DTO policy.** `z.looseObject` everywhere, so unknown keys survive;
+kind strings stay open (proto-v7 `custom_<12hex>` and anything newer are
+preserved verbatim, only an explicit `null` falls back to `claude`); and
+`parseWireJson` promotes integer literals beyond 2^53 to `bigint` via the
+ES2026 `JSON.parse` source-access reviver, re-emitting them as bare JSON
+integers. No `lossless-json` dependency, and runtimes without source access
+degrade only above 2^53.
+
+**Event → Query bridge.** Refresh-on-connect invalidates agents / templates
+/ shortcuts / custom types on the user channel (Android `UserEventBus`
+order) and sessions / projects on an agent channel. Per event the policy is
+`invalidateQueries`, never a hand-applied delta; `custom_type.deleted` also
+invalidates shortcuts because the server cascades them in one transaction
+with no companion events. User-channel payloads are schema-validated before
+anything is invalidated (a malformed payload is dropped, as on mobile);
+agent-channel payloads are only routed by `type`, since their shapes belong
+to WEB-07/09/10. Unknown envelope types are ignored.
+
+`onlineManager` is driven from reachability rather than `navigator.onLine`,
+conservatively: offline only after two consecutive pre-open failures of the
+user-events channel, and back online on any WS open, any REST response, or
+an intentional stop — so the signed-out login flow is never paused.
+`staleTime` stays at the global 30 s; `wsBackedQueryOptions`
+(`staleTime: Infinity`) is opt-in for lists that actually have a push
+channel.
+
+### Golden fixtures, TypeScript arm
+
+`src/protocol/*.test.ts` read repo-root `tests/protocol_fixtures/` off disk
+— the same files the iOS test target consumes — under
+`// @vitest-environment node`, asserting hex strings rather than typed
+arrays. `npm run test:protocol` runs just this suite, and
+`protocol-integrity.yml` runs it on every PR alongside the Python checks.
+
+Coverage is deliberately partial and declared in
+`src/protocol/__fixtures__/coverage.ts`: WEB-04 asserts the frame, relay and
+eight realtime DTO fixtures, and every other file is listed against the
+milestone that will claim it. The gate fails when a fixture file is neither
+asserted nor assigned an owner — the same drift protection iOS's
+bidirectional registry provides. One cross-arm constraint: Swift `Codable`
+drops unknown keys on re-encode while `z.looseObject` preserves them, so
+unknown-key round-trips are asserted in TypeScript-only tests, never added
+to a shared fixture.
+
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused
@@ -144,6 +264,12 @@ build → Playwright (`playwright install --with-deps chromium` + `npm run
 test:e2e`). Playwright joined the workflow with WEB-03, once real user
 flows existed to drive; the specs stub `/api/**` with `page.route`, so CI
 needs no relay.
+
+A second workflow also gates `web/`: `protocol-integrity.yml` carries a
+`web-protocol-fixtures` job (Node 22, `npm ci`, `npm run test:protocol`) so
+a change to the shared fixtures fails on the PR that makes it, and its
+constants step compares `APP_PROTOCOL_VERSION` three ways — Android gradle,
+iOS xcconfig, and `web/src/api/bootstrap.ts`.
 
 Release integration: `web` is a release-please package (`release-type:
 node`, component `web`) and a release-bearing PR-title scope
