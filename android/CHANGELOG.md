@@ -1,5 +1,22 @@
 # Android Changelog
 
+## [3.4.0](https://github.com/syrax90/claude_mobile/compare/android-v3.3.0...android-v3.4.0) (2026-08-03)
+
+
+### Features
+
+* **web:** auth & account — email/password + Google Sign-In, dual-axis tokens, devices, account deletion (CLA-190) ([7ab4df6](https://github.com/syrax90/claude_mobile/commit/7ab4df654dae97cf326c1679329c8864b53b8606))
+
+
+### Bug Fixes
+
+* **android:** don't resume follow mode for emulator's own query replies ([6f63df0](https://github.com/syrax90/claude_mobile/commit/6f63df0f5742be2308cd5e2a2f73189728a04de2))
+* gate terminal row-tap execute while the display is frozen (CLA-182) ([2396ed5](https://github.com/syrax90/claude_mobile/commit/2396ed554cd6bb043c0332eef07a2ad2b4643b33))
+* **mobile:** stop unread-row badge counting scroll events instead of scrollback rows ([64c2328](https://github.com/syrax90/claude_mobile/commit/64c2328419e605b31ea111a8bb83986087e04a06))
+* **mobile:** stop unread-row badge counting scroll events instead of scrollback rows ([f77f842](https://github.com/syrax90/claude_mobile/commit/f77f8424e9209c3508ce242ee4943b39ec1db162))
+* **terminal:** gate row-tap execute on synchronized/deferred output ([166b8cf](https://github.com/syrax90/claude_mobile/commit/166b8cf32c30ffd063cbb575daddd8413014c061))
+* **terminal:** latch the synchronized-output gate at touch-up ([0b825bd](https://github.com/syrax90/claude_mobile/commit/0b825bdf320b6e464a6b590b5beb90801188a8cc))
+
 ## [3.3.0](https://github.com/syrax90/claude_mobile/compare/android-v3.2.0...android-v3.3.0) (2026-07-31)
 
 

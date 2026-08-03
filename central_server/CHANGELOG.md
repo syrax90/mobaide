@@ -1,5 +1,22 @@
 # central_server Changelog
 
+## [0.2.10](https://github.com/syrax90/claude_mobile/compare/server-v0.2.9...server-v0.2.10) (2026-08-03)
+
+
+### Features
+
+* **server:** app.mobaide.com origin + relay readiness (CLA-189 / WEB-02) ([83b303e](https://github.com/syrax90/claude_mobile/commit/83b303eaebee471db7dc8ac5b06c13a1501124ee))
+* **web:** auth & account — email/password + Google Sign-In, dual-axis tokens, devices, account deletion (CLA-190) ([7ab4df6](https://github.com/syrax90/claude_mobile/commit/7ab4df654dae97cf326c1679329c8864b53b8606))
+
+
+### Bug Fixes
+
+* **server,web:** address Codex review on CLA-190 — schema migration, refresh races, GIS recovery ([a25c44f](https://github.com/syrax90/claude_mobile/commit/a25c44ff1d0803b4ca79352e742cd0b92cd75a84))
+* **server,web:** address Codex review round 2 on CLA-190 — cross-account session, grace copy, resend cooldown ([e9e7bb6](https://github.com/syrax90/claude_mobile/commit/e9e7bb6eb0b53a9d068cd70c836be5826ab8d138))
+* **server,web:** address Codex review round 4 on CLA-190 — alembic mirror, iOS UA detection, delete copy ([622b5e7](https://github.com/syrax90/claude_mobile/commit/622b5e7fb4e4806030e5875f608d561e45f7b8e8))
+* **server:** address Codex review round 1 on CLA-189 relay readiness ([4b8935b](https://github.com/syrax90/claude_mobile/commit/4b8935b2e79b6b9be9a38761517b3c82a77da8aa))
+* **server:** address Codex review round 2 on CLA-189 relay readiness ([e62fc46](https://github.com/syrax90/claude_mobile/commit/e62fc46454ed9a9dabef25d832440471a351a0f4))
+
 ## [0.2.9](https://github.com/syrax90/claude_mobile/compare/server-v0.2.8...server-v0.2.9) (2026-07-31)
 
 
