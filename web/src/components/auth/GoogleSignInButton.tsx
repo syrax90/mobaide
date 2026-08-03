@@ -47,6 +47,12 @@ export function GoogleSignInButton({
           nonce,
           text,
           onCredential: (credential) => {
+            // GIS holds this callback globally once the button is rendered, so
+            // a popup the user leaves open can complete long after this screen
+            // is gone. `markUserLoggedIn` is unconditional, so without the
+            // guard a late Google credential would swap out a session the user
+            // has since established some other way.
+            if (cancelled) return;
             callbackRef.current(credential, nonce);
           },
         });

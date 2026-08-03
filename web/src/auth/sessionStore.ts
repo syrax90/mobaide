@@ -133,12 +133,28 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
  */
 let bootstrap: Promise<void> | null = null;
 
+/**
+ * Bumped by a peer `logout`, so a handover still in flight can tell that the
+ * session it is about to install has since been ended.
+ *
+ * `BroadcastChannel` does not order messages from different senders, so with
+ * two signed-in peers a `logout` from one and an `offer` from the other can
+ * arrive in that order. Without this, the logout handler would clear the tab
+ * and the resolving handover would then reinstate the very session that was
+ * just signed out — in the store *and* on disk, since `hydrateSession`
+ * persists whatever it accepts. Nothing server-side would undo that: this
+ * milestone ships no logout endpoint, so the token stays valid for its full
+ * lifetime.
+ */
+let logoutGeneration = 0;
+
 export function bootstrapSession(): Promise<void> {
   if (bootstrap !== null) return bootstrap;
   bootstrap = (async () => {
     connectSessionChannel((message) => {
       const store = useSessionStore.getState();
       if (message.type === 'logout') {
+        logoutGeneration += 1;
         // Already broadcast by the originating tab — applying it locally must
         // not echo it back around the channel.
         adoptSession(null);
@@ -175,7 +191,26 @@ export function bootstrapSession(): Promise<void> {
       }
     });
 
-    const session = await hydrateSession();
+    const generation = logoutGeneration;
+    const offered = await hydrateSession();
+
+    // Reconcile against anything the channel handler did while hydration was
+    // in flight — it ran on live messages, so it is more current than the
+    // handover in both directions.
+    const store = useSessionStore.getState();
+    const session =
+      // A peer signed out mid-boot: discard the handover rather than
+      // reinstating a session the user just ended.
+      generation !== logoutGeneration
+        ? null
+        : // A peer's rotation or sign-in landed mid-boot: keep it rather than
+          // overwriting with a handover that resolved to nothing.
+          (store.session ?? offered);
+
+    // `hydrateSession` may have accepted and persisted an offer that the
+    // reconciliation above just rejected, so realign the transport before
+    // anything reads a token from it.
+    adoptSession(session);
     // Agent tokens live in localStorage (shared across tabs, re-mintable), the
     // user session in sessionStorage. Closing every tab therefore ends the
     // session while leaving agent credentials on disk — so a boot that finds
@@ -186,8 +221,7 @@ export function bootstrapSession(): Promise<void> {
     // clobber an incompatible-server takeover that already landed and drop the
     // user back into a normal app against a server it cannot talk to. iOS
     // guards the same ordering with its `refreshGeneration` check.
-    const takenOver =
-      useSessionStore.getState().authState.kind === 'incompatibleServer';
+    const takenOver = store.authState.kind === 'incompatibleServer';
     useSessionStore.setState({
       session,
       ...(takenOver

@@ -94,7 +94,18 @@ export function getAgentToken(agentId: string): string | null {
   return readAll()[agentId]?.accessToken ?? null;
 }
 
+/**
+ * Persist a pair, unless the user session ended while it was being fetched.
+ *
+ * The same rule `applyRotatedSession` enforces on the user axis: a credential
+ * that was authorised by a session which has since ended must not land. It
+ * matters more here, because `mobile_token_expire_minutes` defaults to 0 — the
+ * minted access JWT carries no `exp` — so a pair written after `logout` ran
+ * `clearAgentTokens()` would sit on disk indefinitely, until some later boot
+ * happened to find no session.
+ */
 function store(agentId: string, pair: AgentTokenPair): void {
+  if (readSession() === null) return;
   const map = readAll();
   map[agentId] = pair;
   writeAll(map);
