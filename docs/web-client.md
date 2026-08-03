@@ -141,7 +141,7 @@ node`, component `web`) and a release-bearing PR-title scope
 manually via `deploy/prod/deploy_web.py` (WEB-02): `npm run build`, tar +
 scp to `/opt/mobaide/www/releases/<tag>/`, then an atomic `current`
 symlink swap — Caddy serves the new release immediately, no container
-restart, `--rollback` repoints at the previous release. Runbook: the
+restart, `--rollback` repoints at the previously-live release. Runbook: the
 "Deploying the web SPA" section of docs/deployment.md.
 
 ## App shell

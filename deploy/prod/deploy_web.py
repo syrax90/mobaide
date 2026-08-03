@@ -26,6 +26,10 @@ Server-side artifacts:
     /opt/mobaide/www/current           relative symlink to releases/<tag>
                                        (relative so it resolves inside the
                                        caddy container's /srv/www bind mount)
+    /opt/mobaide/www/.previous         release live before the last swap
+                                       (--rollback target; each rollback
+                                       toggles it; deleting it degrades
+                                       rollback to the sorted predecessor)
 """
 
 from __future__ import annotations
@@ -231,12 +235,18 @@ rm -rf "releases/{tag}"
 mkdir "releases/{tag}"
 tar -xf {REMOTE_BASE}/web-release.tar -C "releases/{tag}" --strip-components=1
 rm -f {REMOTE_BASE}/web-release.tar
+# Remember what `current` pointed at BEFORE this swap: rollback must return
+# to the previously-live release, not guess from directory order (sorted
+# order cannot distinguish "one release back" from "a newer build that was
+# rolled away from").
+prev_target=$(readlink current 2>/dev/null || true)
 rm -f current.new
 ln -s "releases/{tag}" current.new
 # mv -T (GNU) renames onto the existing symlink atomically. Plain mv would
 # move current.new INTO the target dir, and ln -sfn leaves an
 # unlink+create window.
 mv -T current.new current
+if [ -n "$prev_target" ]; then printf '%s\\n' "$prev_target" > .previous; fi
 # Keep the newest {KEEP_RELEASES} (tags sort chronologically; `current`
 # always points at the newest by construction, so it is never pruned; the
 # bootstrap placeholder sorts oldest and ages out here).
@@ -251,16 +261,30 @@ echo "current -> $(readlink current)"
 
 
 def do_rollback() -> int:
-    step("Rollback: repoint current at the previous release")
+    step("Rollback: repoint current at the previously-live release")
     out = invoke_ssh_or_fail(
         f"""set -e
 cd {REMOTE_BASE}/www
 now=$(readlink current || true)
-prev=$(ls -1d releases/* | sort | sed "s|^|X|" | grep -v "X$now$" | sed "s|^X||" | tail -n 1)
-if [ -z "$prev" ]; then echo NO_PREV; exit 1; fi
+# Prefer the recorded pre-swap target (written by every deploy): directory
+# order alone would pick the NEWEST non-current release, which rolls
+# forward if newer builds exist on disk. Fall back to the sorted
+# predecessor of `current` for hosts that predate the .previous marker,
+# and drop the marker if its target was pruned meanwhile.
+prev=""
+if [ -f .previous ]; then
+    prev=$(cat .previous)
+    [ -n "$prev" ] && [ -d "$prev" ] || prev=""
+fi
+if [ -z "$prev" ]; then
+    prev=$(ls -1d releases/* | sort | awk -v cur="$now" '$0 == cur {{exit}} {{last = $0}} END {{print last}}')
+fi
+if [ -z "$prev" ] || [ "$prev" = "$now" ]; then echo NO_PREV; exit 1; fi
 rm -f current.new
 ln -s "$prev" current.new
 mv -T current.new current
+# Make rollback a toggle: a second --rollback returns to where we were.
+if [ -n "$now" ]; then printf '%s\\n' "$now" > .previous; fi
 echo "current -> $prev"
 """,
         "No previous web release to roll back to"

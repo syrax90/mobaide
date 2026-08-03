@@ -42,7 +42,8 @@ python deploy/prod/deploy_central.py --force                      # allow dirty 
 ├── central_server.prev/         # previous source (kept for rollback)
 ├── www/                         # browser SPA, served by Caddy at app.mobaide.com
 │   ├── releases/<tag>/          #   one dir per deploy_web.py release (newest 5 kept)
-│   └── current -> releases/...  #   RELATIVE symlink, atomically swapped per deploy
+│   ├── current -> releases/...  #   RELATIVE symlink, atomically swapped per deploy
+│   └── .previous                #   release live before the last swap (--rollback target)
 └── .last_tag                    # short git sha of last deploy
 
 # Docker-managed, survive restarts:
@@ -55,7 +56,7 @@ The deploy script tars `central_server/` with excludes (`.env`, `__pycache__`, `
 
 `docker-compose.prod.yml` is re-synced from `deploy/prod/` each run, so the per-service `mem_limit` / `cpus` / `ulimits.nofile` caps (central-server `4g`/`3.0`, caddy `1g`/`1.0`, both `nofile` 65536 soft/hard) and the json-file log rotation (`max-size: 20m`, `max-file: 5` per service) apply automatically on the next deploy — no extra step. The 65536 file-descriptor ceiling is what lets the relay and Caddy hold WebSocket fan-out well past the dockerd default 1024 soft limit; the sizing rationale lives inline in the compose file and in [Capacity & revisit triggers](#capacity--revisit-triggers) below.
 
-The deploy command also runs `caddy reload` inside the caddy container after `compose up`: compose never restarts a running container for a bind-mounted file's content change, so without the reload a Caddyfile-only deploy would silently keep serving the old config. The reload is atomic (a parse failure keeps the old config live and fails the deploy loudly) and, thanks to `stream_close_delay` in the app site block, established WebSockets survive it.
+The deploy command validates the incoming `Caddyfile.<TlsMode>` in a throwaway `caddy:2-alpine` container **before** copying it over the live `Caddyfile` (a rejected config must never end up mounted — the running caddy would keep serving from memory, but the next container restart would take down all ingress), then runs `caddy reload` inside the caddy container after `compose up`: compose never restarts a running container for a bind-mounted file's content change, so without the reload a Caddyfile-only deploy would silently keep serving the old config. The reload is atomic (a parse failure keeps the old config live and fails the deploy loudly) and, thanks to `stream_close_delay` in the app site block, established WebSockets survive it.
 
 ### Deploying the web SPA (app.mobaide.com)
 
@@ -67,7 +68,7 @@ python deploy/prod/deploy_web.py --skip-build   # reuse existing web/dist
 python deploy/prod/deploy_web.py --rollback     # repoint at previous release
 ```
 
-Each deploy tars `web/dist`, extracts it to `/opt/mobaide/www/releases/<UTC-timestamp>-<sha>/`, and swaps the `current` symlink atomically (`ln -s` to a temp name, then `mv -T` — the symlink target stays **relative** so it resolves inside the caddy container's `/srv/www` bind mount). **No container restarts**; in-flight requests and live WebSockets are untouched. The newest 5 releases are kept; `--rollback` repoints at the previous one. There is no auto-rollback on a failed health probe — the swap is atomic, so a failure almost always means DNS/Caddy, not release content.
+Each deploy tars `web/dist`, extracts it to `/opt/mobaide/www/releases/<UTC-timestamp>-<sha>/`, and swaps the `current` symlink atomically (`ln -s` to a temp name, then `mv -T` — the symlink target stays **relative** so it resolves inside the caddy container's `/srv/www` bind mount). **No container restarts**; in-flight requests and live WebSockets are untouched. The newest 5 releases are kept. `--rollback` repoints at the release that was live before the last swap (each deploy records it in `www/.previous`; a second `--rollback` toggles back, and hosts without the marker fall back to the sorted predecessor of `current`). There is no auto-rollback on a failed health probe — the swap is atomic, so a failure almost always means DNS/Caddy, not release content.
 
 First-time prerequisites, in order:
 

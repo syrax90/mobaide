@@ -295,12 +295,23 @@ echo {tag} > .last_tag
 
 def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     up_args = "up -d --remove-orphans" if skip_build else "up -d --build --remove-orphans"
-    # One SSH round-trip does: (a) copy Caddyfile.<TlsMode> -> Caddyfile so
-    # docker-compose can mount it, (b) compose up (streaming), (c) caddy
-    # reload, (d) compose ps.
-    # Strict `cp -f`: if Caddyfile.<TlsMode> is missing (e.g. --skip-build on a
-    # never-deployed TLS mode), the deploy fails loudly instead of silently
-    # running the wrong TLS mode against a stale Caddyfile.
+    # One SSH round-trip does: (a) validate the incoming Caddyfile in a
+    # throwaway container, (b) copy Caddyfile.<TlsMode> -> Caddyfile so
+    # docker-compose can mount it, (c) compose up (streaming), (d) caddy
+    # reload, (e) compose ps.
+    # Validate BEFORE cp: the auto-rollback path swaps source dirs only, so
+    # a rejected config copied over the live Caddyfile would stay mounted —
+    # the running caddy keeps its in-memory config, but the next container
+    # or host restart would take down all ingress. Validating the candidate
+    # file first means the live Caddyfile is never replaced by a config the
+    # reload would refuse. The throwaway container uses the same image tag
+    # compose runs, so validation and runtime agree on the Caddy version.
+    # Strict `test -f` + `cp -f`: if Caddyfile.<TlsMode> is missing (e.g.
+    # --skip-build on a never-deployed TLS mode), the deploy fails loudly
+    # instead of silently running the wrong TLS mode against a stale
+    # Caddyfile. The guard must run BEFORE the docker-run mount: `-v` with a
+    # missing host source creates it as a root-owned DIRECTORY, which would
+    # poison every later deploy of that TLS mode until manually removed.
     # The reload step exists because compose never restarts a running caddy
     # container for a bind-mounted file's CONTENT change — without it a
     # Caddyfile-only deploy silently keeps serving the old config. Reload is
@@ -309,7 +320,12 @@ def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     # non-disruptive to established WebSockets. When compose just recreated
     # the container the reload is a harmless re-read.
     return (
-        f"cd {REMOTE_BASE} && cp -f Caddyfile.{tls_mode} Caddyfile"
+        f"cd {REMOTE_BASE}"
+        f" && test -f Caddyfile.{tls_mode}"
+        f" && docker run --rm"
+        f" -v {REMOTE_BASE}/Caddyfile.{tls_mode}:/etc/caddy/Caddyfile:ro"
+        f" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile"
+        f" && cp -f Caddyfile.{tls_mode} Caddyfile"
         f" && docker compose -f docker-compose.prod.yml {up_args}"
         f" && docker compose -f docker-compose.prod.yml exec -T caddy"
         f" caddy reload --config /etc/caddy/Caddyfile"
