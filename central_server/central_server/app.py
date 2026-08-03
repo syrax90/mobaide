@@ -41,6 +41,7 @@ from .logging_setup import (
     shutdown_logging,
 )
 from .manifest.store import ManifestStore
+from .monitoring import monitoring_loop
 from .pairing.service import PairingService
 from .pairing.ws_handlers import PairingWsRegistry
 from .relay.envelope import (
@@ -252,6 +253,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             _heartbeat_flush_loop(db, app.state.routing, config),
             name="heartbeat-flush",
         )
+        monitoring_task = asyncio.create_task(
+            monitoring_loop(app.state.routing, config),
+            name="monitoring",
+        )
 
         yield
 
@@ -259,6 +264,7 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
         cleanup_task.cancel()
         deletion_sweeper_task.cancel()
         heartbeat_flush_task.cancel()
+        monitoring_task.cancel()
         try:
             await cleanup_task
         except asyncio.CancelledError:
@@ -269,6 +275,10 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             pass
         try:
             await heartbeat_flush_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await monitoring_task
         except asyncio.CancelledError:
             pass
         # Final sweep after the loop is cancelled (no interleaving) and

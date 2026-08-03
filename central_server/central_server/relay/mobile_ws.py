@@ -19,6 +19,7 @@ from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
 from ..auth.dependencies import WebSocketAuthError, ws_authenticate_mobile
+from ..monitoring import record_send_queue_drop
 from .envelope import CH_AUTOSCAN, CH_CONTROL, CH_SESSION_IO, encode
 from .routing import (
     WS_CLOSE_AGENT_TRANSIENT_OFFLINE,
@@ -230,6 +231,7 @@ async def relay_autoscan(websocket: WebSocket, agent_id: str) -> None:
     try:
         agent_conn.send_queue.put_nowait(encode(CH_CONTROL, "", open_msg))
     except asyncio.QueueFull:
+        record_send_queue_drop("autoscan_open")
         logger.warning(
             "relay.autoscan.open_drop agent=%s device=%s — agent queue full",
             agent_id, device_id,
@@ -267,7 +269,7 @@ async def relay_autoscan(websocket: WebSocket, agent_id: str) -> None:
                     encode(CH_CONTROL, "", close_msg)
                 )
             except asyncio.QueueFull:
-                pass
+                record_send_queue_drop("autoscan_close")
 
 
 async def _autoscan_reader(
@@ -292,7 +294,7 @@ async def _autoscan_reader(
             try:
                 agent_conn.send_queue.put_nowait(envelope)
             except asyncio.QueueFull:
-                pass
+                record_send_queue_drop("mobile_to_agent_autoscan")
     except WebSocketDisconnect:
         pass
     except Exception as exc:
@@ -324,7 +326,8 @@ async def _session_reader(
             try:
                 agent_conn.send_queue.put_nowait(envelope)
             except asyncio.QueueFull:
-                pass  # Drop frame (slow agent)
+                # Drop frame (slow agent); rate visible in monitoring.sample.
+                record_send_queue_drop("mobile_to_agent_session_io")
     except WebSocketDisconnect:
         pass
     except Exception as exc:

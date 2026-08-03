@@ -13,6 +13,11 @@
 #                          by the container's `app` user or a 600 file is
 #                          unreadable. Absent/empty is fine — leaving the APNS_*
 #                          vars unset disables the dispatcher cleanly.
+#   ./www/                 SPA releases (releases/<tag>/ + `current` symlink;
+#                          symlink target must stay RELATIVE so it resolves
+#                          inside the container mount). Deployed by
+#                          deploy_web.py, served read-only by Caddy — a web
+#                          deploy never restarts a container.
 #
 # Managed Docker volumes that survive upgrades (DO NOT run `compose down -v`):
 #   central-server-data    SQLite DB + Alembic state at /app/data
@@ -43,17 +48,36 @@ services:
       - ./secrets:/app/secrets:ro
     expose:
       - "9000"
-    # Failure isolation on the shared box (tunable for the actual VPS size):
-    # baseline is <300 MiB and argon2 hashing is app-bounded at 2 workers
-    # (~128 MiB burst, <=2 busy cores), so 1g/2.0 caps a leak or stampede
-    # without starving normal operation. The dockerd default 1024 nofile
-    # soft limit would cap the relay at ~150 active users (~6 sockets each).
-    mem_limit: 1g
-    cpus: 2.0
+    # Sized for the Tier-B load model (docs/deployment.md § Capacity &
+    # revisit triggers): ~10k registered users, 2.5k DAU, ~750 peak
+    # concurrent clients ≈ ~10,000 live WebSockets (~6 per client + 1 per
+    # agent tunnel) — about 15% of the 65536 nofile ceiling. Memory:
+    # <300 MiB baseline + ~450 MiB of WS state with permessage-deflate off
+    # (deflate-on would roughly double that to ~950 MiB, which is why the
+    # old 1g cap had to move) + argon2 bursts (app-bounded at 2 workers,
+    # ~128 MiB), so 4g holds the tier with headroom — caps are ceilings,
+    # not reservations. CPU: peak relay fan-out (~21k frame ops/s) is
+    # 40-70% of ONE core — the single asyncio event loop saturates long
+    # before 3.0 cores do; the spare capacity covers argon2 threads.
+    # uvicorn's ws_max_queue stays at its default (32 frames per socket).
+    # When the revisit triggers fire (sustained loop CPU >70%, p95 loop lag
+    # >100 ms, RSS >70% of cap, steady send-queue drops in the
+    # monitoring.sample line) the next step is the Redis relay split, NOT
+    # another rescale — see docs/deployment.md.
+    mem_limit: 4g
+    cpus: 3.0
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
+    # The monitoring.sample line adds one JSON log entry per minute on top
+    # of the request logs; an unrotated json-file driver grows without
+    # bound, so cap it (100 MiB per service, then the oldest file drops).
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     networks:
       - web
     healthcheck:
@@ -73,19 +97,27 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./tls:/etc/caddy/tls:ro
+      - ./www:/srv/www:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
       central-server:
         condition: service_healthy
     # Caddy terminates TLS and proxies every WebSocket (2 fds per proxied
-    # connection), so it needs the same nofile headroom as the relay.
-    mem_limit: 512m
+    # connection), so it needs the same nofile headroom as the relay — and
+    # at the Tier-B ~10k proxied sockets (two sockets + copy buffers each),
+    # 512m was uncomfortably tight, hence 1g.
+    mem_limit: 1g
     cpus: 1.0
     ulimits:
       nofile:
         soft: 65536
         hard: 65536
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     networks:
       - web
 

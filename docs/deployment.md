@@ -16,7 +16,7 @@ Deploy the central server only to a remote Ubuntu host (e.g. `mobaide.com`) from
 Follow [`deploy/prod/bootstrap-mobaide.md`](../deploy/prod/bootstrap-mobaide.md):
 
 1. On the VPS: `mkdir /opt/mobaide`, populate `/opt/mobaide/.env` from `central_server/.env.example`, open ports 80/443.
-2. DNS: `A` record for your domain → VPS public IP, plus a `www` record (both Caddyfiles 308-redirect `www` → apex). Cloudflare proxy can be on (use `CloudflareOrigin` TLS mode) or off (use `LetsEncrypt`).
+2. DNS: `A` record for your domain → VPS public IP, plus a `www` record (both Caddyfiles 308-redirect `www` → apex). Cloudflare proxy can be on (use `CloudflareOrigin` TLS mode) or off (use `LetsEncrypt`). Add an `app` record for the browser SPA — **DNS only (gray cloud) in BOTH TLS modes**: orange cloud would put Cloudflare's ~100 s proxy idle timeout in the path of every relay WebSocket, and a gray-cloud host cannot serve the Cloudflare Origin cert (browsers do not trust the Origin CA), so Caddy ACME-issues a Let's Encrypt cert for `app.mobaide.com` in both modes.
 3. On your workstation: add an `~/.ssh/config` entry so `ssh mobaide` works with key-based auth.
 
 ### Deploy
@@ -40,6 +40,9 @@ python deploy/prod/deploy_central.py --force                      # allow dirty 
 ├── tls/                         # origin-cert.pem/key only for CloudflareOrigin mode
 ├── central_server/              # current source (synced from repo)
 ├── central_server.prev/         # previous source (kept for rollback)
+├── www/                         # browser SPA, served by Caddy at app.mobaide.com
+│   ├── releases/<tag>/          #   one dir per deploy_web.py release (newest 5 kept)
+│   └── current -> releases/...  #   RELATIVE symlink, atomically swapped per deploy
 └── .last_tag                    # short git sha of last deploy
 
 # Docker-managed, survive restarts:
@@ -50,7 +53,49 @@ python deploy/prod/deploy_central.py --force                      # allow dirty 
 
 The deploy script tars `central_server/` with excludes (`.env`, `__pycache__`, `*.db*`, virtualenvs), `scp`s the archive to the VPS, extracts it into `central_server.new`, and **atomically swaps**: `central_server` → `central_server.prev` → `central_server.new` → `central_server`. Then `docker compose up -d --build --remove-orphans` rebuilds the image and restarts the container. The named volume `central-server-data` is never touched, so the SQLite database and Alembic migration state persist.
 
-`docker-compose.prod.yml` is re-synced from `deploy/prod/` each run, so the per-service `mem_limit` / `cpus` / `ulimits.nofile` caps (central-server `1g`/`2.0`, caddy `512m`/`1.0`, both `nofile` 65536 soft/hard) apply automatically on the next deploy — no extra step. The 65536 file-descriptor ceiling is what lets the relay and Caddy hold WebSocket fan-out well past the dockerd default 1024 soft limit; the values are documented inline as tunable per VPS size.
+`docker-compose.prod.yml` is re-synced from `deploy/prod/` each run, so the per-service `mem_limit` / `cpus` / `ulimits.nofile` caps (central-server `4g`/`3.0`, caddy `1g`/`1.0`, both `nofile` 65536 soft/hard) and the json-file log rotation (`max-size: 20m`, `max-file: 5` per service) apply automatically on the next deploy — no extra step. The 65536 file-descriptor ceiling is what lets the relay and Caddy hold WebSocket fan-out well past the dockerd default 1024 soft limit; the sizing rationale lives inline in the compose file and in [Capacity & revisit triggers](#capacity--revisit-triggers) below.
+
+The deploy command also runs `caddy reload` inside the caddy container after `compose up`: compose never restarts a running container for a bind-mounted file's content change, so without the reload a Caddyfile-only deploy would silently keep serving the old config. The reload is atomic (a parse failure keeps the old config live and fails the deploy loudly) and, thanks to `stream_close_delay` in the app site block, established WebSockets survive it.
+
+### Deploying the web SPA (app.mobaide.com)
+
+The browser client (`web/`) is served by **Caddy from disk** at `app.mobaide.com` — its own origin, same host. The site block reverse-proxies `/api`, `/ws`, `/relay` and `/proxy` to central-server (mirroring `web/vite.config.ts`'s dev proxy), so the SPA is fully same-origin with the relay and CORS never enters the picture. Everything else falls through to `try_files {path} /index.html` (client-side routing) with `Cache-Control: no-cache, must-revalidate` on `index.html` and unhashed public files, and `public, max-age=31536000, immutable` on Vite's content-hashed `/assets/*`.
+
+```bash
+python deploy/prod/deploy_web.py                # npm run build + ship
+python deploy/prod/deploy_web.py --skip-build   # reuse existing web/dist
+python deploy/prod/deploy_web.py --rollback     # repoint at previous release
+```
+
+Each deploy tars `web/dist`, extracts it to `/opt/mobaide/www/releases/<UTC-timestamp>-<sha>/`, and swaps the `current` symlink atomically (`ln -s` to a temp name, then `mv -T` — the symlink target stays **relative** so it resolves inside the caddy container's `/srv/www` bind mount). **No container restarts**; in-flight requests and live WebSockets are untouched. The newest 5 releases are kept; `--rollback` repoints at the previous one. There is no auto-rollback on a failed health probe — the swap is atomic, so a failure almost always means DNS/Caddy, not release content.
+
+First-time prerequisites, in order:
+
+1. Create the `app.mobaide.com` DNS record — **gray cloud in both TLS modes** (see [One-time setup](#one-time-setup)).
+2. Run `deploy_central.py` **without `--skip-build`** so the extract step creates `www/releases` before compose mounts `./www` (a compose-created mount would be root-owned) and Caddy picks up the new site block. This run recreates both containers — the one-time quiet window; every live WebSocket drops once and clients auto-reconnect (session replay covers the gap). Afterwards, Caddyfile-only changes ship via the deploy command's `caddy reload` step, which `stream_close_delay` makes non-disruptive.
+3. Wait ~30 s (the server's ufw limits SSH to 6 connections per 30 s), then run `deploy_web.py`.
+
+Hosts bootstrapped by the current `bootstrap-mobaide.sh` serve a placeholder page until the first web deploy; older hosts serve 404 on `/` of the app host between steps 2 and 3.
+
+**CSP hash for the theme-boot script.** `web/index.html` carries one inline pre-paint `<script>` (theme boot), pinned in the site block's `script-src` by its `sha256-…` hash — duplicated in **both** `deploy/prod/Caddyfile.*` files. Editing that script requires recomputing the hash (build, then `deploy_web.py` prints the expected value on mismatch), updating both Caddyfiles, and shipping them via `deploy_central.py` before the next web deploy. `deploy_web.py` hard-fails on drift; the failure mode if it ever slips through is cosmetic (theme flash on load).
+
+### Capacity & revisit triggers
+
+Sizing targets the **Tier B (stress)** load model from the 2026-08 web-client research: ~10,000 registered users, ~2,500 DAU, ~750 peak concurrent clients ≈ **~10,000 live WebSockets** (~6 per client + 1 per agent tunnel).
+
+- **File descriptors:** ~10k sockets ≈ 15% of the 65,536 `nofile` ceiling — never the bottleneck at this tier.
+- **Memory:** <300 MiB baseline + ~450 MiB of WS state with permessage-deflate **off** (`ws_per_message_deflate=False`, pinned in `central_server/__main__.py`; deflate-on would roughly double that to ~950 MiB, which is what made the old 1 GB cap the first bottleneck) + argon2 bursts (app-bounded at 2 workers). The 4 GB cap holds the tier with headroom.
+- **CPU:** peak relay fan-out (~21k frame ops/s) is 40-70% of **one** core. The relay is a single asyncio event loop — it saturates one core long before the 3.0-cpu cap matters; the spare capacity covers argon2 threads. Vertical rescaling stops helping at that point.
+- **`ws_max_queue`** (uvicorn, 32 frames per socket) stays at its default — the app-level send queues (10k/5k) are the real backpressure boundary, counted by the drop counters below.
+
+**Observability:** the relay emits a `monitoring.sample` structured log line every 60 s (`MONITORING_INTERVAL_SECONDS`) with `loop_lag_ms_max` / `loop_lag_ms_avg` (event-loop lag over 1 s probe ticks), `rss_bytes` / `mem_limit_bytes` / `rss_pct_of_cap` (from cgroup v2 `memory.current` / `memory.max` — the numbers the OOM killer actually compares), `open_fds`, routing gauges (`agents_online`, `mobile_sockets`, `user_sockets`, `users_connected`, `attached_sessions`, `agent_queue_depth_max`/`_total`), and cumulative per-site send-queue drop counters (`queue_drops`, `queue_drops_total`). Grep it from `docker compose logs central-server`.
+
+**Revisit triggers** — when any of these holds sustained, the next step is the **Redis relay split** (routing table, pairing registry, proxy futures, rate limiters → shared backend; a ~25-50k-registered-users project), **not** another rescale:
+
+- event-loop CPU >70% sustained, or
+- p95 `loop_lag_ms_max` >100 ms, or
+- `rss_pct_of_cap` >70%, or
+- a steadily climbing `queue_drops_total`.
 
 ### Public API surface
 
@@ -87,6 +132,9 @@ Headers are applied with `setdefault`, so a route that sets its own value still 
 | `/dashboard/*` | the same shape with **no** Google origins and **no** `'unsafe-inline'` |
 | everything else — `/api/*`, `/proxy/*`, `/relay/*`, `/static/*`, 404s | `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
 | `/docs`, `/redoc` | **no CSP** — see below |
+| `app.mobaide.com` static SPA (served by **Caddy**, not the app) | `default-src 'self'; script-src 'self' 'sha256-<theme-boot hash>'; style-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
+
+The SPA row is enforced by the `(app_mobaide)` snippet in both `deploy/prod/Caddyfile.*` files, because static files never pass through `security_headers.py` — the Caddy site block therefore also duplicates the three universal headers plus `Permissions-Policy`. Proxied requests on the app host (`/api`, `/ws`, `/relay`, `/proxy`) still get the app's own path-routed policies from the table above. `connect-src 'self'` covers same-origin WebSockets (CSP3 treats `ws(s)://same-host` as `'self'`).
 
 `script-src` grants no `'unsafe-inline'` and no `'unsafe-eval'` on any surface. That is why no template contains an inline `<script>`, an `onclick=` attribute or an `hx-on:` attribute any more — the portal's behaviour lives in `static/site/portal.js`, the dashboard's in `static/dashboard.js`, and per-request values reach them through `data-` attributes. Adding any of those three forms back does not degrade a page, it silently breaks it.
 
@@ -115,7 +163,7 @@ The default is **enforce** (`csp_report_only: bool = False`). A report-only defa
 **`max-age=300` is the first rung of a ratchet, not the target.** HSTS is effectively irreversible — once a browser caches a `max-age`, lowering it only reaches clients that come back before the old value expires, and there is no way to reach the rest. Advance one rung per deploy, verifying between each (CLA-172):
 
 1. `max-age=31536000`, still no `includeSubDomains`. Soak a week.
-2. Audit every subdomain for HTTPS-only serving. `api.mobaide.com` and `www.mobaide.com` are this same Caddy; `get.mobaide.com` is GitHub Pages and needs "Enforce HTTPS" confirmed there.
+2. Audit every subdomain for HTTPS-only serving. `api.mobaide.com`, `www.mobaide.com` and `app.mobaide.com` are this same Caddy; `get.mobaide.com` is GitHub Pages and needs "Enforce HTTPS" confirmed there.
 3. Add `includeSubDomains` — it binds every current *and future* `*.mobaide.com` name, including any short-lived staging host. Soak a month.
 4. Consider `preload` only after that, and only accepting that removal takes months.
 
@@ -123,7 +171,11 @@ On `CloudflareOrigin`, leave Cloudflare's own HSTS setting **off**: two sources 
 
 #### CORS — deliberately absent
 
-`CORSMiddleware` is not installed, and its absence is a decision rather than an oversight. The Android and iOS clients use OkHttp and `URLSession`, which are not browsers and do not preflight, so nothing today needs a CORS policy. Should a browser-based client ever be built, it needs an explicit allow-list decided at that point — not a permissive default inherited from a framework example.
+`CORSMiddleware` is not installed, and its absence is a decision rather than an oversight. The Android and iOS clients use OkHttp and `URLSession`, which are not browsers and do not preflight. The browser client exists now — and is served **same-origin** on `app.mobaide.com` (the Caddy site block proxies `/api`, `/ws`, `/relay`, `/proxy` to central-server) precisely so no CORS policy is ever needed. Keep it that way: a cross-origin API host would reopen this decision for zero benefit.
+
+#### WebSocket Origin allow-list
+
+Every WS endpoint checks the `Origin` header **before** accepting the handshake (`central_server/ws_origin.py`): absent `Origin` is allowed (native apps and the agent send none — the header only means something from a browser), loopback origins are always allowed (Vite dev/preview need zero config), and anything else must match `WS_ALLOWED_ORIGINS` (comma-separated, default `https://app.mobaide.com`). Rejected handshakes close pre-accept, which uvicorn surfaces as HTTP 403, and log `ws_origin.rejected`. Relay auth rides bearer tokens rather than cookies, so this is anti-CSWSH defense in depth, not the primary control.
 
 ### Client IP behind Caddy
 
@@ -139,6 +191,8 @@ On `CloudflareOrigin`, leave Cloudflare's own HSTS setting **off**: two sources 
 ```powershell
 curl.exe https://mobaide.com/api/health          # 200 + {"status":"ok",...}
 curl.exe -I https://mobaide.com                  # cert issuer visible
+curl.exe -I https://app.mobaide.com              # SPA (or placeholder) + CSP/HSTS headers
+curl.exe https://app.mobaide.com/api/health      # 200 — proxied prefix reaches central-server
 ssh mobaide 'docker compose -f /opt/mobaide/docker-compose.prod.yml ps'
 ssh mobaide 'docker compose -f /opt/mobaide/docker-compose.prod.yml logs --tail=60 central-server'
 ```

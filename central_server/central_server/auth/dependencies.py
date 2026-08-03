@@ -7,6 +7,7 @@ from typing import Callable
 import jwt
 from fastapi import Depends, HTTPException, Request, WebSocket, status
 
+from ..ws_origin import enforce_ws_origin
 from .models import MobileTokenPayload, UserTokenPayload
 from .service import AuthService
 
@@ -66,6 +67,11 @@ async def ws_authenticate_mobile(websocket: WebSocket) -> MobileTokenPayload:
     have seen had the device been online to receive the synchronous
     teardown that ``routing.disconnect_agent`` issues on revocation.
     """
+    if not await enforce_ws_origin(websocket):
+        # Helper already logged and closed (4403) — plain raise, no
+        # _auth_failed, to avoid a second log line for the same event.
+        raise WebSocketAuthError("Disallowed Origin")
+
     auth_service = _get_auth_service(websocket)
     token = websocket.query_params.get("token")
     if not token:
@@ -102,6 +108,9 @@ async def ws_authenticate_user(websocket: WebSocket) -> UserTokenPayload:
     message regardless of whether the device was online at the moment
     of unregister.
     """
+    if not await enforce_ws_origin(websocket):
+        raise WebSocketAuthError("Disallowed Origin")
+
     auth_service = _get_auth_service(websocket)
     token = websocket.query_params.get("token")
     if not token:

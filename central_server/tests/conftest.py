@@ -32,7 +32,6 @@ def config(tmp_path) -> CentralServerConfig:
         db_path=str(tmp_path / "test.db"),
         log_level="DEBUG",
         log_format="console",
-        pairing_token_ttl_seconds=300,
         ws_ping_interval=20,
         agent_disconnect_timeout=30,
         # Bypass OTP flow for legacy tests — covered by the dedicated

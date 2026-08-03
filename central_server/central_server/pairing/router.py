@@ -28,6 +28,7 @@ from ..auth.models import (
     MobileTokenResponse,
     UserTokenPayload,
 )
+from ..ws_origin import enforce_ws_origin
 from .models import (
     PairingClaimRequest,
     PairingClaimResponse,
@@ -375,6 +376,9 @@ async def pairing_ws(websocket: WebSocket, nonce: str) -> None:
     A miss means the queue path (claim arrives later) is the active
     delivery channel.
     """
+    if not await enforce_ws_origin(websocket):
+        return
+
     app = websocket.app
     db = app.state.db
     registry = app.state.pairing_ws_registry

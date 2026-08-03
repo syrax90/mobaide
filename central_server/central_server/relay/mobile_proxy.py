@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 
 from ..auth.dependencies import get_mobile_user
 from ..auth.models import MobileTokenPayload
+from ..monitoring import record_send_queue_drop
 from .envelope import CH_CONTROL, encode
 from .routing import RoutingTable
 
@@ -96,6 +97,7 @@ class MobileProxy:
         try:
             agent_conn.send_queue.put_nowait(envelope)
         except asyncio.QueueFull:
+            record_send_queue_drop("proxy_request")
             self._pending.pop(request_id, None)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

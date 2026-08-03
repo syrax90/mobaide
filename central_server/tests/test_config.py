@@ -34,11 +34,11 @@ def test_from_env_with_admin_seed(monkeypatch):
 def test_from_env_custom_values(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "s")
     monkeypatch.setenv("PORT", "8888")
-    monkeypatch.setenv("PAIRING_TOKEN_TTL_SECONDS", "600")
+    monkeypatch.setenv("PAIRING_QR_TOKEN_TTL_SECONDS", "600")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "my-client-id.apps.googleusercontent.com")
     config = CentralServerConfig.from_env()
     assert config.port == 8888
-    assert config.pairing_token_ttl_seconds == 600
+    assert config.pairing_qr_token_ttl_seconds == 600
     assert config.google_client_id == "my-client-id.apps.googleusercontent.com"
 
 
@@ -146,3 +146,60 @@ def test_site_base_url_defaults_to_the_apex_when_unset(monkeypatch):
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     monkeypatch.delenv("SITE_BASE_URL", raising=False)
     assert CentralServerConfig.from_env().site_base_url == "https://mobaide.com"
+
+
+def test_monitoring_interval_default_and_env(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("MONITORING_INTERVAL_SECONDS", raising=False)
+    assert CentralServerConfig.from_env().monitoring_interval_seconds == 60
+    monkeypatch.setenv("MONITORING_INTERVAL_SECONDS", "5")
+    assert CentralServerConfig.from_env().monitoring_interval_seconds == 5
+
+
+def test_ws_allowed_origins_defaults_when_unset(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.delenv("WS_ALLOWED_ORIGINS", raising=False)
+    assert CentralServerConfig.from_env().ws_allowed_origins == (
+        "https://app.mobaide.com",
+    )
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Per-element whitespace and a trailing slash are tolerated.
+        (
+            " https://a.example , https://b.example:8443/ ",
+            ("https://a.example", "https://b.example:8443"),
+        ),
+        # Malformed elements are dropped, valid ones kept.
+        (
+            "https://good.example,not-a-url,ftp://x.example,https://x.example/path",
+            ("https://good.example",),
+        ),
+        # Entries are stored pre-normalized (host case-fold, default-port
+        # strip), so equivalent spellings dedupe to one entry.
+        (
+            "https://App.Mobaide.com:443,https://app.mobaide.com",
+            ("https://app.mobaide.com",),
+        ),
+        # Order preserved, duplicates removed.
+        (
+            "https://b.example,https://a.example,https://b.example",
+            ("https://b.example", "https://a.example"),
+        ),
+        # Operator input keeps _env_origin's hostname-only shape: bracketed
+        # IPv6 is rejected here (loopback is structurally allowed at the WS
+        # gate instead), so an all-IPv6 list falls back to the default.
+        ("http://[::1]:5173", ("https://app.mobaide.com",)),
+        # All-invalid list falls back to the default rather than locking
+        # every browser out.
+        ("not-a-url, ,", ("https://app.mobaide.com",)),
+        # Blank var behaves like unset.
+        ("   ", ("https://app.mobaide.com",)),
+    ],
+)
+def test_ws_allowed_origins_parses_csv(monkeypatch, raw, expected):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("WS_ALLOWED_ORIGINS", raw)
+    assert CentralServerConfig.from_env().ws_allowed_origins == expected

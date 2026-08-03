@@ -18,8 +18,8 @@ The script is idempotent (safe to re-run) and:
 - installs base apt packages (`curl`, `git`, `tar`, `ufw`, `cron`, `ca-certificates`),
 - verifies Docker Engine + Compose plugin and adds your user to the `docker` group,
 - configures ufw (default deny-in / allow-out, `limit 22/tcp`, `allow 80/tcp`, `allow 443/tcp`) and enables it,
-- creates `/opt/mobaide/`, `/opt/mobaide/tls/` (0700), and `/opt/mobaide/backups/`,
-- writes a skeleton `/opt/mobaide/.env` (chmod 600) with a fresh random `JWT_SECRET_KEY`.
+- creates `/opt/mobaide/`, `/opt/mobaide/tls/` (0700), `/opt/mobaide/backups/`, and `/opt/mobaide/www/` with a placeholder web release + `current` symlink (so `app.mobaide.com` serves a page before the first `deploy_web.py` run),
+- writes a skeleton `/opt/mobaide/.env` (chmod 600) with a fresh random `JWT_SECRET_KEY` and `PAIRING_QR_TOKEN_TTL_SECONDS=600` (web pairing links must survive a cross-device hop; the nonce is single-use, so the wider window adds no replay exposure — servers bootstrapped before this line existed should add it to `/opt/mobaide/.env` by hand).
 
 After the script finishes you still need to:
 
@@ -179,13 +179,14 @@ sudo ufw enable
 
 ### Option A — `LetsEncrypt` (recommended)
 
-- In Cloudflare DNS, set the `A` record for `mobaide.com` to **DNS only** (gray cloud). The `www` record must be **DNS only** too — Caddy provisions a separate cert for `www.mobaide.com` over ACME HTTP-01, which fails if Cloudflare proxies that host.
+- In Cloudflare DNS, set the `A` record for `mobaide.com` to **DNS only** (gray cloud). The `www` record must be **DNS only** too — Caddy provisions a separate cert for `www.mobaide.com` over ACME HTTP-01, which fails if Cloudflare proxies that host. Same for the `app` record (the browser SPA host): **DNS only**.
 - Caddy will provision a real Let's Encrypt cert via ACME HTTP-01 on first start and renew it automatically.
 - No extra files needed on the server.
 
 ### Option B — `CloudflareOrigin`
 
 - In Cloudflare DNS, keep the `A` record **Proxied** (orange cloud). Proxy the `www` record too; the default origin-cert hostnames below (`*.mobaide.com` plus the apex) already cover `www`, so it needs no extra cert step.
+- **Exception: the `app` record stays DNS only (gray cloud) even in this mode.** Orange cloud would put Cloudflare's ~100 s proxy idle timeout in the path of every relay WebSocket, and a gray-cloud host cannot serve the Origin cert (browsers do not trust the Origin CA) — so the `app.mobaide.com` site block deliberately has no `tls` directive and Caddy ACME-issues a Let's Encrypt cert for that one host over HTTP-01 (port 80 is already open).
 - In the Cloudflare dashboard → **SSL/TLS** → **Overview**, set mode to **Full (strict)**.
 - Create an Origin Certificate: **SSL/TLS** → **Origin Server** → **Create Certificate** (default RSA 2048, 15-year validity).
 - Save the two PEMs on the server:
@@ -227,7 +228,12 @@ cd <repo-root>
 python deploy/prod/deploy_central.py                              # LetsEncrypt
 # or
 python deploy/prod/deploy_central.py --tls-mode CloudflareOrigin
+
+# then, after ~30s (ufw limits SSH to 6 connections per 30s), the web SPA:
+python deploy/prod/deploy_web.py
 ```
+
+`deploy_web.py` builds `web/` and ships it to `/opt/mobaide/www` with an atomic symlink swap — no container restart; see the "Deploying the web SPA" section of `docs/deployment.md` for the full runbook and rollback.
 
 ## Operational notes
 

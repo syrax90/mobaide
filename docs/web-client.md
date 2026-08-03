@@ -137,8 +137,12 @@ browser download); it joins when real flows exist (WEB-03+).
 
 Release integration: `web` is a release-please package (`release-type:
 node`, component `web`) and a release-bearing PR-title scope
-(`feat(web): …`); `web-v*` tags trigger no workflow yet — the SPA ships
-with the central-server deploy (WEB-02).
+(`feat(web): …`); `web-v*` tags trigger no workflow yet. The SPA ships
+manually via `deploy/prod/deploy_web.py` (WEB-02): `npm run build`, tar +
+scp to `/opt/mobaide/www/releases/<tag>/`, then an atomic `current`
+symlink swap — Caddy serves the new release immediately, no container
+restart, `--rollback` repoints at the previous release. Runbook: the
+"Deploying the web SPA" section of docs/deployment.md.
 
 ## App shell
 
@@ -150,7 +154,11 @@ with the central-server deploy (WEB-02).
   colors are CSS custom properties under `:root[data-theme=…]` in
   `src/styles/theme.css`. The shell ships neutral tokens; adopting the
   marketing "modern pixel" design system (docs/website.md) is a decision
-  for the feature milestones.
+  for the feature milestones. **CSP coupling:** the production Caddy site
+  block pins that inline script by `sha256` hash in `script-src` — in
+  BOTH `deploy/prod/Caddyfile.*` files. Editing the script means updating
+  both hashes; `deploy_web.py` hard-fails on drift (the escape hatch is
+  `--force`, at the cost of a theme flash).
 - **Errors, two tiers** — the router's `errorElement` (`RouteError`)
   renders loader/render errors and doubles as the 404 page;
   `AppErrorBoundary` (class component) wraps the providers as a last

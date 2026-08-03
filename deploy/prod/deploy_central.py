@@ -21,7 +21,11 @@ Server-side artifacts (survive across runs):
     /opt/mobaide/central_server.prev/    previous source (rollback target)
     /opt/mobaide/.env                    secrets (NEVER synced)
     /opt/mobaide/.last_tag               short git sha of current deploy
+    /opt/mobaide/www/                    SPA releases (owned by deploy_web.py)
     docker volumes: central-server-data, caddy-data, caddy-config
+
+The browser SPA at app.mobaide.com ships separately via deploy_web.py — a
+web deploy swaps a symlink and never touches containers.
 """
 
 from __future__ import annotations
@@ -149,18 +153,22 @@ def info(msg: str) -> None:
     _emit(msg, CYAN)
 
 
-def wait_http(url: str, timeout_sec: int = 90) -> None:
+def wait_http(url: str, timeout_sec: int = 90, any_status: bool = False) -> None:
     # TLS verification stays on (default context, OS trust store). No PS-5.1
     # protocol shim needed: Python's ssl negotiates TLS 1.2+ natively.
+    # any_status=True succeeds on ANY HTTP response (404 included) — used by
+    # deploy_web.py's preflight, where "the site block answered at all" is
+    # the question and only a transport/TLS failure means not-deployed.
     deadline = time.monotonic() + timeout_sec
     cert_error: ssl.SSLCertVerificationError | None = None
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:
-                if resp.status == 200:
+                if any_status or resp.status == 200:
                     return
         except urllib.error.HTTPError:
-            pass
+            if any_status:
+                return
         except urllib.error.URLError as e:
             if isinstance(e.reason, ssl.SSLCertVerificationError):
                 cert_error = e.reason
@@ -273,7 +281,7 @@ def build_extract_script(tag: str) -> str:
     return f"""set -e
 cd {REMOTE_BASE}
 rm -rf central_server.new
-mkdir -p central_server.new tls
+mkdir -p central_server.new tls www/releases
 tar -xf central_server.new.tar -C central_server.new --strip-components=1
 rm -f central_server.new.tar
 if [ -d central_server ]; then
@@ -288,13 +296,23 @@ echo {tag} > .last_tag
 def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     up_args = "up -d --remove-orphans" if skip_build else "up -d --build --remove-orphans"
     # One SSH round-trip does: (a) copy Caddyfile.<TlsMode> -> Caddyfile so
-    # docker-compose can mount it, (b) compose up (streaming), (c) compose ps.
+    # docker-compose can mount it, (b) compose up (streaming), (c) caddy
+    # reload, (d) compose ps.
     # Strict `cp -f`: if Caddyfile.<TlsMode> is missing (e.g. --skip-build on a
     # never-deployed TLS mode), the deploy fails loudly instead of silently
     # running the wrong TLS mode against a stale Caddyfile.
+    # The reload step exists because compose never restarts a running caddy
+    # container for a bind-mounted file's CONTENT change — without it a
+    # Caddyfile-only deploy silently keeps serving the old config. Reload is
+    # atomic (a parse failure keeps the old config live and fails this
+    # command loudly) and, with stream_close_delay in the app site block,
+    # non-disruptive to established WebSockets. When compose just recreated
+    # the container the reload is a harmless re-read.
     return (
         f"cd {REMOTE_BASE} && cp -f Caddyfile.{tls_mode} Caddyfile"
         f" && docker compose -f docker-compose.prod.yml {up_args}"
+        f" && docker compose -f docker-compose.prod.yml exec -T caddy"
+        f" caddy reload --config /etc/caddy/Caddyfile"
         f" && docker compose -f docker-compose.prod.yml ps"
     )
 

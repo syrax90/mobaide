@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import WebSocket
 
+from ..monitoring import record_send_queue_drop
 from .envelope import CH_CONTROL, encode
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ def try_enqueue_control(
         conn.send_queue.put_nowait(envelope)
         return True
     except asyncio.QueueFull:
+        record_send_queue_drop("control")
         return False
 
 
@@ -103,6 +105,7 @@ def broadcast_user_event(
         try:
             client.send_queue.put_nowait(envelope)
         except asyncio.QueueFull:
+            record_send_queue_drop("user_event")
             logger.warning(
                 "user_events.queue_full user_id=%s device=%s — "
                 "dropping %s event",
@@ -226,6 +229,37 @@ class RoutingTable:
 
     def list_online_agents(self) -> list[AgentConnection]:
         return list(self._agents.values())
+
+    def gauges(self) -> dict[str, int]:
+        """Connection-count snapshot for the monitoring.sample log line.
+
+        O(connections) walk; fine at the 60 s monitoring cadence. Queue
+        depths cover agent send queues only — they are the relay's shared
+        fan-in points, so depth there is the earliest saturation signal,
+        while per-mobile queues drain into exactly one socket each.
+        """
+        mobile_sockets = attached_sessions = 0
+        for channels in self._mobile_clients.values():
+            for key, clients in channels.items():
+                mobile_sockets += len(clients)
+                if key.startswith("session_io:") and clients:
+                    attached_sessions += 1
+        queue_total = queue_max = 0
+        for conn in self._agents.values():
+            depth = conn.send_queue.qsize()
+            queue_total += depth
+            queue_max = max(queue_max, depth)
+        return {
+            "agents_online": len(self._agents),
+            "mobile_sockets": mobile_sockets,
+            "attached_sessions": attached_sessions,
+            "users_connected": len(self._user_clients),
+            "user_sockets": sum(
+                len(clients) for clients in self._user_clients.values()
+            ),
+            "agent_queue_depth_max": queue_max,
+            "agent_queue_depth_total": queue_total,
+        }
 
     def register_mobile(
         self, agent_id: str, channel_key: str, client: MobileClient
