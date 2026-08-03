@@ -139,7 +139,9 @@ struct ShortcutPickerSheet: View {
     @ViewBuilder
     private func keySection(_ title: String, keys: [String]) -> some View {
         sectionHeader(title)
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 6)], spacing: 6) {
+        // Flow, not a grid: a uniform column width cannot fit both "A" and
+        // "Backspace", and this section mixes them.
+        ChipFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
             ForEach(keys, id: \.self) { key in
                 toggleChip(KeyChordKeys.displayName(key), selected: key == selectedKey, enabled: true) {
                     selectedKey = key == selectedKey ? nil : key
@@ -240,7 +242,7 @@ struct ShortcutPickerSheet: View {
     }
 
     private func chipGrid<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 6)], alignment: .leading, spacing: 6) {
+        ChipFlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
             content()
         }
     }
