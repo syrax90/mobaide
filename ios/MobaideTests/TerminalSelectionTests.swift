@@ -186,6 +186,24 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(rects[2], CGRect(x: 0, y: 100, width: 30, height: 20))
     }
 
+    /// The toolbar anchors on the union of these rects. Across rows `end.col`
+    /// is usually left of `start.col`, so anything derived from
+    /// `end.col - start.col` goes negative and collapses to a sliver at the
+    /// right edge — dragging from mid-line down onto a shorter line is the
+    /// ordinary case for copying a stack trace.
+    func testMultiRowRectsUnionToTheFullHighlightBox() {
+        let rects = TerminalSelection.highlightRects(
+            start: Position(col: 40, row: 1),
+            end: Position(col: 3, row: 4),
+            cols: 80,
+            cellSize: cell
+        )
+
+        let union = rects.reduce(CGRect.null) { $0.union($1) }
+        XCTAssertEqual(union, CGRect(x: 0, y: 20, width: 800, height: 80))
+        XCTAssertGreaterThan(union.width, cell.width, "the anchor must not collapse to a single cell")
+    }
+
     func testHandleCentersBracketTheSelection() {
         let centers = TerminalSelection.handleCenters(
             start: Position(col: 2, row: 1),

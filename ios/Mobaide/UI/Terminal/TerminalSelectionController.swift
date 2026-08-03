@@ -438,12 +438,21 @@ final class TerminalSelectionController: NSObject {
             return
         }
         let cell = view.cellSize
-        let contentRect = CGRect(
-            x: CGFloat(current.start.col) * cell.width,
-            y: CGFloat(current.start.row) * cell.height,
-            width: max(cell.width, CGFloat(current.end.col + 1 - current.start.col) * cell.width),
-            height: CGFloat(current.end.row + 1 - current.start.row) * cell.height
-        )
+        // The union of the drawn rects, not a single-row span: across rows
+        // `end.col` is usually *left* of `start.col`, so a naive
+        // `end.col - start.col` width goes negative and collapses the anchor to
+        // one cell near the right edge, shoving the toolbar away from the
+        // selection it acts on.
+        let contentRect = TerminalSelection.highlightRects(
+            start: current.start,
+            end: current.end,
+            cols: view.getTerminal().getDims().cols,
+            cellSize: cell
+        ).reduce(CGRect.null) { $0.union($1) }
+        guard !contentRect.isNull else {
+            onChange?(nil)
+            return
+        }
         // Report in the host's *viewport* space, which is what the SwiftUI
         // toolbar's `.position` uses. `convert(_:to:)` lands in the host's
         // bounds space, and the host is a scroll view whose bounds origin is

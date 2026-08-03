@@ -322,9 +322,17 @@ Android's `TerminalEmulator.paste()`: strip ESC and C1 **first** — so a
 clipboard carrying a live `ESC[201~` degrades to literal text instead of closing
 the bracket early and executing its tail — then `\r?\n` → `\r`, then wrap in
 `ESC[200~`/`ESC[201~` only when the program enabled DECSET 2004, as exactly
-three ordered `i` frames — two ordered passes, exactly as Android runs them,
+**one** `i` frame — two ordered sanitizer passes, exactly as Android runs them,
 because a fused walk would turn `CR ESC LF` into two carriage returns instead of
-one. It deliberately never routes through `sendInput`, whose `m`-submit encoder
+one. The single frame is a deliberate divergence and a disconnect-safety
+invariant, not an incidental detail: Android's three writes reach a local PTY fd
+where they are effectively atomic, while these cross a WebSocket and a relay
+whose send result the drain loop discards, so losing only the closing `ESC[201~`
+would strand the program's line editor in paste-collect mode and swallow every
+later keystroke as paste content. `TerminalPaste.writes(for:bracketed:)` keeps
+returning the three parts as the byte oracle the ported Android cases assert
+against; the model joins them before sending, and a test pins the frame count so
+a partial bracketed paste is not representable on the wire. It deliberately never routes through `sendInput`, whose `m`-submit encoder
 wraps multi-line bodies unconditionally and would double-wrap the markers into
 literal `200~`/`201~`. One deliberate divergence from Android, which has no cap:
 pastes are refused above 1 MiB with a toast, because the agent opens its relay
