@@ -102,10 +102,19 @@ cadence; they do **not** gate compatibility.
   the shortcuts ``KIND_PATTERN`` and the server stores kinds opaquely.
 * Protocol-fixture updates under ``tests/protocol_fixtures/`` (dropping
   the ``unknown_coerces_to_claude`` cases, adding ``custom_*`` round-trip
-  cases and the ``CustomAgentTypeDto`` fixtures) ride with the iOS client
-  half (CLA-155): the fixtures' only consumer is the iOS test target,
-  whose registry gate would break the iOS build if they changed before
-  the ``.custom`` kind exists there.
+  cases and the ``CustomAgentTypeDto`` fixtures) rode with the iOS client
+  half (CLA-155), which was the fixtures' only consumer at the time; its
+  registry gate would have broken the iOS build had they changed before
+  the ``.custom`` kind existed there. **Since CLA-191 (WEB-04) the web
+  client is a second consumer**: ``web/src/protocol/`` reads the same JSON
+  off disk under Vitest, and ``protocol-integrity`` runs that suite on
+  every PR. A fixture edit must therefore satisfy both arms — and note
+  that Swift's ``Codable`` drops unknown keys on re-encode while the web
+  client's ``z.looseObject`` preserves them, so an unknown-extra-key case
+  added to a shared fixture would fail iOS. Web coverage is deliberately
+  partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
+  which fails if a new fixture file is neither asserted nor assigned an
+  owner.
 
 ## proto-v6 (superseded by proto-v7)
 
@@ -533,11 +542,14 @@ and apply to every current proto-v revision.
    ``central_server/central_server/relay/envelope.py``. The CI
    ``protocol-integrity`` workflow rejects any commit that drifts the two.
 2. Update the ``BuildConfig.APP_PROTOCOL_VERSION`` field in
-   ``android/app/build.gradle.kts`` to match, and the
+   ``android/app/build.gradle.kts`` to match, the
    ``APP_PROTOCOL_VERSION`` / ``MIN_SERVER_PROTOCOL_VERSION`` values in
-   ``ios/Config/Protocol.xcconfig``. The ``protocol-integrity`` workflow
-   asserts the iOS constants equal Android's, so a bump that misses
-   either client fails CI.
+   ``ios/Config/Protocol.xcconfig``, and ``APP_PROTOCOL_VERSION`` in
+   ``web/src/api/bootstrap.ts``. The ``protocol-integrity`` workflow
+   asserts all three ``APP_PROTOCOL_VERSION`` values are equal (and iOS's
+   ``MIN_SERVER_PROTOCOL_VERSION`` equals Android's — the web gate is set
+   membership against the server's advertised list and carries no floor of
+   its own), so a bump that misses a client fails CI.
 3. Update ``tests/protocol_golden.json`` to match the new shape; any change
    must update the golden file or CI fails.
 4. Add a new section to this file documenting the change.

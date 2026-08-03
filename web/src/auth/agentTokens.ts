@@ -129,6 +129,24 @@ export function clearAgentTokens(): void {
 }
 
 /**
+ * Drop one agent's pair, keeping the others.
+ *
+ * The WebSocket close policy calls this when the relay rejects the token for a
+ * specific agent (4001, or 4003 "token not valid for this agent"): the pair is
+ * provably useless, and leaving it cached would make every reconnect present
+ * the same rejected credential. The user session is untouched — unlike the user
+ * JWT, an agent token is always re-mintable.
+ */
+export function clearAgentToken(agentId: string): void {
+  const map = readAll();
+  // `Object.hasOwn`, not `in`: an agent id is externally supplied, and `in`
+  // reaches the prototype chain, so `'constructor'` would pass the guard.
+  if (!Object.hasOwn(map, agentId)) return;
+  delete map[agentId];
+  writeAll(map);
+}
+
+/**
  * Mint a fresh pair for an agent.
  *
  * Goes through `relayClient` like every other user-JWT call in this codebase

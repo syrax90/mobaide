@@ -11,8 +11,13 @@ import {
   setUserTokenProvider,
   setUserTokenRefresher,
 } from '../api/auth';
-import { setSessionRefresher, setUserUnauthorizedHandler } from '../api/clients';
+import {
+  setServerReachableHandler,
+  setSessionRefresher,
+  setUserUnauthorizedHandler,
+} from '../api/clients';
 import { queryClient } from '../lib/queryClient';
+import { reportRestReachable } from '../realtime/reachability';
 import { getAgentToken } from './agentTokens';
 import { getAccessToken } from './sessionTransport';
 import { useSessionStore } from './sessionStore';
@@ -32,6 +37,9 @@ export function installAuthProviders(): void {
   setUserUnauthorizedHandler(() => {
     useSessionStore.getState().invalidateUserSession('tokenRejected');
   });
+  // A REST response is independent proof the server is reachable, which keeps a
+  // blocked WebSocket upgrade from pinning TanStack Query offline.
+  setServerReachableHandler(reportRestReachable);
 
   // Drop every cached query whenever the account changes.
   //

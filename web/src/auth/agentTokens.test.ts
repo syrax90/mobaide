@@ -1,0 +1,69 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Node >= 22 defines an experimental global `localStorage` that is undefined
+// without --localstorage-file and shadows jsdom's implementation under vitest.
+// Install a functional stand-in before importing the module under test.
+const backing = new Map<string, string>();
+vi.stubGlobal('localStorage', {
+  getItem: (key: string) => backing.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    backing.set(key, String(value));
+  },
+  removeItem: (key: string) => {
+    backing.delete(key);
+  },
+  clear: () => {
+    backing.clear();
+  },
+  key: (index: number) => [...backing.keys()][index] ?? null,
+  get length() {
+    return backing.size;
+  },
+});
+
+const { clearAgentToken, clearAgentTokens, getAgentToken } = await import('./agentTokens');
+
+const STORAGE_KEY = 'mobaide-agent-tokens';
+
+function pair(agentId: string) {
+  return { accessToken: `access-${agentId}`, refreshToken: `refresh-${agentId}` };
+}
+
+/** Seed through storage alone, the way a peer tab's rotation arrives. */
+function seed(...agentIds: string[]): void {
+  const map = Object.fromEntries(agentIds.map((agentId) => [agentId, pair(agentId)]));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+}
+
+function storedAgentIds(): string[] {
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+  if (raw === null) return [];
+  const parsed: unknown = JSON.parse(raw);
+  return Object.keys(parsed as Record<string, unknown>);
+}
+
+beforeEach(() => {
+  clearAgentTokens();
+});
+
+describe('clearAgentToken', () => {
+  it('drops one agent pair and leaves every other agent connected', () => {
+    // The close policy calls this per agent on a 4001/4003; taking the whole map
+    // down would sign every other agent's channel out of its credential.
+    seed('a1', 'a2');
+
+    clearAgentToken('a1');
+
+    expect(getAgentToken('a1')).toBeNull();
+    expect(getAgentToken('a2')).toBe('access-a2');
+    expect(storedAgentIds()).toEqual(['a2']);
+  });
+
+  it('leaves the cache untouched for an agent it never held', () => {
+    seed('a1');
+
+    clearAgentToken('unknown-agent');
+
+    expect(getAgentToken('a1')).toBe('access-a1');
+  });
+});

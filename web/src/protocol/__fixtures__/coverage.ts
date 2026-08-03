@@ -1,0 +1,126 @@
+/**
+ * Which golden fixtures the TypeScript arm asserts, and who owns the rest.
+ *
+ * iOS gates its fixture suite in both directions: every fixture file must map to
+ * a registered type, and every registered type must have a fixture
+ * (`MobaideTests/Fixtures/DTOFixtureTests.swift`). The web client cannot claim
+ * all 80 DTOs at WEB-04 — most of them describe surfaces (git, projects,
+ * auto-scan, session create) that later milestones build — so the gate is
+ * expressed as an explicit split instead of a silent subset.
+ *
+ * `fixtureCoverage.test.ts` asserts that COVERED ∪ DEFERRED is exactly the set
+ * of files on disk. A new fixture file therefore fails the TypeScript suite
+ * until someone decides which side it belongs on, which is the same drift
+ * protection the iOS registry provides.
+ */
+
+const OWNER = {
+  terminal: 'WEB-05 — terminal screen (xterm.js)',
+  shortcuts: 'WEB-06 — keyboard & saved shortcuts',
+  sessions: 'WEB-07 — sessions list & create wizard',
+  pairing: 'WEB-08 — pairing and per-agent tokens',
+  projects: 'WEB-09 — projects, git items & templates',
+  autoscan: 'WEB-10 — auto-scan monitor, notifications & settings',
+  /**
+   * Shipped surfaces whose shapes come from the committed `openapi-typescript`
+   * output. A hand-written Zod mirror would be a second source of truth for a
+   * contract the generated types and the schema-drift CI gate already pin.
+   */
+  generated: 'WEB-03 (shipped) — typed by the generated central-server schema',
+  /** Web has no APNs equivalent; Web Push is not implemented. */
+  notApplicable: 'not applicable on web',
+} as const;
+
+/** Fixture files this milestone's tests read and assert. */
+export const COVERED_FIXTURES: readonly string[] = [
+  'frames/terminal_frames.json',
+  'frames/autoscan_frames.json',
+  'relay/relay_mapping.json',
+  'dto/agent/SessionKind.json',
+  'dto/agent/SessionResponse.json',
+  'dto/central/CustomAgentTypeDto.json',
+  'dto/central/CustomTypeDeletedPayload.json',
+  'dto/central/ShortcutDeletedPayload.json',
+  'dto/central/ShortcutDto.json',
+  'dto/central/TemplateDeletedPayload.json',
+  'dto/central/TemplateDto.json',
+];
+
+/** Fixture files no TypeScript test reads yet, each with the milestone that will. */
+export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
+  'ansi/ansi_sgr.json': OWNER.terminal,
+
+  'dto/agent/AntigravityOptionsModel.json': OWNER.sessions,
+  'dto/agent/AutoScanFilterDto.json': OWNER.autoscan,
+  'dto/agent/AutoScanInstanceDto.json': OWNER.autoscan,
+  'dto/agent/AutoScanListResponse.json': OWNER.autoscan,
+  'dto/agent/BusyByResponse.json': OWNER.projects,
+  'dto/agent/BusyHolder.json': OWNER.projects,
+  'dto/agent/ClaudeOptionsModel.json': OWNER.sessions,
+  'dto/agent/CodexLoginRequest.json': OWNER.sessions,
+  'dto/agent/CodexLoginResponse.json': OWNER.sessions,
+  'dto/agent/CodexOptionsModel.json': OWNER.sessions,
+  'dto/agent/CreateSessionRequest.json': OWNER.sessions,
+  'dto/agent/ForceUpdateResponse.json': OWNER.autoscan,
+  'dto/agent/GitDeleteItem.json': OWNER.projects,
+  'dto/agent/GitDeleteRequest.json': OWNER.projects,
+  'dto/agent/GitDeleteResponse.json': OWNER.projects,
+  'dto/agent/GitDeleteResultItem.json': OWNER.projects,
+  'dto/agent/GitItem.json': OWNER.projects,
+  'dto/agent/GitItemsResponse.json': OWNER.projects,
+  'dto/agent/LinearLabelDto.json': OWNER.autoscan,
+  'dto/agent/LinearStateDto.json': OWNER.autoscan,
+  'dto/agent/ProjectInfo.json': OWNER.projects,
+  'dto/agent/ProjectOrderRequest.json': OWNER.projects,
+  'dto/agent/ProjectUpdate.json': OWNER.projects,
+  'dto/agent/ProjectWrite.json': OWNER.projects,
+  'dto/agent/RefreshRequest.json': OWNER.pairing,
+  'dto/agent/RunNowRequest.json': OWNER.autoscan,
+  'dto/agent/RunNowResponse.json': OWNER.autoscan,
+  'dto/agent/ScrollbackResponse.json': OWNER.terminal,
+  'dto/agent/StartScanRequest.json': OWNER.autoscan,
+  'dto/agent/StopScanRequest.json': OWNER.autoscan,
+  'dto/agent/TokenRequest.json': OWNER.pairing,
+  'dto/agent/TokenResponse.json': OWNER.pairing,
+  'dto/agent/VersionInfoResponse.json': OWNER.autoscan,
+
+  'dto/central/AgentSummaryResponse.json': OWNER.pairing,
+  'dto/central/CancelAccountDeletionResponse.json': OWNER.generated,
+  'dto/central/CreateAgentRequest.json': OWNER.pairing,
+  'dto/central/CreateAgentResponse.json': OWNER.pairing,
+  'dto/central/CreateCustomAgentTypeRequest.json': OWNER.sessions,
+  'dto/central/CreateShortcutRequest.json': OWNER.shortcuts,
+  'dto/central/CreateTemplateRequest.json': OWNER.projects,
+  'dto/central/DeleteAccountReauthDetail.json': OWNER.generated,
+  'dto/central/DeleteAccountReauthErrorBody.json': OWNER.generated,
+  'dto/central/DeleteAccountRequest.json': OWNER.generated,
+  'dto/central/DeviceResponse.json': OWNER.generated,
+  'dto/central/ForgotPasswordRequest.json': OWNER.generated,
+  'dto/central/ForgotPasswordResponse.json': OWNER.generated,
+  'dto/central/GoogleAuthRequest.json': OWNER.generated,
+  'dto/central/MobileTokenRequest.json': OWNER.pairing,
+  'dto/central/MobileTokenResponse.json': OWNER.pairing,
+  'dto/central/PairingClaimRequest.json': OWNER.pairing,
+  'dto/central/PairingClaimResponse.json': OWNER.pairing,
+  'dto/central/ReRegisterAgentResponse.json': OWNER.pairing,
+  'dto/central/RegisterPushTokenRequest.json': OWNER.notApplicable,
+  'dto/central/ResendRateLimitedDetail.json': OWNER.generated,
+  'dto/central/ResendRateLimitedErrorBody.json': OWNER.generated,
+  'dto/central/ResendVerificationRequest.json': OWNER.generated,
+  'dto/central/ResendVerificationResponse.json': OWNER.generated,
+  'dto/central/ResetErrorBody.json': OWNER.generated,
+  'dto/central/ResetErrorDetail.json': OWNER.generated,
+  'dto/central/ResetIpRateLimitedDetail.json': OWNER.generated,
+  'dto/central/ResetIpRateLimitedErrorBody.json': OWNER.generated,
+  'dto/central/ResetPasswordRequest.json': OWNER.generated,
+  'dto/central/ResetPasswordResponse.json': OWNER.generated,
+  'dto/central/UpdateCustomAgentTypeRequest.json': OWNER.sessions,
+  'dto/central/UpdateShortcutRequest.json': OWNER.shortcuts,
+  'dto/central/UpdateTemplateRequest.json': OWNER.projects,
+  'dto/central/UserAuthResponse.json': OWNER.generated,
+  'dto/central/UserLoginRequest.json': OWNER.generated,
+  'dto/central/UserRegisterRequest.json': OWNER.generated,
+  'dto/central/VerificationRequiredDetail.json': OWNER.generated,
+  'dto/central/VerificationRequiredErrorBody.json': OWNER.generated,
+  'dto/central/VerifyEmailRequest.json': OWNER.generated,
+};

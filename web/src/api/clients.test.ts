@@ -8,6 +8,7 @@ import {
 import {
   createAgentClient,
   relayClient,
+  setServerReachableHandler,
   setSessionRefresher,
   setUserUnauthorizedHandler,
 } from './clients';
@@ -38,6 +39,7 @@ afterEach(() => {
   resetTokenProviders();
   setSessionRefresher(() => Promise.resolve('terminal'));
   setUserUnauthorizedHandler(null);
+  setServerReachableHandler(null);
   vi.unstubAllGlobals();
 });
 
@@ -110,6 +112,46 @@ describe('api client auth axes', () => {
     });
 
     expect(requests[0]?.headers.get('Authorization')).toBeNull();
+  });
+});
+
+describe('server reachability signal', () => {
+  function respondWith(status: number) {
+    return (): Promise<Response> =>
+      Promise.resolve(
+        new Response('{}', {
+          status,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+  }
+
+  it('reports the relay answering, so a blocked WS upgrade cannot pin the app offline', async () => {
+    let reachable = 0;
+    setServerReachableHandler(() => {
+      reachable += 1;
+    });
+
+    await relayClient.GET('/api/health', {
+      fetch: respondWith(200),
+      baseUrl: testBaseUrl,
+    });
+
+    expect(reachable).toBe(1);
+  });
+
+  it('reports on an agent-axis error response — any status proves the server is there', async () => {
+    let reachable = 0;
+    setServerReachableHandler(() => {
+      reachable += 1;
+    });
+
+    await createAgentClient('agent-a').GET('/api/health', {
+      fetch: respondWith(503),
+      baseUrl: testBaseUrl,
+    });
+
+    expect(reachable).toBe(1);
   });
 });
 

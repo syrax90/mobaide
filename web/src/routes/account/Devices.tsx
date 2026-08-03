@@ -8,9 +8,8 @@ import {
   type Device,
 } from '../../api/deviceRepository';
 import { getDeviceId } from '../../auth/deviceIdentity';
+import { queryKeys } from '../../lib/queryKeys';
 import { useToastStore } from '../../stores/toastStore';
-
-const DEVICES_QUERY_KEY = ['devices'] as const;
 
 export function Devices() {
   const queryClient = useQueryClient();
@@ -18,7 +17,7 @@ export function Devices() {
   const [target, setTarget] = useState<Device | null>(null);
 
   const devices = useQuery({
-    queryKey: DEVICES_QUERY_KEY,
+    queryKey: queryKeys.devices(),
     queryFn: listDevices,
   });
 
@@ -29,7 +28,7 @@ export function Devices() {
     // source of what is still active.
     onSuccess: async () => {
       setTarget(null);
-      await queryClient.invalidateQueries({ queryKey: DEVICES_QUERY_KEY });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.devices() });
     },
     onError: () => {
       setTarget(null);
