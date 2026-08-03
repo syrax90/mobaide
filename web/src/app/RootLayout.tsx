@@ -1,16 +1,7 @@
 import { NavLink, Outlet } from 'react-router';
-import { useThemeStore, type ThemePreference } from '../stores/themeStore';
-
-const CYCLE: Record<ThemePreference, ThemePreference> = {
-  system: 'light',
-  light: 'dark',
-  dark: 'system',
-};
+import { ThemeToggle } from './ThemeToggle';
 
 export function RootLayout() {
-  const preference = useThemeStore((state) => state.preference);
-  const setPreference = useThemeStore((state) => state.setPreference);
-
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -18,16 +9,10 @@ export function RootLayout() {
           <NavLink to="/" className="app-brand">
             Mobaide
           </NavLink>
+          <NavLink to="/account">Account</NavLink>
+          <NavLink to="/devices">Devices</NavLink>
         </nav>
-        <button
-          type="button"
-          className="theme-toggle"
-          onClick={() => {
-            setPreference(CYCLE[preference]);
-          }}
-        >
-          Theme: {preference}
-        </button>
+        <ThemeToggle />
       </header>
       <main className="app-main">
         <Outlet />

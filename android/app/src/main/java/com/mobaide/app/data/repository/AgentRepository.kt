@@ -1,5 +1,6 @@
 package com.mobaide.app.data.repository
 
+import com.mobaide.app.data.auth.DeviceIdentityStore
 import com.mobaide.app.data.auth.UserIdentityStore
 import com.mobaide.app.data.auth.requireAccessToken
 import com.mobaide.app.data.network.CentralApi
@@ -81,6 +82,7 @@ class AgentRepository(
             MobileTokenRequest(
                 mobile_device_id = mobileDeviceId,
                 mobile_device_name = mobileDeviceName,
+                platform = DeviceIdentityStore.DEVICE_PLATFORM,
             ),
         )
     }
@@ -107,6 +109,7 @@ class AgentRepository(
                 trust_key_fp = trustKeyFp,
                 mobile_device_id = mobileDeviceId,
                 mobile_device_name = mobileDeviceName,
+                platform = DeviceIdentityStore.DEVICE_PLATFORM,
                 hostname_hint = hostnameHint,
                 friendly_name = friendlyName,
             ),

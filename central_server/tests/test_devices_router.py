@@ -84,6 +84,7 @@ class TestListDevices:
             "name",
             "created_at",
             "last_seen_at",
+            "platform",
         }
         assert row["device_id"] == "dev-shape"
         assert row["name"] == "Pixel 9"
@@ -92,6 +93,35 @@ class TestListDevices:
         # now"), so we assert presence + type, not nullness.
         assert isinstance(row["last_seen_at"], str)
         assert isinstance(row["created_at"], str)
+
+    async def test_reports_the_platform_each_device_registered_with(
+        self, client, app, api_auth_headers, viewer_user
+    ):
+        """Clients label the listing from this field; a client that omitted
+        it must come back null rather than absent."""
+        for device_id, platform in (
+            ("dev-web", "web"),
+            ("dev-ios", "ios"),
+            ("dev-android", "android"),
+            ("dev-legacy", None),
+        ):
+            await app.state.db.upsert_mobile_device(
+                device_id=device_id,
+                user_id=viewer_user["id"],
+                name=device_id,
+                platform=platform,
+            )
+
+        resp = await client.get("/api/devices", headers=api_auth_headers)
+
+        assert resp.status_code == 200
+        platforms = {row["device_id"]: row["platform"] for row in resp.json()}
+        assert platforms == {
+            "dev-web": "web",
+            "dev-ios": "ios",
+            "dev-android": "android",
+            "dev-legacy": None,
+        }
 
 
 class TestRevokeDevice:

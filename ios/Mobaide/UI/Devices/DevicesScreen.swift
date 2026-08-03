@@ -40,9 +40,9 @@ private struct DevicesContent: View {
                 Button("Cancel", role: .cancel) { model.revokeTarget = nil }
             } message: { device in
                 if model.isCurrent(device) {
-                    Text("Revoking this device signs you out on the next token refresh. You can sign back in afterwards.")
+                    Text("Revoking this device signs you out on the next token refresh. You can sign back in afterwards. Every agent paired with it is signed out too.")
                 } else {
-                    Text("\(device.name ?? device.device_id) will be signed out on its next token refresh.")
+                    Text("\(device.name ?? device.device_id) will be signed out on its next token refresh. Every agent paired with it is signed out too.")
                 }
             }
             .toast($toast)

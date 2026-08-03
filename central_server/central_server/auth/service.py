@@ -508,6 +508,7 @@ class AuthService:
         # where the new password is durable but stolen refresh tokens still
         # work.
         revoked = await self._db.revoke_all_refresh_tokens_for_user(user["id"])
+        revoked += await self._db.revoke_all_user_refresh_tokens(user["id"])
         await self._db.update_user_password(user["id"], new_hash)
 
         if self._reset_email_limiter is not None:
@@ -902,6 +903,68 @@ class AuthService:
             role=role,
         )
 
+    async def issue_refreshable_session(
+        self, user_id: str, email: str, role: str
+    ) -> tuple[str, str, int]:
+        """Mint a short-lived access token plus a rotating refresh token.
+
+        Returns ``(access_token, refresh_token, expires_in_seconds)``.
+
+        This is an *upgrade* applied after an auth path has already
+        authenticated the user, rather than a parameter threaded through
+        ``register_user`` / ``login_user`` / ``verify_email`` /
+        ``google_authenticate`` / ``apple_authenticate``. Those five return
+        a plain dashboard token whose TTL is governed by
+        ``dashboard_token_expire_minutes``, and two of them are shared with
+        the server-rendered portal, which has no use for a refresh token.
+        Keeping the upgrade separate leaves every one of those signatures —
+        and the portal — untouched; the cost is one discarded HMAC signature
+        on the refreshable path.
+
+        The token carries the same claims as the non-refreshable one, so
+        ``decode_dashboard_token`` and every dependency that consumes it are
+        unchanged. Only the ``exp`` claim differs, and PyJWT already
+        enforces it whenever present.
+        """
+        expire_minutes = self._config.user_session_access_expire_minutes
+        access = self._create_jwt(
+            sub=user_id,
+            token_type="dashboard",
+            expire_minutes=expire_minutes,
+            user_id=user_id,
+            email=email,
+            role=role,
+        )
+        refresh = secrets.token_urlsafe(32)
+        await self._db.store_user_refresh_token(
+            raw_token=refresh,
+            user_id=user_id,
+            expire_minutes=self._config.user_session_refresh_expire_minutes,
+        )
+        return access, refresh, expire_minutes * 60
+
+    async def refresh_user_session(
+        self, refresh_token: str
+    ) -> tuple[dict, str, str, int] | None:
+        """Rotate a user-session refresh token.
+
+        Returns ``(user, access_token, refresh_token, expires_in)``, or None
+        when the token is unknown, expired, or already consumed. The user row
+        is re-read on every rotation so a deleted account cannot keep
+        refreshing, and so ``role`` / ``scheduled_deletion_at`` stay current
+        for the client without needing a separate profile endpoint.
+        """
+        user_id = await self._db.validate_and_consume_user_refresh(refresh_token)
+        if user_id is None:
+            return None
+        user = await self._db.get_user_by_id(user_id)
+        if user is None:
+            return None
+        access, refresh, expires_in = await self.issue_refreshable_session(
+            user["id"], user["email"], user["role"]
+        )
+        return user, access, refresh, expires_in
+
     # Re-auth freshness window for self-delete via Google ID token. Auth0
     # guidance recommends 5 minutes for high-risk actions.
     _GOOGLE_REAUTH_FRESHNESS_SECONDS = 5 * 60
@@ -1054,6 +1117,7 @@ class AuthService:
             mode="scheduled",
         )
         revoked = await self._db.revoke_all_refresh_tokens_for_user(user_id)
+        revoked += await self._db.revoke_all_user_refresh_tokens(user_id)
 
         if self._routing is not None:
             agent_ids = await self._db.list_agents_for_user(user_id)
@@ -1121,6 +1185,7 @@ class AuthService:
             mode="immediate",
         )
         revoked = await self._db.revoke_all_refresh_tokens_for_user(user_id)
+        revoked += await self._db.revoke_all_user_refresh_tokens(user_id)
 
         if self._routing is not None:
             agent_ids = await self._db.list_agents_for_user(user_id)

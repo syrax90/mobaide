@@ -1,10 +1,11 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { RouterProvider } from 'react-router';
 import { AppErrorBoundary } from './app/AppErrorBoundary';
-import { router } from './app/router';
+import { AppGate } from './app/AppGate';
 import { ThemeProvider } from './app/ThemeProvider';
+import { installAuthProviders } from './auth/install';
+import { bootstrapSession } from './auth/sessionStore';
 import { ToastViewport } from './components/toast/ToastViewport';
 import { queryClient } from './lib/queryClient';
 import './styles/theme.css';
@@ -15,12 +16,18 @@ if (!container) {
   throw new Error('Root container #root is missing from index.html');
 }
 
+// Bind the API layer's token seams before anything can issue a request.
+installAuthProviders();
+// Fire-and-forget: `AppGate` holds a splash on the store's `hydrated` flag
+// rather than blocking the first render, so a slow peer handover still paints.
+void bootstrapSession();
+
 createRoot(container).render(
   <StrictMode>
     <AppErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
-          <RouterProvider router={router} />
+          <AppGate />
           <ToastViewport />
         </ThemeProvider>
       </QueryClientProvider>

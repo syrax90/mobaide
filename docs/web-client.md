@@ -10,7 +10,10 @@ commands see `web/README.md`.
 
 Bootstrapped by WEB-01 (CLA-188): production-grade shell with routing,
 theming, error boundaries, toasts, state/data scaffolding, typed API
-clients, tests, and CI — no feature screens yet. The series is tracked in
+clients, tests, and CI. WEB-03 (CLA-190) added the auth & account gate:
+login / register / verify-email / forgot-reset-password screens, a session
+that survives reload and refreshes silently, and the devices and account
+(incl. delete + 14-day cancel) screens. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -36,7 +39,7 @@ Vite dev server mirrors this with a proxy to `http://localhost:9000`.
 | Unit/component tests | Vitest 4 + Testing Library (jsdom) |
 | E2E | Playwright (chromium) against `vite preview` |
 | Lint | typescript-eslint v8 `projectService` + `recommendedTypeChecked`, eslint-plugin-react-hooks v6 flat config |
-| Forms | react-hook-form + Zod — locked for the series, arrives with WEB-03 |
+| Forms | react-hook-form + Zod — locked for the series, first consumers are the WEB-03 auth forms |
 
 ## Workspace layout
 
@@ -47,15 +50,19 @@ web/
 ├── redocly.yaml              # multi-schema map driving openapi-typescript
 ├── src/
 │   ├── main.tsx              # StrictMode > AppErrorBoundary > QueryClientProvider > ThemeProvider > RouterProvider + ToastViewport
-│   ├── app/                  # router, RootLayout (nav + theme toggle), RouteError, AppErrorBoundary, ThemeProvider
-│   ├── routes/               # route components (Home placeholder)
+│   ├── app/                  # router + route guards, RootLayout/AuthLayout, AppGate, RouteError, AppErrorBoundary, ThemeProvider
+│   ├── routes/               # route components (Home, auth/*, account/*)
+│   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh, GIS loader
 │   ├── components/toast/     # zero-dependency toast primitives
+│   ├── components/form/      # react-hook-form fields (+ auth/ Google button, account/ grace banner)
 │   ├── stores/               # Zustand stores (themeStore, toastStore)
 │   ├── lib/queryClient.ts    # TanStack Query defaults
 │   ├── api/
 │   │   ├── generated/*.ts    # committed openapi-typescript output — never hand-edited
-│   │   ├── auth.ts           # bearer-token provider seam (WEB-03 wires the real source)
-│   │   └── clients.ts        # relayClient + createAgentClient(agentId), auth middleware
+│   │   ├── auth.ts           # bearer-token provider seams (filled in by src/auth/install.ts)
+│   │   ├── clients.ts        # relayClient + createAgentClient(agentId), auth + 401-recovery middleware
+│   │   ├── errors.ts         # HTTP/network error normalisation
+│   │   └── *Repository.ts    # typed call wrappers (auth, devices) + anonymous bootstrap
 │   ├── styles/               # theme tokens (data-theme) + global styles
 │   └── test/setup.ts         # jest-dom matchers for Vitest
 ├── e2e/                      # Playwright specs
@@ -84,7 +91,8 @@ guard on `/proxy/...` accepts only the per-agent `mobile_access` JWT, while
 central `/api/*` routes take the dashboard/user JWT. `src/api/auth.ts`
 therefore exposes two seams — `setUserTokenProvider()` (consumed by
 `relayClient`) and `setAgentTokenProvider(agentId => token)` (consumed by
-each `createAgentClient(agentId)`) — both wired by WEB-03.
+each `createAgentClient(agentId)`) — both filled in at startup by
+`src/auth/install.ts` (WEB-03).
 
 Caveat: the agent schema types the agent's **entire** REST surface, but the
 relay tunnel's agent-side dispatcher forwards only an allowlisted subset —
@@ -132,8 +140,10 @@ by `central_server/`/`mobaide_agent/` edits, not just `web/` ones). Single
 job: Python 3.12 + editable installs → **schema drift gate** (regenerate
 JSON, fail on `git status --porcelain` diff) → Node 22 + `npm ci` → **type
 drift gate** (regenerate TS, fail on diff) → typecheck → lint → Vitest →
-build. Playwright is deliberately not in CI yet (placeholder page, heavy
-browser download); it joins when real flows exist (WEB-03+).
+build → Playwright (`playwright install --with-deps chromium` + `npm run
+test:e2e`). Playwright joined the workflow with WEB-03, once real user
+flows existed to drive; the specs stub `/api/**` with `page.route`, so CI
+needs no relay.
 
 Release integration: `web` is a release-please package (`release-type:
 node`, component `web`) and a release-bearing PR-title scope
@@ -166,6 +176,24 @@ restart, `--rollback` repoints at the previously-live release. Runbook: the
 - **Toasts** — Zustand store + two presentational components, no
   dependency; `ToastViewport` mounts as a sibling of `RouterProvider` so
   toasts survive route errors.
+- **Auth & session (WEB-03)** — `src/auth/authState.ts` mirrors Android's
+  `SessionManager.AuthState` state-for-state (`unauthenticated`,
+  `userOnly`, `fullyConnected`, `incompatibleServer`). The user JWT lives
+  in `sessionStorage` — per-tab, never on disk, because the relay keeps no
+  JWT denylist — and a booting tab asks open peers to hand the session
+  over via `BroadcastChannel`; the always-re-mintable per-agent
+  `mobile_access` tokens live in `localStorage`. Sessions are minted with
+  the server's opt-in `refreshable: true` flag, so the access token is
+  short-lived (`USER_SESSION_ACCESS_EXPIRE_MINUTES`, default 15) and
+  rotates against `POST /api/auth/refresh`; refreshes are single-flighted
+  across tabs with `navigator.locks`, and a 401 is terminal (sign out)
+  while anything else is transient (keep the tokens). Route access is
+  enforced by React Router **middleware**, not loaders — loaders run in
+  parallel, a parent middleware short-circuits the whole match — and the
+  wanted path survives the bounce as `?next=`. `GET /api/version` is the
+  single anonymous bootstrap call: protocol gate *and* the
+  `google_client_id` the Google Identity Services button initialises with,
+  so the SPA needs no build-time env var.
 
 ## Parity policy
 

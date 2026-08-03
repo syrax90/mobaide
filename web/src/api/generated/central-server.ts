@@ -228,6 +228,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Session
+         * @description Rotate a user-session refresh token into a fresh access token.
+         *
+         *     Unauthenticated by design: the refresh token is the credential, and the
+         *     access token this call replaces has usually already expired. The
+         *     presented refresh token is consumed, so a replay returns 401 — clients
+         *     must serialize concurrent refreshes rather than racing them.
+         */
+        post: operations["refresh_session_api_auth_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/register": {
         parameters: {
             query?: never;
@@ -761,6 +786,11 @@ export interface components {
             id_token: string;
             /** Nonce */
             nonce: string;
+            /**
+             * Refreshable
+             * @default false
+             */
+            refreshable: boolean;
         };
         /**
          * AuthTokenResponse
@@ -775,12 +805,21 @@ export interface components {
          *     ``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is
          *     in the soft-delete grace window — clients surface a "cancel scheduled
          *     deletion" banner so the user can restore the account.
+         *
+         *     ``refresh_token`` and ``expires_in`` are non-null only when the request
+         *     asked for a refreshable session (see ``RefreshableSessionRequest``). This
+         *     is also the response of ``POST /api/auth/refresh``, where ``status`` is
+         *     always ``"ok"``.
          */
         AuthTokenResponse: {
             /** Access Token */
             access_token?: string | null;
             /** Email */
             email: string;
+            /** Expires In */
+            expires_in?: number | null;
+            /** Refresh Token */
+            refresh_token?: string | null;
             /** Role */
             role: string;
             /** Scheduled Deletion At */
@@ -904,6 +943,10 @@ export interface components {
         /**
          * DeviceResponse
          * @description One entry in the user's ``GET /api/devices`` listing.
+         *
+         *     ``platform`` is the free-form label the device sent when it last minted
+         *     agent tokens (``"ios"``, ``"android"``, ``"web"``); it is null for rows
+         *     registered by a client that omitted the field.
          */
         DeviceResponse: {
             /** Created At */
@@ -914,6 +957,8 @@ export interface components {
             last_seen_at: string | null;
             /** Name */
             name: string | null;
+            /** Platform */
+            platform?: string | null;
         };
         /** ForgotPasswordRequest */
         ForgotPasswordRequest: {
@@ -932,6 +977,11 @@ export interface components {
         GoogleAuthRequest: {
             /** Id Token */
             id_token: string;
+            /**
+             * Refreshable
+             * @default false
+             */
+            refreshable: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1230,6 +1280,22 @@ export interface components {
             email: string;
             /** Password */
             password: string;
+            /**
+             * Refreshable
+             * @default false
+             */
+            refreshable: boolean;
+        };
+        /**
+         * UserRefreshRequest
+         * @description Body for ``POST /api/auth/refresh``.
+         *
+         *     Unauthenticated by design — the refresh token *is* the credential, so
+         *     presenting a dead access token alongside it must not matter.
+         */
+        UserRefreshRequest: {
+            /** Refresh Token */
+            refresh_token: string;
         };
         /** UserRegisterRequest */
         UserRegisterRequest: {
@@ -1237,6 +1303,11 @@ export interface components {
             email: string;
             /** Password */
             password: string;
+            /**
+             * Refreshable
+             * @default false
+             */
+            refreshable: boolean;
         };
         /** ValidationError */
         ValidationError: {
@@ -1257,6 +1328,11 @@ export interface components {
             code: string;
             /** Email */
             email: string;
+            /**
+             * Refreshable
+             * @default false
+             */
+            refreshable: boolean;
         };
     };
     responses: never;
@@ -1594,6 +1670,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelAccountDeletionResponse"];
+                };
+            };
+        };
+    };
+    refresh_session_api_auth_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthTokenResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

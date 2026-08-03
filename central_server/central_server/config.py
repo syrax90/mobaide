@@ -158,6 +158,14 @@ class CentralServerConfig:
     mobile_token_expire_minutes: int = 0
     mobile_refresh_expire_minutes: int = 0
     dashboard_token_expire_minutes: int = 0
+    # TTLs for a *refreshable* user session — the opt-in a client requests
+    # with `refreshable: true` on an auth call (see RefreshableSessionRequest).
+    # These deliberately do not honour the 0-means-never sentinel above: a
+    # session whose whole point is that the access token expires and rotates
+    # would be pointless with an eternal token, so both are clamped to a
+    # positive minimum by `from_env`.
+    user_session_access_expire_minutes: int = 15
+    user_session_refresh_expire_minutes: int = 43200  # 30 days
     db_path: str = "central_server.db"
     host: str = "0.0.0.0"
     port: int = 9000
@@ -320,6 +328,14 @@ class CentralServerConfig:
             ),
             dashboard_token_expire_minutes=int(
                 os.getenv("DASHBOARD_TOKEN_EXPIRE_MINUTES", "0"),
+            ),
+            user_session_access_expire_minutes=max(
+                1,
+                int(os.getenv("USER_SESSION_ACCESS_EXPIRE_MINUTES", "15")),
+            ),
+            user_session_refresh_expire_minutes=max(
+                1,
+                int(os.getenv("USER_SESSION_REFRESH_EXPIRE_MINUTES", "43200")),
             ),
             db_path=_storage_path(
                 "DB_PATH", "central_server.db", "central_server.db",

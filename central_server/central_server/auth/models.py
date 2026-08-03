@@ -104,21 +104,40 @@ class ReregisterAgentResponse(BaseModel):
     token: str
 
 
-class UserRegisterRequest(BaseModel):
+class RefreshableSessionRequest(BaseModel):
+    """Mixin for the auth endpoints that mint a user session.
+
+    A client that sets ``refreshable`` receives a short-lived access token
+    (``exp`` from ``user_session_access_expire_minutes``) plus an opaque
+    refresh token redeemable at ``POST /api/auth/refresh``. Defaulting to
+    ``False`` keeps the field additive: clients that never send it keep
+    receiving the ``dashboard_token_expire_minutes`` token — which, at the
+    default TTL of 0, carries no ``exp`` claim at all.
+
+    Opting in is explicit rather than inferred from the ``Origin`` header:
+    browsers send ``Origin`` on same-origin POSTs and native clients do not,
+    so sniffing it would work today but would silently hand a short-lived,
+    refresh-requiring token to any future WebView-based client.
+    """
+
+    refreshable: bool = False
+
+
+class UserRegisterRequest(RefreshableSessionRequest):
     email: str
     password: str
 
 
-class UserLoginRequest(BaseModel):
+class UserLoginRequest(RefreshableSessionRequest):
     email: str
     password: str
 
 
-class GoogleAuthRequest(BaseModel):
+class GoogleAuthRequest(RefreshableSessionRequest):
     id_token: str
 
 
-class AppleAuthRequest(BaseModel):
+class AppleAuthRequest(RefreshableSessionRequest):
     """Sign in with Apple identity-token exchange.
 
     ``nonce`` is required (unlike the Google mobile path): the iOS client
@@ -128,6 +147,16 @@ class AppleAuthRequest(BaseModel):
 
     id_token: str = Field(..., min_length=1)
     nonce: str = Field(..., min_length=1)
+
+
+class UserRefreshRequest(BaseModel):
+    """Body for ``POST /api/auth/refresh``.
+
+    Unauthenticated by design — the refresh token *is* the credential, so
+    presenting a dead access token alongside it must not matter.
+    """
+
+    refresh_token: str = Field(..., min_length=1)
 
 
 class AuthTokenResponse(BaseModel):
@@ -142,6 +171,11 @@ class AuthTokenResponse(BaseModel):
     ``scheduled_deletion_at`` (ISO-8601, UTC) is non-null when the account is
     in the soft-delete grace window — clients surface a "cancel scheduled
     deletion" banner so the user can restore the account.
+
+    ``refresh_token`` and ``expires_in`` are non-null only when the request
+    asked for a refreshable session (see ``RefreshableSessionRequest``). This
+    is also the response of ``POST /api/auth/refresh``, where ``status`` is
+    always ``"ok"``.
     """
 
     access_token: str | None = None
@@ -151,9 +185,11 @@ class AuthTokenResponse(BaseModel):
     role: str
     status: str = "ok"
     scheduled_deletion_at: str | None = None
+    refresh_token: str | None = None
+    expires_in: int | None = None
 
 
-class VerifyEmailRequest(BaseModel):
+class VerifyEmailRequest(RefreshableSessionRequest):
     email: str
     code: str
 

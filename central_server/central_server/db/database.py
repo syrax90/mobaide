@@ -77,6 +77,14 @@ CREATE TABLE IF NOT EXISTS mobile_refresh_tokens (
     revoked_at       TEXT
 );
 
+CREATE TABLE IF NOT EXISTS user_refresh_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS email_verification_tokens (
     token_hash  TEXT PRIMARY KEY,
     user_id     TEXT NOT NULL REFERENCES users(id),
@@ -178,6 +186,8 @@ CREATE INDEX IF NOT EXISTS idx_refresh_agent_device
     ON mobile_refresh_tokens(agent_id, mobile_device_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_refresh_mobile_device
     ON mobile_refresh_tokens(mobile_device_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_user_refresh_user
+    ON user_refresh_tokens(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_email_verification_user
     ON email_verification_tokens(user_id) WHERE consumed_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_password_reset_user
@@ -750,9 +760,9 @@ class Database:
              reference any of those agents.
           3. Drop the ``agents`` rows themselves.
           4. Drop ``email_verification_tokens``, ``password_reset_tokens``,
-             ``account_deletion_cancel_tokens``, ``mobile_devices``,
-             ``prompt_templates``, ``user_shortcuts``, and
-             ``custom_agent_types`` owned by the user.
+             ``account_deletion_cancel_tokens``, ``user_refresh_tokens``,
+             ``mobile_devices``, ``prompt_templates``, ``user_shortcuts``,
+             and ``custom_agent_types`` owned by the user.
           5. Drop the ``users`` row.
 
         ``deletion_audit`` rows are intentionally NOT cascaded — they have no
@@ -794,6 +804,9 @@ class Database:
         await self.conn.execute(
             "DELETE FROM account_deletion_cancel_tokens WHERE user_id = ?",
             (user_id,),
+        )
+        await self.conn.execute(
+            "DELETE FROM user_refresh_tokens WHERE user_id = ?", (user_id,)
         )
         await self.conn.execute(
             "DELETE FROM mobile_devices WHERE user_id = ?", (user_id,)
@@ -1624,8 +1637,8 @@ class Database:
     _PAIRING_CLAIMED_TOKEN_RETENTION_SECONDS = 60
 
     async def cleanup_expired_tokens(self) -> int:
-        """Delete expired pairing AND email-verification tokens; clear stale
-        claimed pairing-token rows.
+        """Delete expired pairing, email-verification, password-reset and
+        user-session refresh tokens; clear stale claimed pairing-token rows.
 
         Verification tokens are cleaned in two sweeps:
           - expired but never consumed rows are dropped immediately;
@@ -1680,6 +1693,22 @@ class Database:
             "WHERE consumed_at IS NOT NULL AND consumed_at <= ?",
             (retention_cutoff,),
         )
+        # User-session refresh tokens rotate on every use, so unlike
+        # ``mobile_refresh_tokens`` (whose default TTL is "never expires", one
+        # row per pairing) this table gains a row per refresh — several per
+        # hour per open browser session. Without a sweep it grows without
+        # bound. Deleting a revoked row is not observable: a replay misses the
+        # ``revoked_at IS NULL`` predicate either way.
+        user_refresh_expired_cursor = await self.conn.execute(
+            "DELETE FROM user_refresh_tokens "
+            "WHERE expires_at <= ? AND revoked_at IS NULL",
+            (now,),
+        )
+        user_refresh_revoked_cursor = await self.conn.execute(
+            "DELETE FROM user_refresh_tokens "
+            "WHERE revoked_at IS NOT NULL AND revoked_at <= ?",
+            (retention_cutoff,),
+        )
         claimed_clear_cursor = await self.conn.execute(
             "UPDATE pairing_tokens SET claimed_token_raw = NULL "
             "WHERE consumed_at IS NOT NULL "
@@ -1694,6 +1723,8 @@ class Database:
             + consumed_cursor.rowcount
             + reset_expired_cursor.rowcount
             + reset_consumed_cursor.rowcount
+            + user_refresh_expired_cursor.rowcount
+            + user_refresh_revoked_cursor.rowcount
             + claimed_clear_cursor.rowcount
         )
 
@@ -2167,7 +2198,7 @@ class Database:
     async def list_user_devices(self, user_id: str) -> list[dict]:
         """Active devices for a user, most-recently-seen first."""
         cursor = await self.conn.execute(
-            "SELECT device_id, name, created_at, last_seen_at "
+            "SELECT device_id, name, created_at, last_seen_at, platform "
             "FROM mobile_devices "
             "WHERE user_id = ? AND revoked_at IS NULL "
             "ORDER BY COALESCE(last_seen_at, created_at) DESC",
@@ -2329,6 +2360,81 @@ class Database:
         )
         await self.conn.commit()
         return row["mobile_device_id"], row["agent_id"]
+
+    async def store_user_refresh_token(
+        self, raw_token: str, user_id: str, expire_minutes: int
+    ) -> None:
+        """Persist a hashed user-session refresh token.
+
+        Mirrors ``store_refresh_token`` on the mobile axis, including the
+        year-9999 sentinel for the never-expires case, so both families
+        answer the same ``expires_at > now`` predicate.
+        """
+        now = datetime.now(timezone.utc)
+        if expire_minutes == 0:
+            expires_at_iso = _NEVER_EXPIRES_AT
+        else:
+            expires_at_iso = datetime.fromtimestamp(
+                now.timestamp() + expire_minutes * 60, tz=timezone.utc
+            ).isoformat()
+        await self.conn.execute(
+            "INSERT INTO user_refresh_tokens "
+            "(token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (_hash_token(raw_token), user_id, now.isoformat(), expires_at_iso),
+        )
+        await self.conn.commit()
+
+    async def validate_and_consume_user_refresh(
+        self, raw_token: str
+    ) -> str | None:
+        """Validate a user-session refresh token, returning its ``user_id``.
+
+        Rotates: the presented token is revoked on success, so the caller
+        must issue a replacement. Replaying a consumed token returns None —
+        there is deliberately no reuse-detection cascade here, matching
+        ``validate_and_consume_refresh``.
+        """
+        token_hash = _hash_token(raw_token)
+        now = _now_iso()
+        cursor = await self.conn.execute(
+            "SELECT user_id FROM user_refresh_tokens "
+            "WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+            (token_hash, now),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        await self.conn.execute(
+            "UPDATE user_refresh_tokens SET revoked_at = ? WHERE token_hash = ?",
+            (now, token_hash),
+        )
+        await self.conn.commit()
+        return row["user_id"]
+
+    async def _revoke_live_user_refresh_tokens(
+        self, user_id: str, now: str
+    ) -> int:
+        """Revoke every live user-session refresh token, without committing —
+        callers group the write into their own commit."""
+        cursor = await self.conn.execute(
+            "UPDATE user_refresh_tokens SET revoked_at = ? "
+            "WHERE user_id = ? AND revoked_at IS NULL",
+            (now, user_id),
+        )
+        return cursor.rowcount
+
+    async def revoke_all_user_refresh_tokens(self, user_id: str) -> int:
+        """Revoke every active user-session refresh token for an account.
+
+        Called wherever the mobile axis already drops its refresh tokens —
+        password reset and account deletion — so a credential change ends
+        browser sessions too. Already-issued access JWTs stay valid until
+        they expire (there is no JWT denylist), which is why the refreshable
+        session uses a short access TTL.
+        """
+        count = await self._revoke_live_user_refresh_tokens(user_id, _now_iso())
+        await self.conn.commit()
+        return count
 
     async def revoke_mobile_tokens(
         self, mobile_device_id: str, agent_id: str
