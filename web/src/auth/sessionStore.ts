@@ -157,11 +157,19 @@ export function bootstrapSession(): Promise<void> {
         return;
       }
       if (message.type === 'update') {
-        // A rotation broadcast must not sign a tab back in. A tab that is
-        // unauthenticated either never signed in or deliberately signed out;
-        // in both cases adopting a peer's rotated token would be a promotion,
-        // which only `markUserLoggedIn` and the boot handover may perform.
+        // Same two rules the local `applyRotatedSession` enforces, because a
+        // broadcast is just a rotation arriving from another tab.
+        //
+        // Never a promotion: an unauthenticated tab either never signed in or
+        // deliberately signed out, and only `markUserLoggedIn` or the boot
+        // handover may sign one in.
         if (store.authState.kind === 'unauthenticated') return;
+        // Never a hand-off to a different account: a peer signing in as
+        // someone else also broadcasts `update`, and adopting it would
+        // silently switch this tab's identity out from under the user.
+        if (store.session !== null && store.session.userId !== message.session.userId) {
+          return;
+        }
         adoptSession(message.session);
         useSessionStore.setState({ session: message.session });
       }

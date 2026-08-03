@@ -78,9 +78,20 @@ export function ResetPassword() {
       startCooldown(60);
       useToastStore.getState().show('A new code is on its way.', 'success');
     } catch (cause) {
-      const seconds = isApiError(cause) ? (cause.retryAfterSeconds ?? 60) : 60;
-      startCooldown(seconds);
-      useToastStore.getState().show(networkRateLimitedMessage(seconds), 'error');
+      // Only a 429 starts a cooldown. Treating every failure as rate limiting
+      // would tell an offline user they had made too many requests and then
+      // lock the button for 60s over what was just a dropped connection —
+      // Android keeps these branches separate too, as does the verify-email
+      // resend in this same milestone.
+      if (isApiError(cause) && cause.status === 429) {
+        const seconds = cause.retryAfterSeconds ?? 60;
+        startCooldown(seconds);
+        useToastStore.getState().show(networkRateLimitedMessage(seconds), 'error');
+      } else {
+        useToastStore
+          .getState()
+          .show("Couldn't request a new code. Check your connection.", 'error');
+      }
     } finally {
       setResending(false);
     }

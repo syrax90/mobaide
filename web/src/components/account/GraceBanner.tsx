@@ -43,9 +43,14 @@ export function GraceBanner() {
   return (
     <section className="grace-banner" aria-live="polite">
       <h2 className="grace-banner-title">⚠ Account scheduled for deletion</h2>
+      {/* iOS's wording, not Android's. Android claims "Sign in cancels at any
+          time during the grace window", which is false: `clear_scheduled_deletion`
+          has exactly one caller, `cancel_account_deletion`, so signing in only
+          surfaces the banner — the user must still press the button (or use the
+          emailed link). A user who trusts that sentence loses the account. */}
       <p className="grace-banner-body">
-        Final purge on {scheduledDeletionAt}. Sign in cancels at any time during
-        the grace window.
+        Final purge on {scheduledDeletionAt}. Cancel any time before then to keep
+        your account.
       </p>
       {confirming ? (
         <div className="grace-banner-confirm">
