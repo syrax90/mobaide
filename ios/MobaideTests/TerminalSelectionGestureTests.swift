@@ -365,6 +365,21 @@ final class TerminalSelectionGestureTests: XCTestCase {
         return condition()
     }
 
+    func testLeavingTheScreenEndsTheSelection() {
+        let (model, terminal) = wiredTerminal()
+        terminal.feed(text: "hello world\r\n")
+        XCTAssertTrue(terminal.beginSelectionForTest(at: point(row: 0, col: 1, on: terminal)))
+        XCTAssertTrue(terminal.holdsAutoScroll)
+
+        model.markHidden()
+
+        XCTAssertFalse(terminal.isSelectionActive)
+        XCTAssertFalse(
+            terminal.holdsAutoScroll,
+            "the retained view keeps consuming output while hidden — a selection left live would pin the viewport with no unread badge and no jump-to-bottom button to escape it"
+        )
+    }
+
     // MARK: - Renderer geometry
 
     /// The whole selection model assumes content row R is drawn at

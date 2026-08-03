@@ -96,11 +96,27 @@ enum TerminalSelection {
     }
 
     /// Snaps a column that landed on the trailing half of a double-width glyph
-    /// back to that glyph's first column (Android `getValidCurX`).
+    /// back to that glyph's first column.
     static func snapToCellStart(_ col: Int, cells: [Cell]) -> Int {
         guard !cells.isEmpty else { return max(0, col) }
         var index = min(max(0, col), cells.count - 1)
         while index > 0, cells[index].width == 0 { index -= 1 }
+        return index
+    }
+
+    /// Snaps a column landing inside a double-width glyph *forward* to that
+    /// glyph's last column.
+    ///
+    /// The direction depends on which endpoint is moving, which is what Android
+    /// `getValidCurX` encodes: a start handle must sit on the glyph's leading
+    /// cell, an end handle on its trailing one, or the highlight covers half a
+    /// character and the handle is drawn through the middle of it. Extraction is
+    /// unaffected either way — `getText` takes an exclusive end column — so this
+    /// is purely what the user sees.
+    static func snapToCellEnd(_ col: Int, cells: [Cell]) -> Int {
+        guard !cells.isEmpty else { return max(0, col) }
+        var index = min(max(0, col), cells.count - 1)
+        while index + 1 < cells.count, cells[index + 1].width == 0 { index += 1 }
         return index
     }
 

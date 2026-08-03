@@ -715,6 +715,12 @@ final class TerminalSessionModel {
 
     func markHidden() {
         foregroundSessionTracker.clearVisible(sessionId)
+        // Selection is per-visit UI. The view is retained and keeps consuming
+        // PTY output while hidden, and a live selection pins the viewport
+        // through `holdsAutoScroll` — with follow mode untouched, no unread
+        // rows accrue and the jump-to-bottom button stays hidden, so the user
+        // would come back to a frozen viewport and no affordance to escape it.
+        endSelection()
         // Leaving the screen must drop the terminal keyboard (Android
         // dismiss-on-dispose parity) — the retained view would otherwise keep
         // first responder and swallow keys behind whatever screen comes next.

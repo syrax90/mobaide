@@ -76,6 +76,26 @@ final class TerminalSelectionTests: XCTestCase {
         XCTAssertEqual(TerminalSelection.snapToCellStart(2, cells: row), 2)
     }
 
+    /// The two endpoints snap in opposite directions (Android `getValidCurX`):
+    /// a start handle to the glyph's leading cell, an end handle to its
+    /// trailing one. Snapping both backwards draws the highlight over half a
+    /// character and puts the handle through the middle of it.
+    func testEndEndpointSnapsForwardThroughAWideGlyph() {
+        let row = [
+            TerminalSelection.Cell(character: "字", width: 2),
+            TerminalSelection.Cell(character: " ", width: 0),
+            TerminalSelection.Cell(character: "b", width: 1),
+        ]
+
+        XCTAssertEqual(TerminalSelection.snapToCellEnd(0, cells: row), 1)
+        XCTAssertEqual(TerminalSelection.snapToCellEnd(1, cells: row), 1)
+        XCTAssertEqual(
+            TerminalSelection.snapToCellEnd(2, cells: row),
+            2,
+            "a single-width cell is already its own end"
+        )
+    }
+
     // MARK: - Ordering and constraint
 
     func testStartAndEndAreOrderedRegardlessOfDragDirection() {

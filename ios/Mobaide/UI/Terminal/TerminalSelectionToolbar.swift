@@ -17,7 +17,12 @@ struct TerminalSelectionToolbar: View {
 
     @Environment(\.mobaideColors) private var colors
 
-    private static let estimatedSize = CGSize(width: 280, height: 44)
+    /// The toolbar's own measured size. The labels are `.footnote`, so they grow
+    /// with Dynamic Type — clamping against a fixed estimate would mis-centre
+    /// `.position` and push an edge button under the enclosing `.clipped()`.
+    /// Seeded with a plausible size so the first frame is not wildly off.
+    @State private var measured = CGSize(width: 280, height: 44)
+
     private static let margin: CGFloat = 8
 
     var body: some View {
@@ -25,7 +30,7 @@ struct TerminalSelectionToolbar: View {
             let position = Self.position(
                 for: selection.anchor,
                 container: container,
-                size: Self.estimatedSize,
+                size: measured,
                 margin: Self.margin
             )
             HStack(spacing: 4) {
@@ -50,6 +55,7 @@ struct TerminalSelectionToolbar: View {
                     .fill(colors.surfaceVariant)
                     .shadow(radius: 6, y: 2)
             )
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { measured = $0 }
             .position(x: position.x, y: position.y)
             .accessibilityIdentifier("terminal.selectionToolbar")
         }

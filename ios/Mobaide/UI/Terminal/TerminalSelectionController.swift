@@ -176,7 +176,8 @@ final class TerminalSelectionController: NSObject {
     /// Re-points one handle, pinning it so it cannot cross the other.
     /// The drag recognizer's only job is to call this.
     func moveHandle(_ handle: TerminalSelectionHandle, to point: CGPoint) {
-        guard let current = range, let position = position(at: point) else { return }
+        guard let current = range,
+              let position = position(at: point, snapping: handle) else { return }
         let fixed = handle == .start ? current.end : current.start
         let moved = TerminalSelectionRange(anchor: fixed, focus: position)
         range = TerminalSelection.constrain(moved, moving: handle)
@@ -220,8 +221,9 @@ final class TerminalSelectionController: NSObject {
     // MARK: - Buffer reads
 
     /// A touch point in content coordinates → a buffer position, with the column
-    /// snapped out of the trailing half of any double-width glyph.
-    private func position(at point: CGPoint) -> Position? {
+    /// snapped clear of any double-width glyph it landed inside. Which way it
+    /// snaps depends on the endpoint being placed: see `snapToCellEnd`.
+    private func position(at point: CGPoint, snapping handle: TerminalSelectionHandle = .start) -> Position? {
         let cell = view.cellSize
         guard cell.width > 0, cell.height > 0 else { return nil }
         let terminal = view.getTerminal()
@@ -233,10 +235,10 @@ final class TerminalSelectionController: NSObject {
         )
         let clamped = TerminalSelection.clamp(raw, cols: dims.cols, maxRow: maxRow)
         guard let cells = view.selectionCells(atContentRow: clamped.row) else { return clamped }
-        return Position(
-            col: TerminalSelection.snapToCellStart(clamped.col, cells: cells),
-            row: clamped.row
-        )
+        let snapped = handle == .end
+            ? TerminalSelection.snapToCellEnd(clamped.col, cells: cells)
+            : TerminalSelection.snapToCellStart(clamped.col, cells: cells)
+        return Position(col: snapped, row: clamped.row)
     }
 
     private func wordRange(at point: CGPoint) -> TerminalSelectionRange? {
