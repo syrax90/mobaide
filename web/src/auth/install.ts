@@ -31,8 +31,27 @@ export function installAuthProviders(): void {
   setSessionRefresher(async () => (await refreshUserSession()).kind);
   setUserUnauthorizedHandler(() => {
     useSessionStore.getState().invalidateUserSession('tokenRejected');
-    // removeQueries, not invalidateQueries: invalidation would refetch every
-    // active query on the way out, each with a token the server just refused.
-    queryClient.removeQueries();
+  });
+
+  // Drop every cached query whenever the account changes.
+  //
+  // Subscribing to the store rather than hanging this off one call site is
+  // what makes it exhaustive: sign-out, post-delete sign-out, a rejected
+  // token, and a peer tab's `logout` broadcast all end a session, and they do
+  // not share a single entry point. Query keys are account-agnostic (the
+  // devices list is just `['devices']`) and the default staleTime is 30s, so
+  // a second account signing in soon after the first signed out would
+  // otherwise be served the previous user's data straight from cache, with no
+  // request made under the new session.
+  //
+  // removeQueries, not invalidateQueries: invalidation would refetch every
+  // active query on the way out, each with a credential that is gone.
+  let previousUserId = useSessionStore.getState().session?.userId ?? null;
+  useSessionStore.subscribe((state) => {
+    const userId = state.session?.userId ?? null;
+    if (userId === previousUserId) return;
+    const ended = previousUserId !== null;
+    previousUserId = userId;
+    if (ended) queryClient.removeQueries();
   });
 }

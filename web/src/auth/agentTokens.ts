@@ -36,7 +36,19 @@ function isTokenPair(value: unknown): value is AgentTokenPair {
   );
 }
 
-function readAll(): AgentTokenMap {
+/**
+ * In-memory mirror, and the sole source when storage is unavailable.
+ *
+ * `localStorage` throws in a partitioned or storage-blocked context. Without
+ * this the axis would be dead for the page's lifetime rather than merely
+ * unshared: `getAgentToken` is read synchronously by the bearer middleware, so
+ * a read that returns nothing means no `Authorization` header is ever
+ * attached, and no amount of re-minting helps because the write is lost too.
+ * Same fallback shape as `deviceIdentity`'s cached id.
+ */
+let memoryTokens: AgentTokenMap = {};
+
+function readStored(): AgentTokenMap {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(STORAGE_KEY);
@@ -57,12 +69,19 @@ function readAll(): AgentTokenMap {
   }
 }
 
+function readAll(): AgentTokenMap {
+  // Memory wins: it holds this tab's most recent writes, which is what matters
+  // when a rotation could not be persisted.
+  return { ...readStored(), ...memoryTokens };
+}
+
 function writeAll(map: AgentTokenMap): void {
+  memoryTokens = map;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
-    // Storage denied: tokens stay in this page's memory via `readAll` misses
-    // re-minting, which is correct if wasteful.
+    // Storage denied — the memory mirror above keeps the axis working for this
+    // page, at the cost of not sharing it with other tabs.
   }
 }
 
@@ -83,10 +102,14 @@ function store(agentId: string, pair: AgentTokenPair): void {
  * would strand a credential on disk past the session that authorised it.
  */
 export function clearAgentTokens(): void {
+  // Memory first, so a storage failure still drops the credentials this page
+  // is actually using.
+  memoryTokens = {};
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch {
-    // Nothing to do — a storage failure here cannot be surfaced usefully.
+    // Nothing further to do — a storage failure here cannot be surfaced
+    // usefully, and the live copy is already gone.
   }
 }
 
