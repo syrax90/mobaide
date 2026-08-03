@@ -249,8 +249,14 @@ mv -T current.new current
 if [ -n "$prev_target" ]; then printf '%s\\n' "$prev_target" > .previous; fi
 # Keep the newest {KEEP_RELEASES} (tags sort chronologically; `current`
 # always points at the newest by construction, so it is never pruned; the
-# bootstrap placeholder sorts oldest and ages out here).
-ls -1d releases/* | sort | head -n -{KEEP_RELEASES} | xargs -r rm -rf
+# bootstrap placeholder sorts oldest and ages out here). The grep keeps the
+# recorded rollback target alive even when repeated deploy/rollback cycles
+# push it out of the newest-{KEEP_RELEASES} window — pruning it would
+# silently degrade --rollback to the sorted-predecessor fallback, i.e. a
+# newer, just-rejected build. (grep mid-pipeline: its exit code is masked
+# by xargs under set -e without pipefail, and an empty $prev_target
+# matches nothing, so every candidate still prunes.)
+ls -1d releases/* | sort | head -n -{KEEP_RELEASES} | grep -v -x -F "$prev_target" | xargs -r rm -rf
 echo "current -> $(readlink current)"
 """,
             "Remote extract/swap failed",

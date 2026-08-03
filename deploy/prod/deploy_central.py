@@ -341,9 +341,10 @@ def build_deploy_cmd(tls_mode: str, skip_build: bool) -> str:
     # container for a bind-mounted file's CONTENT change — without it a
     # Caddyfile-only deploy silently keeps serving the old config. Reload is
     # atomic (a parse failure keeps the old config live and fails this
-    # command loudly) and, with stream_close_delay in the app site block,
-    # non-disruptive to established WebSockets. When compose just recreated
-    # the container the reload is a harmless re-read.
+    # command loudly) and, with stream_close_delay on both proxied site
+    # blocks (apex/api and app), non-disruptive to established WebSockets.
+    # When compose just recreated the container the reload is a harmless
+    # re-read.
     # The tls/ mount mirrors the compose caddy service: CloudflareOrigin's
     # `tls <cert> <key>` directives load the PEMs at provision time, so
     # validate fails without them. tls/ always exists (bootstrap and the

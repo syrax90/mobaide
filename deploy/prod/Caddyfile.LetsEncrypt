@@ -101,7 +101,13 @@ www.mobaide.com {
 mobaide.com, api.mobaide.com {
     header Strict-Transport-Security "max-age=300"
     encode zstd gzip
-    reverse_proxy central-server:9000
+    reverse_proxy central-server:9000 {
+        # Same rationale as in (app_mobaide): every deploy now runs
+        # `caddy reload`, and without this delay a reload would force-close
+        # every established native-client WebSocket (agent tunnels, Android/
+        # iOS relay sockets) the moment the config swaps.
+        stream_close_delay 5m
+    }
 }
 
 # The SPA host. DNS-only (gray cloud) like every host in this mode; Caddy
