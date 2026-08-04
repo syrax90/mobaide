@@ -34,6 +34,12 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
     /// keeping notifications agent-scoped.
     private let teardownEpoch = OSAllocatedUnfairLock<UInt64>(initialState: 0)
 
+    /// Announces a grant to whoever can recover the alerts dropped while
+    /// authorization was undecided. It hangs off the request itself rather than
+    /// off any one caller because `post` starts its own retries whenever it
+    /// finds `.notDetermined` — an outcome nobody would otherwise be waiting on.
+    private let onAuthorizationGranted = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
+
     init(
         tracker: ForegroundSessionTracker,
         center: UNUserNotificationCenter = .current(),
@@ -99,8 +105,15 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         Set(await center.deliveredNotifications().map { $0.request.identifier })
     }
 
-    func requestAuthorization() async -> Bool {
-        await startAuthorizationRequest().value
+    func requestAuthorization() {
+        _ = startAuthorizationRequest()
+    }
+
+    /// Wires the grant handler. Set by `AppContainer` once the coordinator
+    /// exists, which is after this service (the coordinator takes it as its
+    /// presenter) — the same late-binding shape as `attachPushDelegate`.
+    func setOnAuthorizationGranted(_ handler: @escaping @Sendable () -> Void) {
+        onAuthorizationGranted.withLock { $0 = handler }
     }
 
     /// Starts the authorization request, or joins the one already in flight, so
@@ -115,9 +128,13 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         let slotLock = authorizationRequest
         return slotLock.withLock { slot in
             if let inFlight = slot { return inFlight }
+            let grantHandler = onAuthorizationGranted
             let task = Task { [center] in
                 let granted = (try? await center.requestAuthorization(options: Self.authorizationOptions)) ?? false
                 slotLock.withLock { $0 = nil }
+                if granted {
+                    grantHandler.withLock { $0 }?()
+                }
                 return granted
             }
             slot = task

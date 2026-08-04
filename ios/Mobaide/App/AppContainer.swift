@@ -245,6 +245,12 @@ final class AppContainer {
             }
         )
         self.attentionCoordinator = attentionCoordinator
+        // Late-bound because the coordinator takes the service as its presenter:
+        // a granted prompt recovers the alerts `post` dropped while
+        // authorization was undecided, whichever request won the grant.
+        notificationService.setOnAuthorizationGranted { [attentionCoordinator] in
+            Task { @MainActor in attentionCoordinator.authorizationGranted() }
+        }
         self.appLifecycleController = AppLifecycleController(
             coordinator: attentionCoordinator,
             agentEventBus: agentEventBus
