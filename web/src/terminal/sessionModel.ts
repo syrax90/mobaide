@@ -247,6 +247,14 @@ export class TerminalSessionModel {
     this.resizeObserver = observer;
     this.ensureOpen();
     this.fitNow();
+    // Re-assert unconditionally, bypassing `pushSize`'s dedupe. A retained
+    // model keeps its socket open across detach/reattach, so none of the other
+    // three re-assert points (socket open, first binary while reconnecting,
+    // `replayEnd`) fires on a revisit — and if the grid is unchanged locally
+    // the dedupe swallows the only remaining one. A session another client
+    // resized would then keep that client's grid while this one renders its
+    // own. One extra `r` frame per attach is the whole cost.
+    this.assertSize();
   }
 
   detach(): void {
@@ -586,6 +594,21 @@ export class TerminalSessionModel {
   }
 
   /**
+   * Re-arm a channel that gave up.
+   *
+   * `WebSocketChannel` stops for good after a terminal close code, five
+   * unbuildable URLs (an agent-token mint failing through a network outage
+   * reaches that in seconds), or a throwing `buildUrl` — and nothing re-arms it
+   * after the constructor, so without this the screen is bricked until the tab
+   * reloads or the model is evicted. `connect()` sets `shouldReconnect` again
+   * and is idempotent on a healthy channel.
+   */
+  retryConnection(): void {
+    if (this.disposed) return;
+    this.io.channel.connect();
+  }
+
+  /**
    * Whether the emulator's output may reach the PTY.
    *
    * The `pendingReplayWrites` term is the web-specific half. `'e'` flips the
@@ -691,7 +714,17 @@ export class TerminalSessionModel {
    * gets retried.
    */
   runSelection(): void {
-    if (this.replay.connection !== 'live' || !this.screenIsSettled()) return;
+    // The `pendingReplayWrites` term matters here for the same reason it does
+    // in `canSendBytes`, and more: the selection this reads is taken off a
+    // buffer the parser has not finished reconstructing, so without it an `x`
+    // frame could replay a command assembled from a half-drawn screen.
+    if (
+      this.replay.connection !== 'live' ||
+      this.pendingReplayWrites > 0 ||
+      !this.screenIsSettled()
+    ) {
+      return;
+    }
     if (!this.sendPayload('execute', executePayload(this.term.getSelection()))) {
       return;
     }

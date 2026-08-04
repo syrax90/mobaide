@@ -43,6 +43,11 @@ export function Composer({ model, value, canSend, onOpenTemplates }: ComposerPro
         }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter' || event.shiftKey) return;
+          // The Enter that confirms an IME composition must reach the IME, not
+          // this handler: stealing it leaves the composition uncommitted and
+          // submits the raw composition buffer. `keyCode === 229` is the
+          // pre-`isComposing` signal Safari and older engines still use.
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return;
           event.preventDefault();
           model.submitComposer();
         }}

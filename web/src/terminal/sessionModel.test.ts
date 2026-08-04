@@ -5,6 +5,7 @@ import {
   settle,
   type FakeSocket,
 } from '../realtime/__testing__/fakeSocket';
+import { WS_CLOSE } from '../protocol/closeCodes';
 import { encodeTerminalFrame, TERMINAL_FRAME_TYPE } from '../protocol/terminalCodec';
 import { useToastStore } from '../stores/toastStore';
 import { MAX_PASTE_BYTES } from './terminalPaste';
@@ -27,6 +28,8 @@ const RESIZE_DEBOUNCE_MS = 100;
 interface Harness {
   model: Model;
   socket: FakeSocket;
+  /** Every socket the channel has built, oldest first. */
+  sockets: FakeSocket[];
   /** Fire the armed resize debounce and report the delay it was armed with. */
   flushResize: () => number;
   /** How many resize timers are armed; a burst must never arm more than one. */
@@ -78,6 +81,7 @@ async function harness(): Promise<Harness> {
   return {
     model,
     socket,
+    sockets,
     flushResize: () => modelTimers.runNext(),
     pendingResizes: () => modelTimers.pending.length,
     resizeFrames: () =>
@@ -245,6 +249,62 @@ describe('TerminalSessionModel send gate', () => {
     model.pasteText('ls\r');
 
     expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
+  });
+
+  it('holds a selection run back until the replayed history has been parsed', async () => {
+    // Worse than the input case: the selection an `x` frame carries is read off
+    // the buffer at the moment of the call, so between `'e'` and the parser
+    // draining it is taken from a screen that is still half-reconstructed —
+    // the frame would replay a command the user never selected.
+    const { model, deliverFrame, deliver, framesOfType } = await liveRunning();
+    vi.spyOn(model.term, 'getSelection').mockReturnValue('git status');
+    deliver(TERMINAL_FRAME_TYPE.replayStart);
+    deliverFrame(outputFrame('replayed history'));
+    deliver(TERMINAL_FRAME_TYPE.replayEnd);
+
+    expect(model.state.getState().connection).toBe('live');
+    model.runSelection();
+    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toEqual([]);
+
+    await settle();
+    model.runSelection();
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
+      'git status',
+    ]);
+  });
+});
+
+describe('TerminalSessionModel stopped channel', () => {
+  it('re-opens a socket when the user retries a channel that gave up', async () => {
+    // 4010 arrives verbatim on an already-open socket and is terminal on the
+    // agent axis, so nothing re-arms the channel on its own — the screen would
+    // stay dead until the tab is reloaded or the model evicted.
+    const { model, socket, sockets } = await harness();
+
+    socket.serverClose(WS_CLOSE.adminRevoked);
+
+    expect(model.state.getState().channelStopped).toBe(true);
+    expect(sockets).toHaveLength(1);
+
+    model.retryConnection();
+    await settle();
+
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('ignores a retry aimed at a model that was disposed under the button', async () => {
+    // `stopAllRealtime()` runs on every session change, so a click landing after
+    // disposal is ordinary; `connect()` would then open a socket owned by
+    // nothing, outliving the model that was supposed to close it.
+    const { model, socket, sockets } = await harness();
+    socket.serverClose(WS_CLOSE.adminRevoked);
+    model.dispose();
+
+    model.retryConnection();
+    await settle();
+
+    expect(sockets).toHaveLength(1);
   });
 });
 

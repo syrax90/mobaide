@@ -12,7 +12,12 @@ import type { TerminalViewState } from '../../terminal/sessionModel';
 export function overlayMessage(
   view: Pick<TerminalViewState, 'channelStopped' | 'connection' | 'replayPainting'>,
 ): string | null {
-  if (view.channelStopped) return 'Session ended';
+  // Not "Session ended": nothing in the close policy reports a session's death
+  // this way. A stopped channel means the reconnect loop gave up — a terminal
+  // close code, or five failed agent-token mints during a network outage — and
+  // nothing will re-arm it on its own, which is why this state carries a
+  // button rather than just a label.
+  if (view.channelStopped) return 'Disconnected';
   if (view.connection === 'connecting') return 'Reconnecting…';
   if (view.connection === 'replaying' || view.replayPainting) {
     return 'Replaying buffer…';
@@ -22,13 +27,20 @@ export function overlayMessage(
 
 interface ConnectionOverlayProps {
   message: string | null;
+  /** Present only when the channel gave up and the user can re-arm it. */
+  onRetry?: (() => void) | undefined;
 }
 
-export function ConnectionOverlay({ message }: ConnectionOverlayProps) {
+export function ConnectionOverlay({ message, onRetry }: ConnectionOverlayProps) {
   if (message === null) return null;
   return (
     <div className="terminal-overlay" role="status" aria-live="polite">
       {message}
+      {onRetry !== undefined && (
+        <button type="button" className="terminal-overlay-retry" onClick={onRetry}>
+          Reconnect
+        </button>
+      )}
     </div>
   );
 }

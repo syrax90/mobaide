@@ -680,7 +680,23 @@ button {
   border: 1px solid var(--color-border);
   color: var(--color-fg);
   font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  /* The pill floats over the grid; only its button may take a click, so a
+     selection drag through the top rows is not blocked by a status label. */
   pointer-events: none;
+}
+
+.terminal-overlay-retry {
+  pointer-events: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  background: var(--color-bg);
+  color: var(--color-accent);
+  font: inherit;
+  cursor: pointer;
 }
 
 .terminal-jump {

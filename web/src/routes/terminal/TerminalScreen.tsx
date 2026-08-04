@@ -22,13 +22,17 @@ export function TerminalScreen() {
     key === null ? undefined : state.models[key],
   );
 
-  // Re-acquires whenever the model goes missing, not only on mount:
-  // `stopAllRealtime()` runs on every session change and disposes the model out
-  // from under a screen that is still open (`channelRegistry.ts` documents the
-  // contract for exactly this reason).
+  // Called unconditionally, not only when the model is missing. Two jobs:
+  // it re-acquires after `stopAllRealtime()` disposes the model out from under
+  // a screen that is still open (`channelRegistry.ts` documents that contract),
+  // and it refreshes the model's LRU position on a revisit — without that the
+  // resident set degrades from least-recently-used to creation-order, evicting
+  // the session the user just came back to and charging them a fresh replay.
+  // `acquireTerminal` is idempotent per key and returns the same instance, so
+  // the selector below sees no change and this cannot loop.
   useEffect(() => {
     if (agentId === undefined || sessionId === undefined) return;
-    if (model === undefined) acquireTerminal(agentId, sessionId);
+    acquireTerminal(agentId, sessionId);
   }, [agentId, sessionId, model]);
 
   if (agentId === undefined || sessionId === undefined) {
@@ -58,7 +62,12 @@ function TerminalView({ model }: TerminalViewProps) {
   const [templatesOpen, setTemplatesOpen] = useState(false);
 
   const running = isSessionRunning(view.status);
-  const live = view.connection === 'live';
+  // `replayPainting` mirrors the model's own `pendingReplayWrites` term: after
+  // `'e'` the connection flips live synchronously while the parser is still
+  // consuming replayed history, so without it the screen would offer an enabled
+  // Send that `submitComposer()` silently swallows. It is a time-superset of
+  // the model's gate, so nothing that would have been allowed gets disabled.
+  const live = view.connection === 'live' && !view.replayPainting;
   const overlay = overlayMessage(view);
 
   return (
@@ -98,7 +107,16 @@ function TerminalView({ model }: TerminalViewProps) {
 
       <div className="terminal-stage">
         <TerminalSurface model={model} />
-        <ConnectionOverlay message={overlay} />
+        <ConnectionOverlay
+          message={overlay}
+          onRetry={
+            view.channelStopped
+              ? () => {
+                  model.retryConnection();
+                }
+              : undefined
+          }
+        />
         {!view.pinned && (
           <JumpToBottom
             unread={view.unread}
