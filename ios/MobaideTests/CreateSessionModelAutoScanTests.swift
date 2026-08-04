@@ -249,6 +249,51 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         )
     }
 
+    /// The agent-wide default rides in on `observeScans()`'s refresh, which
+    /// races the user. Reaching the step first must not latch the project as
+    /// seeded with an empty prompt: nothing would re-seed it, and the wizard
+    /// would hide the prompt the scan actually runs with for its whole life.
+    func testAutoScanPromptPicksUpAnAgentDefaultThatLandsAfterTheStep() async {
+        StubURLProtocol.reset()
+        let repo = makeAutoScanRepo()
+        XCTAssertNil(repo.autoScanPrompt, "a cold repository is the whole point — do not seed this one")
+        let model = await loadedModel(autoScanRepo: repo)
+        model.selectStoredProject("linear")
+
+        model.selectMode(.autoScan)
+        XCTAssertEqual(model.step, .config)
+        XCTAssertEqual(model.autoScanInitialPrompt, "", "no project prompt, and the agent default has not arrived")
+
+        StubURLProtocol.enqueue(status: 200, body: listJSON(scans: [], prompt: "agent-wide prompt", maxScans: 5))
+        let observe = Task { await model.observeScans() }
+        defer { observe.cancel() }
+
+        await waitUntil { !model.autoScanInitialPrompt.isEmpty }
+        XCTAssertEqual(
+            model.autoScanInitialPrompt, "agent-wide prompt",
+            "the refresh that resolves the default has to re-seed the step the user already reached"
+        )
+    }
+
+    func testALateAgentDefaultLeavesAnInFlightPromptEditAlone() async {
+        StubURLProtocol.reset()
+        let model = await loadedModel(autoScanRepo: makeAutoScanRepo())
+        model.selectStoredProject("linear")
+        model.selectMode(.autoScan)
+        model.autoScanInitialPrompt = "hand-written"
+
+        StubURLProtocol.enqueue(status: 200, body: listJSON(scans: ["linear"], prompt: "agent-wide prompt", maxScans: 5))
+        let observe = Task { await model.observeScans() }
+        defer { observe.cancel() }
+
+        // `activeScans` is assigned in the same synchronous loop body as the
+        // re-seed attempt, with no suspension between them, so observing it
+        // pins the assertion past the one moment the typed prompt could have
+        // been overwritten.
+        await waitUntil { model.runningScan != nil }
+        XCTAssertEqual(model.autoScanInitialPrompt, "hand-written")
+    }
+
     // MARK: - Options block
 
     func testAutoScanOptionsForceWorktreeAndDefaultToSkippingPermissions() {

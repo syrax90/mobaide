@@ -368,6 +368,13 @@ final class CreateSessionModel {
         _ = await autoScanRepository.refresh()
         for await scans in autoScanRepository.scans() {
             activeScans = scans
+            // The agent-wide default prompt rides in on the same payload, from
+            // the REST seed above *and* from every `autoscan.list.changed`
+            // push — so re-seed here rather than only after the refresh, which
+            // silently returns the unchanged cache when the agent is briefly
+            // unreachable. Idempotent: the empty check keeps an in-flight edit
+            // untouched, and `seedAutoScanPrompt` is a no-op once latched.
+            if autoScanInitialPrompt.isEmpty { seedAutoScanPrompt() }
         }
     }
 
@@ -493,15 +500,22 @@ final class CreateSessionModel {
         step = .config
     }
 
-    /// Per-project saved prompt → the agent-wide default → empty (Android
+    /// Per-project saved prompt → the agent-wide default (Android
     /// `selectAutoScanMode`). Re-seeds only when the selected project changed,
     /// so returning to the step does not discard the user's edits.
+    ///
+    /// Latches `autoScanPromptSeededFor` only once a source actually resolved.
+    /// The agent-wide default rides in on the scan-list refresh, so reaching
+    /// this step before that lands would otherwise mark the project seeded with
+    /// an empty prompt and strand it that way for the rest of the wizard's
+    /// life — `observeScans()` re-attempts the seed once the refresh returns.
     private func seedAutoScanPrompt() {
         guard case .stored(let name) = selection, autoScanPromptSeededFor != name else { return }
-        autoScanPromptSeededFor = name
-        autoScanInitialPrompt = projects.first { $0.name == name }?.auto_scan_prompt
+        guard let prompt = projects.first(where: { $0.name == name })?.auto_scan_prompt
             ?? autoScanRepository.autoScanPrompt
-            ?? ""
+        else { return }
+        autoScanPromptSeededFor = name
+        autoScanInitialPrompt = prompt
     }
 
     func back() {
