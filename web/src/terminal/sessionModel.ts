@@ -196,6 +196,9 @@ export class TerminalSessionModel {
     this.term = new Terminal({
       allowProposedApi: true,
       scrollback: SCROLLBACK_ROWS,
+      // Starts closed and is kept in step with the send gate by
+      // `syncStdinGate()`; nothing may reach the PTY before the first live entry.
+      disableStdin: true,
       // The PTY's termios owns the LF -> CRLF translation; doing it here too
       // would double-space everything a real shell prints.
       convertEol: false,
@@ -446,6 +449,7 @@ export class TerminalSessionModel {
           case 'disconnected':
             this.replay = reduceDisconnected();
             patchState(this.state, { connection: this.replay.connection });
+            this.syncStdinGate();
             break;
           default:
             break;
@@ -497,6 +501,7 @@ export class TerminalSessionModel {
       }
     }
     patchState(this.state, { connection: this.replay.connection });
+    this.syncStdinGate();
   }
 
   /**
@@ -533,10 +538,14 @@ export class TerminalSessionModel {
       this.term.write(payload, () => {
         this.pendingReplayWrites -= 1;
         this.settleReplayPaint();
+        // The counter is a term in the send gate, so the drain that releases it
+        // has to re-open stdin.
+        this.syncStdinGate();
       });
     } catch {
       this.pendingReplayWrites -= 1;
       this.settleReplayPaint();
+      this.syncStdinGate();
     }
   }
 
@@ -627,6 +636,31 @@ export class TerminalSessionModel {
       this.pendingReplayWrites === 0 &&
       isSessionRunning(this.state.getState().status)
     );
+  }
+
+  /**
+   * Mirror the send gate into xterm, so a key that cannot reach the PTY has no
+   * side effects either.
+   *
+   * `disableStdin` short-circuits `triggerDataEvent`/`triggerBinaryEvent`
+   * *before* two things xterm does on user input: scrolling the viewport back
+   * to the tail (which silently clears the unread badge) and clearing the
+   * selection. Without it, typing into a stopped session — exactly when the
+   * terminal is a read-only transcript someone is scrolling back through and
+   * selecting to copy — throws away their scroll position and their selection
+   * while the keystroke goes nowhere.
+   *
+   * Deliberately not done in `attachCustomKeyEventHandler`: returning `false`
+   * there skips xterm's `preventDefault`, so Tab would escape the terminal,
+   * Space would scroll the page and `/` would open Firefox's quick-find. This
+   * gate leaves the viewport-paging chords and the clipboard chords working,
+   * because those never produce data in the first place.
+   */
+  private syncStdinGate(): void {
+    const disabled = !this.canSendBytes();
+    if (this.term.options.disableStdin !== disabled) {
+      this.term.options.disableStdin = disabled;
+    }
   }
 
   private sendInputText(text: string): void {

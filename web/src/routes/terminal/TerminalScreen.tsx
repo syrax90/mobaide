@@ -125,11 +125,15 @@ function TerminalView({ model }: TerminalViewProps) {
             }}
           />
         )}
+        {/*
+          Inside the stage, floating, alongside the other two overlays. As a
+          flex sibling it stole ~3 rows from the terminal the moment a selection
+          existed, and xterm clears the selection on any row-count change — so
+          the bar that appears because there is a selection destroyed it, then
+          unmounted itself and gave the rows back.
+        */}
+        {view.hasSelection && <SelectionActions model={model} canRun={live} />}
       </div>
-
-      {view.hasSelection && (
-        <SelectionActions model={model} canRun={live} />
-      )}
 
       {view.composerVisible && (
         <Composer

@@ -275,6 +275,91 @@ describe('TerminalSessionModel send gate', () => {
   });
 });
 
+describe('TerminalSessionModel stdin gate', () => {
+  // `disableStdin` mirrors `canSendBytes()` into the emulator, because xterm
+  // acts on a keystroke before the model ever sees the bytes: `CoreService`
+  // re-pins the viewport to the tail on user input — silently clearing the
+  // unread badge — and `SelectionService` drops the selection on the same
+  // signal. A key pressed while the gate is shut would therefore throw away the
+  // scroll position and the selection of someone reading back a stopped
+  // session, for input that goes nowhere. Refusing the key from
+  // `attachCustomKeyEventHandler` instead would skip xterm's `preventDefault`
+  // and leak Tab, Space and `/` to the browser.
+  interface GateCase {
+    name: string;
+    reach: (context: Harness) => void | Promise<void>;
+    disabled: boolean;
+  }
+
+  const goLiveRunning = (context: Harness): void => {
+    context.deliverFrame(stateFrame('running'));
+  };
+
+  const replaySpan = (context: Harness): void => {
+    context.deliver(TERMINAL_FRAME_TYPE.replayStart);
+    context.deliverFrame(outputFrame('replayed history'));
+    context.deliver(TERMINAL_FRAME_TYPE.replayEnd);
+  };
+
+  const cases: GateCase[] = [
+    {
+      name: 'shut before the first inbound frame',
+      reach: () => undefined,
+      disabled: true,
+    },
+    {
+      name: 'open once the channel is live and the process is running',
+      reach: goLiveRunning,
+      disabled: false,
+    },
+    {
+      name: 'shut again while a replay span is still in the parser',
+      reach: (context) => {
+        goLiveRunning(context);
+        replaySpan(context);
+      },
+      disabled: true,
+    },
+    {
+      name: 'open again once the replayed history has drained',
+      // The drain is the only thing left to re-open it: `'e'` ran the gate while
+      // the writes were still outstanding, so on a session that goes quiet after
+      // its replay nothing else would arrive to re-run it and the keyboard would
+      // stay dead until the next frame.
+      reach: async (context) => {
+        goLiveRunning(context);
+        replaySpan(context);
+        await settle();
+      },
+      disabled: false,
+    },
+    {
+      name: 'shut when the socket drops',
+      reach: (context) => {
+        goLiveRunning(context);
+        context.socket.serverClose(1006);
+      },
+      disabled: true,
+    },
+    {
+      name: 'shut when the process is no longer running',
+      reach: (context) => {
+        goLiveRunning(context);
+        context.deliverFrame(stateFrame('stopped'));
+      },
+      disabled: true,
+    },
+  ];
+
+  it.each(cases)('$name', async ({ reach, disabled }) => {
+    const context = await harness();
+
+    await reach(context);
+
+    expect(context.model.term.options.disableStdin).toBe(disabled);
+  });
+});
+
 describe('TerminalSessionModel stopped channel', () => {
   it('re-opens a socket when the user retries a channel that gave up', async () => {
     // 4010 arrives verbatim on an already-open socket and is terminal on the
