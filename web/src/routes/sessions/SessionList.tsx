@@ -1,0 +1,140 @@
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router';
+import { listCustomAgentTypes } from '../../api/customAgentTypeRepository';
+import { listSessions, stopSession } from '../../api/sessionRepository';
+import { isApiError } from '../../api/errors';
+import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
+import type { SessionResponse } from '../../protocol/dto/session';
+import { forceReconnectAgentEvents, useAgentEvents } from '../../realtime';
+import { useLastSessionStore } from '../../stores/lastSessionStore';
+import { useToastStore } from '../../stores/toastStore';
+import { evictTerminals } from '../../terminal/terminalEviction';
+import { SessionCard } from './SessionCard';
+import { StopSessionDialog } from './StopSessionDialog';
+import { customTypeNameMap, sessionKindLabel } from './sessionDisplay';
+import { newSessionPath } from './terminalPath';
+import { useAutoResume } from './useAutoResume';
+
+interface SessionListProps {
+  agentId: string;
+  online: boolean;
+}
+
+export function SessionList({ agentId, online }: SessionListProps) {
+  const queryClient = useQueryClient();
+  const [stopTarget, setStopTarget] = useState<SessionResponse | null>(null);
+  const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
+
+  // Held open even while the agent is offline: close code 4012 is the ordinary
+  // attach-to-an-offline-agent case and reconnects, so the agent coming back
+  // pushes its snapshot with no extra work here.
+  useAgentEvents(agentId);
+
+  const sessions = useQuery({
+    queryKey: queryKeys.sessions(agentId),
+    queryFn: () => listSessions(agentId),
+    // Disabled while offline: the relay answers 503 for an offline agent, which
+    // the global query-error toast would fire on every mount.
+    enabled: online,
+    ...wsBackedQueryOptions,
+  });
+
+  const customTypes = useQuery({
+    queryKey: queryKeys.customAgentTypes(),
+    queryFn: listCustomAgentTypes,
+    ...wsBackedQueryOptions,
+  });
+
+  useAutoResume(agentId, sessions.data);
+
+  const stop = useMutation({
+    mutationFn: ({ sessionId, force }: { sessionId: string; force: boolean }) =>
+      stopSession(agentId, sessionId, force),
+    onSuccess: async (_result, { sessionId }) => {
+      setStopTarget(null);
+      // Before the network settles: this is what actually kills a live PTY view.
+      evictTerminals(agentId, [sessionId]);
+      // The agent publishes `sessions.changed` immediately, which is the honest
+      // source; this only covers the socket being down.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.sessions(agentId) });
+    },
+    onError: (error) => {
+      setStopTarget(null);
+      useToastStore
+        .getState()
+        .show(
+          isApiError(error)
+            ? `Failed to stop session: ${error.message}`
+            : 'Failed to stop session',
+          'error',
+        );
+    },
+  });
+
+  const names = customTypeNameMap(customTypes.data);
+
+  return (
+    <>
+      <div className="sessions-toolbar">
+        <Link className="button button-primary" to={newSessionPath(agentId)}>
+          New session
+        </Link>
+        <button
+          type="button"
+          className="button"
+          onClick={() => {
+            forceReconnectAgentEvents(agentId);
+            void sessions.refetch();
+          }}
+        >
+          Refresh
+        </button>
+      </div>
+
+      {/* Offline is checked before `isPending`: a disabled query with a cold
+          cache reports pending forever, which would render a permanent spinner. */}
+      {!online ? (
+        <p className="empty-state">This agent is offline.</p>
+      ) : sessions.isPending ? (
+        <p className="page-note">Loading sessions…</p>
+      ) : sessions.isError ? (
+        <p className="auth-error">Failed to load sessions.</p>
+      ) : sessions.data.length === 0 ? (
+        <p className="empty-state">No active sessions</p>
+      ) : (
+        <ul className="device-list session-list">
+          {sessions.data.map((session) => (
+            <SessionCard
+              key={session.session_id}
+              agentId={agentId}
+              session={session}
+              kindLabel={sessionKindLabel(session, names)}
+              onOpen={(sessionId) => {
+                // Web writes this on open as well as on create — attaching to a
+                // session started elsewhere is the browser's main job, so a
+                // create-only write would leave auto-resume dormant. Android and
+                // iOS follow in CLA-229 / CLA-230.
+                setLastUsedSession(agentId, sessionId);
+              }}
+              onStop={setStopTarget}
+            />
+          ))}
+        </ul>
+      )}
+
+      {stopTarget !== null && (
+        <StopSessionDialog
+          session={stopTarget}
+          busy={stop.isPending}
+          onStop={(force) => {
+            stop.mutate({ sessionId: stopTarget.session_id, force });
+          }}
+          onCancel={() => {
+            setStopTarget(null);
+          }}
+        />
+      )}
+    </>
+  );
+}

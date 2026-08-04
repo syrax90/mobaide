@@ -39,7 +39,7 @@ export function TerminalScreen() {
     return (
       <section className="page">
         <h1>Session not specified</h1>
-        <Link to="/">Back home</Link>
+        <Link to="/">Back to sessions</Link>
       </section>
     );
   }

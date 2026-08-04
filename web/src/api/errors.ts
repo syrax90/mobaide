@@ -14,6 +14,18 @@ export class ApiError extends Error {
   /** Seconds to wait, from `Retry-After` or a cooldown field in the body. */
   readonly retryAfterSeconds: number | null;
   readonly detail: unknown;
+  /**
+   * The whole parsed payload, not just `detail`.
+   *
+   * The relay's marker bodies put their discriminator *beside* `detail`, not
+   * inside it — `{"agent_update_required": true, "detail": "…"}`,
+   * `{"codex_auth_required": true, "detail": "…"}`,
+   * `{"detail": "…", "codex_cli_missing": true, "searched_paths": [...]}`.
+   * `_ProxyRejection` in `central_server/relay/mobile_proxy.py` exists
+   * specifically to keep them unwrapped. Narrowing to `detail` would drop every
+   * one of them before a caller could read it.
+   */
+  readonly body: unknown;
 
   constructor(init: {
     status: number;
@@ -21,6 +33,7 @@ export class ApiError extends Error {
     code: string | null;
     retryAfterSeconds: number | null;
     detail: unknown;
+    body?: unknown;
   }) {
     super(init.message);
     this.name = 'ApiError';
@@ -28,6 +41,7 @@ export class ApiError extends Error {
     this.code = init.code;
     this.retryAfterSeconds = init.retryAfterSeconds;
     this.detail = init.detail;
+    this.body = init.body ?? init.detail;
   }
 }
 
@@ -53,6 +67,34 @@ function readNumber(value: unknown): number | null {
   if (typeof value === 'string') {
     const parsed = Number.parseInt(value, 10);
     if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+/**
+ * A human-readable message for the two `detail` shapes that carry one but do
+ * not use the `message` key.
+ *
+ * FastAPI's 422 is `{"detail": [{loc, msg, type}, …]}` — an array, which the
+ * `message` lookup below cannot see, leaving every validation failure reading
+ * "Request failed (422)". The agent's own auth/marker errors nest a second
+ * `detail` string inside the object (`sessions/router.py` raises
+ * `HTTPException(detail={"codex_auth_required": True, "detail": str(exc)})`).
+ */
+function describeDetail(detail: unknown): string | null {
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) =>
+        typeof item === 'object' && item !== null && typeof (item as { msg?: unknown }).msg === 'string'
+          ? (item as { msg: string }).msg
+          : null,
+      )
+      .filter((msg): msg is string => msg !== null);
+    return messages.length > 0 ? messages.join('; ') : null;
+  }
+  if (typeof detail === 'object' && detail !== null) {
+    const nested = (detail as { detail?: unknown }).detail;
+    if (typeof nested === 'string') return nested;
   }
   return null;
 }
@@ -87,10 +129,11 @@ export function toApiError(response: Response, body: unknown): ApiError {
 
   return new ApiError({
     status: response.status,
-    message: message ?? `Request failed (${String(response.status)})`,
+    message: message ?? describeDetail(detail) ?? `Request failed (${String(response.status)})`,
     code,
     retryAfterSeconds,
     detail,
+    body,
   });
 }
 

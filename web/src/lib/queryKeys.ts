@@ -23,6 +23,8 @@ export const queryKeys = {
   sessions: (agentId: string) => ['agent', agentId, 'sessions'] as const,
   projects: (agentId: string) => ['agent', agentId, 'projects'] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
+  /** Which CLIs the agent has installed, and the models each advertises. */
+  agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,
 };
 
 /**

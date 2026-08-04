@@ -7,6 +7,7 @@
 export {
   connectAgentEvents,
   disconnectAgentEvents,
+  forceReconnectAgentEvents,
   startUserEvents,
   stopAllRealtime,
   stopUserEvents,
@@ -14,4 +15,5 @@ export {
 export { AutoScanChannel, SessionIoChannel, sessionChannelName } from './channels';
 export { useConnectionStore } from './connectionStore';
 export { RealtimeProvider } from './RealtimeProvider';
+export { useAgentEvents } from './useAgentEvents';
 export type { ChannelEvent, ChannelState, ChannelStatus } from './webSocketChannel';

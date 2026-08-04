@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { signIn, stubRelay } from './fixtures';
 
-test('home page renders the heading and nav brand for a signed-in visitor', async ({
+test('sessions list renders the heading and nav brand for a signed-in visitor', async ({
   page,
 }) => {
   await stubRelay(page);
@@ -11,7 +11,7 @@ test('home page renders the heading and nav brand for a signed-in visitor', asyn
   await expect(page).toHaveURL(/:\d+\/$/);
 
   await expect(
-    page.getByRole('heading', { level: 1, name: 'Mobaide Web' }),
+    page.getByRole('heading', { level: 1, name: 'Sessions' }),
   ).toBeVisible();
   await expect(
     page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Mobaide' }),

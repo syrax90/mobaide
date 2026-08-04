@@ -18,7 +18,9 @@ protocol core — WebSocket channel manager, binary terminal codec, the
 TypeScript arm of the cross-platform golden fixtures, and the WS-event →
 TanStack Query bridge. WEB-05 (CLA-192) added the terminal screen on
 xterm.js 6: replay, follow mode and the unread badge, desktop copy/paste,
-the composer and the prompt-template picker. The series is tracked in
+the composer and the prompt-template picker. WEB-07 (CLA-193) added the
+sessions area — the live list with auto-resume, and the six-branch create
+wizard. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -56,7 +58,7 @@ web/
 ├── src/
 │   ├── main.tsx              # StrictMode > AppErrorBoundary > QueryClientProvider > ThemeProvider > RouterProvider + ToastViewport
 │   ├── app/                  # router + route guards, RootLayout/AuthLayout, AppGate, RouteError, AppErrorBoundary, ThemeProvider
-│   ├── routes/               # route components (Home, auth/*, account/*, terminal/*)
+│   ├── routes/               # route components (sessions/*, auth/*, account/*, terminal/*)
 │   ├── terminal/             # framework-free terminal core (WEB-05): session model,
 │   │                         #   replay/follow/paste/submit/key reducers, clipboard,
 │   │                         #   renderer ladder, theme, model store
@@ -68,7 +70,8 @@ web/
 │   │                         #   autoscan frames, __fixtures__/ golden-fixture loader
 │   ├── realtime/             # WS channel manager, close policy, connection store,
 │   │                         #   event→Query bridge, RealtimeProvider (WEB-04)
-│   ├── stores/               # Zustand stores (themeStore, toastStore, terminalPrefsStore)
+│   ├── stores/               # Zustand stores (themeStore, toastStore, terminalPrefsStore,
+│   │                         #   selectedAgentStore, lastSessionStore)
 │   ├── lib/queryClient.ts    # TanStack Query defaults
 │   ├── lib/queryKeys.ts      # central query-key factory + wsBackedQueryOptions
 │   ├── api/
@@ -227,13 +230,24 @@ degrade only above 2^53.
 
 **Event → Query bridge.** Refresh-on-connect invalidates agents / templates
 / shortcuts / custom types on the user channel (Android `UserEventBus`
-order) and sessions / projects on an agent channel. Per event the policy is
+order) and projects on an agent channel. Per event the default policy is
 `invalidateQueries`, never a hand-applied delta; `custom_type.deleted` also
 invalidates shortcuts because the server cascades them in one transaction
-with no companion events. User-channel payloads are schema-validated before
-anything is invalidated (a malformed payload is dropped, as on mobile);
-agent-channel payloads are only routed by `type`, since their shapes belong
-to WEB-07/09/10. Unknown envelope types are ignored.
+with no companion events. Payloads are schema-validated before anything is
+written, and dropped rather than thrown on failure — this runs inside the
+socket's listener loop.
+
+The three agent-channel session events are the one exception, added by
+WEB-07 (`src/realtime/sessionCache.ts`): `sessions.changed` carries the
+agent's complete list and `session.updated` / `session.attention` carry a
+whole row each, so there is no delta that could drift, and they are written
+straight into the cache. A snapshot **may** seed a cache nothing has
+fetched; an upsert **must not**, or one row would masquerade as the whole
+list. Sessions are therefore absent from refresh-on-connect: the agent
+re-pushes its snapshot on every connect, and an extra REST GET would only
+race it. The remaining agent-channel payloads are still routed by `type`
+alone, their shapes belonging to WEB-09/10. Unknown envelope types are
+ignored.
 
 `onlineManager` is driven from reachability rather than `navigator.onLine`,
 conservatively: offline only after two consecutive pre-open failures of the
@@ -261,14 +275,69 @@ drops unknown keys on re-encode while `z.looseObject` preserves them, so
 unknown-key round-trips are asserted in TypeScript-only tests, never added
 to a shared fixture.
 
+## Sessions (WEB-07)
+
+The index route `/` is the live session list; `/agents/:agentId/new-session`
+is the create wizard.
+
+**Agent selection.** The list is agent-scoped, and web is the first client
+that can see more than one agent, so `GET /api/agents` backs a small picker
+(hidden when there is exactly one). The choice persists under `localStorage`
+key `mobaide-agent` and the resolution is written back, which makes the
+automatic pick sticky — otherwise an agent dropping offline would silently
+move the user's list. Full pairing is WEB-08. While the selected agent is
+offline the events channel stays open (close code 4012 is the ordinary
+attach-to-an-offline-agent case and reconnects) but the REST query is
+disabled, since an offline agent 503s on every mount.
+
+**Auto-resume** ports `SessionListViewModel.maybeAutoResume` verbatim,
+including its asymmetry: a stored id that is *absent from the list* is left
+alone, and only one that is present but dead gets cleared. Two web-specific
+changes. The once-per-attempt flag lives at module scope keyed by agent id,
+not on the component — a web route unmounts on navigate and remounts on
+Back, so component state would re-fire and trap the user in a loop. And the
+id is recorded **on open as well as on create** (`mobaide-sessions`, keyed
+per agent): mobile records it only on create, which on web would leave the
+feature dormant for anyone who starts sessions from their phone. Android and
+iOS follow in CLA-229 / CLA-230.
+
+**Cards** follow iOS: state dot, title, kind label, cwd, and the attention
+chip Android does not render (`awaiting_permission` → "Needs permission",
+`turn_finished` → "Ready", `ended` → "Ended"). Unknown kinds fall back to
+`kind_label`, then the live custom-type registry, then "Custom" — never the
+raw wire token. Stopping uses iOS's Stop / Force Stop / Cancel confirmation.
+
+**The create wizard** is three steps (project → agent → options), iOS's
+shape rather than Android's seven. State is one reducer over **per-mode
+buckets**, and the request builder switches on mode, so a Codex request
+cannot name a Claude field — the alternative, one form with
+`shouldUnregister`, would make that a property of what happens to be
+mounted. Auto Scan gets its own Claude bucket, since its `skip_permissions`
+defaults the opposite way. Only `step`, `mode` and the project selection
+live in the URL; the ~30 option fields do not, so no prompt text reaches
+browser history.
+
+`skip_permissions` is the trap the wizard is built around: its **wire-absence
+default is `true`**, so an omitted field launches with
+`--dangerously-skip-permissions`. Requests are re-parsed through
+`createSessionRequestSchema` (a `z.strictObject`, unlike the inbound loose
+schemas) and typed as the *generated* request, whose booleans are required —
+so a dropped flag is a compile error rather than a silent escalation.
+
+Custom agent types are listed, launched, created and deleted here; editing
+is CLA-231. A launch sends only `cli: "custom_<id>"` — the relay resolves the
+stored command server-side, and the agent-direct REST path rejects custom
+kinds outright. The Auto Scan branch posts to `/api/autoscan/start` and
+returns to the list; its monitor screen is WEB-10.
+
 ## Terminal screen (WEB-05)
 
 Built on **xterm.js 6.0** (`@xterm/xterm` plus the `fit`, `webgl`,
 `clipboard` and `unicode11` addons). Route
 `/agents/:agentId/sessions/:sessionId` — the **only lazy route**: xterm and
 its WebGL addon outweigh the rest of the SPA, so they load on first attach
-rather than on the sign-in screen. Until the sessions list lands (WEB-07)
-the screen is reached from a stand-in form on `Home`.
+rather than on the sign-in screen. It is reached from the sessions list at
+`/`.
 
 **Layering.** `src/terminal/` is framework-free — pure reducers
 (`terminalReplay`, `terminalFollow`, `terminalPaste`, `terminalSubmit`,
@@ -346,7 +415,8 @@ WS + relay can strand the closing marker) and capped at 1 MiB, because one
 oversized frame trips the agent tunnel's 4 MB limit and drops *every*
 session on that agent. The toggle is the one piece of terminal state that
 outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
-`mobaide-terminal`, the second persisted key after `mobaide-theme`.
+`mobaide-terminal`, the second persisted key after `mobaide-theme` (WEB-07
+adds `mobaide-agent` and `mobaide-sessions`).
 
 **OSC 52**: writes allowed, reads refused. The refusal is a handler
 registered *after* `ClipboardAddon` (xterm dispatches OSC handlers
@@ -474,3 +544,8 @@ Ctrl+V / Ctrl+Shift+C/V, the "pass Ctrl+V" toggle) and Full-only display
 mode both exist because a browser window has a physical keyboard and a wide
 viewport, neither of which a phone has. Each is listed in the WEB-05 section
 above with its reason.
+
+WEB-07's two divergences are **not** exempt and are tracked accordingly:
+recording the last-used session on open as well as on create is a behaviour
+change mobile has to follow (CLA-229 / CLA-230), and the session-card
+attention chip is iOS parity that Android does not yet render.

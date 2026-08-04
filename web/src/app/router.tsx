@@ -1,5 +1,4 @@
 import { createBrowserRouter } from 'react-router';
-import { Home } from '../routes/Home';
 import { Account } from '../routes/account/Account';
 import { Devices } from '../routes/account/Devices';
 import { ForgotPassword } from '../routes/auth/ForgotPassword';
@@ -7,6 +6,8 @@ import { Login } from '../routes/auth/Login';
 import { Register } from '../routes/auth/Register';
 import { ResetPassword } from '../routes/auth/ResetPassword';
 import { VerifyEmail } from '../routes/auth/VerifyEmail';
+import { SessionsScreen } from '../routes/sessions/SessionsScreen';
+import { NewSession } from '../routes/sessions/create/NewSession';
 import { AuthLayout } from './AuthLayout';
 import { RootLayout } from './RootLayout';
 import { RouteError } from './RouteError';
@@ -41,9 +42,13 @@ export const router = createBrowserRouter([
           {
             element: <RootLayout />,
             children: [
-              { index: true, element: <Home /> },
+              { index: true, element: <SessionsScreen /> },
               { path: 'account', element: <Account /> },
               { path: 'devices', element: <Devices /> },
+              // Not `sessions/new`: keeping it off the terminal route's path
+              // means correctness never rests on react-router ranking a static
+              // segment above `:sessionId`.
+              { path: 'agents/:agentId/new-session', element: <NewSession /> },
               {
                 // The only lazy route. xterm.js and its WebGL addon are ~740 KB
                 // raw, which is more than the rest of the SPA put together —

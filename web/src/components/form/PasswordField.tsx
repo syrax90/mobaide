@@ -1,22 +1,45 @@
-import { useId, useState } from 'react';
+import { useId, useState, type ChangeEvent } from 'react';
 import type { UseFormRegisterReturn } from 'react-hook-form';
 
-interface PasswordFieldProps {
+interface BasePasswordFieldProps {
   label: string;
-  autoComplete: 'current-password' | 'new-password';
-  registration: UseFormRegisterReturn;
+  autoComplete: 'current-password' | 'new-password' | 'off';
   error?: string;
+  autoFocus?: boolean;
 }
+
+/**
+ * Same union as `TextField`: the auth forms drive this through react-hook-form,
+ * while the Codex login dialog holds its value in local state.
+ */
+type PasswordFieldProps = BasePasswordFieldProps &
+  (
+    | { registration: UseFormRegisterReturn; value?: never; onChange?: never }
+    | { registration?: never; value: string; onChange: (value: string) => void }
+  );
 
 export function PasswordField({
   label,
   autoComplete,
-  registration,
   error,
+  autoFocus,
+  registration,
+  value,
+  onChange,
 }: PasswordFieldProps) {
   const [revealed, setRevealed] = useState(false);
   const id = useId();
   const errorId = `${id}-error`;
+
+  const controlled =
+    registration === undefined
+      ? {
+          value,
+          onChange: (event: ChangeEvent<HTMLInputElement>) => {
+            onChange?.(event.target.value);
+          },
+        }
+      : registration;
 
   return (
     <div className="field">
@@ -29,9 +52,10 @@ export function PasswordField({
           className="field-input"
           type={revealed ? 'text' : 'password'}
           autoComplete={autoComplete}
+          autoFocus={autoFocus}
           aria-invalid={error !== undefined}
           aria-describedby={error !== undefined ? errorId : undefined}
-          {...registration}
+          {...controlled}
         />
         <button
           type="button"
@@ -41,7 +65,7 @@ export function PasswordField({
           aria-pressed={revealed}
           aria-label={revealed ? 'Hide password' : 'Show password'}
           onClick={() => {
-            setRevealed((value) => !value);
+            setRevealed((current) => !current);
           }}
         >
           {revealed ? 'Hide' : 'Show'}
