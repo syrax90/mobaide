@@ -7,6 +7,7 @@
  * Called once from `main.tsx` before the app renders.
  */
 import {
+  setAgentTokenPreparer,
   setAgentTokenProvider,
   setUserTokenProvider,
   setUserTokenRefresher,
@@ -18,7 +19,7 @@ import {
 } from '../api/clients';
 import { queryClient } from '../lib/queryClient';
 import { reportRestReachable } from '../realtime/reachability';
-import { getAgentToken } from './agentTokens';
+import { ensureAgentToken, getAgentToken } from './agentTokens';
 import { getAccessToken } from './sessionTransport';
 import { useSessionStore } from './sessionStore';
 import { ensureFreshUserToken, refreshUserSession } from './userTokens';
@@ -26,6 +27,10 @@ import { ensureFreshUserToken, refreshUserSession } from './userTokens';
 export function installAuthProviders(): void {
   setUserTokenProvider(getAccessToken);
   setAgentTokenProvider(getAgentToken);
+  // The agent axis's equivalent of the user refresher: REST calls for an agent
+  // can be the first thing that ever needs its token, so something has to mint
+  // it. Before this, only opening a WebSocket did.
+  setAgentTokenPreparer(ensureAgentToken);
   // Pre-emptive: a refreshable session's access token expires (15 minutes by
   // default), so without this the client would simply start 401ing and the
   // refresh token would never be redeemed.

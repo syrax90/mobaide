@@ -2,10 +2,15 @@
  * The live terminal session models, keyed by `session:<agent>:<session>`.
  *
  * The models outlive their views (that is the whole point — a remount must not
- * cost a fresh 4 MiB replay), so something has to bound how many stay attached.
- * iOS keeps one per session until `SessionRepository` evicts it on the session
- * dying; the web client has no session list yet to deliver that signal, so it
- * caps the set and drops the least recently acquired instead.
+ * cost a fresh 4 MiB replay), so two separate things bound the set:
+ *
+ * * **Death.** `evictTerminalSessions` drops a model once the agent says its
+ *   session is gone — from a `sessions.changed` snapshot or a stop mutation.
+ *   This is the iOS behaviour (`SessionRepository` evicting on the session
+ *   dying); the sessions list is what finally delivers the signal on web.
+ * * **Memory.** `MAX_RETAINED` still caps how many *live* sessions stay
+ *   attached at once, since a user can hold several running sessions open and
+ *   each one owns an emulator plus its scrollback.
  *
  * `stopAllRealtime()` reaches these through the disposable registry each model
  * self-registers with, which is why `forget` exists: a model disposed from
@@ -15,6 +20,7 @@
 import { create } from 'zustand';
 import { TerminalSessionModel } from './sessionModel';
 import { sessionChannelName } from '../realtime/channels';
+import { setTerminalEvictor } from './terminalEviction';
 
 /** How many attached sessions stay resident. */
 const MAX_RETAINED = 3;
@@ -73,6 +79,24 @@ export function acquireTerminal(
   for (const staleKey of evicted) models[staleKey]?.dispose();
   return model;
 }
+
+/**
+ * Dispose the models for sessions the agent reports as gone.
+ *
+ * `dispose()` fires `onDispose`, which calls `forgetTerminal`, so the store
+ * write is already handled — this only has to find them.
+ */
+export function evictTerminalSessions(
+  agentId: string,
+  sessionIds: readonly string[],
+): void {
+  const { models } = useTerminalStore.getState();
+  for (const sessionId of sessionIds) {
+    models[sessionChannelName(agentId, sessionId)]?.dispose();
+  }
+}
+
+setTerminalEvictor(evictTerminalSessions);
 
 /** Drop a model's entry. Called by the model itself as it disposes. */
 export function forgetTerminal(key: string): void {

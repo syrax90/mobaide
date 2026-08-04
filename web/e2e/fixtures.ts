@@ -11,6 +11,18 @@ export const SERVER_INFO = {
   latest_agent_version: null,
 };
 
+export const AGENTS = [
+  {
+    agent_id: 'agent-00000001',
+    name: 'Workstation',
+    online: true,
+    created_at: '2026-07-01T10:00:00+00:00',
+    last_seen_at: '2026-08-01T10:00:00+00:00',
+    agent_version: '0.9.9',
+    agent_protocol_version: 7,
+  },
+];
+
 export const SESSION = {
   access_token: 'access-token-1',
   refresh_token: 'refresh-token-1',
@@ -75,6 +87,25 @@ export async function stubRelay(
   // Stubbing the rotation keeps that off the network instead of leaving
   // ECONNREFUSED noise in the CI log.
   await target.route('**/api/auth/refresh', (route) => route.fulfill(json(SESSION)));
+  // The sessions list is the index route, so a signed-in visitor hits these on
+  // arrival. Without the agent-token mint the client retries a 404 and leaves
+  // noise in the log, for the same reason the refresh stub exists.
+  await target.route('**/api/agents', (route) => route.fulfill(json(AGENTS)));
+  // Must be the real `MobileTokenResponse` shape: `mint()` reads `access_token`
+  // and `refresh_token`, so an invented `{token}` leaves both undefined, fails
+  // the token-pair guard, and silently runs the agent axis with no bearer at
+  // all — a fixture that would certify the very bug it exists to cover.
+  await target.route('**/api/agents/*/token', (route) =>
+    route.fulfill(
+      json({
+        access_token: 'agent-access-1',
+        refresh_token: 'agent-refresh-1',
+        token_type: 'bearer',
+      }),
+    ),
+  );
+  await target.route('**/api/custom-agent-types', (route) => route.fulfill(json([])));
+  await target.route('**/proxy/*/api/sessions', (route) => route.fulfill(json([])));
 }
 
 export async function signIn(page: Page): Promise<void> {

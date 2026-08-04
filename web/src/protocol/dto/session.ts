@@ -38,3 +38,26 @@ export const sessionResponseSchema = z.looseObject({
 });
 
 export type SessionResponse = z.infer<typeof sessionResponseSchema>;
+
+/**
+ * `sessions.changed` — the agent's complete session list, rebuilt from
+ * `list_sessions()` on every create, stop and state change, and pushed again on
+ * every (re)connect (`core/session_manager.py::_publish_sessions_changed`).
+ * Authoritative: ids missing from it no longer exist.
+ */
+export const sessionsChangedSchema = z.looseObject({
+  sessions: z.array(sessionResponseSchema),
+});
+
+/**
+ * `session.updated` and the agent-channel `session.attention` — one **whole**
+ * session row, not a partial patch (`agent/ws/event_fanout.py`). That is what
+ * makes an upsert into the cached list safe.
+ *
+ * The user-events channel carries a differently-shaped, slimmer
+ * `session.attention` (`{session_id, reason, agent_id, …}`); it is handled by
+ * `userEvents.ts` and must not be decoded with this schema.
+ */
+export const sessionEventSchema = z.looseObject({
+  session: sessionResponseSchema,
+});

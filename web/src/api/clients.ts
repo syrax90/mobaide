@@ -2,6 +2,7 @@ import createClient, { type Middleware } from 'openapi-fetch';
 import {
   getAgentToken,
   getUserToken,
+  prepareAgentToken,
   refreshUserTokenIfNeeded,
 } from './auth';
 import type { paths as AgentPaths } from './generated/agent';
@@ -209,6 +210,17 @@ relayClient.use(reachabilityMiddleware);
 export function createAgentClient(agentId: string) {
   const client = createClient<AgentPaths>({
     baseUrl: `/proxy/${encodeURIComponent(agentId)}`,
+  });
+  // Registered before the bearer so the token exists by the time it is read.
+  // `ensureAgentToken` is single-flight per agent and short-circuits to the
+  // cached value unless it is near expiry, so this costs a round trip only on
+  // the first call for an agent — which is exactly the call that would
+  // otherwise go out with no Authorization header at all and 401.
+  client.use({
+    async onRequest({ request }) {
+      await prepareAgentToken(agentId);
+      return request;
+    },
   });
   client.use(bearerMiddleware(() => getAgentToken(agentId)));
   client.use(reachabilityMiddleware);

@@ -105,13 +105,32 @@ classifying it fails the suite. `APP_PROTOCOL_VERSION` in
 `src/api/bootstrap.ts` is compared against the Android and iOS constants by
 `protocol-integrity` — see PROTOCOL.md "How to bump".
 
+## Sessions (WEB-07)
+
+`/` is the live session list, `/agents/:agentId/new-session` the create
+wizard.
+
+- The list seeds over REST and is kept live by the agent events channel.
+  `sessions.changed` / `session.updated` / `session.attention` are written
+  straight into the TanStack cache (`src/realtime/sessionCache.ts`) rather
+  than invalidated — each carries a complete object, so there is no delta to
+  drift, and invalidating would cost a round trip per title change.
+- Auto-resume returns you to the last session on entry. Its once-per-attempt
+  flag is module-scoped, not component state: a route remount on Back would
+  otherwise re-navigate and trap you.
+- The wizard keeps a separate option bucket per mode, so switching branches
+  cannot leak a field into the request. `skip_permissions` defaults to
+  **true** on wire absence, so every boolean is sent explicitly and the
+  request is re-parsed through a strict schema before it goes out.
+- Two new persisted keys: `mobaide-agent` (selected agent) and
+  `mobaide-sessions` (last-used session per agent).
+
 ## Terminal (WEB-05)
 
 `/agents/:agentId/sessions/:sessionId` is the **only lazy route** — xterm.js
 and its WebGL addon outweigh the rest of the SPA, so they load on first
-attach rather than on the sign-in screen. Until the sessions list lands
-(WEB-07) the screen is reached from a stand-in form on `Home`. The layering
-mirrors the WEB-04 split:
+attach rather than on the sign-in screen. It is reached from the sessions
+list at `/`. The layering mirrors the WEB-04 split:
 
 - `src/terminal/` is framework-free: the replay, follow/unread, paste,
   submit and key-policy reducers, the clipboard/renderer/theme adapters, and
@@ -121,7 +140,7 @@ mirrors the WEB-04 split:
 - `src/routes/terminal/` is presentation only.
 - `src/stores/terminalPrefsStore.ts` persists the terminal preferences under
   `localStorage` key `mobaide-terminal` (the second persisted key, after
-  `mobaide-theme`).
+  `mobaide-theme`; WEB-07 adds `mobaide-agent` and `mobaide-sessions`).
 
 Dependencies: `@xterm/xterm` plus the `fit`, `webgl`, `clipboard` and
 `unicode11` addons. `@xterm/headless` is a devDependency only — it backs the

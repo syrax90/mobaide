@@ -472,7 +472,7 @@ export interface paths {
         put?: never;
         /**
          * Receive Hook
-         * @description Apply a Claude Code hook to the addressed session's attention state.
+         * @description Route a Claude Code hook to the addressed session's attention gate.
          */
         post: operations["receive_hook_internal_hook_post"];
         delete?: never;
@@ -1882,6 +1882,7 @@ export interface operations {
             query?: {
                 session_id?: string;
                 token?: string;
+                hook?: string;
             };
             header?: never;
             path?: never;

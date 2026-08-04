@@ -65,16 +65,6 @@ button {
   padding: 2rem 1.25rem;
 }
 
-.home h1 {
-  margin-bottom: 0.75rem;
-}
-
-.home p {
-  max-width: 42rem;
-  color: var(--color-fg-muted);
-  margin-bottom: 1.5rem;
-}
-
 .error-screen {
   display: flex;
   flex-direction: column;
@@ -392,7 +382,8 @@ button {
   color: var(--color-fg-muted);
 }
 
-.device-list {
+.device-list,
+.session-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -401,7 +392,8 @@ button {
   gap: 0.75rem;
 }
 
-.device-card {
+.device-card,
+.session-card {
   padding: 0.9rem;
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -853,24 +845,351 @@ button {
   cursor: pointer;
 }
 
-/*
- * Home's stand-in for the sessions list. Filed under the terminal region rather
- * than with the home rules because it leaves with the form when WEB-07 lands.
- */
-.home-open-session {
+/* endregion */
+
+/* region sessions (WEB-07) */
+.sessions-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.agent-current {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.agent-name {
+  font-weight: 600;
+}
+
+.agent-select {
+  width: auto;
+}
+
+.agent-status {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-fg-muted);
+  flex: none;
+}
+
+.agent-status-online {
+  background: var(--color-success);
+}
+
+.session-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.session-card-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.session-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  flex: none;
+  background: var(--color-fg-muted);
+}
+
+.session-dot-running {
+  background: var(--color-success);
+}
+
+.session-dot-pending {
+  background: var(--color-accent);
+}
+
+.session-dot-crashed {
+  background: var(--color-danger);
+}
+
+/* `min-width: 0` is what lets the ellipsis rules below actually clip. */
+.session-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.session-title,
+.session-kind,
+.session-cwd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-title {
+  font-weight: 600;
+}
+
+.session-kind {
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+}
+
+.session-cwd {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+}
+
+.session-attention {
+  flex: none;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.session-attention-permission {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
+}
+
+.session-attention-ready {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 20%, transparent);
+}
+
+.session-attention-ended {
+  color: var(--color-fg-muted);
+  background: color-mix(in srgb, var(--color-fg-muted) 20%, transparent);
+}
+
+.session-stop {
+  flex: none;
+}
+/* endregion */
+
+/* region sessions — create wizard (WEB-07) */
+.wizard-steps {
+  display: flex;
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.5rem;
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+}
+
+.wizard-step-current {
+  color: var(--color-fg);
+  font-weight: 600;
+}
+
+.wizard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.project-list,
+.mode-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  max-width: 22rem;
+}
+
+.project-row,
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-row-selected {
+  border-color: var(--color-accent);
+}
+
+.project-name,
+.mode-title {
+  font-weight: 600;
+}
+
+.project-path,
+.mode-subtitle {
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+}
+
+.project-badges {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.2rem;
+}
+
+.project-badge {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  color: var(--color-fg-muted);
+  background: color-mix(in srgb, var(--color-fg-muted) 15%, transparent);
+}
+
+.project-badge-warning {
+  color: var(--color-warning);
+  background: color-mix(in srgb, var(--color-warning) 20%, transparent);
+}
+
+.mode-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/*
+ * `aria-disabled`, not `disabled`: the card stays focusable so a screen reader
+ * can reach the reason it is unavailable.
+ */
+.mode-card[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+.mode-command {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-subtitle-warning {
+  font-size: 0.8rem;
+  color: var(--color-warning);
+}
+
+.mode-delete {
+  flex: none;
+}
+
+.option-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
   padding: 1rem;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
 }
 
-.home-open-session h2 {
+.option-group h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 0.95rem;
 }
 
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.check-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.check-row-hint,
+.field-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+}
+
+.field-select {
+  width: auto;
+  min-width: 12rem;
+}
+
+.field-textarea {
+  font-family: inherit;
+  resize: vertical;
+}
+
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.preset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  flex: 1 1 12rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preset-card-active {
+  border-color: var(--color-accent);
+}
+
+.preset-title {
+  font-weight: 600;
+}
+
+.preset-description {
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+}
+
+.advanced summary {
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.dialog {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-fg);
+  max-width: 30rem;
+  padding: 1.25rem;
+}
+
+.dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
 /* endregion */

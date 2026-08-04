@@ -9,6 +9,11 @@
   --color-accent-fg: #ffffff;
   --color-danger: #c93c3c;
   --color-success: #1a7f37;
+  /*
+   * Attention chips and disabled-mode reasons. Darker than iOS's #F9A825, which
+   * is ~2:1 against the light surface and fails WCAG AA as text.
+   */
+  --color-warning: #8a6100;
 }
 
 :root[data-theme='dark'] {
@@ -22,4 +27,5 @@
   --color-accent-fg: #0b1420;
   --color-danger: #e56868;
   --color-success: #4ac26b;
+  --color-warning: #e3b341;
 }

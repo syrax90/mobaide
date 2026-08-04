@@ -9,15 +9,21 @@
  * and marks the rest stale.
  *
  * **Per event, invalidate rather than patch.** `setQueryData` is reserved for
- * full-snapshot events; a delta applied to a cache the client cannot prove is
- * in sync is how lists drift. Invalidation costs one request and is always
- * right.
+ * events carrying a complete, authoritative object; a *delta* applied to a cache
+ * the client cannot prove is in sync is how lists drift. Invalidation costs one
+ * request and is always right.
  *
- * The user-channel payloads are validated before anything is invalidated, so a
- * malformed payload is dropped exactly as it is on Android and iOS. The
- * agent-channel payloads are only routed by `type`: their shapes (session
- * lists, project lists, auto-scan DTOs) belong to WEB-07/09/10, and modelling
- * them here would create a second source of truth ahead of their consumers.
+ * The three agent-channel session events are the sanctioned exception, and
+ * `sessionCache.ts` documents why they qualify: `sessions.changed` is a full
+ * list and `session.updated` / `session.attention` carry a whole row each, so
+ * there is no delta to drift. Everything else still invalidates.
+ *
+ * All payloads that reach a schema are validated before anything is written, so
+ * a malformed payload is dropped exactly as it is on Android and iOS — and
+ * dropped rather than thrown: this runs inside the socket's listener loop, where
+ * an escaping `ZodError` would take out `onmessage`. The remaining agent-channel
+ * types (project lists, auto-scan DTOs) are still routed by `type` alone, their
+ * shapes belonging to WEB-09/10.
  *
  * Unknown envelope types are ignored — that is the forward-compatibility
  * contract every client honours.
@@ -26,6 +32,7 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import type { z } from 'zod';
 import { queryKeys } from '../lib/queryKeys';
 import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelope';
+import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import {
   agentStatusChangedSchema,
   customAgentTypeSchema,
@@ -40,6 +47,11 @@ import {
 export type BridgeOutcome =
   /** Well-formed and routed; `keys` may be empty when nothing is cached for it. */
   | { kind: 'invalidated'; type: string; keys: readonly QueryKey[] }
+  /**
+   * Well-formed and written straight into the cache. `keys` is empty when there
+   * was nothing to patch — an upsert never seeds a list it cannot complete.
+   */
+  | { kind: 'patched'; type: string; keys: readonly QueryKey[] }
   /** Well-formed envelope, unrecognised `type`. */
   | { kind: 'ignored'; type: string }
   /** Malformed envelope, or a payload that failed its schema. */
@@ -104,10 +116,6 @@ const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
 
 function agentEventKeys(agentId: string, type: string): readonly QueryKey[] | null {
   switch (type) {
-    case 'sessions.changed':
-    case 'session.updated':
-    case 'session.attention':
-      return [queryKeys.sessions(agentId)];
     case 'projects.changed':
     case 'git.changed':
       return [queryKeys.projects(agentId)];
@@ -156,10 +164,38 @@ export function applyAgentEvent(
 ): BridgeOutcome {
   const envelope = decodeEventEnvelope(text);
   if (envelope === null) return { kind: 'dropped' };
-  const keys = agentEventKeys(agentId, envelope.type);
-  if (keys === null) return { kind: 'ignored', type: envelope.type };
-  invalidate(client, keys);
-  return { kind: 'invalidated', type: envelope.type, keys };
+
+  switch (envelope.type) {
+    case 'sessions.changed': {
+      const outcome = applySessionsSnapshot(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: [queryKeys.sessions(agentId)],
+      };
+    }
+    // The agent channel's `session.attention` carries the whole row, so it
+    // upserts exactly like `session.updated`. iOS does the same; Android decodes
+    // the event but never applies it to the list, which is why its cards cannot
+    // show an attention chip.
+    case 'session.updated':
+    case 'session.attention': {
+      const outcome = applySessionUpsert(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: outcome === 'applied' ? [queryKeys.sessions(agentId)] : [],
+      };
+    }
+    default: {
+      const keys = agentEventKeys(agentId, envelope.type);
+      if (keys === null) return { kind: 'ignored', type: envelope.type };
+      invalidate(client, keys);
+      return { kind: 'invalidated', type: envelope.type, keys };
+    }
+  }
 }
 
 /**
@@ -183,11 +219,14 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
 }
 
 /**
- * The agent tunnel re-pushes its own snapshot on connect, but the REST-backed
- * caches still need marking stale — the snapshot arrives as events this bridge
- * turns into invalidations anyway, and a connect with no changes would
- * otherwise leave a stale list mounted.
+ * Reconcile the agent-scoped caches the tunnel does not repair by itself.
+ *
+ * Sessions are deliberately absent: the agent pushes a `sessions.changed`
+ * snapshot on every connect and that snapshot now *replaces* the cache
+ * authoritatively, so invalidating as well would fire a `/proxy` GET racing it —
+ * and a slow response landing afterwards would roll the list back. Projects
+ * still need it, since `projects.changed` only fires on an actual change.
  */
 export function refreshOnAgentEventsConnect(client: QueryClient, agentId: string): void {
-  invalidate(client, [queryKeys.sessions(agentId), queryKeys.projects(agentId)]);
+  invalidate(client, [queryKeys.projects(agentId)]);
 }

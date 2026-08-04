@@ -2,10 +2,13 @@ export type UserTokenProvider = () => string | null;
 export type AgentTokenProvider = (agentId: string) => string | null;
 /** Resolves once the user access token is fresh enough to send. */
 export type UserTokenRefresher = () => Promise<void>;
+/** Mints or rotates an agent's `mobile_access` JWT before the bearer is read. */
+export type AgentTokenPreparer = (agentId: string) => Promise<unknown>;
 
 let userTokenProvider: UserTokenProvider = () => null;
 let agentTokenProvider: AgentTokenProvider = () => null;
 let userTokenRefresher: UserTokenRefresher = () => Promise.resolve();
+let agentTokenPreparer: AgentTokenPreparer = () => Promise.resolve();
 
 /**
  * The two client axes authenticate differently (mirrors the Android split in
@@ -48,9 +51,28 @@ export function refreshUserTokenIfNeeded(): Promise<void> {
   return userTokenRefresher();
 }
 
+/**
+ * Register the agent-token mint the agent client awaits before attaching a
+ * bearer. Separate from `AgentTokenProvider` for the same reason the user
+ * axis splits them: the provider is synchronous, but the first REST call for
+ * an agent has no token to read yet — nothing has minted one.
+ *
+ * Without this the agent axis only worked by accident, on screens that had
+ * already opened a WebSocket for that agent (the URL providers are the only
+ * other `ensureAgentToken` callers).
+ */
+export function setAgentTokenPreparer(next: AgentTokenPreparer): void {
+  agentTokenPreparer = next;
+}
+
+export function prepareAgentToken(agentId: string): Promise<unknown> {
+  return agentTokenPreparer(agentId);
+}
+
 /** Test seam — restores the unauthenticated defaults. */
 export function resetTokenProviders(): void {
   userTokenProvider = () => null;
   agentTokenProvider = () => null;
   userTokenRefresher = () => Promise.resolve();
+  agentTokenPreparer = () => Promise.resolve();
 }

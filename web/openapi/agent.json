@@ -2496,7 +2496,7 @@
     },
     "/internal/hook": {
       "post": {
-        "description": "Apply a Claude Code hook to the addressed session's attention state.",
+        "description": "Route a Claude Code hook to the addressed session's attention gate.",
         "operationId": "receive_hook_internal_hook_post",
         "parameters": [
           {
@@ -2516,6 +2516,16 @@
             "schema": {
               "default": "",
               "title": "Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hook",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Hook",
               "type": "string"
             }
           }

@@ -3,9 +3,10 @@
  *
  * The user-events channel is a singleton owned by `RealtimeProvider` and runs
  * for as long as there is a session. Agent-scoped channels are started on
- * demand — WEB-07 will open one per selected agent, WEB-05 the session I/O
- * channel, WEB-10 the auto-scan stream — and each one is registered here so a
- * second request reuses the live socket instead of opening a rival.
+ * demand — `useAgentEvents` opens one per selected agent, the terminal screen
+ * the session I/O channel, WEB-10 the auto-scan stream — and each one is
+ * registered here so a second request reuses the live socket instead of opening
+ * a rival.
  *
  * Kept out of `index.ts` so the barrel stays a barrel: `RealtimeProvider`
  * imports these directly, and re-exporting the provider from a module it
@@ -152,6 +153,22 @@ export function disconnectAgentEvents(agentId: string): void {
   if (running === undefined) return;
   agentEvents.delete(agentId);
   tearDown(running);
+}
+
+/**
+ * Drop and reopen an agent's socket now — the sessions list's Refresh button,
+ * mirroring both mobile clients' pull-to-refresh (`AgentEventBus.forceReconnect`).
+ *
+ * `connect()` first, deliberately: `forceReconnect` returns early on a channel
+ * that stopped for good, which is precisely the state a user reaches for
+ * Refresh in. The redundant attempt on a healthy channel is discarded by the
+ * generation guard `forceReconnect` then advances.
+ */
+export function forceReconnectAgentEvents(agentId: string): void {
+  const running = agentEvents.get(agentId);
+  if (running === undefined) return;
+  running.channel.connect();
+  running.channel.forceReconnect();
 }
 
 /**

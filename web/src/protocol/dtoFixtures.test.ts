@@ -3,7 +3,15 @@ import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { COVERED_FIXTURES } from './__fixtures__/coverage';
 import { canonicalize, readFixture, type DtoFixtureFile } from './__fixtures__/load';
+import { agentVersionSchema } from './dto/agentVersion';
+import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
+import {
+  antigravityOptionsSchema,
+  claudeOptionsSchema,
+  codexOptionsSchema,
+  createSessionRequestSchema,
+} from './dto/sessionCreate';
 import {
   customAgentTypeSchema,
   customTypeDeletedSchema,
@@ -21,6 +29,12 @@ import {
 const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   SessionKind: sessionKindSchema,
   SessionResponse: sessionResponseSchema,
+  CreateSessionRequest: createSessionRequestSchema,
+  ClaudeOptionsModel: claudeOptionsSchema,
+  CodexOptionsModel: codexOptionsSchema,
+  AntigravityOptionsModel: antigravityOptionsSchema,
+  VersionInfoResponse: agentVersionSchema,
+  CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,
   TemplateDto: templateSchema,
   TemplateDeletedPayload: templateDeletedSchema,
   ShortcutDto: shortcutSchema,
