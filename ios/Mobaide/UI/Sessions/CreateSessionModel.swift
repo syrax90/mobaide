@@ -339,6 +339,18 @@ final class CreateSessionModel {
             }
             self.projects = fetched
             applyProjectPrefill()
+            if autoScanProjectPreset != nil {
+                // The preset chooses between the config step and the live
+                // monitor from `runningScan`, and it applies exactly once — so
+                // the scan list has to be warm *before* it runs. `init` seeds
+                // it from a repository cache that is empty on a cold start, and
+                // the sibling `observeScans()` task refreshes concurrently with
+                // no ordering guarantee. Without this the shortcut lands in the
+                // config step for an already-scanning project, recoverable only
+                // by a start that 409s — and not even that when the Claude CLI
+                // is missing, since the Start button is then disabled.
+                activeScans = await autoScanRepository.refresh().scans
+            }
             // The preset skips the mode picker, where the probe normally runs,
             // so the config step would not know whether Claude is installed.
             if applyAutoScanPreset() {

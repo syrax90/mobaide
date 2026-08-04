@@ -95,13 +95,25 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
     }
 
     /// The wizard snapshots `currentScans` in `init`, so seed the repository
-    /// before building the model.
+    /// before building the model. On the preset path `load()` also re-reads the
+    /// scan list, so that request gets a response mirroring the seeded state
+    /// (`max_scans` reverts to the default — no preset test pins it).
     private func loadedModel(
         autoScanRepo: AutoScanRepository,
         prefs: PreferencesStore? = nil,
         autoScanProject: String? = nil
     ) async -> CreateSessionModel {
         StubURLProtocol.enqueue(status: 200, body: projectsJSON)
+        if autoScanProject != nil {
+            StubURLProtocol.enqueue(
+                status: 200,
+                body: listJSON(
+                    scans: autoScanRepo.currentScans.map(\.project_name),
+                    prompt: autoScanRepo.autoScanPrompt,
+                    maxScans: 5
+                )
+            )
+        }
         let model = makeModel(autoScanRepo: autoScanRepo, prefs: prefs, autoScanProject: autoScanProject)
         await model.load()
         return model
@@ -434,5 +446,28 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
         let late = StreamCollector(model.autoScanNavEvents())
         let quiet = await late.expectNoElement()
         XCTAssertTrue(quiet, "a consumed project name is not replayed to the next subscriber")
+    }
+
+    /// The preset applies exactly once, off `runningScan`, so a repository
+    /// nobody warmed — no `refresh()`, no bus frame, empty at `init` — has to be
+    /// filled inside `load()`. Otherwise the shortcut drops an already-scanning
+    /// project into the config step, whose only exit is a start that 409s — and
+    /// not even that when the Claude CLI is missing and Start is disabled.
+    func testProjectsShortcutPresetResolvesARunningScanFromAColdRepository() async throws {
+        StubURLProtocol.reset()
+        let repo = makeAutoScanRepo()
+        XCTAssertTrue(repo.currentScans.isEmpty, "cold cache is the whole point — do not seed this repository")
+        StubURLProtocol.enqueue(status: 200, body: projectsJSON)
+        StubURLProtocol.enqueue(status: 200, body: listJSON(scans: ["linear"], prompt: nil, maxScans: 5))
+        let model = makeModel(autoScanRepo: repo, autoScanProject: "linear")
+
+        await model.load()
+
+        XCTAssertEqual(model.selection, .stored("linear"))
+        XCTAssertNotEqual(model.step, .config, "a running scan routes to the monitor, never to a config step")
+        XCTAssertNil(model.mode)
+        let nav = StreamCollector(model.autoScanNavEvents())
+        let opened = try await nav.next()
+        XCTAssertEqual(opened, "linear")
     }
 }
