@@ -99,8 +99,19 @@ export function applySessionUpsert(
   const decoded = sessionEventSchema.safeParse(payload);
   if (!decoded.success) return 'dropped';
 
+  const key = queryKeys.sessions(agentId);
+  // Same race as the snapshot path — the user channel's slim `session.attention`
+  // invalidates this key while the agent channel patches it, so a GET in flight
+  // can resolve last and roll the row back, and `staleTime: Infinity` means it
+  // never self-heals. Guarded on an existing entry, though: cancelling a *cold*
+  // initial `listSessions` would strand the list on "Loading sessions…", because
+  // the updater below deliberately writes nothing when there is no cache.
+  if (client.getQueryData<SessionResponse[]>(key) !== undefined) {
+    void client.cancelQueries({ queryKey: key });
+  }
+
   let applied = false;
-  client.setQueryData<SessionResponse[]>(queryKeys.sessions(agentId), (previous) => {
+  client.setQueryData<SessionResponse[]>(key, (previous) => {
     if (previous === undefined) return undefined;
     applied = true;
     return upsertSession(previous, decoded.data.session);

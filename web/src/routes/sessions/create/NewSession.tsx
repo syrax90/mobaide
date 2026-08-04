@@ -202,6 +202,11 @@ export function NewSession() {
       setShowCodexLogin(false);
       pendingRequest.current = null;
       setLastUsedSession(resolvedAgentId, session.session_id);
+      // The agent's `sessions.changed` normally carries the new row; this covers
+      // the socket being down, where REST still works and the list would
+      // otherwise be missing the session the user is now sitting in. Same
+      // fallback the stop mutation carries.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.sessions(resolvedAgentId) });
       void navigate(terminalPath(resolvedAgentId, session.session_id), { replace: true });
     },
     onError: (cause, request) => {
@@ -327,7 +332,19 @@ export function NewSession() {
     <section className="page wizard">
       <header className="page-header">
         <h1>New session</h1>
-        <Link to="/" className="button">
+        {/*
+          Gated like ConfigStep's Back and Create: a mutation's `onSuccess` runs
+          even after this unmounts, so leaving mid-launch would yank the user out
+          of the list and into a session they thought they had cancelled.
+        */}
+        <Link
+          to="/"
+          className="button"
+          aria-disabled={submitting}
+          onClick={(event) => {
+            if (submitting) event.preventDefault();
+          }}
+        >
           Cancel
         </Link>
       </header>

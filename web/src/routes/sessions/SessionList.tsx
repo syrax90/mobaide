@@ -64,8 +64,18 @@ export function SessionList({ agentId, online }: SessionListProps) {
       // source; this only covers the socket being down.
       await queryClient.invalidateQueries({ queryKey: queryKeys.sessions(agentId) });
     },
-    onError: (error) => {
+    onError: (error, { sessionId }) => {
       setStopTarget(null);
+      // A 404 means the session is already gone — the user's intent is
+      // satisfied, so reconcile rather than report a failure. Without this the
+      // dead card stays on screen (`staleTime: Infinity` never refetches it) and
+      // pressing Stop again just 404s. An unreachable agent answers 503 from the
+      // relay, not 404, so this cannot swallow a real connectivity failure.
+      if (isApiError(error) && error.status === 404) {
+        evictTerminals(agentId, [sessionId]);
+        void queryClient.invalidateQueries({ queryKey: queryKeys.sessions(agentId) });
+        return;
+      }
       useToastStore
         .getState()
         .show(
