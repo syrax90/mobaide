@@ -656,3 +656,95 @@ describe('TerminalSessionModel synchronized output guard', () => {
     expect(toastKinds()).toEqual(['info']);
   });
 });
+
+describe('TerminalSessionModel selection focus', () => {
+  /** Flipped by the one test that needs the browser to refuse the write. */
+  let clipboardAllows = true;
+
+  beforeEach(() => {
+    clipboardAllows = true;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: () =>
+          clipboardAllows
+            ? Promise.resolve()
+            : Promise.reject(new Error('NotAllowedError')),
+      },
+    });
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  /** A live session carrying a selection; `getSelection` stubbed as above. */
+  async function selecting(): Promise<Harness> {
+    const context = await liveRunning();
+    vi.spyOn(context.model.term, 'getSelection').mockReturnValue('selected text');
+    return context;
+  }
+
+  /**
+   * Spied on the terminal rather than on `model.focus()`, because that is the
+   * call the user feels. jsdom builds no textarea before `open()`, so the real
+   * `Terminal.focus()` is a silent no-op and asserting on the DOM would prove
+   * nothing either way.
+   */
+  const spyFocus = (model: Model) => vi.spyOn(model.term, 'focus');
+
+  it('returns focus to the grid after a run', async () => {
+    // `SelectionService.clearSelection()` fires `onSelectionChange`
+    // unconditionally, which drops `hasSelection`, which unmounts the toolbar —
+    // taking the button the user just pressed out of the DOM. Focus falls to
+    // `document.body` and the keyboard stops reaching the PTY until the grid is
+    // clicked again, immediately after a core action.
+    const { model, framesOfType } = await selecting();
+    const focus = spyFocus(model);
+
+    model.runSelection();
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toHaveLength(1);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns focus to the grid after a copy', async () => {
+    const { model } = await selecting();
+    const focus = spyFocus(model);
+
+    await model.copySelection();
+
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves focus alone when the clipboard write was refused', async () => {
+    // The refusal returns ahead of `clearSelection`, so the toolbar is still
+    // mounted, still holds the focused button, and still offers the retry.
+    // Yanking focus to the grid there would take the retry off the keyboard.
+    clipboardAllows = false;
+    const { model } = await selecting();
+    const focus = spyFocus(model);
+
+    await model.copySelection();
+
+    expect(useToastStore.getState().toasts.map((toast) => toast.kind)).toEqual([
+      'error',
+    ]);
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it('leaves the grid unfocused when the selection is sent to the composer', async () => {
+    // Deliberately unlike the other two: this action puts a text field on
+    // screen, so focusing the grid would feed the user's next keystrokes to the
+    // PTY instead of the message they opened the composer to write. Pinned so a
+    // later pass at making the three selection actions symmetric has to
+    // confront it.
+    const { model } = await selecting();
+    const focus = spyFocus(model);
+
+    model.sendSelectionToComposer();
+
+    expect(model.state.getState().composerVisible).toBe(true);
+    expect(focus).not.toHaveBeenCalled();
+  });
+});

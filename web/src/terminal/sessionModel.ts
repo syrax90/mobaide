@@ -764,6 +764,11 @@ export class TerminalSessionModel {
     }
     this.term.clearSelection();
     this.jumpToBottom();
+    // Clearing the selection unmounts the toolbar, taking the focused button
+    // with it — focus would land on `document.body` and the keyboard would stop
+    // reaching the PTY until the user clicked the grid again. `Terminal.focus()`
+    // uses `preventScroll`, so it cannot yank a scrolled-up viewport.
+    this.focus();
   }
 
   async copySelection(): Promise<void> {
@@ -780,6 +785,9 @@ export class TerminalSessionModel {
       return;
     }
     this.term.clearSelection();
+    // Same reason as `runSelection`: the toolbar button that was clicked is
+    // about to leave the DOM. A no-op when the copy came from Ctrl+C.
+    this.focus();
   }
 
   sendSelectionToComposer(): void {

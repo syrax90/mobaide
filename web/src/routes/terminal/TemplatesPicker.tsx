@@ -20,9 +20,17 @@ interface SectionProps {
   templates: readonly PromptTemplate[];
   onPick: (template: PromptTemplate) => void;
   onToggleFavorite: (template: PromptTemplate) => void;
+  /** The row whose favourite PATCH is in flight, if any. */
+  pendingFavoriteId: string | undefined;
 }
 
-function Section({ title, templates, onPick, onToggleFavorite }: SectionProps) {
+function Section({
+  title,
+  templates,
+  onPick,
+  onToggleFavorite,
+  pendingFavoriteId,
+}: SectionProps) {
   if (templates.length === 0) return null;
   return (
     <section className="template-section">
@@ -43,6 +51,12 @@ function Section({ title, templates, onPick, onToggleFavorite }: SectionProps) {
             <button
               type="button"
               className="template-favorite"
+              // The PATCH carries an absolute `is_favorite`, computed from the
+              // value on screen — and that value only moves once the refetch
+              // lands. A second click inside the round trip would send the same
+              // boolean again and silently drop the user's toggle. Same
+              // in-flight guard `Devices` and `GraceBanner` use.
+              disabled={pendingFavoriteId === template.templateId}
               aria-pressed={template.isFavorite}
               aria-label={
                 template.isFavorite
@@ -93,6 +107,9 @@ export function TemplatesPicker({ onPick, onClose }: TemplatesPickerProps) {
     },
   });
 
+  const pendingFavoriteId = favorite.isPending
+    ? favorite.variables.templateId
+    : undefined;
   const grouped = groupTemplates(templates.data ?? [], filter);
   const empty =
     grouped.recents.length === 0 &&
@@ -139,18 +156,21 @@ export function TemplatesPicker({ onPick, onClose }: TemplatesPickerProps) {
         templates={grouped.recents}
         onPick={pick}
         onToggleFavorite={favorite.mutate}
+        pendingFavoriteId={pendingFavoriteId}
       />
       <Section
         title="Favourites"
         templates={grouped.favorites}
         onPick={pick}
         onToggleFavorite={favorite.mutate}
+        pendingFavoriteId={pendingFavoriteId}
       />
       <Section
         title="All"
         templates={grouped.others}
         onPick={pick}
         onToggleFavorite={favorite.mutate}
+        pendingFavoriteId={pendingFavoriteId}
       />
     </div>
   );
