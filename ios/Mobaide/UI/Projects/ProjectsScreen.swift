@@ -74,25 +74,46 @@ private struct ProjectsContent: View {
         } else {
             List {
                 ForEach(model.projects, id: \.name) { project in
-                    Button {
-                        sheet = .edit(project)
-                    } label: {
-                        ProjectCard(project: project)
-                    }
-                    .buttonStyle(.plain)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            model.delete(project)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
+                    projectRow(project)
                 }
                 .onMove { source, destination in
                     model.move(from: source, to: destination)
                 }
             }
             .listStyle(.plain)
+        }
+    }
+
+    /// Tap edits; swipe deletes. Only a Linear-keyed project also carries the
+    /// Auto Scan shortcut — the modifier is attached conditionally rather than
+    /// left to render an empty menu, which would still swallow the long press
+    /// on every other row.
+    @ViewBuilder
+    private func projectRow(_ project: ProjectInfo) -> some View {
+        let row = Button {
+            sheet = .edit(project)
+        } label: {
+            ProjectCard(project: project)
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing) {
+            Button(role: .destructive) {
+                model.delete(project)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+
+        if project.has_linear_key {
+            row.contextMenu {
+                Button {
+                    router.navigate(to: .createAutoScan(projectName: project.name))
+                } label: {
+                    Label("Start Auto Scan…", systemImage: "bolt")
+                }
+            }
+        } else {
+            row
         }
     }
 }

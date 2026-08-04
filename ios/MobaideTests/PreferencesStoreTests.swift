@@ -74,6 +74,34 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(legacy?.noMemory, false)
     }
 
+    func testAutoScanBucketRoundTripsPlanModeAndStaysIsolatedFromClaude() {
+        XCTAssertNil(store.getLastUsedAutoScanOptions())
+
+        store.setLastUsedClaudeOptions(ClaudeLaunchPrefs(model: "sonnet", skipPermissions: false))
+        store.setLastUsedAutoScanOptions(ClaudeLaunchPrefs(model: "opus", skipPermissions: true, planMode: true))
+
+        let autoScan = store.getLastUsedAutoScanOptions()
+        XCTAssertEqual(autoScan?.model, "opus")
+        XCTAssertEqual(autoScan?.skipPermissions, true)
+        XCTAssertEqual(autoScan?.planMode, true)
+
+        let claude = store.getLastUsedClaudeOptions()
+        XCTAssertEqual(claude?.model, "sonnet", "the two wizard modes never pre-fill each other")
+        XCTAssertEqual(claude?.skipPermissions, false)
+        XCTAssertEqual(claude?.planMode, false, "planMode is meaningful only in the Auto Scan bucket")
+
+        // A blob persisted before planMode existed decodes it false rather than
+        // failing and resetting the whole bucket.
+        defaults.set(
+            #"{"model":"haiku","effort":"low","skipPermissions":true}"#,
+            forKey: PreferencesStore.keyLastUsedAutoScanOptions
+        )
+        let legacy = store.getLastUsedAutoScanOptions()
+        XCTAssertEqual(legacy?.model, "haiku")
+        XCTAssertEqual(legacy?.skipPermissions, true)
+        XCTAssertEqual(legacy?.planMode, false)
+    }
+
     func testDynamicKeysUseDoubleColonSeparator() {
         XCTAssertEqual(PreferencesStore.linearLabelsKey(projectName: "p"), "linear_labels::p")
         XCTAssertEqual(PreferencesStore.linearStatesKey(projectName: "p"), "linear_states::p")

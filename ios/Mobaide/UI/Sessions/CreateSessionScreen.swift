@@ -4,11 +4,15 @@ import SwiftUI
 /// `createSession` route: project select → mode pick (unavailable reasons in
 /// `warningYellow`) → per-kind config.
 struct CreateSessionScreen: View {
+    /// Stored project to open directly in Auto Scan config (the Projects
+    /// screen's "Start Auto Scan…" shortcut); nil for the normal wizard.
+    var autoScanProject: String?
+
     @Environment(\.appContainer) private var container
 
     var body: some View {
         if let container {
-            CreateSessionContent(container: container)
+            CreateSessionContent(container: container, autoScanProject: autoScanProject)
         }
     }
 }
@@ -23,13 +27,15 @@ private struct CreateSessionContent: View {
 
     private let container: AppContainer
 
-    init(container: AppContainer) {
+    init(container: AppContainer, autoScanProject: String?) {
         self.container = container
         _model = State(initialValue: CreateSessionModel(
             agentAPI: container.agentAPI,
             sessionRepository: container.sessionRepository,
             preferencesStore: container.preferencesStore,
-            customAgentTypesRepository: container.customAgentTypesRepository
+            customAgentTypesRepository: container.customAgentTypesRepository,
+            autoScanRepository: container.autoScanRepository,
+            autoScanProject: autoScanProject
         ))
     }
 
@@ -60,6 +66,7 @@ private struct CreateSessionContent: View {
         }
         .task { await model.load() }
         .task { await model.observeCustomTypes() }
+        .task { await model.observeScans() }
         .onChange(of: model.step) { _, step in
             if step == .modePick {
                 Task { await model.refreshCliAvailability() }
@@ -98,6 +105,13 @@ private struct CreateSessionContent: View {
             for await id in model.navEvents() {
                 router.pop()
                 router.navigate(to: .sessionDetail(sessionId: id))
+            }
+        }
+        .task {
+            for await projectName in model.autoScanNavEvents() {
+                router.pop()
+                router.navigate(to: .autoScanDetail(projectName: projectName))
+                model.clearAutoScanNav()
             }
         }
     }
@@ -246,29 +260,93 @@ private struct CreateSessionContent: View {
 
     // MARK: - Config
 
+    /// Auto Scan is split out ahead of the session-creating modes: it forces
+    /// `worktree` on (so the Worktree section would be a lie) and starts a scan
+    /// rather than a session, so it carries its own submit button.
     @ViewBuilder
     private var configStep: some View {
-        switch model.mode {
-        case .standard: claudeConfig
-        case .codex: codexConfig
-        case .antigravity: antigravityConfig
-        case .custom(let id): customConfig(id)
-        case .shell, .none: shellConfig
+        if model.mode == .autoScan {
+            autoScanConfig
+        } else {
+            switch model.mode {
+            case .standard: claudeConfig
+            case .codex: codexConfig
+            case .antigravity: antigravityConfig
+            case .custom(let id): customConfig(id)
+            case .autoScan, .shell, .none: shellConfig
+            }
+            gitOptionsSection
+            Section {
+                Button {
+                    Task { await model.create() }
+                } label: {
+                    if model.submitting {
+                        ProgressView().frame(maxWidth: .infinity)
+                    } else {
+                        Text(model.mode == .shell ? "Start Terminal" : "Create Session")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!model.canCreate)
+            }
         }
-        gitOptionsSection
+    }
+
+    @ViewBuilder
+    private var autoScanConfig: some View {
+        @Bindable var model = model
+        Section("Claude") {
+            claudeModelAndEffortPickers(
+                claudeModel: $model.autoScanClaudeModel,
+                effort: $model.autoScanClaudeEffort,
+                fastMode: model.autoScanClaudeFastMode,
+                ultracode: model.autoScanClaudeUltracode
+            )
+            claudeAdvancedControls(
+                fastMode: $model.autoScanClaudeFastMode,
+                ultracode: $model.autoScanClaudeUltracode,
+                appendSystemPrompt: $model.autoScanClaudeAppendSystemPrompt
+            )
+        }
+
+        Section {
+            Toggle("Plan mode", isOn: $model.autoScanPlanMode)
+            Toggle("Skip permissions", isOn: $model.autoScanSkipPermissions)
+            // Shown in both states: this defaults ON, so leaving the caption to
+            // the off-state would let an unattended permission-bypassing scan
+            // start with no explanation at all.
+            Text("When off, the scan pauses at permission prompts — you'll get a notification and can open the session to approve.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Toggle("No memory", isOn: $model.autoScanNoMemory)
+        } header: {
+            Text("Auto Scan")
+        } footer: {
+            Text("Each matching issue runs in its own git worktree, so its changes stay isolated from your working copy. Non-git projects run in the project directory.")
+        }
+
+        Section("Initial prompt") {
+            TextField("Sent to each spawned session", text: $model.autoScanInitialPrompt, axis: .vertical)
+                .lineLimit(3...8)
+        }
+
         Section {
             Button {
-                Task { await model.create() }
+                Task { await model.startAutoScan() }
             } label: {
-                if model.submitting {
+                if model.autoScanStarting {
                     ProgressView().frame(maxWidth: .infinity)
                 } else {
-                    Text(model.mode == .shell ? "Start Terminal" : "Create Session")
-                        .frame(maxWidth: .infinity)
+                    Text("Start Auto Scan").frame(maxWidth: .infinity)
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!model.canCreate)
+            .disabled(!model.canStartAutoScan)
+        } footer: {
+            if !model.claudeEnabled {
+                Text(model.reason(for: .autoScan)).foregroundStyle(MobaideColors.warningYellow)
+            }
         }
     }
 
@@ -276,24 +354,58 @@ private struct CreateSessionContent: View {
     private var claudeConfig: some View {
         @Bindable var model = model
         Section("Claude") {
-            Picker("Model", selection: $model.claudeModel) {
-                Text("Default").tag(String?.none)
-                ForEach(CreateSessionModel.claudeModels, id: \.self) { Text($0).tag(String?.some($0)) }
-            }
-            .disabled(model.claudeFastMode)
-
-            Picker("Effort", selection: $model.claudeEffort) {
-                ForEach(model.claudeEfforts(for: model.claudeModel), id: \.self) { Text($0).tag($0) }
-            }
-            .disabled(model.claudeUltracode)
-
+            claudeModelAndEffortPickers(
+                claudeModel: $model.claudeModel,
+                effort: $model.claudeEffort,
+                fastMode: model.claudeFastMode,
+                ultracode: model.claudeUltracode
+            )
             Toggle("Skip permissions", isOn: $model.skipPermissions)
             Toggle("No memory", isOn: $model.noMemory)
-            Toggle("Fast mode (Opus only)", isOn: $model.claudeFastMode)
-            Toggle("Ultracode", isOn: $model.claudeUltracode)
-            TextField("Append system prompt", text: $model.claudeAppendSystemPrompt, axis: .vertical)
-                .lineLimit(1...4)
+            claudeAdvancedControls(
+                fastMode: $model.claudeFastMode,
+                ultracode: $model.claudeUltracode,
+                appendSystemPrompt: $model.claudeAppendSystemPrompt
+            )
         }
+    }
+
+    /// Model + Effort pickers with their fast-mode / ultracode interlocks.
+    /// Shared by the Claude Code and Auto Scan config steps, which drive the
+    /// same controls from separate option buckets (Android shares these as
+    /// `ClaudeOptionControls`).
+    @ViewBuilder
+    private func claudeModelAndEffortPickers(
+        claudeModel: Binding<String?>,
+        effort: Binding<String>,
+        fastMode: Bool,
+        ultracode: Bool
+    ) -> some View {
+        Picker("Model", selection: claudeModel) {
+            Text("Default").tag(String?.none)
+            ForEach(CreateSessionModel.claudeModels, id: \.self) { Text($0).tag(String?.some($0)) }
+        }
+        .disabled(fastMode)
+
+        Picker("Effort", selection: effort) {
+            ForEach(model.claudeEfforts(for: claudeModel.wrappedValue), id: \.self) { Text($0).tag($0) }
+        }
+        .disabled(ultracode)
+    }
+
+    /// The trailing half of the shared Claude controls. Kept separate from the
+    /// pickers so each config step can interleave its own toggles between the
+    /// two runs without reordering anything on screen.
+    @ViewBuilder
+    private func claudeAdvancedControls(
+        fastMode: Binding<Bool>,
+        ultracode: Binding<Bool>,
+        appendSystemPrompt: Binding<String>
+    ) -> some View {
+        Toggle("Fast mode (Opus only)", isOn: fastMode)
+        Toggle("Ultracode", isOn: ultracode)
+        TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
+            .lineLimit(1...4)
     }
 
     @ViewBuilder

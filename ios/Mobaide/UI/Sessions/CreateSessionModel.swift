@@ -4,8 +4,12 @@ import Observation
 /// Create-session wizard state (Android `CreateSessionViewModel`). Builds
 /// byte-identical `CreateSessionRequest`s: managed CLIs carry worktree/branch
 /// inside their options block, shell and custom agent types carry them on the
-/// top-level request, and custom paths always force worktree off. AutoScan
-/// mode is deferred to iOS-07, so it is omitted here.
+/// top-level request, and custom paths always force worktree off.
+///
+/// Auto Scan is the one mode that does not create a session: it POSTs
+/// `/api/autoscan/start` through `AutoScanRepository` and navigates to the
+/// live monitor, so it has its own submit path (`startAutoScan`), its own
+/// option bucket, and its own nav stream.
 @MainActor
 @Observable
 final class CreateSessionModel {
@@ -19,6 +23,7 @@ final class CreateSessionModel {
         case standard
         case codex
         case antigravity
+        case autoScan
         case shell
         /// An account-scoped custom agent type, identified by its 12-hex id
         /// (the wire kind is `custom_<id>`). Holding only the id keeps the
@@ -29,7 +34,7 @@ final class CreateSessionModel {
         case custom(String)
 
         /// The static mode cards, in render order; custom-type cards follow.
-        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .shell]
+        static let builtIn: [Mode] = [.standard, .codex, .antigravity, .autoScan, .shell]
 
         var isCustom: Bool {
             if case .custom = self { return true }
@@ -123,6 +128,26 @@ final class CreateSessionModel {
     var codexFullAuto = false
     var codexReasoningEffort = "high"
 
+    // Auto Scan — its own option bucket, deliberately not shared with the
+    // Claude Code fields above so the two modes remember separate choices.
+    var autoScanClaudeModel: String?
+    var autoScanClaudeEffort = "high"
+    var autoScanClaudeFastMode = false
+    var autoScanClaudeUltracode = false
+    var autoScanClaudeAppendSystemPrompt = ""
+    var autoScanPlanMode = false
+    /// Defaults ON: a scan runs unattended, so pausing at a permission prompt
+    /// would strand it (Android `autoScanSkipPermissions = true`).
+    var autoScanSkipPermissions = true
+    var autoScanNoMemory = false
+    var autoScanInitialPrompt = ""
+    private(set) var autoScanStarting = false
+    private(set) var activeScans: [AutoScanInstanceDto] = []
+    /// Stored-project name the initial prompt was last seeded for, so
+    /// re-entering the step keeps in-flight edits and only a project change
+    /// re-seeds (Android `autoScanConfigInitializedFor`).
+    private var autoScanPromptSeededFor: String?
+
     // Antigravity
     var antigravityModel: String?
     var antigravitySkipPermissions = false
@@ -141,7 +166,20 @@ final class CreateSessionModel {
     private let sessionRepository: SessionRepository
     private let preferencesStore: PreferencesStore
     private let customAgentTypesRepository: CustomAgentTypesRepository
+    private let autoScanRepository: AutoScanRepository
     private let navBroadcaster = Broadcaster<String>(replay: .none)
+    /// Carries a project name to the Auto Scan monitor. Separate from
+    /// `navBroadcaster` (which carries a session id) because the two lead to
+    /// different routes. `.latestClearable` because the Projects-shortcut
+    /// preset emits from inside `load()`, which can run before the screen's
+    /// nav task subscribes — a non-replaying stream would drop it (the
+    /// `SessionListModel` auto-resume pattern); the screen clears the cache
+    /// once it has navigated.
+    private let autoScanNavBroadcaster = Broadcaster<String>(replay: .latestClearable)
+    /// Stored project the wizard should open directly in Auto Scan config
+    /// (the Projects screen shortcut); applied once `load()` resolves it.
+    private let autoScanProjectPreset: String?
+    private var didApplyAutoScanPreset = false
 
     /// Projects created inline via the New Session "Create new project…" flow,
     /// retained so a late initial `load()` (a still-pending `getProjects`) cannot
@@ -153,17 +191,28 @@ final class CreateSessionModel {
         agentAPI: AgentAPI,
         sessionRepository: SessionRepository,
         preferencesStore: PreferencesStore,
-        customAgentTypesRepository: CustomAgentTypesRepository
+        customAgentTypesRepository: CustomAgentTypesRepository,
+        autoScanRepository: AutoScanRepository,
+        autoScanProject: String? = nil
     ) {
         self.agentAPI = agentAPI
         self.sessionRepository = sessionRepository
         self.preferencesStore = preferencesStore
         self.customAgentTypesRepository = customAgentTypesRepository
+        self.autoScanRepository = autoScanRepository
+        self.autoScanProjectPreset = autoScanProject
         self.customTypes = customAgentTypesRepository.currentTypes
+        self.activeScans = autoScanRepository.currentScans
         applyPrefill()
     }
 
     func navEvents() -> AsyncStream<String> { navBroadcaster.subscribe(replayLatest: false) }
+
+    func autoScanNavEvents() -> AsyncStream<String> { autoScanNavBroadcaster.subscribe() }
+
+    /// Called by the screen once it has consumed the project name and
+    /// navigated, so the cached id is not replayed.
+    func clearAutoScanNav() { autoScanNavBroadcaster.clearReplay() }
 
     // MARK: - Availability
 
@@ -171,11 +220,29 @@ final class CreateSessionModel {
     var codexEnabled: Bool { codexAvailable != false }
     var antigravityEnabled: Bool { antigravityAvailable != false }
 
+    /// Auto Scan additionally needs a Linear API key on the selected stored
+    /// project — the agent scans Linear for that project's issues. A custom
+    /// path or no selection can never satisfy it (Android `autoScanEnabled`).
+    var autoScanEnabled: Bool {
+        claudeEnabled && selectedProject?.has_linear_key == true
+    }
+
+    /// The scan already running for the selected stored project, if any. Auto
+    /// Scan is one-per-project, so this turns a guaranteed 409 into a route to
+    /// the live monitor.
+    var runningScan: AutoScanInstanceDto? {
+        guard case .stored(let name) = selection else { return nil }
+        return activeScans.first { $0.project_name == name }
+    }
+
     func isEnabled(_ mode: Mode) -> Bool {
         switch mode {
         case .standard: return claudeEnabled
         case .codex: return codexEnabled
         case .antigravity: return antigravityEnabled
+        // A running scan keeps the card tappable even when the launch gate
+        // would refuse — tapping opens its monitor rather than the config step.
+        case .autoScan: return autoScanEnabled || runningScan != nil
         case .shell: return true
         // No CLI probe for custom types — the agent runs whatever command the
         // relay resolves; a launch failure surfaces from the server instead.
@@ -194,6 +261,17 @@ final class CreateSessionModel {
         case .antigravity:
             return antigravityEnabled ? "Configure and launch a Google Antigravity session."
                 : "Antigravity CLI (agy) is not installed on the agent."
+        case .autoScan:
+            if let running = runningScan {
+                return "Already running for \(running.project_name) — tap to open the live monitor."
+            }
+            if !claudeEnabled {
+                return "Auto Scan needs the Claude CLI, which isn't installed on the agent."
+            }
+            if !autoScanEnabled {
+                return "Auto Scan needs a Linear API key for this project."
+            }
+            return "Scan Linear for matching issues and launch sessions."
         case .shell:
             return "Bash / cmd in the chosen directory"
         case .custom(let id):
@@ -215,6 +293,7 @@ final class CreateSessionModel {
         case .standard: return "Claude Code"
         case .codex: return "Codex"
         case .antigravity: return "Antigravity"
+        case .autoScan: return "Auto Scan"
         case .shell: return "Terminal"
         case .custom(let id): return customType(id: id)?.name ?? "Terminal session"
         }
@@ -237,6 +316,16 @@ final class CreateSessionModel {
         return claudeEfforts(for: effectiveClaudeModel).contains(claudeEffort) ? claudeEffort : "high"
     }
 
+    /// Same fast-mode / ultracode rules as the Claude Code bucket, applied to
+    /// Auto Scan's own selections.
+    var effectiveAutoScanModel: String? { autoScanClaudeFastMode ? "opus" : autoScanClaudeModel }
+
+    var effectiveAutoScanEffort: String {
+        if autoScanClaudeUltracode { return "xhigh" }
+        return claudeEfforts(for: effectiveAutoScanModel).contains(autoScanClaudeEffort)
+            ? autoScanClaudeEffort : "high"
+    }
+
     // MARK: - Loading
 
     func load() async {
@@ -250,9 +339,69 @@ final class CreateSessionModel {
             }
             self.projects = fetched
             applyProjectPrefill()
+            if autoScanProjectPreset != nil {
+                // The preset chooses between the config step and the live
+                // monitor from `runningScan`, and it applies exactly once — so
+                // the scan list has to be warm *before* it runs. `init` seeds
+                // it from a repository cache that is empty on a cold start, and
+                // the sibling `observeScans()` task refreshes concurrently with
+                // no ordering guarantee. Without this the shortcut lands in the
+                // config step for an already-scanning project, recoverable only
+                // by a start that 409s — and not even that when the Claude CLI
+                // is missing, since the Start button is then disabled.
+                activeScans = await autoScanRepository.refresh().scans
+            }
+            // The preset skips the mode picker, where the probe normally runs,
+            // so the config step would not know whether Claude is installed.
+            if applyAutoScanPreset() {
+                await refreshCliAvailability()
+            }
         } catch {
             // Non-fatal: the wizard still allows a custom path.
         }
+    }
+
+    /// Seeds the scan list from REST (autoscan may be unconfigured — swallowed
+    /// by `refresh`), then mirrors bus-driven updates so the mode card can
+    /// report a scan started from another device mid-wizard.
+    func observeScans() async {
+        _ = await autoScanRepository.refresh()
+        for await scans in autoScanRepository.scans() {
+            activeScans = scans
+            // The agent-wide default prompt rides in on the same payload, from
+            // the REST seed above *and* from every `autoscan.list.changed`
+            // push — so re-seed here rather than only after the refresh, which
+            // silently returns the unchanged cache when the agent is briefly
+            // unreachable. Idempotent: the empty check keeps an in-flight edit
+            // untouched, and `seedAutoScanPrompt` is a no-op once latched.
+            if autoScanInitialPrompt.isEmpty { seedAutoScanPrompt() }
+        }
+    }
+
+    /// Projects-screen shortcut: drop straight into the Auto Scan config step
+    /// for `autoScanProjectPreset`. Runs once, after `load()` has the project
+    /// (its `has_linear_key` is the launch gate). An already-running scan
+    /// routes to the monitor instead; a project that lost its Linear key falls
+    /// back to the mode picker rather than a dead end.
+    /// Returns whether the config step was entered.
+    @discardableResult
+    private func applyAutoScanPreset() -> Bool {
+        guard !didApplyAutoScanPreset, let name = autoScanProjectPreset else { return false }
+        guard projects.contains(where: { $0.name == name }) else { return false }
+        didApplyAutoScanPreset = true
+        selection = .stored(name)
+        if let running = runningScan {
+            autoScanNavBroadcaster.emit(running.project_name)
+            return false
+        }
+        guard selectedProject?.has_linear_key == true else {
+            step = .modePick
+            return false
+        }
+        seedAutoScanPrompt()
+        mode = .autoScan
+        step = .config
+        return true
     }
 
     func refreshCliAvailability() async {
@@ -339,8 +488,34 @@ final class CreateSessionModel {
 
     func selectMode(_ mode: Mode) {
         guard isEnabled(mode) else { return }
+        if mode == .autoScan {
+            // One scan per project: an existing one is opened, not reconfigured.
+            if let running = runningScan {
+                autoScanNavBroadcaster.emit(running.project_name)
+                return
+            }
+            seedAutoScanPrompt()
+        }
         self.mode = mode
         step = .config
+    }
+
+    /// Per-project saved prompt → the agent-wide default (Android
+    /// `selectAutoScanMode`). Re-seeds only when the selected project changed,
+    /// so returning to the step does not discard the user's edits.
+    ///
+    /// Latches `autoScanPromptSeededFor` only once a source actually resolved.
+    /// The agent-wide default rides in on the scan-list refresh, so reaching
+    /// this step before that lands would otherwise mark the project seeded with
+    /// an empty prompt and strand it that way for the rest of the wizard's
+    /// life — `observeScans()` re-attempts the seed once the refresh returns.
+    private func seedAutoScanPrompt() {
+        guard case .stored(let name) = selection, autoScanPromptSeededFor != name else { return }
+        guard let prompt = projects.first(where: { $0.name == name })?.auto_scan_prompt
+            ?? autoScanRepository.autoScanPrompt
+        else { return }
+        autoScanPromptSeededFor = name
+        autoScanInitialPrompt = prompt
     }
 
     func back() {
@@ -370,10 +545,12 @@ final class CreateSessionModel {
 
     func create() async {
         guard let mode, canCreate else { return }
+        // Auto Scan has its own submit button and endpoint; it never reaches
+        // the create-session path.
+        guard let request = buildRequest(mode: mode) else { return }
         submitting = true
         error = nil
         do {
-            let request = buildRequest(mode: mode)
             let response = try await sessionRepository.createSession(request)
             persistLastUsed(mode: mode, response: response)
             submitting = false
@@ -531,7 +708,80 @@ final class CreateSessionModel {
         }
     }
 
-    func buildRequest(mode: Mode) -> CreateSessionRequest {
+    // MARK: - Auto Scan submit
+
+    var canStartAutoScan: Bool {
+        guard case .stored = selection else { return false }
+        return claudeEnabled && !autoScanStarting
+    }
+
+    /// `POST /api/autoscan/start`, then navigate to the live monitor. Note
+    /// this does **not** create a session — the scanner spawns its own,
+    /// one per matching Linear issue.
+    func startAutoScan() async {
+        guard case .stored(let projectName) = selection, !autoScanStarting else { return }
+        autoScanStarting = true
+        error = nil
+        do {
+            try await autoScanRepository.startScan(
+                projectName: projectName,
+                claudeOptions: autoScanClaudeOptions()
+            )
+            preferencesStore.setLastUsedProjectName(projectName)
+            preferencesStore.setLastUsedAutoScanOptions(autoScanLaunchPrefs())
+            autoScanStarting = false
+            autoScanNavBroadcaster.emit(projectName)
+        } catch AutoScanStartError.alreadyRunning(let running) {
+            // Started elsewhere while the step was open — resolve it the same
+            // way the mode card does, by opening the monitor.
+            autoScanStarting = false
+            autoScanNavBroadcaster.emit(running)
+        } catch AutoScanStartError.capacity(let maxScans) {
+            autoScanStarting = false
+            self.error = "Auto Scan capacity reached (max \(maxScans))."
+        } catch {
+            autoScanStarting = false
+            self.error = "Failed to start Auto Scan: \(String(describing: error))"
+        }
+    }
+
+    /// `worktree` is hardcoded true: the scanner branches a worktree per Linear
+    /// issue so concurrent issues stay isolated (Android `submitAutoScan`).
+    func autoScanClaudeOptions() -> ClaudeOptionsModel {
+        ClaudeOptionsModel(
+            plan_mode: autoScanPlanMode,
+            no_memory: autoScanNoMemory,
+            skip_permissions: autoScanSkipPermissions,
+            initial_prompt: Self.blankToNil(autoScanInitialPrompt),
+            worktree: true,
+            model: effectiveAutoScanModel,
+            effort: effectiveAutoScanEffort,
+            fast_mode: autoScanClaudeFastMode,
+            ultracode: autoScanClaudeUltracode,
+            append_system_prompt: Self.blankToNil(autoScanClaudeAppendSystemPrompt)
+        )
+    }
+
+    private func autoScanLaunchPrefs() -> ClaudeLaunchPrefs {
+        ClaudeLaunchPrefs(
+            model: effectiveAutoScanModel,
+            effort: effectiveAutoScanEffort,
+            fastMode: autoScanClaudeFastMode,
+            ultracode: autoScanClaudeUltracode,
+            appendSystemPrompt: autoScanClaudeAppendSystemPrompt,
+            skipPermissions: autoScanSkipPermissions,
+            noMemory: autoScanNoMemory,
+            planMode: autoScanPlanMode
+        )
+    }
+
+    private static func blankToNil(_ value: String) -> String? {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+    }
+
+    /// `nil` for `.autoScan`, which starts a scan instead of creating a
+    /// session — every other mode maps onto a request.
+    func buildRequest(mode: Mode) -> CreateSessionRequest? {
         let projectName: String?
         let cwd: String?
         switch selection {
@@ -554,6 +804,8 @@ final class CreateSessionModel {
             ? branchName : nil
 
         switch mode {
+        case .autoScan:
+            return nil
         case .standard:
             let options = ClaudeOptionsModel(
                 no_memory: noMemory,
@@ -564,7 +816,7 @@ final class CreateSessionModel {
                 effort: effectiveClaudeEffort,
                 fast_mode: claudeFastMode,
                 ultracode: claudeUltracode,
-                append_system_prompt: claudeAppendSystemPrompt.isEmpty ? nil : claudeAppendSystemPrompt
+                append_system_prompt: Self.blankToNil(claudeAppendSystemPrompt)
             )
             return CreateSessionRequest(cwd: cwd, project_name: projectName, claude_options: options)
         case .codex:
@@ -639,7 +891,9 @@ final class CreateSessionModel {
                 skipPermissions: antigravitySkipPermissions,
                 sandbox: antigravitySandbox
             ))
-        case .shell, .custom:
+        // Auto Scan persists its own bucket from `startAutoScan`, which never
+        // routes through `create()`.
+        case .autoScan, .shell, .custom:
             break
         }
     }
@@ -655,6 +909,16 @@ final class CreateSessionModel {
             claudeAppendSystemPrompt = claude.appendSystemPrompt
             skipPermissions = claude.skipPermissions
             noMemory = claude.noMemory
+        }
+        if let autoScan = preferencesStore.getLastUsedAutoScanOptions() {
+            autoScanClaudeModel = autoScan.model
+            autoScanClaudeEffort = autoScan.effort
+            autoScanClaudeFastMode = autoScan.fastMode
+            autoScanClaudeUltracode = autoScan.ultracode
+            autoScanClaudeAppendSystemPrompt = autoScan.appendSystemPrompt
+            autoScanSkipPermissions = autoScan.skipPermissions
+            autoScanNoMemory = autoScan.noMemory
+            autoScanPlanMode = autoScan.planMode
         }
         if let codex = preferencesStore.getLastUsedCodexOptions() {
             codexModel = codex.model

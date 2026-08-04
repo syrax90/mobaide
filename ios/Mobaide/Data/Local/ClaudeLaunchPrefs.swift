@@ -1,10 +1,9 @@
 import Foundation
 
 /// Mirror of Android `ClaudeLaunchPrefs` — last-used Claude launch options,
-/// persisted as a JSON blob in `PreferencesStore`. Android's blob also carries
-/// a `planMode` field for its Auto Scan bucket; iOS adds it together with the
-/// Auto Scan launch UI — until then the stores are device-local and
-/// both decoders are lenient, so the shape difference is harmless.
+/// persisted as a JSON blob in `PreferencesStore`. Backs two independent
+/// per-kind buckets — Claude Code and Auto Scan — so each mode remembers its
+/// own choices; `planMode` is meaningful only in the Auto Scan bucket.
 struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
     let model: String?
     let effort: String
@@ -13,6 +12,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
     let appendSystemPrompt: String
     let skipPermissions: Bool
     let noMemory: Bool
+    let planMode: Bool
 
     init(
         model: String? = nil,
@@ -21,7 +21,8 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         ultracode: Bool = false,
         appendSystemPrompt: String = "",
         skipPermissions: Bool = false,
-        noMemory: Bool = false
+        noMemory: Bool = false,
+        planMode: Bool = false
     ) {
         self.model = model
         self.effort = effort
@@ -30,6 +31,7 @@ struct ClaudeLaunchPrefs: Codable, Equatable, Sendable {
         self.appendSystemPrompt = appendSystemPrompt
         self.skipPermissions = skipPermissions
         self.noMemory = noMemory
+        self.planMode = planMode
     }
 }
 
@@ -43,5 +45,6 @@ extension ClaudeLaunchPrefs {
         appendSystemPrompt = try container.decodeIfPresent(String.self, forKey: .appendSystemPrompt) ?? ""
         skipPermissions = try container.decodeIfPresent(Bool.self, forKey: .skipPermissions) ?? false
         noMemory = try container.decodeIfPresent(Bool.self, forKey: .noMemory) ?? false
+        planMode = try container.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
     }
 }
