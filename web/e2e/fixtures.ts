@@ -23,6 +23,31 @@ export const AGENTS = [
   },
 ];
 
+/** `CreateAgentResponse` — the manual-add path, which returns a token once. */
+export const CREATED_AGENT = {
+  agent_id: 'agent-00000002',
+  name: 'Laptop',
+  token: 'agent-token-shown-once',
+};
+
+/** The agent a pairing claim attaches to the account. */
+export const PENDING_AGENT = {
+  agent_id: 'agent-00000003',
+  name: 'Paired host',
+  online: false,
+  created_at: '2026-08-04T10:00:00+00:00',
+  last_seen_at: null,
+  agent_version: '0.9.9',
+  agent_protocol_version: 7,
+};
+
+/** `PairingClaimResponse`. `ws_delivered` is tri-state; this is the `true` arm. */
+export const PAIRING_CLAIM = {
+  agent_id: PENDING_AGENT.agent_id,
+  agent_friendly_name: PENDING_AGENT.name,
+  ws_delivered: true,
+};
+
 export const SESSION = {
   access_token: 'access-token-1',
   refresh_token: 'refresh-token-1',
@@ -75,10 +100,38 @@ export function json(body: unknown) {
   };
 }
 
+export interface StubRelayOptions {
+  /**
+   * Start the agent list with `PENDING_AGENT` offline and absent, the way a
+   * relay looks before a pairing code is claimed. The claim handler adds it,
+   * still offline; `bringPendingAgentOnline` is what flips it — so a test
+   * cannot accidentally pass by reading the claim's 200 as proof of pairing.
+   */
+  pendingPairing?: boolean;
+}
+
+/**
+ * Per-call, never module-level: two tests in one file share this module, and a
+ * mutable stub state that outlived a test would make the pairing spec's result
+ * depend on execution order.
+ */
+export interface RelayStub {
+  bringPendingAgentOnline: () => void;
+}
+
 export async function stubRelay(
   target: Page | BrowserContext,
   version: unknown = SERVER_INFO,
-): Promise<void> {
+  options: StubRelayOptions = {},
+): Promise<RelayStub> {
+  let claimed = false;
+  let pendingOnline = false;
+  const agentsSnapshot = () => {
+    if (options.pendingPairing !== true) return AGENTS;
+    if (!claimed) return [];
+    return [{ ...PENDING_AGENT, online: pendingOnline }];
+  };
+
   await target.route('**/api/version', (route) => route.fulfill(json(version)));
   await target.route('**/api/auth/login', (route) => route.fulfill(json(SESSION)));
   await target.route('**/api/devices', (route) => route.fulfill(json(DEVICES)));
@@ -90,7 +143,27 @@ export async function stubRelay(
   // The sessions list is the index route, so a signed-in visitor hits these on
   // arrival. Without the agent-token mint the client retries a 404 and leaves
   // noise in the log, for the same reason the refresh stub exists.
-  await target.route('**/api/agents', (route) => route.fulfill(json(AGENTS)));
+  //
+  // Method-aware: `/api/agents` is both the list (GET) and manual create
+  // (POST). A single handler would answer a create with an array, which the
+  // repository reads as `data.agent_id === undefined` — a fixture that
+  // certifies the very bug it exists to cover.
+  await target.route('**/api/agents', (route) => {
+    if (route.request().method() === 'POST') {
+      return route.fulfill({
+        ...json(CREATED_AGENT),
+        status: 201,
+      });
+    }
+    return route.fulfill(json(agentsSnapshot()));
+  });
+  await target.route('**/api/pairing/claim', (route) => {
+    // The claim only proves the relay persisted credentials. The agent coming
+    // online is a separate fact the relay learns later, so the row appears
+    // offline here and only `bringPendingAgentOnline` flips it.
+    claimed = true;
+    return route.fulfill(json(PAIRING_CLAIM));
+  });
   // Must be the real `MobileTokenResponse` shape: `mint()` reads `access_token`
   // and `refresh_token`, so an invented `{token}` leaves both undefined, fails
   // the token-pair guard, and silently runs the agent axis with no bearer at
@@ -106,6 +179,12 @@ export async function stubRelay(
   );
   await target.route('**/api/custom-agent-types', (route) => route.fulfill(json([])));
   await target.route('**/proxy/*/api/sessions', (route) => route.fulfill(json([])));
+
+  return {
+    bringPendingAgentOnline: () => {
+      pendingOnline = true;
+    },
+  };
 }
 
 export async function signIn(page: Page): Promise<void> {

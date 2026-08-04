@@ -8,7 +8,8 @@ interface AgentPickerProps {
 
 /**
  * Minimal agent selector — enough to make the sessions list reachable. Pairing,
- * renaming and revoking are WEB-08.
+ * re-registering and removing live on `/agents`; renaming has no endpoint on
+ * any client.
  */
 export function AgentPicker({ agents, selectedAgentId, onSelect }: AgentPickerProps) {
   const selected = agents.find((agent) => agent.agentId === selectedAgentId);

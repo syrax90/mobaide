@@ -1,0 +1,145 @@
+{
+  "type": "PairingQrPayload",
+  "description": "Golden table for the MOBA1 pairing payload: the canonical encoding, the strict parse contract shared by mobaide_agent / Android / iOS / web, and the base64url pairing link the agent prints and the web client decodes. `parse_cases` values are stored verbatim — blankness is tested after trimming, but nothing is trimmed on the way in — and `exp_unix` follows a signed 64-bit integer parse with no clock comparison, because the expiry decision belongs to each client's state machine. Accepted `exp_unix` values stay inside IEEE-754 safe-integer range so the TypeScript arm can assert them after a plain JSON.parse; the 64-bit ceiling is pinned by the rejection case instead.",
+  "encode_cases": [
+    {
+      "name": "canonical",
+      "relay_url": "https://relay.test",
+      "nonce": "nonce-abc",
+      "trust_key_fp": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "exp_unix": 1700000000,
+      "expect": "MOBA1|https://relay.test|nonce-abc|ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff|1700000000"
+    },
+    {
+      "name": "relay_url_with_port_and_path",
+      "relay_url": "https://relay.test:8443/base",
+      "nonce": "n",
+      "trust_key_fp": "ab",
+      "exp_unix": 1,
+      "expect": "MOBA1|https://relay.test:8443/base|n|ab|1"
+    },
+    {
+      "name": "urlsafe_nonce_alphabet_is_not_escaped",
+      "relay_url": "https://relay.test",
+      "nonce": "aB3-_x9",
+      "trust_key_fp": "ab",
+      "exp_unix": 1700000000,
+      "expect": "MOBA1|https://relay.test|aB3-_x9|ab|1700000000"
+    }
+  ],
+  "parse_cases": [
+    {
+      "name": "happy_path",
+      "raw": "MOBA1|https://relay.test|nonce-abc|ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff|1700000000",
+      "expect": {
+        "version": "MOBA1",
+        "relay_url": "https://relay.test",
+        "nonce": "nonce-abc",
+        "trust_key_fp": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "exp_unix": 1700000000
+      }
+    },
+    {
+      "name": "values_are_stored_untrimmed",
+      "raw": "MOBA1| https://relay.test |nonce |fp |100",
+      "expect": {
+        "version": "MOBA1",
+        "relay_url": " https://relay.test ",
+        "nonce": "nonce ",
+        "trust_key_fp": "fp ",
+        "exp_unix": 100
+      }
+    },
+    {
+      "name": "negative_exp_parses",
+      "raw": "MOBA1|https://relay.test|n|ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff|-5",
+      "expect": {
+        "version": "MOBA1",
+        "relay_url": "https://relay.test",
+        "nonce": "n",
+        "trust_key_fp": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "exp_unix": -5
+      }
+    },
+    {
+      "name": "leading_plus_exp_parses",
+      "raw": "MOBA1|r|n|f|+100",
+      "expect": {
+        "version": "MOBA1",
+        "relay_url": "r",
+        "nonce": "n",
+        "trust_key_fp": "f",
+        "exp_unix": 100
+      }
+    },
+    {
+      "name": "far_future_exp_parses",
+      "raw": "MOBA1|r|n|f|4102444800",
+      "expect": {
+        "version": "MOBA1",
+        "relay_url": "r",
+        "nonce": "n",
+        "trust_key_fp": "f",
+        "exp_unix": 4102444800
+      }
+    },
+    { "name": "wrong_version_digit", "raw": "MOBA0|https://relay.test|n|f|1", "expect": null },
+    { "name": "unknown_future_version", "raw": "MOBA2|r|n|f|100", "expect": null },
+    { "name": "lowercase_version", "raw": "moba1|r|n|f|100", "expect": null },
+    { "name": "too_few_fields", "raw": "MOBA1|https://relay.test|nonce-abc|fp", "expect": null },
+    { "name": "too_many_fields", "raw": "MOBA1|https://relay.test|n|f|1|extra", "expect": null },
+    { "name": "empty_string", "raw": "", "expect": null },
+    { "name": "blank_relay_url", "raw": "MOBA1||n|f|100", "expect": null },
+    { "name": "blank_nonce", "raw": "MOBA1|r||f|100", "expect": null },
+    { "name": "blank_trust_key_fp", "raw": "MOBA1|r|n||100", "expect": null },
+    { "name": "whitespace_only_relay_url", "raw": "MOBA1|   |n|f|100", "expect": null },
+    { "name": "whitespace_only_trust_key_fp", "raw": "MOBA1|r|n| |100", "expect": null },
+    { "name": "non_numeric_exp", "raw": "MOBA1|r|n|f|not-a-number", "expect": null },
+    { "name": "empty_exp", "raw": "MOBA1|r|n|f|", "expect": null },
+    { "name": "exp_with_surrounding_whitespace", "raw": "MOBA1|r|n|f| 100 ", "expect": null },
+    { "name": "exp_with_trailing_newline", "raw": "MOBA1|r|n|f|100\n", "expect": null },
+    { "name": "exp_with_digit_separators", "raw": "MOBA1|r|n|f|1_700_000_000", "expect": null },
+    { "name": "exp_overflows_int64", "raw": "MOBA1|r|n|f|9223372036854775808", "expect": null },
+    { "name": "exp_is_a_float", "raw": "MOBA1|r|n|f|100.5", "expect": null },
+    { "name": "unrelated_url_qr", "raw": "https://example.com/promo", "expect": null },
+    { "name": "unrelated_wifi_qr", "raw": "WIFI:T:WPA;S:my-net;P:secret;;", "expect": null }
+  ],
+  "link_cases": [
+    {
+      "name": "canonical_default_origin",
+      "payload": "MOBA1|https://relay.test|nonce-abc|ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff|1700000000",
+      "origin": "https://app.mobaide.com",
+      "expect": "https://app.mobaide.com/pair#TU9CQTF8aHR0cHM6Ly9yZWxheS50ZXN0fG5vbmNlLWFiY3xmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmfDE3MDAwMDAwMDA"
+    },
+    {
+      "name": "one_padding_char_stripped",
+      "payload": "MOBA1|https://relay.test|n1|ab|1",
+      "origin": "https://app.mobaide.com",
+      "expect": "https://app.mobaide.com/pair#TU9CQTF8aHR0cHM6Ly9yZWxheS50ZXN0fG4xfGFifDE"
+    },
+    {
+      "name": "no_padding_needed",
+      "payload": "MOBA1|https://relay.test|n12|ab|1",
+      "origin": "https://app.mobaide.com",
+      "expect": "https://app.mobaide.com/pair#TU9CQTF8aHR0cHM6Ly9yZWxheS50ZXN0fG4xMnxhYnwx"
+    },
+    {
+      "name": "two_padding_chars_stripped",
+      "payload": "MOBA1|https://relay.test|n123|ab|1",
+      "origin": "https://app.mobaide.com",
+      "expect": "https://app.mobaide.com/pair#TU9CQTF8aHR0cHM6Ly9yZWxheS50ZXN0fG4xMjN8YWJ8MQ"
+    },
+    {
+      "name": "non_ascii_relay_url_is_utf8",
+      "payload": "MOBA1|https://relé.test|n|ab|1",
+      "origin": "https://app.mobaide.com",
+      "expect": "https://app.mobaide.com/pair#TU9CQTF8aHR0cHM6Ly9yZWzDqS50ZXN0fG58YWJ8MQ"
+    },
+    {
+      "name": "self_hosted_origin_override",
+      "payload": "MOBA1|https://relay.test|n12|ab|1",
+      "origin": "http://localhost:5173",
+      "expect": "http://localhost:5173/pair#TU9CQTF8aHR0cHM6Ly9yZWxheS50ZXN0fG4xMnxhYnwx"
+    }
+  ]
+}

@@ -2028,3 +2028,49 @@ class TestRenderPendingToStdout:
             "expected the safety net to also swallow generic "
             "exceptions, not only UnicodeEncodeError"
         )
+
+    async def test_swallows_pairing_hint_write_error(
+        self, monkeypatch, caplog
+    ) -> None:
+        # ``write_pairing_hints`` runs after the QR on the same stdout, so it
+        # inherits the identical hazard: a cp1252-redirected service log
+        # raises UnicodeEncodeError on write. It must be *inside* the same
+        # try, not after it — a raise here reaches the surrounding ``async
+        # with PairingWsClient.connect(...)``, tears the socket down before
+        # ``wait_for_claim``, and the relay then rejects that nonce forever.
+        def _raise_unicode(*_args, **_kwargs):
+            raise UnicodeEncodeError(
+                "cp1252", "—", 0, 1, "character maps to <undefined>"
+            )
+
+        monkeypatch.setattr(_pm, "write_pairing_hints", _raise_unicode)
+        caplog.set_level(logging.WARNING, logger="mobaide.agent.pairing_monitor")
+
+        await _pm._render_pending_to_stdout(self._make_pending())
+
+        assert any(
+            "qr_render_skipped" in rec.getMessage()
+            and "UnicodeEncodeError" in rec.getMessage()
+            for rec in caplog.records
+        ), (
+            "expected the pairing-hint write to sit inside the same "
+            "must-not-raise try as the QR render; if this fires, a failed "
+            "hint write kills pairing permanently"
+        )
+
+    async def test_writes_the_pairing_hints_after_the_qr(
+        self, monkeypatch, capsys
+    ) -> None:
+        # The safety net above is only worth having if the call actually
+        # happens on this path — an operator tailing the service log is the
+        # main audience for the pasteable line.
+        calls: list[str] = []
+        monkeypatch.setattr(_pm, "render_qr_to_terminal", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            _pm, "write_pairing_hints", lambda payload, **_k: calls.append(payload)
+        )
+        pending = self._make_pending()
+
+        await _pm._render_pending_to_stdout(pending)
+
+        assert calls == [pending.qr_payload]

@@ -82,6 +82,65 @@ MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}
 The token is never carried in the QR. The server mints it server-side
 and pushes it to the agent over the pairing WebSocket.
 
+The parse contract is pinned across all four implementations by
+`tests/protocol_fixtures/pairing/qr_payload.json`: exactly five fields,
+`MOBA1` case-sensitive, `relay_url` / `nonce` / `trust_key_fp` non-blank
+once trimmed but stored **verbatim**, and `exp_unix` a signed 64-bit
+integer parse that rejects surrounding whitespace, digit separators and
+overflow. Expiry is deliberately **not** range-checked in the parser — a
+negative `exp_unix` parses, and the staleness decision belongs to each
+client's pairing state machine, which needs the value to say "expired N
+minutes ago" rather than "malformed". The Android arm of the golden is
+tracked in CLA-235; the `central_server` builder, still an inline f-string
+rather than a named function, in CLA-236.
+
+### Printed pairing link (webcam-less pairing)
+
+Under the QR, the agent also prints the payload on one unbroken line and a
+browser link, in that order — pasteable artifact first, following
+`gh auth login`:
+
+```
+[mobaide-agent] Pairing code (copy this entire line):
+MOBA1|https://api.mobaide.com|<nonce>|<fp>|<exp>
+[mobaide-agent] Or open this link in a browser:
+https://app.mobaide.com/pair#<base64url(payload)>
+```
+
+Both lines come from `pairing_qr.write_pairing_hints`, which all three
+print sites call (`pair-qr`, `show-qr`, and the pairing monitor — the last
+inside its must-not-raise `try`). Two constraints hold them together:
+
+* **Never wrapped, never prefixed.** A terminal's soft wrap is invisible,
+  but a copied soft-wrapped line carries embedded newlines. The web paste
+  box strips all whitespace before parsing so it survives anyway, but the
+  printer must not manufacture the problem.
+* **Never raises.** The labels are ASCII, but `relay_url` is the operator's
+  `PUBLIC_BASE_URL` and may be an internationalized host, so the payload and
+  the link are probed against the stream's codec first and replaced with an
+  ASCII notice when they do not fit. A Windows service redirects stdout to a
+  `cp437`/`cp1252` log file: a `UnicodeEncodeError` from the monitor's render
+  tears down the pairing WebSocket before `wait_for_claim` — the incident
+  `_stream_supports_block_glyphs` documents — and the same error on the
+  `show-qr` path fails the installer, which treats a non-zero exit as fatal.
+
+The payload is base64url-encoded without padding in the fragment: a raw `|`
+is not a legal URL character and terminal linkifiers stop at it, and a
+fragment never reaches the relay's access logs. The web client's decoder
+(`web/src/protocol/pairingPayload.ts`) is padding-tolerant.
+
+The link's origin is **not** derivable from `relay_url`: that field is the
+relay's `PUBLIC_BASE_URL` (`api.mobaide.com` in production) while the SPA
+is a separate host. It is therefore a fixed default with an env override:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `MOBAIDE_AGENT_PAIR_WEB_ORIGIN` | `https://app.mobaide.com` | Origin of the web client the printed link points at. Self-hosted and development deployments set it; a value that is not ASCII `http(s)` is ignored rather than printed. |
+
+Because the agent fleet auto-updates on a 60-minute poll, the printed link
+only converges after the release ships — the web paste box and manual
+`POST /api/agents` are the day-one paths.
+
 ### Pairing WS URL is agent-derived
 
 The `/api/pairing/initiate` response intentionally omits a `ws_url`
@@ -150,6 +209,22 @@ Recovery for a legitimately rotated relay key: clear the app's data
 (Android Settings → Apps → Mobaide → Storage → Clear data) so the
 fingerprint is unpinned. (A future settings-screen action may expose
 this without a full app-data wipe.)
+
+### TOFS in a browser is weaker, deliberately
+
+The web client pins the same way, in `localStorage` under
+`mobaide-trust-pins`, with the same key normalization (trim, strip every
+trailing slash, lowercase) and the same hard refusal with no override. The
+difference is durability: Safari caps script-written storage at 7 days of
+no interaction, so an infrequently used relay silently degrades from
+trust-on-first-scan to trust-on-most-recent-scan. The same wipe
+regenerates the browser's device UUID, which under the
+last-login-wins registry above orphans a `mobile_devices` row. Recovery
+is clearing the site's data rather than the app's.
+
+This is a known Phase-1 limitation, not an oversight — CLA-199 replaces it
+with an account-level fingerprint the server validates on every claim from
+any client.
 
 ## Re-pair semantics
 

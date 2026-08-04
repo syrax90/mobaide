@@ -44,6 +44,7 @@ from .pairing_qr import (
     parse_qr_payload,
     render_qr_to_terminal,
     save_pending_pairing,
+    write_pairing_hints,
 )
 from .pairing_ws import PairingClaim, PairingWsClient, PairingWsError
 from .updater import InstallLayout
@@ -224,7 +225,7 @@ async def write_credentials_to_env(
 
 
 async def _render_pending_to_stdout(pending: PendingPairing) -> None:
-    """Print the QR header + the QR itself for SSH-attached operators.
+    """Print the QR, the pasteable payload and the browser link for operators.
 
     The stdout QR is a convenience for operators tailing the service log
     or attached over SSH. The cross-process signal for ``install.ps1``'s
@@ -246,6 +247,7 @@ async def _render_pending_to_stdout(pending: PendingPairing) -> None:
             "[mobaide-agent] Pairing QR — scan from the Mobaide mobile app:\n"
         )
         render_qr_to_terminal(pending.qr_payload)
+        write_pairing_hints(pending.qr_payload)
         sys.stdout.write(
             f"[mobaide-agent] Pairing nonce expires at {pending.expires_at}\n"
         )

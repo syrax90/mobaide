@@ -545,6 +545,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         render_qr_to_terminal,
         save_pending_pairing,
         clear_pending_pairing,
+        write_pairing_hints,
     )
     from mobaide.agent.pairing_ws import PairingWsClient, PairingWsError
     from mobaide.agent.updater import InstallLayout
@@ -603,6 +604,7 @@ def _run_pair_qr(args: argparse.Namespace) -> int:
         "[mobaide-agent] Pairing QR — scan from the Mobaide mobile app:\n"
     )
     render_qr_to_terminal(pending.qr_payload)
+    write_pairing_hints(pending.qr_payload)
     sys.stdout.write(
         f"[mobaide-agent] Pairing nonce expires at {pending.expires_at}\n"
     )
@@ -665,6 +667,7 @@ def _run_show_qr(args: argparse.Namespace) -> int:
     from mobaide.agent.pairing_qr import (
         load_pending_pairing,
         render_qr_to_terminal,
+        write_pairing_hints,
     )
     from mobaide.agent.updater import InstallLayout
 
@@ -689,6 +692,7 @@ def _run_show_qr(args: argparse.Namespace) -> int:
             "mobile app:\n"
         )
         render_qr_to_terminal(pending.qr_payload)
+        write_pairing_hints(pending.qr_payload)
         sys.stdout.write(
             f"[mobaide-agent] Pairing nonce expires at "
             f"{pending.expires_at}\n"

@@ -194,15 +194,18 @@ describe('SessionsScreen', () => {
     expect(screen.queryByText('Loading sessions…')).not.toBeInTheDocument();
   });
 
-  it('points an account with no agents at the mobile apps', async () => {
+  it('points an account with no agents at the pairing route', async () => {
+    // Pairing used to live only in the mobile apps; WEB-08 makes the empty
+    // state the entry point, so the link is the assertion — a browser user
+    // with no agent has nowhere else to start.
     api.agents = [];
 
     renderScreen();
 
-    expect(
-      await screen.findByText(
-        'No agents yet. Pair an agent from the Mobaide mobile app to see its sessions here.',
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/No agents yet/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Pair an agent' })).toHaveAttribute(
+      'href',
+      '/pair',
+    );
   });
 });

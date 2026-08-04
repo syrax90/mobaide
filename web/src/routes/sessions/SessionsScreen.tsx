@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router';
 import { listAgents } from '../../api/agentRepository';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import { useSelectedAgentStore } from '../../stores/selectedAgentStore';
@@ -48,9 +49,8 @@ export function SessionsScreen() {
       ) : agents.isError ? (
         <p className="auth-error">Failed to load agents.</p>
       ) : resolved === null ? (
-        // No link: pairing lives in the mobile apps until WEB-08 lands.
         <p className="empty-state">
-          No agents yet. Pair an agent from the Mobaide mobile app to see its sessions here.
+          No agents yet. <Link to="/pair">Pair an agent</Link> to see its sessions here.
         </p>
       ) : (
         <SessionList

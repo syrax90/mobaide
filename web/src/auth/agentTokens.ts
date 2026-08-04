@@ -9,9 +9,9 @@
  * protect, since rotating a refresh token in one tab invalidates every other
  * tab's copy.
  *
- * No screen consumes this yet — the agent surface arrives with WEB-08 — but
- * `createAgentClient` already reads through `getAgentToken`, so the axis is
- * wired end to end here.
+ * `createAgentClient` reads through `getAgentToken`, so the axis is wired end to
+ * end here; the agents screen removes a single agent's pair with
+ * `clearAgentToken`.
  */
 import { relayClient } from '../api/clients';
 import { DEVICE_PLATFORM, getDeviceId, getDeviceName } from './deviceIdentity';
