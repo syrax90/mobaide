@@ -102,8 +102,10 @@ export function NewSession() {
     queryKey: queryKeys.agentCapabilities(resolvedAgentId),
     queryFn: () => fetchAgentCapabilities(resolvedAgentId),
     enabled: resolvedAgentId !== '',
-    // Re-probed whenever the picker is entered: installing a CLI while the
-    // wizard is open should un-grey its card. Both mobile clients do this.
+    // Re-probed on every wizard entry, so installing a CLI between visits
+    // un-greys its card. Per *mount*, not per step: a CLI installed during a
+    // single visit is not picked up until the wizard is re-entered, which the
+    // disabled card's explicit reason makes survivable.
     refetchOnMount: 'always',
     ...wsBackedQueryOptions,
   });
@@ -176,11 +178,11 @@ export function NewSession() {
   const urlPath =
     location.selection.kind === 'customPath' ? location.selection.path : null;
   useEffect(() => {
-    if (urlPath === null || urlPath === state.customPathDraft.trim()) return;
-    dispatch({ type: 'setCustomPathDraft', draft: urlPath });
-    // `customPathDraft` is deliberately absent from the deps: this reconciles
-    // *from* the URL, and re-running on every keystroke would fight the user.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    dispatch({ type: 'syncCustomPathFromUrl', path: urlPath });
+    // Keyed on `urlPath` alone, deliberately. Typing never writes the URL, so
+    // this fires only when a navigation actually changed the selection — which
+    // is why clearing on `null` cannot wipe what the user is typing, and why
+    // adding `customPathDraft` to the deps would make it do exactly that.
   }, [urlPath]);
 
   // Seeded once per project, so re-entering the step never discards edits.

@@ -249,6 +249,7 @@ export type ClaudeBucketId = 'claude' | 'autoScan';
 export type WizardAction =
   | { type: 'selectStoredProject'; project: ProjectSummary }
   | { type: 'setCustomPathDraft'; draft: string }
+  | { type: 'syncCustomPathFromUrl'; path: string | null }
   | { type: 'setClaudeModel'; bucket: ClaudeBucketId; model: string | null }
   | { type: 'setClaudeEffort'; bucket: ClaudeBucketId; effort: ClaudeEffort }
   | {
@@ -311,6 +312,24 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         git: { worktree: false, branchName: '' },
       };
     }
+
+    // Distinct from `setCustomPathDraft`: this reconciles *from* the URL after a
+    // history navigation, so a null path (the entry selected a stored project,
+    // or nothing) must clear a stale draft rather than leave it to outrank the
+    // URL at Continue. Clearing must not raise "Path is required" — the field is
+    // optional and nobody typed in it.
+    case 'syncCustomPathFromUrl':
+      if (action.path === null) {
+        return state.customPathDraft === ''
+          ? state
+          : { ...state, customPathDraft: '', customPathError: null };
+      }
+      return {
+        ...state,
+        customPathDraft: action.path,
+        customPathError: validateCustomPath(action.path),
+        selection: { kind: 'customPath', path: action.path },
+      };
 
     case 'setClaudeModel':
       return withClaudeBucket(state, action.bucket, (bucket) => {

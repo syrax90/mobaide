@@ -91,8 +91,18 @@ export async function stubRelay(
   // arrival. Without the agent-token mint the client retries a 404 and leaves
   // noise in the log, for the same reason the refresh stub exists.
   await target.route('**/api/agents', (route) => route.fulfill(json(AGENTS)));
+  // Must be the real `MobileTokenResponse` shape: `mint()` reads `access_token`
+  // and `refresh_token`, so an invented `{token}` leaves both undefined, fails
+  // the token-pair guard, and silently runs the agent axis with no bearer at
+  // all — a fixture that would certify the very bug it exists to cover.
   await target.route('**/api/agents/*/token', (route) =>
-    route.fulfill(json({ token: 'agent-token-1', expires_in: 3600 })),
+    route.fulfill(
+      json({
+        access_token: 'agent-access-1',
+        refresh_token: 'agent-refresh-1',
+        token_type: 'bearer',
+      }),
+    ),
   );
   await target.route('**/api/custom-agent-types', (route) => route.fulfill(json([])));
   await target.route('**/proxy/*/api/sessions', (route) => route.fulfill(json([])));
