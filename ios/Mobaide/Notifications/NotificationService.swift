@@ -11,7 +11,8 @@ import os
 /// `NSObject`, which is not `Sendable`. Every stored property is either
 /// immutable and `Sendable` (the tracker is thread-safe, the center is a
 /// thread-safe singleton, `onTap` is `@Sendable`) or lock-guarded
-/// (`authorizationRequest`), so there is no unsynchronised mutable state.
+/// (`authorizationRequest`, `teardownEpoch`), so there is no unsynchronised
+/// mutable state.
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate, AttentionPresenting, @unchecked Sendable {
     /// Loud delivery: heads-up banner + sound, on the Lock Screen and while
     /// foregrounded. Deliberately excludes `.provisional`, which grants
@@ -25,10 +26,13 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
 
     /// Single-flight slot for an in-flight `requestAuthorization`, so the
     /// coordinator's fire-and-forget request and a racing inline request from
-    /// `post` share one system prompt. Cleared when a request resolves without
-    /// a grant: a request made while the app is not active shows no prompt, so
-    /// it has to stay retryable.
+    /// `post` share one system prompt.
     private let authorizationRequest = OSAllocatedUnfairLock<Task<Bool, Never>?>(initialState: nil)
+
+    /// Bumped by every `removeAll()`. A `post` suspended across a teardown
+    /// compares the epoch it captured before suspending and drops the add,
+    /// keeping notifications agent-scoped.
+    private let teardownEpoch = OSAllocatedUnfairLock<UInt64>(initialState: 0)
 
     init(
         tracker: ForegroundSessionTracker,
@@ -69,7 +73,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
 
     func post(_ session: SessionResponse) async {
         guard let request = Self.makeRequest(for: session) else { return }
+        // `isAuthorized()` can suspend for as long as the user takes to answer
+        // the permission prompt. An agent-scoped teardown (logout, agent
+        // switch/takeover) landing in that window runs `removeAll()`, but does
+        // not cancel this task — so re-check the epoch before adding, or the
+        // previous agent's alert reappears after the teardown cleared it.
+        let epoch = teardownEpoch.withLock { $0 }
         guard await isAuthorized() else { return }
+        guard teardownEpoch.withLock({ $0 }) == epoch else { return }
         try? await center.add(request)
     }
 
@@ -79,6 +90,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
     }
 
     func removeAll() {
+        teardownEpoch.withLock { $0 &+= 1 }
         center.removeAllDeliveredNotifications()
         center.removeAllPendingNotificationRequests()
     }
@@ -92,12 +104,21 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
     }
 
     /// Starts the authorization request, or joins the one already in flight, so
-    /// concurrent callers never queue a second system prompt.
+    /// concurrent callers never queue a second system prompt. The task evicts
+    /// itself when it resolves: the slot tracks only an *in-flight* request, it
+    /// is not a memo of the outcome. A request made while the app is not active
+    /// resolves `false` without ever showing a prompt, and caching that would
+    /// strand a `.provisional` install — which re-requests on every alert —
+    /// quiet forever. Re-prompt suppression comes from the `authorizationStatus`
+    /// switch below, not from this slot.
     private func startAuthorizationRequest() -> Task<Bool, Never> {
-        authorizationRequest.withLock { slot in
+        let slotLock = authorizationRequest
+        return slotLock.withLock { slot in
             if let inFlight = slot { return inFlight }
             let task = Task { [center] in
-                (try? await center.requestAuthorization(options: Self.authorizationOptions)) ?? false
+                let granted = (try? await center.requestAuthorization(options: Self.authorizationOptions)) ?? false
+                slotLock.withLock { $0 = nil }
+                return granted
             }
             slot = task
             return task
@@ -121,11 +142,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
             // `.fullyConnected`, but it and the event loop are unordered, so the
             // first `.sessionAttention` can arrive here first. Join the same
             // single-flight request so that first alert is never dropped.
-            let granted = await startAuthorizationRequest().value
-            if !granted {
-                authorizationRequest.withLock { $0 = nil }
-            }
-            return granted
+            return await startAuthorizationRequest().value
         default:
             return false
         }
