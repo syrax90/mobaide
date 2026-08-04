@@ -74,7 +74,7 @@ final class AttentionCoordinatorTests: XCTestCase {
         XCTAssertEqual(presenter.removed, ["d"], "remove B\\A")
     }
 
-    func testProvisionalAuthorizationRequestedOnceOnFirstFullyConnected() async {
+    func testAuthorizationRequestedOnceOnFirstFullyConnected() async {
         let presenter = FakeAttentionPresenter()
         let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
         let coordinator = makeCoordinator(presenter: presenter, authStates: authStates)
@@ -88,6 +88,73 @@ final class AttentionCoordinatorTests: XCTestCase {
         // Allow any wrongly duplicated request to surface before asserting once.
         await waitUntil(timeout: .milliseconds(200)) { false }
         XCTAssertEqual(presenter.authRequestCount, 1)
+    }
+
+    func testAuthorizationGrantReconcilesToRecoverDroppedAlerts() async {
+        // `post` drops alerts while authorization is undecided, so a grant is
+        // what recovers them — and it arrives from whichever request won, not
+        // only the one made on connect.
+        let presenter = FakeAttentionPresenter()
+        let snapshotCount = Counter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: { snapshotCount.increment(); return [] }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        await waitUntil { snapshotCount.value == 1 }
+        coordinator.authorizationGranted()
+        await waitUntil { snapshotCount.value == 2 }
+        XCTAssertEqual(snapshotCount.value, 2, "a grant reconciles to recover dropped alerts")
+        continuation.finish()
+    }
+
+    func testLateAuthorizationGrantStillReconciles() async {
+        // The retry `post` starts on a later `.notDetermined` is not the
+        // connect-path request, and the coordinator only ever asks once — so
+        // recovery must not be tied to that first request's outcome.
+        let presenter = FakeAttentionPresenter()
+        let snapshotCount = Counter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: { snapshotCount.increment(); return [] }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        await waitUntil { snapshotCount.value == 1 }
+        XCTAssertEqual(presenter.authRequestCount, 1, "the coordinator asks exactly once")
+        coordinator.authorizationGranted()
+        await waitUntil { snapshotCount.value == 2 }
+        coordinator.authorizationGranted()
+        await waitUntil { snapshotCount.value == 3 }
+        XCTAssertEqual(snapshotCount.value, 3, "every grant recovers, not just the first")
+        continuation.finish()
+    }
+
+    func testAuthorizationGrantAfterTeardownDoesNotReconcile() async {
+        // Answering the prompt after a logout / agent switch must not resurrect
+        // the previous agent's alerts past `removeAll()`.
+        let presenter = FakeAttentionPresenter()
+        let snapshotCount = Counter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: { snapshotCount.increment(); return [] }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        await waitUntil { snapshotCount.value == 1 }
+        continuation.yield(.userOnly)
+        await waitUntil { presenter.removeAllCount == 1 }
+        coordinator.authorizationGranted()
+        await waitUntil(timeout: .milliseconds(200)) { false }
+        XCTAssertEqual(snapshotCount.value, 1, "no reconcile once the agent connection is gone")
+        continuation.finish()
     }
 
     func testReconcileSkipsWhenSnapshotFails() async {

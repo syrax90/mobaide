@@ -67,8 +67,10 @@ final class AttentionCoordinator {
     }
 
     /// Authorization + agent-scoped notification lifecycle, driven by the auth
-    /// state. On reaching `.fullyConnected`: request provisional authorization
-    /// once, then reconcile — so attention that accrued while the app wasn't
+    /// state. On reaching `.fullyConnected`: request notification authorization
+    /// once — off this loop, because the system prompt blocks on the user and
+    /// this loop is serial, so awaiting it would hold a teardown state behind
+    /// the dialog — then reconcile, so attention that accrued while the app wasn't
     /// running (a cold launch after iOS killed a suspended app) or while the
     /// agent was disconnected is posted, since the `.active` path only
     /// reconciles a background→foreground resume and the connect snapshot
@@ -86,7 +88,9 @@ final class AttentionCoordinator {
         case .fullyConnected:
             if !didRequestAuthorization {
                 didRequestAuthorization = true
-                await presenter.requestProvisionalAuthorization()
+                // Synchronous: started in this same loop turn, so a teardown
+                // can never interleave and leave a prompt opening after it.
+                presenter.requestAuthorization()
             }
             // Reconcile off the serial auth loop so a subsequent teardown state
             // (logout / agent switch) isn't blocked behind the network snapshot.
@@ -97,6 +101,20 @@ final class AttentionCoordinator {
                 presenter.removeAll()
             }
         }
+    }
+
+    /// Called when the user grants notification authorization, from whichever
+    /// request happened to be in flight — the one this coordinator makes on
+    /// connect, or a retry `post` starts on finding `.notDetermined`. `post`
+    /// drops alerts outright while authorization is undecided, so reconciling
+    /// here is what recovers them; sourcing that from a fresh snapshot means
+    /// attention resolved while the prompt was up is simply absent rather than
+    /// posted late. Ignored once the agent connection is gone: a prompt answered
+    /// after a logout or agent switch must not re-post the previous agent's
+    /// alerts past `removeAll()`.
+    func authorizationGranted() {
+        guard latestAuthState == .fullyConnected else { return }
+        reconcileCancellable()
     }
 
     /// Foreground reconciliation between the snapshot-derived attention set A

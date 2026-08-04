@@ -1,4 +1,5 @@
 import UserNotifications
+import os
 
 /// `UNUserNotificationCenter` wrapper + delegate (port of Android
 /// `AttentionNotifier` plus the notification-facing half of
@@ -7,13 +8,37 @@ import UserNotifications
 /// and hands a tapped notification's session id to the deep-link router.
 ///
 /// `@unchecked Sendable`: `UNUserNotificationCenterDelegate` requires
-/// `NSObject`, which is not `Sendable`. Every stored property is immutable
-/// and `Sendable` (the tracker is thread-safe, the center is a thread-safe
-/// singleton, `onTap` is `@Sendable`), so there is no mutable state to race.
+/// `NSObject`, which is not `Sendable`. Every stored property is either
+/// immutable and `Sendable` (the tracker is thread-safe, the center is a
+/// thread-safe singleton, `onTap` is `@Sendable`) or lock-guarded
+/// (`authorizationRequest`, `teardownEpoch`), so there is no unsynchronised
+/// mutable state.
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate, AttentionPresenting, @unchecked Sendable {
+    /// Loud delivery: heads-up banner + sound, on the Lock Screen and while
+    /// foregrounded. Deliberately excludes `.provisional`, which grants
+    /// quiet-only delivery (Notification Center, no banner, no sound) and
+    /// additionally caps whatever `willPresent` returns down to `.list`.
+    static let authorizationOptions: UNAuthorizationOptions = [.alert, .sound, .badge]
+
     private let tracker: ForegroundSessionTracker
     private let center: UNUserNotificationCenter
     private let onTap: @Sendable (String) -> Void
+
+    /// Single-flight slot for an in-flight `requestAuthorization`, so the
+    /// coordinator's fire-and-forget request and a racing inline request from
+    /// `post` share one system prompt.
+    private let authorizationRequest = OSAllocatedUnfairLock<Task<Bool, Never>?>(initialState: nil)
+
+    /// Bumped by every `removeAll()`. A `post` suspended across a teardown
+    /// compares the epoch it captured before suspending and drops the add,
+    /// keeping notifications agent-scoped.
+    private let teardownEpoch = OSAllocatedUnfairLock<UInt64>(initialState: 0)
+
+    /// Announces a grant to whoever can recover the alerts dropped while
+    /// authorization was undecided. It hangs off the request itself rather than
+    /// off any one caller because `post` starts its own retries whenever it
+    /// finds `.notDetermined` — an outcome nobody would otherwise be waiting on.
+    private let onAuthorizationGranted = OSAllocatedUnfairLock<(@Sendable () -> Void)?>(initialState: nil)
 
     init(
         tracker: ForegroundSessionTracker,
@@ -54,7 +79,14 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
 
     func post(_ session: SessionResponse) async {
         guard let request = Self.makeRequest(for: session) else { return }
+        // `isAuthorized()` can suspend for as long as the user takes to answer
+        // the permission prompt. An agent-scoped teardown (logout, agent
+        // switch/takeover) landing in that window runs `removeAll()`, but does
+        // not cancel this task — so re-check the epoch before adding, or the
+        // previous agent's alert reappears after the teardown cleared it.
+        let epoch = teardownEpoch.withLock { $0 }
         guard await isAuthorized() else { return }
+        guard teardownEpoch.withLock({ $0 }) == epoch else { return }
         try? await center.add(request)
     }
 
@@ -64,6 +96,7 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
     }
 
     func removeAll() {
+        teardownEpoch.withLock { $0 &+= 1 }
         center.removeAllDeliveredNotifications()
         center.removeAllPendingNotificationRequests()
     }
@@ -72,20 +105,76 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         Set(await center.deliveredNotifications().map { $0.request.identifier })
     }
 
-    func requestProvisionalAuthorization() async {
-        _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge, .provisional])
+    func requestAuthorization() {
+        _ = startAuthorizationRequest()
+    }
+
+    /// Wires the grant handler. Set by `AppContainer` once the coordinator
+    /// exists, which is after this service (the coordinator takes it as its
+    /// presenter) — the same late-binding shape as `attachPushDelegate`.
+    func setOnAuthorizationGranted(_ handler: @escaping @Sendable () -> Void) {
+        onAuthorizationGranted.withLock { $0 = handler }
+    }
+
+    /// Starts the authorization request, or joins the one already in flight, so
+    /// concurrent callers never queue a second system prompt. The task evicts
+    /// itself when it resolves: the slot tracks only an *in-flight* request, it
+    /// is not a memo of the outcome. A request made while the app is not active
+    /// resolves `false` without ever showing a prompt, and caching that would
+    /// strand a `.provisional` install — which re-requests on every alert —
+    /// quiet forever. Re-prompt suppression comes from the `authorizationStatus`
+    /// switch below, not from this slot.
+    ///
+    /// Creating the task and publishing it into the slot both happen while the
+    /// lock is held, and that ordering is load-bearing: a request that resolves
+    /// immediately (the app is inactive, so no prompt is shown) would otherwise
+    /// evict before it was ever published, and the assignment would then cache a
+    /// finished task forever. Because eviction needs this same lock it blocks
+    /// until publication has happened, so the slot always ends up `nil` rather
+    /// than stale. Do not hoist the `Task` out of the critical section.
+    private func startAuthorizationRequest() -> Task<Bool, Never> {
+        // `OSAllocatedUnfairLock` is a struct over heap storage, so this copy is
+        // the same lock and the same slot the task below clears.
+        let slotLock = authorizationRequest
+        return slotLock.withLock { slot in
+            if let inFlight = slot { return inFlight }
+            let grantHandler = onAuthorizationGranted
+            let task = Task { [center] in
+                let granted = (try? await center.requestAuthorization(options: Self.authorizationOptions)) ?? false
+                slotLock.withLock { $0 = nil }
+                if granted {
+                    grantHandler.withLock { $0 }?()
+                }
+                return granted
+            }
+            slot = task
+            return task
+        }
     }
 
     private func isAuthorized() async -> Bool {
         switch await center.notificationSettings().authorizationStatus {
-        case .authorized, .provisional:
+        case .authorized:
+            return true
+        case .provisional:
+            // Builds before this one asked for `.provisional`, which leaves the
+            // install on quiet-only delivery. Re-requesting without it promotes
+            // to full authorization (provisional records a provisional grant,
+            // not a user decision, so the prompt still shows). Fire-and-forget:
+            // provisional already delivers, so this alert must not wait on it.
+            _ = startAuthorizationRequest()
             return true
         case .notDetermined:
-            // The coordinator's auth task requests provisional authorization on
-            // first `.fullyConnected`, but it and the event loop are unordered,
-            // so the first `.sessionAttention` can arrive here first. Request it
-            // inline (silent, near-instant) so that first alert is never dropped.
-            return (try? await center.requestAuthorization(options: [.alert, .sound, .badge, .provisional])) ?? false
+            // Never await the prompt here. `post` runs on the coordinator's
+            // serial event loop, so a pending dialog holds every later event
+            // behind it — including a `session.updated` that clears this very
+            // attention, which would then be applied only *after* this alert
+            // was added, flashing a loud notification for resolved attention.
+            // Start the request and drop this alert; on a grant the coordinator
+            // reconciles from a fresh snapshot, which re-posts whatever still
+            // needs attention and naturally omits whatever no longer does.
+            _ = startAuthorizationRequest()
+            return false
         default:
             return false
         }

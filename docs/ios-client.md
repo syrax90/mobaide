@@ -72,9 +72,26 @@ grace (`AppLifecycleController`), and events missed while suspended are
 re-derived from a `GET /api/sessions` snapshot on foregrounding — the
 `attention` field is stamped on every snapshot for exactly this recovery,
 posting the set the client never showed and removing alerts whose attention is
-gone. Authorization is requested silently as `.provisional`, so background
-alerts arrive quietly (no heads-up banner/sound until the user promotes them) —
-a deliberate divergence from Android's loud runtime prompt.
+gone. Authorization is requested as the full `[.alert, .sound, .badge]` on first
+`.fullyConnected`, matching Android's loud runtime prompt, so alerts arrive as
+heads-up banners with sound. The request is fire-and-forget and is never awaited
+on either serial loop: the system prompt blocks on the user and cannot display at
+all while backgrounded, so awaiting it in `handleAuth` would hold a logout or
+agent-switch teardown behind the dialog, and awaiting it in `post` would hold the
+whole event loop — including a `session.updated` clearing that very attention,
+which would then be applied only after the alert had already fired. So `post`
+drops alerts outright while authorization is undecided (starting its own request
+whenever it finds `.notDetermined`), and a grant reconciles from a fresh snapshot
+to recover them; attention resolved while the prompt was up is simply absent from
+that snapshot rather than posted late. The grant hook hangs off the request
+itself in `NotificationService` rather than off any one caller — `post`'s retries
+are requests nobody would otherwise be waiting on — and `AppContainer` late-binds
+it to `AttentionCoordinator.authorizationGranted()`, which ignores a grant once
+the agent connection is gone. Earlier builds requested `.provisional`,
+which grants quiet-only delivery and — the non-obvious part — also caps whatever
+`willPresent` returns down to `.list`, so foreground alerts were silent for the
+same reason; an install still in that state is promoted by re-requesting without
+`.provisional` the first time an alert would post.
 CLA-106 (iOS-10) closes the suspended-app gap with APNs alert pushes: the
 agent mirrors each `session.attention` as a `user_event` control frame, and
 the central server broadcasts it on `/relay/ws/user-events` — pushing via APNs

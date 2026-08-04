@@ -23,6 +23,20 @@ enum TestJWT {
     }
 }
 
+/// Lock-guarded call counter for closure-injected collaborators invoked off
+/// the test's actor (a plain `var` captured in a `@Sendable` closure will not
+/// compile under strict concurrency).
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int { lock.withLock { count } }
+
+    func increment() {
+        lock.withLock { count += 1 }
+    }
+}
+
 /// Reusable one-shot barrier: N waiters block until `open()`.
 final class AsyncGate: @unchecked Sendable {
     private let lock = NSLock()

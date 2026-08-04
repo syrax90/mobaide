@@ -11,8 +11,13 @@ protocol AttentionPresenting: Sendable {
     func remove(sessionId: String)
     /// Ids of currently delivered notifications (for foreground reconcile).
     func deliveredSessionIds() async -> Set<String>
-    /// Request provisional (quiet) authorization; a silent no-op once decided.
-    func requestProvisionalAuthorization() async
+    /// Request alert+sound authorization; a no-op once the user has decided.
+    /// Synchronous and fire-and-forget by contract: the system prompt blocks on
+    /// the user and cannot be shown at all while the app is backgrounded, so
+    /// awaiting it on either of the coordinator's serial loops would hold a
+    /// teardown, or a clearing `session.updated`, behind the dialog. A grant is
+    /// reported back out of band, not by this call.
+    func requestAuthorization()
     /// Drop every delivered/pending notification (cross-account teardown).
     func removeAll()
 }
