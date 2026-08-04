@@ -1,7 +1,11 @@
-import { useToastStore } from '../stores/toastStore';
+import { useState } from 'react';
+import { useNavigate } from 'react-router';
 
 export function Home() {
-  const show = useToastStore((state) => state.show);
+  const navigate = useNavigate();
+  const [agentId, setAgentId] = useState('');
+  const [sessionId, setSessionId] = useState('');
+  const ready = agentId.trim() !== '' && sessionId.trim() !== '';
 
   return (
     <section className="home">
@@ -12,14 +16,47 @@ export function Home() {
         shell carries the routing, theming, data, and API foundations they
         build on.
       </p>
-      <button
-        type="button"
-        onClick={() => {
-          show('Toasts are wired up.', 'success');
+
+      {/*
+        Stand-in for the sessions list (WEB-07), which will link straight to a
+        terminal. Until it exists the terminal screen has no entry point, so
+        this form is the only way to reach — and verify — it.
+      */}
+      <form
+        className="home-open-session"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!ready) return;
+          void navigate(
+            `/agents/${encodeURIComponent(agentId.trim())}/sessions/${encodeURIComponent(sessionId.trim())}`,
+          );
         }}
       >
-        Show a toast
-      </button>
+        <h2>Open a terminal</h2>
+        <label className="field">
+          <span className="field-label">Agent id</span>
+          <input
+            className="field-input"
+            value={agentId}
+            onChange={(event) => {
+              setAgentId(event.target.value);
+            }}
+          />
+        </label>
+        <label className="field">
+          <span className="field-label">Session id</span>
+          <input
+            className="field-input"
+            value={sessionId}
+            onChange={(event) => {
+              setSessionId(event.target.value);
+            }}
+          />
+        </label>
+        <button type="submit" className="button button-primary" disabled={!ready}>
+          Attach
+        </button>
+      </form>
     </section>
   );
 }

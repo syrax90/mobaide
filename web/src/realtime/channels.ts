@@ -139,9 +139,11 @@ export function sessionChannelName(agentId: string, sessionId: string): string {
  * The client is the sole PTY size authority: the agent spawns every session at
  * 24×80 and never reports a size back, so the measured grid has to be
  * re-asserted on every open or a reconnect silently leaves a full-screen TUI
- * drawing into 24 rows. WEB-05 owns the replay state machine and its two extra
- * re-assert points (first inbound binary while reconnecting, and `replayEnd`),
- * which is why `resendCachedSize` is public.
+ * drawing into 24 rows. `onOpen` covers the socket-open case from this channel's
+ * own cache; WEB-05 owns the replay state machine and its two extra re-assert
+ * points (first inbound binary while reconnecting, and `replayEnd`), which it
+ * drives through `setSize` because its model caches the measured grid *before*
+ * the resize debounce and can therefore be ahead of this cache.
  */
 export class SessionIoChannel {
   readonly channel: WebSocketChannel;
@@ -188,7 +190,7 @@ export class SessionIoChannel {
   }
 
   /** Re-push the last measured grid. No-op before the first measurement. */
-  resendCachedSize(): void {
+  private resendCachedSize(): void {
     if (this.rows <= 0 || this.cols <= 0) return;
     this.send({ kind: 'resize', rows: this.rows, cols: this.cols });
   }

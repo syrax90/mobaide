@@ -75,15 +75,6 @@ button {
   margin-bottom: 1.5rem;
 }
 
-.home button {
-  padding: 0.5rem 1rem;
-  border: none;
-  border-radius: 6px;
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
-  cursor: pointer;
-}
-
 .error-screen {
   display: flex;
   flex-direction: column;
@@ -564,6 +555,295 @@ button {
 
 .radio-row small {
   color: var(--color-fg-muted);
+}
+
+/* endregion */
+
+/* region terminal (WEB-05) */
+
+/*
+ * The terminal is the one full-bleed screen: `.app-main` centres every other
+ * route in a 60rem column, which would waste most of the grid. `:has()` keeps
+ * that knowledge in CSS instead of threading a layout flag through RootLayout.
+ */
+.app-main:has(.terminal-page) {
+  max-width: none;
+  padding: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.terminal-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-bg);
+}
+
+.terminal-page-empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--color-fg-muted);
+}
+
+.terminal-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  font-size: 0.9rem;
+}
+
+.terminal-bar-spacer {
+  flex: 1;
+}
+
+.terminal-back {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.terminal-session-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--color-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22rem;
+}
+
+.terminal-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-fg-muted);
+  text-transform: capitalize;
+}
+
+.terminal-state::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--color-fg-muted);
+}
+
+.terminal-state-running::before {
+  background: var(--color-success);
+}
+
+.terminal-state-starting::before,
+.terminal-state-stopping::before {
+  background: var(--color-accent);
+}
+
+.terminal-state-crashed::before {
+  background: var(--color-danger);
+}
+
+.terminal-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+
+.terminal-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+ * `position: absolute` rather than `height: 100%`: FitAddon measures the host's
+ * parent, and a percentage height inside a flex child resolves against a box
+ * that is itself still being sized, which lands the grid a row or two short.
+ */
+.terminal-surface,
+.terminal-host {
+  position: absolute;
+  inset: 0;
+}
+
+.terminal-overlay {
+  position: absolute;
+  top: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-fg);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+
+.terminal-jump {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.terminal-jump-badge {
+  position: absolute;
+  top: -0.4rem;
+  right: -0.4rem;
+  min-width: 1.25rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-accent-fg);
+  font-size: 0.7rem;
+  line-height: 1.25rem;
+}
+
+.terminal-selection-bar,
+.terminal-composer-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.terminal-selection-bar {
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.terminal-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+/* Layered on `.field-input`, which already carries the box and the colours. */
+.terminal-composer-input {
+  resize: vertical;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.95rem;
+}
+
+.terminal-composer-actions {
+  justify-content: flex-end;
+}
+
+.template-picker {
+  position: fixed;
+  inset: auto 1rem 1rem auto;
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 30%);
+}
+
+.template-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.template-picker-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.template-section h3 {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-fg-muted);
+}
+
+.template-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.template-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.5rem;
+}
+
+.template-pick {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.template-pick:hover {
+  background: var(--color-bg);
+}
+
+.template-name {
+  font-weight: 600;
+}
+
+.template-body {
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-favorite {
+  border: none;
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+/*
+ * Home's stand-in for the sessions list. Filed under the terminal region rather
+ * than with the home rules because it leaves with the form when WEB-07 lands.
+ */
+.home-open-session {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 22rem;
+  padding: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.home-open-session h2 {
+  margin: 0;
+  font-size: 1rem;
 }
 
 /* endregion */
