@@ -320,6 +320,15 @@ them because its Termux fork genuinely appends them.
 renderer with the buffer intact) → one bounded re-arm → stay on DOM after a
 second loss.
 
+**The grid is always dark**, whatever the app's theme preference — the same
+choice both mobile clients make. An ANSI palette is a matched set with its
+background, and pairing a dark 16-colour palette with the light app background
+puts white on near-white (~1.4:1, and ~1.1:1 for bright white), which Claude
+Code prints constantly. The 16 colours are spelled out as
+`MobaideColors.ansiColors`, the table Android and iOS render with, so a red is
+the same red everywhere: xterm's own built-in default is the **Tango** palette,
+a different set entirely.
+
 **Copy/paste is web-only design**, not a port: mobile has no physical
 keyboard, its `Ctrl+C` is unconditionally `0x03`, and copy/paste live on the
 long-press selection toolbar. Here Ctrl+C copies when there is a selection,

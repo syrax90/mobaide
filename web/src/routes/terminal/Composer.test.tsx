@@ -31,6 +31,16 @@ function renderComposer() {
 describe('Composer', () => {
   afterEach(cleanup);
 
+  it('takes focus on mount', () => {
+    // The field only ever mounts because the user asked for it, and one of the
+    // two ways in — "Send to input" — clears the selection, which unmounts the
+    // toolbar button that was just clicked. Focus would fall to `document.body`
+    // and the first thing typed would go nowhere.
+    const { field } = renderComposer();
+
+    expect(field).toHaveFocus();
+  });
+
   it('sends on a plain Enter and keeps the newline out of the field', () => {
     const { field, calls } = renderComposer();
 

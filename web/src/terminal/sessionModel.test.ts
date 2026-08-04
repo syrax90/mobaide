@@ -655,6 +655,69 @@ describe('TerminalSessionModel synchronized output guard', () => {
     // The one refusal above is all that ever spoke.
     expect(toastKinds()).toEqual(['info']);
   });
+
+  /**
+   * A live session carrying a selection whose replayed history is still queued
+   * in the parser. `'e'` flips the connection to live synchronously while
+   * `term.write` stays asynchronous, so the toolbar is reachable over a
+   * half-reconstructed buffer; not calling `settle()` is what holds it there.
+   */
+  async function replayDraining(): Promise<Harness> {
+    const context = await liveRunning();
+    vi.spyOn(context.model.term, 'getSelection').mockReturnValue('selected text');
+    context.deliver(TERMINAL_FRAME_TYPE.replayStart);
+    context.deliverFrame(outputFrame('replayed history'));
+    context.deliver(TERMINAL_FRAME_TYPE.replayEnd);
+    return context;
+  }
+
+  it('refuses a copy while the replayed history is still being parsed', async () => {
+    // The send gate held the `x` frame back from the start, but copy went
+    // straight to the buffer: the user would have got text off a screen that was
+    // still being rebuilt, on the system clipboard, with no way to tell.
+    const { model } = await replayDraining();
+    expect(model.state.getState().replayPainting).toBe(true);
+
+    await model.copySelection();
+
+    expect(clipboardWrites).toEqual([]);
+    expect(toastKinds()).toEqual(['info']);
+  });
+
+  it('refuses a send-to-composer while the replayed history is still being parsed', async () => {
+    const { model } = await replayDraining();
+
+    model.sendSelectionToComposer();
+
+    expect(model.state.getState().composer).toBe('');
+    expect(model.state.getState().composerVisible).toBe(false);
+    expect(toastKinds()).toEqual(['info']);
+  });
+
+  it('says why a run was refused mid-replay instead of dropping it silently', async () => {
+    const { model, framesOfType } = await replayDraining();
+
+    model.runSelection();
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.execute)).toEqual([]);
+    expect(toastKinds()).toEqual(['info']);
+  });
+
+  it('lets the same three actions through once the parser drains', async () => {
+    const { model, framesOfType } = await replayDraining();
+
+    await settle();
+    await model.copySelection();
+    model.sendSelectionToComposer();
+    model.runSelection();
+
+    expect(clipboardWrites).toEqual(['selected text']);
+    expect(model.state.getState().composer).toBe('selected text');
+    expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
+      'selected text',
+    ]);
+    expect(toastKinds()).toEqual([]);
+  });
 });
 
 describe('TerminalSessionModel selection focus', () => {

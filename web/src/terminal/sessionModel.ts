@@ -65,7 +65,7 @@ import {
   type RendererKind,
 } from './terminalRenderer';
 import { executePayload, submitPayload } from './terminalSubmit';
-import { readTerminalTheme } from './terminalTheme';
+import { terminalTheme } from './terminalTheme';
 
 /** Matches Android's and iOS's 100 ms resize debounce. */
 const RESIZE_DEBOUNCE_MS = 100;
@@ -211,7 +211,7 @@ export class TerminalSessionModel {
       // from un-pausing a scrolled-up viewport. Both mobile clients had to
       // build that discrimination by hand (Android CLA-184, iOS CLA-178).
       scrollOnUserInput: true,
-      theme: readTerminalTheme(document.documentElement),
+      theme: terminalTheme(),
     });
 
     this.term.loadAddon(this.fit);
@@ -225,7 +225,6 @@ export class TerminalSessionModel {
     this.io = options.channel ?? new SessionIoChannel(agentId, sessionId);
     this.wireTerminal();
     this.wireChannel();
-    this.observeTheme();
 
     registerDisposable(this);
     this.io.channel.connect();
@@ -383,26 +382,6 @@ export class TerminalSessionModel {
       element.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('pointerup', endDrag);
       window.removeEventListener('pointercancel', endDrag);
-    });
-  }
-
-  /**
-   * Re-read the palette when the theme preference changes.
-   *
-   * Watches the `data-theme` attribute `ThemeProvider` stamps rather than
-   * subscribing to the store, so the terminal follows the *resolved* theme —
-   * including a `system` preference flipping with the OS.
-   */
-  private observeTheme(): void {
-    const observer = new MutationObserver(() => {
-      this.term.options.theme = readTerminalTheme(document.documentElement);
-    });
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['data-theme'],
-    });
-    this.disposers.push(() => {
-      observer.disconnect();
     });
   }
 
@@ -733,7 +712,13 @@ export class TerminalSessionModel {
    * would hand back text that was never on screen.
    */
   private screenIsSettled(): boolean {
-    if (!this.term.modes.synchronizedOutputMode) return true;
+    // Two ways the buffer can be ahead of what the user can see: the program
+    // armed mode 2026, or the parser is still reconstructing replayed history.
+    // Copy is the one that matters most — it would put text the user never saw
+    // onto the system clipboard.
+    if (!this.term.modes.synchronizedOutputMode && this.pendingReplayWrites === 0) {
+      return true;
+    }
     useToastStore
       .getState()
       .show('The screen is still painting — try that again in a moment.', 'info');
@@ -748,17 +733,7 @@ export class TerminalSessionModel {
    * gets retried.
    */
   runSelection(): void {
-    // The `pendingReplayWrites` term matters here for the same reason it does
-    // in `canSendBytes`, and more: the selection this reads is taken off a
-    // buffer the parser has not finished reconstructing, so without it an `x`
-    // frame could replay a command assembled from a half-drawn screen.
-    if (
-      this.replay.connection !== 'live' ||
-      this.pendingReplayWrites > 0 ||
-      !this.screenIsSettled()
-    ) {
-      return;
-    }
+    if (this.replay.connection !== 'live' || !this.screenIsSettled()) return;
     if (!this.sendPayload('execute', executePayload(this.term.getSelection()))) {
       return;
     }

@@ -35,6 +35,11 @@ export function Composer({ model, value, canSend, onOpenTemplates }: ComposerPro
       <textarea
         id={fieldId}
         className="field-input terminal-composer-input"
+        // The composer only ever mounts because the user asked for it — the
+        // toggle button, or "Send to input", which clears the selection and so
+        // unmounts the toolbar button that was focused. Without this, focus
+        // falls to `document.body` in both cases.
+        autoFocus
         rows={2}
         value={value}
         placeholder="Type a message, then press Enter to send"

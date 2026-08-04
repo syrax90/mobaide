@@ -1,38 +1,79 @@
 /**
- * Terminal palette, derived from the app's CSS custom properties.
+ * Terminal palette.
  *
- * Only the chrome colours are set. The 16 ANSI entries are deliberately left at
- * xterm's defaults, which are already the VS Code dark palette — byte-identical
- * to `MobaideColors.ansiColors`, the table both mobile clients render with and
- * `tests/protocol_fixtures/ansi/ansi_sgr.json` documents. Restating them here
- * would be a second source of truth for colours that already agree.
+ * **The grid is always dark, regardless of the app's light/dark preference**,
+ * which is what both mobile clients do and what every terminal emulator does.
+ * The reason is not taste: an ANSI palette is a matched set with its
+ * background. Pairing a dark 16-colour palette with the light app background
+ * (`--color-bg: #f7f8fa`) puts white on near-white — xterm's own default white
+ * against it is about 1.4:1, bright white about 1.1:1 — and Claude Code prints
+ * plenty of both. Since the theme preference defaults to `system`, that would
+ * have been the default experience for every user on a light-mode OS.
+ *
+ * The 16 colours are `MobaideColors.ansiColors`, the table Android and iOS
+ * render with, so a red is the same red on all three clients. They are spelled
+ * out rather than inherited: xterm 6's built-in default is the **Tango**
+ * palette (`#2e3436`, `#cc0000`, `#4e9a06`, …), a different set entirely — an
+ * earlier revision of this file claimed the two already agreed, and they do
+ * not. `tests/protocol_fixtures/ansi/ansi_sgr.json` cross-checks three of the
+ * sixteen (`31`, `91`, `1;32` → red, brightRed, green); the rest have no golden
+ * anywhere in the repo, which is why they are asserted as literals.
  */
 import type { ITheme } from '@xterm/xterm';
 
-const FALLBACK: Required<Pick<ITheme, 'background' | 'foreground' | 'cursor'>> = {
-  background: '#12141a',
-  foreground: '#e6e8ee',
-  cursor: '#4da3ff',
+/**
+ * `MobaideColors.ansiColors` — the VS Code dark palette, mirrored by
+ * `AnsiParser.basePalette` on iOS and its Android twin.
+ */
+const ANSI: Pick<
+  ITheme,
+  | 'black'
+  | 'red'
+  | 'green'
+  | 'yellow'
+  | 'blue'
+  | 'magenta'
+  | 'cyan'
+  | 'white'
+  | 'brightBlack'
+  | 'brightRed'
+  | 'brightGreen'
+  | 'brightYellow'
+  | 'brightBlue'
+  | 'brightMagenta'
+  | 'brightCyan'
+  | 'brightWhite'
+> = {
+  black: '#000000',
+  red: '#cd3131',
+  green: '#0dbc79',
+  yellow: '#e5e510',
+  blue: '#2472c8',
+  magenta: '#bc3fbc',
+  cyan: '#11a8cd',
+  white: '#e5e5e5',
+  brightBlack: '#666666',
+  brightRed: '#f14c4c',
+  brightGreen: '#23d18b',
+  brightYellow: '#f5f543',
+  brightBlue: '#3b8eea',
+  brightMagenta: '#d670d6',
+  brightCyan: '#29b8db',
+  brightWhite: '#ffffff',
 };
 
-function cssVar(styles: CSSStyleDeclaration, name: string, fallback: string): string {
-  const value = styles.getPropertyValue(name).trim();
-  return value === '' ? fallback : value;
-}
+/** The dark chrome the palette is matched to — the app's own dark tokens. */
+const BACKGROUND = '#12141a';
+const FOREGROUND = '#e6e8ee';
+const CURSOR = '#4da3ff';
 
-/**
- * Read the live theme off `document.documentElement`, where `ThemeProvider`
- * stamps `data-theme`. Call again after the preference changes — xterm applies a
- * new `options.theme` immediately.
- */
-export function readTerminalTheme(root: HTMLElement): ITheme {
-  const styles = getComputedStyle(root);
-  const accent = cssVar(styles, '--color-accent', FALLBACK.cursor);
+export function terminalTheme(): ITheme {
   return {
-    background: cssVar(styles, '--color-bg', FALLBACK.background),
-    foreground: cssVar(styles, '--color-fg', FALLBACK.foreground),
-    cursor: accent,
-    cursorAccent: cssVar(styles, '--color-bg', FALLBACK.background),
+    ...ANSI,
+    background: BACKGROUND,
+    foreground: FOREGROUND,
+    cursor: CURSOR,
+    cursorAccent: BACKGROUND,
     // Alpha rather than a solid fill: xterm composites the selection over the
     // glyphs, and an opaque colour hides the text being selected.
     selectionBackground: 'rgba(77, 163, 255, 0.35)',
