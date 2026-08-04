@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -78,6 +79,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -581,6 +583,10 @@ private fun CustomPathPanel(
         onValueChange = onDraftChange,
         label = { Text("Absolute path on the agent") },
         singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+        ),
         isError = state.customPathError != null,
         supportingText = {
             Text(
@@ -976,6 +982,10 @@ private fun StandardConfigSection(
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1113,6 +1123,10 @@ private fun CodexConfigSection(
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1226,6 +1240,10 @@ private fun AntigravityConfigSection(
         onValueChange = viewModel::setAntigravityAddDirsDraft,
         label = { Text("Additional directories (one per line, optional)") },
         supportingText = { Text("Each is added to the workspace via --add-dir.") },
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+        ),
         modifier = Modifier.fillMaxWidth(),
     )
 
@@ -1238,6 +1256,10 @@ private fun AntigravityConfigSection(
                 onValueChange = viewModel::setBranchName,
                 label = { Text("Branch name (optional)") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -1321,6 +1343,10 @@ private fun ClaudeOptionControls(
             modifier = Modifier.fillMaxWidth(),
             minLines = 2,
             maxLines = 6,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
         )
     }
 }
@@ -1423,6 +1449,10 @@ private fun TerminalConfigSection(
             onValueChange = viewModel::setBranchName,
             label = { Text("Branch name (optional)") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+            ),
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -1474,6 +1504,10 @@ private fun AutoScanConfigSection(
         modifier = Modifier.fillMaxWidth(),
         minLines = 3,
         maxLines = 8,
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.None,
+            autoCorrectEnabled = false,
+        ),
     )
 
     Button(
