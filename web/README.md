@@ -2,8 +2,8 @@
 
 Browser SPA for controlling Mobaide agents through the central relay. React
 19 + TypeScript (strict) + Vite, React Router (Data mode), Zustand, TanStack
-Query, openapi-fetch. See `docs/web-client.md` at the repo root for the full
-architecture write-up.
+Query, openapi-fetch, xterm.js 6. See `docs/web-client.md` at the repo root
+for the full architecture write-up.
 
 ## Prerequisites
 
@@ -104,3 +104,32 @@ covered or deferred to a later milestone; adding a fixture without
 classifying it fails the suite. `APP_PROTOCOL_VERSION` in
 `src/api/bootstrap.ts` is compared against the Android and iOS constants by
 `protocol-integrity` — see PROTOCOL.md "How to bump".
+
+## Terminal (WEB-05)
+
+`/agents/:agentId/sessions/:sessionId` is the **only lazy route** — xterm.js
+and its WebGL addon outweigh the rest of the SPA, so they load on first
+attach rather than on the sign-in screen. Until the sessions list lands
+(WEB-07) the screen is reached from a stand-in form on `Home`. The layering
+mirrors the WEB-04 split:
+
+- `src/terminal/` is framework-free: the replay, follow/unread, paste,
+  submit and key-policy reducers, the clipboard/renderer/theme adapters, and
+  the session model that owns the socket and the emulator. Models live
+  outside React in `terminalStore`, so navigating away and back keeps the
+  buffer instead of paying for a fresh replay.
+- `src/routes/terminal/` is presentation only.
+- `src/stores/terminalPrefsStore.ts` persists the terminal preferences under
+  `localStorage` key `mobaide-terminal` (the second persisted key, after
+  `mobaide-theme`).
+
+Dependencies: `@xterm/xterm` plus the `fit`, `webgl`, `clipboard` and
+`unicode11` addons. `@xterm/headless` is a devDependency only — it backs the
+buffer-contract test that pins the xterm behaviour the follow/unread logic
+derives from, so an addon or major bump fails the suite rather than the UI.
+
+Two behaviours deliberately diverge from Android and iOS under the CLAUDE.md
+platform-convention exemption — **Full display mode only** (no Static /
+forced-column mode, no horizontal pan) and the desktop keyboard copy/paste
+surface. Both are spelled out with their reasons in the "Terminal screen
+(WEB-05)" section of `docs/web-client.md`.

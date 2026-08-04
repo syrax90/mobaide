@@ -11,7 +11,7 @@ export {
   stopAllRealtime,
   stopUserEvents,
 } from './channelRegistry';
-export { AutoScanChannel, SessionIoChannel } from './channels';
+export { AutoScanChannel, SessionIoChannel, sessionChannelName } from './channels';
 export { useConnectionStore } from './connectionStore';
 export { RealtimeProvider } from './RealtimeProvider';
 export type { ChannelEvent, ChannelState, ChannelStatus } from './webSocketChannel';

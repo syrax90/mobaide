@@ -15,7 +15,6 @@
  */
 
 const OWNER = {
-  terminal: 'WEB-05 — terminal screen (xterm.js)',
   shortcuts: 'WEB-06 — keyboard & saved shortcuts',
   sessions: 'WEB-07 — sessions list & create wizard',
   pairing: 'WEB-08 — pairing and per-agent tokens',
@@ -29,6 +28,13 @@ const OWNER = {
   generated: 'WEB-03 (shipped) — typed by the generated central-server schema',
   /** Web has no APNs equivalent; Web Push is not implemented. */
   notApplicable: 'not applicable on web',
+  /**
+   * No client reads the endpoint this pins. Android has the repository call
+   * (`SessionRepository.getScrollback`) with no UI caller, iOS never added one,
+   * and the web terminal keeps its 10,000-row scrollback inside xterm — a REST
+   * round trip would be a second, staler copy of what is already on screen.
+   */
+  unusedByClients: 'no client consumes this endpoint',
 } as const;
 
 /** Fixture files this milestone's tests read and assert. */
@@ -48,7 +54,13 @@ export const COVERED_FIXTURES: readonly string[] = [
 
 /** Fixture files no TypeScript test reads yet, each with the milestone that will. */
 export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
-  'ansi/ansi_sgr.json': OWNER.terminal,
+  /**
+   * Re-pointed from WEB-05 during that milestone: this is the golden for the
+   * mobile clients' `ui/autoscan/AnsiParser`, which renders the auto-scan log
+   * pane. The terminal screen has no SGR parser of its own — xterm.js owns
+   * that — so the web consumer is the auto-scan log view.
+   */
+  'ansi/ansi_sgr.json': OWNER.autoscan,
 
   'dto/agent/AntigravityOptionsModel.json': OWNER.sessions,
   'dto/agent/AutoScanFilterDto.json': OWNER.autoscan,
@@ -77,7 +89,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/RefreshRequest.json': OWNER.pairing,
   'dto/agent/RunNowRequest.json': OWNER.autoscan,
   'dto/agent/RunNowResponse.json': OWNER.autoscan,
-  'dto/agent/ScrollbackResponse.json': OWNER.terminal,
+  'dto/agent/ScrollbackResponse.json': OWNER.unusedByClients,
   'dto/agent/StartScanRequest.json': OWNER.autoscan,
   'dto/agent/StopScanRequest.json': OWNER.autoscan,
   'dto/agent/TokenRequest.json': OWNER.pairing,

@@ -16,7 +16,9 @@ that survives reload and refreshes silently, and the devices and account
 (incl. delete + 14-day cancel) screens. WEB-04 (CLA-191) added the realtime
 protocol core — WebSocket channel manager, binary terminal codec, the
 TypeScript arm of the cross-platform golden fixtures, and the WS-event →
-TanStack Query bridge. The series is tracked in
+TanStack Query bridge. WEB-05 (CLA-192) added the terminal screen on
+xterm.js 6: replay, follow mode and the unread badge, desktop copy/paste,
+the composer and the prompt-template picker. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -54,7 +56,10 @@ web/
 ├── src/
 │   ├── main.tsx              # StrictMode > AppErrorBoundary > QueryClientProvider > ThemeProvider > RouterProvider + ToastViewport
 │   ├── app/                  # router + route guards, RootLayout/AuthLayout, AppGate, RouteError, AppErrorBoundary, ThemeProvider
-│   ├── routes/               # route components (Home, auth/*, account/*)
+│   ├── routes/               # route components (Home, auth/*, account/*, terminal/*)
+│   ├── terminal/             # framework-free terminal core (WEB-05): session model,
+│   │                         #   replay/follow/paste/submit/key reducers, clipboard,
+│   │                         #   renderer ladder, theme, model store
 │   ├── auth/                 # session store + transport, user/agent token axes, single-flight refresh, GIS loader
 │   ├── components/toast/     # zero-dependency toast primitives
 │   ├── components/form/      # react-hook-form fields (+ auth/ Google button, account/ grace banner)
@@ -63,7 +68,7 @@ web/
 │   │                         #   autoscan frames, __fixtures__/ golden-fixture loader
 │   ├── realtime/             # WS channel manager, close policy, connection store,
 │   │                         #   event→Query bridge, RealtimeProvider (WEB-04)
-│   ├── stores/               # Zustand stores (themeStore, toastStore)
+│   ├── stores/               # Zustand stores (themeStore, toastStore, terminalPrefsStore)
 │   ├── lib/queryClient.ts    # TanStack Query defaults
 │   ├── lib/queryKeys.ts      # central query-key factory + wsBackedQueryOptions
 │   ├── api/
@@ -202,8 +207,11 @@ Browsers also expose no ping API, unlike both mobile clients (CLA-219).
 
 **Resume hooks.** The session I/O channel re-asserts the cached PTY size on
 every open — the client is the sole size authority and the agent spawns at
-24×80 — and exposes `resendCachedSize()` for the two further re-assert
-points WEB-05's replay state machine owns. The auto-scan channel sends
+24×80. WEB-05's replay state machine owns two further re-assert points
+(first inbound binary while reconnecting, and `replayEnd`) and drives them
+through `setSize`, because its model caches the measured grid *before* the
+resize debounce and can therefore be ahead of the channel's own cache. The
+auto-scan channel sends
 `{subscribe, resume_from_seq}` as the first thing on every open (the agent's
 grace window is 200 ms direct, 1 s through the relay), rebuilt from a live
 per-project cursor so a reconnect resumes at the true high-water mark; it
@@ -252,6 +260,135 @@ bidirectional registry provides. One cross-arm constraint: Swift `Codable`
 drops unknown keys on re-encode while `z.looseObject` preserves them, so
 unknown-key round-trips are asserted in TypeScript-only tests, never added
 to a shared fixture.
+
+## Terminal screen (WEB-05)
+
+Built on **xterm.js 6.0** (`@xterm/xterm` plus the `fit`, `webgl`,
+`clipboard` and `unicode11` addons). Route
+`/agents/:agentId/sessions/:sessionId` — the **only lazy route**: xterm and
+its WebGL addon outweigh the rest of the SPA, so they load on first attach
+rather than on the sign-in screen. Until the sessions list lands (WEB-07)
+the screen is reached from a stand-in form on `Home`.
+
+**Layering.** `src/terminal/` is framework-free — pure reducers
+(`terminalReplay`, `terminalFollow`, `terminalPaste`, `terminalSubmit`,
+`terminalKeys`), the clipboard/renderer/theme adapters, and
+`TerminalSessionModel`, which owns the socket, the emulator and a per-model
+Zustand store the React tree reads. `src/routes/terminal/` is presentation
+only. Models live in `terminalStore` outside React so navigating away and
+back keeps the buffer instead of paying for a fresh replay; three stay
+resident, least-recently-acquired evicted (iOS keeps one per session until
+the session dies, a signal web has no list to deliver yet). Each model
+self-registers with `liveChannels`, so `stopAllRealtime()` on a session
+change tears it down — the screen re-acquires when its entry disappears.
+
+**One Terminal in the DOM.** `open()` runs once, into a host `div` the model
+owns and views adopt; a hidden terminal is an *unmounted* one, never a
+`display: none` one, because xterm cannot `open()` there and `FitAddon`
+mis-measures under it. `open()` is further deferred until the container has
+a non-zero size.
+
+**Replay** follows the mobile state machine exactly: `'b'` feeds
+`ESC[H ESC[2J ESC[3J` **into the write stream** (never `Terminal.reset()`,
+which executes immediately, jumps queued writes and clears the program's
+DECSET modes), `'o'` chunks append, `'e'` is guarded on being in a span.
+Any inbound binary upgrades a reconnecting channel to live *before* the
+decode. The overlay is driven by socket state, not by the first frame
+(ttyd's stuck-overlay bug), and stays up past `'e'` until the replay writes
+report parsed through their `write` callbacks.
+
+**Size authority.** The grid is cached before the 100 ms resize debounce and
+re-asserted at all three live entries — socket open, first inbound binary
+of a cycle, and `replayEnd` — because the agent spawns every PTY at 24×80
+and never reports back.
+
+**Follow mode is derived, not commanded**: pinned ⇔ `viewportY === baseY`.
+That gets the CLA-184/CLA-178 fix for free — xterm scrolls to the tail on
+genuine user input only, so a program's own `ESC[6n` cannot un-pause a
+scrolled-up viewport, and the `isApplyingEmulatorOutput` discriminator both
+mobile clients needed must **not** be ported. The unread tally counts rows
+entering the scrollback as
+`max(0, ΔbaseY) + max(0, −ΔviewportY)`, which stays exact past the
+`scrollback` cap where `baseY` saturates (the web analogue of the iOS
+`yDisp` freeze). Wheel, viewport pointer-drag, Shift+paging keys, resize and
+the replay wipe re-baseline instead of accruing. Cap 9999, label `999+`,
+cleared by re-pinning — same rule as mobile, and like iOS it does not count
+DECSTBM region scrolls, because xterm shifts those in place; Android counts
+them because its Termux fork genuinely appends them.
+
+**Renderer.** WebGL, with `onContextLoss` → dispose (which reverts to the DOM
+renderer with the buffer intact) → one bounded re-arm → stay on DOM after a
+second loss.
+
+**The grid is always dark**, whatever the app's theme preference — the same
+choice both mobile clients make. An ANSI palette is a matched set with its
+background, and pairing a dark 16-colour palette with the light app background
+puts white on near-white (~1.4:1, and ~1.1:1 for bright white), which Claude
+Code prints constantly. The 16 colours are spelled out as
+`MobaideColors.ansiColors`, the table Android and iOS render with, so a red is
+the same red everywhere: xterm's own built-in default is the **Tango** palette,
+a different set entirely.
+
+**Copy/paste is web-only design**, not a port: mobile has no physical
+keyboard, its `Ctrl+C` is unconditionally `0x03`, and copy/paste live on the
+long-press selection toolbar. Here Ctrl+C copies when there is a selection,
+Ctrl+Shift+C always copies (never SIGINT), and Ctrl+V, Ctrl+Shift+V and
+Cmd+V hand off to the browser's native paste — deliberately, since
+`clipboard.readText()` is prompt-gated in Firefox and Safari. A persisted
+"pass Ctrl+V to terminal" toggle sends `0x16` instead, for Claude Code's
+image paste. The resulting `paste` event is intercepted in the **capture**
+phase, ahead of xterm's own handler, which does the newline rewrite and the
+bracket wrap but no ESC/C1 strip. Paste encoding is the mobile encoder:
+strip ESC + C1 **first** (so a clipboard carrying `ESC[201~` degrades to a
+literal `[201~`), then `\r?\n` → `\r`, then wrap iff the program enabled
+DECSET 2004 — as **one** `i` frame (iOS's shape; three frames over a lossy
+WS + relay can strand the closing marker) and capped at 1 MiB, because one
+oversized frame trips the agent tunnel's 4 MB limit and drops *every*
+session on that agent. The toggle is the one piece of terminal state that
+outlives the tab: `terminalPrefsStore` persists it under `localStorage` key
+`mobaide-terminal`, the second persisted key after `mobaide-theme`.
+
+**OSC 52**: writes allowed, reads refused. The refusal is a handler
+registered *after* `ClipboardAddon` (xterm dispatches OSC handlers
+last-registered-first) so the query is swallowed rather than answered with
+an empty payload. No browser analogue of Android's `EXTRA_IS_SENSITIVE` or
+iOS's `localOnly` + 60 s expiry exists — accepted divergence.
+
+**Synchronized output (DEC 2026) is native** in xterm 6, so neither iOS's
+byte scanner nor Android's deferred-paint timer is ported. Their *consumer*
+discipline is: while `terminal.modes.synchronizedOutputMode` is armed the
+painted screen lags the buffer, so the selection actions refuse and say so —
+otherwise Copy would hand back text the user cannot see. The mode is read at
+the instant of the action, never cached in view state: xterm disarms it on a
+1 s safety timeout inside `RenderService` with **no** event, so a sampled
+flag has a transition it can never observe and would strand the toolbar
+disabled over a screen that is actually current.
+
+**Frames sent.** `i` from keystrokes, mouse reports (`onBinary`) and paste;
+`m` from the composer, prefixed with `CLEAR_INPUT_LINE` (`0x01 0x0B`) and
+bracket-wrapped only when multi-line; `x` from the selection's "Run" action,
+the desktop stand-in for mobile's tap-a-row-to-execute. Neither `m` nor `x`
+carries a trailing CR — the agent owns that timing (proto-v4). Keystrokes,
+paste and submit are gated on `live && running` **plus a web-only third
+term: the replay write queue must have drained.** `'e'` flips the connection
+synchronously while `term.write` is asynchronous, so a DECRQM / XTVERSION /
+DECRQSS / OSC 4 query still sitting in the replayed history would otherwise
+be answered after the gate opened and land in the user's live prompt — the
+agent's ring scrub does not cover those, and mobile never sees it because
+its replay append finishes before its gate flips. "Run" is on `live` only,
+like the row tap it replaces. Every outbound text frame is capped at 1 MiB,
+not just paste: the relay forwards a client frame to the agent's tunnel
+unchunked and that tunnel is opened with `max_size=4 MB`, so one oversized
+frame closes it with 1009 and drops *every* session on that agent.
+
+**Accepted divergences from mobile**, all under the CLAUDE.md
+platform-convention exemption: **Full display mode only** — no Static /
+forced-column mode and no horizontal pan, because a desktop window is wide
+and fit-to-window is the browser convention, where a phone at ~40 columns
+needs the forced grid; and the whole desktop keyboard surface above. The
+prompt-template picker is read-only here (list, recents/favourites grouping,
+filter, insert, favourite toggle); creating and deleting templates is
+WEB-09.
 
 ## CI — `.github/workflows/web-ci.yml`
 
@@ -330,3 +467,10 @@ that feature areas not yet built on web are covered by their planned WEB-*
 issue rather than per-change issues. Terminal behavior parity references:
 the client is the sole PTY size authority and must re-assert size on every
 reconnect (see `docs/ios-client.md` and PROTOCOL.md).
+
+Web-only behaviour that needs **no** mirror issue is the platform-convention
+exemption the rule already carries: the desktop keyboard surface (Ctrl+C /
+Ctrl+V / Ctrl+Shift+C/V, the "pass Ctrl+V" toggle) and Full-only display
+mode both exist because a browser window has a physical keyboard and a wide
+viewport, neither of which a phone has. Each is listed in the WEB-05 section
+above with its reason.

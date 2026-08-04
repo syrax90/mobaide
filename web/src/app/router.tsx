@@ -44,6 +44,19 @@ export const router = createBrowserRouter([
               { index: true, element: <Home /> },
               { path: 'account', element: <Account /> },
               { path: 'devices', element: <Devices /> },
+              {
+                // The only lazy route. xterm.js and its WebGL addon are ~740 KB
+                // raw, which is more than the rest of the SPA put together —
+                // eager-loading them would put the whole emulator on the
+                // critical path of the sign-in screen.
+                path: 'agents/:agentId/sessions/:sessionId',
+                lazy: async () => {
+                  const { TerminalScreen } = await import(
+                    '../routes/terminal/TerminalScreen'
+                  );
+                  return { Component: TerminalScreen };
+                },
+              },
             ],
           },
         ],
