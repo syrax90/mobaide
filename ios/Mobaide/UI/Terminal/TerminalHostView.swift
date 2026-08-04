@@ -614,6 +614,29 @@ final class MobaideTerminalView: TerminalView {
         TerminalFollowScroll.maxOffsetY(contentHeight: contentSize.height, viewportHeight: bounds.height)
     }
 
+    /// Highest content row the buffer actually holds, counted from the scroll
+    /// view's own geometry rather than from `yDisp`.
+    ///
+    /// `contentSize` is the one row count that stays true while `yDisp` is
+    /// parked: SwiftTerm's `updateScroller()` writes it *above* its
+    /// `isTracking || (userScrolling && isDecelerating)` early return, precisely
+    /// so rows appended during a drag stay reachable. A bound derived from
+    /// `yDisp` instead goes stale the moment a fling leaves it at the row the
+    /// finger lifted on, and clamping a touch against a stale bound does not
+    /// reject the touch — it silently moves it to a row the user never put a
+    /// finger on, which is how a selection ends up copying text nobody chose.
+    /// The floor is a full viewport, not zero: `contentSize` stays `.zero` until
+    /// SwiftTerm's `updateScroller()` first runs, and it runs only on a scroll —
+    /// so a session whose output has not yet filled a screen has never set it.
+    /// The buffer always holds at least a viewport's worth of lines, and falling
+    /// back to zero would clamp every touch below the first row onto it.
+    var lastContentRow: Int {
+        let rows = getTerminal().getDims().rows
+        let cellHeight = cellSize.height
+        let counted = cellHeight > 0 ? Int(contentSize.height / cellHeight) : 0
+        return max(counted, rows, 1) - 1
+    }
+
     var followPosition: Double {
         TerminalFollowScroll.position(offsetY: contentOffset.y, maxOffsetY: maxScrollOffsetY)
     }

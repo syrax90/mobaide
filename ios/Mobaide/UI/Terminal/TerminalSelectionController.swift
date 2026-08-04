@@ -236,7 +236,13 @@ final class TerminalSelectionController: NSObject {
         guard cell.width > 0, cell.height > 0 else { return nil }
         let terminal = view.getTerminal()
         let dims = terminal.getDims()
-        let maxRow = terminal.buffer.yDisp + dims.rows - 1
+        // Counted from the content, not from `yDisp`: `clamp` moves an
+        // out-of-range row rather than refusing it, so a bound that sits above
+        // the rows on screen — which `yDisp` does for as long as a fling leaves
+        // it parked — would quietly relocate the touch and select text the user
+        // never pointed at. Rows the lookup window cannot reach still fail
+        // closed downstream, where `bufferLine` returns nil.
+        let maxRow = view.lastContentRow
         let raw = Position(
             col: Int((point.x / cell.width).rounded(.down)),
             row: Int((point.y / cell.height).rounded(.down))
