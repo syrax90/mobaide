@@ -329,6 +329,8 @@ private struct FlagRow: View {
                 .keyboardType(.numbersAndPunctuation)
         case .string:
             TextField("Value", text: $flag.textValue)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
         }
     }
 }

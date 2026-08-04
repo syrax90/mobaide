@@ -39,9 +39,14 @@ struct CreateOrEditTemplateSheet: View {
                     TextField("Name", text: $name)
                 }
                 Section("Prompt body") {
+                    // Same verbatim-input rule as the terminal composer: a saved
+                    // body is sent to the PTY unchanged, so `ls -la` must not be
+                    // stored as `Ls -la`.
                     TextEditor(text: $bodyText)
                         .font(MobaideTypography.code)
                         .frame(minHeight: 160)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
                 }
             }
             .navigationTitle(target == nil ? "New template" : "Edit template")

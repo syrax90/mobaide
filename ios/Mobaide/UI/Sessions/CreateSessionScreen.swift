@@ -96,6 +96,8 @@ private struct CreateSessionContent: View {
         }
         .alert("Codex login required", isPresented: codexLoginPresented) {
             SecureField("OpenAI API key", text: $model.codexApiKey)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
             Button("Log in") { Task { await model.submitCodexLogin() } }
             Button("Cancel", role: .cancel) { model.cancelCodexLogin() }
         } message: {
@@ -329,6 +331,8 @@ private struct CreateSessionContent: View {
         Section("Initial prompt") {
             TextField("Sent to each spawned session", text: $model.autoScanInitialPrompt, axis: .vertical)
                 .lineLimit(3...8)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
         }
 
         Section {
@@ -406,6 +410,8 @@ private struct CreateSessionContent: View {
         Toggle("Ultracode", isOn: ultracode)
         TextField("Append system prompt", text: appendSystemPrompt, axis: .vertical)
             .lineLimit(1...4)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
     }
 
     @ViewBuilder
@@ -454,6 +460,7 @@ private struct CreateSessionContent: View {
             TextField("Additional directories", text: $model.antigravityAddDirs, axis: .vertical)
                 .lineLimit(1...4)
                 .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
         }
     }
 

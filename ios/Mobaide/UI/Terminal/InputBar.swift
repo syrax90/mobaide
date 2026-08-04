@@ -196,9 +196,14 @@ struct InputBar: View {
             }
             .disabled(!model.isConnected)
 
+            // Verbatim input: this text is written straight to the PTY, so the
+            // keyboard must not capitalize `ls` into `Ls` or "correct" command
+            // tokens.
             TextField("Message", text: $model.inputText, axis: .vertical)
                 .lineLimit(1...5)
                 .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
                 .focused($inputFocused)
 
             Button(action: onSaveTemplate) {

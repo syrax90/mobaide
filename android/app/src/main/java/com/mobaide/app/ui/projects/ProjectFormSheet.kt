@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
@@ -46,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -103,6 +105,14 @@ fun ProjectFormSheet(
                 isError = state.nameError != null,
                 supportingText = { state.nameError?.let { Text(it) } },
                 singleLine = true,
+                // Unlike a template name, this one is a constrained identifier —
+                // `VALID_NAME` in ProjectFormState allows only letters, digits,
+                // spaces and `_-.`, so an autocorrected apostrophe or smart quote
+                // fails validation outright.
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .blurTouchTrigger { onTouch(ProjectFormState.Field.NAME) },
@@ -118,6 +128,10 @@ fun ProjectFormSheet(
                 isError = state.pathError != null,
                 supportingText = { state.pathError?.let { Text(it) } },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
                     .blurTouchTrigger { onTouch(ProjectFormState.Field.PATH) },
@@ -131,6 +145,10 @@ fun ProjectFormSheet(
                 },
                 label = { Text("Conda env (optional)") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
 

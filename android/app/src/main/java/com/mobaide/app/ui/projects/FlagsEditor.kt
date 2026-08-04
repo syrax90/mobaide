@@ -32,6 +32,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
@@ -103,6 +104,13 @@ private fun FlagRow(
                 isError = keyError != null,
                 supportingText = { keyError?.let { Text(it) } },
                 singleLine = true,
+                // The key becomes the flag name (`add-dir`, `model`) on the
+                // agent's command line — exactly the short hyphenated token an
+                // IME likes to "correct".
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier.weight(1f),
             )
             TypeDropdown(
@@ -157,6 +165,12 @@ private fun FlagRow(
                 isError = valueError != null,
                 supportingText = { valueError?.let { Text(it) } },
                 singleLine = true,
+                // Flag values reach the agent's command line verbatim — paths,
+                // regexes and URLs must survive the keyboard untouched.
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrectEnabled = false,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
