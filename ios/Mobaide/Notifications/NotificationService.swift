@@ -124,7 +124,17 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
     /// strand a `.provisional` install — which re-requests on every alert —
     /// quiet forever. Re-prompt suppression comes from the `authorizationStatus`
     /// switch below, not from this slot.
+    ///
+    /// Creating the task and publishing it into the slot both happen while the
+    /// lock is held, and that ordering is load-bearing: a request that resolves
+    /// immediately (the app is inactive, so no prompt is shown) would otherwise
+    /// evict before it was ever published, and the assignment would then cache a
+    /// finished task forever. Because eviction needs this same lock it blocks
+    /// until publication has happened, so the slot always ends up `nil` rather
+    /// than stale. Do not hoist the `Task` out of the critical section.
     private func startAuthorizationRequest() -> Task<Bool, Never> {
+        // `OSAllocatedUnfairLock` is a struct over heap storage, so this copy is
+        // the same lock and the same slot the task below clears.
         let slotLock = authorizationRequest
         return slotLock.withLock { slot in
             if let inFlight = slot { return inFlight }
