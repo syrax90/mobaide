@@ -74,7 +74,7 @@ final class AttentionCoordinatorTests: XCTestCase {
         XCTAssertEqual(presenter.removed, ["d"], "remove B\\A")
     }
 
-    func testProvisionalAuthorizationRequestedOnceOnFirstFullyConnected() async {
+    func testAuthorizationRequestedOnceOnFirstFullyConnected() async {
         let presenter = FakeAttentionPresenter()
         let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
         let coordinator = makeCoordinator(presenter: presenter, authStates: authStates)

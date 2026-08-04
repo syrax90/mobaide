@@ -39,7 +39,7 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
         lock.withLock { deliveredStorage }
     }
 
-    func requestProvisionalAuthorization() async {
+    func requestAuthorization() {
         lock.withLock { authRequestStorage += 1 }
     }
 

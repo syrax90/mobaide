@@ -72,9 +72,17 @@ grace (`AppLifecycleController`), and events missed while suspended are
 re-derived from a `GET /api/sessions` snapshot on foregrounding — the
 `attention` field is stamped on every snapshot for exactly this recovery,
 posting the set the client never showed and removing alerts whose attention is
-gone. Authorization is requested silently as `.provisional`, so background
-alerts arrive quietly (no heads-up banner/sound until the user promotes them) —
-a deliberate divergence from Android's loud runtime prompt.
+gone. Authorization is requested as the full `[.alert, .sound, .badge]` on first
+`.fullyConnected`, matching Android's loud runtime prompt, so alerts arrive as
+heads-up banners with sound. The request is fire-and-forget (a non-`async`
+`AttentionPresenting.requestAuthorization()` over a single-flight `Task`): the
+system prompt blocks on the user and cannot display at all while backgrounded,
+and `handleAuth`'s loop is serial, so awaiting it would hold a logout or
+agent-switch teardown behind the dialog. Earlier builds requested `.provisional`,
+which grants quiet-only delivery and — the non-obvious part — also caps whatever
+`willPresent` returns down to `.list`, so foreground alerts were silent for the
+same reason; an install still in that state is promoted by re-requesting without
+`.provisional` the first time an alert would post.
 CLA-106 (iOS-10) closes the suspended-app gap with APNs alert pushes: the
 agent mirrors each `session.attention` as a `user_event` control frame, and
 the central server broadcasts it on `/relay/ws/user-events` — pushing via APNs

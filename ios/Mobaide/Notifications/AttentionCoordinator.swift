@@ -67,8 +67,10 @@ final class AttentionCoordinator {
     }
 
     /// Authorization + agent-scoped notification lifecycle, driven by the auth
-    /// state. On reaching `.fullyConnected`: request provisional authorization
-    /// once, then reconcile — so attention that accrued while the app wasn't
+    /// state. On reaching `.fullyConnected`: request notification authorization
+    /// once — fire-and-forget, because the system prompt blocks on the user and
+    /// this loop is serial, so awaiting it would hold a teardown state behind
+    /// the dialog — then reconcile, so attention that accrued while the app wasn't
     /// running (a cold launch after iOS killed a suspended app) or while the
     /// agent was disconnected is posted, since the `.active` path only
     /// reconciles a background→foreground resume and the connect snapshot
@@ -86,7 +88,7 @@ final class AttentionCoordinator {
         case .fullyConnected:
             if !didRequestAuthorization {
                 didRequestAuthorization = true
-                await presenter.requestProvisionalAuthorization()
+                presenter.requestAuthorization()
             }
             // Reconcile off the serial auth loop so a subsequent teardown state
             // (logout / agent switch) isn't blocked behind the network snapshot.

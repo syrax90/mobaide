@@ -10,8 +10,19 @@ final class NotificationServiceRequestTests: XCTestCase {
         XCTAssertEqual(request?.content.threadIdentifier, "sess-42")
         XCTAssertEqual(request?.content.title, "Permission needed")
         XCTAssertEqual(request?.content.body, "Bug fix is waiting for your approval")
-        XCTAssertNotNil(request?.content.sound)
+        XCTAssertEqual(request?.content.sound, .default)
         XCTAssertNil(request?.trigger)
+    }
+
+    func testAuthorizationOptionsRequestLoudDeliveryNotProvisional() {
+        let options = NotificationService.authorizationOptions
+        XCTAssertTrue(options.contains(.alert))
+        XCTAssertTrue(options.contains(.sound))
+        XCTAssertTrue(options.contains(.badge))
+        XCTAssertFalse(
+            options.contains(.provisional),
+            "provisional grants quiet-only delivery: no banner, no sound, and it caps willPresent to .list"
+        )
     }
 
     func testRequestNilForUnnotifiableAttention() {

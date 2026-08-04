@@ -1,4 +1,5 @@
 import UserNotifications
+import os
 
 /// `UNUserNotificationCenter` wrapper + delegate (port of Android
 /// `AttentionNotifier` plus the notification-facing half of
@@ -7,13 +8,27 @@ import UserNotifications
 /// and hands a tapped notification's session id to the deep-link router.
 ///
 /// `@unchecked Sendable`: `UNUserNotificationCenterDelegate` requires
-/// `NSObject`, which is not `Sendable`. Every stored property is immutable
-/// and `Sendable` (the tracker is thread-safe, the center is a thread-safe
-/// singleton, `onTap` is `@Sendable`), so there is no mutable state to race.
+/// `NSObject`, which is not `Sendable`. Every stored property is either
+/// immutable and `Sendable` (the tracker is thread-safe, the center is a
+/// thread-safe singleton, `onTap` is `@Sendable`) or lock-guarded
+/// (`authorizationRequest`), so there is no unsynchronised mutable state.
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate, AttentionPresenting, @unchecked Sendable {
+    /// Loud delivery: heads-up banner + sound, on the Lock Screen and while
+    /// foregrounded. Deliberately excludes `.provisional`, which grants
+    /// quiet-only delivery (Notification Center, no banner, no sound) and
+    /// additionally caps whatever `willPresent` returns down to `.list`.
+    static let authorizationOptions: UNAuthorizationOptions = [.alert, .sound, .badge]
+
     private let tracker: ForegroundSessionTracker
     private let center: UNUserNotificationCenter
     private let onTap: @Sendable (String) -> Void
+
+    /// Single-flight slot for an in-flight `requestAuthorization`, so the
+    /// coordinator's fire-and-forget request and a racing inline request from
+    /// `post` share one system prompt. Cleared when a request resolves without
+    /// a grant: a request made while the app is not active shows no prompt, so
+    /// it has to stay retryable.
+    private let authorizationRequest = OSAllocatedUnfairLock<Task<Bool, Never>?>(initialState: nil)
 
     init(
         tracker: ForegroundSessionTracker,
@@ -72,20 +87,45 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         Set(await center.deliveredNotifications().map { $0.request.identifier })
     }
 
-    func requestProvisionalAuthorization() async {
-        _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge, .provisional])
+    func requestAuthorization() {
+        _ = startAuthorizationRequest()
+    }
+
+    /// Starts the authorization request, or joins the one already in flight, so
+    /// concurrent callers never queue a second system prompt.
+    private func startAuthorizationRequest() -> Task<Bool, Never> {
+        authorizationRequest.withLock { slot in
+            if let inFlight = slot { return inFlight }
+            let task = Task { [center] in
+                (try? await center.requestAuthorization(options: Self.authorizationOptions)) ?? false
+            }
+            slot = task
+            return task
+        }
     }
 
     private func isAuthorized() async -> Bool {
         switch await center.notificationSettings().authorizationStatus {
-        case .authorized, .provisional:
+        case .authorized:
+            return true
+        case .provisional:
+            // Builds before this one asked for `.provisional`, which leaves the
+            // install on quiet-only delivery. Re-requesting without it promotes
+            // to full authorization (provisional records a provisional grant,
+            // not a user decision, so the prompt still shows). Fire-and-forget:
+            // provisional already delivers, so this alert must not wait on it.
+            requestAuthorization()
             return true
         case .notDetermined:
-            // The coordinator's auth task requests provisional authorization on
-            // first `.fullyConnected`, but it and the event loop are unordered,
-            // so the first `.sessionAttention` can arrive here first. Request it
-            // inline (silent, near-instant) so that first alert is never dropped.
-            return (try? await center.requestAuthorization(options: [.alert, .sound, .badge, .provisional])) ?? false
+            // The coordinator's auth task requests authorization on first
+            // `.fullyConnected`, but it and the event loop are unordered, so the
+            // first `.sessionAttention` can arrive here first. Join the same
+            // single-flight request so that first alert is never dropped.
+            let granted = await startAuthorizationRequest().value
+            if !granted {
+                authorizationRequest.withLock { $0 = nil }
+            }
+            return granted
         default:
             return false
         }
