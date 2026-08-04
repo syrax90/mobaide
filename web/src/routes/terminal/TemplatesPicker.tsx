@@ -20,8 +20,8 @@ interface SectionProps {
   templates: readonly PromptTemplate[];
   onPick: (template: PromptTemplate) => void;
   onToggleFavorite: (template: PromptTemplate) => void;
-  /** The row whose favourite PATCH is in flight, if any. */
-  pendingFavoriteId: string | undefined;
+  /** Rows whose favourite PATCH is in flight. */
+  pendingFavorites: ReadonlySet<string>;
 }
 
 function Section({
@@ -29,7 +29,7 @@ function Section({
   templates,
   onPick,
   onToggleFavorite,
-  pendingFavoriteId,
+  pendingFavorites,
 }: SectionProps) {
   if (templates.length === 0) return null;
   return (
@@ -56,7 +56,7 @@ function Section({
               // lands. A second click inside the round trip would send the same
               // boolean again and silently drop the user's toggle. Same
               // in-flight guard `Devices` and `GraceBanner` use.
-              disabled={pendingFavoriteId === template.templateId}
+              disabled={pendingFavorites.has(template.templateId)}
               aria-pressed={template.isFavorite}
               aria-label={
                 template.isFavorite
@@ -96,9 +96,29 @@ export function TemplatesPicker({ onPick, onClose }: TemplatesPickerProps) {
     ...wsBackedQueryOptions,
   });
 
+  // Tracked as a set rather than read off the mutation observer. A
+  // `useMutation` observer only ever describes its *latest* call — `mutate()`
+  // detaches the previous mutation — so toggling row A then row B would hand
+  // A's star back while A's PATCH was still running, and a third click on A
+  // would re-send the same stale absolute boolean. A half-guard is worse than
+  // none: it advertises a serialization it does not provide.
+  const [pendingFavorites, setPendingFavorites] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+
   const favorite = useMutation({
     mutationFn: (template: PromptTemplate) =>
       setTemplateFavorite(template.templateId, !template.isFavorite),
+    onMutate: (template) => {
+      setPendingFavorites((pending) => new Set(pending).add(template.templateId));
+    },
+    onSettled: (_data, _error, template) => {
+      setPendingFavorites((pending) => {
+        const next = new Set(pending);
+        next.delete(template.templateId);
+        return next;
+      });
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.templates() });
     },
@@ -106,10 +126,6 @@ export function TemplatesPicker({ onPick, onClose }: TemplatesPickerProps) {
       useToastStore.getState().show('Failed to update template', 'error');
     },
   });
-
-  const pendingFavoriteId = favorite.isPending
-    ? favorite.variables.templateId
-    : undefined;
   const grouped = groupTemplates(templates.data ?? [], filter);
   const empty =
     grouped.recents.length === 0 &&
@@ -156,21 +172,21 @@ export function TemplatesPicker({ onPick, onClose }: TemplatesPickerProps) {
         templates={grouped.recents}
         onPick={pick}
         onToggleFavorite={favorite.mutate}
-        pendingFavoriteId={pendingFavoriteId}
+        pendingFavorites={pendingFavorites}
       />
       <Section
         title="Favourites"
         templates={grouped.favorites}
         onPick={pick}
         onToggleFavorite={favorite.mutate}
-        pendingFavoriteId={pendingFavoriteId}
+        pendingFavorites={pendingFavorites}
       />
       <Section
         title="All"
         templates={grouped.others}
         onPick={pick}
         onToggleFavorite={favorite.mutate}
-        pendingFavoriteId={pendingFavoriteId}
+        pendingFavorites={pendingFavorites}
       />
     </div>
   );

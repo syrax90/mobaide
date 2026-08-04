@@ -60,6 +60,9 @@ function TerminalView({ model }: TerminalViewProps) {
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  // Bumped on every template pick so the composer can take focus and select
+  // the inserted body; it is already mounted, so `autoFocus` cannot help.
+  const [insertToken, setInsertToken] = useState(0);
 
   const running = isSessionRunning(view.status);
   // `replayPainting` mirrors the model's own `pendingReplayWrites` term: after
@@ -140,6 +143,7 @@ function TerminalView({ model }: TerminalViewProps) {
           model={model}
           value={view.composer}
           canSend={live && running}
+          insertToken={insertToken}
           onOpenTemplates={() => {
             setTemplatesOpen(true);
           }}
@@ -155,6 +159,7 @@ function TerminalView({ model }: TerminalViewProps) {
             model.setComposer(template.body);
             model.setComposerVisible(true);
             setTemplatesOpen(false);
+            setInsertToken((token) => token + 1);
           }}
         />
       )}

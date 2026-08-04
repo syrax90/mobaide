@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 
 interface ComposerProps {
@@ -6,6 +6,14 @@ interface ComposerProps {
   value: string;
   canSend: boolean;
   onOpenTemplates: () => void;
+  /**
+   * Bumped when text is inserted from outside — a template pick. `autoFocus`
+   * only fires on mount, and the composer is already mounted whenever the
+   * picker is open (its only entry point is the button below), so without this
+   * the picker's unmount would drop focus to `document.body` right when the
+   * user wants to edit what was just inserted.
+   */
+  insertToken: number;
 }
 
 /**
@@ -17,9 +25,27 @@ interface ComposerProps {
  * belongs here rather than in the grid, and why Enter sends while Shift+Enter
  * inserts a newline.
  */
-export function Composer({ model, value, canSend, onOpenTemplates }: ComposerProps) {
+export function Composer({
+  model,
+  value,
+  canSend,
+  onOpenTemplates,
+  insertToken,
+}: ComposerProps) {
   const fieldId = useId();
+  const field = useRef<HTMLTextAreaElement>(null);
   const ready = canSend && value.trim().length > 0;
+
+  // Runs after commit, so `value` is already the inserted body — which is what
+  // makes selecting it meaningful (plan step 8: insert, select, touch). Skips
+  // the initial render, where `autoFocus` has it covered.
+  useEffect(() => {
+    if (insertToken === 0) return;
+    const node = field.current;
+    if (node === null) return;
+    node.focus();
+    node.select();
+  }, [insertToken]);
 
   return (
     <form
@@ -34,6 +60,7 @@ export function Composer({ model, value, canSend, onOpenTemplates }: ComposerPro
       </label>
       <textarea
         id={fieldId}
+        ref={field}
         className="field-input terminal-composer-input"
         // The composer only ever mounts because the user asked for it — the
         // toggle button, or "Send to input", which clears the selection and so

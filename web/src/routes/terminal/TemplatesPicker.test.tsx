@@ -17,7 +17,10 @@ import type { PromptTemplate } from '../../api/templateRepository';
 const repo = vi.hoisted(() => ({
   templates: [] as PromptTemplate[],
   patches: [] as { templateId: string; isFavorite: boolean }[],
-  settleFavorite: undefined as ((outcome: 'ok' | 'failed') => void) | undefined,
+  // Keyed by template id, not a single slot: two rows can hold PATCHes open at
+  // once, and that is the case the guard exists for — a second in-flight
+  // request must not overwrite the first one's resolver.
+  settlers: new Map<string, (outcome: 'ok' | 'failed') => void>(),
   listGate: undefined as Promise<void> | undefined,
 }));
 
@@ -34,10 +37,10 @@ vi.mock('../../api/templateRepository', async (importOriginal) => {
     setTemplateFavorite: (templateId: string, isFavorite: boolean) => {
       repo.patches.push({ templateId, isFavorite });
       return new Promise<void>((resolve, reject) => {
-        repo.settleFavorite = (outcome) => {
+        repo.settlers.set(templateId, (outcome) => {
           if (outcome === 'ok') resolve();
           else reject(new Error('PATCH refused'));
-        };
+        });
       });
     },
   };
@@ -85,6 +88,13 @@ async function starEnabled(name: string): Promise<void> {
   });
 }
 
+/** Wait for the guard to take a star, rather than for one notification round. */
+async function starDisabled(name: string): Promise<void> {
+  await waitFor(() => {
+    expect(star(name)).toBeDisabled();
+  });
+}
+
 /** Hold the refetch a successful PATCH triggers open; the return opens it. */
 function holdList(): () => void {
   let open = (): void => undefined;
@@ -96,11 +106,12 @@ function holdList(): () => void {
   return open;
 }
 
-/** Settle the PATCH in flight, rather than passing quietly on a stale one. */
-async function settlePatch(outcome: 'ok' | 'failed'): Promise<void> {
-  const settle = repo.settleFavorite;
-  if (settle === undefined) throw new Error('no favourite PATCH is in flight');
-  repo.settleFavorite = undefined;
+/** Settle one row's PATCH, rather than passing quietly on a stale one. */
+async function settlePatch(name: string, outcome: 'ok' | 'failed'): Promise<void> {
+  const templateId = `id-${name}`;
+  const settle = repo.settlers.get(templateId);
+  if (settle === undefined) throw new Error(`no favourite PATCH in flight for ${name}`);
+  repo.settlers.delete(templateId);
   settle(outcome);
   await flush();
 }
@@ -118,7 +129,7 @@ async function renderPicker(...templates: PromptTemplate[]): Promise<void> {
 beforeEach(() => {
   repo.templates = [];
   repo.patches.length = 0;
-  repo.settleFavorite = undefined;
+  repo.settlers.clear();
   repo.listGate = undefined;
 });
 
@@ -156,7 +167,7 @@ describe('TemplatesPicker favourite guard', () => {
     const openList = holdList();
     repo.templates = [{ ...template('alpha'), isFavorite: true }];
 
-    await settlePatch('ok');
+    await settlePatch('alpha', 'ok');
 
     expect(star('alpha')).toBeDisabled();
 
@@ -166,12 +177,53 @@ describe('TemplatesPicker favourite guard', () => {
     expect(star('alpha')).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('holds every row with a PATCH in flight, not only the most recent one', async () => {
+    // A `useMutation` observer only ever describes its *latest* call — `mutate()`
+    // detaches the one before it — so reading the guard off the observer handed
+    // alpha's star back the moment beta was clicked, while alpha's PATCH was
+    // still open. A third click on alpha would then re-send the same stale
+    // absolute boolean: exactly the lost update the guard was added to prevent.
+    await renderPicker(template('alpha'), template('beta'));
+
+    await clickStar('alpha');
+    await clickStar('beta');
+
+    await starDisabled('alpha');
+    await starDisabled('beta');
+
+    await clickStar('alpha');
+
+    expect(repo.patches).toEqual([
+      { templateId: 'id-alpha', isFavorite: true },
+      { templateId: 'id-beta', isFavorite: true },
+    ]);
+  });
+
+  it('hands each star back on its own settle, leaving the other held', async () => {
+    await renderPicker(template('alpha'), template('beta'));
+    await clickStar('alpha');
+    await clickStar('beta');
+
+    await settlePatch('beta', 'ok');
+    await starEnabled('beta');
+
+    // Beta's round trip is over — including the refetch its success triggers —
+    // and alpha's is not, so alpha stays under the guard.
+    expect(star('alpha')).toBeDisabled();
+
+    await settlePatch('alpha', 'ok');
+    await starEnabled('alpha');
+
+    await clickStar('alpha');
+    expect(repo.patches).toHaveLength(3);
+  });
+
   it('hands the star back when the PATCH fails, so the toggle can be retried', async () => {
     // No refetch follows a failure, so nothing else would ever clear the guard.
     await renderPicker(template('alpha'));
     await clickStar('alpha');
 
-    await settlePatch('failed');
+    await settlePatch('alpha', 'failed');
     await starEnabled('alpha');
 
     await clickStar('alpha');

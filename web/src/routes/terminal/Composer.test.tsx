@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { Composer } from './Composer';
 
+/** Non-empty on purpose: the selection cases below assert against its length. */
+const body = 'にほん';
+
 /**
  * The composer only ever calls back into the model, so a recorder is enough —
  * a real model would open a socket and an emulator to answer one method.
@@ -16,16 +19,26 @@ function renderComposer() {
     setComposer: () => undefined,
   } as unknown as TerminalSessionModel;
 
-  render(
+  const composer = (insertToken: number) => (
     <Composer
       model={model}
-      value="にほん"
+      value={body}
       canSend
       onOpenTemplates={() => undefined}
-    />,
+      insertToken={insertToken}
+    />
   );
 
-  return { field: screen.getByLabelText('Message'), calls };
+  const { rerender } = render(composer(0));
+
+  return {
+    field: screen.getByLabelText<HTMLTextAreaElement>('Message'),
+    calls,
+    /** What `TerminalScreen` does when a template pick lands in the composer. */
+    insert: (token: number): void => {
+      rerender(composer(token));
+    },
+  };
 }
 
 describe('Composer', () => {
@@ -39,6 +52,33 @@ describe('Composer', () => {
     const { field } = renderComposer();
 
     expect(field).toHaveFocus();
+  });
+
+  it('takes focus back and selects the whole body when a token bump inserts text', () => {
+    // The picker's only way in is the composer's own Templates button, so the
+    // composer is necessarily already mounted when a pick lands: `autoFocus`
+    // cannot fire a second time, and unmounting the picker drops focus to
+    // `document.body`. Selecting the insert is the rest of the contract — the
+    // body is a starting point the user is expected to edit or replace.
+    const { field, insert } = renderComposer();
+    field.blur();
+
+    insert(1);
+
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe(body.length);
+  });
+
+  it('leaves the value the composer mounts with unselected', () => {
+    // The initial token is skipped because `autoFocus` already covers mount —
+    // and mounting with text is a real path: "Send to input" opens the composer
+    // with the terminal selection already in it. Selecting that on arrival
+    // would let the next keystroke wipe what the user just sent over.
+    const { field } = renderComposer();
+
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(field.selectionEnd);
   });
 
   it('sends on a plain Enter and keeps the newline out of the field', () => {
