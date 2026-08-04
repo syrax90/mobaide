@@ -16,7 +16,6 @@
 
 const OWNER = {
   shortcuts: 'WEB-06 — keyboard & saved shortcuts',
-  pairing: 'WEB-08 — pairing and per-agent tokens',
   projects: 'WEB-09 — projects, git items & templates',
   autoscan: 'WEB-10 — auto-scan monitor, notifications & settings',
   /**
@@ -27,6 +26,13 @@ const OWNER = {
    * Applies on both axes: the agent's Codex-login pair lands here for the same
    * reason the central-server auth DTOs do — one required field each, no
    * default, no three-state, nothing Zod would add.
+   *
+   * WEB-08 moved the whole pairing/per-agent-token group here rather than
+   * mirroring it. Every one of those DTOs is REST-only: the pairing payload
+   * that *does* need a hand-written parser is the `MOBA1|…` QR string, which
+   * appears in no OpenAPI schema and is asserted from `pairing/qr_payload.json`
+   * below. `agent.status_changed`, the one pairing-adjacent WebSocket payload,
+   * already has its Zod mirror in `dto/userEvents.ts`.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -46,6 +52,7 @@ const OWNER = {
 export const COVERED_FIXTURES: readonly string[] = [
   'frames/terminal_frames.json',
   'frames/autoscan_frames.json',
+  'pairing/qr_payload.json',
   'relay/relay_mapping.json',
   'dto/agent/AntigravityOptionsModel.json',
   'dto/agent/ClaudeOptionsModel.json',
@@ -93,19 +100,19 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/ProjectOrderRequest.json': OWNER.projects,
   'dto/agent/ProjectUpdate.json': OWNER.projects,
   'dto/agent/ProjectWrite.json': OWNER.projects,
-  'dto/agent/RefreshRequest.json': OWNER.pairing,
+  'dto/agent/RefreshRequest.json': OWNER.generated,
   'dto/agent/RunNowRequest.json': OWNER.autoscan,
   'dto/agent/RunNowResponse.json': OWNER.autoscan,
   'dto/agent/ScrollbackResponse.json': OWNER.unusedByClients,
   'dto/agent/StartScanRequest.json': OWNER.autoscan,
   'dto/agent/StopScanRequest.json': OWNER.autoscan,
-  'dto/agent/TokenRequest.json': OWNER.pairing,
-  'dto/agent/TokenResponse.json': OWNER.pairing,
+  'dto/agent/TokenRequest.json': OWNER.generated,
+  'dto/agent/TokenResponse.json': OWNER.generated,
 
-  'dto/central/AgentSummaryResponse.json': OWNER.pairing,
+  'dto/central/AgentSummaryResponse.json': OWNER.generated,
   'dto/central/CancelAccountDeletionResponse.json': OWNER.generated,
-  'dto/central/CreateAgentRequest.json': OWNER.pairing,
-  'dto/central/CreateAgentResponse.json': OWNER.pairing,
+  'dto/central/CreateAgentRequest.json': OWNER.generated,
+  'dto/central/CreateAgentResponse.json': OWNER.generated,
   'dto/central/CreateShortcutRequest.json': OWNER.shortcuts,
   'dto/central/CreateTemplateRequest.json': OWNER.projects,
   'dto/central/DeleteAccountReauthDetail.json': OWNER.generated,
@@ -115,11 +122,11 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/central/ForgotPasswordRequest.json': OWNER.generated,
   'dto/central/ForgotPasswordResponse.json': OWNER.generated,
   'dto/central/GoogleAuthRequest.json': OWNER.generated,
-  'dto/central/MobileTokenRequest.json': OWNER.pairing,
-  'dto/central/MobileTokenResponse.json': OWNER.pairing,
-  'dto/central/PairingClaimRequest.json': OWNER.pairing,
-  'dto/central/PairingClaimResponse.json': OWNER.pairing,
-  'dto/central/ReRegisterAgentResponse.json': OWNER.pairing,
+  'dto/central/MobileTokenRequest.json': OWNER.generated,
+  'dto/central/MobileTokenResponse.json': OWNER.generated,
+  'dto/central/PairingClaimRequest.json': OWNER.generated,
+  'dto/central/PairingClaimResponse.json': OWNER.generated,
+  'dto/central/ReRegisterAgentResponse.json': OWNER.generated,
   'dto/central/RegisterPushTokenRequest.json': OWNER.notApplicable,
   'dto/central/ResendRateLimitedDetail.json': OWNER.generated,
   'dto/central/ResendRateLimitedErrorBody.json': OWNER.generated,

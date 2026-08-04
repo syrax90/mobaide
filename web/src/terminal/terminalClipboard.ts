@@ -19,26 +19,10 @@
  */
 import type { IDisposable, Terminal } from '@xterm/xterm';
 import type { IClipboardProvider } from '@xterm/addon-clipboard';
+import { writeClipboardText } from '../lib/clipboard';
 
 /** OSC 52's `Pc` value for the system clipboard. */
 const SYSTEM_SELECTION = 'c';
-
-/**
- * Best-effort clipboard write.
- *
- * Never rejects. Chromium grants `clipboard-write` to the focused document, but
- * Firefox and Safari refuse a write with no user gesture behind it — which is
- * exactly the OSC 52 case — and an unhandled rejection there would surface
- * inside xterm's parser promise chain.
- */
-export async function writeClipboardText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Allows OSC 52 writes, reports nothing back.

@@ -115,8 +115,9 @@ export function stopUserEvents(): void {
  *
  * A successful open promotes the session to `fullyConnected`. The reverse is
  * deliberately not wired: `agentDisconnect()` clears *every* agent's tokens,
- * which is right for an unpair (WEB-08) and wrong for a network blip the
- * backoff loop is about to recover from.
+ * which is wrong for a network blip the backoff loop is about to recover from —
+ * and wrong for removing one agent too, which is why the agents screen pairs
+ * `clearAgentToken(agentId)` with `disconnectAgentEvents(agentId)` instead.
  */
 export function connectAgentEvents(
   client: QueryClient,

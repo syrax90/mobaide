@@ -4,7 +4,6 @@ import {
   isOsc52Read,
   refuseOsc52Reads,
   TerminalClipboardProvider,
-  writeClipboardText,
 } from './terminalClipboard';
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
@@ -21,21 +20,6 @@ beforeEach(() => {
 
 afterEach(() => {
   Reflect.deleteProperty(navigator, 'clipboard');
-});
-
-describe('writeClipboardText', () => {
-  it('reports a completed write', async () => {
-    await expect(writeClipboardText('hello')).resolves.toBe(true);
-    expect(writeText).toHaveBeenCalledWith('hello');
-  });
-
-  it('swallows the refusal Safari and Firefox give a gesture-less write', async () => {
-    // An unhandled rejection here would surface inside xterm's parser promise
-    // chain, which is where OSC 52 writes are dispatched from.
-    writeText.mockRejectedValue(new Error('NotAllowedError'));
-
-    await expect(writeClipboardText('hello')).resolves.toBe(false);
-  });
 });
 
 describe('TerminalClipboardProvider', () => {

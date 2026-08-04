@@ -9,6 +9,7 @@ export function RootLayout() {
           <NavLink to="/" className="app-brand">
             Mobaide
           </NavLink>
+          <NavLink to="/agents">Agents</NavLink>
           <NavLink to="/account">Account</NavLink>
           <NavLink to="/devices">Devices</NavLink>
         </nav>

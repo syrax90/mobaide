@@ -19,6 +19,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from mobaide.__main__ import _run_pair_qr, _run_re_pair, _run_show_qr
 from mobaide.agent._env_writer import env_path_for_prefix
+from mobaide.agent.pairing_qr import (
+    PAIRING_WEB_ORIGIN_ENV,
+    PendingPairing,
+    compute_trust_key_fp,
+    format_pairing_link,
+    save_pending_pairing,
+)
+from mobaide.agent.updater import InstallLayout
 
 
 def _ns(**overrides) -> argparse.Namespace:
@@ -55,6 +63,27 @@ def _seed_trust_key(prefix: Path) -> str:
         pub_b64 + "\n", encoding="utf-8",
     )
     return pub_b64
+
+
+def _seed_pending(prefix: Path, trust_key_fp: str = "ee" * 32) -> str:
+    """Write a pending-pairing file whose nonce is still far from expiry.
+
+    ``load_pending_pairing`` drops an expired payload, so the exp has to sit
+    well past any plausible test-run clock.
+    """
+    payload = f"MOBA1|https://relay.test|show-qr-nonce|{trust_key_fp}|2999999999"
+    save_pending_pairing(
+        InstallLayout(prefix=prefix),
+        PendingPairing(
+            nonce="show-qr-nonce",
+            expires_at="2999-01-01T00:00:00+00:00",
+            trust_key_fp=trust_key_fp,
+            ws_url="wss://relay.test/ws/pairing/show-qr-nonce",
+            relay_url="https://relay.test",
+            qr_payload=payload,
+        ),
+    )
+    return payload
 
 
 class TestRunPairQrEarlyExits:
@@ -106,6 +135,33 @@ class TestRunPairQrEarlyExits:
         assert rc == 3
         assert "central server" in capsys.readouterr().err.lower()
 
+    def test_render_prints_payload_line_and_browser_link(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        # A pending file whose fingerprint already matches the pinned trust
+        # key short-circuits ``initiate_pairing``, so the render path runs
+        # with no network at all.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        pub_b64 = _seed_trust_key(tmp_path)
+        monkeypatch.delenv("MOBAIDE_AGENT_TRUST_KEY", raising=False)
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        payload = _seed_pending(
+            tmp_path, trust_key_fp=compute_trust_key_fp(pub_b64)
+        )
+
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=AssertionError(
+                "a matching pending file must not trigger a new initiate"
+            ),
+        ):
+            rc = _run_pair_qr(_ns(prefix=str(tmp_path), print=True))
+
+        assert rc == 0
+        lines = capsys.readouterr().out.split("\n")
+        assert payload in lines
+        assert format_pairing_link(payload) in lines
+
 
 class TestRunShowQr:
     def test_already_paired_returns_0_without_render(
@@ -135,6 +191,41 @@ class TestRunShowQr:
         rc = _run_show_qr(_ns(prefix=str(tmp_path)))
 
         assert rc == 2
+
+    def test_pending_render_prints_payload_line_and_browser_link(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        payload = _seed_pending(tmp_path)
+
+        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 0
+        lines = capsys.readouterr().out.split("\n")
+        # The whole point of the line: it is copied as-is, so it carries no
+        # prefix and shares its line with nothing.
+        assert payload in lines
+        assert format_pairing_link(payload) in lines
+
+    def test_already_paired_prints_no_link(self, tmp_path, capsys):
+        # The early return is the one render site that must stay silent: an
+        # agent that is already paired has no live nonce, so a printed link
+        # would send the operator to a /pair screen that can only 410.
+        _seed_env(
+            tmp_path,
+            RELAY_SERVER_URL="wss://relay.test",
+            RELAY_AGENT_ID="already-paired-id",
+            RELAY_AGENT_TOKEN="already-paired-token",
+        )
+        _seed_pending(tmp_path)
+
+        rc = _run_show_qr(_ns(prefix=str(tmp_path)))
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Already paired" in out
+        assert "/pair#" not in out
+        assert "MOBA1|" not in out
 
 
 class TestRunShowQrRequirePending:

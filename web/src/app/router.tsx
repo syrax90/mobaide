@@ -6,6 +6,8 @@ import { Login } from '../routes/auth/Login';
 import { Register } from '../routes/auth/Register';
 import { ResetPassword } from '../routes/auth/ResetPassword';
 import { VerifyEmail } from '../routes/auth/VerifyEmail';
+import { Agents } from '../routes/agents/Agents';
+import { Pair } from '../routes/pair/Pair';
 import { SessionsScreen } from '../routes/sessions/SessionsScreen';
 import { NewSession } from '../routes/sessions/create/NewSession';
 import { AuthLayout } from './AuthLayout';
@@ -36,6 +38,16 @@ export const router = createBrowserRouter([
         ],
       },
       {
+        // Neither guarded nor anonymous-only. A pairing link must reach this
+        // component even when signed out, because the payload rides in the URL
+        // fragment and `requireAuthMiddleware` would redirect — carrying only
+        // `pathname + search` — before anything could read it. A signed-in user
+        // must reach it too, which rules out `RequireAnonymous`. The route
+        // handles the sign-in bounce itself, after stashing and scrubbing.
+        element: <AuthLayout />,
+        children: [{ path: 'pair', element: <Pair /> }],
+      },
+      {
         middleware: [requireAuthMiddleware],
         element: <RequireAuth />,
         children: [
@@ -45,6 +57,7 @@ export const router = createBrowserRouter([
               { index: true, element: <SessionsScreen /> },
               { path: 'account', element: <Account /> },
               { path: 'devices', element: <Devices /> },
+              { path: 'agents', element: <Agents /> },
               // Not `sessions/new`: keeping it off the terminal route's path
               // means correctness never rests on react-router ranking a static
               // segment above `:sessionId`.

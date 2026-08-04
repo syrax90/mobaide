@@ -1,0 +1,141 @@
+/**
+ * Every string the pairing screen can show, as pure functions.
+ *
+ * Mostly lifted from `AgentListViewModel` (Android) and `AgentListModel`
+ * (iOS). Three deliberate divergences, each noted at its definition: the
+ * malformed-input message (web has no camera, so "scanned QR" is wrong), the
+ * expiry message (the issue asks for the elapsed time a paste box can compute
+ * but a scanner cannot), and the trust-mismatch recovery step (a browser has
+ * no "clear app data").
+ */
+import { isApiError } from '../../api/errors';
+
+/** Both mobile clients cap the post-claim wait here; the agent's own write-retry ceiling. */
+export const WAIT_FOR_ONLINE_TIMEOUT_SECONDS = 60;
+
+/**
+ * Android says "Scanned QR is not a Mobaide pairing code"; there is nothing to
+ * scan here, and the two things a user can paste are named instead — a paste
+ * box can be wrong in ways a camera cannot.
+ */
+export const MALFORMED_PAYLOAD_MESSAGE =
+  'That is not a Mobaide pairing code. Copy the whole MOBA1|… line the agent printed, or the link next to it.';
+
+const FRESH_CODE_HINT =
+  'On the agent host, run `mobaide-agent show-qr` to render a fresh one.';
+
+/**
+ * Mobile shows a flat "QR expired. Render a fresh one on the agent." A pasted
+ * payload can be arbitrarily stale — a screenshot from last week, a scrollback
+ * line from this morning — so the elapsed time is the part that tells the user
+ * whether they mis-copied or simply waited too long.
+ */
+export function expiredMessage(expUnix: number, nowSeconds: number): string {
+  const elapsed = Math.max(0, nowSeconds - expUnix);
+  const minutes = Math.floor(elapsed / 60);
+  const ago =
+    minutes < 1
+      ? 'less than a minute ago'
+      : minutes === 1
+        ? '1 minute ago'
+        : minutes < 120
+          ? `${String(minutes)} minutes ago`
+          : `${String(Math.floor(minutes / 60))} hours ago`;
+  return `This pairing code expired ${ago}. ${FRESH_CODE_HINT}`;
+}
+
+/**
+ * How long a still-valid code has left, for the confirmation step.
+ *
+ * Mobile prints the raw `exp_unix` there. That is readable on a phone held
+ * next to the terminal that produced it, and useless in a browser tab opened
+ * from a link some minutes later.
+ */
+export function expiresInMessage(expUnix: number, nowSeconds: number): string {
+  const minutes = Math.floor(Math.max(0, expUnix - nowSeconds) / 60);
+  if (minutes < 1) return 'in under a minute';
+  if (minutes === 1) return 'in 1 minute';
+  return `in ${String(minutes)} minutes`;
+}
+
+/**
+ * Byte-identical to Android and iOS up to the final sentence, which names the
+ * browser's equivalent of clearing app data. No override anywhere: a mismatch
+ * is a hard refusal on every platform.
+ */
+export function trustMismatchMessage(relayUrl: string): string {
+  return (
+    `Trust key changed for ${relayUrl} — possible MITM. Refusing to claim. ` +
+    "If you intentionally rotated the relay key, clear this site's data to re-pin."
+  );
+}
+
+/**
+ * Claim failures, by status.
+ *
+ * Both mobile clients special-case only 410 and pass every other server
+ * `detail` straight through. That is a worse deal in a browser: a phone user
+ * is usually sitting at the agent host, while a desktop user often is not, and
+ * none of these details name a remedy. So each status the claim handler can
+ * raise gets copy that does.
+ */
+export function claimErrorMessage(error: unknown): string {
+  if (!isApiError(error)) {
+    return error instanceof Error && error.message !== ''
+      ? error.message
+      : 'Pairing failed.';
+  }
+  switch (error.status) {
+    case 400:
+      return `This pairing code was built with an older relay trust key. ${FRESH_CODE_HINT}`;
+    case 404:
+      return (
+        'The agent this code belongs to no longer exists on the relay. On the agent ' +
+        'host, run `mobaide-agent re-pair --fresh`, then pair again.'
+      );
+    case 409:
+      return (
+        'This agent is already paired to a different account. Its current owner has ' +
+        'to remove it before it can be paired here.'
+      );
+    case 410:
+      // Verbatim from both mobile clients.
+      return 'Pairing code consumed or expired. Render a fresh QR on the agent.';
+    case 503:
+      return (
+        'Pairing is not configured on this relay — it is missing its manifest ' +
+        'signing keys. Contact the relay operator.'
+      );
+    default:
+      return error.message !== '' ? error.message : 'Pairing failed.';
+  }
+}
+
+/**
+ * iOS's shape, not Android's.
+ *
+ * Android's version enumerates `Get-ScheduledTask MobaideAgent` and
+ * `agent.err.log` under `$env:ProgramFiles` — Windows-specific by design,
+ * because its user is holding a phone next to a desktop. A browser user's host
+ * is as likely to be Linux, so the short form travels better.
+ *
+ * `wsDelivered` is tri-state and `null` (an older relay that omits the field)
+ * appends nothing rather than claiming the push was staged.
+ */
+export function waitTimeoutMessage(
+  friendlyName: string,
+  wsDelivered: boolean | null,
+): string {
+  const parts = [
+    `‘${friendlyName}’ did not come online within ${String(WAIT_FOR_ONLINE_TIMEOUT_SECONDS)} s.`,
+  ];
+  if (wsDelivered === true) {
+    parts.push("The relay delivered credentials to the agent, but its tunnel hasn't connected yet.");
+  } else if (wsDelivered === false) {
+    parts.push("Credentials were staged for the agent's next reconnect.");
+  }
+  parts.push(
+    'On the agent host, run `mobaide-agent show-qr` to re-render the QR and restart pairing.',
+  );
+  return parts.join(' ');
+}

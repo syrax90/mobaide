@@ -32,17 +32,14 @@ import {
   isSessionRunning,
   type TerminalState,
 } from '../protocol/dto/terminalState';
+import { writeClipboardText } from '../lib/clipboard';
 import { SessionIoChannel, sessionChannelName } from '../realtime/channels';
 import { useConnectionStore } from '../realtime/connectionStore';
 import { registerDisposable, unregisterDisposable } from '../realtime/liveChannels';
 import { realScheduler, type Scheduler } from '../realtime/webSocketChannel';
 import { useToastStore } from '../stores/toastStore';
 import { useTerminalPrefsStore } from '../stores/terminalPrefsStore';
-import {
-  refuseOsc52Reads,
-  TerminalClipboardProvider,
-  writeClipboardText,
-} from './terminalClipboard';
+import { refuseOsc52Reads, TerminalClipboardProvider } from './terminalClipboard';
 import {
   foldSample,
   initialFollowState,

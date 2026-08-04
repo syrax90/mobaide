@@ -125,6 +125,30 @@ wizard.
 - Two new persisted keys: `mobaide-agent` (selected agent) and
   `mobaide-sessions` (last-used session per agent).
 
+## Agents and pairing (WEB-08)
+
+`/agents` lists and manages agents; `/pair` completes a pairing from a link or
+a pasted code.
+
+- `/pair` is **outside both route guards** on purpose. The payload rides in the
+  URL fragment, which `requireAuthMiddleware`'s `?next=` (built from
+  `pathname + search`) would drop, so the route captures it itself, stashes it
+  under `sessionStorage` key `mobaide-pairing`, scrubs the URL with
+  `navigate({… hash: ''}, {replace: true})` — assigning `location.hash` would
+  *push* a history entry Back re-exposes — and only then bounces to sign-in.
+- `src/protocol/pairingPayload.ts` is the TypeScript arm of the four-way
+  `MOBA1|…` contract, driven by `tests/protocol_fixtures/pairing/qr_payload.json`.
+  The paste box strips all whitespace first, because a terminal soft-wraps the
+  one-line payload and a copied soft-wrap carries the breaks.
+- Trust pins are TOFS in `localStorage` key `mobaide-trust-pins`; a mismatch is
+  a hard refusal with no override, matching mobile. Safari's 7-day storage cap
+  weakens this in a browser — CLA-199 replaces it with a server-side pin.
+- The claim's 200 is not proof of pairing. `agent.status_changed` with
+  `online: true` is, and it already invalidates `['agents']`, so the 60 s wait
+  rides the existing query rather than polling.
+- Two more persisted keys: `mobaide-trust-pins` (`localStorage`) and
+  `mobaide-pairing` (`sessionStorage`, the deep-link handoff).
+
 ## Terminal (WEB-05)
 
 `/agents/:agentId/sessions/:sessionId` is the **only lazy route** — xterm.js

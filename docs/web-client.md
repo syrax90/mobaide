@@ -20,7 +20,9 @@ TanStack Query bridge. WEB-05 (CLA-192) added the terminal screen on
 xterm.js 6: replay, follow mode and the unread badge, desktop copy/paste,
 the composer and the prompt-template picker. WEB-07 (CLA-193) added the
 sessions area — the live list with auto-resume, and the six-branch create
-wizard. The series is tracked in
+wizard. WEB-08 (CLA-194) added agents and pairing Phase 1 — the `/pair`
+route with its deep link and paste box, the `/agents` screen, and the
+pairing link the agent now prints under its QR. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -330,6 +332,113 @@ stored command server-side, and the agent-direct REST path rejects custom
 kinds outright. The Auto Scan branch posts to `/api/autoscan/start` and
 returns to the list; its monitor screen is WEB-10.
 
+## Agents and pairing (WEB-08)
+
+Two routes: `/agents` (guarded, in the app shell) lists and manages agents;
+`/pair` completes a pairing.
+
+**Why `/pair` sits outside both guards.** The payload rides in the URL
+*fragment*, and `requireAuthMiddleware` builds its `?next=` from
+`pathname + search` only, so a bounce through sign-in would drop it. Putting
+the nonce in a query string instead would put it in the relay's access log.
+So the route is public: it reads `useLocation().hash` in a mount effect,
+stashes the payload under `sessionStorage` key `mobaide-pairing`, scrubs the
+URL, and only then sends a signed-out visitor to `/login?next=/pair` —
+`useAfterAuth` brings them back. The scrub is `navigate({… hash: ''},
+{replace: true})`, never `location.hash = ''`: assigning to `location.hash`
+*pushes* a history entry, so Back would re-expose the nonce, and a bare
+`history.replaceState` would desync the router's own location.
+`RequireAnonymous` is equally wrong for the route, because a signed-in user
+must be able to open a pairing link.
+
+**The payload contract.** `src/protocol/pairingPayload.ts` is the fourth
+implementation of `MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}`, and
+the first shared golden for it —
+`tests/protocol_fixtures/pairing/qr_payload.json` — now drives the Python,
+TypeScript and Swift arms (Android reads no fixtures at all; CLA-235).
+Building it surfaced that the agent's `parse_qr_payload` was *looser* than
+both mobile parsers: Python's `int()` strips surrounding whitespace, honours
+`_` digit separators and has no 64-bit ceiling, and its blank check missed
+whitespace-only fields. That was tightened rather than encoded into the
+golden. The web arm adds one documented divergence: an `exp_unix` outside
+IEEE-754 safe-integer range is rejected rather than silently rounded, which
+only matters 285 million years from now.
+
+The paste box strips **all** whitespace before the anchored `^MOBA1|` test —
+the payload is printed on one unbroken line, but a terminal soft-wraps it and
+a copied soft-wrapped line carries the breaks. It also accepts the pairing
+link and a bare fragment, since the agent prints the payload and the link next
+to each other and either can end up on a clipboard.
+
+**Order of operations** follows both mobile clients exactly: parse → expiry →
+trust pin → confirm → claim. Expiry before trust is load-bearing (Android pins
+it in `skipsTrustKeyCheck`) — a stale screenshot from before a legitimate key
+rotation must read as "expired", not as a MITM refusal. The confirm step is
+kept even on the deep link: it names the relay, which is the phishing
+mitigation for a clicked link exactly as it is for a scanned QR.
+
+**Trust pinning** is TOFS in `localStorage` (`mobaide-trust-pins`), keyed by
+the relay URL normalized the way `TrustKeyPinning` normalizes it — trim, strip
+every trailing slash, lowercase. A mismatch never overwrites and has no
+override affordance, matching the mobile rule.
+
+One deliberate split from mobile: both mobile clients fold the read and the
+write into a single `verifyOrPin` that pins on first sight, which is safe when
+the only input channel is a camera the user is aiming. Here the input is a URL,
+so `checkTrustPin` (read-only) runs during validation and `pinTrustKey` runs
+from the confirm button. Folded together, any link a user merely *opened* would
+write a permanent pin — and since a mismatch is a hard refusal with no
+override, a payload naming the real relay with a wrong fingerprint would lock
+that browser out of pairing for good, recoverable only by clearing site data.
+
+The confirm step also carries the RFC 8628 §5.4 remote-phishing instruction,
+which is what makes it a mitigation rather than a speed bump: a pairing link
+works for whoever opens it, an attacker can run `pair-qr` against the *real*
+relay on their own machine, and every field on that screen would look correct.
+Only the code the user can read off their own terminal separates the two cases,
+so the screen says to compare it. Mobile has the same dialog without the
+instruction, but its delivery channel is a camera pointed at the host, so the
+remote vector does not exist there.
+
+The browser is a weaker home
+for this than a phone and knowingly so: Safari caps script-written storage at
+7 days of no interaction, degrading the pin to trust-on-most-recent-scan (and
+regenerating the device UUID, which under last-login-wins orphans a device
+row). CLA-199 replaces it with an account-level server-side pin.
+
+**Waiting for the agent.** A claim's 200 only proves the relay persisted
+credentials; `ws_delivered` is tri-state diagnostic (`null` from an older
+relay must never collapse to `false`) and only refines the timeout copy. The
+authoritative signal is `agent.status_changed` with `online: true`. Android
+polls its cached list once a second; web does not need to, because that event
+already invalidates `['agents']` and an invalidation refetches the mounted
+query. What web keeps is the reason mobile refreshes *twice* — a status event
+landing between the claim's refresh and the watcher's start would be rolled
+back by the in-flight stale snapshot — plus a 5 s defensive interval so a
+dropped socket cannot strand the screen for the full 60 s. The timeout copy
+is iOS's short form; Android's enumerates `Get-ScheduledTask` and
+`agent.err.log` paths, which are Windows-specific by design.
+
+**`/agents`** is full mobile parity: cards (status dot, name, Online/Offline,
+agent id, version, added, last seen), manual add, re-register, remove, and the
+install-commands panel. Two web-only card fields, both because a browser is
+the first client that can hold several agents at once: the agent id, which is
+what each host's `.env` carries, and the agent version, which is the fastest
+way to spot a host that missed an auto-update. The per-OS `.env` table and the
+install one-liners are byte-identical to `AgentCredentialsSheet` on both
+mobile clients, and are deliberately not OS-detected — the host is a different
+machine from the browser.
+
+Removing an agent calls `clearAgentToken(agentId)`, never
+`sessionStore.agentDisconnect()`, which clears *every* agent's tokens; it also
+drops the agent's events channel and its `mobaide-agent` / `mobaide-sessions`
+entries. The credentials panel is an inline panel rather than a `<dialog>`
+precisely so no Escape handler or backdrop can dismiss the one and only
+showing of a token — the web analogue of Android's `confirmValueChange` and
+iOS's `interactiveDismissDisabled`. Android's `EXTRA_IS_SENSITIVE` clipboard
+flag has no browser equivalent, so a copied token lands in ordinary clipboard
+history; that is why the panel points at pairing instead.
+
 ## Terminal screen (WEB-05)
 
 Built on **xterm.js 6.0** (`@xterm/xterm` plus the `fit`, `webgl`,
@@ -549,3 +658,13 @@ WEB-07's two divergences are **not** exempt and are tracked accordingly:
 recording the last-used session on open as well as on create is a behaviour
 change mobile has to follow (CLA-229 / CLA-230), and the session-card
 attention chip is iOS parity that Android does not yet render.
+
+WEB-08's divergences are all platform-convention exempt: the paste box and
+the `/pair` deep link exist because a desktop browser has no camera, the
+agent id and version on the card because a browser is the first client that
+can hold more than one agent, and the trust-mismatch copy's final sentence
+because a browser has no "clear app data". The `parse_qr_payload` tightening
+went the other way — it moved the agent's Python parser onto the mobile
+clients' stricter contract rather than away from it — and the shared golden
+now pins all four implementations, with the Android arm tracked in CLA-235
+and the duplicated `central_server` encoder in CLA-236.

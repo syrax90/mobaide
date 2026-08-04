@@ -8,8 +8,9 @@ import { useSessionStore } from '../../auth/sessionStore';
  * Adopt a fresh session and land the user where they were headed.
  *
  * The guard stores the blocked path in `?next=`, so a deep link survives the
- * detour through sign-in — which is what WEB-08's `/pair` handoff will rely
- * on. The destination is resolved with the same `safeNextPath` that
+ * detour through sign-in — which is what the `/pair` handoff relies on (the
+ * payload itself rides in `sessionStorage`, since a fragment would not survive
+ * the bounce). The destination is resolved with the same `safeNextPath` that
  * `RequireAnonymous` uses, because adopting the session re-renders that guard
  * and the two redirects race; agreeing on the target makes the race harmless.
  */

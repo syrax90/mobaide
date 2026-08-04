@@ -12,6 +12,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import re
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -84,11 +86,136 @@ def encode_qr_payload(
     return f"MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}"
 
 
+DEFAULT_PAIRING_WEB_ORIGIN = "https://app.mobaide.com"
+
+PAIRING_WEB_ORIGIN_ENV = "MOBAIDE_AGENT_PAIR_WEB_ORIGIN"
+
+
+def pairing_web_origin() -> str:
+    """Origin of the web client that serves ``/pair``.
+
+    Not derivable from the payload: ``relay_url`` is the relay's
+    ``PUBLIC_BASE_URL`` (``api.mobaide.com`` in production) while the SPA is a
+    separate host, so this is a fixed default with an env escape hatch for
+    self-hosted and development deployments. An override that is not ASCII
+    ``http(s)`` is ignored rather than honoured — printing a link nobody can
+    open is worse than printing the wrong host next to a payload that still
+    pastes, and a non-ASCII origin would make the link line unprintable on the
+    redirected consoles ``write_pairing_hints`` has to survive.
+    """
+    override = os.environ.get(PAIRING_WEB_ORIGIN_ENV, "").strip()
+    if override.isascii() and override.startswith(("https://", "http://")):
+        trimmed = override.rstrip("/")
+        if trimmed not in ("https:", "http:"):
+            return trimmed
+    return DEFAULT_PAIRING_WEB_ORIGIN
+
+
+def format_pairing_link(payload: str) -> str:
+    """Build the browser pairing link for a ``MOBA1|...`` payload.
+
+    The payload rides in the fragment, base64url-encoded without padding: a
+    raw ``|`` is not a legal URL character and terminal linkifiers stop at it,
+    which would hand the user a truncated link. A fragment also never reaches
+    the relay's access logs.
+
+    The web client's decoder mirrors this and is padding-tolerant
+    (``web/src/protocol/pairingPayload.ts``).
+    """
+    fragment = (
+        base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+    )
+    return f"{pairing_web_origin()}/pair#{fragment}"
+
+
+def _stream_can_encode(out, text: str) -> bool:
+    """Whether ``out``'s declared codec can carry ``text``.
+
+    The narrow-scope twin of ``_stream_supports_block_glyphs``: same probe,
+    against the caller's string instead of a fixed glyph.
+    """
+    if text.isascii():
+        return True
+    encoding = getattr(out, "encoding", None)
+    if not encoding:
+        return False
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return False
+    return True
+
+
+_UNPRINTABLE_HINT = (
+    "[mobaide-agent] The pairing code contains characters this console cannot "
+    "render — scan the QR above instead.\n"
+)
+
+
+def write_pairing_hints(payload: str, *, stream=None) -> None:
+    """Print the pasteable payload and the browser link under a rendered QR.
+
+    Two hard constraints, both learned from this module's existing failure
+    modes:
+
+    * The payload and the link each occupy a whole line with no prefix and are
+      never wrapped. A terminal's soft wrap is invisible to the user but a
+      copied soft-wrapped line carries embedded newlines, so any prefix or
+      manual break turns a working paste into a malformed one.
+    * This must never raise. The labels are ASCII, but ``relay_url`` comes from
+      the operator's ``PUBLIC_BASE_URL`` and may be an internationalized host,
+      so the payload and link are probed against the stream's codec first and
+      replaced with an ASCII notice when they do not fit. A Windows service
+      redirects stdout to a ``cp437``/``cp1252`` log file, and a
+      ``UnicodeEncodeError`` from the pairing monitor's render tears down the
+      pairing WebSocket before ``wait_for_claim`` — the incident
+      ``_stream_supports_block_glyphs`` documents — while the same error on the
+      ``show-qr`` path fails the installer.
+
+    Pasteable artifact first, link second, following ``gh auth login``.
+    """
+    out = stream if stream is not None else sys.stdout
+    link = format_pairing_link(payload)
+    if not _stream_can_encode(out, payload) or not _stream_can_encode(out, link):
+        out.write(_UNPRINTABLE_HINT)
+        out.flush()
+        return
+    out.write("[mobaide-agent] Pairing code (copy this entire line):\n")
+    out.write(f"{payload}\n")
+    out.write("[mobaide-agent] Or open this link in a browser:\n")
+    out.write(f"{link}\n")
+    out.flush()
+
+
+_EXP_UNIX_PATTERN = re.compile(r"\A[+-]?[0-9]+\Z")
+
+_INT64_MIN = -(2**63)
+
+_INT64_MAX = 2**63 - 1
+
+
 def parse_qr_payload(text: str) -> ParsedQrPayload | None:
     """Parse a QR string. Returns None on any malformedness.
 
-    Strict: rejects unknown versions, wrong field counts, non-numeric
-    expiry. Designed so the mobile parser can mirror this exactly.
+    Strict: rejects unknown versions, wrong field counts, blank required
+    fields, and anything the mobile clients' 64-bit integer parse would
+    reject for the expiry. Pinned across all four implementations by
+    ``tests/protocol_fixtures/pairing/qr_payload.json``.
+
+    ``int()`` alone is *looser* than Kotlin's ``toLongOrNull`` and Swift's
+    ``Int64(_:)``: it strips surrounding whitespace, honours ``_`` digit
+    separators, accepts non-ASCII digits, and has no 64-bit ceiling. Each of
+    those would parse here and be refused on a phone, so the shape is checked
+    before the conversion and the result is range-checked after it. The shape
+    pattern is anchored with ``\\A``/``\\Z`` rather than ``^``/``$`` because
+    Python's ``$`` also matches *before* a trailing newline, which would accept
+    a payload every other implementation rejects. Blankness
+    likewise means "empty once trimmed", matching ``isBlank()`` /
+    ``trimmingCharacters``; the values themselves are stored verbatim.
+
+    Expiry is deliberately not range-checked against the clock — that decision
+    belongs to the caller's state machine, and every client pins the fact that
+    a negative ``exp_unix`` parses.
     """
     parts = text.split("|")
     if len(parts) != 5:
@@ -96,11 +223,20 @@ def parse_qr_payload(text: str) -> ParsedQrPayload | None:
     version, relay_url, nonce, trust_key_fp, exp_str = parts
     if version != "MOBA1":
         return None
-    if not relay_url or not nonce or not trust_key_fp:
+    if not relay_url.strip() or not nonce.strip() or not trust_key_fp.strip():
+        return None
+    if not _EXP_UNIX_PATTERN.match(exp_str):
         return None
     try:
         exp_unix = int(exp_str)
     except ValueError:
+        # The shape check does not bound length, and CPython caps int()
+        # string conversion at sys.get_int_max_str_digits() (4300). Without
+        # this the function would *raise* where its whole contract is to
+        # return None, and the pairing monitor's retry loop would re-read the
+        # same payload forever instead of letting the TTL evict it.
+        return None
+    if not _INT64_MIN <= exp_unix <= _INT64_MAX:
         return None
     return ParsedQrPayload(
         version=version,

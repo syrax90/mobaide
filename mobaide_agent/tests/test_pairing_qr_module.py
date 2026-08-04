@@ -21,18 +21,51 @@ from pathlib import Path
 import pytest
 
 from mobaide.agent.pairing_qr import (
+    DEFAULT_PAIRING_WEB_ORIGIN,
+    PAIRING_WEB_ORIGIN_ENV,
     ParsedQrPayload,
     PendingPairing,
     clear_pending_pairing,
     compute_trust_key_fp,
     encode_qr_payload,
+    format_pairing_link,
     load_pending_pairing,
+    pairing_web_origin,
     parse_qr_payload,
     pending_pairing_path,
     read_pinned_trust_key_fp,
     render_qr_to_terminal,
     save_pending_pairing,
+    write_pairing_hints,
 )
+
+# Resolved from this file, never the CWD: pytest is run from ``mobaide_agent/``
+# so ``import mobaide`` picks up these sources rather than the installed
+# checkout, which leaves the repo root two levels up.
+_QR_PAYLOAD_FIXTURE = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "tests"
+        / "protocol_fixtures"
+        / "pairing"
+        / "qr_payload.json"
+    ).read_text(encoding="utf-8")
+)
+
+
+def _fixture_cases(key: str) -> list[dict]:
+    cases = _QR_PAYLOAD_FIXTURE[key]
+    assert cases, f"{key} is empty — the golden would assert nothing"
+    return cases
+
+
+def _case_ids(cases: list[dict]) -> list[str]:
+    return [case["name"] for case in cases]
+
+
+_ENCODE_CASES = _fixture_cases("encode_cases")
+_PARSE_CASES = _fixture_cases("parse_cases")
+_LINK_CASES = _fixture_cases("link_cases")
 
 
 @dataclass
@@ -109,6 +142,19 @@ class TestEncodeQrPayload:
 
         assert out == f"MOBA1|https://relay.test|n1|{'ff' * 32}|1700000000"
 
+    @pytest.mark.parametrize(
+        "case", _ENCODE_CASES, ids=_case_ids(_ENCODE_CASES)
+    )
+    def test_matches_shared_golden(self, case):
+        out = encode_qr_payload(
+            case["relay_url"],
+            case["nonce"],
+            case["trust_key_fp"],
+            case["exp_unix"],
+        )
+
+        assert out == case["expect"]
+
 
 class TestParseQrPayload:
     def test_round_trip_with_encode(self):
@@ -141,6 +187,194 @@ class TestParseQrPayload:
     )
     def test_returns_none_on_malformed_input(self, bad):
         assert parse_qr_payload(bad) is None
+
+    def test_absurd_digit_count_returns_none_rather_than_raising(self):
+        """Past ``sys.get_int_max_str_digits()`` the shape check passes but
+        ``int()`` raises; the guard in ``parse_qr_payload`` explains why that
+        must not escape."""
+        assert parse_qr_payload("MOBA1|https://relay.test|n|fp|" + "9" * 5000) is None
+
+    @pytest.mark.parametrize("case", _PARSE_CASES, ids=_case_ids(_PARSE_CASES))
+    def test_matches_shared_golden(self, case):
+        parsed = parse_qr_payload(case["raw"])
+        expected = case["expect"]
+
+        if expected is None:
+            assert parsed is None
+            return
+        assert parsed == ParsedQrPayload(
+            version=expected["version"],
+            relay_url=expected["relay_url"],
+            nonce=expected["nonce"],
+            trust_key_fp=expected["trust_key_fp"],
+            exp_unix=expected["exp_unix"],
+        )
+
+
+class TestPairingWebOrigin:
+    def test_defaults_when_unset(self, monkeypatch):
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+
+        assert pairing_web_origin() == DEFAULT_PAIRING_WEB_ORIGIN
+
+    @pytest.mark.parametrize(
+        "override,expected",
+        [
+            ("https://pair.example.com", "https://pair.example.com"),
+            # A dev server on loopback has no TLS; refusing plain http would
+            # make the override useless for exactly the case it exists for.
+            ("http://localhost:5173", "http://localhost:5173"),
+            ("https://pair.example.com/", "https://pair.example.com"),
+            # Every trailing slash, so the link never grows a `//pair`.
+            ("https://pair.example.com///", "https://pair.example.com"),
+            ("  https://pair.example.com  ", "https://pair.example.com"),
+        ],
+    )
+    def test_honours_usable_override(self, monkeypatch, override, expected):
+        monkeypatch.setenv(PAIRING_WEB_ORIGIN_ENV, override)
+
+        assert pairing_web_origin() == expected
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            "",
+            "app.mobaide.com",           # no scheme — not clickable
+            "ftp://app.mobaide.com",     # scheme a browser will not open
+            "javascript:alert(1)",       # would render an executable "link"
+            "https://",                  # scheme only: rstrip leaves "https:"
+            "http://",
+            "https:///",
+        ],
+    )
+    def test_ignores_unusable_override(self, monkeypatch, override):
+        # Falling back beats printing a link nobody can open: the payload on
+        # the line above still pastes, so a wrong host is recoverable and a
+        # broken URL is not.
+        monkeypatch.setenv(PAIRING_WEB_ORIGIN_ENV, override)
+
+        assert pairing_web_origin() == DEFAULT_PAIRING_WEB_ORIGIN
+
+
+class TestFormatPairingLink:
+    @pytest.mark.parametrize("case", _LINK_CASES, ids=_case_ids(_LINK_CASES))
+    def test_matches_shared_golden(self, monkeypatch, case):
+        monkeypatch.setenv(PAIRING_WEB_ORIGIN_ENV, case["origin"])
+
+        assert format_pairing_link(case["payload"]) == case["expect"]
+
+    @pytest.mark.parametrize("case", _LINK_CASES, ids=_case_ids(_LINK_CASES))
+    def test_fragment_is_url_safe(self, monkeypatch, case):
+        # The whole reason for base64url: a raw `|` is not a legal URL
+        # character and terminal linkifiers stop at the first one, handing the
+        # user a truncated link. `=` padding is stripped for the same reason.
+        monkeypatch.setenv(PAIRING_WEB_ORIGIN_ENV, case["origin"])
+
+        fragment = format_pairing_link(case["payload"]).split("#", 1)[1]
+
+        assert set(fragment) <= set(
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "abcdefghijklmnopqrstuvwxyz"
+            "0123456789-_"
+        )
+
+    @pytest.mark.parametrize("case", _LINK_CASES, ids=_case_ids(_LINK_CASES))
+    def test_fragment_round_trips_back_to_the_payload(self, monkeypatch, case):
+        monkeypatch.setenv(PAIRING_WEB_ORIGIN_ENV, case["origin"])
+        fragment = format_pairing_link(case["payload"]).split("#", 1)[1]
+
+        # What the web decoder does: restore the stripped padding, then decode.
+        padded = fragment + "=" * (-len(fragment) % 4)
+        decoded = base64.urlsafe_b64decode(padded).decode("utf-8")
+
+        assert decoded == case["payload"]
+
+
+class TestWritePairingHints:
+    _PAYLOAD = f"MOBA1|https://relay.test|nonce-abc|{'ff' * 32}|1700000000"
+
+    def _render(self, monkeypatch, payload: str | None = None) -> str:
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        stream = io.StringIO()
+
+        write_pairing_hints(payload or self._PAYLOAD, stream=stream)
+
+        return stream.getvalue()
+
+    def test_payload_occupies_its_own_unbroken_line(self, monkeypatch):
+        # No prefix, no wrapping, nothing else on the line. A user selects the
+        # line and copies it; a prefix would ride along into the paste box and
+        # a manual break would embed a newline the parser has to survive.
+        lines = self._render(monkeypatch).split("\n")
+
+        assert self._PAYLOAD in lines
+
+    def test_link_occupies_its_own_line_after_the_payload(self, monkeypatch):
+        out = self._render(monkeypatch)
+        lines = out.split("\n")
+        link = f"{DEFAULT_PAIRING_WEB_ORIGIN}/pair#"
+
+        assert any(line.startswith(link) for line in lines)
+        # Pasteable artifact first, link second — `gh auth login`'s order.
+        assert lines.index(self._PAYLOAD) < next(
+            index for index, line in enumerate(lines) if line.startswith(link)
+        )
+
+    def test_link_matches_format_pairing_link(self, monkeypatch):
+        out = self._render(monkeypatch)
+
+        assert format_pairing_link(self._PAYLOAD) in out.split("\n")
+
+    def test_output_is_pure_ascii(self, monkeypatch):
+        # A Windows service redirects stdout to a cp437/cp1252 log file, and a
+        # UnicodeEncodeError raised here tears down the pairing WebSocket
+        # before ``wait_for_claim`` — the incident this module's
+        # ``_stream_supports_block_glyphs`` exists for. So no em dash, no
+        # arrows, no box glyphs in the framing this writer adds.
+        out = self._render(monkeypatch)
+
+        assert out.isascii(), f"non-ASCII byte in pairing hints: {out!r}"
+
+    def test_substitutes_a_notice_when_the_stream_cannot_encode_the_payload(
+        self, monkeypatch
+    ):
+        """An internationalized ``relay_url`` must not raise on a cp1252 log.
+
+        ``PUBLIC_BASE_URL`` is operator config and may be an IDN host, so the
+        payload is not ASCII by construction the way the framing is. The
+        sibling ``render_qr_to_terminal`` probes the stream's codec for exactly
+        this reason; without the same probe here, ``show-qr`` would exit
+        non-zero under ``install.ps1`` (a hard failure) and the pairing
+        monitor's render would abort its WebSocket.
+        """
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        stream, buf = _cp1252_stream()
+        # Cyrillic, deliberately: cp1252 *can* carry `é`, so a Latin-1 accent
+        # would prove nothing about the probe.
+        payload = f"MOBA1|https://релэй.test|nonce-abc|{'ff' * 32}|1700000000"
+
+        write_pairing_hints(payload, stream=stream)
+        stream.flush()
+        out = buf.getvalue().decode("cp1252")
+
+        assert "cannot render" in out
+        assert "nonce-abc" not in out
+
+    def test_still_prints_an_ascii_payload_on_a_cp1252_stream(self, monkeypatch):
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+        stream, buf = _cp1252_stream()
+
+        write_pairing_hints(self._PAYLOAD, stream=stream)
+        stream.flush()
+
+        assert self._PAYLOAD in buf.getvalue().decode("cp1252").split("\n")
+
+    def test_defaults_to_stdout(self, monkeypatch, capsys):
+        monkeypatch.delenv(PAIRING_WEB_ORIGIN_ENV, raising=False)
+
+        write_pairing_hints(self._PAYLOAD)
+
+        assert self._PAYLOAD in capsys.readouterr().out.split("\n")
 
 
 class TestReadPinnedTrustKeyFp:

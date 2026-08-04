@@ -8,6 +8,14 @@ interface TextAreaFieldProps {
   placeholder?: string;
   hint?: string;
   error?: string;
+  /** Appended to the base classes, for a field that needs its own type styling. */
+  className?: string;
+  /**
+   * Off for machine-readable input. A phone keyboard capitalising the first
+   * letter of a pasted pairing payload silently corrupts it.
+   */
+  autoCapitalize?: 'off' | 'on';
+  autoCorrect?: 'off' | 'on';
 }
 
 export function TextAreaField({
@@ -18,6 +26,9 @@ export function TextAreaField({
   placeholder,
   hint,
   error,
+  className,
+  autoCapitalize,
+  autoCorrect,
 }: TextAreaFieldProps) {
   const id = useId();
   const errorId = `${id}-error`;
@@ -30,11 +41,17 @@ export function TextAreaField({
       </label>
       <textarea
         id={id}
-        className="field-input field-textarea"
+        className={
+          className === undefined
+            ? 'field-input field-textarea'
+            : `field-input field-textarea ${className}`
+        }
         rows={rows}
         value={value}
         placeholder={placeholder}
         spellCheck={false}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={autoCorrect}
         aria-invalid={error !== undefined}
         aria-describedby={error !== undefined ? errorId : hint !== undefined ? hintId : undefined}
         onChange={(event) => {
