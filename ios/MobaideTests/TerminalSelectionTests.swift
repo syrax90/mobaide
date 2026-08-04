@@ -253,7 +253,12 @@ final class TerminalSelectionTests: XCTestCase {
 
     func testTrimShiftIgnoresRegionScrolls() {
         XCTAssertEqual(
-            TerminalSelection.trimShift(scrollTop: 3, previousYDisp: 5, currentYDisp: 5),
+            TerminalSelection.trimShift(
+                scrollTop: 3,
+                isAlternateBuffer: false,
+                previousLinesTrimmed: 5,
+                currentLinesTrimmed: 5
+            ),
             0,
             "a DECSTBM region scroll shifts rows in place; indices are stable"
         )
@@ -261,17 +266,63 @@ final class TerminalSelectionTests: XCTestCase {
 
     func testTrimShiftIsZeroWhileTheRingStillHasRoom() {
         XCTAssertEqual(
-            TerminalSelection.trimShift(scrollTop: 0, previousYDisp: 5, currentYDisp: 6),
+            TerminalSelection.trimShift(
+                scrollTop: 0,
+                isAlternateBuffer: false,
+                previousLinesTrimmed: 5,
+                currentLinesTrimmed: 5
+            ),
             0,
-            "yDisp advancing means a line was appended, not recycled"
+            "nothing recycled means a line was appended and every existing index still names its own row"
         )
     }
 
-    func testTrimShiftRenumbersOnceTheRingIsFull() {
+    func testTrimShiftRenumbersOncePerRecycledLine() {
         XCTAssertEqual(
-            TerminalSelection.trimShift(scrollTop: 0, previousYDisp: 5, currentYDisp: 5),
+            TerminalSelection.trimShift(
+                scrollTop: 0,
+                isAlternateBuffer: false,
+                previousLinesTrimmed: 5,
+                currentLinesTrimmed: 6
+            ),
             -1,
-            "yDisp frozen while a line was pushed means the oldest line was recycled"
+            "the trim counter moving is what renumbers rows, and it counts only the recycling branch"
+        )
+    }
+
+    /// The counter cannot answer for the alternate buffer — it keeps no
+    /// scrollback, so SwiftTerm never records a trim there — but its ring is
+    /// full from the first line, so every push renumbers every surviving row.
+    /// Reading the counter alone would freeze the selection over a Claude Code
+    /// or Codex repaint, which is the case the feature exists for.
+    func testTrimShiftRenumbersEveryAlternateBufferScroll() {
+        XCTAssertEqual(
+            TerminalSelection.trimShift(
+                scrollTop: 0,
+                isAlternateBuffer: true,
+                previousLinesTrimmed: 0,
+                currentLinesTrimmed: 0
+            ),
+            -1,
+            "the alternate buffer recycles on every scroll while never counting one"
+        )
+    }
+
+    /// A frozen `yDisp` used to stand in for "a line was recycled". SwiftTerm
+    /// also freezes it for as long as `Terminal.userScrolling` is set, which its
+    /// iOS scroll view now does on any tracked drag — so on a ring with room to
+    /// spare, a reader scrolled into history would have been told a line was
+    /// trimmed on every streamed row, walking the highlight off its text.
+    func testTrimShiftIsZeroWhileTheReaderIsScrolledBackOnARoomyRing() {
+        XCTAssertEqual(
+            TerminalSelection.trimShift(
+                scrollTop: 0,
+                isAlternateBuffer: false,
+                previousLinesTrimmed: 0,
+                currentLinesTrimmed: 0
+            ),
+            0,
+            "a paused viewport is not a trim, however long yDisp sits still"
         )
     }
 

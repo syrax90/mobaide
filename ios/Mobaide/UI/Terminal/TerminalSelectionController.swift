@@ -43,11 +43,14 @@ final class TerminalSelectionController: NSObject {
     private(set) var range: TerminalSelectionRange?
     /// Which handle the in-flight drag is moving.
     private var draggingHandle: TerminalSelectionHandle?
-    /// `yDisp` as of the last emulator scroll, for the trim-shift decision.
-    private var lastYDisp: Int?
-    /// `yDisp` when the selection started. Within one buffer at one size it
-    /// only ever grows (and freezes once the scrollback ring fills), so seeing
-    /// it *lower* means the transcript was trimmed underneath the selection.
+    /// `Buffer.totalLinesTrimmed` as of the last emulator scroll, for the
+    /// trim-shift decision.
+    private var lastLinesTrimmed: Int?
+    /// `yDisp` as of the last movement this controller has accounted for.
+    /// Seeing it *lower* means the transcript moved underneath the selection
+    /// without a scroll callback to compensate for — `handleEmulatorScroll`
+    /// re-baselines it on every trim it does account for, because `yDisp` itself
+    /// drops once per trimmed line whenever `Terminal.userScrolling` is set.
     private var startYDisp = 0
 
     /// Publishes selection geometry to the session model for the SwiftUI toolbar.
@@ -73,7 +76,7 @@ final class TerminalSelectionController: NSObject {
         view.setContentOffset(view.contentOffset, animated: false)
         range = word
         draggingHandle = nil
-        lastYDisp = view.getTerminal().buffer.yDisp
+        lastLinesTrimmed = view.getTerminal().buffer.totalLinesTrimmed
         startYDisp = view.getTerminal().buffer.yDisp
         refresh()
         return true
@@ -274,9 +277,10 @@ final class TerminalSelectionController: NSObject {
         // catch low rows: for any row < `rows` its window origin collapses to
         // 0, so row 3 keeps resolving happily to whatever line 3 now is.
         //
-        // A drop in `yDisp` is what catches those. Within one buffer at one
-        // size it only ever grows and then freezes at ring-full, so a lower
-        // value means the transcript was trimmed under us. Buffer switches and
+        // A drop in `yDisp` below the last accounted-for value is what catches
+        // those — an `ESC[3J` scrollback wipe lowers it by the whole transcript
+        // and reports no scroll, so nothing else compensates. Trims that *do*
+        // report re-baseline this in `handleEmulatorScroll`. Buffer switches and
         // resizes — the other two ways it can drop — already cancel outright.
         guard view.getTerminal().buffer.yDisp >= startYDisp else { return nil }
         guard view.bufferLine(atContentRow: current.start.row) != nil,
@@ -294,7 +298,7 @@ final class TerminalSelectionController: NSObject {
         guard isActive else { return }
         range = nil
         draggingHandle = nil
-        lastYDisp = nil
+        lastLinesTrimmed = nil
         lastOverlayGeometry = nil
         refresh()
         // Releasing the `holdsAutoScroll` pin does not itself move the viewport,
@@ -314,17 +318,18 @@ final class TerminalSelectionController: NSObject {
     ///
     /// A scroll inside a region (DECSTBM, and every alternate-buffer repaint)
     /// overwrites its own rows in place, so the selected text is gone rather than
-    /// moved — cancel. Otherwise rows only renumber once the scrollback ring is
-    /// full, which `trimShift` detects from `yDisp` no longer advancing.
-    func handleEmulatorScroll(yDisp: Int) {
-        guard let current = range else {
-            lastYDisp = yDisp
-            return
-        }
+    /// moved — cancel. Otherwise rows only renumber once a line is recycled off
+    /// the top, which `trimShift` reads from `Buffer.totalLinesTrimmed`.
+    func handleEmulatorScroll() {
         let terminal = view.getTerminal()
         let buffer = terminal.buffer
+        let linesTrimmed = buffer.totalLinesTrimmed
+        guard let current = range else {
+            lastLinesTrimmed = linesTrimmed
+            return
+        }
         let scrollTop = buffer.scrollTop
-        defer { lastYDisp = yDisp }
+        defer { lastLinesTrimmed = linesTrimmed }
 
         // Only a *region* scroll overwrites rows in place; the whole-screen arm
         // renumbers them instead, which `trimShift` handles. The alternate
@@ -336,7 +341,7 @@ final class TerminalSelectionController: NSObject {
         if !TerminalFollowScroll.pushesRowIntoScrollback(scrollTop: scrollTop) {
             if TerminalSelection.scrollRegionIntersects(
                 current,
-                yDisp: yDisp,
+                yDisp: buffer.yDisp,
                 scrollTop: scrollTop,
                 scrollBottom: buffer.scrollBottom
             ) {
@@ -349,8 +354,9 @@ final class TerminalSelectionController: NSObject {
 
         let shift = TerminalSelection.trimShift(
             scrollTop: scrollTop,
-            previousYDisp: lastYDisp ?? yDisp,
-            currentYDisp: yDisp
+            isAlternateBuffer: terminal.isCurrentBufferAlternate,
+            previousLinesTrimmed: lastLinesTrimmed ?? linesTrimmed,
+            currentLinesTrimmed: linesTrimmed
         )
         guard shift != 0 else {
             refreshOverlay()
@@ -363,6 +369,15 @@ final class TerminalSelectionController: NSObject {
             return
         }
         range = shifted
+        // The rows this trim moved are now accounted for, so re-baseline the
+        // staleness guard to match. Without this the guard reads its own
+        // compensation as damage: SwiftTerm lowers `yDisp` once per trimmed line
+        // while `userScrolling` is set, so a reader scrolled into history would
+        // drop below `startYDisp` on the first trim and `selectedText()` would
+        // refuse a selection that is in fact still correct. Re-baselining rather
+        // than subtracting `shift` keeps it honest on the other arm too, where
+        // rows renumber without `yDisp` moving at all.
+        startYDisp = view.getTerminal().buffer.yDisp
         // `refresh`, not `refreshOverlay`: the rows moved, so the toolbar's
         // anchor moved with them and would otherwise sit a cell further from
         // the highlight on every trimmed line.

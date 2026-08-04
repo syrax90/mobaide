@@ -489,9 +489,11 @@ final class TerminalSynchronizedOutputTests: XCTestCase {
 
     private func emulatorAnswer(_ testCase: DifferentialCase) -> EmulatorAnswer {
         let probe = DecrqmProbe()
-        // Default geometry, but no scrollback: every armed case would otherwise
-        // deep-copy a 525-line buffer in `beginSynchronizedOutput`, which is what
-        // made the sweep heavy enough to get the test host jettisoned. DECRQM
+        // Default geometry, but no scrollback: kept from when every armed case
+        // deep-copied a 525-line buffer in `beginSynchronizedOutput`, which made
+        // the sweep heavy enough to get the test host jettisoned. SwiftTerm 1.15
+        // suppresses paints instead of snapshotting, so the copy is gone, but a
+        // 525-line buffer per case is still weight the sweep does not need. DECRQM
         // answers 2026 straight off the mode flag, so the reply is unaffected —
         // verified identical over both sweeps' full 0x00-0xFF pair space.
         let terminal = Terminal(delegate: probe, options: TerminalOptions(cols: 80, rows: 25, scrollback: 0))

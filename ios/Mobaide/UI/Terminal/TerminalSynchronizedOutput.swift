@@ -1,13 +1,19 @@
 import Foundation
 
 /// Tracks DEC private mode 2026 (synchronized output) across the raw output
-/// stream, so row hit-testing can fail closed while the emulator is drawing a
-/// frozen snapshot instead of its live buffer.
+/// stream, so row hit-testing can fail closed while the emulator has stopped
+/// painting the buffer it is still parsing into.
 ///
-/// SwiftTerm deep-copies the buffer on `ESC[?2026h` and renders that copy until
-/// `ESC[?2026l` or a one-second timeout. Both `Terminal.displayBuffer` and the
-/// `synchronizedOutputChanged` callback are unreachable from another module, so
-/// the byte stream the app already holds is the only available signal.
+/// SwiftTerm keeps one live buffer and suppresses paints while the mode is set,
+/// until `ESC[?2026l` or a one-second timeout — so the rows on screen lag the
+/// rows a lookup reads for as long as it lasts.
+///
+/// This scanner exists because that state used to be unreadable: SwiftTerm 1.13
+/// exposed neither the flag nor `displayBuffer`, leaving the byte stream the app
+/// already holds as the only signal. Since 1.15 `Terminal.synchronizedOutputActive`
+/// is `public private(set)`, so the scanner is retained only until that direct
+/// read is adopted — the hazard it guards is unchanged, but the reason it has to
+/// be reproduced here is gone.
 ///
 /// The machine reproduces the CSI path of SwiftTerm's `EscapeSequenceParser`
 /// rather than approximating it, because the two directions need opposite
