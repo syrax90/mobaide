@@ -76,17 +76,24 @@ rationale as `/privacy.html`) and the two crawler/favicon TTLs.
 
 Everything else is set site-wide by
 `central_server/central_server/security_headers.py`, which serves this router's
-paths — `/`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`, plus `/privacy.html`
-— the same policy the router used to attach per response:
+paths — `/`, `/robots.txt`, `/sitemap.xml`, `/favicon.ico`, plus `/privacy.html`:
 
 ```
 Content-Security-Policy: default-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none'
 X-Content-Type-Options: nosniff
 Referrer-Policy: strict-origin-when-cross-origin
 X-Frame-Options: DENY
+Cross-Origin-Opener-Policy: same-origin-allow-popups
+Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=(), identity-credentials-get=()
 ```
 
-**This policy must not be loosened**, and on the four marketing paths it is the
+The first three are the policy the router used to attach per response. The last
+three the router never set — `X-Frame-Options` has only ever come from the
+middleware — so they are site-wide additions, and their values and per-surface
+variants live under "Security response headers" in
+[`docs/deployment.md`](deployment.md).
+
+**The CSP above must not be loosened**, and on the four marketing paths it is the
 one thing `CSP_REPORT_ONLY` cannot de-enforce — they already ran it enforced in
 production, so a soak has nothing to learn from them. (`/privacy.html` shares the
 policy but not that exemption: it carried no security header before the

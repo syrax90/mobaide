@@ -1,4 +1,4 @@
-"""Site-wide response security headers and the per-surface CSP.
+"""Site-wide response security headers and the per-surface CSP and Permissions-Policy.
 
 ``SecurityHeadersMiddleware`` is registered last in ``create_app``, so it is the
 outermost user middleware and stamps every response the inner stack produces —
@@ -19,16 +19,28 @@ are pinned as exact strings rather than substring checks:
 - every served template has to stay free of inline ``<script>``, ``on*=``,
   ``hx-on:`` and ``style=``, because ``script-src 'self'`` / ``style-src 'self'``
   drop them with no server-side symptom at all.
+
+``Cross-Origin-Opener-Policy`` and ``Permissions-Policy`` belong to the same
+category and raise the stakes: neither has a report-only counterpart to soak
+behind, and the wrong COOP value breaks Google Sign-In outright — a blank popup
+or a flow that stalls after the credential is picked, with a clean 200 on every
+request this suite can make. Both are pinned by value here, and so is the copy
+the prod Caddyfiles serve to the SPA host, which mounts the same button.
 """
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from starlette.datastructures import Headers
 
 from central_server.config import CentralServerConfig
-from central_server.security_headers import SecurityHeadersMiddleware, portal_csp
+from central_server.security_headers import (
+    SecurityHeadersMiddleware,
+    portal_csp,
+    portal_permissions_policy,
+)
 from central_server.templates_dir import resolve_templates_dir
 
 GOOGLE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
@@ -62,11 +74,34 @@ GOOGLE_PORTAL_CSP = (
     "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 )
 
+# Never the bare ``same-origin`` — see ``TestCrossOriginOpenerPolicy``.
+COOP_POLICY = "same-origin-allow-popups"
+
 UNIVERSAL_HEADERS = (
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "strict-origin-when-cross-origin"),
     ("X-Frame-Options", "DENY"),
+    ("Cross-Origin-Opener-Policy", COOP_POLICY),
 )
+
+# Every surface except a ``/portal/*`` on an instance with Google configured.
+# Spelled out rather than composed from the denied-feature list production
+# shares between the two, so a rewrite of either half still has to reproduce
+# this byte for byte.
+BASELINE_PERMISSIONS_POLICY = (
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+    "identity-credentials-get=()"
+)
+
+GIS_PERMISSIONS_POLICY = (
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=(), "
+    'identity-credentials-get=(self "https://accounts.google.com")'
+)
+
+# Chrome answers each of these with `Error with Permissions-Policy header:
+# Unrecognized feature` on every page load: FLoC's ``interest-cohort`` went in
+# 2022 and its successor ``browsing-topics`` in Chrome 150.
+RETIRED_FEATURE_NAMES = ("interest-cohort", "browsing-topics")
 
 # The conftest config carries no Google client id, so the portal is on its
 # strict fallback policy here; the configured shape is covered separately.
@@ -84,8 +119,24 @@ CSP_BY_PATH = (
     ("/no-such-path", API_CSP),
 )
 
-# One per bucket, plus an exempt path and a 404: the universal three are the
-# only headers that must not depend on which bucket a path lands in.
+# Per-bucket like the CSP, but only one of the two variants is in play here:
+# with no client id configured nothing on the instance mounts a Google button,
+# so every bucket denies FedCM outright. ``/docs`` is listed because the
+# CSP-exempt tuple is built by an early return that could drop the header, and
+# ``/`` and ``/privacy.html`` because they are two different site tiers.
+PERMISSIONS_POLICY_BY_PATH = (
+    ("/", BASELINE_PERMISSIONS_POLICY),
+    ("/privacy.html", BASELINE_PERMISSIONS_POLICY),
+    ("/portal/login", BASELINE_PERMISSIONS_POLICY),
+    ("/dashboard/login", BASELINE_PERMISSIONS_POLICY),
+    ("/api/version", BASELINE_PERMISSIONS_POLICY),
+    ("/static/style.css", BASELINE_PERMISSIONS_POLICY),
+    ("/docs", BASELINE_PERMISSIONS_POLICY),
+    ("/no-such-path", BASELINE_PERMISSIONS_POLICY),
+)
+
+# One per bucket, plus an exempt path and a 404: the universal headers are the
+# only ones that must not depend on which bucket a path lands in.
 REPRESENTATIVE_PATHS = (
     "/",
     "/portal/login",
@@ -109,6 +160,16 @@ _EVENT_HANDLER_RE = re.compile(r"\son[a-z]+\s*=")
 _HX_ON_RE = re.compile(r"\shx-on")
 _SUBRESOURCE_TAG_RE = re.compile(r"<(?:link|script|img)\b[^>]*>", re.DOTALL)
 _SUBRESOURCE_URL_RE = re.compile(r'\s(?:src|href)="([^"]*)"')
+
+# ``parents[2]`` walks tests/ → central_server/ → repo root. A checkout without
+# ``deploy/`` — an installed sdist, say — skips the Caddy class rather than
+# failing it.
+PROD_CADDY_DIR = Path(__file__).resolve().parents[2] / "deploy" / "prod"
+PROD_CADDYFILES = ("Caddyfile.LetsEncrypt", "Caddyfile.CloudflareOrigin")
+
+_CADDY_SNIPPET_RE = re.compile(
+    r"^\(app_mobaide\) \{\n(.*?)^\}$", re.DOTALL | re.MULTILINE
+)
 
 # The one cross-origin subresource any policy in this app permits. Anything else
 # in a template — a CDN htmx, a remote font, an analytics beacon — is blocked at
@@ -158,6 +219,31 @@ def _template_source(path) -> str:
     return _HTML_COMMENT_RE.sub("", _JINJA_COMMENT_RE.sub("", path.read_text()))
 
 
+def _app_mobaide_snippet(filename: str) -> str:
+    """The body of the ``(app_mobaide)`` snippet in one prod Caddyfile."""
+    match = _CADDY_SNIPPET_RE.search((PROD_CADDY_DIR / filename).read_text())
+    assert match is not None, f"no (app_mobaide) snippet in {filename}"
+    return match.group(1)
+
+
+def _caddy_header_value(snippet: str, name: str) -> str:
+    """The one value the snippet sets for ``name``, unquoted.
+
+    Caddy accepts a double-quoted or a backtick-quoted string; the
+    Permissions-Policy value has to use backticks because it embeds the double
+    quotes the FedCM origin allowlist needs. Finding anything other than
+    exactly one line is itself a failure: the SPA's static ``header {}`` block
+    is the only place in the snippet that may set these.
+    """
+    values = re.findall(rf"^\s*{re.escape(name)}\s+(.+)$", snippet, re.MULTILINE)
+    assert len(values) == 1, f"expected one {name} line, found {len(values)}"
+    raw = values[0].strip()
+    quote = raw[0]
+    assert quote in '"`' and raw.endswith(quote), f"unquoted {name} value: {raw}"
+    unquoted = raw[1:-1]
+    return unquoted.replace('\\"', '"') if quote == '"' else unquoted
+
+
 async def _drive(middleware, scope) -> list[dict]:
     """Run one request through the middleware over a stub inner app."""
     sent: list[dict] = []
@@ -180,14 +266,26 @@ class TestPerSurfacePolicy:
         response = await client.get(path)
         assert response.headers["Content-Security-Policy"] == policy
 
+    @pytest.mark.parametrize("path,policy", PERMISSIONS_POLICY_BY_PATH)
+    async def test_each_surface_gets_its_permissions_policy(
+        self, client, path, policy
+    ) -> None:
+        """Per-bucket rather than universal, because ``/portal/*`` needs one
+        allowance nothing else does — but only on an instance with Google
+        configured, which this one is not. It rides along on JSON and static
+        responses where it is inert, on the same trade the universal headers
+        make: no document surface can be missed."""
+        response = await client.get(path)
+        assert response.headers["Permissions-Policy"] == policy
+
     @pytest.mark.parametrize("header,value", UNIVERSAL_HEADERS)
     @pytest.mark.parametrize("path", REPRESENTATIVE_PATHS)
-    async def test_the_universal_three_are_bucket_independent(
+    async def test_the_universal_headers_are_bucket_independent(
         self, client, path, header, value
     ) -> None:
         """These carry no per-surface cost, so every bucket gets them — the
         static tree and the JSON API included, where ``nosniff`` is the header
-        that actually matters."""
+        that actually matters and COOP is inert."""
         response = await client.get(path)
         assert response.headers[header] == value
 
@@ -256,11 +354,74 @@ class TestApiDocsExemption:
         assert header not in response.headers
 
 
+class TestCrossOriginOpenerPolicy:
+    """The bare ``same-origin`` is the one wrong value with no server-side
+    symptom at all: both values isolate this window from a cross-origin
+    *opener*, but ``same-origin`` additionally drops the handle on popups we
+    open — which is the handle the Google Sign-In popup posts its credential
+    back through. The failure is a blank popup or a flow that stalls after the
+    account is picked, behind a clean 200 on every request this suite can make.
+    """
+
+    async def test_the_portal_keeps_the_handle_the_popup_replies_through(
+        self, client
+    ) -> None:
+        response = await client.get("/portal/login")
+        assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
+
+    def test_the_pinned_value_is_never_the_bare_same_origin(self) -> None:
+        """Every other COOP assertion in this file — the universal-header
+        matrix, the two beside this one, the report-only case and the Caddyfile
+        mirror — compares against ``COOP_POLICY``, so each pins the response
+        only relative to a constant an editor can move: hardening
+        ``security_headers.py``, then this constant, then both Caddyfiles turns
+        the whole suite green again. This is the one assertion that does not
+        survive that sequence. The split is for the parameterised spelling —
+        ``same-origin; report-to="coop"`` enforces ``same-origin`` too."""
+        assert COOP_POLICY.split(";")[0].strip() != "same-origin"
+
+    async def test_the_dashboard_takes_the_same_value(self, client) -> None:
+        """A recorded decision rather than an oversight: ``/dashboard/*`` opens
+        no popup today, so ``same-origin`` would protect against nothing that
+        exists while breaking any popup added there later. One value everywhere
+        also keeps navigation between the same-origin ``/``, ``/portal/*`` and
+        ``/dashboard/*`` inside a single browsing context group."""
+        response = await client.get("/dashboard/login")
+        assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
+
+
+@with_google
+class TestPermissionsPolicyFeatureNames:
+    @pytest.mark.parametrize("feature", RETIRED_FEATURE_NAMES)
+    @pytest.mark.parametrize("path", ("/portal/login", "/"))
+    async def test_no_retired_feature_name_is_advertised(
+        self, client, path, feature
+    ) -> None:
+        """Chrome is the only engine that reads this header, and it answers a
+        name it no longer knows with a console error on every page load — the
+        same console the deployment soak asks you to read clean. Google is
+        configured here so the GIS variant is on ``/portal/login`` and the
+        baseline on ``/``: a "harden the header" edit would have to reach both
+        to reintroduce one."""
+        response = await client.get(path)
+        assert feature not in response.headers["Permissions-Policy"]
+
+
 @with_google
 class TestGoogleSignInRelaxations:
     async def test_the_portal_carries_the_gis_origins(self, client) -> None:
         response = await client.get("/portal/login")
         assert response.headers["Content-Security-Policy"] == GOOGLE_PORTAL_CSP
+
+    async def test_the_portal_carries_the_fedcm_allowance(self, client) -> None:
+        """The GIS button frame is created with
+        ``allow="identity-credentials-get"``, and a frame's ``allow`` only
+        delegates a feature this document's own policy grants to that origin.
+        Once the header names the feature at all, the allowlist has to carry
+        Google's origin — ``(self)`` alone would refuse the delegation and take
+        the FedCM path down with it."""
+        response = await client.get("/portal/login")
+        assert response.headers["Permissions-Policy"] == GIS_PERMISSIONS_POLICY
 
     @pytest.mark.parametrize(
         "path", ("/", "/privacy.html", "/dashboard/login", "/api/version")
@@ -268,10 +429,15 @@ class TestGoogleSignInRelaxations:
     async def test_no_other_surface_inherits_them(self, client, path) -> None:
         """``google_client_id`` is instance-wide but the concession is not: the
         admin dashboard and the two htmx-only site pages must keep a policy with
-        no ``'unsafe-inline'`` and no third-party origin in it."""
-        policy = (await client.get(path)).headers["Content-Security-Policy"]
+        no ``'unsafe-inline'`` and no third-party origin in it, and must keep
+        FedCM switched off outright rather than merely undelegated."""
+        response = await client.get(path)
+        policy = response.headers["Content-Security-Policy"]
         assert "'unsafe-inline'" not in policy
         assert "accounts.google.com" not in policy
+        permissions = response.headers["Permissions-Policy"]
+        assert "identity-credentials-get=()" in permissions
+        assert "accounts.google.com" not in permissions
 
 
 class TestPortalPolicyWithoutGoogle:
@@ -285,6 +451,15 @@ class TestPortalPolicyWithoutGoogle:
         loads nothing that needs the relaxations and must not be granted them.
         """
         assert portal_csp(client_id) == SAME_ORIGIN_CSP
+
+    @pytest.mark.parametrize("client_id", (None, ""))
+    def test_an_unconfigured_client_id_denies_fedcm_outright(
+        self, client_id
+    ) -> None:
+        """Same gate, second header: with no button to mount there is nothing
+        to allow, so such an instance never advertises an origin it does not
+        talk to."""
+        assert portal_permissions_policy(client_id) == BASELINE_PERMISSIONS_POLICY
 
 
 @report_only
@@ -309,6 +484,19 @@ class TestReportOnlyMode:
         response = await client.get("/")
         assert response.headers["Content-Security-Policy"] == SITE_CSP
         assert "Content-Security-Policy-Report-Only" not in response.headers
+
+    async def test_the_flag_does_not_reach_the_other_two_headers(
+        self, client
+    ) -> None:
+        """Report-only counterparts exist for both, but they report through the
+        Reporting API alone and this deployment configures no collector, so the
+        flag has to leave both enforcing under their own names — a rename would
+        show up here as a missing header. Having no readable soak mode is the
+        whole reason their rollout is a staged deploy and a manual Google
+        Sign-In instead."""
+        response = await client.get("/portal/login")
+        assert response.headers["Cross-Origin-Opener-Policy"] == COOP_POLICY
+        assert response.headers["Permissions-Policy"] == BASELINE_PERMISSIONS_POLICY
 
 
 class TestReportOnlyConfig:
@@ -442,3 +630,44 @@ class TestExternalisedBundlesAreServed:
         response = await client.get(path)
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == cache_control
+
+
+@pytest.mark.skipif(
+    not PROD_CADDY_DIR.is_dir(), reason="deploy/prod is not part of this checkout"
+)
+class TestCaddySpaHeadersMirrorThePortal:
+    """``app.mobaide.com`` serves the SPA off disk, so Caddy stamps its headers
+    and this middleware never runs — yet the SPA mounts the same Google Sign-In
+    button ``/portal/*`` does, in popup mode, on ``/login``, ``/register`` and
+    ``/account``. Both prod Caddyfiles say in prose that their ``(app_mobaide)``
+    snippet has to stay identical, because the deploy copies exactly one of the
+    two files to the server whole; nothing else in the repo checks that."""
+
+    def test_both_prod_caddyfiles_carry_the_same_snippet(self) -> None:
+        """A header added to one file only ships on whichever certificate mode
+        that server happens to run, and the divergence stays invisible until
+        somebody reads the other file."""
+        letsencrypt, cloudflare = (
+            _app_mobaide_snippet(name) for name in PROD_CADDYFILES
+        )
+        assert letsencrypt == cloudflare
+
+    @pytest.mark.parametrize("filename", PROD_CADDYFILES)
+    def test_the_spa_permissions_policy_matches_the_configured_portal(
+        self, filename
+    ) -> None:
+        """The FedCM allowance is unconditional here where the middleware makes
+        it conditional, for the same reason the CSP's Google origins already
+        are: Caddy cannot read ``GOOGLE_CLIENT_ID``, and the SPA's button never
+        mounts when ``GET /api/version`` reports no client id."""
+        snippet = _app_mobaide_snippet(filename)
+        value = _caddy_header_value(snippet, "Permissions-Policy")
+        assert value == GIS_PERMISSIONS_POLICY
+
+    @pytest.mark.parametrize("filename", PROD_CADDYFILES)
+    def test_the_spa_opener_policy_matches_the_middlewares(self, filename) -> None:
+        """Same popup, same failure mode: ``same-origin`` here severs the
+        opener on ``app.mobaide.com`` exactly as it would on ``/portal/*``."""
+        snippet = _app_mobaide_snippet(filename)
+        value = _caddy_header_value(snippet, "Cross-Origin-Opener-Policy")
+        assert value == COOP_POLICY
