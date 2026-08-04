@@ -350,6 +350,35 @@ Android rather than fixed here: when the program has *not* enabled DECSET 2004,
 the moment Paste is tapped, with no confirmation — desktop terminals (iTerm2,
 GNOME Terminal, Windows Terminal) prompt in that case, and adding a prompt would
 be a parity decision to take on all three clients at once.
+CLA-176 adds the launch half of Auto Scan, which CLA-103 left unbuilt:
+`AutoScanRepository.startScan` had no production caller, so the "Active Auto
+Scans" section — gated on a non-empty scan list — could never render for an
+iOS-only user. A fifth **Auto Scan** mode card sits between Antigravity and
+Terminal, enabled only when the selected stored project carries a Linear API key
+and the Claude CLI is installed, greyed out with the reason otherwise (Android's
+`autoScanEnabled` gate; a custom path has no stored project, so it can never
+satisfy it). Its config step drives the Claude model / effort / fast-mode /
+ultracode / append-system-prompt controls — extracted into two `@ViewBuilder`
+helpers now shared with the Claude Code step, mirroring Android's
+`ClaudeOptionControls` — plus Plan mode, Skip permissions (default ON for
+unattended scans, with an always-visible caption explaining the off-state), No
+memory, and an Initial prompt seeded from the project's saved `auto_scan_prompt`
+and then the agent-wide default. Submitting POSTs the pre-existing
+`/api/autoscan/start` with `worktree` forced true — the scanner branches a
+worktree per Linear issue, so the shared Worktree section would be a lie — and
+routes to the CLA-103 live monitor. Last-used choices persist to their own
+`last_used_auto_scan_options` bucket (a new `ClaudeLaunchPrefs.planMode` field),
+kept separate from the Claude Code bucket so the two wizard modes never pre-fill
+each other. Three iOS-first conveniences, with the Android mirrors tracked in
+CLA-223: because a scan is one-per-project, a scan already running for the
+selection makes the card read "Already running…" and tapping it opens the live
+monitor rather than a config step that could only 409; a start that loses that
+race is still handled as typed `alreadyRunning` / `capacity` (409 / 429)
+failures; and Linear-keyed rows on the Projects screen gain a "Start Auto Scan…"
+long-press action, reachable through a new `Route.createAutoScan(projectName:)`.
+No wire field, endpoint, protocol version or dependency changes —
+`ClaudeOptionsModel` already carried `plan_mode` / `initial_prompt` / `worktree`,
+and `ProjectInfo.has_linear_key` / `auto_scan_prompt` were decoded but unread.
 Remaining feature screens land in later issues.
 
 ## Layout

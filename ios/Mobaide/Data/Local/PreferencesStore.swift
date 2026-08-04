@@ -9,6 +9,7 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyLastUsedProjectName = "last_used_project_name"
     static let keyLastUsedSessionId = "last_used_session_id"
     static let keyLastUsedClaudeOptions = "last_used_claude_options"
+    static let keyLastUsedAutoScanOptions = "last_used_auto_scan_options"
     static let keyLastUsedCodexOptions = "last_used_codex_options"
     static let keyLastUsedAntigravityOptions = "last_used_antigravity_options"
     static let keyTerminalDisplayMode = "terminal_display_mode"
@@ -52,6 +53,16 @@ struct PreferencesStore: @unchecked Sendable {
 
     func setLastUsedClaudeOptions(_ prefs: ClaudeLaunchPrefs) {
         encodeBlob(prefs, forKey: Self.keyLastUsedClaudeOptions)
+    }
+
+    /// Auto Scan's own bucket. Kept separate from the Claude Code bucket so the
+    /// two wizard modes never pre-fill each other (Android parity).
+    func getLastUsedAutoScanOptions() -> ClaudeLaunchPrefs? {
+        decodeBlob(forKey: Self.keyLastUsedAutoScanOptions)
+    }
+
+    func setLastUsedAutoScanOptions(_ prefs: ClaudeLaunchPrefs) {
+        encodeBlob(prefs, forKey: Self.keyLastUsedAutoScanOptions)
     }
 
     func getLastUsedCodexOptions() -> CodexLaunchPrefs? {

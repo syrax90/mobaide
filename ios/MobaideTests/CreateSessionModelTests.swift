@@ -12,6 +12,14 @@ final class CreateSessionModelTests: XCTestCase {
         PreferencesStore(defaults: UserDefaults(suiteName: "cw-\(UUID().uuidString)")!)
     }
 
+    private func idleWsClient() -> AutoScanWsClient {
+        AutoScanWsClient(
+            webSocketFactory: .live(transportFactory: FakeWebSocketTransportFactory(), sleeper: RecordingSleeper()),
+            urlProvider: { nil },
+            isAuthenticated: { false }
+        )
+    }
+
     /// Repository over `StubURLProtocol` with its own logged-in identity —
     /// pass the same instance to the model when a test seeds or inspects the
     /// custom-type cache.
@@ -41,7 +49,8 @@ final class CreateSessionModelTests: XCTestCase {
             agentAPI: agentAPI,
             sessionRepository: repo,
             preferencesStore: prefs ?? isolatedPrefs(),
-            customAgentTypesRepository: typesRepo ?? makeTypesRepo()
+            customAgentTypesRepository: typesRepo ?? makeTypesRepo(),
+            autoScanRepository: AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: idleWsClient())
         )
     }
 
@@ -62,7 +71,8 @@ final class CreateSessionModelTests: XCTestCase {
             agentAPI: agentAPI,
             sessionRepository: repo,
             preferencesStore: prefs ?? isolatedPrefs(),
-            customAgentTypesRepository: typesRepo ?? makeTypesRepo()
+            customAgentTypesRepository: typesRepo ?? makeTypesRepo(),
+            autoScanRepository: AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: idleWsClient())
         )
     }
 
@@ -76,10 +86,10 @@ final class CreateSessionModelTests: XCTestCase {
 
     // MARK: - Request building
 
-    func testClaudeStoredProjectDefaults() {
+    func testClaudeStoredProjectDefaults() throws {
         let model = makeModel()
         model.selection = .stored("alpha")
-        let request = model.buildRequest(mode: .standard)
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(request.project_name, "alpha")
         XCTAssertNil(request.cwd)
         XCTAssertNil(request.cli)
@@ -90,39 +100,42 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.claude_options?.worktree, false)
     }
 
-    func testClaudeFastModeLocksOpus() {
+    func testClaudeFastModeLocksOpus() throws {
         let model = makeModel()
         model.selection = .stored("a")
         model.claudeFastMode = true
-        let request = model.buildRequest(mode: .standard)
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(request.claude_options?.model, "opus")
         XCTAssertEqual(request.claude_options?.fast_mode, true)
     }
 
-    func testClaudeUltracodeLocksXhighEffort() {
+    func testClaudeUltracodeLocksXhighEffort() throws {
         let model = makeModel()
         model.selection = .stored("a")
         model.claudeUltracode = true
-        XCTAssertEqual(model.buildRequest(mode: .standard).claude_options?.effort, "xhigh")
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
+        XCTAssertEqual(request.claude_options?.effort, "xhigh")
     }
 
-    func testClaudeEffortClampedWhenModelNarrows() {
+    func testClaudeEffortClampedWhenModelNarrows() throws {
         let model = makeModel()
         model.selection = .stored("a")
         model.claudeModel = "opus"
         model.claudeEffort = "max"
-        XCTAssertEqual(model.buildRequest(mode: .standard).claude_options?.effort, "max")
+        let wide = try XCTUnwrap(model.buildRequest(mode: .standard))
+        XCTAssertEqual(wide.claude_options?.effort, "max")
         model.claudeModel = "haiku" // no longer supports "max"
+        let narrowed = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(
-            model.buildRequest(mode: .standard).claude_options?.effort, "high",
+            narrowed.claude_options?.effort, "high",
             "a stale effort unsupported by the new model clamps to a valid value"
         )
     }
 
-    func testCodexUsesCliAndStateDefaults() {
+    func testCodexUsesCliAndStateDefaults() throws {
         let model = makeModel()
         model.selection = .stored("a")
-        let request = model.buildRequest(mode: .codex)
+        let request = try XCTUnwrap(model.buildRequest(mode: .codex))
         XCTAssertEqual(request.cli, "codex")
         XCTAssertEqual(request.codex_options?.approval, "on-request")
         XCTAssertEqual(request.codex_options?.reasoning_effort, "high")
@@ -130,7 +143,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertNil(request.claude_options)
     }
 
-    func testAntigravityExclusivityAndAddDirs() {
+    func testAntigravityExclusivityAndAddDirs() throws {
         let model = makeModel()
         model.selection = .stored("a")
         model.setAntigravitySkipPermissions(true)
@@ -138,21 +151,21 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertFalse(model.antigravitySkipPermissions)
         XCTAssertTrue(model.antigravitySandbox)
         model.antigravityAddDirs = "one\ntwo, three"
-        let request = model.buildRequest(mode: .antigravity)
+        let request = try XCTUnwrap(model.buildRequest(mode: .antigravity))
         XCTAssertEqual(request.cli, "antigravity")
         XCTAssertEqual(request.antigravity_options?.add_dirs, ["one", "two", "three"])
         XCTAssertEqual(request.antigravity_options?.sandbox, true)
         XCTAssertEqual(request.antigravity_options?.skip_permissions, false)
     }
 
-    func testShellCarriesWorktreeOnTopLevel() async {
+    func testShellCarriesWorktreeOnTopLevel() async throws {
         // Shell worktree/branch ride the top-level request, but only for a
         // stored git project (worktree is git-gated).
         let model = await modelWithProjects(#"[{"name":"a","path":"/p","is_git":true}]"#)
         model.selectStoredProject("a")
         model.worktree = true
         model.branchName = "feat"
-        let request = model.buildRequest(mode: .shell)
+        let request = try XCTUnwrap(model.buildRequest(mode: .shell))
         XCTAssertNil(request.cli)
         XCTAssertNil(request.claude_options)
         XCTAssertEqual(request.project_name, "a")
@@ -160,7 +173,7 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.branch_name, "feat")
     }
 
-    func testCustomTypeCarriesCliAndTopLevelWorktree() async {
+    func testCustomTypeCarriesCliAndTopLevelWorktree() async throws {
         // Custom agent types launch with plain-terminal semantics plus the
         // `cli` discriminator — worktree/branch ride the top level exactly
         // like `.shell` (compare testShellCarriesWorktreeOnTopLevel).
@@ -168,7 +181,7 @@ final class CreateSessionModelTests: XCTestCase {
         model.selectStoredProject("a")
         model.worktree = true
         model.branchName = "feat"
-        let request = model.buildRequest(mode: .custom("ab12cd34ef56"))
+        let request = try XCTUnwrap(model.buildRequest(mode: .custom("ab12cd34ef56")))
         XCTAssertEqual(request.cli, "custom_ab12cd34ef56")
         XCTAssertNil(request.command, "the stored command is resolved relay-side — the client never sends it")
         XCTAssertNil(request.claude_options)
@@ -179,40 +192,41 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(request.branch_name, "feat")
     }
 
-    func testCustomPathForcesWorktreeOff() {
+    func testCustomPathForcesWorktreeOff() throws {
         let model = makeModel()
         model.setCustomPath("/abs/path")
         model.worktree = true
-        let request = model.buildRequest(mode: .standard)
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertEqual(request.cwd, "/abs/path")
         XCTAssertNil(request.project_name)
         XCTAssertEqual(request.worktree, false)
         XCTAssertEqual(request.claude_options?.worktree, false)
     }
 
-    func testCustomPathTrimmedInRequest() {
+    func testCustomPathTrimmedInRequest() throws {
         let model = makeModel()
         model.setCustomPath("  /abs/path  ")
-        XCTAssertEqual(model.buildRequest(mode: .standard).cwd, "/abs/path")
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
+        XCTAssertEqual(request.cwd, "/abs/path")
     }
 
-    func testNonGitStoredProjectDropsWorktree() async {
+    func testNonGitStoredProjectDropsWorktree() async throws {
         let model = await modelWithProjects(#"[{"name":"plain","path":"/p","is_git":false}]"#)
         model.selectStoredProject("plain")
         model.worktree = true
         model.branchName = "x"
-        let request = model.buildRequest(mode: .standard)
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertFalse(model.showsGitOptions)
         XCTAssertEqual(request.claude_options?.worktree, false, "a non-git project must not send a stale worktree toggle")
         XCTAssertNil(request.claude_options?.branch_name)
     }
 
-    func testGitStoredProjectKeepsWorktree() async {
+    func testGitStoredProjectKeepsWorktree() async throws {
         let model = await modelWithProjects(#"[{"name":"repo","path":"/p","is_git":true}]"#)
         model.selectStoredProject("repo")
         model.worktree = true
         model.branchName = "feat"
-        let request = model.buildRequest(mode: .standard)
+        let request = try XCTUnwrap(model.buildRequest(mode: .standard))
         XCTAssertTrue(model.showsGitOptions)
         XCTAssertEqual(request.claude_options?.worktree, true)
         XCTAssertEqual(request.claude_options?.branch_name, "feat")

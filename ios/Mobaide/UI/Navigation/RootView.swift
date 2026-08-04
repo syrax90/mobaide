@@ -53,6 +53,8 @@ struct RootView: View {
             SessionDetailScreen(sessionId: sessionId)
         case .createSession:
             CreateSessionScreen()
+        case .createAutoScan(let projectName):
+            CreateSessionScreen(autoScanProject: projectName)
         case .settings:
             SettingsScreen()
         case .support:
