@@ -69,7 +69,7 @@ export function CodexOptionsPanel({ bucket, models, dispatch }: CodexOptionsPane
       <SelectField
         label="Model"
         value={bucket.model}
-        options={modelOptions(models, CODEX_MODELS)}
+        options={modelOptions(models, CODEX_MODELS, bucket.model)}
         onChange={(model) => {
           dispatch({ type: 'setCodexModel', model });
         }}

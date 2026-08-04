@@ -31,8 +31,14 @@ const reduce = (actions: WizardAction[], from: WizardState = INITIAL_WIZARD_STAT
 describe('selectors', () => {
   it('offers the wide effort range only on the larger models', () => {
     expect(claudeEffortsFor('opus')).toContain('max');
-    expect(claudeEffortsFor(null)).toContain('max');
+    expect(claudeEffortsFor('fable')).toContain('max');
+    expect(claudeEffortsFor('sonnet')).toContain('max');
     expect(claudeEffortsFor('haiku')).toEqual(['low', 'medium', 'high']);
+    // The Default model caps at `high`, like Android and iOS: the model the
+    // agent resolves it to is unknown, and `effectiveClaudeEffort` clamps
+    // through this helper, so widening it would put an effort on the wire the
+    // other two clients never send.
+    expect(claudeEffortsFor(null)).toEqual(['low', 'medium', 'high']);
   });
 
   it('lets fast mode decide the model', () => {

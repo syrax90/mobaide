@@ -25,7 +25,7 @@ export function AntigravityOptionsPanel({
       <SelectField
         label="Model"
         value={bucket.model}
-        options={modelOptions(models, ANTIGRAVITY_MODELS, 'Auto')}
+        options={modelOptions(models, ANTIGRAVITY_MODELS, bucket.model, 'Auto')}
         onChange={(model) => {
           dispatch({ type: 'setAntigravityModel', model });
         }}

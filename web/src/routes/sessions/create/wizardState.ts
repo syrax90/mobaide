@@ -170,12 +170,20 @@ export const ANTIGRAVITY_MODELS = [
 
 const WIDE_EFFORT_MODELS = new Set(['opus', 'fable', 'sonnet']);
 
-/** `xhigh`/`max` only exist on the larger models (Android `claudeEffortsFor`). */
+/**
+ * `xhigh`/`max` only exist on the larger models.
+ *
+ * The Default (`null`) model takes the **base** ladder, matching Android's
+ * `claudeEffortsFor` and iOS's `claudeEfforts(for:)` — both key strictly on
+ * `opus`/`fable`/`sonnet`. Whichever model the agent resolves Default to is
+ * unknown here, and `effectiveClaudeEffort` clamps through this same helper, so
+ * widening it would put an effort on the wire that the other two clients never
+ * send.
+ */
 export function claudeEffortsFor(model: string | null): readonly ClaudeEffort[] {
-  if (model === null || WIDE_EFFORT_MODELS.has(model)) {
-    return ['low', 'medium', 'high', 'xhigh', 'max'];
-  }
-  return ['low', 'medium', 'high'];
+  return model !== null && WIDE_EFFORT_MODELS.has(model)
+    ? ['low', 'medium', 'high', 'xhigh', 'max']
+    : ['low', 'medium', 'high'];
 }
 
 /** Fast mode is Opus-only, so it decides the model rather than merely disabling the select. */

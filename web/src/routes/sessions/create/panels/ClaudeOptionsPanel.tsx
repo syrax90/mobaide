@@ -20,14 +20,31 @@ interface ClaudeOptionsPanelProps {
   skipPermissionsHint?: string;
 }
 
+/**
+ * `selected` is always included, even when the agent's advertised list omits it.
+ *
+ * The probe resolves after the first render, so a model can be chosen from the
+ * hardcoded fallback and then vanish when a narrower advertised list (an org
+ * allowlist, say) arrives. A controlled `<select>` whose value matches no option
+ * renders blank while the reducer keeps the value and the request still sends
+ * it — displayed and submitted would disagree. Keeping the option is the right
+ * repair rather than reconciling the bucket, which would silently discard a
+ * deliberate choice.
+ */
 export function modelOptions(
   models: readonly string[] | null,
   fallback: readonly string[],
+  selected: string | null,
   defaultLabel = 'Default',
 ): SelectOption[] {
+  const available = models ?? fallback;
+  const known = selected === null || available.includes(selected);
   return [
     { value: null, label: defaultLabel },
-    ...(models ?? fallback).map((model) => ({ value: model, label: model })),
+    ...(known ? available : [...available, selected]).map((model) => ({
+      value: model,
+      label: model,
+    })),
   ];
 }
 
@@ -49,7 +66,7 @@ export function ClaudeOptionsPanel({
       <SelectField
         label="Model"
         value={effectiveClaudeModel(bucket)}
-        options={modelOptions(models, CLAUDE_MODELS)}
+        options={modelOptions(models, CLAUDE_MODELS, effectiveClaudeModel(bucket))}
         // Fast mode is Opus-only, so it owns the model while it is on.
         disabled={bucket.fastMode}
         onChange={(model) => {

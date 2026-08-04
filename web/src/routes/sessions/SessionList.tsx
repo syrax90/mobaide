@@ -46,7 +46,12 @@ export function SessionList({ agentId, online }: SessionListProps) {
     ...wsBackedQueryOptions,
   });
 
-  useAutoResume(agentId, sessions.data);
+  // Passing `undefined` while offline leaves the module-level attempt
+  // unclaimed, so auto-resume still fires once the agent returns. A disabled
+  // query still serves cached rows, and a snapshot may have seeded them from
+  // the wizard's channel, so without this the list could redirect into a
+  // terminal on an unreachable agent and never show the offline state.
+  useAutoResume(agentId, online ? sessions.data : undefined);
 
   const stop = useMutation({
     mutationFn: ({ sessionId, force }: { sessionId: string; force: boolean }) =>
@@ -85,7 +90,11 @@ export function SessionList({ agentId, online }: SessionListProps) {
           className="button"
           onClick={() => {
             forceReconnectAgentEvents(agentId);
-            void sessions.refetch();
+            // `refetch()` ignores `enabled`, so refetching while offline would
+            // fire exactly the 503 (twice, then a toast) that the gate exists to
+            // prevent. Reconnecting the socket is the whole of Refresh here —
+            // the agent pushes a snapshot as soon as it is back.
+            if (online) void sessions.refetch();
           }}
         >
           Refresh
