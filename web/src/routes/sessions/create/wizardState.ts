@@ -216,6 +216,19 @@ export function parseAddDirs(draft: string): string[] {
     .filter((entry) => entry !== '');
 }
 
+/**
+ * The server rejects any `add_dirs` entry that looks like a CLI flag, because
+ * `add_dirs: ["--dangerously-skip-permissions"]` would otherwise smuggle the
+ * blocked flag past the mutual-exclusion check. Checked here so the wizard can
+ * both explain it and refuse to submit — showing the message while still
+ * sending the entry buys the user a friendly error *and* a raw 422.
+ */
+export function addDirsError(draft: string): string | null {
+  return parseAddDirs(draft).some((dir) => dir.startsWith('-'))
+    ? 'Directories must not start with "-"'
+    : null;
+}
+
 const WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
 
 /**

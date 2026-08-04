@@ -15,6 +15,7 @@ import { queryKeys, wsBackedQueryOptions } from '../../../lib/queryKeys';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
 import { useLastSessionStore } from '../../../stores/lastSessionStore';
 import { useToastStore } from '../../../stores/toastStore';
+import { useAgentEvents } from '../../../realtime';
 import { terminalPath } from '../terminalPath';
 import { CodexLoginDialog } from './CodexLoginDialog';
 import { ConfigStep } from './ConfigStep';
@@ -77,6 +78,12 @@ export function NewSession() {
   const setLastUsedSession = useLastSessionStore((state) => state.setLastUsedSession);
 
   const resolvedAgentId = agentId ?? '';
+
+  // The wizard keeps the agent channel open for its own visit: without it
+  // `projects.changed` is missed for the whole time it is mounted (and a
+  // deep-linked wizard has no channel at all), and the socket would be torn
+  // down and re-handshaked on every list <-> wizard transition.
+  useAgentEvents(resolvedAgentId);
 
   const projects = useQuery({
     queryKey: queryKeys.projects(resolvedAgentId),
@@ -162,6 +169,19 @@ export function NewSession() {
       setSearchParams(next, { replace: true });
     }
   }, [location, projects.data, isModeSelectable, searchParams, setSearchParams]);
+
+  // The URL owns the selection, so a history navigation that changes it has to
+  // reach the draft too — otherwise Back can land on a project step whose URL
+  // says `path=/foo` while the field is blank and Continue is disabled.
+  const urlPath =
+    location.selection.kind === 'customPath' ? location.selection.path : null;
+  useEffect(() => {
+    if (urlPath === null || urlPath === state.customPathDraft.trim()) return;
+    dispatch({ type: 'setCustomPathDraft', draft: urlPath });
+    // `customPathDraft` is deliberately absent from the deps: this reconciles
+    // *from* the URL, and re-running on every keystroke would fight the user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlPath]);
 
   // Seeded once per project, so re-entering the step never discards edits.
   useEffect(() => {

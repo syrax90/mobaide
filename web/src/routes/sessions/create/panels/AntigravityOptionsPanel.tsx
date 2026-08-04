@@ -2,8 +2,8 @@ import { CheckboxField } from '../../../../components/form/CheckboxField';
 import { SelectField } from '../../../../components/form/SelectField';
 import { TextAreaField } from '../../../../components/form/TextAreaField';
 import {
+  addDirsError,
   ANTIGRAVITY_MODELS,
-  parseAddDirs,
   type AntigravityBucket,
   type WizardAction,
 } from '../wizardState';
@@ -13,17 +13,6 @@ interface AntigravityOptionsPanelProps {
   bucket: AntigravityBucket;
   models: readonly string[] | null;
   dispatch: (action: WizardAction) => void;
-}
-
-/**
- * The server rejects a directory that looks like a CLI flag, because
- * `add_dirs: ["--dangerously-skip-permissions"]` would otherwise smuggle past
- * the mutual-exclusion check. Caught here so the message is friendly.
- */
-function addDirsError(draft: string): string | undefined {
-  return parseAddDirs(draft).some((dir) => dir.startsWith('-'))
-    ? 'Directories must not start with "-"'
-    : undefined;
 }
 
 export function AntigravityOptionsPanel({
@@ -67,7 +56,7 @@ export function AntigravityOptionsPanel({
         value={bucket.addDirsDraft}
         placeholder="/one/path, /another/path"
         hint="One per line, or comma-separated."
-        error={addDirsError(bucket.addDirsDraft)}
+        error={addDirsError(bucket.addDirsDraft) ?? undefined}
         onChange={(draft) => {
           dispatch({ type: 'setAntigravityAddDirs', draft });
         }}

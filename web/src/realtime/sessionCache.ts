@@ -71,6 +71,12 @@ export function applySessionsSnapshot(
     evictTerminals(agentId, removedSessionIds(previous, sessions));
   }
 
+  // Cancel first: `listSessions` and the events channel are started together on
+  // mount, and Refresh fires a refetch alongside a forced reconnect, so a slower
+  // GET can resolve *after* this snapshot and overwrite it with older rows. The
+  // agent only re-pushes on the next change, so the list would stay wrong until
+  // then. A cancelled query discards its resolution without an error toast.
+  void client.cancelQueries({ queryKey: key });
   client.setQueryData<SessionResponse[]>(key, () => sessions);
   return 'applied';
 }

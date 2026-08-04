@@ -8,6 +8,7 @@ import { ClaudeOptionsPanel } from './panels/ClaudeOptionsPanel';
 import { CodexOptionsPanel } from './panels/CodexOptionsPanel';
 import { WorktreeSection } from './panels/WorktreeSection';
 import {
+  addDirsError,
   isCustomMode,
   type ProjectSelection,
   type WizardAction,
@@ -69,6 +70,11 @@ export function ConfigStep({
   const showsGitOptions =
     selection.kind === 'stored' && project?.isGit === true && mode !== 'auto_scan';
 
+  // The server 422s a flag-shaped directory, so refuse the launch rather than
+  // showing the inline error and sending it anyway.
+  const blocked =
+    mode === 'antigravity' && addDirsError(state.antigravity.addDirsDraft) !== null;
+
   return (
     <div className="wizard-body">
       <h2>{modeTitle(mode, customTypes)}</h2>
@@ -118,7 +124,7 @@ export function ConfigStep({
         <button
           type="button"
           className="button button-primary"
-          disabled={submitting}
+          disabled={submitting || blocked}
           onClick={onSubmit}
         >
           {submitting
