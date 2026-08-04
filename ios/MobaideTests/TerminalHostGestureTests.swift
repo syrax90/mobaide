@@ -786,6 +786,14 @@ final class TerminalHostGestureTests: XCTestCase {
         terminal.handleScrollViewDidScroll(isUserDriven: true)
     }
 
+    /// `getLine(row:)` counts from `yDisp`, so `row` is a screen row rather than
+    /// a buffer index — which is what an in-place screen rotation like RI has to
+    /// be read through.
+    private func visibleRow(_ terminal: MobaideTerminalView, _ row: Int) -> String {
+        (terminal.getTerminal().getLine(row: row)?.translateToString(trimRight: true) ?? "")
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     func testConfigureAppearanceClaimsTheScrollViewDelegate() {
         let terminal = makeTerminal()
         XCTAssertNil(
@@ -883,7 +891,7 @@ final class TerminalHostGestureTests: XCTestCase {
 
         XCTAssertEqual(
             terminal.contentOffset.y, terminal.maxScrollOffsetY, accuracy: 0.5,
-            "scroll(toPosition: 1.0) is guarded by `row != yDisp` and yDisp is already at the tail, so the button did nothing"
+            "scroll(toPosition: 1.0) is guarded by `row != yDisp`, which is already the target row here, so the button did nothing"
         )
         XCTAssertTrue(model.followMode)
         XCTAssertEqual(model.unreadRows, 0)
@@ -899,8 +907,10 @@ final class TerminalHostGestureTests: XCTestCase {
         let terminal = model.terminalView
         scrollUp(terminal)
         XCTAssertEqual(model.unreadRows, 0, "output before this point arrived while following")
-        // `yDisp` is pinned to `yBase`, so its delta counts the lines the
-        // emulator actually pushed into the scrollback.
+        // `scrollUp` writes `contentOffset` with no live touch, so `isTracking`
+        // is false, SwiftTerm never sets `Terminal.userScrolling`, and `yDisp`
+        // stays pinned to `yBase` — which is what lets its delta count the lines
+        // the emulator pushed into the scrollback. A real finger would freeze it.
         let originBefore = terminal.getTerminal().buffer.yDisp
 
         terminal.feed(text: "a\r\nb\r\n")
@@ -958,41 +968,187 @@ final class TerminalHostGestureTests: XCTestCase {
     /// The scrollback gate reads no margin value at all — see
     /// `TerminalFollowScroll.pushesRowIntoScrollback` for why neither one stands
     /// in for the `marginMode` SwiftTerm actually branches on. This reproduces
-    /// both strands that make them wrong, so a reintroduced margin term fails
+    /// the strand that makes them wrong, so a reintroduced margin term fails
     /// here with the reason attached rather than as a bare count downstream.
     ///
-    /// `marginRight` is stranded low for the whole session; `marginLeft` is left
-    /// raised by `ESC[?69l`, which is the worse of the two — after it, SwiftTerm
-    /// is back on the arm that really does fill the scrollback, so a
-    /// `marginLeft == 0` term would pin the badge at zero for good.
+    /// Both margins strand from the same `ESC[?69h...s...ESC[?69l` sequence
+    /// (`cmdSetMargins` sets `marginLeft`/`marginRight` together): after
+    /// `ESC[?69l`, SwiftTerm is back on the arm that really does fill the
+    /// scrollback, so a `marginLeft == 0` term would pin the badge at zero for
+    /// good.
     func testStrandedMarginsDoNotSuppressTheUnreadTally() {
         let model = scrollableModel()
         let terminal = model.terminalView
         let buffer = terminal.getTerminal().buffer
-        XCTAssertLessThan(
-            buffer.marginRight, terminal.getTerminal().getDims().cols - 1,
-            "the harness has to reproduce the strand, or there is no hazard here to guard"
-        )
-        // DECLRMM on, a left margin set, DECLRMM back off: margin mode is false
-        // again but marginLeft keeps the value, and nothing ever lowers it.
+        // DECLRMM on, both margins set narrower than the grid, DECLRMM back
+        // off: margin mode is false again but the margins keep their values,
+        // and nothing ever restores them to full width.
         terminal.feed(text: "\u{1B}[?69h\u{1B}[3;40s\u{1B}[?69l")
         XCTAssertGreaterThan(
             buffer.marginLeft, 0,
             "ESC[?69l drops margin mode without restoring the margins it was gating"
         )
+        XCTAssertLessThan(
+            buffer.marginRight, terminal.getTerminal().getDims().cols - 1,
+            "the harness has to reproduce the strand, or there is no hazard here to guard"
+        )
         scrollUp(terminal)
+        let originBefore = buffer.yDisp
 
-        // Column 5 is inside the stranded margins on purpose. `cmdLineFeedBasic`
-        // gates scrolling on `buffer.x` falling between them and — alone among
-        // SwiftTerm's margin reads — never checks `marginMode` first, so a line
-        // feed from column 0 is swallowed entirely and this would assert against
-        // a scroll that never happened. Drop the placement once that gate is
-        // fixed; it is a separate defect, filed.
-        terminal.feed(text: "\u{1B}[5Ga\n")
+        // Plain CR+LF from the bottom row, which is what every program emits.
+        // The carriage return parks the cursor at column 0 — left of the
+        // stranded `marginLeft`, the state that used to make SwiftTerm drop the
+        // line feed on the floor.
+        terminal.feed(text: "a\r\n")
 
         XCTAssertEqual(
+            buffer.yDisp - originBefore, 1,
+            "a line feed from column 0 must scroll: stranded margins gate nothing once margin mode is off"
+        )
+        XCTAssertEqual(
             model.unreadRows, 1,
-            "margins stranded by a two-column startup grid and by ESC[?69l must not decide what a full-size session counts"
+            "margins stranded by ESC[?69l must not decide what a full-size session counts"
+        )
+    }
+
+    // MARK: - Margin gates
+
+    /// `ESC D` (IND) and `ESC M` (RI) carry the same margin gate as the line
+    /// feed, so they were swallowed by the same stranded `marginLeft` and have
+    /// to recover with it. IND is asserted through the scrollback the way a line
+    /// feed is; RI never grows the scrollback — it rotates the screen in place —
+    /// so it is asserted on the rows themselves.
+    func testStrandedMarginsDoNotSwallowIndexOrReverseIndex() {
+        let terminal = scrolledBackTerminal()
+        let buffer = terminal.getTerminal().buffer
+        terminal.feed(text: "\u{1B}[?69h\u{1B}[3;40s\u{1B}[?69l")
+        XCTAssertGreaterThan(buffer.marginLeft, 0, "no strand means no hazard to guard here")
+
+        let originBefore = buffer.yDisp
+        terminal.feed(text: "\r\u{1B}D")
+
+        XCTAssertEqual(buffer.yDisp - originBefore, 1, "IND on the bottom row scrolls like a line feed")
+
+        // RI scrolls the other way, so it needs the cursor on the region's top
+        // row — still at column 0, still left of the stranded margin.
+        terminal.feed(text: "\u{1B}[H")
+        let topBefore = visibleRow(terminal, 0)
+        XCTAssertFalse(topBefore.isEmpty, "the row RI is supposed to push down has to have content on it")
+
+        terminal.feed(text: "\u{1B}M")
+
+        XCTAssertEqual(visibleRow(terminal, 0), "", "RI opens a blank line at the top of the region")
+        XCTAssertEqual(visibleRow(terminal, 1), topBefore, "and pushes what was there down one row")
+    }
+
+    /// The other half of the same rule: while DECLRMM is genuinely active the
+    /// gate still has to confine scrolling to the margin columns. Without this,
+    /// "stop reading stale margins" degrades into "stop reading margins", which
+    /// passes every assertion above and breaks every program that sets them.
+    ///
+    /// `Terminal.scroll` branches on `hasNarrowMargins` for a live left/right
+    /// margin narrower than the full grid: it rotates the margin columns of
+    /// every row in place (`dst[topRow+i] = src[topRow+i+1]`, then blanks the
+    /// bottom row) rather than pushing into scrollback, the same as a DECSTBM
+    /// region scroll never advancing `yDisp`
+    /// (`testRegionScrollWhilePausedAccruesNothingButFullWidthOutputStillCounts`).
+    /// So the observable evidence that the gate let the scroll through is the
+    /// bottom row's margin-column content being cleared, not `yDisp` moving.
+    func testActiveMarginsStillConfineScrolling() {
+        let terminal = scrolledBackTerminal()
+        let buffer = terminal.getTerminal().buffer
+        let dims = terminal.getTerminal().getDims()
+        let bottomRow = dims.rows - 1
+        // 1-based, and far enough right to sit outside marginRight (39).
+        let outsideColumn = dims.cols - 2
+
+        // Written while margin mode is still off, so it lands at the absolute
+        // column asked for. `Buffer.insertAsciiRun` clamps its autowrap
+        // boundary to `marginRight` whenever margin mode is live, regardless of
+        // where the cursor already sits — writing this marker after enabling
+        // margins would immediately auto-wrap back inside them and scroll the
+        // still-unwritten "IN" marker's row before a single "O" landed.
+        terminal.feed(text: "\u{1B}[\(outsideColumn)GOUT")
+
+        // No ESC[?69l this time — margin mode stays on, so the margins are live
+        // rather than stranded.
+        terminal.feed(text: "\u{1B}[?69h\u{1B}[3;40s")
+        let originBefore = buffer.yDisp
+        XCTAssertGreaterThan(
+            outsideColumn - 1, buffer.marginRight,
+            "the grid has to be wider than the margins or neither marker proves anything"
+        )
+
+        // The "IN" marker goes down *before* either line feed, so each
+        // assertion below is about a row that already existed. Writing it
+        // afterwards would make it a foregone conclusion.
+        terminal.feed(text: "\u{1B}[6GIN")
+
+        // Column 0, outside the live margins. CR would be clamped to marginLeft
+        // while margin mode is on, so the column is set explicitly.
+        terminal.feed(text: "\u{1B}[1G\n")
+
+        XCTAssertEqual(
+            buffer.yDisp, originBefore,
+            "a line feed outside live left/right margins is confined, and always was"
+        )
+        XCTAssertTrue(
+            visibleRow(terminal, bottomRow).contains("IN"),
+            "the gate has to refuse this line feed outright — deleting it would scroll the row away here"
+        )
+
+        terminal.feed(text: "\u{1B}[6G\n")
+
+        XCTAssertEqual(
+            buffer.yDisp, originBefore,
+            "a narrow left/right-margin scroll rotates rows in place, exactly like a DECSTBM region scroll — it never advances yDisp"
+        )
+        XCTAssertFalse(
+            visibleRow(terminal, bottomRow).contains("IN"),
+            "from inside the margins the same line feed still scrolls"
+        )
+        XCTAssertTrue(
+            visibleRow(terminal, bottomRow).contains("OUT"),
+            "and it stays confined to the margin columns — the text outside them is not the scroll's to move"
+        )
+    }
+
+    /// The gate is `buffer.x >= marginLeft && buffer.x <= marginRight`, and
+    /// every case above approaches it from the left. `marginRight` strands the
+    /// same way — DECSLRM raises it, `ESC[?69l` walks away from it, and
+    /// `Buffer.resize` only ever lowers it — and past a stranded right margin
+    /// is precisely where the cursor sits after a program fills the row it is
+    /// about to feed.
+    func testStrandedRightMarginDoesNotSwallowOutputPastIt() {
+        let terminal = scrolledBackTerminal()
+        let emulator = terminal.getTerminal()
+        let buffer = emulator.buffer
+        let cols = emulator.getDims().cols
+        // Half the grid, so there is a column to the right of the margin to
+        // feed from whatever width the harness laid out at.
+        let margin = cols / 2
+        terminal.feed(text: "\u{1B}[?69h\u{1B}[1;\(margin)s\u{1B}[?69l")
+        XCTAssertEqual(
+            buffer.marginRight, margin - 1,
+            "DECSLRM has to have taken, and ESC[?69l has to have left it behind, or there is no strand to guard"
+        )
+
+        let originBefore = buffer.yDisp
+        // The last column, well right of the stranded margin. A bare LF keeps
+        // the column, which is what makes this the right-hand half of the gate
+        // rather than the left one.
+        terminal.feed(text: "\u{1B}[\(cols)G\n")
+
+        XCTAssertEqual(
+            buffer.yDisp - originBefore, 1,
+            "a line feed right of a stranded marginRight must scroll: margin mode is off, so nothing is gated"
+        )
+
+        terminal.feed(text: "\u{1B}[\(cols)G\u{1B}D")
+
+        XCTAssertEqual(
+            buffer.yDisp - originBefore, 2,
+            "IND carries the same gate and recovers with it"
         )
     }
 
@@ -1063,6 +1219,50 @@ final class TerminalHostGestureTests: XCTestCase {
         XCTAssertTrue(model.followMode, "typing is a resume trigger — the answer has to be visible")
         XCTAssertEqual(model.unreadRows, 0)
         XCTAssertFalse(terminal.isAutoScrollSuppressed)
+    }
+
+    /// OSC 52 has a query direction (`ESC]52;c;?ST`) that answers with the
+    /// user's clipboard, base64'd, straight back down the same reply chain as
+    /// the cursor-position report below it. Anything running on the agent host
+    /// can send it, so the delegate has to refuse — the pasteboard is not the
+    /// session's to read. The DSR query rides along so the absence of a
+    /// clipboard reply is pinned by a frame that did arrive rather than by a
+    /// timeout.
+    func testOscClipboardQueryIsRefusedWhileOtherRepliesStillReachThePty() async throws {
+        let (model, connection, _) = try await pausedWiredModel()
+        Clipboard.copy("secret", isSensitive: true)
+
+        connection.emit(.binary(outputFrame("\u{1B}[5;3H\u{1B}]52;c;?\u{1B}\\\u{1B}[6n")))
+
+        let frames = await waitForInputFrames(connection, atLeast: 1)
+        XCTAssertEqual(
+            frames, [inputFrame("\u{1B}[5;3R")],
+            "the cursor report is the only thing that may come back — a clipboard read would be exfiltration"
+        )
+        XCTAssertFalse(
+            frames.contains { String(decoding: $0, as: UTF8.self).contains("52;") },
+            "no OSC 52 response in any shape, including an empty one"
+        )
+        XCTAssertFalse(model.followMode, "a program querying the clipboard is not the user returning to the tail")
+    }
+
+    /// The refusal above only means something if SwiftTerm asks in the first
+    /// place: a silent parse change would leave that test green while nothing
+    /// ever reached the delegate. Both directions land in the same
+    /// `oscClipboard` handler, so a write that arrives is the oracle that the
+    /// OSC 52 route into this app is live — and it pins the direction the
+    /// refusal deliberately left open, which 1.15.0 widened to selection
+    /// characters 1.13.0 ignored.
+    func testOscClipboardWriteStillReachesTheCopyPath() {
+        let model = scrollableModel()
+        UIPasteboard.general.items = []
+
+        model.terminalView.feed(text: "\u{1B}]52;c;aGVsbG8=\u{1B}\\")
+
+        XCTAssertEqual(
+            UIPasteboard.general.string, "hello",
+            "OSC 52 writes still travel emulator → Coordinator → pasteboard; only the read direction is refused"
+        )
     }
 
     // MARK: - resolveRow
@@ -1427,7 +1627,7 @@ final class TerminalHostGestureTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertTrue(
             tapFrames(connection).isEmpty,
-            "SwiftTerm is drawing a deep copy the app cannot read, so the tapped line is not the drawn "
+            "SwiftTerm has stopped painting while it keeps parsing, so the tapped line is not the drawn "
                 + "one — an `x` execute frame here runs text the user never saw"
         )
         XCTAssertNil(

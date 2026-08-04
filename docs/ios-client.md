@@ -192,10 +192,12 @@ suppresses presses in that mode) nor a submit.
 Follow mode is driven from the terminal's own scroll view rather than from
 SwiftTerm (`TerminalFollowScroll` plus a `UIScrollViewDelegate` on
 `MobaideTerminalView`). SwiftTerm's iOS renderer draws from `contentOffset`
-while its `scrollPosition` and `getLine(row:)` read `buffer.yDisp`, and nothing
-in the package maps a drag onto `yDisp` — so `TerminalViewDelegate.scrolled`
-never fired for a touch, the jump-to-bottom button was unreachable and
-`jumpToBottom()` was a no-op. The app claims the scroll-view `delegate` slot
+while its `scrollPosition` and `getLine(row:)` read `buffer.yDisp`, which
+nothing in the package mapped a drag onto before 1.15 — so
+`TerminalViewDelegate.scrolled` never fired for a touch, the jump-to-bottom
+button was unreachable and `jumpToBottom()` was a no-op. 1.15 moves `yDisp`
+while a drag is tracking but parks it at the row the finger lifted on, so the
+scroll view remains the only honest source for how far up the reader is. The app claims the scroll-view `delegate` slot
 (SwiftTerm declares the conformance but implements no method of it and never
 assigns it) and reports a position only while `isDragging`/`isDecelerating`,
 which is the same feedback-loop guard as the Android fork's rule that
@@ -225,20 +227,21 @@ viewport. Android now does the same (CLA-184), raising the equivalent flag
 around `TerminalEmulator.append` inside `TerminalSession`. One
 limitation is accepted: once the scrollback ring is full SwiftTerm trims from
 the top without growing `contentSize`, so a held viewport drifts up a row per
-trimmed line — Android compensates via `mTopRow`, which needs an index iOS
-cannot read. Row hit-testing re-points `buffer.yDisp` at the rows actually on
+trimmed line — Android compensates via `mTopRow`, whose iOS counterpart
+(`Buffer.totalLinesTrimmed`) became readable in SwiftTerm 1.15 but has not been
+adopted for viewport drift yet. Row hit-testing re-points `buffer.yDisp` at the rows actually on
 screen for the duration of the synchronous `getLine` read, so tapping a prompt
 still resolves the rendered line while scrolled into history; a tap below the
 last line — the blank overscroll band — resolves nothing rather than folding
 onto that line, since on the plain-shell arm a tap is what executes it. That
 drawn-equals-resolved guarantee is enforced rather than assumed: while a
-program holds synchronized output (DEC mode 2026) SwiftTerm draws a frozen
-deep copy of the buffer, so the row `getLine` returns is not the row on the
-glass, and the copy is `internal` — `resolveRow` therefore resolves nothing
+program holds synchronized output (DEC mode 2026) SwiftTerm suppresses paints
+while continuing to parse, so the row `getLine` returns is not the row on the
+glass — `resolveRow` therefore resolves nothing
 at all for the duration, refusing both the single-tap execute and the
-double-tap copy-to-composer. `displayBuffer` and the emulator's
-`synchronizedOutputChanged` callback are both unreachable from another
-module, so `TerminalSynchronizedOutput` recognizes the mode from the output
+double-tap copy-to-composer. That state was unreadable from outside the package
+until SwiftTerm 1.15 made `Terminal.synchronizedOutputActive` public, so
+`TerminalSynchronizedOutput` still recognizes the mode from the output
 bytes the app already holds, mirroring the subset of SwiftTerm's parser that
 can reach DECSET/DECRST 2026 — a deliberate superset of it, since a false
 positive costs one ignored tap while a false negative reopens the hole. The
@@ -319,10 +322,14 @@ soft-wrapped rows without a newline and adds one on hard breaks — Android's
 `joinBackLines = true` — so a wrapped path copies back intact. A live selection
 also pins the viewport through `holdsAutoScroll`, a second self-restoring term
 beside the model-owned `isAutoScrollSuppressed`, and follows its text as the
-emulator scrolls: rows renumber only once the scrollback ring is full, detected
-by `yDisp` no longer advancing. The alternate buffer is permanently in that
-state — no scrollback, so the ring is full from the start and `yDisp` is pinned
-at 0 — which means a Claude Code or Codex selection shifts up one row per
+emulator scrolls: rows renumber only once a line is recycled, counted from
+`Buffer.totalLinesTrimmed` (public since SwiftTerm 1.15) rather than inferred
+from `yDisp` no longer advancing — 1.15 freezes `yDisp` for the whole of a
+tracked drag too, so a reader scrolled into history would otherwise be told a
+line was trimmed on every streamed row. The alternate buffer is the one case
+that counter cannot answer — no scrollback, so SwiftTerm never counts a trim
+there, but its ring is full from the first line — and is handled as its own
+arm, which means a Claude Code or Codex selection shifts up one row per
 streamed line rather than being cancelled; cancelling there instead would kill
 the selection on the first line of output, in exactly the sessions the feature
 exists for. A selection is dropped outright whenever its content-absolute rows
@@ -361,7 +368,15 @@ control-key row that needs no selection at all — an iOS-first affordance, with
 the Android mirror tracked separately. `Clipboard` gains `hasText`
 (`UIPasteboard.hasStrings`, a description-level probe that never raises the
 paste banner, so toolbar gating is free) and `readText()`, which reads contents
-and is therefore only ever called from an explicit tap. Knowingly inherited from
+and is therefore only ever called from an explicit tap. OSC 52 is
+write-direction only, matching Android's documented posture: a program may put
+text on the pasteboard (marked sensitive, so it is device-local and expires),
+but the read/query form `ESC]52;c;?ST` — which SwiftTerm 1.15 newly implements —
+is refused by `TerminalHostView.Coordinator.clipboardRead` returning `nil`, so
+nothing on the agent host can lift the pasteboard across the relay. 1.15 also
+widened the accepted selection characters from a literal `c;` to any of
+`c`/`p`/`q`/`s`/`0-7`, so the write sink now fires for sequences 1.13 dropped.
+Knowingly inherited from
 Android rather than fixed here: when the program has *not* enabled DECSET 2004,
 `\n` becomes `\r`, so a multi-line clipboard executes as a sequence of commands
 the moment Paste is tapped, with no confirmation — desktop terminals (iTerm2,
@@ -406,7 +421,7 @@ ios/
 │                                 # + optional #include of Local.xcconfig (gitignored dev overrides;
 │                                 #   see Config/Local.xcconfig.example)
 ├── Mobaide.xcodeproj             # hand-authored; objectVersion 70, Xcode 16 synchronized folder groups;
-│                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.13.0
+│                                 # SPM: GoogleSignIn-iOS ≥ 9.0, SwiftTerm 1.15.0
 │                                 #   (+ swift-argument-parser transitively; Package.resolved committed)
 ├── Mobaide/
 │   ├── App/                      # entry point, AppConfig, AppContainer (manual DI), AuthStateModel

@@ -482,6 +482,75 @@ final class TerminalSelectionGestureTests: XCTestCase {
         }
     }
 
+    // MARK: - CLA-186 follow-up: yDisp parked short of the bottom by a fling
+
+    /// SwiftTerm 1.15.0's `updateScroller()` only re-syncs `yDisp` to the scroll
+    /// position while the finger is physically down (`isTracking`), so a fling
+    /// that coasts past a screen and settles short of the bottom leaves `yDisp`
+    /// parked at the finger-lift row while `contentSize` — and the screen the
+    /// user is actually looking at — has moved on. `lastContentRow` exists
+    /// precisely to stay correct through that: it must read off `contentSize`,
+    /// not `yDisp`.
+    func testLastContentRowTracksContentSizeNotAParkedYDisp() throws {
+        let terminal = makeTerminal()
+        let rows = terminal.getTerminal().getDims().rows
+        let extra = 20
+        for line in 0..<(rows + extra) {
+            terminal.feed(text: "line\(line)\r\n")
+        }
+        terminal.layoutIfNeeded()
+
+        let expected = Int((terminal.contentSize.height / terminal.cellSize.height).rounded()) - 1
+        XCTAssertEqual(terminal.lastContentRow, expected)
+
+        // Park yDisp well below the tail, the way a fling that stops short of
+        // the bottom leaves it — lastContentRow must not shrink to follow it.
+        terminal.getTerminal().buffer.yDisp = 0
+        XCTAssertEqual(
+            terminal.lastContentRow,
+            expected,
+            "lastContentRow is read off contentSize, so a parked yDisp must not move it"
+        )
+    }
+
+    /// Reproduces the defect a stale `yDisp`-derived bound caused. Verified
+    /// against the pre-fix formula (`yDisp + rows - 1`) with this harness's own
+    /// numbers: it silently clamped a touch on the actually-touched row
+    /// ("line56") down to the stale bound and returned "line36" instead —
+    /// exactly the "Copy returns some other row's text" bug. `position(at:)`
+    /// now bounds the touch by `lastContentRow`, so it no longer clamps into
+    /// range and silently substitutes a row nobody touched.
+    ///
+    /// That does not make the touched row selectable here: `bufferLine`'s own
+    /// lookup window is bounded by the very same parked `yDisp` (a limit this
+    /// diff does not touch, guarding a stale-`contentSize` scrollback-wipe case
+    /// — see its doc comment), so a row this far outside it fails closed
+    /// instead. The fix's guarantee is "no selection", never "the wrong one".
+    func testSelectionBeyondPositionOnParkedYDispFailsClosedRatherThanRelocating() throws {
+        let terminal = makeTerminal()
+        let rows = terminal.getTerminal().getDims().rows
+        let extra = 20
+        for line in 0..<(rows + extra) {
+            terminal.feed(text: "line\(line)\r\n")
+        }
+        terminal.layoutIfNeeded()
+
+        // Simulate the state SwiftTerm 1.15 leaves behind when a fling coasts
+        // past a screen and stops short of the bottom: yDisp frozen at the
+        // finger-lift row while the actual content — and the row a touch
+        // names — has moved on.
+        terminal.getTerminal().buffer.yDisp = 0
+        let touched = rows + extra - 1
+
+        let began = terminal.beginSelectionForTest(at: point(row: touched, col: 1, on: terminal))
+
+        XCTAssertFalse(
+            began,
+            "the touched row sits outside bufferLine's yDisp-bounded window, so this must fail closed rather than silently landing on line\(rows - 1) — the pre-fix `yDisp + rows - 1` clamp target"
+        )
+        XCTAssertNil(terminal.selectionController.selectedText())
+    }
+
     // MARK: - Keyboard regression
 
     func testSelectingNeverRaisesTheKeyboard() {

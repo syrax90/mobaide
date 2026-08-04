@@ -86,18 +86,17 @@ final class MobaideTerminalView: TerminalView {
     /// nothing is drawn there.
     ///
     /// `getLine(row:)` counts from `buffer.yDisp`, but the iOS renderer counts
-    /// from `contentOffset`, and SwiftTerm never moves `yDisp` for a user drag
-    /// (`Terminal.userScrolling` is never set, so `yDisp` stays pinned to
-    /// `yBase`) — once scrolled up the two name different lines. `yDisp` is
-    /// public and `getLine` is a synchronous pure read, so the window is
-    /// re-pointed at the row being looked up and restored before any SwiftTerm
-    /// code can observe it.
+    /// from `contentOffset`, and the two only agree while following: SwiftTerm
+    /// moves `yDisp` for a drag it is tracking and then leaves it at the row the
+    /// finger lifted on, so momentum and every programmatic write walk the
+    /// renderer past it. `yDisp` is public and `getLine` is a synchronous pure
+    /// read, so the window is re-pointed at the row being looked up and restored
+    /// before any SwiftTerm code can observe it.
     ///
-    /// The equality holds against `terminal.buffer`. SwiftTerm draws
-    /// `displayBuffer`, which diverges into a frozen deep copy while a program
-    /// holds synchronized output (DEC mode 2026); that buffer is `internal`, so
-    /// both callers refuse for the duration instead — see
-    /// `TerminalSynchronizedOutput`.
+    /// The equality holds against the rows on screen. While a program holds
+    /// synchronized output (DEC mode 2026) SwiftTerm keeps parsing into that
+    /// same buffer but stops painting it, so `getLine` outruns the glass — both
+    /// callers refuse for the duration instead, see `TerminalSynchronizedOutput`.
     func bufferLine(atContentRow row: Int) -> BufferLine? {
         let terminal = getTerminal()
         let buffer = terminal.buffer
@@ -184,8 +183,11 @@ final class MobaideTerminalView: TerminalView {
         // remainder `scrollToBottom()` lands on, both make the normal case.
         let contentRow = Int(point.y / cellHeight)
         let terminal = getTerminal()
-        // `yDisp` is pinned to `yBase`, so it is the first row of the active
-        // region as well as the largest legal scrollback window origin.
+        // Reached only on the `isScrolledToBottom` arm below, which is what
+        // makes `yDisp` equal to `yBase` here — the first row of the active
+        // region as well as the largest legal scrollback window origin. It is
+        // not an invariant of `yDisp` itself, which parks below `yBase` for as
+        // long as a drag holds `Terminal.userScrolling`.
         let activeRegionTop = terminal.buffer.yDisp
         guard let line = bufferLine(atContentRow: contentRow) else { return nil }
         guard let command = Self.promptCommand(line.translateToString(trimRight: true)) else { return nil }
@@ -612,6 +614,29 @@ final class MobaideTerminalView: TerminalView {
         TerminalFollowScroll.maxOffsetY(contentHeight: contentSize.height, viewportHeight: bounds.height)
     }
 
+    /// Highest content row the buffer actually holds, counted from the scroll
+    /// view's own geometry rather than from `yDisp`.
+    ///
+    /// `contentSize` is the one row count that stays true while `yDisp` is
+    /// parked: SwiftTerm's `updateScroller()` writes it *above* its
+    /// `isTracking || (userScrolling && isDecelerating)` early return, precisely
+    /// so rows appended during a drag stay reachable. A bound derived from
+    /// `yDisp` instead goes stale the moment a fling leaves it at the row the
+    /// finger lifted on, and clamping a touch against a stale bound does not
+    /// reject the touch — it silently moves it to a row the user never put a
+    /// finger on, which is how a selection ends up copying text nobody chose.
+    /// The floor is a full viewport, not zero: `contentSize` stays `.zero` until
+    /// SwiftTerm's `updateScroller()` first runs, and it runs only on a scroll —
+    /// so a session whose output has not yet filled a screen has never set it.
+    /// The buffer always holds at least a viewport's worth of lines, and falling
+    /// back to zero would clamp every touch below the first row onto it.
+    var lastContentRow: Int {
+        let rows = getTerminal().getDims().rows
+        let cellHeight = cellSize.height
+        let counted = cellHeight > 0 ? Int(contentSize.height / cellHeight) : 0
+        return max(counted, rows, 1) - 1
+    }
+
     var followPosition: Double {
         TerminalFollowScroll.position(offsetY: contentOffset.y, maxOffsetY: maxScrollOffsetY)
     }
@@ -647,9 +672,11 @@ final class MobaideTerminalView: TerminalView {
         }
     }
 
-    /// Replaces SwiftTerm's `scroll(toPosition: 1.0)`, which cannot work on iOS:
-    /// it routes through `scrollTo(row:)`, whose body is guarded by
-    /// `row != yDisp` — and `yDisp` is already pinned to the tail.
+    /// Replaces SwiftTerm's `scroll(toPosition: 1.0)`, which cannot be relied on
+    /// here: it routes through `scrollTo(row:)`, whose body is guarded by
+    /// `row != yDisp`, so it does nothing whenever `yDisp` already names the
+    /// target row — which is every jump-to-bottom that did not come from a drag
+    /// SwiftTerm itself tracked.
     func scrollToBottom() {
         let maxY = maxScrollOffsetY
         // Tolerance, not equality: SwiftTerm parks the tail at
@@ -940,9 +967,7 @@ struct TerminalHostView: UIViewRepresentable {
             // Keeps a live selection glued to its text, or cancels it when the
             // text is overwritten rather than moved.
             if let terminal = source as? MobaideTerminalView {
-                terminal.selectionController.handleEmulatorScroll(
-                    yDisp: terminal.getTerminal().buffer.yDisp
-                )
+                terminal.selectionController.handleEmulatorScroll()
             }
             panHost?.caretDidMove()
         }
@@ -951,6 +976,20 @@ struct TerminalHostView: UIViewRepresentable {
             guard let text = String(data: content, encoding: .utf8) else { return }
             Clipboard.copy(text, isSensitive: true)
         }
+
+        /// OSC 52 *read* (`ESC]52;c;?ST`) — refused, always. SwiftTerm 1.15
+        /// added the query direction and base64s whatever this returns straight
+        /// back to the program, so answering would let anything running on the
+        /// agent host lift the user's pasteboard across the relay. The write
+        /// direction above stays allowed because it only moves outward data the
+        /// program already holds.
+        ///
+        /// SwiftTerm's own `TerminalViewDelegate` extension already defaults to
+        /// `nil`, so this override is not needed to compile — it is here so the
+        /// refusal is this app's decision and survives an upstream default that
+        /// ever stops denying. Deleting it would hand that choice back to a
+        /// dependency.
+        func clipboardRead(source: TerminalView) -> Data? { nil }
 
         func setTerminalTitle(source: TerminalView, title: String) {}
         func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}

@@ -13,8 +13,9 @@ enum TerminalSelectionHandle {
 /// `MobaideTerminalView.resolveRow`'s `contentRow`, the iOS renderer's row
 /// index, and `Terminal.getText`'s `Position.row`. Viewport-relative rows would
 /// have to be re-derived on every scroll, and `yDisp`-relative rows name
-/// different lines once the user scrolls back (SwiftTerm never sets
-/// `Terminal.userScrolling`, so `yDisp` stays pinned to `yBase`).
+/// different lines once the user scrolls back — which they now do, since
+/// SwiftTerm's iOS scroll view sets `Terminal.userScrolling` on a tracked drag
+/// and parks `yDisp` below `yBase` for its duration.
 ///
 /// `end.col` is **inclusive**, matching Android's `mSelX2`. The conversion to
 /// `getText`'s exclusive end column happens at that one call site.
@@ -252,15 +253,33 @@ enum TerminalSelection {
     /// `scrollTop == 0` and which neither predicate can distinguish from
     /// outside the emulator, so it reports a shift that did not happen.
     ///
-    /// What is specific here: of the scrolls that *do* push, only those landing
-    /// on a full scrollback ring renumber anything. While the ring has room
-    /// `yBase`/`yDisp` advance and existing indices hold; once it is full the
-    /// oldest line is recycled and `yDisp` stops moving, so every surviving row
-    /// shifts down by one. The alternate buffer is always in that second state:
-    /// no scrollback, so the ring is full from the start and `yDisp` never moves.
-    static func trimShift(scrollTop: Int, previousYDisp: Int, currentYDisp: Int) -> Int {
+    /// What is specific here: of the scrolls that *do* push, only those that
+    /// recycle a line renumber anything. While the ring has room `yBase`
+    /// advances and existing indices hold; once it is full the oldest line is
+    /// recycled and every surviving row shifts down by one.
+    ///
+    /// The count comes from `Buffer.totalLinesTrimmed` rather than from `yDisp`
+    /// standing still. A frozen `yDisp` is not evidence of a trim: SwiftTerm
+    /// also freezes it for the whole time `Terminal.userScrolling` is set, which
+    /// its iOS scroll view now does on any tracked drag, so on a ring with room
+    /// to spare a reader scrolled into history would otherwise be told a line
+    /// was trimmed on every streamed row. `totalLinesTrimmed` increments on the
+    /// recycling branch alone.
+    ///
+    /// The alternate buffer is the one case that counter cannot answer: it keeps
+    /// no scrollback, so SwiftTerm never counts a trim there — but its ring is
+    /// full from the first line, so every push renumbers every surviving row.
+    static func trimShift(
+        scrollTop: Int,
+        isAlternateBuffer: Bool,
+        previousLinesTrimmed: Int,
+        currentLinesTrimmed: Int
+    ) -> Int {
         guard TerminalFollowScroll.pushesRowIntoScrollback(scrollTop: scrollTop) else { return 0 }
-        return currentYDisp > previousYDisp ? 0 : -1
+        if isAlternateBuffer { return -1 }
+        // A hard reset restarts the count; treat that as no shift rather than
+        // shifting the selection the wrong way on the negative delta.
+        return -max(0, currentLinesTrimmed - previousLinesTrimmed)
     }
 
     /// Whether an emulator scroll region overlaps the selection.
@@ -268,7 +287,18 @@ enum TerminalSelection {
     /// A region scroll overwrites its own rows in place, so the selected text is
     /// gone rather than moved — the selection must be cancelled, not shifted.
     /// `scrollTop`/`scrollBottom` are screen-relative; the selection is
-    /// content-absolute, hence the `yDisp` offset.
+    /// content-absolute, hence the offset.
+    ///
+    /// The offset that is strictly correct is `yBase`, the origin of the region
+    /// the emulator writes to, rather than `yDisp`, the origin of what the
+    /// reader is looking at. They are equal except while a drag holds
+    /// `Terminal.userScrolling`, which parks `yDisp` below `yBase` — and `yBase`
+    /// is `internal`, with no public quantity standing in for it (`yDisp` and
+    /// `totalLinesTrimmed` are the only two published, and neither tracks it).
+    /// So a region scroll arriving while the reader is scrolled back is tested
+    /// against the band they are looking at instead of the band being written.
+    /// The alternate buffer, where both are pinned to 0, is unaffected — which
+    /// is the arm that carries every Claude Code and Codex repaint.
     static func scrollRegionIntersects(
         _ range: TerminalSelectionRange,
         yDisp: Int,
