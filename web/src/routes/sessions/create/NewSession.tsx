@@ -221,6 +221,14 @@ export function NewSession() {
         // Refresh so the stale card disappears with the message.
         void queryClient.invalidateQueries({ queryKey: queryKeys.customAgentTypes() });
       }
+      // Close the login dialog before reporting anything else. It is a native
+      // `<dialog>` on the top layer, so the page behind it is inert — a message
+      // written to the config step would be invisible, and the dialog would sit
+      // there re-enabled with no feedback, inviting the user to re-submit a key
+      // that was never the problem (session cap, agent update required, project
+      // deleted between login and launch).
+      setShowCodexLogin(false);
+      pendingRequest.current = null;
       setError(failure.message);
     },
   });
