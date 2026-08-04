@@ -1,10 +1,10 @@
-"""Site-wide response security headers, including a per-surface CSP.
+"""Site-wide response security headers, with a per-surface CSP and Permissions-Policy.
 
 Pure ASGI rather than ``BaseHTTPMiddleware``: the only work is rewriting the
 headers of ``http.response.start``, and ``BaseHTTPMiddleware`` — which
 ``_http_logging_middleware`` already is — adds a task group and a body stream
 per request on the same event loop that relays live terminal traffic. Measured
-on this app's response shape, that is ~1.6 µs here against ~125 µs for a no-op
+on this app's response shape, that is ~2 µs here against ~125 µs for a no-op
 ``BaseHTTPMiddleware`` dispatch. Non-``http`` scopes — every ``/ws/*`` route,
 including the live terminal relay — pass straight through with the original
 ``send``, so the relay's per-message path is untouched and a WebSocket handshake
@@ -12,6 +12,15 @@ response carries none of these headers.
 
 Headers are applied with ``setdefault``, so a route that sets its own value
 still wins.
+
+``CSP_REPORT_ONLY`` does not soak ``Cross-Origin-Opener-Policy`` or
+``Permissions-Policy``. Report-only counterparts do exist for both, but they
+report through the Reporting API alone rather than the console, and this
+deployment configures no collector — so there would be nothing to
+read. Both therefore go straight to enforcing, and the only rehearsal is a
+staged deploy plus a manual Google Sign-In. Each is set to a value that keeps
+that flow working; the reasoning is at the constant, because getting either
+wrong breaks sign-in outright rather than degrading it.
 
 Two surfaces are deliberately not covered:
 
@@ -53,6 +62,15 @@ _UNIVERSAL_HEADERS = (
     # Redundant with every policy's `frame-ancestors 'none'` on a current
     # browser, and the fallback for one that predates CSP framing control.
     ("X-Frame-Options", "DENY"),
+    # NOT `same-origin`. Both values isolate us from a cross-origin *opener*;
+    # only `same-origin` additionally drops the handle on popups we open, which
+    # is the handle the Google Sign-In popup posts its credential back through.
+    # `/dashboard/*` opens no popup today and takes the same value anyway: one
+    # value across every surface keeps navigation between the same-origin `/`,
+    # `/portal/*` and `/dashboard/*` inside one browsing context group, and a
+    # popup added to the dashboard later would fail under the stricter value
+    # as a blank window with nothing to see server-side.
+    ("Cross-Origin-Opener-Policy", "same-origin-allow-popups"),
 )
 
 _CSP_HEADER = "Content-Security-Policy"
@@ -100,9 +118,37 @@ _SAME_ORIGIN_DOCUMENT_CSP = (
 
 # Google documents the exact script path and the `/gsi/` parent for frames and
 # XHR, and asks that individual endpoints under it not be listed separately.
-_GIS_SCRIPT_URL = "https://accounts.google.com/gsi/client"
-_GIS_STYLE_URL = "https://accounts.google.com/gsi/style"
-_GIS_PARENT_URL = "https://accounts.google.com/gsi/"
+_GIS_ORIGIN = "https://accounts.google.com"
+_GIS_SCRIPT_URL = f"{_GIS_ORIGIN}/gsi/client"
+_GIS_STYLE_URL = f"{_GIS_ORIGIN}/gsi/style"
+_GIS_PARENT_URL = f"{_GIS_ORIGIN}/gsi/"
+
+_PERMISSIONS_POLICY_HEADER = "Permissions-Policy"
+
+# Chromium is the only engine that reads this header at all — Firefox and
+# Safari ignore it — and it answers a name it does not know with `Error with
+# Permissions-Policy header: Unrecognized feature` on every page load. That is
+# the console the soak in docs/deployment.md asks you to read clean, so only
+# names current Chrome still recognises appear here: `interest-cohort` (FLoC,
+# dropped in 2022) and its successor `browsing-topics` (removed in Chrome 150)
+# are retired and deliberately absent.
+_DENIED_FEATURES = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+
+# `identity-credentials-get` is named rather than left off the list. Its
+# default allowlist is `self`, so an empty one is what denies FedCM to our own
+# same-origin documents too — containment for an injected script, on surfaces
+# that have no use for the API.
+_BASELINE_PERMISSIONS_POLICY = f"{_DENIED_FEATURES}, identity-credentials-get=()"
+
+# The GIS button frame is created with `allow="identity-credentials-get"`, and
+# a frame's `allow` only delegates what this document's own policy grants to
+# that origin. So naming the feature obliges us to name Google's origin with
+# it: `identity-credentials-get=(self)` reads like the tighter choice and is
+# the one that refuses the delegation and takes the FedCM path down — the same
+# shape of trap as `COOP: same-origin` above.
+_GIS_PERMISSIONS_POLICY = (
+    f'{_DENIED_FEATURES}, identity-credentials-get=(self "{_GIS_ORIGIN}")'
+)
 
 _SITE_PATHS = frozenset(
     {"/", "/robots.txt", "/sitemap.xml", "/favicon.ico", "/privacy.html"}
@@ -147,8 +193,20 @@ def portal_csp(google_client_id: str | None) -> str:
     )
 
 
+def portal_permissions_policy(google_client_id: str | None) -> str:
+    """Return the ``/portal/*`` Permissions-Policy for this Google config.
+
+    With no client id ``portal_base.html`` mounts no Google button, so the
+    portal takes the same deny-most baseline every other surface gets and an
+    instance without Google configured never advertises the FedCM allowance.
+    """
+    if not google_client_id:
+        return _BASELINE_PERMISSIONS_POLICY
+    return _GIS_PERMISSIONS_POLICY
+
+
 class SecurityHeadersMiddleware:
-    """Attach the universal hardening headers and a path-scoped CSP."""
+    """Attach the universal hardening headers and the path-scoped policies."""
 
     def __init__(
         self,
@@ -164,16 +222,27 @@ class SecurityHeadersMiddleware:
         # Every other policy here is new and takes `soak_header`.
         soak_header = _CSP_REPORT_ONLY_HEADER if report_only else _CSP_HEADER
 
-        def bucket(policy: str | None, header: str) -> tuple[tuple[str, str], ...]:
+        def bucket(
+            policy: str | None,
+            header: str,
+            permissions_policy: str = _BASELINE_PERMISSIONS_POLICY,
+        ) -> tuple[tuple[str, str], ...]:
+            headers = _UNIVERSAL_HEADERS + (
+                (_PERMISSIONS_POLICY_HEADER, permissions_policy),
+            )
             if policy is None:
-                return _UNIVERSAL_HEADERS
-            return _UNIVERSAL_HEADERS + ((header, policy),)
+                return headers
+            return headers + ((header, policy),)
 
         # Resolved once per app, so the request path only chooses between
         # already-built tuples.
         self._site_enforced = bucket(_SITE_CSP, _CSP_HEADER)
         self._site_soakable = bucket(_SITE_CSP, soak_header)
-        self._portal = bucket(portal_csp(google_client_id), soak_header)
+        self._portal = bucket(
+            portal_csp(google_client_id),
+            soak_header,
+            portal_permissions_policy(google_client_id),
+        )
         self._dashboard = bucket(_SAME_ORIGIN_DOCUMENT_CSP, soak_header)
         self._api = bucket(_API_CSP, soak_header)
         # `bucket` ignores the header for a `None` policy; passing `soak_header`

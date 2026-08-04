@@ -113,17 +113,51 @@ The agent has the same knob with the same name and the same default. It matters 
 
 ### Security response headers
 
-Three headers go on **every** response, from `central_server/central_server/security_headers.py` (a pure-ASGI middleware, registered last in `create_app` so it is the outermost of the three and stamps what the inner two produce):
+Four headers go on **every** response, from `central_server/central_server/security_headers.py` (a pure-ASGI middleware, registered last in `create_app` so it is the outermost of the three and stamps what the inner two produce):
 
 | Header | Value |
 | --- | --- |
 | `X-Content-Type-Options` | `nosniff` |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
 | `X-Frame-Options` | `DENY` |
+| `Cross-Origin-Opener-Policy` | `same-origin-allow-popups` |
 
 `X-Frame-Options` duplicates every policy's `frame-ancestors 'none'` and exists only for browsers that predate CSP framing control. `/portal/cancel-deletion` overrides the referrer policy to `no-referrer` with a document `<meta>`, which wins over the header — that page carries a cancellation token in its URL.
 
+`Content-Security-Policy` and `Permissions-Policy` are set on every response too — `/docs` and `/redoc` aside, which are CSP-exempt for the reason given below — but their value depends on the path. Both have their own section.
+
 One gap, deliberate and worth knowing: an **unhandled** exception is turned into a 500 by Starlette's `ServerErrorMiddleware`, which wraps the entire user middleware stack, so that one response carries none of these. Everything else does, including every `HTTPException` (404 / 403 / 405) and every static file.
+
+#### Cross-Origin-Opener-Policy
+
+> **`Cross-Origin-Opener-Policy: same-origin` breaks Google Sign-In.** Do not "harden" this value. It severs the `window.opener` relationship the Google Identity Services popup posts the credential back through, and the symptom is a blank popup or a flow that stalls with nothing logged server-side.
+
+Both plausible values isolate our window from a **cross-origin opener** — a page that opened us keeps no scriptable handle either way. They differ only in the other direction: `same-origin` additionally drops the handle on popups **we** open, and that handle is exactly what the sign-in popup uses.
+
+`/portal/*` therefore requires `same-origin-allow-popups`, and every other surface takes the same value rather than the stricter one. That is a decision, not an oversight: `/dashboard/*` opens no popup today (no `window.open`, no `target="_blank"`, no Google button in `static/dashboard.js` or any dashboard template), so `same-origin` would protect against nothing that exists, while a dashboard popup added later would break under it silently. One value across every surface also keeps navigation between the same-origin `/`, `/portal/*` and `/dashboard/*` inside a single browsing context group.
+
+The header is not verifiable in one browser. When FedCM is active Chrome renders the sign-in popup itself and COOP never comes into play; it matters on the non-FedCM path and in browsers without FedCM, which is why the check below asks for both.
+
+`Cross-Origin-Embedder-Policy` and `Cross-Origin-Resource-Policy` are deliberately **not** set, and the issue that added COOP scoped both out. The reason is only strictly true of COEP: `require-corp` would block the `accounts.google.com/gsi/` frame and script, neither of which sends CORP. CORP is a different question — it governs who may embed *our* responses, not the Google frame — and has simply not been evaluated on its merits yet.
+
+#### Permissions-Policy
+
+Chosen by path, like the CSP:
+
+| Surface | Policy |
+| --- | --- |
+| everything except `/portal/*` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), identity-credentials-get=()` |
+| `/portal/*` with `GOOGLE_CLIENT_ID` set | the same list, but `identity-credentials-get=(self "https://accounts.google.com")` |
+| `app.mobaide.com` static SPA (served by **Caddy**) | the `/portal/*` value, unconditionally |
+
+> **`identity-credentials-get=(self)` on `/portal/*` breaks Google Sign-In**, the same way `COOP: same-origin` does, and for the same reason it looks like the tighter choice. The Google button frame is created with `allow="identity-credentials-get"`, and a frame's `allow` only delegates a feature the embedding document's own policy grants to *that origin*. Naming the feature at all therefore obliges you to name Google's origin alongside `self`.
+
+`identity-credentials-get` is spelled out rather than left off the list on purpose. Its default allowlist is `self`, so the empty allowlist in the baseline is what denies FedCM to our own same-origin documents as well — containment for an injected script on a surface that has no use for the API. `portal_permissions_policy()` follows `portal_csp()`: with no client id configured the portal drops back to the baseline, so an instance without Google never advertises the allowance.
+
+Two things worth knowing before editing the feature list:
+
+* **This header is Chromium-only.** Firefox and Safari ignore it entirely, so it hardens Chrome users and nobody else. It is not a substitute for any server-side control.
+* **An unknown feature name is a console error on every page load** — `Error with Permissions-Policy header: Unrecognized feature: 'x'` — which is the same console the soak below asks you to read clean. Only names current Chrome still recognises belong here. `interest-cohort` (FLoC, dropped from Chrome in 2022) and its successor `browsing-topics` (removed in Chrome 150, July 2026) are both retired and deliberately absent.
 
 #### Content-Security-Policy per surface
 
@@ -138,13 +172,13 @@ Headers are applied with `setdefault`, so a route that sets its own value still 
 | `/docs`, `/redoc` | **no CSP** — see below |
 | `app.mobaide.com` static SPA (served by **Caddy**, not the app) | `default-src 'self'; script-src 'self' 'sha256-<theme-boot hash>' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self'; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
 
-The SPA row is enforced by the `(app_mobaide)` snippet in both `deploy/prod/Caddyfile.*` files, because static files never pass through `security_headers.py` — the Caddy site block therefore also duplicates the three universal headers plus `Permissions-Policy`. Proxied requests on the app host (`/api`, `/ws`, `/relay`, `/proxy`) still get the app's own path-routed policies from the table above. `connect-src 'self'` covers same-origin WebSockets (CSP3 treats `ws(s)://same-host` as `'self'`).
+The SPA row is enforced by the `(app_mobaide)` snippet in both `deploy/prod/Caddyfile.*` files, because static files never pass through `security_headers.py` — the Caddy site block therefore also duplicates the four universal headers plus `Permissions-Policy`. The SPA is the second Google Sign-In popup surface (`web/src/auth/googleSignIn.ts` mounts GIS with `ux_mode: 'popup'` on `/login`, `/register` and `/account`), so its COOP and `Permissions-Policy` match what the middleware serves `/portal/*`. Proxied requests on the app host (`/api`, `/ws`, `/relay`, `/proxy`) still get the app's own path-routed policies from the table above. `connect-src 'self'` covers same-origin WebSockets (CSP3 treats `ws(s)://same-host` as `'self'`).
 
 `script-src` grants no `'unsafe-inline'` and no `'unsafe-eval'` on any surface. That is why no template contains an inline `<script>`, an `onclick=` attribute or an `hx-on:` attribute any more — the portal's behaviour lives in `static/site/portal.js`, the dashboard's in `static/dashboard.js`, and per-request values reach them through `data-` attributes. Adding any of those three forms back does not degrade a page, it silently breaks it.
 
 `'unsafe-inline'` appears in `style-src` only, and only on the two surfaces that host a Google Sign-In button: `/portal/*` (and there only when `GOOGLE_CLIENT_ID` is set) and the `app.mobaide.com` SPA. The Google Identity Services client appends an inline `<style>` to the parent document the moment it loads, on top of the `accounts.google.com/gsi/style` sheet Google documents, and `renderButton({width})` emits an inline `style=` attribute. With no client id configured, `portal_base.html` emits no Google tag and the middleware serves the portal the strict same-origin policy instead; the SPA's policy is static — Caddy cannot see the server config — so it carries the Google origins unconditionally and the button simply never mounts when `GET /api/version` reports no client id. `img-src` stays `'self'` on both: the button and its Google logo render inside a cross-origin iframe, governed by Google's policy rather than ours. Since WEB-05 the SPA row has a **second, independent** reason to keep it: xterm.js injects a `<style>` element at runtime for the terminal screen, so tightening `style-src` on the app host would break the terminal even if the Google button ever left that origin. No other WEB-05 change touches the SPA policy — the terminal's WebSocket is same-origin (`connect-src 'self'`) and its assets are Vite-hashed local files.
 
-`/docs` and `/redoc` are exempt on purpose. FastAPI renders both from a `cdn.jsdelivr.net` bundle with an inline bootstrap script, so any policy strict enough to be worth setting would break them, and one loose enough to fit is a list of third-party origins we do not control. Both stay unregistered unless `ENABLE_API_DOCS` is set, and admin-gated when it is. They still get the three universal headers.
+`/docs` and `/redoc` are exempt on purpose. FastAPI renders both from a `cdn.jsdelivr.net` bundle with an inline bootstrap script, so any policy strict enough to be worth setting would break them, and one loose enough to fit is a list of third-party origins we do not control. Both stay unregistered unless `ENABLE_API_DOCS` is set, and admin-gated when it is. They still get the four universal headers and the baseline `Permissions-Policy`.
 
 #### Rolling out a CSP change — the report-only soak
 
@@ -159,6 +193,12 @@ Deployment is manual and a bad CSP does not trigger the `/api/health` rollback, 
 3. Remove `CSP_REPORT_ONLY` and deploy again.
 
 The default is **enforce** (`csp_report_only: bool = False`). A report-only default would mean the policy silently protects nobody if the flag is never flipped. There is no violation-collection endpoint — the soak is browser-console-based; server-side collection is tracked in CLA-174.
+
+##### `CSP_REPORT_ONLY` does not cover COOP or Permissions-Policy
+
+Both headers do have report-only counterparts — `Cross-Origin-Opener-Policy-Report-Only` and `Permissions-Policy-Report-Only` — but unlike CSP they report **only** through the Reporting API (`Reporting-Endpoints` plus a collector), never to the console. With no collection endpoint on this deployment (tracked in CLA-174) there is nothing to read, so `CSP_REPORT_ONLY` leaves both alone and their only rehearsal is a staged deploy plus a manual sign-in. Once CLA-174 lands, `Cross-Origin-Opener-Policy-Report-Only: same-origin` served alongside the enforcing `same-origin-allow-popups` is the way to answer the question below without a two-browser sweep. After changing either value, sign in end to end on **both** `/portal/login` and the `/portal/account` delete-account modal's Google re-auth, twice — once on a stock Chrome (FedCM active) and once on a Chrome launched with `--disable-features=FedCm`. A COOP mistake is invisible on the FedCM path, because there Chrome renders the popup itself, so a single-browser check proves nothing.
+
+Repeat both on `app.mobaide.com` when the `(app_mobaide)` Caddy block changes — it carries its own copy of these headers and is the other surface with a Google button.
 
 #### HSTS
 

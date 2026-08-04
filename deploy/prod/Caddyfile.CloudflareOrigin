@@ -89,12 +89,25 @@
         # emits an inline style= attribute. img-src stays 'self' — the
         # button and its Google logo render inside a cross-origin iframe, so
         # they are governed by Google's policy, not ours.
+        #
+        # Cross-Origin-Opener-Policy has to stay same-origin-allow-popups:
+        # same-origin severs the opener that same sign-in popup posts its
+        # credential back through. Permissions-Policy mirrors what
+        # security_headers.py serves on /portal/*, FedCM allowance included:
+        # the GIS button frame carries allow="identity-credentials-get", and a
+        # frame's allow only delegates what the embedding document grants to
+        # that origin, so identity-credentials-get=(self) would refuse it and
+        # take sign-in down. Both are unconditional here for the same reason
+        # the CSP's Google origins are:
+        # Caddy cannot read GOOGLE_CLIENT_ID, and the button never mounts when
+        # GET /api/version reports no client id.
         header {
             Content-Security-Policy "default-src 'self'; script-src 'self' 'sha256-DQjnNfb9BFsBDwtrOfOC9aSi5NaqDDr+KkPgo0PMtbY=' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src 'self'; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+            Cross-Origin-Opener-Policy "same-origin-allow-popups"
             X-Frame-Options "DENY"
             X-Content-Type-Options "nosniff"
             Referrer-Policy "strict-origin-when-cross-origin"
-            Permissions-Policy "camera=(), microphone=(), geolocation=()"
+            Permissions-Policy `camera=(), microphone=(), geolocation=(), payment=(), usb=(), identity-credentials-get=(self "https://accounts.google.com")`
         }
 
         # route {} forces listed order: the cache headers must run AFTER the
