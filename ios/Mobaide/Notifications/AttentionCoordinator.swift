@@ -17,6 +17,7 @@ final class AttentionCoordinator {
     private var eventSubscription: Task<Void, Never>?
     private var authSubscription: Task<Void, Never>?
     private var reconcileTask: Task<Void, Never>?
+    private var authorizationTask: Task<Void, Never>?
     private var didRequestAuthorization = false
     private var latestAuthState: AuthState?
 
@@ -68,7 +69,7 @@ final class AttentionCoordinator {
 
     /// Authorization + agent-scoped notification lifecycle, driven by the auth
     /// state. On reaching `.fullyConnected`: request notification authorization
-    /// once — fire-and-forget, because the system prompt blocks on the user and
+    /// once — off this loop, because the system prompt blocks on the user and
     /// this loop is serial, so awaiting it would hold a teardown state behind
     /// the dialog — then reconcile, so attention that accrued while the app wasn't
     /// running (a cold launch after iOS killed a suspended app) or while the
@@ -88,7 +89,7 @@ final class AttentionCoordinator {
         case .fullyConnected:
             if !didRequestAuthorization {
                 didRequestAuthorization = true
-                presenter.requestAuthorization()
+                requestAuthorizationThenReconcile()
             }
             // Reconcile off the serial auth loop so a subsequent teardown state
             // (logout / agent switch) isn't blocked behind the network snapshot.
@@ -96,8 +97,29 @@ final class AttentionCoordinator {
         case .userOnly, .unauthenticated, .incompatibleServer:
             if previous == .fullyConnected || state == .unauthenticated {
                 reconcileTask?.cancel()
+                authorizationTask?.cancel()
                 presenter.removeAll()
             }
+        }
+    }
+
+    /// Requests authorization off the serial auth loop, then reconciles if it
+    /// was granted. Detached because the system prompt blocks on the user:
+    /// awaiting it on either serial loop would hold a teardown, or a clearing
+    /// `session.updated`, behind the dialog. The reconcile is what keeps the
+    /// attention that arrived while the prompt was up from being lost — `post`
+    /// drops alerts outright while authorization is undecided — and sourcing it
+    /// from a fresh snapshot means attention resolved in the meantime is simply
+    /// absent rather than posted late.
+    private func requestAuthorizationThenReconcile() {
+        authorizationTask?.cancel()
+        authorizationTask = Task { [weak self] in
+            guard let self else { return }
+            let granted = await self.presenter.requestAuthorization()
+            // A teardown can land while the prompt is up; reconciling past it
+            // would re-post the previous agent's alerts after `removeAll()`.
+            guard granted, !Task.isCancelled, self.latestAuthState == .fullyConnected else { return }
+            self.reconcileCancellable()
         }
     }
 

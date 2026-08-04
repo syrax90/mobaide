@@ -11,8 +11,19 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
     private var removeAllStorage = 0
     private var deliveredStorage: Set<String>
 
-    init(delivered: Set<String> = []) {
+    /// Outcome the stubbed authorization request reports, and an optional gate
+    /// awaited before it resolves (to hold a request "at the prompt").
+    private let grantsAuthorization: Bool
+    private let authorizationGate: AsyncGate?
+
+    init(
+        delivered: Set<String> = [],
+        grantsAuthorization: Bool = true,
+        authorizationGate: AsyncGate? = nil
+    ) {
         deliveredStorage = delivered
+        self.grantsAuthorization = grantsAuthorization
+        self.authorizationGate = authorizationGate
     }
 
     var posted: [SessionResponse] { lock.withLock { postedStorage } }
@@ -39,8 +50,10 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
         lock.withLock { deliveredStorage }
     }
 
-    func requestAuthorization() {
+    func requestAuthorization() async -> Bool {
         lock.withLock { authRequestStorage += 1 }
+        await authorizationGate?.wait()
+        return grantsAuthorization
     }
 
     func removeAll() {

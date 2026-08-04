@@ -99,8 +99,8 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
         Set(await center.deliveredNotifications().map { $0.request.identifier })
     }
 
-    func requestAuthorization() {
-        _ = startAuthorizationRequest()
+    func requestAuthorization() async -> Bool {
+        await startAuthorizationRequest().value
     }
 
     /// Starts the authorization request, or joins the one already in flight, so
@@ -135,14 +135,19 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
             // to full authorization (provisional records a provisional grant,
             // not a user decision, so the prompt still shows). Fire-and-forget:
             // provisional already delivers, so this alert must not wait on it.
-            requestAuthorization()
+            _ = startAuthorizationRequest()
             return true
         case .notDetermined:
-            // The coordinator's auth task requests authorization on first
-            // `.fullyConnected`, but it and the event loop are unordered, so the
-            // first `.sessionAttention` can arrive here first. Join the same
-            // single-flight request so that first alert is never dropped.
-            return await startAuthorizationRequest().value
+            // Never await the prompt here. `post` runs on the coordinator's
+            // serial event loop, so a pending dialog holds every later event
+            // behind it — including a `session.updated` that clears this very
+            // attention, which would then be applied only *after* this alert
+            // was added, flashing a loud notification for resolved attention.
+            // Start the request and drop this alert; on a grant the coordinator
+            // reconciles from a fresh snapshot, which re-posts whatever still
+            // needs attention and naturally omits whatever no longer does.
+            _ = startAuthorizationRequest()
+            return false
         default:
             return false
         }

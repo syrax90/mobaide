@@ -90,6 +90,71 @@ final class AttentionCoordinatorTests: XCTestCase {
         XCTAssertEqual(presenter.authRequestCount, 1)
     }
 
+    func testAuthorizationGrantTriggersASecondReconcile() async {
+        // `post` drops alerts while authorization is undecided, so the attention
+        // that arrived during the prompt is recovered only by reconciling once
+        // it is granted — from a fresh snapshot, so attention resolved in the
+        // meantime is absent rather than posted late.
+        let gate = AsyncGate()
+        let presenter = FakeAttentionPresenter(authorizationGate: gate)
+        let snapshotCount = Counter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: { snapshotCount.increment(); return [] }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        // The connect-path reconcile runs while the prompt is still up.
+        await waitUntil { snapshotCount.value == 1 }
+        XCTAssertEqual(snapshotCount.value, 1, "authorization must not block the connect reconcile")
+        gate.open()
+        await waitUntil { snapshotCount.value == 2 }
+        XCTAssertEqual(snapshotCount.value, 2, "a grant reconciles again to recover dropped alerts")
+        continuation.finish()
+    }
+
+    func testAuthorizationGrantAfterTeardownDoesNotReconcile() async {
+        // Answering the prompt after a logout / agent switch must not resurrect
+        // the previous agent's alerts past `removeAll()`.
+        let gate = AsyncGate()
+        let presenter = FakeAttentionPresenter(authorizationGate: gate)
+        let snapshotCount = Counter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: { snapshotCount.increment(); return [] }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        await waitUntil { snapshotCount.value == 1 }
+        continuation.yield(.userOnly)
+        await waitUntil { presenter.removeAllCount == 1 }
+        gate.open()
+        await waitUntil(timeout: .milliseconds(200)) { false }
+        XCTAssertEqual(snapshotCount.value, 1, "no reconcile once the agent connection is gone")
+        continuation.finish()
+    }
+
+    func testAuthorizationDenialDoesNotReconcile() async {
+        let presenter = FakeAttentionPresenter(grantsAuthorization: false)
+        let snapshotCount = Counter()
+        let (authStates, continuation) = AsyncStream.makeStream(of: AuthState.self)
+        let coordinator = makeCoordinator(
+            presenter: presenter,
+            authStates: authStates,
+            snapshot: { snapshotCount.increment(); return [] }
+        )
+        coordinator.start()
+        continuation.yield(.fullyConnected)
+        await waitUntil { snapshotCount.value == 1 }
+        await waitUntil(timeout: .milliseconds(200)) { false }
+        XCTAssertEqual(snapshotCount.value, 1, "a denial has nothing to recover")
+        continuation.finish()
+    }
+
     func testReconcileSkipsWhenSnapshotFails() async {
         // A transient REST failure must not be read as an empty attention set;
         // otherwise reconcile would remove every delivered notification.

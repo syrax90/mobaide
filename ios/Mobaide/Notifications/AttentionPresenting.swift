@@ -11,11 +11,14 @@ protocol AttentionPresenting: Sendable {
     func remove(sessionId: String)
     /// Ids of currently delivered notifications (for foreground reconcile).
     func deliveredSessionIds() async -> Set<String>
-    /// Request alert+sound authorization; a no-op once the user has decided.
-    /// Synchronous and fire-and-forget by contract: the system prompt blocks on
-    /// the user and cannot be shown at all while the app is backgrounded, so it
-    /// must never stall the coordinator's serial auth-state loop.
-    func requestAuthorization()
+    /// Request alert+sound authorization, reporting whether it was granted; a
+    /// no-op returning the standing decision once the user has decided.
+    /// The system prompt blocks on the user and cannot be shown at all while
+    /// the app is backgrounded, so this may only be awaited from a detached,
+    /// cancellable task — never from the coordinator's serial auth-state or
+    /// event loops, where a pending dialog would hold a teardown or a clearing
+    /// `session.updated` behind it.
+    func requestAuthorization() async -> Bool
     /// Drop every delivered/pending notification (cross-account teardown).
     func removeAll()
 }

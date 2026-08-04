@@ -74,11 +74,17 @@ re-derived from a `GET /api/sessions` snapshot on foregrounding — the
 posting the set the client never showed and removing alerts whose attention is
 gone. Authorization is requested as the full `[.alert, .sound, .badge]` on first
 `.fullyConnected`, matching Android's loud runtime prompt, so alerts arrive as
-heads-up banners with sound. The request is fire-and-forget (a non-`async`
-`AttentionPresenting.requestAuthorization()` over a single-flight `Task`): the
-system prompt blocks on the user and cannot display at all while backgrounded,
-and `handleAuth`'s loop is serial, so awaiting it would hold a logout or
-agent-switch teardown behind the dialog. Earlier builds requested `.provisional`,
+heads-up banners with sound. The request runs on its own cancellable task, never
+on a serial loop: the system prompt blocks on the user and cannot display at all
+while backgrounded, so awaiting it in `handleAuth` would hold a logout or
+agent-switch teardown behind the dialog, and awaiting it in `post` would hold the
+whole event loop — including a `session.updated` clearing that very attention,
+which would then be applied only after the alert had already fired. So `post`
+drops alerts outright while authorization is undecided, and a grant reconciles
+from a fresh snapshot to recover them; attention resolved while the prompt was up
+is simply absent from that snapshot rather than posted late. A teardown landing
+during the prompt cancels the task, and the grant path re-checks
+`.fullyConnected` before reconciling. Earlier builds requested `.provisional`,
 which grants quiet-only delivery and — the non-obvious part — also caps whatever
 `willPresent` returns down to `.list`, so foreground alerts were silent for the
 same reason; an install still in that state is promoted by re-requesting without
