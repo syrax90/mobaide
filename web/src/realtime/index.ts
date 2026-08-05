@@ -8,6 +8,7 @@ export {
   connectAgentEvents,
   disconnectAgentEvents,
   forceReconnectAgentEvents,
+  forceReconnectAllEvents,
   startUserEvents,
   stopAllRealtime,
   stopUserEvents,

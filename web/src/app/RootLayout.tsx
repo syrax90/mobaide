@@ -13,7 +13,10 @@ export function RootLayout() {
           <NavLink to="/projects">Projects</NavLink>
           <NavLink to="/templates">Templates</NavLink>
           <NavLink to="/account">Account</NavLink>
-          <NavLink to="/devices">Devices</NavLink>
+          {/* Devices is deliberately not here: Settings and Account both link
+              to it, and a seventh top-level entry buys nothing on a screen
+              where the first five are the daily ones. */}
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
         <ThemeToggle />
       </header>

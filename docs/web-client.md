@@ -25,7 +25,9 @@ route with its deep link and paste box, the `/agents` screen, and the
 pairing link the agent now prints under its QR. WEB-09 (CLA-195) added the
 three CRUD surfaces: projects with accessible reorder and three-state updates,
 the per-project git branch/worktree list with its deferred delete, and prompt
-template management. The series is tracked in
+template management. WEB-10 (CLA-196) added the last live surfaces: the
+Auto Scan monitor with its ANSI log pane, the attention-notification
+surface, and the settings hub. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -72,11 +74,16 @@ web/
 │   ├── components/form/      # react-hook-form fields (+ auth/ Google button, account/ grace banner)
 │   ├── protocol/             # framework-free wire layer (WEB-04): terminal codec,
 │   │                         #   relay URL/path builder, wire JSON + Zod schemas,
-│   │                         #   autoscan frames, __fixtures__/ golden-fixture loader
+│   │                         #   autoscan frames, SGR parser, __fixtures__/ loader
+│   ├── autoscan/             # framework-free auto-scan core (WEB-10): frame reducer
+│   │                         #   with its reduction cursor, channel hook, display helpers
+│   ├── notifications/        # attention content/suppression/service + the event
+│   │                         #   bridge (WEB-10)
 │   ├── realtime/             # WS channel manager, close policy, connection store,
 │   │                         #   event→Query bridge, RealtimeProvider (WEB-04)
 │   ├── stores/               # Zustand stores (themeStore, toastStore, terminalPrefsStore,
-│   │                         #   selectedAgentStore, lastSessionStore)
+│   │                         #   selectedAgentStore, lastSessionStore,
+│   │                         #   notificationPrefsStore, visibleSessionStore)
 │   ├── lib/queryClient.ts    # TanStack Query defaults
 │   ├── lib/queryKeys.ts      # central query-key factory + wsBackedQueryOptions
 │   ├── api/
@@ -86,7 +93,7 @@ web/
 │   │   ├── errors.ts         # HTTP/network error normalisation
 │   │   └── *Repository.ts    # typed call wrappers (auth, devices) + anonymous bootstrap
 │   ├── styles/               # theme tokens (data-theme) + global styles
-│   └── test/setup.ts         # jest-dom matchers for Vitest
+│   └── test/                 # jest-dom matchers + the localStorage stand-in
 ├── e2e/                      # Playwright specs
 └── vite.config.ts, tsconfig*.json, eslint.config.js, playwright.config.ts
 ```
@@ -700,6 +707,155 @@ prompt-template picker is read-only here (list, recents/favourites grouping,
 filter, insert, favourite toggle); creating and deleting templates is
 WEB-09.
 
+## Auto Scan, notifications & settings (WEB-10)
+
+The last live-surface milestone: the Auto Scan monitor, the attention
+surface, and a settings hub.
+
+**Monitor, two channels.** The card list rides the shared agent-events bus
+that `SessionList` already opened and mounts as an "Active Auto Scans"
+section above the sessions, which is where iOS puts it; only the detail
+screen at `agents/:agentId/autoscan/:projectName` opens the dedicated
+`ws/autoscan` channel. Both ids ride in the path for the same reason the git
+route's do — a scan is one project on one host, and the selected-agent store
+would make a shared link resolve elsewhere. That channel is capacity-limited:
+past its ten-subscription cap, or when the agent's send queue is full, the
+relay accepts the socket and then closes it with `1013`, which the screen
+latches into a declined banner with a manual retry rather than the close-code
+policy's default reconnect.
+
+**The three `autoscan.*` events, judged by the snapshot-vs-pointer rule.**
+None of them is an invalidation. `autoscan.list.changed` carries the agent's
+entire `list_response()` and `autoscan.status` a complete
+`AutoScanInstanceDto`, so both are *written* (`realtime/autoscanCache.ts`) —
+the status upsert replaces a row and deliberately never inserts one, because
+the event carries no `capacity`/`max_scans`/`available_projects` and the
+`autoscan.list.changed` that every start publishes is what introduces it.
+`autoscan.event` is *ignored*: it is one scan event, the stream the detail
+screen reads from its own channel, and `AutoScanInstance._emit` publishes one
+per emitted log line — invalidating on it, as the bridge did before this
+milestone, cost a `/proxy` GET per line of output.
+
+The Auto Scan list is nonetheless the one written cache that also needs a
+connect-time refresh, and not for the usual reason. The agent *does* publish
+`autoscan.list.changed` as a connect snapshot, but only on the direct
+`ws/events` path; `relay/client.py::_handle_request_events_snapshot`
+republishes sessions and projects and stops there, and the relay is the only
+path a browser takes. `refreshOnAgentEventsConnect` covers the gap, which is
+also why the query must not pin `staleTime: Infinity` (CLA-234). Filed as
+CLA-249 for the agent; once that ships the refresh can go and the list can be
+treated exactly like sessions and projects. `GET /api/autoscan/status` has no
+relay handler at all, so detail state is seeded from the WS `snapshot` frame
+and never from REST.
+
+**Two dedupe layers, both needed.** The wire cursor
+(`protocol/autoscanFrames.ts`, WEB-04) is rebuilt from the live high-water
+mark on every reopen and drops `seq <= cursor`, which is mandatory rather
+than an optimisation: when its ring has already rolled past the client's
+cursor the agent skips its trim filter and replays everything it still holds.
+The reduction cursor (`autoscan/autoscanModel.ts`) makes reducing the same
+frames twice idempotent, which is what a remount or a snapshot overlapping
+live events produces. Both are `bigint`; a `number` stops discriminating past
+2^53, and `seq` is an unbounded per-instance counter. Android has neither
+layer (CLA-119, still open in the code despite being closed).
+
+**ANSI without a dependency.** `protocol/ansi.ts` is a port of the iOS
+`AnsiParser` — full 16-base palette, the 6×6×6 cube, the grayscale ramp,
+truecolor, background/bold/italic/underline — and it returns integer `[r,g,b]`
+runs, which is the shape `tests/protocol_fixtures/ansi/ansi_sgr.json` asserts.
+`ansi_up` was rejected on that ground alone: it emits an HTML string, so
+nothing of the right shape exists to assert. Colours ride React's `style`
+prop, a CSSOM write that CSP never gates — and the SPA's `style-src` carries
+`'unsafe-inline'` regardless, forced by Google Identity Services.
+
+**The log pane is not virtualised, deliberately.** The ring caps at 2000
+lines, rows memoise on an id that is never recycled, and
+`content-visibility: auto` skips layout and paint for anything off screen.
+What that keeps over a windowing library is what a log reader actually needs:
+selecting and copying the whole buffer, and the browser's own scroll
+anchoring holding the view still when the ring trims its oldest line. Follow
+mode is derived from the viewport, not latched, and the released-at line id
+doubles as the unread watermark. Frames are buffered and flushed on an
+animation frame, so a verbose scan collapses into one render per frame.
+
+**Notifications are edge-triggered only.** `attention` is *latched* on the
+agent — cleared only by a client PTY write, a `UserPromptSubmit` hook, or
+output resuming — so every full-state snapshot keeps reporting it and
+`core/attention_gate.py` warns clients not to re-post from one. Web consumes
+only the one-shot `session.attention` edge, which is what makes Android
+correct by construction and what iOS needed a per-session seen-store to
+emulate. There is therefore no reconcile and no seen-store here: a closed tab
+shows nothing, which is honest, because there is no background delivery to
+reconcile against.
+
+It listens on the **user-events** channel, not the agent bus. That payload is
+the slim `{session_id, reason, title?, project_name?, exit_reason?, agent_id}`
+and the channel is account-wide, so a browser — the first client that
+routinely holds several agents — is alerted about all of them rather than
+only the one whose list is open. Consuming both channels would double-post.
+
+*Clearing* an alert cannot be edge-triggered, though — the agent publishes no
+"attention resolved" event, only the full session row with the field gone. So
+`dismissResolvedAttention` watches `session.updated` and `sessions.changed` on
+the agent channel and closes the matching notification, which is the second
+collector Android runs (`SessionEventService` → `notifier.cancel`). Reading a
+snapshot to *dismiss* is safe in the way reading one to *post* is not: the trap
+`attention_gate.py` warns about is re-raising an alert from a latched field, and
+this only ever takes one away.
+`notifications/attentionContent.ts` is a byte-for-byte port of the same map
+iOS, Android and `central_server/push/content.py` carry, em dashes included;
+a phone and a browser watching one session must say the same thing.
+
+Delivery follows the rule both mobile clients share — never alert about the
+session already on screen — with the split a browser makes possible: a hidden
+tab gets a system notification (tagged with the session id, so it replaces
+rather than stacks, matching the APNs collapse id), a visible one gets an
+in-app toast. Permission is requested only from the button in Settings, never
+on load, and `e2e/settings.spec.ts` asserts that by counting
+`Notification.requestPermission()` calls from before any app code runs.
+
+**Tab lifecycle: the socket stays open when hidden.** Presence gating for
+APNs became per device rather than per account
+(`relay/agent_ws.py::_handle_user_event` excluding
+`routing.get_user_device_ids()`), so a browser tab no longer mutes a phone.
+Web deliberately sends no `device_id` hint on `ws/user-events`, exactly as
+Android does not: it registers no push token, so it can never be a
+`list_push_targets` row, and an unverifiable hint would only add log noise. A
+tab therefore never appears in the exclusion set — an iPhone receives its
+attention push whether this tab is open, hidden or closed — and keeping the
+socket open buys live badges in a background tab at no cost to the phone.
+
+Keeping it open that long has a cost of its own, though: a browser exposes no
+`ping()`, so a half-open socket (NAT rebind, Wi-Fi to cellular, a laptop waking)
+sits at `readyState === OPEN` with no data and no close event, where both mobile
+clients would have caught it with their 30 s application ping. `resumeOnFocus.ts`
+covers the two observable causes — `online`, and returning to a tab that was
+hidden longer than a minute — by force-reconnecting the events channels the
+registry owns, plus anything registered through its `onResume` seam. Not every
+`visibilitychange`: alt-tabbing is constant, and reconnecting on each would be
+its own handshake storm.
+
+The auto-scan monitor's socket uses that seam, and needs it most: at the default
+300 s scan interval it is silent for most of every cycle, behind a screen a user
+deliberately leaves open, so a black-holed connection is indistinguishable from a
+healthy idle scan. Firing it blindly is safe in both directions — `forceReconnect`
+no-ops once `disconnect()` has cleared `shouldReconnect`, so a declined channel
+stays declined, and the replay a reconnect triggers is dropped by both cursors.
+The terminal is deliberately left out: it is user-driven, so a dead socket
+announces itself the moment someone types. The residual case (a path
+black-holing while the tab stays visible) needs a heartbeat the browser can
+observe, which is a protocol change across all three clients and is not
+attempted here.
+
+**Settings** is a hub plus the preferences that had nowhere else to live:
+notification permission and the in-app opt-out, the Ctrl+V terminal
+preference, support and privacy links (the same constants iOS and Android
+carry), sign out, and a protocol/server version footer. It links onward to
+agents, projects, templates, devices and the account danger zone, so someone
+who learned the app on a phone finds what they expect; `Devices` left the top
+nav in exchange. There is **no** terminal display-mode picker — web ships
+Full display only, the WEB-05 divergence above.
+
 ## CI — `.github/workflows/web-ci.yml`
 
 Runs on every PR and push to main (no paths filter — schema drift is caused
@@ -789,6 +945,21 @@ WEB-07's two divergences are **not** exempt and are tracked accordingly:
 recording the last-used session on open as well as on create is a behaviour
 change mobile has to follow (CLA-229 / CLA-230), and the session-card
 attention chip is iOS parity that Android does not yet render.
+
+WEB-10's divergences are platform-convention exempt too: no reconcile and no
+seen-store, because a browser has no background delivery to reconcile against
+and consumes only the one-shot attention edge, as Android does; alerting from
+the account-wide user-events channel rather than the per-agent bus, because a
+browser is the first client that routinely holds several agents; requesting
+notification permission from a settings button, which is what a browser
+permission model requires; and no display-mode picker, which is the WEB-05
+exemption restated. The tab-lifecycle contract — the socket stays open when
+hidden, web sends no `device_id`, and a tab therefore never suppresses a push
+— is a cross-client contract rather than a divergence, and matches Android's
+existing choice not to send the hint. Two gaps this milestone found in other
+components are filed rather than fixed: the agent's relay events-snapshot
+handler omits `autoscan.list.changed` (CLA-249), and Android's ANSI parser is
+still a 16-colour subset with no fixture consumer (CLA-250).
 
 WEB-08's divergences are all platform-convention exempt: the paste box and
 the `/pair` deep link exist because a desktop browser has no camera, the

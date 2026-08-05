@@ -14,6 +14,7 @@ import {
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useToastStore } from '../../stores/toastStore';
 import { evictTerminals } from '../../terminal/terminalEviction';
+import { AutoScanSection } from '../autoscan/AutoScanSection';
 import { SessionCard } from './SessionCard';
 import { StopSessionDialog } from './StopSessionDialog';
 import { customTypeNameMap, sessionKindLabel } from './sessionDisplay';
@@ -96,6 +97,11 @@ export function SessionList({ agentId, online }: SessionListProps) {
 
   return (
     <>
+      {/* Above the sessions, where iOS mounts its `AutoScanCard`. It rides the
+          agent-events channel this component already opened, so it costs one
+          REST seed and nothing else. */}
+      <AutoScanSection agentId={agentId} online={online} />
+
       <div className="sessions-toolbar">
         <Link className="button button-primary" to={newSessionPath(agentId)}>
           New session

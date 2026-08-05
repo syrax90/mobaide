@@ -18,8 +18,9 @@ class AgentEvent:
         - ``session.attention`` — payload: {"session": {...}} (one-shot: the
           session needs the user; reason in the session's ``attention`` field)
         - ``projects.changed``  — payload: {"projects": [...]}
-        - ``autoscan.status``   — payload: <full status dict>
-        - ``autoscan.event``    — payload: {"event_type": ..., "timestamp": ..., "data": ...}
+        - ``autoscan.status``   — payload: <full AutoScanInstance.to_dto()>
+        - ``autoscan.event``    — payload: {"project_name": ..., "event": {...}}
+        - ``autoscan.list.changed`` — payload: <full AutoScanSessionManager.list_response()>
     """
 
     type: str

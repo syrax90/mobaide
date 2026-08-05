@@ -1538,3 +1538,232 @@ button {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 /* endregion */
+
+/* region: auto scan monitor (WEB-10) */
+.autoscan-section {
+  margin-bottom: 1.5rem;
+}
+
+.autoscan-section-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+  color: var(--color-fg-muted);
+}
+
+.autoscan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.autoscan-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.autoscan-card-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autoscan-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+}
+
+/* Tabular figures for the same reason iOS uses `monospacedDigit()`: this label
+   is rewritten once a second and would otherwise reflow on every tick. */
+.autoscan-countdown {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.autoscan-chip {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  color: var(--color-fg-muted);
+  background: color-mix(in srgb, var(--color-fg-muted) 15%, transparent);
+}
+
+.autoscan-chip-running {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 18%, transparent);
+}
+
+.autoscan-chip-pending {
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.autoscan-chip-crashed {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 18%, transparent);
+}
+
+.autoscan-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.autoscan-heading {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.95rem;
+  color: var(--color-fg-muted);
+}
+
+.autoscan-phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.autoscan-phase {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 6rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.autoscan-phase[aria-current='step'] {
+  border-color: var(--color-accent);
+}
+
+.autoscan-phase-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.autoscan-phase-status {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+}
+
+.autoscan-phase-running .autoscan-phase-status {
+  color: var(--color-success);
+}
+
+.autoscan-phase-pending .autoscan-phase-status {
+  color: var(--color-accent);
+}
+
+.autoscan-phase-crashed .autoscan-phase-status {
+  color: var(--color-danger);
+}
+
+.autoscan-issues {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.autoscan-issue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.autoscan-issue-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.autoscan-issue-title {
+  flex: 1;
+  min-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.autoscan-issue-step,
+.autoscan-issue-error {
+  color: var(--color-fg-muted);
+}
+
+.autoscan-issue-error {
+  color: var(--color-danger);
+}
+
+.autoscan-log {
+  position: relative;
+}
+
+.autoscan-log-viewport {
+  height: min(60vh, 32rem);
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+/* What replaces a virtualiser here. The browser skips layout and paint for
+   off-screen rows while keeping every one of them in the DOM, so the whole
+   buffer stays selectable and scroll anchoring still holds the view steady when
+   the ring trims its oldest line. `contain-intrinsic-size` is the placeholder
+   height that keeps the scrollbar from jumping as rows are measured. */
+.autoscan-log-line {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1.16rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.autoscan-log-jump {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.6rem;
+}
+/* endregion */
+
+/* region: settings (WEB-10) */
+.settings-heading {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 0.95rem;
+  color: var(--color-fg-muted);
+}
+
+.settings-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.settings-version {
+  margin-top: 2rem;
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+}
+/* endregion */
+

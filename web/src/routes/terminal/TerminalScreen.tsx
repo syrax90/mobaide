@@ -9,6 +9,7 @@ import {
 } from '../../terminal/terminalStore';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
+import { useVisibleSessionStore } from '../../stores/visibleSessionStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { Composer } from './Composer';
 import { ConnectionOverlay, overlayMessage } from './ConnectionOverlay';
@@ -67,6 +68,17 @@ function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
       clearMountedTerminal(key);
     };
   }, [key]);
+
+  // The suppression input both mobile clients call a `ForegroundSessionTracker`:
+  // an attention alert for the session already on screen is noise. Session id,
+  // not the channel key — that is what the event carries.
+  useEffect(() => {
+    const { setVisibleSession, clearVisibleSession } = useVisibleSessionStore.getState();
+    setVisibleSession(sessionId);
+    return () => {
+      clearVisibleSession(sessionId);
+    };
+  }, [sessionId]);
 
   if (model === undefined) {
     return <section className="terminal-page terminal-page-empty">Attaching…</section>;

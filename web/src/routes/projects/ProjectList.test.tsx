@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { stubLocalStorage } from '../../test/localStorageStub';
 import { queryKeys } from '../../lib/queryKeys';
 import { UNDO_WINDOW_MS } from '../../lib/useDeferredCommit';
 import { projectInfoSchema, type ProjectInfo } from '../../protocol/dto/projects';
@@ -47,26 +48,8 @@ vi.mock('../../api/projectRepository', async (importOriginal) => {
   };
 });
 
-// Node >= 22 defines an experimental global `localStorage` that is undefined
-// without --localstorage-file and shadows jsdom's. Same stand-in the other
-// screen tests install, before any persisted store is imported.
-const backing = new Map<string, string>();
-vi.stubGlobal('localStorage', {
-  getItem: (key: string) => backing.get(key) ?? null,
-  setItem: (key: string, value: string) => {
-    backing.set(key, String(value));
-  },
-  removeItem: (key: string) => {
-    backing.delete(key);
-  },
-  clear: () => {
-    backing.clear();
-  },
-  key: (index: number) => [...backing.keys()][index] ?? null,
-  get length() {
-    return backing.size;
-  },
-});
+// Before any persisted store is imported.
+stubLocalStorage();
 
 const { stopAllRealtime } = await import('../../realtime');
 const { useToastStore } = await import('../../stores/toastStore');

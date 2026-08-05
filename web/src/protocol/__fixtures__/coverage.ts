@@ -16,7 +16,13 @@
 
 const OWNER = {
   shortcuts: 'WEB-06 — keyboard & saved shortcuts',
-  autoscan: 'WEB-10 — auto-scan monitor, notifications & settings',
+  /**
+   * The agent auto-updater's force-install response. Android drives it from the
+   * agent-outdated banner (`SessionListScreen` → `AgentUpdateRepository`); iOS
+   * defers it to CLA-120 and web has no banner at all yet. Mis-filed under the
+   * auto-scan milestone before WEB-10 looked at it.
+   */
+  agentUpdate: 'not built on web — agent-outdated banner (Android shipped, iOS CLA-120)',
   /**
    * Shipped surfaces whose shapes come from the committed `openapi-typescript`
    * output. A hand-written Zod mirror would be a second source of truth for a
@@ -37,6 +43,11 @@ const OWNER = {
    * here on the same test. They are request and response bodies only: the shapes
    * that also travel over a socket (`ProjectInfo`) or that no schema documents
    * at all (the `busy_by` 409) are the ones that got Zod mirrors instead.
+   *
+   * WEB-10 moved the Auto Scan request bodies and the Linear filter-picker
+   * responses here on the same test, and kept Zod mirrors only for
+   * `AutoScanInstanceDto` and `AutoScanListResponse` — the two that also arrive
+   * over the agent channel and the `ws/autoscan` snapshot.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -54,11 +65,15 @@ const OWNER = {
 
 /** Fixture files this milestone's tests read and assert. */
 export const COVERED_FIXTURES: readonly string[] = [
+  'ansi/ansi_sgr.json',
   'frames/terminal_frames.json',
   'frames/autoscan_frames.json',
   'pairing/qr_payload.json',
   'relay/relay_mapping.json',
   'dto/agent/AntigravityOptionsModel.json',
+  'dto/agent/AutoScanFilterDto.json',
+  'dto/agent/AutoScanInstanceDto.json',
+  'dto/agent/AutoScanListResponse.json',
   'dto/agent/BusyByResponse.json',
   'dto/agent/BusyHolder.json',
   'dto/agent/ClaudeOptionsModel.json',
@@ -79,37 +94,26 @@ export const COVERED_FIXTURES: readonly string[] = [
 
 /** Fixture files no TypeScript test reads yet, each with the milestone that will. */
 export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
-  /**
-   * Re-pointed from WEB-05 during that milestone: this is the golden for the
-   * mobile clients' `ui/autoscan/AnsiParser`, which renders the auto-scan log
-   * pane. The terminal screen has no SGR parser of its own — xterm.js owns
-   * that — so the web consumer is the auto-scan log view.
-   */
-  'ansi/ansi_sgr.json': OWNER.autoscan,
-
-  'dto/agent/AutoScanFilterDto.json': OWNER.autoscan,
-  'dto/agent/AutoScanInstanceDto.json': OWNER.autoscan,
-  'dto/agent/AutoScanListResponse.json': OWNER.autoscan,
   'dto/agent/CodexLoginRequest.json': OWNER.generated,
   'dto/agent/CodexLoginResponse.json': OWNER.generated,
-  'dto/agent/ForceUpdateResponse.json': OWNER.autoscan,
+  'dto/agent/ForceUpdateResponse.json': OWNER.agentUpdate,
   'dto/agent/GitDeleteItem.json': OWNER.generated,
   'dto/agent/GitDeleteRequest.json': OWNER.generated,
   'dto/agent/GitDeleteResponse.json': OWNER.generated,
   'dto/agent/GitDeleteResultItem.json': OWNER.generated,
   'dto/agent/GitItem.json': OWNER.generated,
   'dto/agent/GitItemsResponse.json': OWNER.generated,
-  'dto/agent/LinearLabelDto.json': OWNER.autoscan,
-  'dto/agent/LinearStateDto.json': OWNER.autoscan,
+  'dto/agent/LinearLabelDto.json': OWNER.generated,
+  'dto/agent/LinearStateDto.json': OWNER.generated,
   'dto/agent/ProjectOrderRequest.json': OWNER.generated,
   'dto/agent/ProjectUpdate.json': OWNER.generated,
   'dto/agent/ProjectWrite.json': OWNER.generated,
   'dto/agent/RefreshRequest.json': OWNER.generated,
-  'dto/agent/RunNowRequest.json': OWNER.autoscan,
-  'dto/agent/RunNowResponse.json': OWNER.autoscan,
+  'dto/agent/RunNowRequest.json': OWNER.generated,
+  'dto/agent/RunNowResponse.json': OWNER.generated,
   'dto/agent/ScrollbackResponse.json': OWNER.unusedByClients,
-  'dto/agent/StartScanRequest.json': OWNER.autoscan,
-  'dto/agent/StopScanRequest.json': OWNER.autoscan,
+  'dto/agent/StartScanRequest.json': OWNER.generated,
+  'dto/agent/StopScanRequest.json': OWNER.generated,
   'dto/agent/TokenRequest.json': OWNER.generated,
   'dto/agent/TokenResponse.json': OWNER.generated,
 

@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { isAuthenticated } from '../auth/authState';
 import { useSessionStore } from '../auth/sessionStore';
 import { startUserEvents, stopAllRealtime } from './channelRegistry';
+import { observeResume } from './resumeOnFocus';
 
 /**
  * Binds the user-events channel to the session, mirroring the mobile buses:
@@ -23,6 +24,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const authenticated = useSessionStore((state) => isAuthenticated(state.authState));
   const userId = useSessionStore((state) => state.session?.userId ?? null);
+
+  // Independent of the session: the listeners are cheap, and a resume arriving
+  // while signed out finds no channels to reconnect.
+  useEffect(() => observeResume(), []);
 
   useEffect(() => {
     if (!authenticated || userId === null) return;

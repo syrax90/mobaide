@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { stubLocalStorage } from '../../test/localStorageStub';
 import type { Agent } from '../../api/agentRepository';
 
 interface ClaimResult {
@@ -40,23 +41,8 @@ vi.mock('../../api/agentRepository', () => ({
 // experimental global `localStorage` that is undefined without
 // --localstorage-file and shadows jsdom's, so the persisted stores would throw
 // on their first write. Installed before the stores are imported.
-const backing = new Map<string, string>();
-vi.stubGlobal('localStorage', {
-  getItem: (key: string) => backing.get(key) ?? null,
-  setItem: (key: string, value: string) => {
-    backing.set(key, String(value));
-  },
-  removeItem: (key: string) => {
-    backing.delete(key);
-  },
-  clear: () => {
-    backing.clear();
-  },
-  key: (index: number) => [...backing.keys()][index] ?? null,
-  get length() {
-    return backing.size;
-  },
-});
+// Before any persisted store is imported.
+stubLocalStorage();
 
 const { useSessionStore } = await import('../../auth/sessionStore');
 const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore');

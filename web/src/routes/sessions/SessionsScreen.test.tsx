@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { stubLocalStorage } from '../../test/localStorageStub';
 import type { Agent } from '../../api/agentRepository';
 import type { SessionResponse } from '../../protocol/dto/session';
 
@@ -35,27 +36,8 @@ vi.mock('../../api/customAgentTypeRepository', () => ({
   listCustomAgentTypes: () => Promise.resolve([]),
 }));
 
-// Node >= 22 defines an experimental global `localStorage` that is undefined
-// without --localstorage-file and shadows jsdom's, so both persisted stores
-// would throw on their first write. Same stand-in as `themeStore.test.ts`,
-// installed before the stores are imported.
-const backing = new Map<string, string>();
-vi.stubGlobal('localStorage', {
-  getItem: (key: string) => backing.get(key) ?? null,
-  setItem: (key: string, value: string) => {
-    backing.set(key, String(value));
-  },
-  removeItem: (key: string) => {
-    backing.delete(key);
-  },
-  clear: () => {
-    backing.clear();
-  },
-  key: (index: number) => [...backing.keys()][index] ?? null,
-  get length() {
-    return backing.size;
-  },
-});
+// Before any persisted store is imported.
+stubLocalStorage();
 
 const { sessionResponseSchema } = await import('../../protocol/dto/session');
 const { useLastSessionStore } = await import('../../stores/lastSessionStore');

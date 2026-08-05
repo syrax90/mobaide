@@ -7,7 +7,9 @@ import { Register } from '../routes/auth/Register';
 import { ResetPassword } from '../routes/auth/ResetPassword';
 import { VerifyEmail } from '../routes/auth/VerifyEmail';
 import { Agents } from '../routes/agents/Agents';
+import { AutoScanDetailScreen } from '../routes/autoscan/AutoScanDetailScreen';
 import { Pair } from '../routes/pair/Pair';
+import { SettingsScreen } from '../routes/settings/SettingsScreen';
 import { ProjectsScreen } from '../routes/projects/ProjectsScreen';
 import { GitScreen } from '../routes/projects/git/GitScreen';
 import { TemplatesScreen } from '../routes/templates/TemplatesScreen';
@@ -60,6 +62,7 @@ export const router = createBrowserRouter([
               { index: true, element: <SessionsScreen /> },
               { path: 'account', element: <Account /> },
               { path: 'devices', element: <Devices /> },
+              { path: 'settings', element: <SettingsScreen /> },
               { path: 'agents', element: <Agents /> },
               { path: 'projects', element: <ProjectsScreen /> },
               { path: 'templates', element: <TemplatesScreen /> },
@@ -74,6 +77,13 @@ export const router = createBrowserRouter([
               // means correctness never rests on react-router ranking a static
               // segment above `:sessionId`.
               { path: 'agents/:agentId/new-session', element: <NewSession /> },
+              // Agent- and project-scoped for the same reason the git route is:
+              // a scan is one project on one host, and the selected-agent store
+              // would make a shared link resolve elsewhere.
+              {
+                path: 'agents/:agentId/autoscan/:projectName',
+                element: <AutoScanDetailScreen />,
+              },
               {
                 // The only lazy route. xterm.js and its WebGL addon are ~740 KB
                 // raw, which is more than the rest of the SPA put together —
