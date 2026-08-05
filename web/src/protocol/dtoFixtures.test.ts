@@ -4,9 +4,13 @@ import type { z } from 'zod';
 import { COVERED_FIXTURES } from './__fixtures__/coverage';
 import { canonicalize, readFixture, type DtoFixtureFile } from './__fixtures__/load';
 import { agentVersionSchema } from './dto/agentVersion';
+import {
+  autoScanInstanceSchema,
+  autoScanListResponseSchema,
+} from './dto/autoscan';
 import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
 import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
-import { projectInfoSchema } from './dto/projects';
+import { autoScanFilterSchema, projectInfoSchema } from './dto/projects';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
 import {
   antigravityOptionsSchema,
@@ -38,6 +42,9 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   VersionInfoResponse: agentVersionSchema,
   CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,
   ProjectInfo: projectInfoSchema,
+  AutoScanFilterDto: autoScanFilterSchema,
+  AutoScanInstanceDto: autoScanInstanceSchema,
+  AutoScanListResponse: autoScanListResponseSchema,
   BusyByResponse: busyByResponseSchema,
   BusyHolder: busyHolderSchema,
   TemplateDto: templateSchema,

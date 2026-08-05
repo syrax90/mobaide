@@ -1,25 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { stubLocalStorage } from '../test/localStorageStub';
 
-// Node >= 22 defines an experimental global `localStorage` that is undefined
-// without --localstorage-file and shadows jsdom's implementation under vitest.
-// Install a functional stand-in before importing the module under test.
-const backing = new Map<string, string>();
-vi.stubGlobal('localStorage', {
-  getItem: (key: string) => backing.get(key) ?? null,
-  setItem: (key: string, value: string) => {
-    backing.set(key, String(value));
-  },
-  removeItem: (key: string) => {
-    backing.delete(key);
-  },
-  clear: () => {
-    backing.clear();
-  },
-  key: (index: number) => [...backing.keys()][index] ?? null,
-  get length() {
-    return backing.size;
-  },
-});
+// Before any persisted store is imported.
+stubLocalStorage();
 
 const { clearAgentToken, clearAgentTokens, getAgentToken } = await import('./agentTokens');
 

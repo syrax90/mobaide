@@ -15,12 +15,18 @@
  */
 import type { QueryClient } from '@tanstack/react-query';
 import { useSessionStore } from '../auth/sessionStore';
+import {
+  clearAttentionNotifications,
+  dismissResolvedAttention,
+  handleAttentionEvent,
+} from '../notifications/attentionNotifications';
+import { decodeEventEnvelope } from '../protocol/dto/envelope';
 import { createAgentEventsChannel, createUserEventsChannel } from './channels';
 import { useConnectionStore } from './connectionStore';
 import { disposeAllChannels } from './liveChannels';
 import {
-  applyAgentEvent,
-  applyUserEvent,
+  applyAgentEventEnvelope,
+  applyUserEventEnvelope,
   refreshOnAgentEventsConnect,
   refreshOnUserEventsConnect,
 } from './queryBridge';
@@ -67,9 +73,17 @@ export function startUserEvents(client: QueryClient): WebSocketChannel {
       case 'connected':
         refreshOnUserEventsConnect(client);
         break;
-      case 'message':
-        applyUserEvent(client, event.data);
+      case 'message': {
+        // Decoded once and routed twice: `parseWireJson`'s source-access reviver
+        // makes a second `JSON.parse` several times the cost of a plain one.
+        const envelope = decodeEventEnvelope(event.data);
+        if (envelope === null) break;
+        applyUserEventEnvelope(client, envelope);
+        // After the cache routing, so the sessions list has at least been marked
+        // stale before an alert points the user at it.
+        handleAttentionEvent(envelope);
         break;
+      }
       case 'tokenRejected':
         session.invalidateUserSession('tokenRejected');
         break;
@@ -106,6 +120,10 @@ export function stopUserEvents(): void {
   if (running === null) return;
   userEvents = null;
   tearDown(running);
+  // Attention alerts are scoped to this account's agents. One left on screen
+  // after a sign-out or an account handover would deep-link into a session the
+  // next user cannot open.
+  clearAttentionNotifications();
   // Stopping on purpose is the signed-out state, where REST-only flows (login,
   // register, password reset) must never be paused as "offline".
   reportRealtimeStopped();
@@ -140,9 +158,16 @@ export function connectAgentEvents(
         useSessionStore.getState().markAgentConnected();
         refreshOnAgentEventsConnect(client, agentId);
         break;
-      case 'message':
-        applyAgentEvent(client, agentId, event.data);
+      case 'message': {
+        const envelope = decodeEventEnvelope(event.data);
+        if (envelope === null) break;
+        applyAgentEventEnvelope(client, agentId, envelope);
+        // The clearing half of the notification surface. Only this channel
+        // carries the full session row, so only this channel can tell that an
+        // attention has been answered.
+        dismissResolvedAttention(envelope);
         break;
+      }
       default:
         break;
     }
@@ -175,6 +200,32 @@ export function forceReconnectAgentEvents(agentId: string): void {
   if (running === undefined) return;
   running.channel.connect();
   running.channel.forceReconnect();
+}
+
+/**
+ * Force every long-lived events socket to re-handshake.
+ *
+ * The two channels this module owns. Both are idle by design — user-events
+ * delivers nothing between account changes, an agent channel nothing between
+ * session changes — so neither notices a dead path on its own.
+ *
+ * Channels built by their consumers are not reachable from here (`liveChannels`
+ * models disposal only). The auto-scan monitor opts in through `onResume`
+ * instead, which it needs at least as much: at the default 300 s scan interval
+ * that socket is silent for most of every cycle, and its screen is one a user
+ * deliberately leaves open. The terminal is left out on purpose — it is
+ * user-driven, so a dead socket announces itself the moment someone types.
+ *
+ * `connect()` before `forceReconnect()`, as the per-agent Refresh does:
+ * `forceReconnect` returns early on a channel that stopped for good, which is
+ * one of the states this exists to recover from.
+ */
+export function forceReconnectAllEvents(): void {
+  if (userEvents !== null) {
+    userEvents.channel.connect();
+    userEvents.channel.forceReconnect();
+  }
+  for (const agentId of [...agentEvents.keys()]) forceReconnectAgentEvents(agentId);
 }
 
 /**

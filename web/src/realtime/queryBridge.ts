@@ -23,14 +23,20 @@
  * **invalidated** — and a pointer event's query must not pin
  * `staleTime: Infinity`, because an invalidation landing during a cold fetch is
  * deduped into that fetch and leaves the stale result pinned (CLA-234).
- * `git.changed` is the pointer case; `autoscan.*` will be judged the same way in
- * WEB-10.
+ * `git.changed` is the pointer case.
+ *
+ * WEB-10 judged the three `autoscan.*` types by the same rule and none of them
+ * is an invalidation: `autoscan.list.changed` and `autoscan.status` carry full
+ * state and are written (`autoscanCache.ts`), while `autoscan.event` is the
+ * detail log's own stream and names no cache at all — the monitor screen reads
+ * it from the dedicated `ws/autoscan` channel, where it arrives filtered by
+ * subscription. Invalidating on it, as this bridge did before, meant a `/proxy`
+ * GET per emitted log line.
  *
  * All payloads that reach a schema are validated before anything is written, so
  * a malformed payload is dropped exactly as it is on Android and iOS — and
  * dropped rather than thrown: this runs inside the socket's listener loop, where
- * an escaping `ZodError` would take out `onmessage`. The auto-scan types are
- * still routed by `type` alone, their shapes belonging to WEB-10.
+ * an escaping `ZodError` would take out `onmessage`.
  *
  * Unknown envelope types are ignored — that is the forward-compatibility
  * contract every client honours.
@@ -40,6 +46,7 @@ import type { z } from 'zod';
 import { queryKeys } from '../lib/queryKeys';
 import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelope';
 import { gitChangedSchema } from '../protocol/dto/projects';
+import { applyAutoScanSnapshot, applyAutoScanStatus } from './autoscanCache';
 import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import { markSessionsSnapshotApplied } from './sessionsSyncStore';
@@ -141,10 +148,6 @@ function agentEventKeys(
       const decoded = gitChangedSchema.safeParse(payload);
       return decoded.success ? [queryKeys.gitItems(agentId, decoded.data.project_name)] : [];
     }
-    case 'autoscan.status':
-    case 'autoscan.list.changed':
-    case 'autoscan.event':
-      return [queryKeys.autoscan(agentId)];
     default:
       return null;
   }
@@ -171,12 +174,25 @@ export function routeUserEvent(envelope: EventEnvelope): BridgeOutcome {
   return { kind: 'invalidated', type: envelope.type, keys: rule.keys(envelope.payload) };
 }
 
-export function applyUserEvent(client: QueryClient, text: string): BridgeOutcome {
-  const envelope = decodeEventEnvelope(text);
-  if (envelope === null) return { kind: 'dropped' };
+export function applyUserEventEnvelope(
+  client: QueryClient,
+  envelope: EventEnvelope,
+): BridgeOutcome {
   const outcome = routeUserEvent(envelope);
   if (outcome.kind === 'invalidated') invalidate(client, outcome.keys);
   return outcome;
+}
+
+/**
+ * Decode-and-route. Callers that need the envelope for something else — the
+ * notification surface does — should decode once and use the `*Envelope`
+ * variants instead: `parseWireJson`'s source-access reviver makes a second
+ * `JSON.parse` several times the cost of a plain one.
+ */
+export function applyUserEvent(client: QueryClient, text: string): BridgeOutcome {
+  const envelope = decodeEventEnvelope(text);
+  if (envelope === null) return { kind: 'dropped' };
+  return applyUserEventEnvelope(client, envelope);
 }
 
 export function applyAgentEvent(
@@ -186,7 +202,14 @@ export function applyAgentEvent(
 ): BridgeOutcome {
   const envelope = decodeEventEnvelope(text);
   if (envelope === null) return { kind: 'dropped' };
+  return applyAgentEventEnvelope(client, agentId, envelope);
+}
 
+export function applyAgentEventEnvelope(
+  client: QueryClient,
+  agentId: string,
+  envelope: EventEnvelope,
+): BridgeOutcome {
   switch (envelope.type) {
     case 'sessions.changed': {
       const outcome = applySessionsSnapshot(client, agentId, envelope.payload);
@@ -221,6 +244,31 @@ export function applyAgentEvent(
         keys: [queryKeys.projects(agentId)],
       };
     }
+    case 'autoscan.list.changed': {
+      const outcome = applyAutoScanSnapshot(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: [queryKeys.autoscan(agentId)],
+      };
+    }
+    case 'autoscan.status': {
+      const outcome = applyAutoScanStatus(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: outcome === 'applied' ? [queryKeys.autoscan(agentId)] : [],
+      };
+    }
+    // Deliberately inert. This is one scan event — the payload the detail screen
+    // consumes from its own `ws/autoscan` channel, where it arrives filtered by
+    // subscription. It reaches the shared bus too because that bus is
+    // unfiltered, and `_emit` publishes one per log line: invalidating here, as
+    // this bridge did before WEB-10, cost a `/proxy` GET per line of output.
+    case 'autoscan.event':
+      return { kind: 'ignored', type: envelope.type };
     default: {
       const keys = agentEventKeys(agentId, envelope.type, envelope.payload);
       if (keys === null) return { kind: 'ignored', type: envelope.type };
@@ -262,11 +310,18 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
  * `/proxy` GET racing them — and a slow response landing afterwards would roll a
  * list back.
  *
- * Git items get it instead, and are the only agent-scoped cache that needs it:
- * `git.changed` fires only on an actual change and carries no snapshot, so a
- * list cached before the socket dropped cannot otherwise be trusted. The prefix
- * key covers every project at once.
+ * Git items need it: `git.changed` fires only on an actual change and carries no
+ * snapshot, so a list cached before the socket dropped cannot otherwise be
+ * trusted. The prefix key covers every project at once.
+ *
+ * Auto Scan needs it for a different reason — not a missing payload but a
+ * missing *transport*. `autoscan.list.changed` is a full snapshot and the agent
+ * does send it on connect, but only on the direct `ws/events` path;
+ * `relay/client.py::_handle_request_events_snapshot` republishes sessions and
+ * projects and stops there, and the relay is the only path a browser takes
+ * (CLA-249). Without this, a scan started while the socket was down stays
+ * invisible until the next start or stop.
  */
 export function refreshOnAgentEventsConnect(client: QueryClient, agentId: string): void {
-  invalidate(client, [queryKeys.gitItemsRoot(agentId)]);
+  invalidate(client, [queryKeys.gitItemsRoot(agentId), queryKeys.autoscan(agentId)]);
 }

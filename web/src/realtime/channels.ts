@@ -253,6 +253,21 @@ export class AutoScanChannel {
     registerDisposable(this);
   }
 
+  /**
+   * Open (or re-open) the socket, re-registering as a disposable first.
+   *
+   * The re-register is what makes reviving a disposed channel safe. Callers
+   * re-arm this object after `stopAllRealtime()` rather than building a new one,
+   * and `dispose()` has already removed it from the registry by then — so
+   * reaching for `channel.connect()` directly would put a live, still-authorised
+   * socket somewhere `stopAllRealtime()` can no longer see. `registerDisposable`
+   * is a `Set.add`, so calling this on a healthy channel is a no-op.
+   */
+  connect(): void {
+    registerDisposable(this);
+    this.channel.connect();
+  }
+
   /** Replace the subscription set; the server treats each frame as a full replace. */
   setSubscribe(projects: readonly string[]): void {
     this.subscribe = [...projects];

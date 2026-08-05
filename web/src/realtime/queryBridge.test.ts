@@ -129,12 +129,10 @@ describe('applyUserEvent', () => {
 
 describe('applyAgentEvent', () => {
   it('maps each event family to its agent-scoped key', () => {
-    // `sessions.changed` and `projects.changed` are patched straight into the
-    // cache via sessionCache.ts / projectsCache.ts (setQueryData, not
-    // invalidateQueries) — each is a complete snapshot, so there is no delta
-    // that could drift. `git.changed` and `autoscan.event` are pointers, so
-    // they still invalidate — `git.changed` scoped to the one project it
-    // names.
+    // `sessions.changed`, `projects.changed` and both Auto Scan list events are
+    // patched straight into the cache (setQueryData, not invalidateQueries) —
+    // each is a complete snapshot, so there is no delta that could drift.
+    // `git.changed` is the one pointer left, scoped to the project it names.
     applyAgentEvent(client, 'a1', frame('sessions.changed', {}));
     const projectsOutcome = applyAgentEvent(
       client,
@@ -142,17 +140,70 @@ describe('applyAgentEvent', () => {
       frame('projects.changed', { projects: [{ name: 'p1', path: '/srv/p1' }] }),
     );
     applyAgentEvent(client, 'a1', frame('git.changed', { project_name: 'alpha' }));
-    applyAgentEvent(client, 'a1', frame('autoscan.event', {}));
 
     expect(projectsOutcome).toEqual({
       kind: 'patched',
       type: 'projects.changed',
       keys: [['agent', 'a1', 'projects']],
     });
-    expect(invalidated).toEqual([
-      ['agent', 'a1', 'git', 'alpha'],
-      ['agent', 'a1', 'autoscan'],
-    ]);
+    expect(invalidated).toEqual([['agent', 'a1', 'git', 'alpha']]);
+  });
+
+  it('writes the Auto Scan list and one scan row instead of invalidating', () => {
+    const scan = {
+      project_name: 'p1',
+      status: 'scanning',
+      started_at: 1,
+      last_activity_at: 1,
+    };
+
+    const listOutcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('autoscan.list.changed', { scans: [scan], capacity: 1, max_scans: 5 }),
+    );
+    const statusOutcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('autoscan.status', { ...scan, status: 'error' }),
+    );
+
+    expect(listOutcome).toEqual({
+      kind: 'patched',
+      type: 'autoscan.list.changed',
+      keys: [['agent', 'a1', 'autoscan']],
+    });
+    expect(statusOutcome).toEqual({
+      kind: 'patched',
+      type: 'autoscan.status',
+      keys: [['agent', 'a1', 'autoscan']],
+    });
+    expect(invalidated).toEqual([]);
+  });
+
+  it('reports no cache write for a status naming a scan the list does not carry', () => {
+    const outcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('autoscan.status', {
+        project_name: 'unknown',
+        status: 'idle',
+        started_at: 1,
+        last_activity_at: 1,
+      }),
+    );
+
+    expect(outcome).toEqual({ kind: 'patched', type: 'autoscan.status', keys: [] });
+  });
+
+  it('ignores autoscan.event rather than invalidating once per log line', () => {
+    // `AutoScanInstance._emit` publishes one of these per scan event, so the
+    // pre-WEB-10 invalidation cost a `/proxy` GET per line of output. The detail
+    // screen reads this stream from its own `ws/autoscan` channel instead.
+    const outcome = applyAgentEvent(client, 'a1', frame('autoscan.event', {}));
+
+    expect(outcome).toEqual({ kind: 'ignored', type: 'autoscan.event' });
+    expect(invalidated).toEqual([]);
   });
 
   it('marks the list synced on a snapshot, and only on one it could apply', () => {
@@ -193,11 +244,15 @@ describe('refresh on connect', () => {
     // Sessions and projects are deliberately excluded: the agent re-pushes an
     // authoritative snapshot of both on every connect (the relay's
     // `request_events_snapshot`), so an extra REST GET here would only race
-    // it — and a slow response landing afterwards would roll a list
-    // backwards. Git items get no such push, so they are the one cache that
-    // actually needs reconciling; the prefix key covers every project at once.
+    // it — and a slow response landing afterwards would roll a list backwards.
+    // Git items get no such push at all. Auto Scan gets one on the direct
+    // `ws/events` path but *not* through the relay, which is the only path a
+    // browser takes (CLA-249) — so it needs reconciling for a different reason.
     refreshOnAgentEventsConnect(client, 'a1');
 
-    expect(invalidated).toEqual([['agent', 'a1', 'git']]);
+    expect(invalidated).toEqual([
+      ['agent', 'a1', 'git'],
+      ['agent', 'a1', 'autoscan'],
+    ]);
   });
 });

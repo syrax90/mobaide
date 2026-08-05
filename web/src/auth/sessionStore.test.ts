@@ -1,32 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { stubWebStorage } from '../test/localStorageStub';
 import type { UserSession } from './sessionTransport';
 
-// Node >= 22 defines experimental `localStorage` / `sessionStorage` globals
-// that are undefined without --localstorage-file and shadow jsdom's, so
-// install functional stand-ins before importing anything that captures them
-// (same trap as themeStore.test.ts).
-function memoryStorage() {
-  const backing = new Map<string, string>();
-  return {
-    getItem: (key: string) => backing.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      backing.set(key, String(value));
-    },
-    removeItem: (key: string) => {
-      backing.delete(key);
-    },
-    clear: () => {
-      backing.clear();
-    },
-    key: (index: number) => [...backing.keys()][index] ?? null,
-    get length() {
-      return backing.size;
-    },
-  };
-}
-
-vi.stubGlobal('sessionStorage', memoryStorage());
-vi.stubGlobal('localStorage', memoryStorage());
+// Before importing anything that captures either global.
+stubWebStorage('sessionStorage');
+stubWebStorage('localStorage');
 
 const { bootstrapSession, currentSession, resetSessionBootstrap, useSessionStore } =
   await import('./sessionStore');
