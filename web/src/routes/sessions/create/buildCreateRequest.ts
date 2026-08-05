@@ -53,7 +53,7 @@ interface Placement {
 
 function placement({ state, project }: BuildContext): Placement {
   const selection = state.selection;
-  const gitEligible = selection.kind === 'stored' && project?.isGit === true;
+  const gitEligible = selection.kind === 'stored' && project?.is_git === true;
   return {
     projectName: selection.kind === 'stored' ? selection.name : undefined,
     cwd: selection.kind === 'customPath' ? selection.path : undefined,

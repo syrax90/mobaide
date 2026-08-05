@@ -10,6 +10,8 @@ export function RootLayout() {
             Mobaide
           </NavLink>
           <NavLink to="/agents">Agents</NavLink>
+          <NavLink to="/projects">Projects</NavLink>
+          <NavLink to="/templates">Templates</NavLink>
           <NavLink to="/account">Account</NavLink>
           <NavLink to="/devices">Devices</NavLink>
         </nav>

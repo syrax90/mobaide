@@ -68,7 +68,7 @@ export function ConfigStep({
 }: ConfigStepProps) {
   // A worktree needs a stored git project; a one-off path has no repo to branch.
   const showsGitOptions =
-    selection.kind === 'stored' && project?.isGit === true && mode !== 'auto_scan';
+    selection.kind === 'stored' && project?.is_git === true && mode !== 'auto_scan';
 
   // The server 422s a flag-shaped directory, so refuse the launch rather than
   // showing the inline error and sending it anyway.

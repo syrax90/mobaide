@@ -15,10 +15,10 @@ const projects: ProjectSummary[] = [
     name: 'mobaide',
     path: '/srv/mobaide',
     order: 0,
-    hasLinearKey: false,
-    isGit: true,
-    pathExists: true,
-    autoScanPrompt: null,
+    has_linear_key: false,
+    is_git: true,
+    path_exists: true,
+    auto_scan_prompt: undefined,
   },
 ];
 

@@ -17,10 +17,10 @@ const gitProject: ProjectSummary = {
   name: 'mobaide',
   path: '/srv/mobaide',
   order: 0,
-  hasLinearKey: true,
-  isGit: true,
-  pathExists: true,
-  autoScanPrompt: null,
+  has_linear_key: true,
+  is_git: true,
+  path_exists: true,
+  auto_scan_prompt: undefined,
 };
 
 /**
@@ -228,7 +228,7 @@ describe('buildCreateRequest — every boolean explicit', () => {
 });
 
 describe('buildCreateRequest — placement', () => {
-  const nonGit: ProjectSummary = { ...gitProject, isGit: false };
+  const nonGit: ProjectSummary = { ...gitProject, is_git: false };
 
   it('keeps a managed CLI’s worktree intent inside its own options block', () => {
     const request = build('claude');

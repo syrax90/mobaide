@@ -191,7 +191,7 @@ export function NewSession() {
       dispatch({
         type: 'seedAutoScanPrompt',
         projectName: project.name,
-        prompt: project.autoScanPrompt ?? '',
+        prompt: project.auto_scan_prompt ?? '',
       });
     }
   }, [location.mode, project]);
