@@ -1,15 +1,15 @@
 """Presence-gated APNs dispatch for ``session.attention`` user-events.
 
-The caller (the agent-tunnel control handler) decides *whether* to push —
-only when the owner has no live user-events socket. The dispatcher decides
-*where*: every non-revoked device of the user that registered a push token.
-Sends run in fire-and-forget tasks so a slow APNs round-trip can never stall
-the agent WebSocket reader.
+Presence is per device, not per account. Gating on the account instead would
+let one awake client mute the notification for every other device the user
+owns. Sends run in fire-and-forget tasks so a slow APNs round-trip can never
+stall the agent WebSocket reader.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Collection
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -69,18 +69,26 @@ class PushDispatcher:
         )
         return cls(db, sender, default_environment)
 
-    def schedule_attention(self, user_id: str, payload: dict) -> None:
-        """Fire-and-forget an attention push fan-out for ``user_id``."""
+    def schedule_attention(
+        self,
+        user_id: str,
+        payload: dict,
+        exclude_device_ids: Collection[str] = (),
+    ) -> None:
+        """Fire-and-forget an attention push fan-out for ``user_id``, skipping
+        devices that already receive the event over their user-events socket."""
         if self._sender is None:
             return
         task = asyncio.create_task(
-            self._send_attention(user_id, payload),
+            self._send_attention(user_id, payload, frozenset(exclude_device_ids)),
             name=f"push-attention-{user_id}",
         )
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _send_attention(self, user_id: str, payload: dict) -> None:
+    async def _send_attention(
+        self, user_id: str, payload: dict, exclude_device_ids: frozenset[str]
+    ) -> None:
         assert self._sender is not None
         content = attention_content(
             payload.get("reason"),
@@ -99,6 +107,8 @@ class PushDispatcher:
             logger.exception("push.target_lookup_failed user_id=%s", user_id)
             return
         for row in targets:
+            if row["device_id"] in exclude_device_ids:
+                continue
             environment = row["push_environment"] or self._default_environment
             try:
                 result = await self._sender.send(

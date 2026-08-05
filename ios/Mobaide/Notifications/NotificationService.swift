@@ -77,17 +77,23 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate, Att
 
     // MARK: - AttentionPresenting
 
-    func post(_ session: SessionResponse) async {
-        guard let request = Self.makeRequest(for: session) else { return }
+    @discardableResult
+    func post(_ session: SessionResponse) async -> Bool {
+        guard let request = Self.makeRequest(for: session) else { return false }
         // `isAuthorized()` can suspend for as long as the user takes to answer
         // the permission prompt. An agent-scoped teardown (logout, agent
         // switch/takeover) landing in that window runs `removeAll()`, but does
         // not cancel this task — so re-check the epoch before adding, or the
         // previous agent's alert reappears after the teardown cleared it.
         let epoch = teardownEpoch.withLock { $0 }
-        guard await isAuthorized() else { return }
-        guard teardownEpoch.withLock({ $0 }) == epoch else { return }
-        try? await center.add(request)
+        guard await isAuthorized() else { return false }
+        guard teardownEpoch.withLock({ $0 }) == epoch else { return false }
+        do {
+            try await center.add(request)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func remove(sessionId: String) {

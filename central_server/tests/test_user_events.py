@@ -6,6 +6,8 @@ Covers:
 - agent_ws._broadcast_status helper
 - /ws/user-events end-to-end delivery (connect, status_changed online/offline,
   user scoping — user B's client receives nothing for user A's agent)
+- the optional ``device_id`` connect hint that marks which registered device
+  WebSocket delivery already reaches
 """
 from __future__ import annotations
 
@@ -442,3 +444,127 @@ class TestUserEventsEndpoint:
                 break
             await asyncio.sleep(0.05)
         assert app.state.routing.get_user_clients(admin["id"]) == set()
+
+
+async def _await_registered_client(app, user_id: str):
+    """The only user client of ``user_id``, once the endpoint has registered
+    it. A hint that verifies makes registration land behind a DB round-trip,
+    so it is no longer synchronous with the accepted handshake.
+    """
+    for _ in range(100):
+        clients = app.state.routing.get_user_clients(user_id)
+        if clients:
+            assert len(clients) == 1
+            return next(iter(clients))
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"no user client registered for {user_id}")
+
+
+class TestDeviceIdHint:
+    """``device_id`` is a delivery hint, never an authorization decision: it
+    names the device this socket already reaches so an attention push can skip
+    it. An absent or unverifiable hint downgrades the socket to "suppresses
+    nothing" — it must never cost the caller the event stream.
+    """
+
+    async def test_own_active_device_binds(self, app):
+        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-mine",
+            user_id=admin["id"],
+            name="iPhone",
+            platform="ios",
+        )
+
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/ws/user-events?token={token}&device_id=dev-mine"
+        ):
+            registered = await _await_registered_client(app, admin["id"])
+            assert registered.bound_device_id == "dev-mine"
+            assert app.state.routing.get_user_device_ids(admin["id"]) == {
+                "dev-mine"
+            }
+
+    async def test_absent_hint_leaves_the_socket_unbound(self, app):
+        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+
+        client = TestClient(app)
+        with client.websocket_connect(f"/ws/user-events?token={token}"):
+            registered = await _await_registered_client(app, admin["id"])
+            assert registered.bound_device_id is None
+            # No binding means no suppression: every registered device of the
+            # account still gets pushed.
+            assert app.state.routing.get_user_device_ids(admin["id"]) == set()
+
+    async def test_another_users_device_does_not_bind_and_still_streams(
+        self, app
+    ):
+        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        other_user_id, _ = await _make_second_user(app)
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-not-yours",
+            user_id=other_user_id,
+            name="iPhone",
+            platform="ios",
+        )
+
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/ws/user-events?token={token}&device_id=dev-not-yours"
+        ) as ws:
+            registered = await _await_registered_client(app, admin["id"])
+            assert registered.bound_device_id is None
+            assert app.state.routing.get_user_device_ids(admin["id"]) == set()
+
+            # Rejecting the hint must not reject the stream.
+            _broadcast_status(
+                app.state.routing, admin["id"], "agent-xyz", online=True
+            )
+            envelope = json.loads(ws.receive_text())
+            assert envelope["payload"]["agent_id"] == "agent-xyz"
+
+    async def test_revoked_device_does_not_bind(self, app):
+        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        await app.state.db.upsert_mobile_device(
+            device_id="dev-gone",
+            user_id=admin["id"],
+            name="Old iPhone",
+            platform="ios",
+        )
+        assert await app.state.db.revoke_mobile_device("dev-gone", admin["id"])
+
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/ws/user-events?token={token}&device_id=dev-gone"
+        ):
+            registered = await _await_registered_client(app, admin["id"])
+            assert registered.bound_device_id is None
+
+    async def test_device_lookup_failure_keeps_the_stream(
+        self, app, monkeypatch
+    ):
+        token = await _user_token(app, TEST_ADMIN_EMAIL, TEST_ADMIN_PASSWORD)
+        admin = await app.state.db.get_user_by_email(TEST_ADMIN_EMAIL)
+        monkeypatch.setattr(
+            app.state.db,
+            "list_user_devices",
+            AsyncMock(side_effect=RuntimeError("db unavailable")),
+        )
+
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/ws/user-events?token={token}&device_id=dev-mine"
+        ) as ws:
+            registered = await _await_registered_client(app, admin["id"])
+            assert registered.bound_device_id is None
+
+            _broadcast_status(
+                app.state.routing, admin["id"], "agent-xyz", online=True
+            )
+            envelope = json.loads(ws.receive_text())
+            assert envelope["payload"]["agent_id"] == "agent-xyz"

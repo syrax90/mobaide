@@ -106,6 +106,45 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(PreferencesStore.linearLabelsKey(projectName: "p"), "linear_labels::p")
         XCTAssertEqual(PreferencesStore.linearStatesKey(projectName: "p"), "linear_states::p")
         XCTAssertEqual(PreferencesStore.recentCustomPathsKey(agentKey: "k"), "recent_custom_paths::k")
+        XCTAssertEqual(PreferencesStore.attentionSeenKey(agentKey: "k"), "attention_seen::k")
+    }
+
+    func testAttentionSeenBucketsRoundTripPerAgentAndSurviveGarbage() {
+        XCTAssertEqual(store.getAttentionSeen(agentKey: "a1"), AttentionSeenRecord())
+
+        store.setAttentionSeen(
+            agentKey: "a1",
+            record: AttentionSeenRecord(baselined: true, seen: ["s1": "turn_finished|"])
+        )
+        let saved = store.getAttentionSeen(agentKey: "a1")
+        XCTAssertEqual(saved.baselined, true)
+        XCTAssertEqual(saved.seen, ["s1": "turn_finished|"])
+        XCTAssertEqual(
+            store.getAttentionSeen(agentKey: "a2"), AttentionSeenRecord(),
+            "per-agent isolation"
+        )
+
+        defaults.set("not-json", forKey: PreferencesStore.attentionSeenKey(agentKey: "a1"))
+        XCTAssertEqual(
+            store.getAttentionSeen(agentKey: "a1"), AttentionSeenRecord(),
+            "a corrupt blob decodes to an unseeded record, not a crash"
+        )
+    }
+
+    func testRemoveAllAttentionSeenClearsEveryAgentAndNothingElse() {
+        // Sign-out clears by prefix because the current agent key may already
+        // be gone — that scan must not take unrelated preferences with it.
+        store.setAttentionSeen(agentKey: "a1", record: AttentionSeenRecord(baselined: true))
+        store.setAttentionSeen(agentKey: "a2", record: AttentionSeenRecord(baselined: true))
+        store.setLastUsedProjectName("proj")
+        store.addRecentCustomPath(agentKey: "a1", path: "/one")
+
+        store.removeAllAttentionSeen()
+
+        XCTAssertEqual(store.getAttentionSeen(agentKey: "a1"), AttentionSeenRecord())
+        XCTAssertEqual(store.getAttentionSeen(agentKey: "a2"), AttentionSeenRecord())
+        XCTAssertEqual(store.getLastUsedProjectName(), "proj")
+        XCTAssertEqual(store.getRecentCustomPaths(agentKey: "a1"), ["/one"])
     }
 
     func testRecentCustomPathsPrependDedupeAndCap() {

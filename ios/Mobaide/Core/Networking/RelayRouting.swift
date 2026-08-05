@@ -53,8 +53,15 @@ enum RelayRouting {
 
     /// `?token=` normally, `&token=` when the URL already carries a query.
     static func appendToken(to url: String, token: String) -> String {
+        appendQueryItem(to: url, name: "token", value: token)
+    }
+
+    /// Append one query item, picking `?` or `&` by whether the URL already
+    /// carries a query. Values are interpolated verbatim — every caller passes
+    /// an already-URL-safe token (JWT, UUID).
+    static func appendQueryItem(to url: String, name: String, value: String) -> String {
         let separator = url.contains("?") ? "&" : "?"
-        return "\(url)\(separator)token=\(token)"
+        return "\(url)\(separator)\(name)=\(value)"
     }
 
     /// Agent REST base: DIRECT → the agent URL; RELAY → `{relay}/proxy/{agentId}`.

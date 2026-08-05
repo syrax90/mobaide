@@ -58,13 +58,17 @@ final class AttentionContentTests: XCTestCase {
         XCTAssertNil(AttentionContent.content(for: makeSessionResponse(attention: "some_future_reason")))
     }
 
-    func testAttentionSessionIdsFiltersToNotifiable() {
+    func testAttentionSessionsFiltersToNotifiableInSnapshotOrder() {
         let sessions = [
             makeSessionResponse(id: "a", attention: "awaiting_permission"),
             makeSessionResponse(id: "b", attention: nil),
             makeSessionResponse(id: "c", attention: "ended"),
             makeSessionResponse(id: "d", attention: "unknown_reason"),
         ]
-        XCTAssertEqual(AttentionContent.attentionSessionIds(in: sessions), ["a", "c"])
+        XCTAssertEqual(
+            AttentionContent.attentionSessions(in: sessions).map(\.session_id),
+            ["a", "c"],
+            "reconcile posts and adopts its baseline in snapshot order"
+        )
     }
 }

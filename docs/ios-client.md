@@ -71,8 +71,23 @@ the events socket lives while the app runs plus a ~30 s `beginBackgroundTask`
 grace (`AppLifecycleController`), and events missed while suspended are
 re-derived from a `GET /api/sessions` snapshot on foregrounding — the
 `attention` field is stamped on every snapshot for exactly this recovery,
-posting the set the client never showed and removing alerts whose attention is
-gone. Authorization is requested as the full `[.alert, .sound, .badge]` on first
+posting the instances this device has not shown and removing alerts whose
+attention is gone. That snapshot field is *latched* level state (the agent
+clears it only on a client PTY write or a `UserPromptSubmit`), so "not shown
+yet" cannot be answered from Notification Center — tapping or swiping an alert
+empties it, and reading only that re-posted the same stale alert on every app
+open. `AttentionSeenStore` answers it instead: a per-agent `UserDefaults`
+record of the last attention instance surfaced per session, keyed by reason
+plus `exit_reason`, written by the live event path and the reconcile alike,
+dropped for a session whose attention is observed clear (which re-arms it), and
+cleared wholesale at sign-out. Its first reconcile for an agent adopts the
+current state as a baseline without posting: a device with no record has missed
+nothing it can act on, and everything latched is already in the session list of
+the app just opened. The one deliberate gap — no attention identity rides the
+wire — is a clear plus a re-latch of the *same* reason occurring entirely
+between two of this device's observations, which reads as the instance already
+surfaced; any device that was connected still got the live edge event.
+Authorization is requested as the full `[.alert, .sound, .badge]` on first
 `.fullyConnected`, matching Android's loud runtime prompt, so alerts arrive as
 heads-up banners with sound. The request is fire-and-forget and is never awaited
 on either serial loop: the system prompt blocks on the user and cannot display at
@@ -95,8 +110,16 @@ same reason; an install still in that state is promoted by re-requesting without
 CLA-106 (iOS-10) closes the suspended-app gap with APNs alert pushes: the
 agent mirrors each `session.attention` as a `user_event` control frame, and
 the central server broadcasts it on `/relay/ws/user-events` — pushing via APNs
-only when the user has **no** live user-events socket (so a foregrounded app
-never double-alerts; see PROTOCOL.md's proto-v6 entry for the full contract).
+to every registered device **except** those holding a live user-events socket,
+so a foregrounded app never double-alerts while a sleeping second device is
+still reached (see PROTOCOL.md's proto-v6 entry for the full contract). The
+socket identifies itself by appending its registered `device_id` to the
+`ws/user-events` URL (`UserEventBus.urlProvider`); the relay verifies it
+against the caller's own device rows before honouring it. Android sends no
+such hint and needs none — it registers no push token, so it is never a push
+target. Gating on the *account* instead, as CLA-106 originally did, meant
+Android's always-on foreground service silenced every push to the iPhone,
+leaving the foreground reconcile as its only delivery path.
 On the client, `PushAppDelegate` (a `@UIApplicationDelegateAdaptor`) receives
 the device token, `PushRegistrationCoordinator` registers for remote
 notifications once signed in (`.userOnly`+) and POSTs the hex token to

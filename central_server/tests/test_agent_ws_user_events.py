@@ -2,8 +2,8 @@
 
 Pins the relay contract: an allowlisted kind is broadcast to the owner's
 user-scoped clients with ``agent_id`` stamped from the authenticated tunnel,
-and the push dispatcher is invoked only when the owner has no live
-user-events socket (WebSocket delivery wins).
+and the push dispatcher is always invoked, told which devices those sockets
+already reach (WebSocket delivery wins per device, never per account).
 """
 from __future__ import annotations
 
@@ -35,10 +35,17 @@ def _make_dispatcher() -> MagicMock:
     return dispatcher
 
 
-def _make_user_client(user_id: str = OWNER) -> UserClient:
+def _make_user_client(
+    user_id: str = OWNER, bound_device_id: str | None = None
+) -> UserClient:
     ws = MagicMock()
     ws.close = AsyncMock()
-    return UserClient(user_id=user_id, device_id="dev-x", websocket=ws)
+    return UserClient(
+        user_id=user_id,
+        device_id="dev-x",
+        websocket=ws,
+        bound_device_id=bound_device_id,
+    )
 
 
 def _ctrl(**overrides) -> dict:
@@ -95,13 +102,35 @@ class TestHandleUserEvent:
         envelope = json.loads(client.send_queue.get_nowait())
         assert envelope["payload"]["agent_id"] == AGENT_ID
 
-    def test_live_user_socket_suppresses_push(self, routing):
+    def test_bound_socket_excludes_only_its_own_device(self, routing):
+        # The regression this replaces: one awake client used to mute the push
+        # for every other device on the account, so a second phone learnt about
+        # the attention only when it was next opened.
+        routing.register_user_client(
+            OWNER, _make_user_client(bound_device_id="dev-a")
+        )
+        dispatcher = _make_dispatcher()
+
+        _handle_user_event(_make_ws(dispatcher), AGENT_ID, _ctrl(), routing)
+
+        dispatcher.schedule_attention.assert_called_once()
+        assert dispatcher.schedule_attention.call_args.kwargs[
+            "exclude_device_ids"
+        ] == {"dev-a"}
+
+    def test_unbound_socket_excludes_no_device(self, routing):
+        # A client that sent no verifiable device hint cannot stand in for any
+        # device, so it must not keep one from being pushed.
         routing.register_user_client(OWNER, _make_user_client())
         dispatcher = _make_dispatcher()
 
         _handle_user_event(_make_ws(dispatcher), AGENT_ID, _ctrl(), routing)
 
-        dispatcher.schedule_attention.assert_not_called()
+        dispatcher.schedule_attention.assert_called_once()
+        assert (
+            dispatcher.schedule_attention.call_args.kwargs["exclude_device_ids"]
+            == set()
+        )
 
     def test_no_user_socket_schedules_push(self, routing):
         dispatcher = _make_dispatcher()
@@ -113,18 +142,25 @@ class TestHandleUserEvent:
         assert user_id == OWNER
         assert payload["session_id"] == "s1"
         assert payload["agent_id"] == AGENT_ID
+        assert (
+            dispatcher.schedule_attention.call_args.kwargs["exclude_device_ids"]
+            == set()
+        )
 
     def test_other_users_clients_receive_nothing(self, routing):
-        foreign = _make_user_client("user-other")
+        foreign = _make_user_client("user-other", bound_device_id="dev-other")
         routing.register_user_client("user-other", foreign)
         dispatcher = _make_dispatcher()
 
         _handle_user_event(_make_ws(dispatcher), AGENT_ID, _ctrl(), routing)
 
         assert foreign.send_queue.empty()
-        # The owner has no socket, so the push path fires for the owner.
+        # The owner has no socket, so the push path fires for the owner — and
+        # another account's live device never counts as reached.
         dispatcher.schedule_attention.assert_called_once_with(
-            OWNER, dispatcher.schedule_attention.call_args[0][1]
+            OWNER,
+            dispatcher.schedule_attention.call_args[0][1],
+            exclude_device_ids=set(),
         )
 
     @pytest.mark.parametrize(

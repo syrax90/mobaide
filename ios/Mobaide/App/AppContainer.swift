@@ -125,6 +125,7 @@ final class AppContainer {
             sessionManager: sessionManager,
             userIdentityStore: userIdentityStore,
             tokenStore: tokenStore,
+            deviceIdentityStore: deviceIdentityStore,
             agentStatusApplier: agentRepository,
             templateSync: templatesRepository,
             shortcutSync: shortcutsRepository,
@@ -242,7 +243,11 @@ final class AppContainer {
             presenter: notificationService,
             snapshot: { [sessionRepository = self.sessionRepository] in
                 try await sessionRepository.listSessions()
-            }
+            },
+            seen: AttentionSeenStore(
+                preferences: preferencesStore,
+                agentKey: { [tokenStore] in tokenStore.getAgentId() }
+            )
         )
         self.attentionCoordinator = attentionCoordinator
         // Late-bound because the coordinator takes the service as its presenter:
