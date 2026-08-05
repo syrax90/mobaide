@@ -5,6 +5,7 @@ final class UserEventBusTests: XCTestCase {
     private struct BusHarness {
         let session: SessionHarness
         let transportFactory = FakeWebSocketTransportFactory()
+        let deviceIdentityStore = DeviceIdentityStore(keychain: InMemoryKeychainStore())
         let agentStatus = RecordingAgentStatusApplier()
         let templateSync = RecordingTemplateSync()
         let shortcutSync = RecordingShortcutSync()
@@ -21,6 +22,7 @@ final class UserEventBusTests: XCTestCase {
                 sessionManager: session.sessionManager,
                 userIdentityStore: session.userIdentityStore,
                 tokenStore: session.tokenStore,
+                deviceIdentityStore: deviceIdentityStore,
                 agentStatusApplier: agentStatus,
                 templateSync: templateSync,
                 shortcutSync: shortcutSync,
@@ -190,9 +192,12 @@ final class UserEventBusTests: XCTestCase {
         await harness.bus.start()
 
         let connection = try await harness.transportFactory.connection(1)
+        // The device id tells the relay which device this socket delivers to,
+        // so an attention push skips it and still reaches the account's others.
         XCTAssertEqual(
             connection.url.absoluteString,
             "wss://agent.example.com/ws/user-events?token=user-token"
+                + "&device_id=\(harness.deviceIdentityStore.getOrCreateDeviceId())"
         )
     }
 
@@ -248,7 +253,8 @@ final class UserEventBusTests: XCTestCase {
         let connection = try await harness.transportFactory.connection(1)
         XCTAssertEqual(
             connection.url.absoluteString,
-            "wss://relay.example.com/ws/user-events?token=user-token",
+            "wss://relay.example.com/ws/user-events?token=user-token"
+                + "&device_id=\(harness.deviceIdentityStore.getOrCreateDeviceId())",
             "user channel is never relay-path-rewritten"
         )
     }
@@ -355,6 +361,7 @@ final class UserEventBusTests: XCTestCase {
             sessionManager: session.sessionManager,
             userIdentityStore: session.userIdentityStore,
             tokenStore: session.tokenStore,
+            deviceIdentityStore: DeviceIdentityStore(keychain: InMemoryKeychainStore()),
             shortcutSync: recorder,
             customTypeSync: recorder
         )

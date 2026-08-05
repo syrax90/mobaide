@@ -206,6 +206,50 @@ class TestUserClientOps:
         assert routing.get_user_clients("u1") == set()
         assert "u1" not in routing._user_clients
 
+    def test_get_user_device_ids_reports_only_verified_bindings(
+        self, routing: RoutingTable
+    ):
+        bound = UserClient(
+            user_id="u1",
+            device_id="log-1",
+            websocket=_admin_ws(),
+            bound_device_id="dev-1",
+        )
+        unbound = UserClient(
+            user_id="u1", device_id="log-2", websocket=_admin_ws()
+        )
+        other_user = UserClient(
+            user_id="u2",
+            device_id="log-3",
+            websocket=_admin_ws(),
+            bound_device_id="dev-3",
+        )
+        routing.register_user_client("u1", bound)
+        routing.register_user_client("u1", unbound)
+        routing.register_user_client("u2", other_user)
+
+        # The log-correlation ``device_id`` is not a device identity, and one
+        # account's live device says nothing about another's.
+        assert routing.get_user_device_ids("u1") == {"dev-1"}
+        assert routing.get_user_device_ids("u2") == {"dev-3"}
+        assert routing.get_user_device_ids("nobody") == set()
+
+    def test_get_user_device_ids_releases_the_device_on_disconnect(
+        self, routing: RoutingTable
+    ):
+        # A binding that outlived its socket would mute that device's pushes
+        # for good.
+        client = UserClient(
+            user_id="u1",
+            device_id="log-1",
+            websocket=_admin_ws(),
+            bound_device_id="dev-1",
+        )
+        routing.register_user_client("u1", client)
+        routing.unregister_user_client("u1", client)
+
+        assert routing.get_user_device_ids("u1") == set()
+
     async def test_disconnect_user_sends_reason_and_closes_each_client(
         self, routing: RoutingTable
     ):

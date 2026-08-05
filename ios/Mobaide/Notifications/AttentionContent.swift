@@ -36,10 +36,10 @@ enum AttentionContent {
         }
     }
 
-    /// Session ids whose attention warrants a notification — the "attention
-    /// set" reconciled against delivered notifications on foreground.
-    static func attentionSessionIds(in sessions: [SessionResponse]) -> Set<String> {
-        Set(sessions.compactMap { content(for: $0) == nil ? nil : $0.session_id })
+    /// Sessions whose attention warrants a notification — the "attention set"
+    /// the foreground reconcile works from, in snapshot order.
+    static func attentionSessions(in sessions: [SessionResponse]) -> [SessionResponse] {
+        sessions.filter { content(for: $0) != nil }
     }
 }
 

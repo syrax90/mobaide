@@ -63,6 +63,21 @@ final class RelayRoutingTests: XCTestCase {
         XCTAssertEqual(url, "wss://host/ws/events?foo=1&token=t")
     }
 
+    func testAppendQueryItemOpensTheQueryWhenNoneIsPresent() {
+        XCTAssertEqual(
+            RelayRouting.appendQueryItem(to: "wss://host/ws/user-events", name: "device_id", value: "D-1"),
+            "wss://host/ws/user-events?device_id=D-1"
+        )
+    }
+
+    func testAppendQueryItemChainsOntoAnExistingQuery() {
+        XCTAssertEqual(
+            RelayRouting.appendQueryItem(to: "wss://host/ws/user-events?token=t", name: "device_id", value: "D-1"),
+            "wss://host/ws/user-events?token=t&device_id=D-1",
+            "the user channel appends its device hint after the token"
+        )
+    }
+
     func testAgentRESTBaseURLDirect() {
         XCTAssertEqual(
             RelayRouting.agentRESTBaseURL(

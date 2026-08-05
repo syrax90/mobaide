@@ -5,8 +5,13 @@ import Foundation
 /// `UNUserNotificationCenter`. Live implementation: `NotificationService`.
 protocol AttentionPresenting: Sendable {
     /// Post (or replace in place) the attention notification for `session`;
-    /// a session whose attention maps to no content is a no-op.
-    func post(_ session: SessionResponse) async
+    /// a session whose attention maps to no content is a no-op. Returns whether
+    /// the alert actually reached Notification Center — a drop (unmapped
+    /// content, authorization still undecided, a teardown mid-flight) must not
+    /// be remembered as surfaced, or the grant-driven recovery reconcile would
+    /// skip the very alerts it exists to replay.
+    @discardableResult
+    func post(_ session: SessionResponse) async -> Bool
     /// Remove the delivered/pending notification for a session id.
     func remove(sessionId: String)
     /// Ids of currently delivered notifications (for foreground reconcile).

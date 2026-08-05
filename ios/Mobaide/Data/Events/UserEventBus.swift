@@ -22,6 +22,7 @@ actor UserEventBus {
     private let sessionManager: SessionManager
     private let userIdentityStore: UserIdentityStore
     private let tokenStore: TokenStore
+    private let deviceIdentityStore: DeviceIdentityStore
     private let agentStatusApplier: any AgentStatusApplying
     private let templateSync: any TemplateSyncApplying
     private let shortcutSync: any ShortcutSyncApplying
@@ -38,6 +39,7 @@ actor UserEventBus {
         sessionManager: SessionManager,
         userIdentityStore: UserIdentityStore,
         tokenStore: TokenStore,
+        deviceIdentityStore: DeviceIdentityStore,
         agentStatusApplier: any AgentStatusApplying = NoOpAgentStatusApplier(),
         templateSync: any TemplateSyncApplying = NoOpTemplateSyncApplier(),
         shortcutSync: any ShortcutSyncApplying = NoOpShortcutSyncApplier(),
@@ -47,6 +49,7 @@ actor UserEventBus {
         self.sessionManager = sessionManager
         self.userIdentityStore = userIdentityStore
         self.tokenStore = tokenStore
+        self.deviceIdentityStore = deviceIdentityStore
         self.agentStatusApplier = agentStatusApplier
         self.templateSync = templateSync
         self.shortcutSync = shortcutSync
@@ -99,7 +102,11 @@ actor UserEventBus {
 
         connectionBroadcaster.emit(.connecting)
         let core = webSocketFactory.make(
-            Self.urlProvider(tokenStore: tokenStore, userIdentityStore: userIdentityStore),
+            Self.urlProvider(
+                tokenStore: tokenStore,
+                userIdentityStore: userIdentityStore,
+                deviceIdentityStore: deviceIdentityStore
+            ),
             { [userIdentityStore] in userIdentityStore.isUserLoggedIn() }
         )
         self.core = core
@@ -182,7 +189,8 @@ actor UserEventBus {
 
     private static func urlProvider(
         tokenStore: TokenStore,
-        userIdentityStore: UserIdentityStore
+        userIdentityStore: UserIdentityStore,
+        deviceIdentityStore: DeviceIdentityStore
     ) -> @Sendable () async throws -> String? {
         {
             guard let token = userIdentityStore.getUserAccessToken() else { return nil }
@@ -204,11 +212,19 @@ actor UserEventBus {
             let effectiveBase = base ?? AppConfig.centralServerURL
             guard !effectiveBase.isEmpty else { return nil }
             // mode .direct: the user channel is never relay-path-rewritten.
-            return RelayRouting.webSocketURLString(
+            let url = RelayRouting.webSocketURLString(
                 baseURL: effectiveBase,
                 path: "ws/user-events",
                 mode: .direct,
                 token: token
+            )
+            // Tells the relay which device this socket delivers to, so an
+            // attention push skips this device and still reaches the account's
+            // others.
+            return RelayRouting.appendQueryItem(
+                to: url,
+                name: "device_id",
+                value: deviceIdentityStore.getOrCreateDeviceId()
             )
         }
     }

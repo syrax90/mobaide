@@ -6,6 +6,11 @@ any of the user's agents is currently online. It exists so the mobile app
 can be notified when any of the user's agents transitions to/from online
 without having to poll ``GET /api/agents``.
 
+Clients may pass their registered ``device_id`` as a query param. It is a
+delivery hint only — it identifies which device WebSocket delivery already
+reaches, so an attention push skips that device and still goes out to the
+user's other ones.
+
 Message format mirrors the per-agent events channel: text JSON envelopes
 of the shape ``{"type": "...", "payload": {...}}``. Current event types:
 
@@ -57,12 +62,19 @@ async def user_events(websocket: WebSocket) -> None:
     # The dashboard JWT carries no device_id, so generate a short token
     # for log correlation and as a unique key within the user's connection set.
     device_id = secrets.token_hex(4)
+    bound_device_id = await _bind_device(websocket, user_id)
 
     routing: RoutingTable = websocket.app.state.routing
-    client = UserClient(user_id=user_id, device_id=device_id, websocket=websocket)
+    client = UserClient(
+        user_id=user_id,
+        device_id=device_id,
+        websocket=websocket,
+        bound_device_id=bound_device_id,
+    )
     routing.register_user_client(user_id, client)
     logger.info(
-        "user_events.connected user_id=%s device=%s", user_id, device_id
+        "user_events.connected user_id=%s device=%s bound=%s",
+        user_id, device_id, bound_device_id,
     )
 
     try:
@@ -72,6 +84,32 @@ async def user_events(websocket: WebSocket) -> None:
         logger.info(
             "user_events.disconnected user_id=%s device=%s", user_id, device_id
         )
+
+
+async def _bind_device(websocket: WebSocket, user_id: str) -> str | None:
+    """Resolve the optional ``device_id`` query hint to one of the caller's own
+    active devices, so attention pushes can skip the devices this socket
+    already delivers to.
+
+    A routing hint, not an authorization decision: an absent or unverifiable
+    hint downgrades the socket to "cannot suppress a push" instead of refusing
+    the stream, because losing presence events is a worse failure than one
+    redundant notification.
+    """
+    claimed = websocket.query_params.get("device_id")
+    if not claimed:
+        return None
+    try:
+        devices = await websocket.app.state.db.list_user_devices(user_id)
+    except Exception:
+        logger.exception("user_events.device_lookup_failed user_id=%s", user_id)
+        return None
+    if any(row["device_id"] == claimed for row in devices):
+        return claimed
+    logger.warning(
+        "user_events.device_unrecognised user_id=%s claimed=%s", user_id, claimed
+    )
+    return None
 
 
 async def _user_writer(websocket: WebSocket, client: UserClient) -> None:

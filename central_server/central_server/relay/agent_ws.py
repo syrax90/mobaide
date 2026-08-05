@@ -412,7 +412,8 @@ _ATTENTION_OPTIONAL_FIELDS = ("title", "project_name", "exit_reason")
 
 def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
     """Relay an agent-emitted user event to the owner's user-scoped clients,
-    falling back to an APNs push when none is connected (WS delivery wins)."""
+    and push it to every registered device those sockets do not already
+    reach (WS delivery wins, per device)."""
     kind = ctrl.get("kind")
     raw = ctrl.get("payload")
     if kind not in _AGENT_USER_EVENT_KINDS or not isinstance(raw, dict):
@@ -451,10 +452,16 @@ def _handle_user_event(websocket, agent_id, ctrl, routing) -> None:
     payload["agent_id"] = agent_id
 
     broadcast_user_event(routing, owner_user_id, kind, payload)
-    if not routing.get_user_clients(owner_user_id):
-        dispatcher = getattr(websocket.app.state, "push_dispatcher", None)
-        if dispatcher is not None:
-            dispatcher.schedule_attention(owner_user_id, payload)
+    # WebSocket delivery wins per device, not per account: one device holding a
+    # socket must not mute every other device the user owns, or a phone that is
+    # asleep while a second client runs never learns about the attention at all.
+    dispatcher = getattr(websocket.app.state, "push_dispatcher", None)
+    if dispatcher is not None:
+        dispatcher.schedule_attention(
+            owner_user_id,
+            payload,
+            exclude_device_ids=routing.get_user_device_ids(owner_user_id),
+        )
 
 
 def _coerce_int(value: object, *, default: int) -> int:

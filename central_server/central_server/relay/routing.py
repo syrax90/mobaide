@@ -164,6 +164,11 @@ class UserClient:
     user_id: str
     device_id: str
     websocket: WebSocket
+    # Registered device this socket speaks for, verified at connect against the
+    # caller's own device rows. None when the client sent no hint or one that
+    # did not verify; such a socket never suppresses a push, because there is no
+    # way to tell which device it would be suppressing for.
+    bound_device_id: str | None = None
     send_queue: asyncio.Queue[str] = field(
         default_factory=lambda: asyncio.Queue(maxsize=_MOBILE_QUEUE_SIZE)
     )
@@ -335,6 +340,19 @@ class RoutingTable:
 
     def get_user_clients(self, user_id: str) -> set[UserClient]:
         return self._user_clients.get(user_id, set())
+
+    def get_user_device_ids(self, user_id: str) -> set[str]:
+        """Registered devices of ``user_id`` that hold a live user-events
+        socket, i.e. the ones WebSocket delivery already reaches.
+
+        Only verified bindings count: an unbound socket cannot stand in for any
+        particular device, so it must not keep that device from being pushed.
+        """
+        return {
+            client.bound_device_id
+            for client in self._user_clients.get(user_id, ())
+            if client.bound_device_id is not None
+        }
 
     async def disconnect_user(
         self,

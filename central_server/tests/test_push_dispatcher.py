@@ -1,9 +1,10 @@
 """Tests for the APNs push package.
 
 Covers the attention content map (string parity with the iOS/Android
-notifiers), the dispatcher's fan-out over registered push targets,
-per-device environment selection, dead-token cleanup on 410/Unregistered,
-and the disabled (unconfigured) no-op path.
+notifiers), the dispatcher's fan-out over registered push targets minus the
+devices already reached over a user-events socket, per-device environment
+selection, dead-token cleanup on 410/Unregistered, and the disabled
+(unconfigured) no-op path.
 """
 from __future__ import annotations
 
@@ -124,7 +125,9 @@ class TestPushDispatcher:
         sender = FakeSender()
         dispatcher = PushDispatcher(db, sender)
 
-        await dispatcher._send_attention(user_id, _attention_payload())
+        await dispatcher._send_attention(
+            user_id, _attention_payload(), frozenset()
+        )
 
         assert {s["token"] for s in sender.sent} == {"tok-1", "tok-2"}
         first = sender.sent[0]
@@ -140,7 +143,9 @@ class TestPushDispatcher:
         sender = FakeSender()
         dispatcher = PushDispatcher(db, sender, default_environment="sandbox")
 
-        await dispatcher._send_attention(user_id, _attention_payload())
+        await dispatcher._send_attention(
+            user_id, _attention_payload(), frozenset()
+        )
 
         assert sender.sent[0]["environment"] == "production"
 
@@ -159,7 +164,9 @@ class TestPushDispatcher:
         )
         dispatcher = PushDispatcher(db, sender)
 
-        await dispatcher._send_attention(user_id, _attention_payload())
+        await dispatcher._send_attention(
+            user_id, _attention_payload(), frozenset()
+        )
 
         remaining = await db.list_push_targets(user_id)
         assert {row["push_token"] for row in remaining} == {"tok-live"}
@@ -178,7 +185,9 @@ class TestPushDispatcher:
         )
         dispatcher = PushDispatcher(db, sender)
 
-        await dispatcher._send_attention(user_id, _attention_payload())
+        await dispatcher._send_attention(
+            user_id, _attention_payload(), frozenset()
+        )
 
         assert len(await db.list_push_targets(user_id)) == 1
 
@@ -188,10 +197,52 @@ class TestPushDispatcher:
         dispatcher = PushDispatcher(db, sender)
 
         await dispatcher._send_attention(
-            user_id, _attention_payload(reason="something_new")
+            user_id, _attention_payload(reason="something_new"), frozenset()
         )
 
         assert sender.sent == []
+
+    async def test_excluded_device_is_skipped_and_the_rest_still_push(
+        self, db, user_id
+    ):
+        # The device holding a user-events socket already got the event over
+        # the WebSocket; every other device of the account still needs it.
+        await _register_device(db, user_id, "dev-awake", token="tok-awake")
+        await _register_device(db, user_id, "dev-asleep", token="tok-asleep")
+        sender = FakeSender()
+        dispatcher = PushDispatcher(db, sender)
+
+        await dispatcher._send_attention(
+            user_id, _attention_payload(), frozenset({"dev-awake"})
+        )
+
+        assert [s["token"] for s in sender.sent] == ["tok-asleep"]
+
+    async def test_every_target_excluded_sends_nothing(self, db, user_id):
+        await _register_device(db, user_id, "dev-1", token="tok-1")
+        sender = FakeSender()
+        dispatcher = PushDispatcher(db, sender)
+
+        await dispatcher._send_attention(
+            user_id, _attention_payload(), frozenset({"dev-1"})
+        )
+
+        assert sender.sent == []
+
+    async def test_schedule_attention_forwards_the_exclusion_set(
+        self, db, user_id
+    ):
+        await _register_device(db, user_id, "dev-1", token="tok-1")
+        await _register_device(db, user_id, "dev-2", token="tok-2")
+        sender = FakeSender()
+        dispatcher = PushDispatcher(db, sender)
+
+        dispatcher.schedule_attention(
+            user_id, _attention_payload(), exclude_device_ids=["dev-1"]
+        )
+        await asyncio.gather(*dispatcher._tasks)
+
+        assert [s["token"] for s in sender.sent] == ["tok-2"]
 
     async def test_disabled_dispatcher_schedules_nothing(self, db, user_id):
         dispatcher = PushDispatcher(db, sender=None)

@@ -10,9 +10,11 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
     private var authRequestStorage = 0
     private var removeAllStorage = 0
     private var deliveredStorage: Set<String>
+    private var postSucceedsFlag: Bool
 
-    init(delivered: Set<String> = []) {
+    init(delivered: Set<String> = [], postSucceeds: Bool = true) {
         deliveredStorage = delivered
+        postSucceedsFlag = postSucceeds
     }
 
     var posted: [SessionResponse] { lock.withLock { postedStorage } }
@@ -27,8 +29,18 @@ final class FakeAttentionPresenter: AttentionPresenting, @unchecked Sendable {
         lock.withLock { deliveredStorage = ids }
     }
 
-    func post(_ session: SessionResponse) async {
-        lock.withLock { postedStorage.append(session) }
+    /// Report every subsequent `post` as dropped, mirroring the live
+    /// presenter's unmapped-content / undecided-authorization / teardown
+    /// returns — the attempt is still recorded in `posted`.
+    func setPostSucceeds(_ succeeds: Bool) {
+        lock.withLock { postSucceedsFlag = succeeds }
+    }
+
+    func post(_ session: SessionResponse) async -> Bool {
+        lock.withLock {
+            postedStorage.append(session)
+            return postSucceedsFlag
+        }
     }
 
     func remove(sessionId: String) {

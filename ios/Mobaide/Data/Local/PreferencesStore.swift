@@ -15,6 +15,8 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalDisplayMode = "terminal_display_mode"
     static let keyTerminalStaticColumns = "terminal_static_columns"
 
+    static let attentionSeenPrefix = "attention_seen::"
+
     static let maxRecentCustomPaths = 5
     static let maxRecentShortcutChords = 10
 
@@ -22,6 +24,7 @@ struct PreferencesStore: @unchecked Sendable {
     static func linearStatesKey(projectName: String) -> String { "linear_states::\(projectName)" }
     static func recentCustomPathsKey(agentKey: String) -> String { "recent_custom_paths::\(agentKey)" }
     static func recentShortcutChordsKey(kindKey: String) -> String { "recent_shortcut_chords::\(kindKey)" }
+    static func attentionSeenKey(agentKey: String) -> String { "\(attentionSeenPrefix)\(agentKey)" }
 
     // UserDefaults is documented thread-safe; this struct holds no other
     // mutable state, hence @unchecked Sendable.
@@ -148,6 +151,23 @@ struct PreferencesStore: @unchecked Sendable {
             Array(tokens.prefix(Self.maxRecentShortcutChords)),
             forKey: Self.recentShortcutChordsKey(kindKey: kindKey)
         )
+    }
+
+    func getAttentionSeen(agentKey: String) -> AttentionSeenRecord {
+        decodeBlob(forKey: Self.attentionSeenKey(agentKey: agentKey)) ?? AttentionSeenRecord()
+    }
+
+    func setAttentionSeen(agentKey: String, record: AttentionSeenRecord) {
+        encodeBlob(record, forKey: Self.attentionSeenKey(agentKey: agentKey))
+    }
+
+    /// Drop every agent's attention bucket at sign-out. Cleared by prefix
+    /// rather than by the current agent key, which may already be gone.
+    func removeAllAttentionSeen() {
+        for key in defaults.dictionaryRepresentation().keys
+        where key.hasPrefix(Self.attentionSeenPrefix) {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     private func setOrRemove(_ value: String?, forKey key: String) {

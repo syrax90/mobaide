@@ -219,12 +219,23 @@ cadence; they do **not** gate compatibility.
     instead of) the existing opaque ``CH_EVENTS`` ``session.attention``
     publication, on attention **set** only. The server validates the kind
     against an allowlist (only ``session.attention``), broadcasts it via the
-    user-events channel, and — **only when the user has zero live user-events
-    sockets** (WebSocket delivery wins) — hands it to the push dispatcher.
-    Back-compat: an old server WARN-counts the unknown control type and drops
-    it; an old agent simply never sends it (no pushes, previous behaviour).
+    user-events channel, and hands it to the push dispatcher along with the
+    devices that channel already reaches. Back-compat: an old server
+    WARN-counts the unknown control type and drops it; an old agent simply
+    never sends it (no pushes, previous behaviour).
+  * **Presence gating is per device, not per account.** A client may pass its
+    registered ``device_id`` as a query param on ``/ws/user-events``; the
+    server accepts it only when it matches one of that user's own non-revoked
+    device rows, and treats it purely as a delivery hint (an absent or
+    unrecognised value is logged and the socket serves events as before —
+    it simply cannot suppress anything). The dispatcher then pushes to every
+    registered device **except** those holding such a socket, so WebSocket
+    delivery still wins for a connected device while a second, sleeping device
+    is not muted by it. Gating on the account instead — the original CLA-106
+    rule — meant one always-on client (Android's foreground service) silenced
+    pushes to every other device the user owned.
   * **Push dispatch** (server→APNs, not a wire-protocol surface but recorded
-    for the delivery contract): alert push (never silent), one per registered
+    for the delivery contract): alert push (never silent), one per targeted
     device of the user, ``apns-collapse-id`` = ``thread-id`` = ``session_id``
     (matches the clients' notification identifier so replace/suppress/
     reconcile semantics hold), ``aps.alert`` title/body from the shared
