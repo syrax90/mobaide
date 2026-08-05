@@ -305,7 +305,7 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
         customPathError: null,
         // A non-git project cannot host a worktree, and leaving a stale branch
         // name behind would send it on the next launch.
-        git: action.project.isGit ? state.git : { worktree: false, branchName: '' },
+        git: action.project.is_git ? state.git : { worktree: false, branchName: '' },
       };
 
     case 'setCustomPathDraft': {

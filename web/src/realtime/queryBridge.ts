@@ -13,17 +13,24 @@
  * the client cannot prove is in sync is how lists drift. Invalidation costs one
  * request and is always right.
  *
- * The three agent-channel session events are the sanctioned exception, and
- * `sessionCache.ts` documents why they qualify: `sessions.changed` is a full
- * list and `session.updated` / `session.attention` carry a whole row each, so
- * there is no delta to drift. Everything else still invalidates.
+ * Full-snapshot events are the sanctioned exception, documented in
+ * `sessionCache.ts` and `projectsCache.ts`: `sessions.changed` and
+ * `projects.changed` are complete lists, and `session.updated` /
+ * `session.attention` carry a whole row each, so there is no delta to drift.
+ *
+ * That split is the rule for every agent-channel event: an event carrying the
+ * new state is **written**, an event carrying only a pointer to it is
+ * **invalidated** — and a pointer event's query must not pin
+ * `staleTime: Infinity`, because an invalidation landing during a cold fetch is
+ * deduped into that fetch and leaves the stale result pinned (CLA-234).
+ * `git.changed` is the pointer case; `autoscan.*` will be judged the same way in
+ * WEB-10.
  *
  * All payloads that reach a schema are validated before anything is written, so
  * a malformed payload is dropped exactly as it is on Android and iOS — and
  * dropped rather than thrown: this runs inside the socket's listener loop, where
- * an escaping `ZodError` would take out `onmessage`. The remaining agent-channel
- * types (project lists, auto-scan DTOs) are still routed by `type` alone, their
- * shapes belonging to WEB-09/10.
+ * an escaping `ZodError` would take out `onmessage`. The auto-scan types are
+ * still routed by `type` alone, their shapes belonging to WEB-10.
  *
  * Unknown envelope types are ignored — that is the forward-compatibility
  * contract every client honours.
@@ -32,6 +39,8 @@ import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import type { z } from 'zod';
 import { queryKeys } from '../lib/queryKeys';
 import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelope';
+import { gitChangedSchema } from '../protocol/dto/projects';
+import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
 import {
   agentStatusChangedSchema,
@@ -114,11 +123,23 @@ const USER_EVENT_RULES: Readonly<Record<string, UserEventRule>> = {
   },
 };
 
-function agentEventKeys(agentId: string, type: string): readonly QueryKey[] | null {
+/**
+ * `null` means "not ours"; an empty array means "ours, but the payload named no
+ * cache" — a `git.changed` whose `project_name` failed its schema, say, which is
+ * a drop rather than a silent no-op invalidation.
+ */
+function agentEventKeys(
+  agentId: string,
+  type: string,
+  payload: unknown,
+): readonly QueryKey[] | null {
   switch (type) {
-    case 'projects.changed':
-    case 'git.changed':
-      return [queryKeys.projects(agentId)];
+    case 'git.changed': {
+      // Per project, not the whole agent: the payload names exactly one, and
+      // invalidating the others would refetch every open Git screen's list.
+      const decoded = gitChangedSchema.safeParse(payload);
+      return decoded.success ? [queryKeys.gitItems(agentId, decoded.data.project_name)] : [];
+    }
     case 'autoscan.status':
     case 'autoscan.list.changed':
     case 'autoscan.event':
@@ -189,9 +210,19 @@ export function applyAgentEvent(
         keys: outcome === 'applied' ? [queryKeys.sessions(agentId)] : [],
       };
     }
+    case 'projects.changed': {
+      const outcome = applyProjectsSnapshot(client, agentId, envelope.payload);
+      if (outcome === 'dropped') return { kind: 'dropped' };
+      return {
+        kind: 'patched',
+        type: envelope.type,
+        keys: [queryKeys.projects(agentId)],
+      };
+    }
     default: {
-      const keys = agentEventKeys(agentId, envelope.type);
+      const keys = agentEventKeys(agentId, envelope.type, envelope.payload);
       if (keys === null) return { kind: 'ignored', type: envelope.type };
+      if (keys.length === 0) return { kind: 'dropped' };
       invalidate(client, keys);
       return { kind: 'invalidated', type: envelope.type, keys };
     }
@@ -221,12 +252,19 @@ export function refreshOnUserEventsConnect(client: QueryClient): void {
 /**
  * Reconcile the agent-scoped caches the tunnel does not repair by itself.
  *
- * Sessions are deliberately absent: the agent pushes a `sessions.changed`
- * snapshot on every connect and that snapshot now *replaces* the cache
- * authoritatively, so invalidating as well would fire a `/proxy` GET racing it —
- * and a slow response landing afterwards would roll the list back. Projects
- * still need it, since `projects.changed` only fires on an actual change.
+ * Sessions and projects are deliberately absent: the relay asks the agent for an
+ * events snapshot whenever a client opens the events socket, and the agent
+ * answers by republishing both lists in full
+ * (`relay/client.py::_handle_request_events_snapshot`). Those snapshots now
+ * *replace* their caches authoritatively, so invalidating as well would fire a
+ * `/proxy` GET racing them — and a slow response landing afterwards would roll a
+ * list back.
+ *
+ * Git items get it instead, and are the only agent-scoped cache that needs it:
+ * `git.changed` fires only on an actual change and carries no snapshot, so a
+ * list cached before the socket dropped cannot otherwise be trusted. The prefix
+ * key covers every project at once.
  */
 export function refreshOnAgentEventsConnect(client: QueryClient, agentId: string): void {
-  invalidate(client, [queryKeys.projects(agentId)]);
+  invalidate(client, [queryKeys.gitItemsRoot(agentId)]);
 }

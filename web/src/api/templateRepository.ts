@@ -60,6 +60,25 @@ export function groupTemplates(
   return { recents, favorites, others };
 }
 
+/**
+ * The management screen's grouping: favourites first, then everything else,
+ * each sorted case-insensitively by name.
+ *
+ * Deliberately not `groupTemplates`. The picker answers "what did I use lately"
+ * and puts recents first; the management list answers "what do I own" and must
+ * show every template exactly once, so a recently-used favourite belongs in
+ * Favorites, not in a third place above it.
+ */
+export function groupForManagement(templates: readonly PromptTemplate[]): {
+  favorites: PromptTemplate[];
+  others: PromptTemplate[];
+} {
+  return {
+    favorites: templates.filter((template) => template.isFavorite).sort(byName),
+    others: templates.filter((template) => !template.isFavorite).sort(byName),
+  };
+}
+
 export async function listTemplates(): Promise<PromptTemplate[]> {
   const { data, error, response } = await relayClient.GET('/api/templates');
   if (error !== undefined || data === undefined) {
@@ -94,12 +113,35 @@ export async function setTemplateFavorite(
   templateId: string,
   isFavorite: boolean,
 ): Promise<void> {
-  const { error, response } = await relayClient.PATCH(
-    '/api/templates/{template_id}',
-    {
-      params: { path: { template_id: templateId } },
-      body: { is_favorite: isFavorite },
-    },
-  );
+  await updateTemplate(templateId, { is_favorite: isFavorite });
+}
+
+export async function createTemplate(name: string, body: string): Promise<void> {
+  const { error, response } = await relayClient.POST('/api/templates', {
+    body: { name, body },
+  });
+  if (error !== undefined) throw toApiError(response, error);
+}
+
+/**
+ * A partial patch: an absent field keeps its value, and an all-absent body is a
+ * legal no-op the server answers without bumping `version`.
+ */
+export async function updateTemplate(
+  templateId: string,
+  patch: { name?: string; body?: string; is_favorite?: boolean },
+): Promise<void> {
+  const { error, response } = await relayClient.PATCH('/api/templates/{template_id}', {
+    params: { path: { template_id: templateId } },
+    body: patch,
+  });
+  if (error !== undefined) throw toApiError(response, error);
+}
+
+/** Soft-delete, and idempotent — deleting an already-deleted template still 204s. */
+export async function deleteTemplate(templateId: string): Promise<void> {
+  const { error, response } = await relayClient.DELETE('/api/templates/{template_id}', {
+    params: { path: { template_id: templateId } },
+  });
   if (error !== undefined) throw toApiError(response, error);
 }

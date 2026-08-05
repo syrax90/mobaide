@@ -16,7 +16,6 @@
 
 const OWNER = {
   shortcuts: 'WEB-06 — keyboard & saved shortcuts',
-  projects: 'WEB-09 — projects, git items & templates',
   autoscan: 'WEB-10 — auto-scan monitor, notifications & settings',
   /**
    * Shipped surfaces whose shapes come from the committed `openapi-typescript`
@@ -33,6 +32,11 @@ const OWNER = {
    * appears in no OpenAPI schema and is asserted from `pairing/qr_payload.json`
    * below. `agent.status_changed`, the one pairing-adjacent WebSocket payload,
    * already has its Zod mirror in `dto/userEvents.ts`.
+   *
+   * WEB-09 moved the project-write, project-order, git and template-write DTOs
+   * here on the same test. They are request and response bodies only: the shapes
+   * that also travel over a socket (`ProjectInfo`) or that no schema documents
+   * at all (the `busy_by` 409) are the ones that got Zod mirrors instead.
    */
   generated: 'shipped — typed by the generated OpenAPI schema',
   /** Editing a custom agent type on web: CLA-231. */
@@ -55,9 +59,12 @@ export const COVERED_FIXTURES: readonly string[] = [
   'pairing/qr_payload.json',
   'relay/relay_mapping.json',
   'dto/agent/AntigravityOptionsModel.json',
+  'dto/agent/BusyByResponse.json',
+  'dto/agent/BusyHolder.json',
   'dto/agent/ClaudeOptionsModel.json',
   'dto/agent/CodexOptionsModel.json',
   'dto/agent/CreateSessionRequest.json',
+  'dto/agent/ProjectInfo.json',
   'dto/agent/SessionKind.json',
   'dto/agent/SessionResponse.json',
   'dto/agent/VersionInfoResponse.json',
@@ -83,23 +90,20 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/agent/AutoScanFilterDto.json': OWNER.autoscan,
   'dto/agent/AutoScanInstanceDto.json': OWNER.autoscan,
   'dto/agent/AutoScanListResponse.json': OWNER.autoscan,
-  'dto/agent/BusyByResponse.json': OWNER.projects,
-  'dto/agent/BusyHolder.json': OWNER.projects,
   'dto/agent/CodexLoginRequest.json': OWNER.generated,
   'dto/agent/CodexLoginResponse.json': OWNER.generated,
   'dto/agent/ForceUpdateResponse.json': OWNER.autoscan,
-  'dto/agent/GitDeleteItem.json': OWNER.projects,
-  'dto/agent/GitDeleteRequest.json': OWNER.projects,
-  'dto/agent/GitDeleteResponse.json': OWNER.projects,
-  'dto/agent/GitDeleteResultItem.json': OWNER.projects,
-  'dto/agent/GitItem.json': OWNER.projects,
-  'dto/agent/GitItemsResponse.json': OWNER.projects,
+  'dto/agent/GitDeleteItem.json': OWNER.generated,
+  'dto/agent/GitDeleteRequest.json': OWNER.generated,
+  'dto/agent/GitDeleteResponse.json': OWNER.generated,
+  'dto/agent/GitDeleteResultItem.json': OWNER.generated,
+  'dto/agent/GitItem.json': OWNER.generated,
+  'dto/agent/GitItemsResponse.json': OWNER.generated,
   'dto/agent/LinearLabelDto.json': OWNER.autoscan,
   'dto/agent/LinearStateDto.json': OWNER.autoscan,
-  'dto/agent/ProjectInfo.json': OWNER.projects,
-  'dto/agent/ProjectOrderRequest.json': OWNER.projects,
-  'dto/agent/ProjectUpdate.json': OWNER.projects,
-  'dto/agent/ProjectWrite.json': OWNER.projects,
+  'dto/agent/ProjectOrderRequest.json': OWNER.generated,
+  'dto/agent/ProjectUpdate.json': OWNER.generated,
+  'dto/agent/ProjectWrite.json': OWNER.generated,
   'dto/agent/RefreshRequest.json': OWNER.generated,
   'dto/agent/RunNowRequest.json': OWNER.autoscan,
   'dto/agent/RunNowResponse.json': OWNER.autoscan,
@@ -114,7 +118,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/central/CreateAgentRequest.json': OWNER.generated,
   'dto/central/CreateAgentResponse.json': OWNER.generated,
   'dto/central/CreateShortcutRequest.json': OWNER.shortcuts,
-  'dto/central/CreateTemplateRequest.json': OWNER.projects,
+  'dto/central/CreateTemplateRequest.json': OWNER.generated,
   'dto/central/DeleteAccountReauthDetail.json': OWNER.generated,
   'dto/central/DeleteAccountReauthErrorBody.json': OWNER.generated,
   'dto/central/DeleteAccountRequest.json': OWNER.generated,
@@ -140,7 +144,7 @@ export const DEFERRED_FIXTURES: Readonly<Record<string, string>> = {
   'dto/central/ResetPasswordResponse.json': OWNER.generated,
   'dto/central/UpdateCustomAgentTypeRequest.json': OWNER.customTypes,
   'dto/central/UpdateShortcutRequest.json': OWNER.shortcuts,
-  'dto/central/UpdateTemplateRequest.json': OWNER.projects,
+  'dto/central/UpdateTemplateRequest.json': OWNER.generated,
   'dto/central/UserAuthResponse.json': OWNER.generated,
   'dto/central/UserLoginRequest.json': OWNER.generated,
   'dto/central/UserRegisterRequest.json': OWNER.generated,

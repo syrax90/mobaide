@@ -22,7 +22,10 @@ the composer and the prompt-template picker. WEB-07 (CLA-193) added the
 sessions area — the live list with auto-resume, and the six-branch create
 wizard. WEB-08 (CLA-194) added agents and pairing Phase 1 — the `/pair`
 route with its deep link and paste box, the `/agents` screen, and the
-pairing link the agent now prints under its QR. The series is tracked in
+pairing link the agent now prints under its QR. WEB-09 (CLA-195) added the
+three CRUD surfaces: projects with accessible reorder and three-state updates,
+the per-project git branch/worktree list with its deferred delete, and prompt
+template management. The series is tracked in
 Linear project "Web Client (React)" (CLA-188…CLA-200): deploy/relay
 readiness (WEB-02), auth (WEB-03), WS protocol core (WEB-04), terminal
 (WEB-05), keyboard/shortcuts (WEB-06), sessions (WEB-07), pairing (WEB-08),
@@ -438,6 +441,112 @@ showing of a token — the web analogue of Android's `confirmValueChange` and
 iOS's `interactiveDismissDisabled`. Android's `EXTRA_IS_SENSITIVE` clipboard
 flag has no browser equivalent, so a copied token lands in ordinary clipboard
 history; that is why the panel points at pairing instead.
+
+## Projects, git & templates (WEB-09)
+
+Three routes: `/projects` (agent-scoped, with the same agent picker and
+`mobaide-agent` selection the sessions list uses),
+`/agents/:agentId/projects/:projectName/git`, and `/templates`. Projects and
+git are agent-axis calls through `/proxy`; templates are central-server ones,
+so the templates screen works while every agent is offline.
+
+**`projects.changed` is written, not invalidated.** It carries the agent's
+complete list, republished after every mutation *and* on every events-socket
+connect — the relay sends `request_events_snapshot` and the agent answers by
+publishing the whole list again (`relay/client.py`). So it joins
+`sessions.changed` in `queryBridge`'s full-snapshot exception, via
+`src/realtime/projectsCache.ts`. That also closes CLA-234: TanStack only
+self-cancels a refetch once `dataUpdatedAt` is truthy, so an invalidation
+landing during a **cold** fetch was deduped into it, the older list resolved,
+and `staleTime: Infinity` pinned it. The general rule the bridge now states is
+that an event carrying the new state is written, an event carrying only a
+pointer to it is invalidated — and a pointer event's query must **not** pin
+`staleTime: Infinity`, which is why the git-items query keeps ordinary
+staleness. `git.changed` is the pointer case, and it now invalidates
+`['agent', id, 'git', projectName]` rather than the project list it used to
+hit. `refreshOnAgentEventsConnect` correspondingly swapped projects for the
+git prefix: projects arrive in the connect snapshot, git items never do.
+
+Because both REST and the push write the same cache, the project list keeps
+its **wire shape** (`projectInfoSchema`) instead of a camelCase mapping — the
+rule `sessionRepository.ts` already documents. The wizard keeps a narrow
+`ProjectSummary = Pick<ProjectInfo, …>` of the seven fields it reads.
+
+**Reorder is buttons first, drag second.** Every row carries Move up / Move
+down plus a live region announcing `"<name> moved to position N of M"`; a
+native `draggable` handle is a desktop-mouse convenience on top. Pragmatic
+drag-and-drop was considered and rejected: it rides the HTML5 drag API, which
+is mouse-based and unreliable on touch, and a phone browser is a first-class
+target here. `PATCH /api/projects/order` takes the **complete** name set and
+400s on any mismatch, so the move is applied to the full list even when a row
+is hidden by an open undo window; the visible neighbour only names the
+destination. The optimistic order is an *override*, never a cache write, and
+is released only when the server's own order matches it exactly — Android's
+`combine` / iOS's `recompute`, which is what keeps the two-client case
+flicker-free.
+
+**Project delete is deferred-commit**, not mobile's immediate delete with a
+recreating Undo. The compensating `POST` cannot restore `linear_api_key` (the
+server never echoes it) or the project's `order`, and web already had the
+deferred model for git delete; one undo model beats two. Android and iOS
+follow in CLA-240 / CLA-241. Only one deletion is in flight at a time — there
+is no batch endpoint — so a second delete commits the first and opens a fresh
+window.
+
+**The project form tracks the live snapshot.** React Hook Form's `values` +
+`resetOptions: { keepDirtyValues: true }` re-seed every untouched field while
+protecting the edited ones, and `buildProjectUpdate` diffs against that same
+snapshot, so the two agree by construction: untouched ⇒ equal ⇒ absent from
+the patch. Flags and the Auto Scan filter are arrays, where a field-level
+merge has no honest answer, so they carry their own touch gate instead. The
+three-state contract is `linear_api_key` and `conda_env` only — absent keeps,
+`""` clears, a value replaces; `name`/`path` have `min_length=1` server-side
+so `""` there is a 422, `default_flags` clears with `{}`, and
+`auto_scan_filter` has no clear state and is always replaced whole. Patches
+are built by conditional key insertion, so absence is asserted with
+`Object.hasOwn` rather than left to `JSON.stringify` dropping `undefined`.
+Dirty-field registries are deliberately not used: RHF reports a field edited
+and changed back, and misses one changed programmatically.
+
+The Linear key gets the same handling as every other secret in the SPA: a
+masked `PasswordField` with a reveal toggle (labelled "key", matching both
+mobile clients' `SecretTextField`), and the save mutation pins `gcTime: 0` with
+`onSettled: save.reset()` — otherwise TanStack keeps the submitted variables,
+plaintext key included, readable app-wide through `getMutationCache()` for
+minutes after the dialog closes. `NewSession`'s Codex login mutation already
+does this for the same reason. Two related traps the form closes: `editing` is
+resolved by name, so a project deleted or renamed by another client would flip
+the dialog into *create* mode with the dirty fields intact — the editor now
+closes instead; and the Auto Scan filter is validated even while hidden, so its
+message renders precisely when the section is **not** shown, or emptying the
+filter and then clearing the key would disable Save with no reason on screen.
+
+**Git delete ports `GitScreenModel` whole**: rows hide immediately, the batch
+lives outside the timer so a coalescing restart cannot discard it, `results`
+map positionally onto the request, `force_required` restores the row *and*
+re-prompts, a short `results` array restores the unreported tail, and the busy
+409 restores the entire batch because the guard runs before anything is
+deleted. The one thing not ported is the overlapping-load guard: `git.changed`
+does arrive before the delete response, but the list lives in TanStack Query,
+whose invalidation cancels an in-flight refetch on a warm cache. The 409 body
+(`{"detail": {"busy_by": […]}}`) is in neither OpenAPI schema, so it has a
+hand-written Zod mirror and a shared parser in `src/api/conflicts.ts` —
+alongside the string-shaped project conflicts, which is the split
+`ConflictParsing.swift` makes and Android duplicates.
+
+**Templates** add create/edit/delete to the picker's existing list/touch/
+favourite calls. The management grouping is Favorites then All, each sorted
+case-insensitively — deliberately not the picker's recents-first grouping,
+because a management list must show every template exactly once. The editor
+keeps its draft on a failed save (iOS's guard; Android has none), and the body
+is sent verbatim while the name is trimmed, since a body reaches the PTY
+unchanged.
+
+Fixture coverage: `ProjectInfo`, `BusyByResponse` and `BusyHolder` moved into
+`COVERED_FIXTURES` with Zod mirrors — the first because it crosses a socket
+into the cache, the other two because no schema documents them. The eleven
+remaining WEB-09 fixtures are REST request/response bodies and were re-pointed
+to `OWNER.generated`, the same call WEB-08 made for the pairing group.
 
 ## Terminal screen (WEB-05)
 

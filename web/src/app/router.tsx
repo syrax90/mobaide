@@ -8,6 +8,9 @@ import { ResetPassword } from '../routes/auth/ResetPassword';
 import { VerifyEmail } from '../routes/auth/VerifyEmail';
 import { Agents } from '../routes/agents/Agents';
 import { Pair } from '../routes/pair/Pair';
+import { ProjectsScreen } from '../routes/projects/ProjectsScreen';
+import { GitScreen } from '../routes/projects/git/GitScreen';
+import { TemplatesScreen } from '../routes/templates/TemplatesScreen';
 import { SessionsScreen } from '../routes/sessions/SessionsScreen';
 import { NewSession } from '../routes/sessions/create/NewSession';
 import { AuthLayout } from './AuthLayout';
@@ -58,6 +61,15 @@ export const router = createBrowserRouter([
               { path: 'account', element: <Account /> },
               { path: 'devices', element: <Devices /> },
               { path: 'agents', element: <Agents /> },
+              { path: 'projects', element: <ProjectsScreen /> },
+              { path: 'templates', element: <TemplatesScreen /> },
+              // Agent- and project-scoped, so both ids ride in the path: a git
+              // list is only meaningful for one repo on one host, and the
+              // selected-agent store would make a shared link resolve elsewhere.
+              {
+                path: 'agents/:agentId/projects/:projectName/git',
+                element: <GitScreen />,
+              },
               // Not `sessions/new`: keeping it off the terminal route's path
               // means correctness never rests on react-router ranking a static
               // segment above `:sessionId`.

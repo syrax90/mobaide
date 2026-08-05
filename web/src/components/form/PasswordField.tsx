@@ -6,6 +6,13 @@ interface BasePasswordFieldProps {
   autoComplete: 'current-password' | 'new-password' | 'off';
   error?: string;
   autoFocus?: boolean;
+  placeholder?: string;
+  /**
+   * What the reveal button calls the secret. Defaults to "password"; the
+   * project form passes "key", which is what both mobile clients' content
+   * descriptions say for the same field.
+   */
+  secretNoun?: string;
 }
 
 /**
@@ -23,6 +30,8 @@ export function PasswordField({
   autoComplete,
   error,
   autoFocus,
+  placeholder,
+  secretNoun = 'password',
   registration,
   value,
   onChange,
@@ -53,6 +62,11 @@ export function PasswordField({
           type={revealed ? 'text' : 'password'}
           autoComplete={autoComplete}
           autoFocus={autoFocus}
+          placeholder={placeholder}
+          // Browser spellcheck ships the contents of ordinary text inputs to
+          // Google/Microsoft; a `password` input is exempt, but this one stops
+          // being one the moment Show is pressed.
+          spellCheck={false}
           aria-invalid={error !== undefined}
           aria-describedby={error !== undefined ? errorId : undefined}
           {...controlled}
@@ -63,7 +77,7 @@ export function PasswordField({
           // aria-pressed carries the state; the label describes the action the
           // press performs, matching the mobile clients' content descriptions.
           aria-pressed={revealed}
-          aria-label={revealed ? 'Hide password' : 'Show password'}
+          aria-label={revealed ? `Hide ${secretNoun}` : `Show ${secretNoun}`}
           onClick={() => {
             setRevealed((current) => !current);
           }}

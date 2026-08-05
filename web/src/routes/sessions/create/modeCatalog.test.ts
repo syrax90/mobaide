@@ -17,10 +17,10 @@ const project = (over: Partial<ProjectSummary> = {}): ProjectSummary => ({
   name: 'mobaide',
   path: '/srv/mobaide',
   order: 0,
-  hasLinearKey: true,
-  isGit: true,
-  pathExists: true,
-  autoScanPrompt: null,
+  has_linear_key: true,
+  is_git: true,
+  path_exists: true,
+  auto_scan_prompt: undefined,
   ...over,
 });
 
@@ -101,7 +101,7 @@ describe('buildModeCards', () => {
   });
 
   it('gates Auto Scan on both the Claude CLI and a Linear key', () => {
-    const missingKey = cards({ project: project({ hasLinearKey: false }) });
+    const missingKey = cards({ project: project({ has_linear_key: false }) });
     const missingClaude = cards({ capabilities: capabilities({ claude: { available: false } }) });
     const missingBoth = cards({
       capabilities: capabilities({ claude: { available: false } }),

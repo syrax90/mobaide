@@ -74,7 +74,7 @@ export function buildModeCards(input: {
       }
       case 'auto_scan': {
         // Auto Scan drives Claude against Linear issues, so it needs both.
-        const hasLinearKey = input.project?.hasLinearKey === true;
+        const hasLinearKey = input.project?.has_linear_key === true;
         const enabled = claudeEnabled && hasLinearKey;
         return {
           mode,

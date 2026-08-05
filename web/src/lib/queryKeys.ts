@@ -22,6 +22,24 @@ export const queryKeys = {
   agent: (agentId: string) => ['agent', agentId] as const,
   sessions: (agentId: string) => ['agent', agentId, 'sessions'] as const,
   projects: (agentId: string) => ['agent', agentId, 'projects'] as const,
+  /**
+   * One project's branches and worktrees. The prefix `['agent', id, 'git']`
+   * invalidates every project's list at once, which is what a reconnect needs:
+   * `git.changed` only fires on a change, so a socket that was down leaves each
+   * cached list unverifiable.
+   */
+  gitItems: (agentId: string, projectName: string) =>
+    ['agent', agentId, 'git', projectName] as const,
+  gitItemsRoot: (agentId: string) => ['agent', agentId, 'git'] as const,
+  /**
+   * Linear labels and states for one project's Auto Scan filter.
+   *
+   * Deliberately **not** nested under `projects`: query keys match by prefix, so
+   * a key like `['agent', id, 'projects', name, 'linear']` would make every
+   * project-list invalidation re-hit the rate-limited Linear API.
+   */
+  linearMetadata: (agentId: string, projectName: string) =>
+    ['agent', agentId, 'linear', projectName] as const,
   autoscan: (agentId: string) => ['agent', agentId, 'autoscan'] as const,
   /** Which CLIs the agent has installed, and the models each advertises. */
   agentCapabilities: (agentId: string) => ['agent', agentId, 'capabilities'] as const,

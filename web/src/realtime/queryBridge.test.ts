@@ -127,16 +127,28 @@ describe('applyUserEvent', () => {
 
 describe('applyAgentEvent', () => {
   it('maps each event family to its agent-scoped key', () => {
-    // `sessions.changed` is patched straight into the cache via sessionCache.ts
-    // (setQueryData, not invalidateQueries) — it is a complete snapshot, so
-    // there is no delta that could drift. Only the remaining families still
-    // invalidate.
+    // `sessions.changed` and `projects.changed` are patched straight into the
+    // cache via sessionCache.ts / projectsCache.ts (setQueryData, not
+    // invalidateQueries) — each is a complete snapshot, so there is no delta
+    // that could drift. `git.changed` and `autoscan.event` are pointers, so
+    // they still invalidate — `git.changed` scoped to the one project it
+    // names.
     applyAgentEvent(client, 'a1', frame('sessions.changed', {}));
-    applyAgentEvent(client, 'a1', frame('git.changed', {}));
+    const projectsOutcome = applyAgentEvent(
+      client,
+      'a1',
+      frame('projects.changed', { projects: [{ name: 'p1', path: '/srv/p1' }] }),
+    );
+    applyAgentEvent(client, 'a1', frame('git.changed', { project_name: 'alpha' }));
     applyAgentEvent(client, 'a1', frame('autoscan.event', {}));
 
+    expect(projectsOutcome).toEqual({
+      kind: 'patched',
+      type: 'projects.changed',
+      keys: [['agent', 'a1', 'projects']],
+    });
     expect(invalidated).toEqual([
-      ['agent', 'a1', 'projects'],
+      ['agent', 'a1', 'git', 'alpha'],
       ['agent', 'a1', 'autoscan'],
     ]);
   });
@@ -165,13 +177,14 @@ describe('refresh on connect', () => {
   });
 
   it('reconciles the REST-backed lists of the reconnected agent', () => {
-    // Sessions are deliberately excluded: the agent re-pushes an authoritative
-    // `sessions.changed` snapshot on every connect, so an extra REST GET here
-    // would only race it (and a slow response landing afterwards would roll
-    // the list backwards). Projects still need it since `projects.changed`
-    // only fires on an actual change.
+    // Sessions and projects are deliberately excluded: the agent re-pushes an
+    // authoritative snapshot of both on every connect (the relay's
+    // `request_events_snapshot`), so an extra REST GET here would only race
+    // it — and a slow response landing afterwards would roll a list
+    // backwards. Git items get no such push, so they are the one cache that
+    // actually needs reconciling; the prefix key covers every project at once.
     refreshOnAgentEventsConnect(client, 'a1');
 
-    expect(invalidated).toEqual([['agent', 'a1', 'projects']]);
+    expect(invalidated).toEqual([['agent', 'a1', 'git']]);
   });
 });

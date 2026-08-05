@@ -1,40 +1,152 @@
+/**
+ * The agent's configured projects.
+ *
+ * The wire shape is preserved rather than mapped to camelCase, for the reason
+ * `sessionRepository.ts` documents: REST and the `projects.changed` push write
+ * the *same* query cache, so the two must agree field for field. Decoding both
+ * through `projectInfoSchema` is what guarantees that.
+ *
+ * Mutations never patch the cache. The agent republishes the whole list after
+ * every successful create/update/delete/reorder, and that echo is the truth —
+ * the rule both mobile repositories state and this one inherits.
+ */
+import type { components } from './generated/agent';
 import { createAgentClient } from './clients';
 import { toApiError } from './errors';
+import { projectInfoSchema, type ProjectInfo } from '../protocol/dto/projects';
 
-export interface ProjectSummary {
-  name: string;
-  path: string;
-  order: number;
-  /** Gates the Auto Scan mode card — a scan without a Linear key has nothing to read. */
-  hasLinearKey: boolean;
-  /** Gates the worktree section on every mode. */
-  isGit: boolean;
-  pathExists: boolean;
-  /** Seeds the Auto Scan prompt; persisted server-side by the previous scan start. */
-  autoScanPrompt: string | null;
-}
+export type { ProjectInfo } from '../protocol/dto/projects';
 
 /**
- * The agent's configured projects, in the order the user arranged them.
+ * The subset the session wizard reads.
  *
- * Read-only here on purpose: project CRUD and the git surface are WEB-09. The
- * wizard needs the list to pick a working directory and to know whether the
- * selection is a git repo.
+ * Structural, so a full `ProjectInfo` satisfies it — it exists to keep the
+ * wizard from depending on the flag map and Auto Scan filter it never touches,
+ * and to keep its fixtures to the fields under test.
  */
-export async function listProjects(agentId: string): Promise<ProjectSummary[]> {
+export type ProjectSummary = Pick<
+  ProjectInfo,
+  'name' | 'path' | 'order' | 'has_linear_key' | 'is_git' | 'path_exists' | 'auto_scan_prompt'
+>;
+
+export type ProjectWriteBody = components['schemas']['ProjectWriteModel'];
+export type ProjectUpdateBody = components['schemas']['ProjectUpdateModel'];
+export type LinearLabel = components['schemas']['LinearLabelModel'];
+export type LinearState = components['schemas']['LinearStateModel'];
+
+/**
+ * Server order, with a name tiebreak.
+ *
+ * The tiebreak is web-only: neither mobile client has one, and `order` is
+ * unique in practice, but a stable comparator keeps a reorder animation from
+ * depending on `Array.prototype.sort` stability across two equal keys.
+ */
+function byOrder(a: ProjectInfo, b: ProjectInfo): number {
+  return a.order - b.order || a.name.localeCompare(b.name);
+}
+
+export function sortProjects(projects: readonly ProjectInfo[]): ProjectInfo[] {
+  return [...projects].sort(byOrder);
+}
+
+export async function listProjects(agentId: string): Promise<ProjectInfo[]> {
   const { data, error, response } = await createAgentClient(agentId).GET('/api/projects');
   if (error !== undefined || data === undefined) {
     throw toApiError(response, error);
   }
-  return data
-    .map((project) => ({
-      name: project.name,
-      path: project.path,
-      order: project.order,
-      hasLinearKey: project.has_linear_key,
-      isGit: project.is_git,
-      pathExists: project.path_exists,
-      autoScanPrompt: project.auto_scan_prompt ?? null,
-    }))
-    .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  return sortProjects(data.map((project) => projectInfoSchema.parse(project)));
+}
+
+export async function createProject(
+  agentId: string,
+  body: ProjectWriteBody,
+): Promise<ProjectInfo> {
+  const { data, error, response } = await createAgentClient(agentId).POST('/api/projects', {
+    body,
+  });
+  if (error !== undefined || data === undefined) {
+    throw toApiError(response, error);
+  }
+  return projectInfoSchema.parse(data);
+}
+
+/**
+ * `PUT /api/projects/{name}` with a three-state patch — see `buildProjectUpdate`
+ * for which keys may be absent, `""` or valued. `name` in the body is a rename.
+ */
+export async function updateProject(
+  agentId: string,
+  currentName: string,
+  body: ProjectUpdateBody,
+): Promise<ProjectInfo> {
+  const { data, error, response } = await createAgentClient(agentId).PUT(
+    '/api/projects/{name}',
+    { params: { path: { name: currentName } }, body },
+  );
+  if (error !== undefined || data === undefined) {
+    throw toApiError(response, error);
+  }
+  return projectInfoSchema.parse(data);
+}
+
+export async function deleteProject(agentId: string, name: string): Promise<void> {
+  const { error, response } = await createAgentClient(agentId).DELETE(
+    '/api/projects/{name}',
+    { params: { path: { name } } },
+  );
+  if (error !== undefined) throw toApiError(response, error);
+}
+
+/**
+ * Replace the ordering atomically. `names` must be the **complete** set — the
+ * server answers 400 on any duplicate, missing or unknown name.
+ *
+ * The 200 body is the re-sorted list, so the caller can write it straight into
+ * the cache instead of waiting for the `projects.changed` echo that follows.
+ */
+export async function reorderProjects(
+  agentId: string,
+  names: readonly string[],
+): Promise<ProjectInfo[]> {
+  const { data, error, response } = await createAgentClient(agentId).PATCH(
+    '/api/projects/order',
+    { body: { names: [...names] } },
+  );
+  if (error !== undefined || data === undefined) {
+    throw toApiError(response, error);
+  }
+  return sortProjects(data.map((project) => projectInfoSchema.parse(project)));
+}
+
+/**
+ * Labels visible to the project's Linear key, for the Auto Scan filter chips.
+ * 400 when the project has no key, 502 when Linear itself fails — both surface
+ * as an inline "couldn't load" state, never a blocked form.
+ */
+export async function listLinearLabels(
+  agentId: string,
+  name: string,
+): Promise<LinearLabel[]> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/projects/{name}/linear/labels',
+    { params: { path: { name } } },
+  );
+  if (error !== undefined || data === undefined) {
+    throw toApiError(response, error);
+  }
+  return data;
+}
+
+export async function listLinearStates(
+  agentId: string,
+  name: string,
+): Promise<LinearState[]> {
+  const { data, error, response } = await createAgentClient(agentId).GET(
+    '/api/projects/{name}/linear/states',
+    { params: { path: { name } } },
+  );
+  if (error !== undefined || data === undefined) {
+    throw toApiError(response, error);
+  }
+  return data;
 }

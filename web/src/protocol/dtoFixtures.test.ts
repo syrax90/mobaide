@@ -5,6 +5,8 @@ import { COVERED_FIXTURES } from './__fixtures__/coverage';
 import { canonicalize, readFixture, type DtoFixtureFile } from './__fixtures__/load';
 import { agentVersionSchema } from './dto/agentVersion';
 import { createCustomAgentTypeRequestSchema } from './dto/customAgentTypes';
+import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
+import { projectInfoSchema } from './dto/projects';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
 import {
   antigravityOptionsSchema,
@@ -35,6 +37,9 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   AntigravityOptionsModel: antigravityOptionsSchema,
   VersionInfoResponse: agentVersionSchema,
   CreateCustomAgentTypeRequest: createCustomAgentTypeRequestSchema,
+  ProjectInfo: projectInfoSchema,
+  BusyByResponse: busyByResponseSchema,
+  BusyHolder: busyHolderSchema,
   TemplateDto: templateSchema,
   TemplateDeletedPayload: templateDeletedSchema,
   ShortcutDto: shortcutSchema,

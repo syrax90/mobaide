@@ -52,9 +52,9 @@ export function ProjectStep({
                   <span className="project-name">{project.name}</span>
                   <span className="project-path">{project.path}</span>
                   <span className="project-badges">
-                    {project.isGit && <span className="project-badge">git</span>}
-                    {project.hasLinearKey && <span className="project-badge">linear</span>}
-                    {!project.pathExists && (
+                    {project.is_git && <span className="project-badge">git</span>}
+                    {project.has_linear_key && <span className="project-badge">linear</span>}
+                    {!project.path_exists && (
                       <span className="project-badge project-badge-warning">missing</span>
                     )}
                   </span>
