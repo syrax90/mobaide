@@ -32,11 +32,9 @@ export const useSessionsSyncStore = create<SessionsSyncState>()((set, get) => ({
   },
 
   clearSnapshot: (agentId) => {
-    if (get().snapshots[agentId] === undefined) return;
-    set((state) => {
-      const { [agentId]: removed, ...rest } = state.snapshots;
-      return { snapshots: rest };
-    });
+    const { [agentId]: removed, ...rest } = get().snapshots;
+    if (removed === undefined) return;
+    set({ snapshots: rest });
   },
 }));
 
