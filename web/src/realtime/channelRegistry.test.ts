@@ -10,9 +10,10 @@ interface StubChannel {
   name: string;
   connects: number;
   disconnects: number;
+  listener: ((event: { kind: string }) => void) | null;
   connect: () => void;
   disconnect: () => void;
-  subscribe: () => () => void;
+  subscribe: (listener: (event: { kind: string }) => void) => () => void;
 }
 
 const built = vi.hoisted(() => ({
@@ -25,13 +26,17 @@ const built = vi.hoisted(() => ({
       name,
       connects: 0,
       disconnects: 0,
+      listener: null,
       connect: () => {
         channel.connects += 1;
       },
       disconnect: () => {
         channel.disconnects += 1;
       },
-      subscribe: () => () => undefined,
+      subscribe: (listener) => {
+        channel.listener = listener;
+        return () => undefined;
+      },
     };
     return channel;
   },
@@ -51,8 +56,16 @@ vi.mock('./channels', () => ({
   },
 }));
 
-const { connectAgentEvents, startUserEvents, stopAllRealtime, stopUserEvents } =
-  await import('./channelRegistry');
+const {
+  connectAgentEvents,
+  disconnectAgentEvents,
+  startUserEvents,
+  stopAllRealtime,
+  stopUserEvents,
+} = await import('./channelRegistry');
+const { markSessionsSnapshotApplied, useSessionsSyncStore } = await import(
+  './sessionsSyncStore'
+);
 
 let client: QueryClient;
 
@@ -62,6 +75,7 @@ beforeEach(() => {
   built.userChannel = null;
   built.agentChannels.clear();
   client = new QueryClient();
+  useSessionsSyncStore.setState({ snapshots: {} });
 });
 
 afterEach(() => {
@@ -95,6 +109,26 @@ describe('connectAgentEvents', () => {
 
     expect(built.agents).toEqual(['A1', 'A2']);
     expect(built.agentChannels.get('A1')?.connects).toBe(2);
+  });
+
+  it('disowns the previous snapshot when the socket opens again', () => {
+    // The reconnected agent may have restarted and lost every session it had;
+    // its list only counts again once *this* connection replays a snapshot.
+    connectAgentEvents(client, 'A1');
+    markSessionsSnapshotApplied('A1');
+
+    built.agentChannels.get('A1')?.listener?.({ kind: 'connected' });
+
+    expect(useSessionsSyncStore.getState().snapshots['A1']).toBeUndefined();
+  });
+
+  it('disowns the snapshot when the channel is torn down', () => {
+    connectAgentEvents(client, 'A1');
+    markSessionsSnapshotApplied('A1');
+
+    disconnectAgentEvents('A1');
+
+    expect(useSessionsSyncStore.getState().snapshots['A1']).toBeUndefined();
   });
 });
 

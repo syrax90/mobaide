@@ -25,6 +25,7 @@ import {
   refreshOnUserEventsConnect,
 } from './queryBridge';
 import { observeReachability, reportRealtimeStopped } from './reachability';
+import { clearSessionsSnapshot } from './sessionsSyncStore';
 import type { WebSocketChannel } from './webSocketChannel';
 
 interface RunningChannel {
@@ -133,6 +134,9 @@ export function connectAgentEvents(
   const dispose = channel.subscribe((event) => {
     switch (event.kind) {
       case 'connected':
+        // This connection has not delivered its snapshot yet; until it does,
+        // the cached list is whatever survived the drop.
+        clearSessionsSnapshot(agentId);
         useSessionStore.getState().markAgentConnected();
         refreshOnAgentEventsConnect(client, agentId);
         break;
@@ -153,6 +157,7 @@ export function disconnectAgentEvents(agentId: string): void {
   const running = agentEvents.get(agentId);
   if (running === undefined) return;
   agentEvents.delete(agentId);
+  clearSessionsSnapshot(agentId);
   tearDown(running);
 }
 

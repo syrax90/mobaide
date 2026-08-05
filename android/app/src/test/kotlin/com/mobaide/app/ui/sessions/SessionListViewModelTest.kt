@@ -21,6 +21,7 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -76,6 +77,8 @@ class SessionListViewModelTest {
         val outdatedFlow: MutableStateFlow<AgentVersionMonitor.Outdated?>,
         val customTypesRepo: CustomAgentTypesRepository,
         val customTypesFlow: MutableStateFlow<List<CustomAgentTypeDto>>,
+        val syncedFlow: MutableStateFlow<Boolean>,
+        val endedNotices: MutableSharedFlow<String>,
     )
 
     /**
@@ -92,6 +95,7 @@ class SessionListViewModelTest {
             available_projects = emptyList(),
         ),
         initialConnection: AgentEventBus.ConnState = AgentEventBus.ConnState.Disconnected,
+        initialSynced: Boolean = true,
     ): Fixture {
         val sessionRepo = mockk<SessionRepository>(relaxed = true)
         val autoScanRepo = mockk<AutoScanRepository>(relaxed = true)
@@ -105,7 +109,12 @@ class SessionListViewModelTest {
         val connectionFlow = MutableStateFlow(initialConnection)
         val outdatedFlow = MutableStateFlow<AgentVersionMonitor.Outdated?>(null)
 
+        val syncedFlow = MutableStateFlow(initialSynced)
+        val endedNotices = MutableSharedFlow<String>(extraBufferCapacity = 1)
+
         every { sessionRepo.observeSessionList() } returns sessionsFlow
+        every { sessionRepo.observeSessionsSynced() } returns syncedFlow
+        every { sessionRepo.endedSessionNotices } returns endedNotices
         every { autoScanRepo.observeList() } returns scanListFlow
         every { bus.connection } returns connectionFlow
         every { bus.start() } just Runs
@@ -125,7 +134,7 @@ class SessionListViewModelTest {
         return Fixture(
             sessionRepo, autoScanRepo, prefs, bus, versionMonitor, updateRepo,
             sessionsFlow, scanListFlow, connectionFlow, outdatedFlow,
-            customTypesRepo, customTypesFlow,
+            customTypesRepo, customTypesFlow, syncedFlow, endedNotices,
         )
     }
 
@@ -324,6 +333,59 @@ class SessionListViewModelTest {
         }
         // getLastUsedSessionId should have been consulted exactly once.
         coVerify(exactly = 1) { fx.prefs.getLastUsedSessionId() }
+    }
+
+    @Test
+    fun maybeAutoResume_noOp_whenTheListIsNotAgentAuthoritative() = runTest {
+        val fx = newFixture(initialSynced = false)
+        coEvery { fx.prefs.getLastUsedSessionId() } returns "s1"
+        val vm = fx.buildVm()
+
+        vm.autoResumeSessionId.test {
+            // A list left over from a dropped tunnel: the agent may have
+            // restarted and lost s1, so "running" here proves nothing and
+            // resuming into it is what opened a terminal on a dead id.
+            fx.sessionsFlow.value = listOf(session("s1", state = "running"))
+            advanceUntilIdle()
+
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
+        coVerify(exactly = 0) { fx.prefs.getLastUsedSessionId() }
+    }
+
+    @Test
+    fun maybeAutoResume_isNotBurned_byAnUnsyncedList() = runTest {
+        val fx = newFixture(initialSynced = false)
+        coEvery { fx.prefs.getLastUsedSessionId() } returns "s1"
+        val vm = fx.buildVm()
+
+        vm.autoResumeSessionId.test {
+            fx.sessionsFlow.value = listOf(session("s1", state = "running"))
+            advanceUntilIdle()
+            expectNoEvents()
+
+            // The snapshot lands: this is the first list worth deciding on, so
+            // the one auto-resume attempt must still be available.
+            fx.syncedFlow.value = true
+            advanceUntilIdle()
+
+            assertEquals("s1", awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun endedSessionNotice_surfacesAsUiStateNotice() = runTest {
+        val fx = newFixture()
+        val vm = fx.buildVm()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.notice)
+
+        fx.endedNotices.emit("s-gone")
+        advanceUntilIdle()
+
+        assertEquals("That session has ended.", vm.uiState.value.notice)
     }
 
     // ---- isReconnecting driven by AgentEventBus.connection ----------------

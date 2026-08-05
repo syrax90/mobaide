@@ -10,19 +10,46 @@ final class SessionRepository {
     private let agentEventBus: AgentEventBus
     private let terminalSessionStore: TerminalSessionStore
     private let broadcaster = Broadcaster<[SessionResponse]>.stateFlow()
+    private let syncedBroadcaster = Broadcaster<Bool>.stateFlow()
+    private let endedNoticeBroadcaster = Broadcaster<String>(replay: .latestClearable)
 
     private(set) var currentSessions: [SessionResponse] = []
+    /// True while `currentSessions` holds a snapshot pushed by the currently
+    /// connected agent. Absence from the list only means "this session is gone"
+    /// while this is true — a list left over from a dropped tunnel can still
+    /// show sessions the agent lost when it restarted.
+    private(set) var sessionsSynced = false
     private var subscription: Task<Void, Never>?
+    private var connectionSubscription: Task<Void, Never>?
 
     init(agentAPI: AgentAPI, agentEventBus: AgentEventBus, terminalSessionStore: TerminalSessionStore) {
         self.agentAPI = agentAPI
         self.agentEventBus = agentEventBus
         self.terminalSessionStore = terminalSessionStore
         broadcaster.emit([])
+        syncedBroadcaster.emit(false)
     }
 
     func sessions() -> AsyncStream<[SessionResponse]> {
         broadcaster.subscribe()
+    }
+
+    func sessionsSyncedStates() -> AsyncStream<Bool> {
+        syncedBroadcaster.subscribe()
+    }
+
+    /// One-shot notices for a session that ended while the user was trying to
+    /// open it, surfaced by whichever session list is on screen.
+    func endedSessionNotices() -> AsyncStream<String> {
+        endedNoticeBroadcaster.subscribe()
+    }
+
+    func notifySessionEnded(id: String) {
+        endedNoticeBroadcaster.emit(id)
+    }
+
+    func clearEndedSessionNotice() {
+        endedNoticeBroadcaster.clearReplay()
     }
 
     /// Idempotent. Subscribe before `AgentEventBus.start()` so the snapshot the
@@ -35,12 +62,27 @@ final class SessionRepository {
                 await self?.apply(event)
             }
         }
+        // Only a full authoritative snapshot sets the flag; any non-connected
+        // bus state clears it.
+        let connectionStream = agentEventBus.connectionStates()
+        connectionSubscription = Task { [weak self] in
+            for await state in connectionStream where state != .connected {
+                await self?.setSynced(false)
+            }
+        }
+    }
+
+    private func setSynced(_ value: Bool) {
+        guard value != sessionsSynced else { return }
+        sessionsSynced = value
+        syncedBroadcaster.emit(value)
     }
 
     private func apply(_ event: AgentEvent) {
         switch event {
         case .sessionsChanged(let list):
             setSessions(list)
+            setSynced(true)
         case .sessionUpdated(let session), .sessionAttention(let session):
             upsert(session)
         default:
@@ -99,6 +141,7 @@ final class SessionRepository {
     func listSessions() async throws -> [SessionResponse] {
         let list = try await agentAPI.listSessions()
         setSessions(list)
+        setSynced(true)
         return list
     }
 }

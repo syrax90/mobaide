@@ -63,6 +63,12 @@ const { useSelectedAgentStore } = await import('../../stores/selectedAgentStore'
 const { stopAllRealtime } = await import('../../realtime');
 const { resetAutoResumeAttempts } = await import('./autoResume');
 const { SessionsScreen } = await import('./SessionsScreen');
+// Auto-resume only acts on a list the connected agent just pushed, and no socket
+// is ever built here (see the agent-token mock), so both halves of that signal
+// are staged directly.
+const { markSessionsSynced, resetSessionsSynced } = await import(
+  '../../realtime/__testing__/sessionsSynced'
+);
 
 const agent = (agentId: string, online: boolean): Agent => ({
   agentId,
@@ -117,6 +123,7 @@ afterEach(() => {
   resetAutoResumeAttempts();
   useLastSessionStore.setState({ lastUsedSessionIds: {} });
   useSelectedAgentStore.setState({ selectedAgentId: null });
+  resetSessionsSynced();
   client.clear();
   localStorage.clear();
 });
@@ -125,6 +132,7 @@ describe('SessionsScreen', () => {
   it('resumes the last session once, and not again when the user comes back', async () => {
     api.sessions = [session('s1')];
     useLastSessionStore.setState({ lastUsedSessionIds: { 'agent-1': 's1' } });
+    markSessionsSynced('agent-1');
 
     const first = renderScreen();
     await waitFor(() => {
@@ -144,6 +152,7 @@ describe('SessionsScreen', () => {
   it('forgets a last session that is no longer alive instead of resuming it', async () => {
     api.sessions = [session('s1', { state: 'stopped' })];
     useLastSessionStore.setState({ lastUsedSessionIds: { 'agent-1': 's1' } });
+    markSessionsSynced('agent-1');
 
     renderScreen();
 

@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -26,6 +27,7 @@ data class SessionListUiState(
     val sessions: List<SessionResponse> = emptyList(),
     val isReconnecting: Boolean = false,
     val error: String? = null,
+    val notice: String? = null,
     val activeScans: List<AutoScanInstanceDto> = emptyList(),
     val outdated: AgentVersionMonitor.Outdated? = null,
     // Live custom-agent-type names keyed by the full wire kind
@@ -57,9 +59,19 @@ class SessionListViewModel @Inject constructor(
         agentEventBus.start()
 
         viewModelScope.launch {
-            sessionRepository.observeSessionList().collect { sessions ->
-                _uiState.update { it.copy(sessions = sessions) }
-                maybeAutoResume(sessions)
+            combine(
+                sessionRepository.observeSessionList(),
+                sessionRepository.observeSessionsSynced(),
+            ) { sessions, synced -> sessions to synced }
+                .collect { (sessions, synced) ->
+                    _uiState.update { it.copy(sessions = sessions) }
+                    maybeAutoResume(sessions, synced)
+                }
+        }
+
+        viewModelScope.launch {
+            sessionRepository.endedSessionNotices.collect {
+                _uiState.update { it.copy(notice = "That session has ended.") }
             }
         }
 
@@ -121,8 +133,12 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    private suspend fun maybeAutoResume(sessions: List<SessionResponse>) {
-        if (didTryAutoResume || sessions.isEmpty()) return
+    /** Resumes only against a snapshot the connected agent just pushed. A list
+     *  left over from a dropped tunnel can still show a session as `running`
+     *  after the agent restarted and lost it, and resuming into that would open
+     *  a terminal for a session that no longer exists. */
+    private suspend fun maybeAutoResume(sessions: List<SessionResponse>, synced: Boolean) {
+        if (didTryAutoResume || !synced || sessions.isEmpty()) return
         didTryAutoResume = true
         val lastId = preferencesStore.getLastUsedSessionId() ?: return
         val match = sessions.firstOrNull { it.session_id == lastId } ?: return
@@ -185,5 +201,9 @@ class SessionListViewModel @Inject constructor(
 
     fun clearError() {
         _uiState.update { it.copy(error = null) }
+    }
+
+    fun clearNotice() {
+        _uiState.update { it.copy(notice = null) }
     }
 }

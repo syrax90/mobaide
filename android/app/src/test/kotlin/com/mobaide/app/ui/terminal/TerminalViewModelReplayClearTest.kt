@@ -75,6 +75,7 @@ class TerminalViewModelReplayClearTest {
         mockk {
             every { createSessionIoConnection("test-session") } returns conn
             every { observeSessionList() } returns MutableStateFlow(emptyList())
+            every { observeSessionsSynced() } returns MutableStateFlow(false)
         }
 
     private val templatesRepository =

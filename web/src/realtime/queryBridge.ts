@@ -33,6 +33,7 @@ import type { z } from 'zod';
 import { queryKeys } from '../lib/queryKeys';
 import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelope';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
+import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import {
   agentStatusChangedSchema,
   customAgentTypeSchema,
@@ -169,6 +170,7 @@ export function applyAgentEvent(
     case 'sessions.changed': {
       const outcome = applySessionsSnapshot(client, agentId, envelope.payload);
       if (outcome === 'dropped') return { kind: 'dropped' };
+      markSessionsSnapshotApplied(agentId);
       return {
         kind: 'patched',
         type: envelope.type,

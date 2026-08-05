@@ -59,6 +59,11 @@ final class TerminalSessionModel {
 
     private(set) var connectionState: ConnectionState = .reconnecting
     private(set) var sessionStatus: String?
+    /// Once the session is known to exist, it is never treated as missing again:
+    /// a session ending or being removed while the user is reading it must leave
+    /// the output on screen, not eject them.
+    private var everSeenAlive = false
+    private var sessionEndedEmitted = false
     private(set) var followMode = true
     /// Rows the terminal pushed past the bottom while follow mode was paused
     /// (Android `TerminalViewModel.unreadRows`), capped so a runaway producer
@@ -236,6 +241,11 @@ final class TerminalSessionModel {
             }
         case .state(let json):
             sessionStatus = Self.parseStatus(json) ?? sessionStatus
+            // The agent answering with a live PTY is proof the session exists,
+            // independent of when its list snapshot lands.
+            if sessionStatus == "running" || sessionStatus == "starting" {
+                everSeenAlive = true
+            }
         case .replayStart:
             // The transcript the selection's rows name is about to be erased and
             // refilled, so those coordinates would silently come to mean other
@@ -750,6 +760,21 @@ final class TerminalSessionModel {
         if let core {
             Task { await core.disconnect() }
         }
+    }
+
+    /// Feeds the agent's session-list snapshot in, returning `true` exactly once
+    /// when it proves this session no longer exists.
+    ///
+    /// `synced` guards the only ambiguous case: a list left over from a dropped
+    /// tunnel is not evidence of anything.
+    func noteSessionSnapshot(isListed: Bool, synced: Bool) -> Bool {
+        if isListed {
+            everSeenAlive = true
+            return false
+        }
+        guard synced, !everSeenAlive, !sessionEndedEmitted else { return false }
+        sessionEndedEmitted = true
+        return true
     }
 
     private static func parseStatus(_ json: String) -> String? {

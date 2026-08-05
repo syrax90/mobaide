@@ -6,12 +6,14 @@ import {
   refreshOnAgentEventsConnect,
   refreshOnUserEventsConnect,
 } from './queryBridge';
+import { useSessionsSyncStore } from './sessionsSyncStore';
 
 let client: QueryClient;
 let invalidated: QueryKey[];
 
 beforeEach(() => {
   client = new QueryClient();
+  useSessionsSyncStore.setState({ snapshots: {} });
   invalidated = [];
   vi.spyOn(client, 'invalidateQueries').mockImplementation((filters) => {
     invalidated.push(filters?.queryKey ?? []);
@@ -139,6 +141,17 @@ describe('applyAgentEvent', () => {
       ['agent', 'a1', 'projects'],
       ['agent', 'a1', 'autoscan'],
     ]);
+  });
+
+  it('marks the list synced on a snapshot, and only on one it could apply', () => {
+    // The flag is what turns "not in the list" into "this session is gone", so
+    // a payload the schema rejected must not arm it. An *empty* snapshot must,
+    // though: no sessions at all is exactly when that decision matters.
+    applyAgentEvent(client, 'a1', frame('sessions.changed', {}));
+    expect(useSessionsSyncStore.getState().snapshots['a1']).toBeUndefined();
+
+    applyAgentEvent(client, 'a1', frame('sessions.changed', { sessions: [] }));
+    expect(useSessionsSyncStore.getState().snapshots['a1']).toBe(true);
   });
 
   it('ignores an unrecognised type without touching the cache', () => {

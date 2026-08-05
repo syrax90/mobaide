@@ -70,6 +70,7 @@ class TerminalViewModelSessionKindTest {
     ): SessionRepository = mockk {
         every { createSessionIoConnection("test-session") } returns connection
         every { observeSessionList() } returns sessions
+        every { observeSessionsSynced() } returns MutableStateFlow(false)
         coEvery { listSessions() } returns restSessions
     }
 
@@ -188,6 +189,7 @@ class TerminalViewModelSessionKindTest {
             val repo = mockk<SessionRepository> {
                 every { createSessionIoConnection("test-session") } returns connection
                 every { observeSessionList() } returns sessions
+                every { observeSessionsSynced() } returns MutableStateFlow(false)
                 coEvery { listSessions() } throws RuntimeException("offline")
             }
             val vm = newViewModel(repo)

@@ -16,4 +16,5 @@ export { AutoScanChannel, SessionIoChannel, sessionChannelName } from './channel
 export { useConnectionStore } from './connectionStore';
 export { RealtimeProvider } from './RealtimeProvider';
 export { useAgentEvents } from './useAgentEvents';
+export { useSessionsSynced } from './useSessionsSynced';
 export type { ChannelEvent, ChannelState, ChannelStatus } from './webSocketChannel';

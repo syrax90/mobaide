@@ -204,6 +204,86 @@ final class SessionRepositoryTests: XCTestCase {
         )
     }
 
+    private func waitForSynced(_ repo: SessionRepository, _ expected: Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if repo.sessionsSynced == expected { return true }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        return repo.sessionsSynced == expected
+    }
+
+    func testSessionsSyncedRequiresASnapshotNotJustAnOpenSocket() async throws {
+        let (repo, bus, factory, _) = makeStack()
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+
+        XCTAssertFalse(
+            repo.sessionsSynced,
+            "the agent replays its snapshot after the socket opens; until it lands the cache is whatever survived the drop"
+        )
+
+        connection.emit(.text(sessionsChanged(["a"])))
+        let synced = await waitForSynced(repo, true)
+        XCTAssertTrue(synced)
+    }
+
+    func testSessionUpdatedAloneDoesNotMarkTheListSynced() async throws {
+        let (repo, bus, factory, _) = makeStack()
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+
+        connection.emit(.text(sessionUpdated("a")))
+        _ = await waitFor(repo) { $0.contains { $0.session_id == "a" } }
+
+        XCTAssertFalse(
+            repo.sessionsSynced,
+            "a single-session upsert says nothing about the sessions it does not mention"
+        )
+    }
+
+    func testDisconnectClearsSyncedButKeepsTheList() async throws {
+        let (repo, bus, factory, _) = makeStack()
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+        connection.emit(.text(sessionsChanged(["a"])))
+        let synced = await waitForSynced(repo, true)
+        XCTAssertTrue(synced)
+
+        connection.emit(.closed(code: 1006, reason: "drop"))
+
+        let cleared = await waitForSynced(repo, false)
+        XCTAssertTrue(
+            cleared,
+            "after an agent restart the cached list still names sessions it lost"
+        )
+        XCTAssertEqual(
+            repo.currentSessions.map(\.session_id), ["a"],
+            "the rows stay on screen; only their authority is revoked"
+        )
+    }
+
+    func testEndedSessionNoticeIsDeliveredThenCleared() async throws {
+        let (repo, _, _, _) = makeStack()
+        let collector = StreamCollector(repo.endedSessionNotices())
+
+        repo.notifySessionEnded(id: "gone")
+
+        let delivered = try await collector.next()
+        XCTAssertEqual(delivered, "gone")
+
+        repo.clearEndedSessionNotice()
+        let replayed = StreamCollector(repo.endedSessionNotices())
+        let noReplay = await replayed.expectNoElement(within: .milliseconds(200))
+        XCTAssertTrue(noReplay, "a cleared notice must not re-toast on the next subscriber")
+    }
+
     func testCreateSessionPublishesResponseWithKind() async throws {
         StubURLProtocol.reset()
         StubURLProtocol.enqueue(

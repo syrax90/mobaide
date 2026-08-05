@@ -60,6 +60,8 @@ private struct SessionListContent: View {
             }
             .toast($toast)
             .task { await model.observeSessions() }
+            .task { await model.observeSessionsSynced() }
+            .task { await model.observeEndedSessionNotices() }
             .task { await model.observeConnection() }
             .task { await model.observeScans() }
             .task { await model.observeCustomTypes() }
@@ -73,6 +75,12 @@ private struct SessionListContent: View {
                 if let newValue {
                     toast = ToastMessage(text: newValue)
                     model.clearError()
+                }
+            }
+            .onChange(of: model.notice) { _, newValue in
+                if let newValue {
+                    toast = ToastMessage(text: newValue)
+                    model.clearNotice()
                 }
             }
     }

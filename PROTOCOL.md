@@ -115,6 +115,24 @@ cadence; they do **not** gate compatibility.
   partial and declared in ``web/src/protocol/__fixtures__/coverage.ts``,
   which fails if a new fixture file is neither asserted nor assigned an
   owner.
+* Additive delta within proto-v7 (2026-08-05, stale-attach fix): **agent-side
+  only — no wire change, no version bump.** ``RelayClient._handle_session_input``
+  no longer auto-creates a session for a ``CH_SESSION_IO`` frame naming an
+  unknown ``session_id``; it drops the frame and answers with the same
+  ``stopped`` state frame ``_handle_mobile_attach`` already sends for a stale
+  attach (both now share ``_send_stopped_frame``). Auto-create used to fire off
+  a bare resize frame — which Android, iOS and the web client all send
+  unconditionally on every socket connect to re-assert their cached PTY size —
+  so merely attaching to a stale id (agent restarted, session swept, a resumed
+  id from preferences, a stale notification, a restored navigation stack)
+  silently spawned a real login shell. The empty-payload guard, which
+  previously sat *after* the auto-create, now runs first. An unpatched client
+  paired with a fixed agent needs no changes: it receives exactly the
+  ``stopped`` frame the attach path has always sent for a stale id and renders
+  a stopped session instead of a phantom shell — old client + new agent is the
+  supported combination. Deciding that a session is *gone* (rather than merely
+  stopped) stays a client-side judgement from the ``sessions.changed``
+  snapshot, not a wire signal.
 
 ## proto-v6 (superseded by proto-v7)
 

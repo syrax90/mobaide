@@ -66,6 +66,7 @@ class TerminalViewModelSendChordTest {
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
         every { observeSessionList() } returns sessionListFlow
+        every { observeSessionsSynced() } returns MutableStateFlow(false)
     }
 
     private fun resolveKind(kind: SessionKind = SessionKind.Claude) {

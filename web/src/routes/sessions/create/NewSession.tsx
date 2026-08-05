@@ -12,10 +12,12 @@ import {
 import { listProjects } from '../../../api/projectRepository';
 import { createSession, type CreateSessionRequest } from '../../../api/sessionRepository';
 import { queryKeys, wsBackedQueryOptions } from '../../../lib/queryKeys';
+import type { SessionResponse } from '../../../protocol/dto/session';
 import { customSessionTypeId } from '../../../protocol/wireSchema';
 import { useLastSessionStore } from '../../../stores/lastSessionStore';
 import { useToastStore } from '../../../stores/toastStore';
 import { useAgentEvents } from '../../../realtime';
+import { upsertSession } from '../../../realtime/sessionCache';
 import { terminalPath } from '../terminalPath';
 import { CodexLoginDialog } from './CodexLoginDialog';
 import { ConfigStep } from './ConfigStep';
@@ -202,6 +204,15 @@ export function NewSession() {
       setShowCodexLogin(false);
       pendingRequest.current = null;
       setLastUsedSession(resolvedAgentId, session.session_id);
+      // Seed the row synchronously, before navigating. The terminal treats
+      // "absent from a synced list" as proof the session is gone and leaves, so
+      // the gap between this create and the reconciling snapshot below would
+      // otherwise bounce the user straight back out of the session they just
+      // made. Idempotently replaced by whichever of the two arrives next.
+      queryClient.setQueryData<SessionResponse[]>(
+        queryKeys.sessions(resolvedAgentId),
+        (current) => upsertSession(current ?? [], session),
+      );
       // The agent's `sessions.changed` normally carries the new row; this covers
       // the socket being down, where REST still works and the list would
       // otherwise be missing the session the user is now sitting in. Same

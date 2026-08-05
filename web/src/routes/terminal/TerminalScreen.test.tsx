@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  type RenderResult,
+} from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PromptTemplate } from '../../api/templateRepository';
@@ -46,13 +53,14 @@ vi.mock('../../api/templateRepository', async (importOriginal) => {
   };
 });
 
-const { acquireTerminal, useTerminalStore } = await import(
+const { sessionChannelName } = await import('../../realtime/channels');
+const { acquireTerminal, evictTerminalSessions, useTerminalStore } = await import(
   '../../terminal/terminalStore'
 );
 const { TerminalScreen } = await import('./TerminalScreen');
 
-function renderTerminal(): HTMLElement {
-  const { container } = render(
+function renderTerminal(): RenderResult {
+  return render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter initialEntries={['/agents/a1/sessions/s1']}>
         <Routes>
@@ -64,7 +72,6 @@ function renderTerminal(): HTMLElement {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return container;
 }
 
 afterEach(() => {
@@ -87,10 +94,40 @@ describe('TerminalScreen selection toolbar', () => {
     const model = acquireTerminal('a1', 's1');
     model.state.setState({ hasSelection: true });
 
-    const container = renderTerminal();
+    const { container } = renderTerminal();
 
     const stage = container.querySelector('.terminal-stage');
     expect(stage).toContainElement(screen.getByRole('toolbar', { name: 'Selection' }));
+  });
+});
+
+describe('TerminalScreen eviction exemption', () => {
+  const key = (): string => sessionChannelName('a1', 's1');
+  const model = () => useTerminalStore.getState().models[key()];
+
+  it('holds its model through the eviction that follows the session ending', () => {
+    // The screen owns the agent channel now, so the snapshot that removes a
+    // session lands while the user is reading it. Without the exemption the
+    // model is disposed, the re-acquire effect builds a fresh one, and the
+    // scrollback the user was reading is gone.
+    const attached = acquireTerminal('a1', 's1');
+    renderTerminal();
+
+    evictTerminalSessions('a1', ['s1']);
+
+    expect(model()).toBe(attached);
+  });
+
+  it('releases the exemption when the screen goes away', () => {
+    // Nothing may stay exempt after unmount: a dead session left resident
+    // holds an emulator plus its scrollback for a terminal no one is watching.
+    acquireTerminal('a1', 's1');
+    const { unmount } = renderTerminal();
+    unmount();
+
+    evictTerminalSessions('a1', ['s1']);
+
+    expect(model()).toBeUndefined();
   });
 });
 

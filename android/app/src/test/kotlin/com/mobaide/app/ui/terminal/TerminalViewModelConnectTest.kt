@@ -77,6 +77,7 @@ class TerminalViewModelConnectTest {
         mockk {
             every { createSessionIoConnection("test-session") } returns conn
             every { observeSessionList() } returns MutableStateFlow(emptyList())
+            every { observeSessionsSynced() } returns MutableStateFlow(false)
         }
 
     private val templatesRepository = mockk<com.mobaide.app.data.repository.TemplatesRepository>(relaxed = true)

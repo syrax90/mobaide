@@ -85,6 +85,7 @@ class TerminalViewModelSavedShortcutsTest {
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
         every { observeSessionList() } returns sessionListFlow
+        every { observeSessionsSynced() } returns MutableStateFlow(false)
     }
     private val templatesRepository = mockk<TemplatesRepository>(relaxed = true)
     // Deliberately strict with zero default stubs — the laziness tripwire.
