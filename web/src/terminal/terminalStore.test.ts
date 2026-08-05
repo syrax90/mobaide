@@ -10,7 +10,13 @@ vi.mock('../auth/agentTokens', () => ({
 }));
 
 const { sessionChannelName } = await import('../realtime/channels');
-const { acquireTerminal, useTerminalStore } = await import('./terminalStore');
+const {
+  acquireTerminal,
+  clearMountedTerminal,
+  evictTerminalSessions,
+  setMountedTerminal,
+  useTerminalStore,
+} = await import('./terminalStore');
 
 const key = (sessionId: string): string => sessionChannelName('a1', sessionId);
 
@@ -51,5 +57,46 @@ describe('acquireTerminal', () => {
     expect(resident()).toEqual([key('s3'), key('s1'), key('s4')]);
     expect(models()[key('s1')]).toBe(first);
     expect(models()[key('s2')]).toBeUndefined();
+  });
+});
+
+describe('evictTerminalSessions', () => {
+  // The exemption is module state, so a test that leaves it set would hand the
+  // next one a terminal nothing can evict.
+  afterEach(() => {
+    clearMountedTerminal(key('s1'));
+    clearMountedTerminal(key('s2'));
+  });
+
+  it('spares the terminal on screen while still disposing the rest', () => {
+    // A session dying under the user must leave its output readable — the
+    // screen says so. Disposing the model behind the visible terminal would
+    // wipe the scrollback and hand the screen's re-acquire effect an empty
+    // emulator, which is worse than not evicting at all.
+    const watched = acquireTerminal('a1', 's1');
+    acquireTerminal('a1', 's2');
+    setMountedTerminal(key('s1'));
+
+    evictTerminalSessions('a1', ['s1', 's2']);
+
+    expect(models()[key('s1')]).toBe(watched);
+    expect(models()[key('s2')]).toBeUndefined();
+  });
+
+  it('ignores a clear from the terminal that has already been replaced', () => {
+    // Route switches mount the next terminal before the previous one's effect
+    // cleanup runs, so the departing screen's clear arrives after its
+    // successor claimed the slot. Honouring it would strip the exemption from
+    // the terminal the user is now looking at.
+    acquireTerminal('a1', 's1');
+    const arrived = acquireTerminal('a1', 's2');
+    setMountedTerminal(key('s1'));
+    setMountedTerminal(key('s2'));
+
+    clearMountedTerminal(key('s1'));
+    evictTerminalSessions('a1', ['s1', 's2']);
+
+    expect(models()[key('s1')]).toBeUndefined();
+    expect(models()[key('s2')]).toBe(arrived);
   });
 });

@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import struct
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from mobaide.relay import client as _relay_client
 from mobaide.relay.client import (
     FRAME_EXECUTE,
     FRAME_INPUT,
@@ -24,6 +26,7 @@ from mobaide.relay.client import (
     FRAME_STATE,
     FRAME_SUBMIT,
     INPUT_QUEUE_MAXSIZE,
+    UNKNOWN_SESSION_NOTIFY_CAP,
     RelayClient,
     _EVENT_TO_STATUS,
     _STATE_MAP,
@@ -524,6 +527,58 @@ class TestHandleMobileAttach:
         # + replay_end). Empty ring still emits one output frame between the
         # markers, so the per-attach count is fixed.
         assert ws.send.await_count == 12
+
+    async def test_unknown_attach_answers_every_time(
+        self, client, mock_session_manager
+    ):
+        """The unknown-id answer is repeatable too, for the same reason the
+        known-id handshake is: the dropped-input path notifies once per id,
+        and sharing that dedupe here would leave a re-opened terminal waiting
+        on a state frame that never comes — a keyboard grayed out for good.
+        """
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+        payload = json.dumps(
+            {"type": "mobile_session_attach", "session_id": "ghost"}
+        ).encode()
+
+        await client._handle_control(payload, ws)
+        await client._handle_control(payload, ws)
+
+        assert ws.send.await_count == 2
+        for call in ws.send.call_args_list:
+            channel, sid, pl = decode(call[0][0])
+            assert channel == CH_SESSION_IO
+            assert sid == "ghost"
+            assert pl[:1] == FRAME_STATE
+            assert json.loads(pl[1:]) == {"status": "stopped"}
+
+    async def test_unknown_attach_answers_after_input_path_notified(
+        self, client, mock_session_manager
+    ):
+        """Both paths send the same frame through one helper, so the attach
+        must not inherit the input path's once-per-id set: the reopen that
+        follows a burst of dropped frames is exactly when the client needs
+        the answer.
+        """
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+
+        await client._handle_session_input("ghost", FRAME_INPUT + b"hi", ws)
+        ws.send.reset_mock()
+
+        await client._handle_control(
+            json.dumps(
+                {"type": "mobile_session_attach", "session_id": "ghost"}
+            ).encode(),
+            ws,
+        )
+
+        ws.send.assert_awaited_once()
+        channel, sid, pl = decode(ws.send.call_args[0][0])
+        assert channel == CH_SESSION_IO
+        assert sid == "ghost"
+        assert json.loads(pl[1:]) == {"status": "stopped"}
 
     async def test_detach_is_silent_noop(self, client, mock_session_manager):
         ws = AsyncMock()
@@ -1372,91 +1427,172 @@ class TestHandleSessionInput:
         mock_session.write.assert_not_awaited()
         mock_session.resize.assert_not_awaited()
 
-    async def test_unknown_session_triggers_auto_create(
+
+class TestUnknownSessionInput:
+    """A CH_SESSION_IO frame naming a session this agent does not have is
+    dropped, never treated as a request to spawn one.
+
+    Both mobile clients re-assert their cached PTY size on every socket
+    connect, so the previous auto-create turned merely attaching to a stale
+    id (agent restarted, session swept, resumed id from preferences) into a
+    real phantom shell that then re-entered the session list.
+    """
+
+    async def test_unknown_session_creates_nothing(
         self, client, mock_session_manager
     ):
-        # First call: session not found, second call: after creation
-        mock_new_session = AsyncMock()
-        mock_new_session.session_id = "unknown-1"
-        mock_new_session.state = SessionState.RUNNING
-        mock_new_session.pid = 200
-        mock_new_session.iter_ring_chunks = MagicMock(
-            side_effect=_mock_iter_ring_chunks(b""),
-        )
-
         mock_session_manager.get_session = AsyncMock(return_value=None)
-        mock_session_manager.create_session = AsyncMock(
-            return_value=mock_new_session
-        )
-
         ws = AsyncMock()
 
-        with patch.object(client, "_bridge_session"):
-            await client._handle_session_input(
-                "unknown-1", FRAME_INPUT + b"hi", ws
-            )
+        await client._handle_session_input("unknown-1", FRAME_INPUT + b"hi", ws)
 
-        mock_session_manager.create_session.assert_awaited_once()
+        mock_session_manager.create_session.assert_not_awaited()
+        assert client._unknown_session_input_total == 1
 
-    async def test_auto_create_sends_handshake_inline(
+    async def test_resize_frame_for_unknown_session_creates_nothing(
         self, client, mock_session_manager
     ):
-        """Regression guard: once ``_handshake_sent`` is gone, the auto-create
-        path must send the state/replay/ring handshake itself. Without it,
-        a mobile whose very first relay frame targets an unknown session
-        (the common "agent bounced, mobile is ahead of the session set"
-        race) would never receive a state frame and its keyboard would
-        stay grayed out — the exact bug this fix exists to prevent.
-        """
-        mock_new_session = AsyncMock()
-        mock_new_session.session_id = "unknown-1"
-        mock_new_session.state = SessionState.RUNNING
-        mock_new_session.pid = 200
-        mock_new_session.iter_ring_chunks = MagicMock(
-            side_effect=_mock_iter_ring_chunks(b"cached-output"),
-        )
-
+        """The reported repro: the size re-assert every client sends on
+        connect is a resize frame, and that is what used to materialize a
+        session for an id nobody asked to create."""
         mock_session_manager.get_session = AsyncMock(return_value=None)
-        mock_session_manager.create_session = AsyncMock(
-            return_value=mock_new_session
-        )
-
         ws = AsyncMock()
 
-        with patch.object(client, "_bridge_session"):
-            await client._handle_session_input(
-                "unknown-1", FRAME_INPUT + b"hi", ws
-            )
+        await client._handle_session_input(
+            "unknown-1", FRAME_RESIZE + struct.pack(">HH", 50, 132), ws
+        )
 
-        handshake_sends = [
-            call[0][0]
-            for call in ws.send.call_args_list
-        ]
-        decoded = [decode(b) for b in handshake_sends]
+        mock_session_manager.create_session.assert_not_awaited()
+
+    async def test_unknown_session_answers_with_stopped_state_frame(
+        self, client, mock_session_manager
+    ):
+        """The client is left waiting on a state frame otherwise: exactly one
+        ``stopped`` frame, and none of the handshake the auto-create used to
+        send (no replay, no ring, no ``running``)."""
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+
+        await client._handle_session_input("unknown-1", FRAME_INPUT + b"hi", ws)
+
+        decoded = [decode(call[0][0]) for call in ws.send.call_args_list]
         sid_frames = [d for d in decoded if d[0] == CH_SESSION_IO]
-        # Chunked handshake (protocol v3): state + replay-start + N×output
-        # + replay-end. The 13-byte "cached-output" fits one chunk, so N=1.
-        assert len(sid_frames) >= 4, (
-            f"expected state + replay + chunked ring + replay_end after "
-            f"auto-create, got {len(sid_frames)} session-io frames"
+        assert len(sid_frames) == 1
+        channel, sid, payload = sid_frames[0]
+        assert channel == CH_SESSION_IO
+        assert sid == "unknown-1"
+        assert payload[:1] == FRAME_STATE
+        assert json.loads(payload[1:]) == {"status": "stopped"}
+        assert all(
+            d[2][:1] not in (FRAME_OUTPUT, FRAME_REPLAY, FRAME_REPLAY_END)
+            for d in sid_frames
         )
 
-        first_four = sid_frames[:4]
-        for ch, sid, _ in first_four:
-            assert ch == CH_SESSION_IO
-            assert sid == "unknown-1"
+    async def test_repeat_frames_for_same_unknown_id_notify_once(
+        self, client, mock_session_manager
+    ):
+        """A client that keeps pushing at a dead id must not have every frame
+        echoed back down the shared tunnel."""
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
 
-        assert first_four[0][2][:1] == FRAME_STATE
-        state_payload = json.loads(first_four[0][2][1:])
-        assert state_payload["status"] == "running"
-        assert state_payload["pid"] == 200
+        for _ in range(5):
+            await client._handle_session_input(
+                "unknown-1", FRAME_INPUT + b"hi", ws
+            )
 
-        assert first_four[1][2] == FRAME_REPLAY
+        assert ws.send.await_count == 1
+        assert client._unknown_session_input_total == 5
 
-        assert first_four[2][2][:1] == FRAME_OUTPUT
-        assert first_four[2][2][1:] == b"cached-output"
+    async def test_each_unknown_id_gets_its_own_notification(
+        self, client, mock_session_manager
+    ):
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
 
-        assert first_four[3][2] == FRAME_REPLAY_END
+        await client._handle_session_input("ghost-a", FRAME_INPUT + b"hi", ws)
+        await client._handle_session_input("ghost-b", FRAME_INPUT + b"hi", ws)
+
+        ids = [decode(call[0][0])[1] for call in ws.send.call_args_list]
+        assert ids == ["ghost-a", "ghost-b"]
+
+    async def test_notified_id_set_stays_capped(
+        self, client, mock_session_manager
+    ):
+        """The set is keyed on ids that come off the wire, so it must not be
+        a memory sink a peer can grow without bound."""
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+
+        for i in range(UNKNOWN_SESSION_NOTIFY_CAP + 5):
+            await client._handle_session_input(
+                f"ghost-{i}", FRAME_INPUT + b"hi", ws
+            )
+
+        assert len(client._unknown_session_notified) <= UNKNOWN_SESSION_NOTIFY_CAP
+
+    async def test_empty_payload_for_unknown_session_is_dropped_first(
+        self, client, mock_session_manager
+    ):
+        """The empty-payload guard runs before the session lookup: a zero-length
+        envelope carries no request at all, so it must not even be counted or
+        answered."""
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+
+        await client._handle_session_input("unknown-1", b"", ws)
+
+        mock_session_manager.get_session.assert_not_awaited()
+        mock_session_manager.create_session.assert_not_awaited()
+        ws.send.assert_not_awaited()
+        assert client._unknown_session_input_total == 0
+
+    async def test_only_the_first_drop_per_id_warns(
+        self,
+        client,
+        mock_session_manager,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """A client attached to a swept session re-sends on every keystroke
+        and every reconnect, so warning per frame would bury the tunnel log
+        that operators read. The drop still has to be visible once per id —
+        and the counter still has to see every frame.
+        """
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+
+        with caplog.at_level(logging.DEBUG, logger=_relay_client.__name__):
+            for _ in range(3):
+                await client._handle_session_input(
+                    "ghost-a", FRAME_INPUT + b"hi", ws
+                )
+            await client._handle_session_input("ghost-b", FRAME_INPUT + b"hi", ws)
+
+        levels = [
+            record.levelno
+            for record in caplog.records
+            if "relay.session_input.unknown_session" in record.getMessage()
+        ]
+        assert levels == [
+            logging.WARNING,
+            logging.DEBUG,
+            logging.DEBUG,
+            logging.WARNING,
+        ]
+        assert client._unknown_session_input_total == 4
+
+    async def test_notify_failure_does_not_propagate(
+        self, client, mock_session_manager
+    ):
+        """A half-closed socket must not take down the reader loop that is
+        still dispatching frames for live sessions."""
+        mock_session_manager.get_session = AsyncMock(return_value=None)
+        ws = AsyncMock()
+        ws.send = AsyncMock(side_effect=ConnectionError("WS closed"))
+
+        await client._handle_session_input("unknown-1", FRAME_INPUT + b"hi", ws)
+
+        ws.send.assert_awaited_once()
 
 
 async def _wait_until(predicate, timeout: float = 2.0) -> None:
@@ -4239,35 +4375,24 @@ class TestHandleCreateSessionCustomKind:
         assert cfg.kind_label is None
 
 
-class TestAutoCreateUsesLoginShellResolver:
-    async def test_auto_create_command_comes_from_resolve_default_shell(
+class TestUnknownSessionNeverSpawnsShell:
+    async def test_unknown_session_does_not_reach_the_shell_resolver(
         self, client, mock_session_manager,
     ):
-        """The unknown-session auto-create path spawns the login shell via
-        the per-request resolver, not a module-level constant frozen at
-        import time."""
-        mock_new_session = AsyncMock()
-        mock_new_session.session_id = "unknown-1"
-        mock_new_session.state = SessionState.RUNNING
-        mock_new_session.pid = 200
-        mock_new_session.iter_ring_chunks = MagicMock(
-            side_effect=_mock_iter_ring_chunks(b""),
-        )
-
+        """Session input is not a create request. Spawning a login shell for
+        an id that arrived over the wire is what let a stale attach resurrect
+        a session and write it back into the list, keeping the client's
+        last-used id "valid" forever."""
         mock_session_manager.get_session = AsyncMock(return_value=None)
-        mock_session_manager.create_session = AsyncMock(
-            return_value=mock_new_session
-        )
 
         ws = AsyncMock()
         with patch(
             "mobaide.relay.client.resolve_default_shell",
             return_value=["/bin/zsh", "-l"],
-        ), patch.object(client, "_bridge_session"):
+        ) as resolver:
             await client._handle_session_input(
                 "unknown-1", FRAME_INPUT + b"hi", ws
             )
 
-        config = mock_session_manager.create_session.await_args.args[0]
-        assert config.command == ["/bin/zsh", "-l"]
-        assert config.kind is SessionKind.SHELL
+        resolver.assert_not_called()
+        mock_session_manager.create_session.assert_not_awaited()

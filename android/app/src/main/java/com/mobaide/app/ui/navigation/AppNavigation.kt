@@ -188,7 +188,12 @@ fun AppNavigation(
             AgentListScreen(
                 viewModel = hiltViewModel(),
                 onAgentConnected = {
-                    navController.navigate(Routes.SESSION_LIST)
+                    // Without this, re-entering from the agent list stacks a
+                    // second SessionListViewModel whose auto-resume arms afresh
+                    // and pushes another terminal on top.
+                    navController.navigate(Routes.SESSION_LIST) {
+                        launchSingleTop = true
+                    }
                 },
                 onSettingsClick = {
                     navController.navigate(Routes.SETTINGS)
@@ -200,7 +205,9 @@ fun AppNavigation(
             SessionListScreen(
                 viewModel = hiltViewModel(),
                 onSessionClick = { sessionId ->
-                    navController.navigate(Routes.sessionDetail(sessionId))
+                    navController.navigate(Routes.sessionDetail(sessionId)) {
+                        launchSingleTop = true
+                    }
                 },
                 onCreateClick = {
                     navController.navigate(Routes.CREATE_SESSION)
@@ -264,6 +271,17 @@ fun AppNavigation(
             TerminalScreen(
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
+                // The session list is not always behind us — a notification tap
+                // or a restored back stack can land here directly — so fall back
+                // to navigating there when there is nothing to pop back to.
+                onSessionEnded = {
+                    if (!navController.popBackStack(Routes.SESSION_LIST, false)) {
+                        navController.navigate(Routes.SESSION_LIST) {
+                            popUpTo(Routes.AGENT_LIST)
+                            launchSingleTop = true
+                        }
+                    }
+                },
             )
         }
 

@@ -17,6 +17,43 @@ final class RouterTests: XCTestCase {
         XCTAssertEqual(router.path, [])
     }
 
+    func testPopToTruncatesEverythingAboveTheRoute() {
+        let router = Router()
+        router.navigate(to: .sessionList)
+        router.navigate(to: .sessionDetail(sessionId: "s1"))
+        router.navigate(to: .settings)
+
+        router.popTo(.sessionList)
+
+        XCTAssertEqual(router.path, [.sessionList])
+    }
+
+    func testPopToPushesTheRouteWhenItIsNotOnTheStack() {
+        let router = Router()
+        // A notification deep link lands straight on the terminal with nothing
+        // under it; leaving a dead session must still reach the list.
+        router.navigate(to: .sessionDetail(sessionId: "s1"))
+
+        router.popTo(.sessionList)
+
+        XCTAssertEqual(router.path, [.sessionList])
+    }
+
+    func testPopToUnwindsToTheNearestOccurrence() {
+        let router = Router()
+        router.navigate(to: .sessionList)
+        router.navigate(to: .sessionDetail(sessionId: "s1"))
+        router.navigate(to: .sessionList)
+        router.navigate(to: .sessionDetail(sessionId: "s2"))
+
+        router.popTo(.sessionList)
+
+        XCTAssertEqual(
+            router.path, [.sessionList, .sessionDetail(sessionId: "s1"), .sessionList],
+            "unwinding to the first occurrence would drop screens the user walked through"
+        )
+    }
+
     func testTransitionToUnauthenticatedClearsPath() {
         let router = Router()
         router.navigate(to: .settings)

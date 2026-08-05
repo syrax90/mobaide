@@ -74,6 +74,13 @@ fun SessionListScreen(
         }
     }
 
+    LaunchedEffect(uiState.notice) {
+        uiState.notice?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearNotice()
+        }
+    }
+
     LaunchedEffect(viewModel) {
         viewModel.autoResumeSessionId.collect { sessionId ->
             onSessionClick(sessionId)

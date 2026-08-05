@@ -38,7 +38,6 @@ from mobaide.core.models import (
     CustomCommandUnresolvedError,
     SessionConfig,
     SessionEvent,
-    SessionKind,
     SessionState,
     resolve_spawn_args,
     session_to_wire_dict,
@@ -231,6 +230,8 @@ _STATE_MAP = {
 
 MAX_AUTOSCAN_STREAMS = 10
 
+UNKNOWN_SESSION_NOTIFY_CAP = 256
+
 
 class ProtocolIncompatibleError(ConnectionError):
     """Raised when the relay rejects the agent's ``protocol_version``.
@@ -386,6 +387,8 @@ class RelayClient:
         # back into the reconnect loop.
         self._on_protocol_incompatible: Any | None = None
         self._unknown_control_type_total = 0
+        self._unknown_session_input_total = 0
+        self._unknown_session_notified: set[str] = set()
 
     async def start(self) -> None:
         """Start the relay client background task."""
@@ -742,15 +745,7 @@ class RelayClient:
                 "relay.mobile_attach.unknown_session session_id=%s",
                 session_id,
             )
-            try:
-                stopped = _state_frame("stopped", None)
-                await ws.send(encode(CH_SESSION_IO, session_id, stopped))
-            except Exception:
-                logger.debug(
-                    "relay.mobile_attach.stopped_frame_failed session_id=%s",
-                    session_id,
-                    exc_info=True,
-                )
+            await self._send_stopped_frame(session_id, ws, "mobile_attach")
             return
         await self._send_session_handshake(session_id, session, ws)
 
@@ -1961,18 +1956,42 @@ class RelayClient:
         payload: bytes,
         ws: ClientConnection,
     ) -> None:
-        """Route incoming PTY frames from relay to a local session."""
-        session = await self._session_manager.get_session(session_id)
+        """Route incoming PTY frames from relay to a local session.
 
-        if session is None:
-            # Auto-create session with default shell when relay traffic arrives
-            # for an unknown session_id.
-            session = await self._auto_create_session(session_id, ws)
-            if session is None:
-                return
+        A frame naming an unknown session is **dropped**, never treated as a
+        request to spawn one. Both mobile clients re-assert their cached PTY
+        size on every socket connect, so attaching to a stale session id
+        (agent restarted, session swept, resumed id from preferences) would
+        otherwise materialize a phantom session out of a resize frame.
 
+        ``_handle_mobile_attach`` normally answers the stale attach with a
+        ``stopped`` state frame; this path repeats it once per unknown id to
+        cover the case where the attach was missed, so the client never waits
+        on a state frame while its frames go in the bin.
+        """
         if not payload:
             return
+
+        session = await self._session_manager.get_session(session_id)
+        if session is None:
+            self._unknown_session_input_total += 1
+            # First sight of an id warns; repeats stay at debug. A client left
+            # attached to a swept session re-sends on every keystroke and every
+            # reconnect, so warning per frame would bury the log.
+            log = (
+                logger.debug
+                if session_id in self._unknown_session_notified
+                else logger.warning
+            )
+            log(
+                "relay.session_input.unknown_session session_id=%s total=%d "
+                "— dropping frame",
+                session_id,
+                self._unknown_session_input_total,
+            )
+            await self._notify_session_unknown(session_id, ws)
+            return
+
         frame_type = payload[:1]
         frame_data = payload[1:]
 
@@ -1990,34 +2009,44 @@ class RelayClient:
                 rows, cols = struct.unpack(">HH", frame_data[:4])
                 await session.resize(rows, cols)
 
-    async def _auto_create_session(
+    async def _notify_session_unknown(
         self, session_id: str, ws: ClientConnection
-    ) -> Any:
-        """Auto-create a session when relay traffic arrives for unknown ID."""
-        config = SessionConfig(
-            session_id=session_id,
-            command=resolve_default_shell(),
-            rows=24,
-            cols=80,
-            kind=SessionKind.SHELL,
-        )
+    ) -> None:
+        """Tell the mobile once that ``session_id`` does not exist here.
+
+        The set is capped rather than grown without bound: a client that keeps
+        pushing frames for ids this agent never had must not be able to inflate
+        agent memory. Clearing on overflow at worst re-sends a duplicate state
+        frame, which is idempotent for the client.
+        """
+        if session_id in self._unknown_session_notified:
+            return
+        if len(self._unknown_session_notified) >= UNKNOWN_SESSION_NOTIFY_CAP:
+            self._unknown_session_notified.clear()
+        self._unknown_session_notified.add(session_id)
+        await self._send_stopped_frame(session_id, ws, "session_input")
+
+    async def _send_stopped_frame(
+        self, session_id: str, ws: ClientConnection, source: str
+    ) -> None:
+        """Tell the mobile this agent has no such session.
+
+        Shared by the attach path and the dropped-input path, which must agree
+        on what a client sees for an unknown id. Deliberately *not* shared with
+        the once-per-id dedupe above: ``_handle_mobile_attach`` has to re-send
+        unconditionally on every attach, or a re-opened terminal keeps a grayed
+        out keyboard waiting on a state frame that never comes.
+        """
         try:
-            session = await self._session_manager.create_session(config)
-            self._bridge_session(session, ws)
-            logger.info("relay.session_auto_created session_id=%s", session_id)
-            # The mobile that caused the auto-create is waiting for the same
-            # state/replay/ring frames that ``_handle_mobile_attach`` sends on
-            # the normal connect path; send them inline since attach already
-            # fired before the session existed.
-            await self._send_session_handshake(session_id, session, ws)
-            return session
-        except Exception as exc:
-            logger.warning(
-                "relay.auto_create_failed session_id=%s: %s",
+            stopped = _state_frame("stopped", None)
+            await ws.send(encode(CH_SESSION_IO, session_id, stopped))
+        except Exception:
+            logger.debug(
+                "relay.%s.stopped_frame_failed session_id=%s",
+                source,
                 session_id,
-                exc,
+                exc_info=True,
             )
-            return None
 
     async def _send_session_handshake(
         self,

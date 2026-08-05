@@ -59,6 +59,7 @@ class TerminalViewModelResizeTest {
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
         every { observeSessionList() } returns MutableStateFlow(emptyList())
+        every { observeSessionsSynced() } returns MutableStateFlow(false)
     }
     private val templatesRepository = mockk<com.mobaide.app.data.repository.TemplatesRepository>(relaxed = true)
     private val preferencesStore = mockk<PreferencesStore> {
@@ -272,8 +273,9 @@ class TerminalViewModelResizeTest {
         runCurrent()
         verify(atLeast = 2, timeout = 2000) { connection.sendBinary(expected) }
 
-        // Drop, then reconnect: the PTY a reconnect finds auto-created at 24x80
-        // must be re-corrected, so entering Live again emits a further resend.
+        // Drop, then reconnect: the PTY a reconnect finds still at its spawn
+        // default of 24x80 must be re-corrected, so entering Live again emits a
+        // further resend.
         eventsFlow.emit(WsEvent.Disconnected)
         runCurrent()
         eventsFlow.emit(WsEvent.Connected)

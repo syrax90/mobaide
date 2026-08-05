@@ -15,8 +15,10 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -47,14 +49,18 @@ class SessionRepositoryTest {
         created_at = createdAt,
     )
 
-    private fun newRepo(): Fixture {
+    private fun newRepo(
+        initialConnection: AgentEventBus.ConnState = AgentEventBus.ConnState.Connected,
+    ): Fixture {
         val restApi = mockk<RestApi>(relaxed = true)
         val eventFlow = MutableSharedFlow<AgentEvent>(replay = 0, extraBufferCapacity = 64)
+        val connectionFlow = MutableStateFlow(initialConnection)
         val bus = mockk<AgentEventBus>()
         every { bus.events } returns eventFlow
+        every { bus.connection } returns connectionFlow
         val wsManager = mockk<WebSocketManager>(relaxed = true)
         val repo = SessionRepository(restApi, wsManager, bus)
-        return Fixture(repo, restApi, bus, eventFlow, wsManager)
+        return Fixture(repo, restApi, bus, eventFlow, wsManager, connectionFlow)
     }
 
     private data class Fixture(
@@ -63,6 +69,7 @@ class SessionRepositoryTest {
         val bus: AgentEventBus,
         val eventFlow: MutableSharedFlow<AgentEvent>,
         val wsManager: WebSocketManager,
+        val connectionFlow: MutableStateFlow<AgentEventBus.ConnState>,
     )
 
     // ---- observeSessionList initial state -----------------------------------
@@ -272,6 +279,115 @@ class SessionRepositoryTest {
             assertEquals(1, after.size)
             assertEquals("s-7", after[0].session_id)
 
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun sessionsSynced_isFalse_untilASnapshotArrives() = runTest {
+        val (repo, _, _, eventFlow) = newRepo()
+
+        repo.observeSessionsSynced().test {
+            assertFalse(
+                "absence from a list nobody pushed yet is not evidence of anything",
+                awaitItem(),
+            )
+
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-1"))))
+
+            assertTrue(awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun sessionsSynced_isClearedOnDisconnect_whileTheListIsKept() = runTest {
+        val (repo, _, _, eventFlow, _, connectionFlow) = newRepo()
+
+        repo.observeSessionsSynced().test {
+            assertFalse(awaitItem())
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-1"))))
+            assertTrue(awaitItem())
+
+            connectionFlow.value = AgentEventBus.ConnState.Disconnected
+
+            assertFalse(
+                "a list from a dropped tunnel can still show sessions the agent " +
+                    "lost when it restarted",
+                awaitItem(),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertEquals(listOf("s-1"), repo.observeSessionList().value.map { it.session_id })
+    }
+
+    @Test
+    fun sessionsSynced_staysFalseOnReconnect_untilTheNextSnapshot() = runTest {
+        val (repo, _, _, eventFlow, _, connectionFlow) = newRepo()
+
+        repo.observeSessionsSynced().test {
+            assertFalse(awaitItem())
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-1"))))
+            assertTrue(awaitItem())
+
+            connectionFlow.value = AgentEventBus.ConnState.Connecting
+            assertFalse(awaitItem())
+
+            // The socket being open again proves nothing: the agent replays its
+            // snapshot right after, and only that frame is authoritative.
+            connectionFlow.value = AgentEventBus.ConnState.Connected
+            expectNoEvents()
+
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-2"))))
+            assertTrue(awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun createSession_insertsTheCreatedSession_intoTheList() = runTest {
+        val (repo, restApi) = newRepo()
+        val request = CreateSessionRequest(command = listOf("bash"))
+        coEvery { restApi.createSession(request) } returns session("s-new")
+
+        repo.createSession(request)
+
+        // Without this the create→navigate window reads as "not in the list",
+        // which the terminal treats as proof the session is gone.
+        assertEquals(
+            listOf("s-new"),
+            repo.observeSessionList().value.map { it.session_id },
+        )
+    }
+
+    @Test
+    fun createSession_replacesTheRow_whenTheSnapshotAlreadyCarriesTheId() = runTest {
+        val (repo, restApi, _, eventFlow) = newRepo()
+        val request = CreateSessionRequest(command = listOf("bash"))
+        coEvery { restApi.createSession(request) } returns session("s-1", state = "running")
+
+        repo.observeSessionList().test {
+            awaitItem()
+            eventFlow.emit(AgentEvent.SessionsChanged(listOf(session("s-1", state = "starting"))))
+            assertEquals(1, awaitItem().size)
+
+            repo.createSession(request)
+
+            val after = awaitItem()
+            assertEquals("insert must be idempotent per id", 1, after.size)
+            assertEquals("running", after[0].state)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun notifySessionEnded_deliversTheIdToTheListeningScreen() = runTest {
+        val (repo) = newRepo()
+
+        repo.endedSessionNotices.test {
+            repo.notifySessionEnded("s-gone")
+
+            assertEquals("s-gone", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
     }

@@ -77,6 +77,7 @@ private const val SHEET_SNACKBAR_TIMEOUT_MS = 130_000L
 fun TerminalScreen(
     viewModel: TerminalViewModel,
     onBack: () -> Unit,
+    onSessionEnded: () -> Unit = onBack,
 ) {
     val sessionState by viewModel.sessionState.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
@@ -100,6 +101,10 @@ fun TerminalScreen(
     var terminalKeyboardRequest by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val shortcutSheetSnackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel) {
+        viewModel.sessionEnded.collect { onSessionEnded() }
+    }
 
     LaunchedEffect(Unit) {
         // The Scaffold host sits behind the shortcut sheet's window and scrim,

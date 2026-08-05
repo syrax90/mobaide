@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { sessionChannelName } from '../../realtime/channels';
-import { acquireTerminal, useTerminalStore } from '../../terminal/terminalStore';
+import {
+  acquireTerminal,
+  clearMountedTerminal,
+  setMountedTerminal,
+  useTerminalStore,
+} from '../../terminal/terminalStore';
 import { isSessionRunning } from '../../protocol/dto/terminalState';
 import { useTerminalPrefsStore } from '../../stores/terminalPrefsStore';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
@@ -11,16 +16,35 @@ import { JumpToBottom } from './JumpToBottom';
 import { SelectionActions } from './SelectionActions';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalSurface } from './TerminalSurface';
+import { useSessionGone } from './useSessionGone';
 
 export function TerminalScreen() {
   const { agentId, sessionId } = useParams();
-  const key =
-    agentId === undefined || sessionId === undefined
-      ? null
-      : sessionChannelName(agentId, sessionId);
-  const model = useTerminalStore((state) =>
-    key === null ? undefined : state.models[key],
-  );
+
+  // Split so everything below can take both ids as plain strings — the
+  // session-gone check owns an agent channel keyed on the id, and an empty
+  // string would open one for an agent that does not exist.
+  if (agentId === undefined || sessionId === undefined) {
+    return (
+      <section className="page">
+        <h1>Session not specified</h1>
+        <Link to="/">Back to sessions</Link>
+      </section>
+    );
+  }
+
+  return <TerminalRoute agentId={agentId} sessionId={sessionId} />;
+}
+
+interface TerminalRouteProps {
+  agentId: string;
+  sessionId: string;
+}
+
+function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
+  useSessionGone(agentId, sessionId);
+  const key = sessionChannelName(agentId, sessionId);
+  const model = useTerminalStore((state) => state.models[key]);
 
   // Called unconditionally, not only when the model is missing. Two jobs:
   // it re-acquires after `stopAllRealtime()` disposes the model out from under
@@ -31,18 +55,18 @@ export function TerminalScreen() {
   // `acquireTerminal` is idempotent per key and returns the same instance, so
   // the selector below sees no change and this cannot loop.
   useEffect(() => {
-    if (agentId === undefined || sessionId === undefined) return;
     acquireTerminal(agentId, sessionId);
   }, [agentId, sessionId, model]);
 
-  if (agentId === undefined || sessionId === undefined) {
-    return (
-      <section className="page">
-        <h1>Session not specified</h1>
-        <Link to="/">Back to sessions</Link>
-      </section>
-    );
-  }
+  // Exempt this terminal from death-driven eviction while it is on screen, so a
+  // session ending under the user leaves its output readable instead of being
+  // disposed and re-acquired as an empty emulator.
+  useEffect(() => {
+    setMountedTerminal(key);
+    return () => {
+      clearMountedTerminal(key);
+    };
+  }, [key]);
 
   if (model === undefined) {
     return <section className="terminal-page terminal-page-empty">Attaching…</section>;

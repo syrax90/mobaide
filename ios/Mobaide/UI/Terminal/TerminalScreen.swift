@@ -24,6 +24,10 @@ private struct TerminalScreenContent: View {
     @State private var showShortcutPicker = false
     @State private var renameShortcutTarget: SavedShortcutUi?
     private let displayStore: TerminalDisplayStore
+    private let sessionRepository: SessionRepository
+    private let sessionId: String
+
+    @Environment(Router.self) private var router
 
     init(container: AppContainer, sessionId: String) {
         let session = container.sessionRepository.currentSessions.first { $0.session_id == sessionId }
@@ -37,6 +41,21 @@ private struct TerminalScreenContent: View {
             initialStatus: session?.state
         ))
         displayStore = container.terminalDisplayStore
+        sessionRepository = container.sessionRepository
+        self.sessionId = sessionId
+    }
+
+    /// Leaves for the sessions list once the agent's snapshot proves this
+    /// session is gone. Both the list and the synced flag can settle in either
+    /// order, so both feed the same one-shot decision in the model.
+    private func checkSessionStillExists() {
+        let isListed = sessionRepository.currentSessions.contains { $0.session_id == sessionId }
+        guard model.noteSessionSnapshot(
+            isListed: isListed,
+            synced: sessionRepository.sessionsSynced
+        ) else { return }
+        sessionRepository.notifySessionEnded(id: sessionId)
+        router.popTo(.sessionList)
     }
 
     /// Pan-don't-resize keyboard layout (Android `ImeFloatingPan` parity):
@@ -106,6 +125,17 @@ private struct TerminalScreenContent: View {
         .toast(Bindable(model).terminalMessage)
         .renameShortcutAlert(target: $renameShortcutTarget) { shortcut, name in
             model.renameShortcut(id: shortcut.id, name: name)
+        }
+        .task {
+            checkSessionStillExists()
+            for await _ in sessionRepository.sessions() {
+                checkSessionStillExists()
+            }
+        }
+        .task {
+            for await _ in sessionRepository.sessionsSyncedStates() {
+                checkSessionStillExists()
+            }
         }
         .onAppear {
             model.markVisible()

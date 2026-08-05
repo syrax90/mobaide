@@ -6,7 +6,11 @@ import { listSessions, stopSession } from '../../api/sessionRepository';
 import { isApiError } from '../../api/errors';
 import { queryKeys, wsBackedQueryOptions } from '../../lib/queryKeys';
 import type { SessionResponse } from '../../protocol/dto/session';
-import { forceReconnectAgentEvents, useAgentEvents } from '../../realtime';
+import {
+  forceReconnectAgentEvents,
+  useAgentEvents,
+  useSessionsSynced,
+} from '../../realtime';
 import { useLastSessionStore } from '../../stores/lastSessionStore';
 import { useToastStore } from '../../stores/toastStore';
 import { evictTerminals } from '../../terminal/terminalEviction';
@@ -30,6 +34,7 @@ export function SessionList({ agentId, online }: SessionListProps) {
   // attach-to-an-offline-agent case and reconnects, so the agent coming back
   // pushes its snapshot with no extra work here.
   useAgentEvents(agentId);
+  const synced = useSessionsSynced(agentId);
 
   const sessions = useQuery({
     queryKey: queryKeys.sessions(agentId),
@@ -51,7 +56,7 @@ export function SessionList({ agentId, online }: SessionListProps) {
   // query still serves cached rows, and a snapshot may have seeded them from
   // the wizard's channel, so without this the list could redirect into a
   // terminal on an unreachable agent and never show the offline state.
-  useAutoResume(agentId, online ? sessions.data : undefined);
+  useAutoResume(agentId, online ? sessions.data : undefined, synced);
 
   const stop = useMutation({
     mutationFn: ({ sessionId, force }: { sessionId: string; force: boolean }) =>

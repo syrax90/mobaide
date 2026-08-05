@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -248,6 +250,40 @@ class TerminalViewModel @Inject constructor(
     /** When true, the next 'o' frame is the start of replay-buffer playback. */
     private var inReplay = false
 
+    private val _sessionEnded = Channel<Unit>(Channel.BUFFERED)
+
+    /** Fires once when the agent proves this session no longer exists and it was
+     *  never seen alive on this screen — the caller leaves rather than render a
+     *  terminal for a session that is gone (stale auto-resume id, restored back
+     *  stack, tapped notification for a session that has since ended). */
+    val sessionEnded: Flow<Unit> = _sessionEnded.receiveAsFlow()
+
+    /** Once the session is known to exist, it is never treated as missing again:
+     *  a session ending or being removed while the user is reading it must leave
+     *  the output on screen, not eject them. */
+    private var everSeenAlive = false
+    private var sessionEndedEmitted = false
+
+    // Declared after the state properties above so their backing fields are
+    // initialized before this observer can touch them.
+    init {
+        viewModelScope.launch {
+            combine(
+                sessionRepository.observeSessionList(),
+                sessionRepository.observeSessionsSynced(),
+            ) { sessions, synced -> sessions to synced }
+                .collect { (sessions, synced) ->
+                    if (sessions.any { it.session_id == sessionId }) {
+                        everSeenAlive = true
+                    } else if (synced && !everSeenAlive && !sessionEndedEmitted) {
+                        sessionEndedEmitted = true
+                        sessionRepository.notifySessionEnded(sessionId)
+                        _sessionEnded.trySend(Unit)
+                    }
+                }
+        }
+    }
+
     private fun connect() {
         connection = sessionRepository.createSessionIoConnection(sessionId)
 
@@ -302,7 +338,13 @@ class TerminalViewModel @Inject constructor(
                 }
             }
             is TerminalFrame.State -> {
-                _sessionState.value = parseStatus(decoded.json)
+                val status = parseStatus(decoded.json)
+                // The agent answering with a live PTY is proof the session
+                // exists, independent of when its list snapshot lands.
+                if (status == "running" || status == "starting") {
+                    everSeenAlive = true
+                }
+                _sessionState.value = status
             }
             TerminalFrame.ReplayMarker -> {
                 // The server replays `state + REPLAY marker + chunked ring + REPLAY_END`
@@ -504,7 +546,7 @@ class TerminalViewModel @Inject constructor(
      * by the transport and then suppressed by [resize]'s dedupe, leaving the PTY at
      * 24 rows so a full-screen TUI fills only the top of a taller device grid. Force
      * past the debounce and dedupe here so the size still reaches a freshly spawned
-     * or reconnect-time auto-created PTY. Mirrors iOS TerminalSessionModel.resendCachedSize().
+     * or agent-spawned (Auto Scan) PTY. Mirrors iOS TerminalSessionModel.resendCachedSize().
      */
     private fun resendCachedSize() {
         if (lastResizeRows <= 0 || lastResizeCols <= 0) return

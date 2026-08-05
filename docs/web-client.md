@@ -297,8 +297,14 @@ disabled, since an offline agent 503s on every mount.
 
 **Auto-resume** ports `SessionListViewModel.maybeAutoResume` verbatim,
 including its asymmetry: a stored id that is *absent from the list* is left
-alone, and only one that is present but dead gets cleared. Two web-specific
-changes. The once-per-attempt flag lives at module scope keyed by agent id,
+alone, and only one that is present but dead gets cleared. "Absent" only
+counts once `useSessionsSynced` confirms the connected agent has pushed a
+fresh `sessions.changed` snapshot — a list left over from a dropped channel
+is not evidence a session is gone, and resuming off one is what used to
+attach into an id the agent had already lost (Android
+`SessionRepository.observeSessionsSynced`, iOS
+`SessionRepository.sessionsSynced`). Two web-specific changes beyond the
+port. The once-per-attempt flag lives at module scope keyed by agent id,
 not on the component — a web route unmounts on navigate and remounts on
 Back, so component state would re-fire and trap the user in a loop. And the
 id is recorded **on open as well as on create** (`mobaide-sessions`, keyed
@@ -574,6 +580,22 @@ owns and views adopt; a hidden terminal is an *unmounted* one, never a
 `display: none` one, because xterm cannot `open()` there and `FitAddon`
 mis-measures under it. `open()` is further deferred until the container has
 a non-zero size.
+
+**A session that ends while open stays readable.** `useSessionGone` treats
+"absent from a synced snapshot" as the same proof of death auto-resume uses
+(`useSessionsSynced`) and returns to `/` with "That session has ended." — but
+never for a session it has already seen alive, so a session ending or being
+stopped under the user leaves the output on screen instead (Android
+`TerminalViewModel.sessionEnded`, iOS
+`TerminalSessionModel.noteSessionSnapshot`). Because the route is directly
+reachable with no session list ever mounted, it holds the agent's events
+channel for its own lifetime rather than assuming one is already open. The
+terminal on screen is also exempt from `evictTerminalSessions`'s
+death-driven eviction, so navigating to a session that then dies cannot
+dispose the model out from under the user. Creating a session seeds this
+cache synchronously from the create response before navigating, so the gap
+before the agent's own `sessions.changed` echo cannot read as the brand new
+session already being gone.
 
 **Replay** follows the mobile state machine exactly: `'b'` feeds
 `ESC[H ESC[2J ESC[3J` **into the write stream** (never `Terminal.reset()`,

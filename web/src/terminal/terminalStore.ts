@@ -41,6 +41,30 @@ function touch(key: string, order: readonly string[]): string[] {
 }
 
 /**
+ * The terminal currently on screen, exempt from death-driven eviction.
+ *
+ * A session ending under the user must leave its output readable — the screen
+ * says so, and both mobile clients behave that way. Disposing the model the user
+ * is looking at would destroy the scrollback and hand the re-acquire effect an
+ * empty emulator, so the one visible terminal opts out. Nothing is leaked: the
+ * exemption ends when the screen unmounts, and `MAX_RETAINED` still bounds the
+ * set. Background terminals for dead sessions are evicted as before.
+ */
+let mountedKey: string | null = null;
+
+export function setMountedTerminal(key: string): void {
+  mountedKey = key;
+}
+
+/**
+ * Clears only if `key` is still the mounted one — a route switch mounts the
+ * next terminal before the previous one's cleanup runs.
+ */
+export function clearMountedTerminal(key: string): void {
+  if (mountedKey === key) mountedKey = null;
+}
+
+/**
  * Return the model for a session, building and connecting one if needed.
  *
  * Called from a React effect, so it must be idempotent for the same key —
@@ -92,7 +116,9 @@ export function evictTerminalSessions(
 ): void {
   const { models } = useTerminalStore.getState();
   for (const sessionId of sessionIds) {
-    models[sessionChannelName(agentId, sessionId)]?.dispose();
+    const key = sessionChannelName(agentId, sessionId);
+    if (key === mountedKey) continue;
+    models[key]?.dispose();
   }
 }
 

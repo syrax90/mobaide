@@ -57,6 +57,7 @@ class TerminalViewModelTemplatesRefreshTest {
     private val sessionRepository = mockk<SessionRepository> {
         every { createSessionIoConnection("test-session") } returns connection
         every { observeSessionList() } returns MutableStateFlow(emptyList())
+        every { observeSessionsSynced() } returns MutableStateFlow(false)
     }
     private val templatesRepository = mockk<TemplatesRepository>(relaxed = true)
     private val preferencesStore = mockk<PreferencesStore> {

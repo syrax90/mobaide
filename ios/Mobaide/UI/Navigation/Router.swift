@@ -21,6 +21,16 @@ final class Router {
         path.removeAll()
     }
 
+    /// Returns to `route`, pushing it when it is not already behind us — a
+    /// notification deep link can land on a pushed screen with nothing under it.
+    func popTo(_ route: Route) {
+        if let index = path.lastIndex(of: route) {
+            path.removeSubrange(path.index(after: index)...)
+        } else {
+            path = [route]
+        }
+    }
+
     /// Android `AppNavigation` auth-transition parity: any transition into
     /// `unauthenticated` clears the whole stack onto the login root, and an
     /// agent disconnect (`fullyConnected` → `userOnly`) clears it onto the

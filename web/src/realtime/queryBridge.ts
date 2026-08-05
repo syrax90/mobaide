@@ -42,6 +42,7 @@ import { decodeEventEnvelope, type EventEnvelope } from '../protocol/dto/envelop
 import { gitChangedSchema } from '../protocol/dto/projects';
 import { applyProjectsSnapshot } from './projectsCache';
 import { applySessionsSnapshot, applySessionUpsert } from './sessionCache';
+import { markSessionsSnapshotApplied } from './sessionsSyncStore';
 import {
   agentStatusChangedSchema,
   customAgentTypeSchema,
@@ -190,6 +191,7 @@ export function applyAgentEvent(
     case 'sessions.changed': {
       const outcome = applySessionsSnapshot(client, agentId, envelope.payload);
       if (outcome === 'dropped') return { kind: 'dropped' };
+      markSessionsSnapshotApplied(agentId);
       return {
         kind: 'patched',
         type: envelope.type,

@@ -211,6 +211,51 @@ final class SessionListModelTests: XCTestCase {
         XCTAssertNil(prefs.getLastUsedSessionId(), "stale last-used id is cleared")
     }
 
+    private func sessionUpdated(_ id: String, _ state: String) -> String {
+        #"{"type":"session.updated","payload":{"session":{"session_id":"\#(id)","state":"\#(state)","created_at":"t"}}}"#
+    }
+
+    func testAutoResumeWaitsForAnAgentAuthoritativeList() async throws {
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedSessionId("a")
+        let (model, repo, bus, factory) = makeStack(prefs: prefs)
+        let collector = StreamCollector(model.autoResumeEvents())
+        // Both observers, same as the screen: the list and the synced flag
+        // settle in either order and either one can complete the decision.
+        let observe = Task { await model.observeSessions() }
+        let observeSynced = Task { await model.observeSessionsSynced() }
+        defer {
+            observe.cancel()
+            observeSynced.cancel()
+        }
+        repo.start()
+        await bus.start()
+        let connection = try await factory.connection(1)
+        connection.emit(.opened)
+
+        // A non-empty list that is not a snapshot: it says nothing about the
+        // sessions it does not mention, so absence proves nothing and neither
+        // does presence.
+        connection.emit(.text(sessionUpdated("a", "running")))
+        let waited = await collector.expectNoElement(within: .milliseconds(300))
+        XCTAssertTrue(waited, "only a full snapshot from the connected agent may arm auto-resume")
+
+        connection.emit(.text(snapshot("a", "running")))
+        let resumed = try await collector.next()
+        XCTAssertEqual(resumed, "a", "the one attempt must survive the stale list, not be burned by it")
+    }
+
+    func testEndedSessionNoticeSurfacesAsAToast() async throws {
+        let (model, repo, _, _) = makeStack(prefs: isolatedPrefs())
+        let observe = Task { await model.observeEndedSessionNotices() }
+        defer { observe.cancel() }
+
+        repo.notifySessionEnded(id: "gone")
+
+        await waitUntil { model.notice != nil }
+        XCTAssertEqual(model.notice, "That session has ended.")
+    }
+
     func testAutoResumeNotReplayedAfterClear() async throws {
         let prefs = isolatedPrefs()
         prefs.setLastUsedSessionId("a")

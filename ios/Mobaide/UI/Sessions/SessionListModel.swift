@@ -12,6 +12,7 @@ final class SessionListModel {
     private(set) var activeScans: [AutoScanInstanceDto] = []
     private(set) var isReconnecting = false
     private(set) var error: String?
+    private(set) var notice: String?
     /// Live custom-type names keyed on the full wire kind (`custom_<id>`),
     /// the second link of the label chain (`kind_label` snapshot → this →
     /// "Custom").
@@ -59,6 +60,21 @@ final class SessionListModel {
         for await list in repository.sessions() {
             sessions = list
             maybeAutoResume(list)
+        }
+    }
+
+    /// Re-evaluates auto-resume when the snapshot becomes agent-authoritative:
+    /// on a cold start the list often arrives before the flag flips.
+    func observeSessionsSynced() async {
+        for await _ in repository.sessionsSyncedStates() {
+            maybeAutoResume(sessions)
+        }
+    }
+
+    func observeEndedSessionNotices() async {
+        for await _ in repository.endedSessionNotices() {
+            notice = "That session has ended."
+            repository.clearEndedSessionNotice()
         }
     }
 
@@ -115,10 +131,18 @@ final class SessionListModel {
         error = nil
     }
 
+    func clearNotice() {
+        notice = nil
+    }
+
     /// Android `maybeAutoResume`: once a real snapshot arrives, open the stored
     /// last-used session if it is still running/starting; otherwise drop the id.
+    ///
+    /// Gated on `sessionsSynced` so a list left over from a dropped tunnel — which
+    /// can still show a session as running after the agent restarted and lost it —
+    /// never resumes into a session that no longer exists.
     private func maybeAutoResume(_ list: [SessionResponse]) {
-        guard !didAttemptAutoResume, !list.isEmpty else { return }
+        guard !didAttemptAutoResume, repository.sessionsSynced, !list.isEmpty else { return }
         didAttemptAutoResume = true
         guard let lastId = preferencesStore.getLastUsedSessionId() else { return }
         if let session = list.first(where: { $0.session_id == lastId }),
