@@ -22,21 +22,23 @@ final class TerminalControlKeyTests: XCTestCase {
         XCTAssertEqual(ids(TerminalControlKey.keys(for: .antigravity)), ids(TerminalControlKey.antigravityKeys))
     }
 
-    func testClaudeShellAndAutoScanFallThroughToClaudeSet() {
+    func testClaudeAndAutoScanUseClaudeSet() {
         let claudeIds = ids(TerminalControlKey.claudeKeys)
         XCTAssertEqual(ids(TerminalControlKey.keys(for: .claude)), claudeIds)
-        XCTAssertEqual(ids(TerminalControlKey.keys(for: .shell)), claudeIds,
-                       "shell deliberately keeps the Claude set — folding it into defaultKeys is a separate tracked change, not a side effect")
         XCTAssertEqual(ids(TerminalControlKey.keys(for: .autoScan)), claudeIds)
     }
 
-    func testNilAndCustomKindsUseDefaultSet() {
+    func testNilCustomAndShellKindsUseDefaultSet() {
         let defaultIds = ids(TerminalControlKey.defaultKeys)
         XCTAssertEqual(
             ids(TerminalControlKey.keys(for: nil)), defaultIds,
             "an unresolved kind renders the neutral set — never a guessed Claude bar"
         )
         XCTAssertEqual(ids(TerminalControlKey.keys(for: .custom("custom_ab12cd34ef56"))), defaultIds)
+        XCTAssertEqual(
+            ids(TerminalControlKey.keys(for: .shell)), defaultIds,
+            "a bash prompt is not a Claude TUI — Mode/Rewind/Ctrl+O/Ctrl+R do not belong there"
+        )
     }
 
     // MARK: - Set composition (order is what the user sees + the fixed wire order)

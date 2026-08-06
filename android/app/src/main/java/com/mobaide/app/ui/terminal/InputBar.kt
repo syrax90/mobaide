@@ -183,11 +183,11 @@ private fun controlKeysFor(kind: SessionKind?): List<ControlKey> = when (kind) {
     SessionKind.Codex -> CODEX_CONTROL_KEYS
     SessionKind.Antigravity -> ANTIGRAVITY_CONTROL_KEYS
     // null = kind not resolved yet: render the neutral set instead of guessing
-    // Claude (its Mode/Rewind escape codes are wrong input for other TUIs).
-    null, is SessionKind.Custom -> DEFAULT_CONTROL_KEYS
-    // Shell keeping the Claude set is a known oddity, deliberately unchanged
-    // here — switching it to DEFAULT_CONTROL_KEYS is tracked as CLA-158.
-    SessionKind.Claude, SessionKind.AutoScan, SessionKind.Shell -> CLAUDE_CONTROL_KEYS
+    // Claude (its Mode/Rewind escape codes are wrong input for other TUIs). A
+    // plain shell is the same case — Mode/Rewind/Ctrl+O/Ctrl+R carry Claude-TUI
+    // meanings a shell binds differently or not at all.
+    null, is SessionKind.Custom, SessionKind.Shell -> DEFAULT_CONTROL_KEYS
+    SessionKind.Claude, SessionKind.AutoScan -> CLAUDE_CONTROL_KEYS
 }
 
 @Composable

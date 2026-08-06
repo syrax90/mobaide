@@ -869,6 +869,13 @@ The Android client has three distinct update paths that work together:
    reads — plus a coverage manifest that fails when a new fixture file is
    neither asserted by a web test nor assigned an owning milestone.
 
+   This is the **only** CI-enforced fixture arm. iOS runs its suite on push to
+   `main` only (`ios-build.yml`'s `pull_request` trigger is commented out), and
+   no workflow runs Gradle unit tests at all — so Android's arm of
+   `keys/key_chords.json` (WEB-06) is a local check, not a gate. Anything
+   shared that only Kotlin or Swift asserts can drift through a PR unnoticed;
+   put the load-bearing assertion in the TypeScript arm.
+
 This is the safety net that lets the two component packages duplicate
 `envelope.py` (a deliberate constraint — the two packages are independent
 deployables and cannot share runtime code) without going out of sync.

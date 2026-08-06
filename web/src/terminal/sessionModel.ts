@@ -390,6 +390,10 @@ export class TerminalSessionModel {
     ) {
       this.rebaseline = true;
     }
+    // App-owned chords never reach here: `useAppShortcuts` claims them on a
+    // document-level capture listener, because xterm registers its `keydown` on
+    // the terminal's textarea and this handler would otherwise fire only while
+    // the grid has focus.
     const action = resolveKeyAction(event, {
       hasSelection: this.term.hasSelection(),
       passCtrlVToTerminal: useTerminalPrefsStore.getState().passCtrlVToTerminal,
@@ -675,6 +679,19 @@ export class TerminalSessionModel {
     // losing only the closing marker would strand the program's line editor in
     // paste-collect mode and read as a dead keyboard.
     this.sendPayload('input', encodePaste(text, this.term.modes.bracketedPasteMode));
+  }
+
+  /**
+   * Send a control-bar button or a saved chord as raw bytes.
+   *
+   * Jumps to the tail for the same reason typing does: xterm scrolls to the
+   * bottom on genuine user input, and a button press is user input. Android
+   * `TerminalViewModel.sendBytes` and iOS `sendControlKey` both do it too.
+   */
+  sendChordBytes(payload: Uint8Array): void {
+    if (payload.length === 0 || !this.canSendBytes()) return;
+    this.sendInputBytes(payload);
+    this.jumpToBottom();
   }
 
   setComposer(text: string): void {

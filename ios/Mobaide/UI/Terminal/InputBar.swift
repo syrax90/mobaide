@@ -59,18 +59,16 @@ struct TerminalControlKey: Identifiable {
     /// the saved-shortcut "…" picker is the escape hatch.
     static let defaultKeys: [TerminalControlKey] = ordered([enter, up, down, left, right, ctrlC, esc, tab, backspace])
 
-    /// Codex and Antigravity get their own sets (Android `controlKeysFor`).
     /// `nil` = kind not resolved yet: render the neutral set instead of
     /// guessing Claude (its Mode/Rewind escape codes are wrong input for
-    /// other TUIs).
+    /// other TUIs). A plain shell is the same case — Mode/Rewind/Ctrl+O/Ctrl+R
+    /// carry Claude-TUI meanings a shell binds differently or not at all.
     static func keys(for kind: SessionKind?) -> [TerminalControlKey] {
         switch kind {
         case .codex: return codexKeys
         case .antigravity: return antigravityKeys
-        case nil, .custom: return defaultKeys
-        // Shell keeping the Claude set is a known oddity, deliberately
-        // unchanged here.
-        case .claude, .autoScan, .shell: return claudeKeys
+        case nil, .custom, .shell: return defaultKeys
+        case .claude, .autoScan: return claudeKeys
         }
     }
 }

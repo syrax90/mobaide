@@ -17,12 +17,23 @@
  *   more reliable than `navigator.clipboard.readText()`, which Firefox and
  *   Safari gate behind a per-read user prompt.
  * - `terminal` — ordinary xterm processing.
+ *
+ * Chords the **app** owns rather than the PTY (`keyboard/appShortcuts.ts`) never
+ * reach this policy: `keyboard/useAppShortcuts.ts` claims them on a
+ * document-level capture listener, because xterm registers its `keydown` on the
+ * terminal's textarea and anything hung off that only fires while the grid has
+ * focus. That is a routing decision about who handles the key at all, not a
+ * clipboard one.
  */
 
 export type TerminalKeyAction = 'copy' | 'browserPaste' | 'terminal';
 
-/** The slice of `KeyboardEvent` the policy reads. */
-export interface KeyChord {
+/**
+ * The slice of `KeyboardEvent` the policy reads. Unrelated to the `KeyChord` in
+ * `protocol/keyChord.ts`, which is a saveable Ctrl/Alt/Shift + base-key chord;
+ * this one is just the modifier flags of a browser event.
+ */
+export interface KeyEventChord {
   type: string;
   key: string;
   ctrlKey: boolean;
@@ -43,7 +54,7 @@ export interface KeyPolicyContext {
 }
 
 export function resolveKeyAction(
-  chord: KeyChord,
+  chord: KeyEventChord,
   context: KeyPolicyContext,
 ): TerminalKeyAction {
   if (chord.type !== 'keydown') return 'terminal';

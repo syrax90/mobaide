@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   detectIsMac,
   resolveKeyAction,
-  type KeyChord,
+  type KeyEventChord,
   type KeyPolicyContext,
   type TerminalKeyAction,
 } from './terminalKeys';
 
-const chord = (key: string, held: Partial<KeyChord> = {}): KeyChord => ({
+const chord = (key: string, held: Partial<KeyEventChord> = {}): KeyEventChord => ({
   type: 'keydown',
   key,
   ctrlKey: false,
@@ -26,7 +26,7 @@ const context = (over: Partial<KeyPolicyContext> = {}): KeyPolicyContext => ({
 
 interface Case {
   name: string;
-  chord: KeyChord;
+  chord: KeyEventChord;
   context: KeyPolicyContext;
   expected: TerminalKeyAction;
 }

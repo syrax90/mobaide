@@ -1,0 +1,607 @@
+{
+  "description": "Golden keyboard-chord contract, shared by Android (KeyChordEncoder.kt), iOS (KeyChordEncoder.swift) and web (web/src/protocol/keyChord.ts). 'encode' pins the chord-to-PTY-bytes matrix: bytes_hex is the full lowercase-hex byte sequence, summary is the picker preview string, uses_csi_u drives the 'may not work in every CLI' hint, and same_as_plain_key discloses a chord that collapses onto an unmodified special's byte (Ctrl+I = Tab). 'parse_cases' pins the token grammar (modifiers accepted in any order, re-emitted as ctrl,alt,shift) and 'parse_rejected'/'encode_rejected' pin what must be refused so stale or forward-incompatible persisted tokens are dropped silently.",
+  "encode": [
+    {
+      "name": "plain_letter",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "a" },
+      "token": "a",
+      "display": "A",
+      "bytes_hex": "61",
+      "summary": "0x61",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_letter_is_uppercase",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "i" },
+      "token": "shift+i",
+      "display": "Shift+I",
+      "bytes_hex": "49",
+      "summary": "0x49",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_letter_last_of_alphabet",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "z" },
+      "token": "shift+z",
+      "display": "Shift+Z",
+      "bytes_hex": "5a",
+      "summary": "0x5A",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "plain_digit",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "2" },
+      "token": "2",
+      "display": "2",
+      "bytes_hex": "32",
+      "summary": "0x32",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "plain_digit_nine",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "9" },
+      "token": "9",
+      "display": "9",
+      "bytes_hex": "39",
+      "summary": "0x39",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_letter_is_c0",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "a" },
+      "token": "ctrl+a",
+      "display": "Ctrl+A",
+      "bytes_hex": "01",
+      "summary": "0x01",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_letter_high_c0",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "z" },
+      "token": "ctrl+z",
+      "display": "Ctrl+Z",
+      "bytes_hex": "1a",
+      "summary": "0x1A",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_j_is_lf_and_is_not_disclosed",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "j" },
+      "token": "ctrl+j",
+      "display": "Ctrl+J",
+      "bytes_hex": "0a",
+      "summary": "0x0A",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_space_is_nul",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "space" },
+      "token": "ctrl+space",
+      "display": "Ctrl+Space",
+      "bytes_hex": "00",
+      "summary": "0x00",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_backspace_is_bs",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "backspace" },
+      "token": "ctrl+backspace",
+      "display": "Ctrl+Backspace",
+      "bytes_hex": "08",
+      "summary": "0x08",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_i_collapses_onto_tab",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "i" },
+      "token": "ctrl+i",
+      "display": "Ctrl+I",
+      "bytes_hex": "09",
+      "summary": "0x09",
+      "uses_csi_u": false,
+      "same_as_plain_key": "Tab"
+    },
+    {
+      "name": "ctrl_m_collapses_onto_enter",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "m" },
+      "token": "ctrl+m",
+      "display": "Ctrl+M",
+      "bytes_hex": "0d",
+      "summary": "0x0D",
+      "uses_csi_u": false,
+      "same_as_plain_key": "Enter"
+    },
+    {
+      "name": "plain_tab_suppresses_its_own_disclosure",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "tab" },
+      "token": "tab",
+      "display": "Tab",
+      "bytes_hex": "09",
+      "summary": "0x09",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "plain_enter_suppresses_its_own_disclosure",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "enter" },
+      "token": "enter",
+      "display": "Enter",
+      "bytes_hex": "0d",
+      "summary": "0x0D",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "plain_space_suppresses_its_own_disclosure",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "space" },
+      "token": "space",
+      "display": "Space",
+      "bytes_hex": "20",
+      "summary": "0x20",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "plain_backspace_is_del",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "backspace" },
+      "token": "backspace",
+      "display": "Backspace",
+      "bytes_hex": "7f",
+      "summary": "0x7F",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_letter_is_esc_prefixed",
+      "chord": { "ctrl": false, "alt": true, "shift": false, "key": "x" },
+      "token": "alt+x",
+      "display": "Alt+X",
+      "bytes_hex": "1b78",
+      "summary": "ESC 0x78",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_shift_letter_is_esc_over_uppercase",
+      "chord": { "ctrl": false, "alt": true, "shift": true, "key": "a" },
+      "token": "alt+shift+a",
+      "display": "Alt+Shift+A",
+      "bytes_hex": "1b41",
+      "summary": "ESC 0x41",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_alt_letter_is_esc_over_c0",
+      "chord": { "ctrl": true, "alt": true, "shift": false, "key": "a" },
+      "token": "ctrl+alt+a",
+      "display": "Ctrl+Alt+A",
+      "bytes_hex": "1b01",
+      "summary": "ESC 0x01",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_alt_i_is_esc_over_tab_byte",
+      "chord": { "ctrl": true, "alt": true, "shift": false, "key": "i" },
+      "token": "ctrl+alt+i",
+      "display": "Ctrl+Alt+I",
+      "bytes_hex": "1b09",
+      "summary": "ESC 0x09",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_digit",
+      "chord": { "ctrl": false, "alt": true, "shift": false, "key": "5" },
+      "token": "alt+5",
+      "display": "Alt+5",
+      "bytes_hex": "1b35",
+      "summary": "ESC 0x35",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_backspace",
+      "chord": { "ctrl": false, "alt": true, "shift": false, "key": "backspace" },
+      "token": "alt+backspace",
+      "display": "Alt+Backspace",
+      "bytes_hex": "1b7f",
+      "summary": "ESC 0x7F",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_tab_is_esc_over_ht",
+      "chord": { "ctrl": false, "alt": true, "shift": false, "key": "tab" },
+      "token": "alt+tab",
+      "display": "Alt+Tab",
+      "bytes_hex": "1b09",
+      "summary": "ESC 0x09",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_enter_is_esc_over_cr",
+      "chord": { "ctrl": false, "alt": true, "shift": false, "key": "enter" },
+      "token": "alt+enter",
+      "display": "Alt+Enter",
+      "bytes_hex": "1b0d",
+      "summary": "ESC 0x0D",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_space_is_esc_over_sp",
+      "chord": { "ctrl": false, "alt": true, "shift": false, "key": "space" },
+      "token": "alt+space",
+      "display": "Alt+Space",
+      "bytes_hex": "1b20",
+      "summary": "ESC 0x20",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_alt_space_is_esc_over_nul",
+      "chord": { "ctrl": true, "alt": true, "shift": false, "key": "space" },
+      "token": "ctrl+alt+space",
+      "display": "Ctrl+Alt+Space",
+      "bytes_hex": "1b00",
+      "summary": "ESC 0x00",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_alt_backspace_is_esc_over_bs",
+      "chord": { "ctrl": true, "alt": true, "shift": false, "key": "backspace" },
+      "token": "ctrl+alt+backspace",
+      "display": "Ctrl+Alt+Backspace",
+      "bytes_hex": "1b08",
+      "summary": "ESC 0x08",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_tab_is_csi_z",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "tab" },
+      "token": "shift+tab",
+      "display": "Shift+Tab",
+      "bytes_hex": "1b5b5a",
+      "summary": "ESC [ Z",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f1_uses_ss3",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f1" },
+      "token": "f1",
+      "display": "F1",
+      "bytes_hex": "1b4f50",
+      "summary": "ESC O P",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f2_uses_ss3",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f2" },
+      "token": "f2",
+      "display": "F2",
+      "bytes_hex": "1b4f51",
+      "summary": "ESC O Q",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f3_uses_ss3",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f3" },
+      "token": "f3",
+      "display": "F3",
+      "bytes_hex": "1b4f52",
+      "summary": "ESC O R",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f4_uses_ss3",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f4" },
+      "token": "f4",
+      "display": "F4",
+      "bytes_hex": "1b4f53",
+      "summary": "ESC O S",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f5_uses_tilde_form",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f5" },
+      "token": "f5",
+      "display": "F5",
+      "bytes_hex": "1b5b31357e",
+      "summary": "ESC [ 15 ~",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f6_skips_sixteen",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f6" },
+      "token": "f6",
+      "display": "F6",
+      "bytes_hex": "1b5b31377e",
+      "summary": "ESC [ 17 ~",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f9_tilde_form",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f9" },
+      "token": "f9",
+      "display": "F9",
+      "bytes_hex": "1b5b32307e",
+      "summary": "ESC [ 20 ~",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f11_skips_twentytwo",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f11" },
+      "token": "f11",
+      "display": "F11",
+      "bytes_hex": "1b5b32337e",
+      "summary": "ESC [ 23 ~",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "f12_tilde_form",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "f12" },
+      "token": "f12",
+      "display": "F12",
+      "bytes_hex": "1b5b32347e",
+      "summary": "ESC [ 24 ~",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_f1_switches_ss3_to_csi",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "f1" },
+      "token": "ctrl+f1",
+      "display": "Ctrl+F1",
+      "bytes_hex": "1b5b313b3550",
+      "summary": "ESC [ 1 ; 5 P",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_f4_switches_ss3_to_csi",
+      "chord": { "ctrl": false, "alt": true, "shift": false, "key": "f4" },
+      "token": "alt+f4",
+      "display": "Alt+F4",
+      "bytes_hex": "1b5b313b3353",
+      "summary": "ESC [ 1 ; 3 S",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_f5_modified_tilde_form",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "f5" },
+      "token": "shift+f5",
+      "display": "Shift+F5",
+      "bytes_hex": "1b5b31353b327e",
+      "summary": "ESC [ 15 ; 2 ~",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_shift_f12_never_falls_to_csi_u",
+      "chord": { "ctrl": true, "alt": false, "shift": true, "key": "f12" },
+      "token": "ctrl+shift+f12",
+      "display": "Ctrl+Shift+F12",
+      "bytes_hex": "1b5b32343b367e",
+      "summary": "ESC [ 24 ; 6 ~",
+      "uses_csi_u": false,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_shift_letter_falls_to_csi_u",
+      "chord": { "ctrl": true, "alt": false, "shift": true, "key": "i" },
+      "token": "ctrl+shift+i",
+      "display": "Ctrl+Shift+I",
+      "bytes_hex": "1b5b3130353b3675",
+      "summary": "ESC [ 105 ; 6 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "csi_u_uses_the_lowercase_codepoint",
+      "chord": { "ctrl": true, "alt": false, "shift": true, "key": "a" },
+      "token": "ctrl+shift+a",
+      "display": "Ctrl+Shift+A",
+      "bytes_hex": "1b5b39373b3675",
+      "summary": "ESC [ 97 ; 6 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_digit_falls_to_csi_u",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "2" },
+      "token": "ctrl+2",
+      "display": "Ctrl+2",
+      "bytes_hex": "1b5b35303b3575",
+      "summary": "ESC [ 50 ; 5 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_digit_falls_to_csi_u",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "2" },
+      "token": "shift+2",
+      "display": "Shift+2",
+      "bytes_hex": "1b5b35303b3275",
+      "summary": "ESC [ 50 ; 2 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_shift_digit_falls_to_csi_u",
+      "chord": { "ctrl": true, "alt": false, "shift": true, "key": "9" },
+      "token": "ctrl+shift+9",
+      "display": "Ctrl+Shift+9",
+      "bytes_hex": "1b5b35373b3675",
+      "summary": "ESC [ 57 ; 6 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_enter_falls_to_csi_u",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "enter" },
+      "token": "shift+enter",
+      "display": "Shift+Enter",
+      "bytes_hex": "1b5b31333b3275",
+      "summary": "ESC [ 13 ; 2 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_enter_falls_to_csi_u",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "enter" },
+      "token": "ctrl+enter",
+      "display": "Ctrl+Enter",
+      "bytes_hex": "1b5b31333b3575",
+      "summary": "ESC [ 13 ; 5 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_tab_falls_to_csi_u",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "tab" },
+      "token": "ctrl+tab",
+      "display": "Ctrl+Tab",
+      "bytes_hex": "1b5b393b3575",
+      "summary": "ESC [ 9 ; 5 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "alt_over_multibyte_core_falls_to_csi_u",
+      "chord": { "ctrl": false, "alt": true, "shift": true, "key": "tab" },
+      "token": "alt+shift+tab",
+      "display": "Alt+Shift+Tab",
+      "bytes_hex": "1b5b393b3475",
+      "summary": "ESC [ 9 ; 4 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_space_falls_to_csi_u",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "space" },
+      "token": "shift+space",
+      "display": "Shift+Space",
+      "bytes_hex": "1b5b33323b3275",
+      "summary": "ESC [ 32 ; 2 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "ctrl_shift_space_falls_to_csi_u",
+      "chord": { "ctrl": true, "alt": false, "shift": true, "key": "space" },
+      "token": "ctrl+shift+space",
+      "display": "Ctrl+Shift+Space",
+      "bytes_hex": "1b5b33323b3675",
+      "summary": "ESC [ 32 ; 6 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    },
+    {
+      "name": "shift_backspace_falls_to_csi_u",
+      "chord": { "ctrl": false, "alt": false, "shift": true, "key": "backspace" },
+      "token": "shift+backspace",
+      "display": "Shift+Backspace",
+      "bytes_hex": "1b5b3132373b3275",
+      "summary": "ESC [ 127 ; 2 u",
+      "uses_csi_u": true,
+      "same_as_plain_key": null
+    }
+  ],
+  "encode_rejected": [
+    {
+      "name": "esc_is_not_a_base_key",
+      "chord": { "ctrl": true, "alt": false, "shift": false, "key": "esc" }
+    },
+    {
+      "name": "plain_esc_is_not_a_base_key",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "esc" }
+    },
+    {
+      "name": "all_three_modifiers",
+      "chord": { "ctrl": true, "alt": true, "shift": true, "key": "a" }
+    },
+    {
+      "name": "base_keys_are_lowercase_only",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "F1" }
+    },
+    {
+      "name": "empty_base_key",
+      "chord": { "ctrl": false, "alt": false, "shift": false, "key": "" }
+    }
+  ],
+  "parse_cases": [
+    {
+      "name": "bare_key",
+      "token": "a",
+      "expect": { "ctrl": false, "alt": false, "shift": false, "key": "a" },
+      "canonical_token": "a"
+    },
+    {
+      "name": "canonical_two_modifiers",
+      "token": "ctrl+shift+i",
+      "expect": { "ctrl": true, "alt": false, "shift": true, "key": "i" },
+      "canonical_token": "ctrl+shift+i"
+    },
+    {
+      "name": "function_key_with_alt",
+      "token": "alt+f5",
+      "expect": { "ctrl": false, "alt": true, "shift": false, "key": "f5" },
+      "canonical_token": "alt+f5"
+    },
+    {
+      "name": "special_key",
+      "token": "ctrl+backspace",
+      "expect": { "ctrl": true, "alt": false, "shift": false, "key": "backspace" },
+      "canonical_token": "ctrl+backspace"
+    },
+    {
+      "name": "modifier_order_on_input_is_free_output_is_canonical",
+      "token": "shift+ctrl+a",
+      "expect": { "ctrl": true, "alt": false, "shift": true, "key": "a" },
+      "canonical_token": "ctrl+shift+a"
+    },
+    {
+      "name": "alt_before_ctrl_renormalizes",
+      "token": "alt+ctrl+f5",
+      "expect": { "ctrl": true, "alt": true, "shift": false, "key": "f5" },
+      "canonical_token": "ctrl+alt+f5"
+    }
+  ],
+  "parse_rejected": [
+    { "name": "empty", "token": "" },
+    { "name": "modifier_without_key", "token": "ctrl+" },
+    { "name": "separator_only", "token": "+" },
+    { "name": "all_three_modifiers", "token": "ctrl+alt+shift+a" },
+    { "name": "unknown_modifier", "token": "meta+a" },
+    { "name": "esc_is_not_a_base_key", "token": "ctrl+esc" },
+    { "name": "duplicate_modifier", "token": "ctrl+ctrl+a" },
+    { "name": "modifier_name_as_key", "token": "shift" },
+    { "name": "uppercase_key", "token": "A" },
+    { "name": "uppercase_key_with_modifier", "token": "ctrl+A" }
+  ]
+}

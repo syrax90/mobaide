@@ -20,9 +20,8 @@ import org.robolectric.annotation.Config
  * keys `Enter, ↑, ↓, ←, →, Ctrl+C, Esc, Tab, Backspace` plus the custom-
  * shortcut "…" trigger. `Mode`/`Rewind`/`Ctrl+O`/`Ctrl+R`/`Ctrl+L` carry
  * Claude-TUI meanings an arbitrary CLI may bind differently and must never
- * leak in; neither may the Codex/Antigravity-only keys. [SessionKind.Shell]
- * deliberately keeps the Claude set (known oddity) — pinned here so a silent
- * change surfaces.
+ * leak in; neither may the Codex/Antigravity-only keys. [SessionKind.Shell] is
+ * the same case and renders the same neutral set.
  *
  * Mirrors [InputBarCodexTest]: Robolectric SDK 33, portrait qualifiers.
  */
@@ -79,11 +78,11 @@ class InputBarDefaultKeysTest {
     }
 
     @Test
-    fun shellKind_deliberatelyKeepsClaudeSet_untilCla158() {
+    fun shellKind_rendersExactlyTheNineDefaultKeys_plusShortcutTrigger() {
+        // A bash prompt is not a Claude TUI: Mode (CSI Z) and Rewind (Esc-Esc)
+        // mean nothing there, and Ctrl+O/Ctrl+R/Ctrl+L are readline bindings the
+        // user may have remapped.
         openPanel(kind = SessionKind.Shell)
-
-        composeRule.onNodeWithText("Mode").assertExists()
-        composeRule.onNodeWithText("Ctrl+L").assertExists()
-        otherCliKeys.forEach { composeRule.onNodeWithText(it).assertDoesNotExist() }
+        assertExactlyDefaultKeys()
     }
 }
