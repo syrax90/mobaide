@@ -685,11 +685,14 @@ Known deliberate deviations from Android's bytes (server-verified safe):
 
 ## Golden fixtures (`tests/protocol_fixtures/`)
 
-Language-neutral goldens every later iOS issue (and potentially Android)
-tests against. **The web client is a second consumer since WEB-04** —
-`web/src/protocol/` reads the same JSON off disk under Vitest and
-`protocol-integrity` runs that suite on every PR — so a fixture edit has to
-satisfy both arms:
+Language-neutral goldens every later iOS issue tests against. **The web client
+is a second consumer since WEB-04** — `web/src/protocol/` reads the same JSON
+off disk under Vitest and `protocol-integrity` runs that suite on every PR — and
+**Android is a third since WEB-06**, though only for `keys/`: `KeyChordFixtureTest`
+loads through `android/app/src/test/kotlin/…/testing/ProtocolFixtures.kt`, which
+walks up from the Gradle working directory to find the repo root. Extending that
+loader to the `dto/` tree is CLA-235. A fixture edit has to satisfy every arm
+that reads it:
 
 - `dto/{agent,central}/<TypeName>.json` — one file per DTO type:
   `cases[]` of `{name, wire, decoded_canonical?}`. Tests decode `wire`,
@@ -705,6 +708,14 @@ satisfy both arms:
 - `ansi/ansi_sgr.json` — SGR + 256-color ANSI goldens: `cases[]` of
   `{name, input, runs}` mapping a raw log line (ESC as `\u001b`) to the
   expected `AnsiParser` runs, with fg/bg as integer `[r,g,b]` channels.
+- `keys/key_chords.json` — the keyboard-chord contract, asserted by all three
+  clients (`KeyChordFixtureTests.swift`, `KeyChordFixtureTest.kt`,
+  `keyChord.test.ts`): `encode[]` of
+  `{chord, token, display, bytes_hex, summary, uses_csi_u, same_as_plain_key}`,
+  plus `encode_rejected`, `parse_cases` (modifiers accepted in any order,
+  re-emitted canonically) and `parse_rejected`. Android's `KeyChordEncoder.kt`
+  is the reference implementation — a disagreement means the fixture is wrong,
+  not the Kotlin.
 - `relay/relay_mapping.json` — relay path rewrites, WS URL construction, and
   REST base derivation tables.
 

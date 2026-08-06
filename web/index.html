@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Installability is not the point: `display: standalone` is what makes
+      `matchMedia('(display-mode: standalone)')` answer true, which is the signal
+      the Tier-1 keyboard widening reads (src/keyboard/reservedKeys.ts). Whether
+      Chrome offers to install an SVG-only icon set is CLA-252.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>Mobaide</title>

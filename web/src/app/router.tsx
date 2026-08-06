@@ -97,6 +97,23 @@ export const router = createBrowserRouter([
                   return { Component: TerminalScreen };
                 },
               },
+              // The reserved-key sweep harness. Both the route and the module
+              // disappear from a production build: `import.meta.env.DEV` is a
+              // compile-time constant, so Rollup drops the branch and the
+              // dynamic import with it.
+              ...(import.meta.env.DEV
+                ? [
+                    {
+                      path: 'dev/key-sweep',
+                      lazy: async () => {
+                        const { KeySweepScreen } = await import(
+                          '../routes/dev/KeySweepScreen'
+                        );
+                        return { Component: KeySweepScreen };
+                      },
+                    },
+                  ]
+                : []),
             ],
           },
         ],

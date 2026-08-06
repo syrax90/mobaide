@@ -13,6 +13,10 @@ import { busyByResponseSchema, busyHolderSchema } from './dto/gitConflict';
 import { autoScanFilterSchema, projectInfoSchema } from './dto/projects';
 import { sessionKindSchema, sessionResponseSchema } from './dto/session';
 import {
+  createShortcutRequestSchema,
+  updateShortcutRequestSchema,
+} from './dto/shortcuts';
+import {
   antigravityOptionsSchema,
   claudeOptionsSchema,
   codexOptionsSchema,
@@ -51,6 +55,8 @@ const REGISTRY: Readonly<Record<string, z.ZodType>> = {
   TemplateDeletedPayload: templateDeletedSchema,
   ShortcutDto: shortcutSchema,
   ShortcutDeletedPayload: shortcutDeletedSchema,
+  CreateShortcutRequest: createShortcutRequestSchema,
+  UpdateShortcutRequest: updateShortcutRequestSchema,
   CustomAgentTypeDto: customAgentTypeSchema,
   CustomTypeDeletedPayload: customTypeDeletedSchema,
 };
