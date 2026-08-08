@@ -46,6 +46,23 @@ def _sign(secret: bytes, nonce: str) -> str:
     return f"{nonce}.{digest}"
 
 
+def _tokens_match(expected: str, presented: str) -> bool:
+    """Constant-time compare of two CSRF tokens.
+
+    Encoded first because ``compare_digest`` raises ``TypeError`` — it does
+    not return False — when a ``str`` operand holds a non-ASCII character, and
+    both call sites below take peer-supplied text (a request header, a form
+    field, a cookie). ``require_csrf`` translates only its own
+    ``HTTPException``, so the raw comparison turned one non-ASCII byte into a
+    500 on every portal POST route. A value that cannot even be encoded (a
+    lone surrogate survives JSON and form decoding) is simply not the token.
+    """
+    try:
+        return hmac.compare_digest(expected.encode("utf-8"), presented.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
+
+
 def _verify(secret: bytes, token: str) -> bool:
     if not token or "." not in token:
         return False
@@ -53,7 +70,7 @@ def _verify(secret: bytes, token: str) -> bool:
     if not nonce or not digest:
         return False
     expected = hmac.new(secret, nonce.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, digest)
+    return _tokens_match(expected, digest)
 
 
 def issue_csrf_token(config: "CentralServerConfig") -> str:
@@ -109,7 +126,7 @@ async def require_csrf(request: Request) -> None:
             form = await request.form()
             value = form.get(_FORM_FIELD)
             presented = str(value) if value is not None else None
-    if presented is None or not hmac.compare_digest(presented, cookie_token):
+    if presented is None or not _tokens_match(cookie_token, presented):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="CSRF token missing or does not match cookie",

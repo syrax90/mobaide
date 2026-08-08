@@ -3,7 +3,7 @@
 The route's contract is:
 
   * CSRF (double-submit) is required.
-  * A short-TTL httponly cookie (``portal_google_nonce``) carries the
+  * A short-TTL httponly cookie (``portal_signin_nonce``) carries the
     server-issued nonce; the GIS callback POSTs the matching ID token in
     ``credential``.
   * The cookie nonce must equal the ID-token ``nonce`` claim; the token
@@ -99,7 +99,7 @@ async def google_client(google_app):
 
 async def _grab_csrf_and_nonce(client) -> tuple[str, str]:
     """Hit ``/portal/login`` to harvest both the CSRF token AND the
-    server-issued ``portal_google_nonce`` cookie. Returns
+    server-issued ``portal_signin_nonce`` cookie. Returns
     ``(csrf_token, nonce)``.
     """
     resp = await client.get("/portal/login")
@@ -111,10 +111,10 @@ async def _grab_csrf_and_nonce(client) -> tuple[str, str]:
         piece = piece.strip()
         if piece.startswith("portal_csrf="):
             csrf_token = piece.split(";", 1)[0].removeprefix("portal_csrf=")
-        elif piece.startswith("portal_google_nonce="):
-            nonce = piece.split(";", 1)[0].removeprefix("portal_google_nonce=")
+        elif piece.startswith("portal_signin_nonce="):
+            nonce = piece.split(";", 1)[0].removeprefix("portal_signin_nonce=")
     assert csrf_token, f"portal_csrf missing in: {cookie_header!r}"
-    assert nonce, f"portal_google_nonce missing in: {cookie_header!r}"
+    assert nonce, f"portal_signin_nonce missing in: {cookie_header!r}"
     return csrf_token, nonce
 
 
@@ -177,7 +177,7 @@ class TestPortalGoogleAuthSuccess:
         set_cookie = resp.headers.get("set-cookie", "")
         assert "portal_token=" in set_cookie
         # Nonce cookie is single-use — server deletes it on success.
-        assert "portal_google_nonce=" in set_cookie  # delete sets empty value
+        assert "portal_signin_nonce=" in set_cookie  # delete sets empty value
 
     async def test_successful_signin_creates_user_row_with_google_sub(
         self, google_client, google_app, monkeypatch,
@@ -307,7 +307,7 @@ class TestPortalGoogleAuthInputValidation:
         cannot validate freshness without the cookie."""
         # Hit a CSRF-issuing GET on a route that does NOT issue the Google
         # nonce cookie. Picking ``/portal/delete-account-info`` keeps the
-        # CSRF cookie populated while leaving ``portal_google_nonce`` unset.
+        # CSRF cookie populated while leaving ``portal_signin_nonce`` unset.
         resp_csrf = await google_client.get("/portal/delete-account-info")
         cookie_header = resp_csrf.headers.get("set-cookie", "")
         csrf_token = ""
@@ -321,7 +321,7 @@ class TestPortalGoogleAuthInputValidation:
         # Confirm the nonce cookie is absent from the jar — if a previous
         # request did set it, this test would silently pass on the happy
         # branch; assert before exercising the failure.
-        assert "portal_google_nonce" not in {
+        assert "portal_signin_nonce" not in {
             c.name for c in google_client.cookies.jar
         }
 
@@ -355,8 +355,8 @@ class TestPasswordFormErrorsWithGoogleConfigured:
 
     ``portal_login.html`` and ``portal_signup.html`` mount the GIS button behind
     ``{% if google_client_id %}``, and the partial does
-    ``{{ google_nonce | tojson }}``. Any re-render that forgets
-    ``issue_google_nonce=True`` therefore hands Jinja an ``Undefined`` and raises
+    ``{{ signin_nonce | tojson }}``. Any re-render that forgets
+    ``issue_signin_nonce=True`` therefore hands Jinja an ``Undefined`` and raises
     ``TypeError: Object of type Undefined is not JSON serializable`` — a 500 on
     the most common error path on the sign-in page.
 
@@ -384,7 +384,7 @@ class TestPasswordFormErrorsWithGoogleConfigured:
         assert "Invalid email or password." in resp.text
         # A fresh nonce must reach the re-rendered GIS button, otherwise the
         # Google path on the error page is dead even when the page renders.
-        assert "portal_google_nonce" in resp.headers.get("set-cookie", "")
+        assert "portal_signin_nonce" in resp.headers.get("set-cookie", "")
 
     async def test_mismatched_passwords_rerender_the_signup_page(
         self, google_client

@@ -283,8 +283,13 @@ class no `site.css` motion rule can ever hide portal content.
 **`static/site/portal.js`, by contrast, is loaded on every portal page.** It
 holds every behaviour the portal templates
 used to ship as an inline `<script>` or an `onclick=`: the password reveal, modal
-dismissal, the password-match indicator, the Google Sign-In bootstrap and the
-delete-account modal controller. It loads after htmx and registers its
+dismissal, the password-match indicator, the Google Sign-In and Sign in with
+Apple bootstraps, and the delete-account modal controller. The two providers
+differ in shape: Google renders its own button and hands back a credential,
+whereas Apple only supplies the flow, so `portal.css` draws the `.apple-btn`
+itself (black fill, inline mark, no offset shadow — Apple's guidelines do not
+permit decorating it) and `portal.js` ships it `disabled` until the SDK
+answers. It loads after htmx and registers its
 per-element initialisers through `htmx.onLoad`, so swapped-in fragments (the two
 modals) get wired too; each initialiser is idempotent behind a `data-*-ready`
 marker. Per-request values reach it as `data-` attributes rather than being

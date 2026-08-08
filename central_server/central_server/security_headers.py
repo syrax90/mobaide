@@ -50,6 +50,13 @@ libraries:
   three rules are shipped in ``static/style.css`` and ``static/site/portal.css``
   instead. Turning that config off without adding the rules would silently
   disable any future ``hx-indicator``.
+* The Sign in with Apple JS bundle contains no ``iframe``, no ``fetch`` and no
+  ``XMLHttpRequest``: under ``usePopup`` it calls ``window.open`` with
+  ``response_mode=web_message`` and reads the answer off a ``postMessage``
+  listener. So Apple costs one ``script-src`` entry and nothing else — no
+  ``frame-src``, no ``connect-src``, no inline style. ``window.open`` is
+  governed by no CSP directive at all, which is why ``appleid.apple.com``
+  itself never appears in a policy here.
 """
 from __future__ import annotations
 
@@ -123,6 +130,13 @@ _GIS_SCRIPT_URL = f"{_GIS_ORIGIN}/gsi/client"
 _GIS_STYLE_URL = f"{_GIS_ORIGIN}/gsi/style"
 _GIS_PARENT_URL = f"{_GIS_ORIGIN}/gsi/"
 
+# Apple serves one bundle per locale and the portal is English-only, so the
+# exact script the templates load is nameable — same tightness as Google's.
+_APPLE_JS_ORIGIN = "https://appleid.cdn-apple.com"
+APPLE_JS_SCRIPT_URL = (
+    f"{_APPLE_JS_ORIGIN}/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js"
+)
+
 _PERMISSIONS_POLICY_HEADER = "Permissions-Policy"
 
 # Chromium is the only engine that reads this header at all — Firefox and
@@ -170,23 +184,40 @@ _PROVEN_SITE_PATHS = frozenset({"/", "/robots.txt", "/sitemap.xml", "/favicon.ic
 _CSP_EXEMPT_PATHS = frozenset({"/docs", "/docs/", "/redoc", "/redoc/"})
 
 
-def portal_csp(google_client_id: str | None) -> str:
-    """Return the ``/portal/*`` policy for an instance with this Google config.
+def portal_csp(
+    google_client_id: str | None,
+    apple_web_client_id: str | None = None,
+) -> str:
+    """Return the ``/portal/*`` policy for an instance with this sign-in config.
 
-    With no client id, ``portal_base.html`` emits no GIS ``<script>`` and the
-    portal earns the strict same-origin policy — including a ``style-src``
-    without ``'unsafe-inline'``.
+    Composed per provider rather than enumerated per combination: each button's
+    ``<script>`` is emitted by ``portal_base.html`` only when its client id is
+    set. With neither configured the portal earns the strict same-origin policy
+    — including a ``style-src`` without ``'unsafe-inline'``.
     """
-    if not google_client_id:
+    if not google_client_id and not apple_web_client_id:
         return _SAME_ORIGIN_DOCUMENT_CSP
+
+    script_src = "'self'"
+    style_src = "'self'"
+    connect_src = "'self'"
+    frame_src = ""
+    if google_client_id:
+        script_src += f" {_GIS_SCRIPT_URL}"
+        style_src += f" 'unsafe-inline' {_GIS_STYLE_URL}"
+        connect_src += f" {_GIS_PARENT_URL}"
+        frame_src = f"frame-src {_GIS_PARENT_URL}; "
+    if apple_web_client_id:
+        script_src += f" {APPLE_JS_SCRIPT_URL}"
+
     return (
         "default-src 'none'; "
-        f"script-src 'self' {_GIS_SCRIPT_URL}; "
-        f"style-src 'self' 'unsafe-inline' {_GIS_STYLE_URL}; "
+        f"script-src {script_src}; "
+        f"style-src {style_src}; "
         "img-src 'self'; "
         "font-src 'self'; "
-        f"connect-src 'self' {_GIS_PARENT_URL}; "
-        f"frame-src {_GIS_PARENT_URL}; "
+        f"connect-src {connect_src}; "
+        f"{frame_src}"
         "form-action 'self'; "
         "base-uri 'none'; "
         "frame-ancestors 'none'"
@@ -213,6 +244,7 @@ class SecurityHeadersMiddleware:
         app: ASGIApp,
         *,
         google_client_id: str | None = None,
+        apple_web_client_id: str | None = None,
         report_only: bool = False,
     ) -> None:
         self.app = app
@@ -239,7 +271,7 @@ class SecurityHeadersMiddleware:
         self._site_enforced = bucket(_SITE_CSP, _CSP_HEADER)
         self._site_soakable = bucket(_SITE_CSP, soak_header)
         self._portal = bucket(
-            portal_csp(google_client_id),
+            portal_csp(google_client_id, apple_web_client_id),
             soak_header,
             portal_permissions_policy(google_client_id),
         )

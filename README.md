@@ -108,6 +108,10 @@ The Android "Sign in with Google" button uses the Credential Manager API and req
 
 The iOS app's sign-in setup (a separate **iOS application** OAuth client ID via the gitignored `ios/Config/Local.xcconfig`, plus Sign in with Apple, which requires `APPLE_CLIENT_ID` in the server's `.env`) is covered in the "Sign-in configuration" section of [docs/ios-client.md](docs/ios-client.md).
 
+## Configuring Sign in with Apple on the web
+
+The web client and the account portal offer Sign in with Apple so accounts created in the iOS app — which often have a private-relay address and no password — can sign in on a browser at all. It needs one extra server value, `APPLE_WEB_CLIENT_ID`, holding an Apple **Services ID**. Both browser surfaces fetch it at runtime from `GET /api/version`, so there is no build-time value, but the Services ID must be created with `com.mobaide.app` as its **primary App ID** — that grouping is what makes Apple issue the same user identifier on web as in the app, and getting it wrong creates duplicate accounts rather than an error. The full setup, including the domain verification each registered origin needs, is in ["Sign in with Apple on the web"](docs/deployment.md#deploying-the-web-spa-appmobaidecom).
+
 ## Releases, versioning, and auto-update
 
 Each component (Android, `mobaide_agent`, `central_server`, `web`) ships on

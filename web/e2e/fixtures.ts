@@ -8,6 +8,7 @@ export const SERVER_INFO = {
   min_client_version: 6,
   capabilities: {},
   google_client_id: null,
+  apple_web_client_id: null,
   latest_agent_version: null,
 };
 

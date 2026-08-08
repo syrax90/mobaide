@@ -236,8 +236,15 @@ JWT_SECRET_KEY=${JWT_SECRET}
 # ADMIN_SEED_EMAIL=you@example.com
 # ADMIN_SEED_PASSWORD=change-me
 
-# Required only if you use Google Sign-In in the Android app.
+# Required only if you use Google Sign-In (Android app, web client, portal).
 # GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+
+# Required only if you use Sign in with Apple. APPLE_CLIENT_ID is the iOS
+# bundle id; APPLE_WEB_CLIENT_ID is the Services ID the browser flow needs,
+# and it must be grouped under APPLE_CLIENT_ID as its primary App ID or web
+# sign-ins create duplicate accounts. See docs/deployment.md.
+# APPLE_CLIENT_ID=com.mobaide.app
+# APPLE_WEB_CLIENT_ID=com.mobaide.web
 
 # Required only if you publish agent releases via release-agent.yml.
 # Without these, POST /api/internal/agent_manifest returns HTTP 503 and

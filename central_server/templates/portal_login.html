@@ -23,10 +23,17 @@
         {% endwith %}
         <button type="submit" class="btn">Sign in</button>
     </form>
-    {% if google_client_id %}
+    {% if google_client_id or apple_web_client_id %}
     <div class="auth-divider"><span>or</span></div>
+    {% endif %}
+    {% if google_client_id %}
     {% with button_id="portal-login-google", post_url="/portal/auth/google", gis_text="continue_with", extra_fields=[] %}
     {% include "_portal_google_button.html" with context %}
+    {% endwith %}
+    {% endif %}
+    {% if apple_web_client_id %}
+    {% with button_id="portal-login-apple", post_url="/portal/auth/apple", apple_text="Sign in with Apple", extra_fields=[] %}
+    {% include "_portal_apple_button.html" with context %}
     {% endwith %}
     {% endif %}
     <p class="card-links">

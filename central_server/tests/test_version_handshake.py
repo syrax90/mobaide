@@ -86,6 +86,43 @@ async def test_get_version_carries_the_configured_google_client_id(tmp_path) -> 
     )
 
 
+async def test_get_version_reports_no_apple_web_client_id_when_unconfigured(
+    client,
+) -> None:
+    response = await client.get("/api/version")
+    # Present-but-null for the same reason the Google key is: the SPA's Zod
+    # schema reads it and renders no Apple button when it is null.
+    assert response.json()["apple_web_client_id"] is None
+
+
+async def test_get_version_carries_the_configured_apple_services_id(
+    tmp_path,
+) -> None:
+    """The Services ID is published, never the native bundle id: only the
+    browser half is a client id the SPA can initialise with, and handing it
+    ``apple_client_id`` would make Apple reject every popup."""
+    config = CentralServerConfig(
+        jwt_secret_key=TEST_JWT_SECRET,
+        db_path=str(tmp_path / "apple.db"),
+        log_level="DEBUG",
+        log_format="console",
+        apple_client_id="com.mobaide.app",
+        apple_web_client_id="com.mobaide.app.web",
+        manifest_store_path=str(tmp_path / "manifest.json"),
+    )
+    application = create_app(config=config)
+    application.state.manifest_store = ManifestStore(config.manifest_store_path)
+
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="https://test") as anon:
+        response = await anon.get("/api/version")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["apple_web_client_id"] == "com.mobaide.app.web"
+    assert "apple_client_id" not in body
+
+
 async def test_get_version_with_manifest(client, app, tmp_path) -> None:
     _, public_key_b64, body, signature_b64 = _signed_manifest(tmp_path)
     store = ManifestStore(tmp_path / "manifest.json")

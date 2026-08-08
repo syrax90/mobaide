@@ -1,0 +1,54 @@
+{# Sign in with Apple button — included on login and signup.
+
+   A hand-rolled <button> rather than AppleID.auth.renderButton, for the same
+   reason the flow runs in popup mode: renderButton attaches its own click
+   handler that signs in with the globally-initialised nonce and reports the
+   result through document events, which leaves no place to bind this form's
+   per-render nonce. The custom button also inherits portal.css and can be
+   disabled, which Apple's rendered one cannot.
+
+   Apple's Human Interface Guidelines govern the appearance: black fill, the
+   Apple logo, "Sign in with Apple"/"Continue with Apple", and a height that
+   matches the neighbouring Google button.
+
+   Required Jinja context:
+   * apple_web_client_id — required; renders nothing if empty
+   * signin_nonce        — required; bound to the AppleID.auth.signIn call and
+                           verified server-side against the portal_signin_nonce
+                           cookie
+   * csrf_token          — required; submitted with the credential POST
+   * post_url            — required; e.g. "/portal/auth/apple"
+   * button_id           — required; unique DOM id so multiple buttons on the
+                           same page do not clash
+   * apple_text          — optional; the visible label. Defaults to
+                           "Continue with Apple".
+   * extra_fields        — optional list of {name, value} hidden inputs sent
+                           alongside `credential`
+
+   The initialiser lives in static/site/portal.js, which picks this button up
+   by `data-apple-button` and reads the config off the `data-` attributes.
+   That is a CSP requirement, not a preference: `/portal/*` is served with a
+   script-src that has no 'unsafe-inline', so an inline block here would not
+   run. It also means the client id and nonce go through Jinja's HTML
+   autoescaping rather than being spliced into a JS literal.
+#}
+{% if apple_web_client_id %}
+<form id="{{ button_id }}-form" method="post" action="{{ post_url }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="credential" value="">
+    {% for field in extra_fields or [] %}
+    <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
+    {% endfor %}
+    <button type="button"
+            id="{{ button_id }}"
+            class="apple-btn"
+            disabled
+            data-apple-button
+            data-apple-form="{{ button_id }}-form"
+            data-apple-client-id="{{ apple_web_client_id }}"
+            data-apple-nonce="{{ signin_nonce }}">
+        {% include "_portal_apple_mark.html" %}
+        <span>{{ apple_text or 'Continue with Apple' }}</span>
+    </button>
+</form>
+{% endif %}

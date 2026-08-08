@@ -9,6 +9,7 @@ messages, AsyncClient against ASGITransport for router integration.
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -372,6 +373,60 @@ class TestRequestAccountDeletionFailures:
                 proof=DeleteAccountRequest(method="google", id_token="t", nonce="n"),
             )
         assert "not configured" in str(excinfo.value).lower()
+
+    async def test_google_reauth_with_a_non_ascii_nonce_is_rejected_not_crashed(
+        self,
+        deletion_db: Database,
+        deletion_config: CentralServerConfig,
+        fake_email: _FakeEmailSender,
+        monkeypatch,
+    ) -> None:
+        """``nonce`` arrives in the request body with no charset constraint, and
+        ``compare_digest`` *raises* ``TypeError`` on a ``str`` holding a
+        non-ASCII character instead of returning False.
+        """
+        from central_server.auth.models import DeleteAccountRequest
+
+        cfg = CentralServerConfig(
+            **{
+                **deletion_config.__dict__,
+                "google_client_id": "fake-client.apps.googleusercontent.com",
+            }
+        )
+        svc = AuthService(
+            cfg, deletion_db, email_sender=fake_email,  # type: ignore[arg-type]
+        )
+        user_id = await deletion_db.create_user(
+            email="google-nonascii@example.com",
+            google_sub="google-sub-nonascii",
+            email_verified=True,
+        )
+        user = await deletion_db.get_user_by_id(user_id)
+        assert user is not None
+
+        async def _fake_verify(self, token_str: str) -> dict[str, Any]:
+            # Signature/audience already passed; the nonce is the next gate.
+            return {
+                "sub": "google-sub-nonascii",
+                "nonce": "a" * 43,
+                "iat": int(time.time()),
+            }
+
+        monkeypatch.setattr(AuthService, "_verify_google_id_token", _fake_verify)
+
+        with pytest.raises(AccountDeletionAuthError) as excinfo:
+            await svc.request_account_deletion(
+                _build_payload(user),
+                source="android",
+                proof=DeleteAccountRequest(
+                    method="google", id_token="tok", nonce="nónce-Ω",
+                ),
+            )
+
+        assert "nonce mismatch" in str(excinfo.value).lower()
+        refreshed = await deletion_db.get_user_by_id(user_id)
+        assert refreshed is not None
+        assert refreshed["scheduled_deletion_at"] is None
 
 
 # ---- Cancel flows --------------------------------------------------------

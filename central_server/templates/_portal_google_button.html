@@ -8,8 +8,8 @@
 
    Required Jinja context:
    * google_client_id  — required; renders nothing if empty
-   * google_nonce      — required; bound to the GIS init call and verified
-                         server-side against the portal_google_nonce cookie
+   * signin_nonce      — required; bound to the GIS init call and verified
+                         server-side against the portal_signin_nonce cookie
    * csrf_token        — required; submitted with the credential POST
    * post_url          — required; e.g. "/portal/auth/google"
    * button_id         — required; unique DOM id so multiple buttons on the
@@ -40,7 +40,7 @@
          data-gis-button
          data-gis-form="{{ button_id }}-form"
          data-gis-client-id="{{ google_client_id }}"
-         data-gis-nonce="{{ google_nonce }}"
+         data-gis-nonce="{{ signin_nonce }}"
          data-gis-text="{{ gis_text or 'continue_with' }}"></div>
 </form>
 {% endif %}

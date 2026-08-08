@@ -58,18 +58,26 @@ accepts a fresh credential proof, validated by `AuthService._verify_fresh_creden
 |---|---|---|
 | `password` | Current password | Argon2id verify against `users.password_hash`. |
 | `google` | Fresh `id_token` + matching `nonce` | `verify_oauth2_token` (signature + audience), then `iat` within last 5 min, `sub` equals stored `google_sub`, and `nonce` claim matches the client-supplied value. |
-| `apple` | Fresh `id_token` + matching `nonce` | Signature verified against Apple's JWKS (audience `APPLE_CLIENT_ID`), then the same `iat` / `nonce` checks with `sub` equal to the stored `apple_sub` (added in CLA-99 for the iOS app). |
+| `apple` | Fresh `id_token` + matching `nonce` | Signature verified against Apple's JWKS, audience matching either `APPLE_CLIENT_ID` (iOS bundle id) or `APPLE_WEB_CLIENT_ID` (Services ID, browser flow), then the same `iat` / `nonce` checks with `sub` equal to the stored `apple_sub`. Added in CLA-99 for the iOS app; the browser audience arrived with CLA-198. |
 
 This mirrors the Auth0 recommended pattern for destructive-action re-auth.
 
 ### Portal authentication
 
-The portal also gains Google Sign-In support. `POST /portal/auth/google` accepts
-a GIS credential callback and logs in (or creates) an account via
-`AuthService.google_authenticate` — the same path used by the Android app. The
-delete modal in the portal re-renders with a Google re-auth button for accounts
-that have no password (`google_sub` set, `password_hash` NULL), so Google-only
-users can now self-delete via the portal for the first time.
+The portal supports both social providers. `POST /portal/auth/google` accepts a
+GIS credential callback and `POST /portal/auth/apple` an identity token from
+Sign in with Apple JS; each logs in (or creates) an account via the same
+`AuthService` path the mobile apps use. Both run in popup mode so the
+credential reaches the server through a same-origin form POST that carries the
+CSRF token and the `portal_signin_nonce` cookie — Apple's own redirect mode
+would arrive cross-site, where `SameSite=Lax` withholds both.
+
+The delete modal offers whichever methods the account can actually complete:
+password, Google re-auth, Apple re-auth, or a chooser between them. A method
+counts only when it is both linked on the account *and* configured on the
+server, because a re-auth panel whose button cannot mount is a dead end. This
+is what lets a social-only user — `google_sub` or `apple_sub` set,
+`password_hash` NULL — self-delete from the portal at all.
 
 ### Deletion mode (`DeleteAccountRequest.mode`)
 
