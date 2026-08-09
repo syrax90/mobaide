@@ -1,5 +1,19 @@
 # central_server Changelog
 
+## [0.2.11](https://github.com/syrax90/claude_mobile/compare/server-v0.2.10...server-v0.2.11) (2026-08-09)
+
+
+### Features
+
+* **central_server:** add Cross-Origin-Opener-Policy and Permissions-Policy headers ([538db80](https://github.com/syrax90/claude_mobile/commit/538db8083a866db9e4130677d34aa9a5f7daffab))
+* **web,central_server:** Sign in with Apple on the SPA and portal (CLA-198) ([edd1c59](https://github.com/syrax90/claude_mobile/commit/edd1c59fcc5ed9be14f93bdff5b5c87ef152c0af))
+
+
+### Bug Fixes
+
+* **ios,central_server:** stop stale attention alerts from re-firing on app open ([79d3dd1](https://github.com/syrax90/claude_mobile/commit/79d3dd191ed5f3f6d971839eee92513d560103d4))
+* **ios,central_server:** stop stale attention alerts from re-firing on app open ([8d786c4](https://github.com/syrax90/claude_mobile/commit/8d786c4e0fbbf0970edb156b7244725427489ce4))
+
 ## [0.2.10](https://github.com/syrax90/claude_mobile/compare/server-v0.2.9...server-v0.2.10) (2026-08-03)
 
 
