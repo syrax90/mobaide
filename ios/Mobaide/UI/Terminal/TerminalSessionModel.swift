@@ -133,7 +133,7 @@ final class TerminalSessionModel {
 
     private let outboundStream: AsyncStream<Data>
     private let outboundContinuation: AsyncStream<Data>.Continuation
-    private let focusBroadcaster = Broadcaster<Void>(replay: .none)
+    private let focusBroadcaster = Broadcaster<Bool>(replay: .none)
 
     init(
         sessionId: String,
@@ -171,7 +171,11 @@ final class TerminalSessionModel {
         }
     }
 
-    func focusRequests() -> AsyncStream<Void> { focusBroadcaster.subscribe(replayLatest: false) }
+    /// Composer focus intent: `true` claims the field, `false` releases it and
+    /// with it the keyboard. One stream rather than a second blur stream —
+    /// two streams consumed by two `.task`s have no ordering guarantee against
+    /// each other, so a reveal and a dismissal could land out of order.
+    func focusRequests() -> AsyncStream<Bool> { focusBroadcaster.subscribe(replayLatest: false) }
 
     func start() {
         guard !started else { return }
@@ -504,7 +508,7 @@ final class TerminalSessionModel {
     func revealComposer() {
         composerVisible = true
         dismissTerminalKeyboard()
-        focusBroadcaster.emit(())
+        focusBroadcaster.emit(true)
     }
 
     /// Collapse the composer. No focus side effect (Android parity): the
@@ -531,6 +535,21 @@ final class TerminalSessionModel {
 
     func dismissTerminalKeyboard() {
         _ = terminalView.resignFirstResponder()
+    }
+
+    /// Puts away whichever keyboard is up — the terminal's own or the
+    /// composer's — leaving the composer's visibility and text alone. Both arms
+    /// are no-ops when that surface does not hold focus, so a caller (the
+    /// terminal touch) never has to know which path raised it.
+    func dismissSoftKeyboard() {
+        // Guarded, not unconditional: `resignFirstResponder` answers true even
+        // when the receiver never held it, and SwiftTerm's override reports
+        // focus-out to the program — a DEC 1004 `CSI O` write on every terminal
+        // touch taken while the composer, not the terminal, holds the keyboard.
+        if terminalView.isFirstResponder {
+            dismissTerminalKeyboard()
+        }
+        focusBroadcaster.emit(false)
     }
 
     /// Reconciles after system-initiated keyboard dismissals that may bypass

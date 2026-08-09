@@ -20,6 +20,26 @@ final class MobaideTerminalView: TerminalView {
     /// show/hide toggle reflects reality, not the last request.
     var onFirstResponderChange: ((Bool) -> Void)?
 
+    /// Puts a raised keyboard away. Set by the Coordinator rather than called
+    /// on the model directly: the view is model-owned, so reaching back would
+    /// retain it (cf. `onUserScroll`).
+    var onDismissSoftKeyboard: (() -> Void)?
+
+    /// Thresholded, never `> 0`: a hardware keyboard leaves a bottom-anchored
+    /// full-width assistant bar that `lift` reports as ~35, and treating that as
+    /// covering would resign the responder on every touch and end hardware typing.
+    var isSoftKeyboardCovering: Bool {
+        (superview as? TerminalPanScrollView).map {
+            $0.keyboardLift > TerminalKeyboardPan.minimumCoveringLift
+        } ?? false
+    }
+
+    /// Latched at touch-down because it cannot be re-read later: `mobaide.rowTap`
+    /// waits out the double-tap timeout, by which point `keyboardWillHide` has
+    /// already dropped the lift — a late read would let that tap through and send a
+    /// bare CR.
+    private(set) var dismissedKeyboardOnCurrentTouch = false
+
     override var canBecomeFirstResponder: Bool { keyboardGate }
 
     override func becomeFirstResponder() -> Bool {
@@ -340,6 +360,15 @@ final class MobaideTerminalView: TerminalView {
         if selectionController.isActive {
             return selectionController.owns(gestureRecognizer)
         }
+        // The touch that dismissed the keyboard is spent: it must not also
+        // resend a prompt row, click into a mouse-tracking TUI, or copy to the
+        // composer. Refusing taps wholesale rather than by name is exact —
+        // `neutralizeSwiftTermGestures()` disables every non-`mobaide.` tap and
+        // the selection tap is owned by the branch above, leaving precisely the
+        // three action taps, plus any added later.
+        if dismissedKeyboardOnCurrentTouch, gestureRecognizer is UITapGestureRecognizer {
+            return false
+        }
         if gestureRecognizer === panGestureRecognizer {
             // Sampled from *this* recognizer — the one UIKit is asking to begin,
             // and so the only one certain to be live at this moment.
@@ -516,9 +545,56 @@ final class MobaideTerminalView: TerminalView {
     ///
     /// Deliberately not Android, which has no tap-to-stop — its `onDown`
     /// returns false and a fling always runs to completion.
+    ///
+    /// Also the single point where touching the terminal puts a raised keyboard
+    /// away: a tap and the start of a scroll drag both pass through here, and it
+    /// runs before any recognizer can be asked to begin — which is what makes
+    /// the decision latchable.
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         cancelFling()
+        dismissedKeyboardOnCurrentTouch = isSoftKeyboardCovering
+        if dismissedKeyboardOnCurrentTouch {
+            // Latches first: arming the ladder's fail-closed guards before any
+            // recognizer is touched leaves no window in which releasing a
+            // failure dependency could resolve a row against stale readings.
+            onDismissSoftKeyboard?()
+            spendSingleTapRecognizers()
+        }
         super.touchesBegan(touches, with: event)
+    }
+
+    /// Takes the dismissing touch away from the taps that could act on it alone,
+    /// instead of only refusing them once they ask to begin. Disabling cancels a
+    /// recognizer's in-flight tracking and re-enabling arms it for the next
+    /// touch only.
+    ///
+    /// Needed because `mobaide.rowTap` waits out `mobaide.rowDoubleTap` and so
+    /// is still pending ~300ms after this touch lifts — long enough for a
+    /// following touch-down to recompute the latch to false and let the spent
+    /// tap resolve after all, as a row resend.
+    ///
+    /// Multi-tap recognizers are deliberately left armed: cancelling
+    /// `mobaide.rowDoubleTap` resets its tally, so the second half of a
+    /// double-tap-to-copy would arrive as a fresh single tap and *execute* the
+    /// row it was meant to copy. Letting the pair complete keeps the worst case
+    /// at copying text into the composer.
+    ///
+    /// Skipped entirely while a selection is live: that episode already owns
+    /// every tap through `gestureRecognizerShouldBegin`, so nothing needs
+    /// spending, and cancelling would strand the selection and its toolbar.
+    ///
+    /// The `isEnabled` filter is load-bearing: `neutralizeSwiftTermGestures()`
+    /// parks SwiftTerm's own taps disabled, and re-enabling one would hand a
+    /// terminal touch back the `becomeFirstResponder()` `keyboardGate` forbids.
+    private func spendSingleTapRecognizers() {
+        guard !selectionController.isActive else { return }
+        for recognizer in gestureRecognizers ?? [] {
+            guard let tap = recognizer as? UITapGestureRecognizer,
+                  tap.isEnabled,
+                  tap.numberOfTapsRequired == 1 else { continue }
+            tap.isEnabled = false
+            tap.isEnabled = true
+        }
     }
 
     /// The terminal view is model-owned and outlives the screen, so a fling
@@ -886,6 +962,16 @@ struct TerminalHostView: UIViewRepresentable {
             // this Coordinator: view → closure → Coordinator → model → view.
             view.onUserScroll = { [weak self] position in
                 self?.userScrolled(to: position)
+            }
+            view.onDismissSoftKeyboard = { [weak self] in
+                guard let self else { return }
+                // The dismissing touch's `mouseTap` is spent, so neither latch
+                // takes its lift-time reading this touch. A program that repaints a
+                // fake prompt behind a synchronized-output freeze must not have a
+                // stale `false` resolve the row for it.
+                lastTapOwnedByProgram = true
+                lastTapDuringFrozenDisplay = true
+                model.dismissSoftKeyboard()
             }
             view.selectionController.onChange = { [weak self] selection in
                 self?.model.selectionUi = selection

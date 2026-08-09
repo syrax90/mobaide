@@ -142,7 +142,15 @@ sticky-Ctrl accessory suppressed); the originally specced auto-activation was
 reverted on Android as a UX regression and is deliberately not ported. The
 composer collapses behind a "Command field" reveal chip, the control-key bar
 gains a Backspace key (DEL `0x7f`), and leaving the session dismisses the
-keyboard. Keyboard avoidance is pan-don't-resize (Android `ImeFloatingPan`
+keyboard. Touching the terminal surface while a keyboard covers it —
+composer-raised or terminal-first-responder alike, and a scroll drag
+equally — dismisses it too, with the touch spent so it cannot also resend
+a prompt row, send a mouse click, or copy to the composer; a live
+selection keeps the touch without losing it to the dismiss. The InputBar's
+own controls, a hardware keyboard's assistant bar, and iPad's
+undocked/floating/split keyboards are excluded, since none of them cover
+the terminal (Android and web mirrors are not yet implemented; CLA-253 /
+CLA-254). Keyboard avoidance is pan-don't-resize (Android `ImeFloatingPan`
 parity): the screen opts out of SwiftUI keyboard avoidance, lifts the UI
 column by the keyboard overlap (`TerminalKeyboardObserver`), and
 `TerminalPanScrollView` counter-pans the terminal so the cursor row plus two
@@ -211,7 +219,12 @@ and both evaluations must agree before anything is submitted. Two taps are
 still reported as two clicks (Android parity), and double-tap
 copy-to-composer stays available in every mode as the way to re-run an
 earlier message. An `.x10`-only program gets neither a click (SwiftTerm
-suppresses presses in that mode) nor a submit.
+suppresses presses in that mode) nor a submit. A touch that put a covering
+keyboard away is refused before any arm evaluates it:
+`gestureRecognizerShouldBegin` declines every single-tap recognizer
+outright for that touch, so neither a click nor a row submit reaches the
+program regardless of which arm would otherwise have owned it; a second
+touch ladders normally.
 Follow mode is driven from the terminal's own scroll view rather than from
 SwiftTerm (`TerminalFollowScroll` plus a `UIScrollViewDelegate` on
 `MobaideTerminalView`). SwiftTerm's iOS renderer draws from `contentOffset`

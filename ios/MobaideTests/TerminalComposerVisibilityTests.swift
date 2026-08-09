@@ -40,7 +40,8 @@ final class TerminalComposerVisibilityTests: XCTestCase {
         model.revealComposer()
 
         XCTAssertTrue(model.composerVisible)
-        _ = try await focusEvents.next()
+        let focused = try await focusEvents.next()
+        XCTAssertTrue(focused, "the stream carries the intent: true claims the field, false releases it")
     }
 
     func testHiddenComposerSurvivesReconnect() async throws {
@@ -73,7 +74,8 @@ final class TerminalComposerVisibilityTests: XCTestCase {
 
         XCTAssertTrue(model.composerVisible, "double-tap copy must auto-reveal the hidden composer")
         XCTAssertEqual(model.inputText, "git status")
-        _ = try await focusEvents.next()
+        let focused = try await focusEvents.next()
+        XCTAssertTrue(focused)
     }
 
     func testApplyTemplateRevealsComposer() async throws {
@@ -85,6 +87,7 @@ final class TerminalComposerVisibilityTests: XCTestCase {
 
         XCTAssertTrue(model.composerVisible)
         XCTAssertEqual(model.inputText, "run tests")
-        _ = try await focusEvents.next()
+        let focused = try await focusEvents.next()
+        XCTAssertTrue(focused)
     }
 }

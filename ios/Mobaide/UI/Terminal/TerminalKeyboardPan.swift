@@ -30,6 +30,17 @@ enum TerminalKeyboardPan {
         return max(0, windowBounds.maxY - keyboardEndFrame.minY - bottomSafeInset)
     }
 
+    /// Smallest `lift` that means a keyboard is actually covering the terminal,
+    /// rather than the assistant bar iOS leaves behind once a hardware keyboard
+    /// is attached — which is bottom-anchored and full-width, so `lift` reports
+    /// it too. The observer tests pin both samples: 310 docked (iPhone
+    /// portrait) against 35 for the assistant bar, and the shortest real docked
+    /// keyboard (iPhone landscape) still clears this.
+    ///
+    /// Predicates only. The counter-pan consumes `lift` as a magnitude and must
+    /// keep honoring every non-zero value, assistant bar included.
+    static let minimumCoveringLift: CGFloat = 100
+
     /// Caret bottom plus slack rows, in terminal-viewport coordinates.
     /// `caretFrame` is in SwiftTerm content coordinates (it tracks the cursor
     /// even while the TUI hides the caret); subtracting the scroll offset

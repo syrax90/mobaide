@@ -146,6 +146,7 @@ final class TerminalKeyboardGateTests: XCTestCase {
             "the terminal responder must drop so keystrokes cannot keep routing into the PTY"
         )
         XCTAssertFalse(model.terminalView.isFirstResponder)
-        _ = try await focusEvents.next()
+        let focused = try await focusEvents.next()
+        XCTAssertTrue(focused, "revealing claims the field — the same stream releases it with false")
     }
 }
