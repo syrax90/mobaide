@@ -598,9 +598,7 @@ button {
   text-decoration: none;
 }
 
-.terminal-session-id {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  color: var(--color-fg-muted);
+.terminal-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

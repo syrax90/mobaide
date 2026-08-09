@@ -23,8 +23,14 @@ private struct TerminalScreenContent: View {
     @State private var templateName = ""
     @State private var showShortcutPicker = false
     @State private var renameShortcutTarget: SavedShortcutUi?
+    /// Last known row for this session, the header label's source. Held rather
+    /// than read from the repository on demand because `SessionRepository` is
+    /// not `@Observable` — only its stream drives a re-render.
+    @State private var sessionRow: SessionResponse?
+    @State private var customTypeNames: [String: String]
     private let displayStore: TerminalDisplayStore
     private let sessionRepository: SessionRepository
+    private let customAgentTypesRepository: CustomAgentTypesRepository
     private let sessionId: String
 
     @Environment(Router.self) private var router
@@ -40,9 +46,21 @@ private struct TerminalScreenContent: View {
             resolvedKind: session?.kind,
             initialStatus: session?.state
         ))
+        _sessionRow = State(initialValue: session)
+        _customTypeNames = State(initialValue: Self.typeNames(container.customAgentTypesRepository.currentTypes))
         displayStore = container.terminalDisplayStore
         sessionRepository = container.sessionRepository
+        customAgentTypesRepository = container.customAgentTypesRepository
         self.sessionId = sessionId
+    }
+
+    /// Empty only on a cold-start deep link, until the first snapshot lands.
+    private var headerLabel: String {
+        sessionRow.map { SessionDisplay.headerLabel($0, customTypeNames: customTypeNames) } ?? ""
+    }
+
+    private static func typeNames(_ types: [CustomAgentTypeDto]) -> [String: String] {
+        Dictionary(types.map { ("custom_\($0.id)", $0.name) }, uniquingKeysWith: { _, last in last })
     }
 
     /// Leaves for the sessions list once the agent's snapshot proves this
@@ -98,7 +116,7 @@ private struct TerminalScreenContent: View {
         }
         .clipped()
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .navigationTitle(model.sessionId)
+        .navigationTitle(headerLabel)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -128,13 +146,27 @@ private struct TerminalScreenContent: View {
         }
         .task {
             checkSessionStillExists()
-            for await _ in sessionRepository.sessions() {
+            for await sessions in sessionRepository.sessions() {
+                // Last non-nil wins: a session dropping out of the snapshot
+                // pops this screen, so blanking the header on the way out
+                // would only flash an empty title bar.
+                if let row = sessions.first(where: { $0.session_id == sessionId }) {
+                    sessionRow = row
+                }
                 checkSessionStillExists()
             }
         }
         .task {
             for await _ in sessionRepository.sessionsSyncedStates() {
                 checkSessionStillExists()
+            }
+        }
+        // Only reachable for a custom-kind session whose row predates the
+        // `kind_label` snapshot; the registry is the label's second chance.
+        .task {
+            try? await customAgentTypesRepository.refreshCustomTypes()
+            for await types in customAgentTypesRepository.types() {
+                customTypeNames = Self.typeNames(types)
             }
         }
         .onAppear {

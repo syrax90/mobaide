@@ -17,10 +17,12 @@ import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionKind
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.wireName
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
+import com.mobaide.app.ui.sessions.sessionHeaderLabel
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
@@ -64,6 +66,7 @@ private const val CLEAR_INPUT_LINE = ""
 class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
+    private val customAgentTypesRepository: CustomAgentTypesRepository,
     private val templatesRepository: TemplatesRepository,
     private val shortcutsRepository: ShortcutsRepository,
     private val foregroundSessionTracker: ForegroundSessionTracker,
@@ -175,6 +178,21 @@ class TerminalViewModel @Inject constructor(
         )
             .onEach { resolvedKind.value = it }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** What the top bar names this session: its live OSC title while there is
+     *  one, else the kind label. Empty until the session row resolves (a cold
+     *  launch builds this VM before the first `sessions.changed` snapshot);
+     *  `mapNotNull` then keeps the last label rather than blanking the bar when
+     *  the session leaves the list on its way out. */
+    val headerLabel: StateFlow<String> =
+        combine(
+            sessionRepository.observeSessionList()
+                .mapNotNull { sessions -> sessions.firstOrNull { it.session_id == sessionId } },
+            customAgentTypesRepository.observeTypes(),
+        ) { session, types ->
+            sessionHeaderLabel(session, types.associate { "custom_${it.id}" to it.name })
+        }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()

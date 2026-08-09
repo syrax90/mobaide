@@ -171,6 +171,15 @@ enum SessionDisplay {
         }
     }
 
+    /// The terminal header's label: the live OSC title while there is one,
+    /// otherwise the kind. Deliberately never falls back to the session id —
+    /// the cards may show a truncated id to disambiguate a list, a single
+    /// screen's header has nothing to disambiguate against.
+    static func headerLabel(_ session: SessionResponse, customTypeNames: [String: String]) -> String {
+        if let title = session.title, !title.isBlank { return title }
+        return kindLabel(session, customTypeNames: customTypeNames)
+    }
+
     static func stateColor(_ state: String) -> Color {
         switch state {
         case "running": return MobaideColors.stateRunning

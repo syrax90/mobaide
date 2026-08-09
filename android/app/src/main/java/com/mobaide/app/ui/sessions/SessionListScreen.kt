@@ -199,26 +199,6 @@ fun SessionListScreen(
     }
 }
 
-/**
- * Human-readable label for a session's kind. Custom types prefer the wire
- * `kind_label` snapshot (creation-time name — stable across rename/delete of
- * the type), then a live registry lookup by wire kind, then a generic
- * fallback.
- */
-private fun sessionKindLabel(
-    session: SessionResponse,
-    customTypeNames: Map<String, String>,
-): String = when (val kind = session.kind) {
-    SessionKind.Claude -> "Claude Code"
-    SessionKind.Codex -> "Codex"
-    SessionKind.Antigravity -> "Antigravity"
-    SessionKind.AutoScan -> "Auto Scan"
-    SessionKind.Shell -> "Terminal"
-    is SessionKind.Custom -> session.kind_label
-        ?: customTypeNames[kind.raw]
-        ?: "Custom"
-}
-
 @Composable
 private fun SessionCard(
     session: SessionResponse,

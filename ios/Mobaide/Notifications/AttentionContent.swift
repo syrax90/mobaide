@@ -42,9 +42,3 @@ enum AttentionContent {
         sessions.filter { content(for: $0) != nil }
     }
 }
-
-private extension String {
-    var isBlank: Bool {
-        trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-}
