@@ -63,6 +63,7 @@ final class CreateSessionModelAutoScanTests: XCTestCase {
                 terminalSessionStore: TerminalTestSupport.store(harness)
             ),
             preferencesStore: prefs ?? isolatedPrefs(),
+            tokenStore: harness.tokenStore,
             customAgentTypesRepository: CustomAgentTypesRepository(
                 centralAPI: TerminalTestSupport.stubbedCentralAPI(),
                 userIdentityStore: harness.userIdentityStore

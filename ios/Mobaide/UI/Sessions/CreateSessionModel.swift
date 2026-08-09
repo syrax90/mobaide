@@ -89,6 +89,9 @@ final class CreateSessionModel {
     var selection: ProjectSelection = .none
     var customPathDraft = ""
     private(set) var customPathError: String?
+    /// Ad-hoc launch directories previously used against this agent,
+    /// most-recent-first. Device-local and never sent on the wire.
+    private(set) var recentCustomPaths: [String] = []
     var mode: Mode?
 
     // Custom agent types (proto-v7)
@@ -165,6 +168,7 @@ final class CreateSessionModel {
     private let agentAPI: AgentAPI
     private let sessionRepository: SessionRepository
     private let preferencesStore: PreferencesStore
+    private let tokenStore: TokenStore
     private let customAgentTypesRepository: CustomAgentTypesRepository
     private let autoScanRepository: AutoScanRepository
     private let navBroadcaster = Broadcaster<String>(replay: .none)
@@ -191,6 +195,7 @@ final class CreateSessionModel {
         agentAPI: AgentAPI,
         sessionRepository: SessionRepository,
         preferencesStore: PreferencesStore,
+        tokenStore: TokenStore,
         customAgentTypesRepository: CustomAgentTypesRepository,
         autoScanRepository: AutoScanRepository,
         autoScanProject: String? = nil
@@ -198,6 +203,7 @@ final class CreateSessionModel {
         self.agentAPI = agentAPI
         self.sessionRepository = sessionRepository
         self.preferencesStore = preferencesStore
+        self.tokenStore = tokenStore
         self.customAgentTypesRepository = customAgentTypesRepository
         self.autoScanRepository = autoScanRepository
         self.autoScanProjectPreset = autoScanProject
@@ -469,6 +475,47 @@ final class CreateSessionModel {
         }
     }
 
+    /// Enters "Custom path…" mode and loads the per-agent recents. Re-selecting
+    /// while already in the mode only refreshes them: unlike Android's dropdown
+    /// item this row stays on screen, so a stray second tap must not wipe a
+    /// draft the user has already typed.
+    func selectCustomPath() {
+        if case .customPath = selection {
+            refreshRecentCustomPaths()
+            return
+        }
+        selection = .customPath("")
+        customPathDraft = ""
+        customPathError = nil
+        worktree = false
+        branchName = ""
+        refreshRecentCustomPaths()
+    }
+
+    /// Fills the field from a recent, so a tapped row runs the same validation
+    /// as typed text (Android `pickRecentCustomPath`).
+    func pickRecentCustomPath(_ path: String) {
+        setCustomPath(path)
+    }
+
+    func removeRecentCustomPath(_ path: String) {
+        guard let agentKey = agentScopeKey else { return }
+        preferencesStore.removeRecentCustomPath(agentKey: agentKey, path: path)
+        refreshRecentCustomPaths()
+    }
+
+    private func refreshRecentCustomPaths() {
+        guard let agentKey = agentScopeKey else {
+            recentCustomPaths = []
+            return
+        }
+        recentCustomPaths = preferencesStore.getRecentCustomPaths(agentKey: agentKey)
+    }
+
+    private var agentScopeKey: String? {
+        tokenStore.getAgentScopeKey()
+    }
+
     func setCustomPath(_ path: String) {
         customPathDraft = path
         customPathError = Self.validateCustomPath(path)
@@ -548,11 +595,22 @@ final class CreateSessionModel {
         // Auto Scan has its own submit button and endpoint; it never reaches
         // the create-session path.
         guard let request = buildRequest(mode: mode) else { return }
+        // Both halves of the recents write are pinned before the round-trip: the
+        // wizard stays interactive while the POST is in flight, so re-reading
+        // afterwards could file a directory that was never launched — or file it
+        // under whichever agent the user switched to meanwhile.
+        let launchSelection = selection
+        let launchScopeKey = agentScopeKey
         submitting = true
         error = nil
         do {
             let response = try await sessionRepository.createSession(request)
-            persistLastUsed(mode: mode, response: response)
+            persistLastUsed(
+                selection: launchSelection,
+                scopeKey: launchScopeKey,
+                mode: mode,
+                response: response
+            )
             submitting = false
             navBroadcaster.emit(response.session_id)
         } catch let apiError as APIError where mode == .codex && apiError.errorBody.contains("codex_auth_required") {
@@ -861,9 +919,26 @@ final class CreateSessionModel {
         }
     }
 
-    private func persistLastUsed(mode: Mode, response: SessionResponse) {
-        if case .stored(let name) = selection {
+    private func persistLastUsed(
+        selection: ProjectSelection,
+        scopeKey: String?,
+        mode: Mode,
+        response: SessionResponse
+    ) {
+        switch selection {
+        case .stored(let name):
             preferencesStore.setLastUsedProjectName(name)
+        case .customPath(let path):
+            // An ad-hoc directory is remembered as a per-agent recent and
+            // deliberately never as the last-used project, so reopening the wizard
+            // still defaults to the last real project. Re-validated because
+            // `setCustomPath` assigns `selection` even when the draft is invalid.
+            if let scopeKey, Self.validateCustomPath(path) == nil {
+                preferencesStore.addRecentCustomPath(agentKey: scopeKey, path: path)
+                refreshRecentCustomPaths()
+            }
+        case .none:
+            break
         }
         preferencesStore.setLastUsedSessionId(response.session_id)
         switch mode {

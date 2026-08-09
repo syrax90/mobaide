@@ -33,6 +33,7 @@ private struct CreateSessionContent: View {
             agentAPI: container.agentAPI,
             sessionRepository: container.sessionRepository,
             preferencesStore: container.preferencesStore,
+            tokenStore: container.tokenStore,
             customAgentTypesRepository: container.customAgentTypesRepository,
             autoScanRepository: container.autoScanRepository,
             autoScanProject: autoScanProject
@@ -139,8 +140,12 @@ private struct CreateSessionContent: View {
                     model.selectStoredProject(project.name)
                 }
             }
-            selectableRow("Custom path…", selected: isCustomPathSelected) {
-                model.setCustomPath(model.customPathDraft)
+            selectableRow(
+                "Custom path…",
+                subtitle: "Run once — no project is created",
+                selected: isCustomPathSelected
+            ) {
+                model.selectCustomPath()
             }
             Button {
                 projectSheet = .create
@@ -159,6 +164,18 @@ private struct CreateSessionContent: View {
                 .textInputAutocapitalization(.never)
                 if let error = model.customPathError {
                     Text(error).font(.footnote).foregroundStyle(colors.error)
+                } else {
+                    Text(#"e.g. /home/user/code or D:\projects\demo"#)
+                        .font(.footnote)
+                        .foregroundStyle(colors.onSurfaceVariant)
+                }
+            }
+
+            if !model.recentCustomPaths.isEmpty {
+                Section("Recent paths") {
+                    ForEach(model.recentCustomPaths, id: \.self) { path in
+                        recentPathRow(path)
+                    }
                 }
             }
         }
@@ -510,15 +527,64 @@ private struct CreateSessionContent: View {
         model.codexFullAuto = fullAuto
     }
 
-    private func selectableRow(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func selectableRow(
+        _ title: String,
+        subtitle: String? = nil,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack {
-                Text(title).foregroundStyle(colors.primary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).foregroundStyle(colors.primary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(colors.onSurfaceVariant)
+                    }
+                }
                 Spacer()
                 if selected {
                     Image(systemName: "checkmark").foregroundStyle(colors.primary)
                 }
             }
+        }
+    }
+
+    /// Tap fills the field; swipe forgets the path. Head truncation keeps the
+    /// tail visible — the trailing folder is what tells two long paths apart.
+    private func recentPathRow(_ path: String) -> some View {
+        Button {
+            model.pickRecentCustomPath(path)
+        } label: {
+            Label {
+                Text(path)
+                    .font(.footnote.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } icon: {
+                Image(systemName: "folder")
+                    .foregroundStyle(colors.onSurfaceVariant)
+            }
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing) {
+            deleteRecentButton(path)
+        }
+        .contextMenu {
+            // Both affordances, as `GitScreen.row` does: swipe is the primary
+            // gesture, long-press the discoverable one — and the only removal
+            // path that does not depend on swipe behaving inside a `Form`.
+            deleteRecentButton(path)
+        }
+    }
+
+    private func deleteRecentButton(_ path: String) -> some View {
+        Button(role: .destructive) {
+            model.removeRecentCustomPath(path)
+        } label: {
+            Label("Delete", systemImage: "trash")
         }
     }
 

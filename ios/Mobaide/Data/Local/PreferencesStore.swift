@@ -16,13 +16,14 @@ struct PreferencesStore: @unchecked Sendable {
     static let keyTerminalStaticColumns = "terminal_static_columns"
 
     static let attentionSeenPrefix = "attention_seen::"
+    static let recentCustomPathsPrefix = "recent_custom_paths::"
 
     static let maxRecentCustomPaths = 5
     static let maxRecentShortcutChords = 10
 
     static func linearLabelsKey(projectName: String) -> String { "linear_labels::\(projectName)" }
     static func linearStatesKey(projectName: String) -> String { "linear_states::\(projectName)" }
-    static func recentCustomPathsKey(agentKey: String) -> String { "recent_custom_paths::\(agentKey)" }
+    static func recentCustomPathsKey(agentKey: String) -> String { "\(recentCustomPathsPrefix)\(agentKey)" }
     static func recentShortcutChordsKey(kindKey: String) -> String { "recent_shortcut_chords::\(kindKey)" }
     static func attentionSeenKey(agentKey: String) -> String { "\(attentionSeenPrefix)\(agentKey)" }
 
@@ -133,6 +134,22 @@ struct PreferencesStore: @unchecked Sendable {
             Array(paths.prefix(Self.maxRecentCustomPaths)),
             forKey: Self.recentCustomPathsKey(agentKey: agentKey)
         )
+    }
+
+    /// Drop `path` from the agent's bucket, matching on the same trimmed exact
+    /// string `addRecentCustomPath` dedupes on.
+    func removeRecentCustomPath(agentKey: String, path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = Self.recentCustomPathsKey(agentKey: agentKey)
+        let remaining = getRecentCustomPaths(agentKey: agentKey).filter { $0 != trimmed }
+        // Drop the key outright once emptied rather than parking an "[]" blob:
+        // in DIRECT mode the key embeds the agent URL, and `setOrRemove` /
+        // `removeAllAttentionSeen` set the same remove-don't-blank precedent.
+        if remaining.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            encodeBlob(remaining, forKey: key)
+        }
     }
 
     /// Recently sent shortcut chords for one session kind, most-recent-first,

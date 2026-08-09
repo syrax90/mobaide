@@ -81,6 +81,13 @@ struct TokenStore: Sendable {
         )
     }
 
+    /// Identity for per-agent local preference buckets (Android
+    /// `agentScopeKey`). The URL fallback carries DIRECT mode, where no
+    /// agent id is ever issued.
+    func getAgentScopeKey() -> String? {
+        getAgentId() ?? getAgentUrl()
+    }
+
     /// Full agent credentials on file for the current mode. RELAY does not
     /// require pairing/device ids — they only matter for re-pairing.
     func isLoggedIn() -> Bool {
