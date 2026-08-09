@@ -145,6 +145,19 @@ class AgentListViewModel @Inject constructor(
      */
     private var deviceCodePollJob: Job? = null
 
+    /**
+     * Wall clock the device-code poll measures its deadline against.
+     *
+     * Overridable because `delay` inside a `runTest` advances only the
+     * scheduler's virtual clock — a loop that compares
+     * `System.currentTimeMillis()` against a deadline therefore never
+     * terminates under `advanceUntilIdle`, since each iteration schedules
+     * another `delay` and the real clock barely moves. Tests point this at
+     * `testScheduler.currentTime` so virtual time drives the deadline too.
+     * iOS carries the same seam as `AgentListModel.now`.
+     */
+    internal var nowMillis: () -> Long = { System.currentTimeMillis() }
+
     init {
         viewModelScope.launch {
             agentRepository.observeAgents().collect { agents ->
@@ -349,7 +362,7 @@ class AgentListViewModel @Inject constructor(
         // wake the radio every two seconds for the life of the process.
         val deadline = parseInstantMillis(expiresAt)
         deviceCodePollJob = viewModelScope.launch {
-            while (deadline == null || System.currentTimeMillis() < deadline) {
+            while (deadline == null || nowMillis() < deadline) {
                 delay(DEVICE_CODE_POLL_INTERVAL_MS)
                 val status = try {
                     agentRepository.getDeviceCodeStatus(requestId)

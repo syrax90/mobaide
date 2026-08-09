@@ -87,17 +87,32 @@ class AgentListViewModelDeviceCodeTest {
     private fun Fixture.buildVm(): AgentListViewModel = AgentListViewModel(
         agentRepository, connectionStore, tokenStore,
         sessionManager, agentEventBus, deviceIdentityStore, trustKeyPinning,
-    )
+    ).also {
+        // Point the poll's deadline clock at virtual time. `delay` advances
+        // only the test scheduler, so a loop comparing the real clock against
+        // `expires_at` would never terminate under `advanceUntilIdle` — each
+        // iteration schedules another `delay` while the wall clock stands
+        // still. Anchoring both to the scheduler makes the deadline reachable.
+        it.nowMillis = { mainDispatcherRule.scheduler.currentTime }
+    }
 
     companion object {
         private const val TEST_DEVICE_ID = "dev-uuid-42"
         private const val TEST_DEVICE_NAME = "Test Device"
         private const val REQUEST_ID = "req-1"
 
+        /**
+         * Ten minutes past the virtual-clock epoch: far enough that the poll
+         * survives every scripted tick, near enough that `advanceUntilIdle`
+         * reaches it in a bounded number of iterations instead of spinning.
+         */
+        private const val POLL_DEADLINE_ISO = "1970-01-01T00:10:00Z"
+        private const val POLL_DEADLINE_MS = 600_000L
+
         private val MINT = DeviceCodeMintResponse(
             request_id = REQUEST_ID,
             code = "WDJB-MJHT",
-            expires_at = "2099-01-01T00:00:00Z",
+            expires_at = POLL_DEADLINE_ISO,
             verification_command = "mobaide-agent pair WDJB-MJHT",
         )
 
@@ -110,7 +125,7 @@ class AgentListViewModelDeviceCodeTest {
             blockedReason: String? = null,
         ) = DeviceCodeStatusResponse(
             status = status,
-            expires_at = "2099-01-01T00:00:00Z",
+            expires_at = POLL_DEADLINE_ISO,
             hostname = hostname,
             os = os,
             is_repair = isRepair,
