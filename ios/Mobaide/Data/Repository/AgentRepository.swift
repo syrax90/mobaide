@@ -93,6 +93,43 @@ final class AgentRepository: AgentStatusApplying {
         return response
     }
 
+    /// Mint a short pairing code to retype on the machine being paired.
+    ///
+    /// The reverse of `claimAgentByPairing`: nothing has to be copied *off* the
+    /// agent host, which is what makes it work where a camera cannot reach.
+    func mintDeviceCode() async throws -> DeviceCodeMintResponse {
+        try await centralAPI.mintDeviceCode(userToken: try userToken())
+    }
+
+    func deviceCodeStatus(requestId: String) async throws -> DeviceCodeStatusResponse {
+        try await centralAPI.getDeviceCodeStatus(userToken: try userToken(), requestId: requestId)
+    }
+
+    /// Approve a redeemed code; refreshes the agent list like a QR claim does.
+    @discardableResult
+    func confirmDeviceCode(
+        requestId: String,
+        request: DeviceCodeConfirmRequest
+    ) async throws -> PairingClaimResponse {
+        let response = try await centralAPI.confirmDeviceCode(
+            userToken: try userToken(),
+            requestId: requestId,
+            request: request
+        )
+        // Best-effort for the same reason as the QR claim: the pairing already
+        // succeeded server-side and the watcher refreshes again.
+        try? await refreshAgents()
+        return response
+    }
+
+    func cancelDeviceCode(requestId: String) async throws {
+        try await centralAPI.cancelDeviceCode(userToken: try userToken(), requestId: requestId)
+    }
+
+    func trustPin() async throws -> TrustPinResponse {
+        try await centralAPI.getTrustPin(userToken: try userToken())
+    }
+
     private func userToken() throws -> String {
         guard let token = userIdentityStore.getUserAccessToken() else {
             throw APIError(code: -1, errorBody: "Not signed in")

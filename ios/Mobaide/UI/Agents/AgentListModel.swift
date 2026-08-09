@@ -19,6 +19,9 @@ struct AgentCredentials: Identifiable, Equatable {
 @Observable
 final class AgentListModel {
     static let waitForOnlineTimeoutSeconds = 60
+    static let deviceCodePollIntervalSeconds = 2
+    /// The `detail.error` discriminator on the relay's account-trust-pin refusal.
+    static let trustPinMismatchCode = "trust_key_pin_mismatch"
 
     private(set) var agents: [AgentSummaryResponse] = []
     private(set) var connectedAgentId: String?
@@ -28,6 +31,15 @@ final class AgentListModel {
     /// Drives the single pairing sheet whose content swaps scanner → flow as
     /// `qrPairing` advances (avoids a dismiss-then-present sheet glitch).
     var pairingSheetPresented = false
+
+    var deviceCodePairing: DeviceCodePairingState = .idle
+    /// Separate presentation flag from `pairingSheetPresented`: the two flows
+    /// can never be active at once, but the device-code sheet hands off to the
+    /// QR sheet for the shared waiting-for-online tail, and one flag cannot
+    /// express that swap.
+    var deviceCodeSheetPresented = false
+    var deviceCodePollTask: Task<Void, Never>?
+    var deviceCodeMintTask: Task<Void, Never>?
 
     var showAddInput = false
     var addName = ""
@@ -78,6 +90,8 @@ final class AgentListModel {
 
     isolated deinit {
         watcherTask?.cancel()
+        deviceCodePollTask?.cancel()
+        deviceCodeMintTask?.cancel()
     }
 
     var isEmpty: Bool { agents.isEmpty }
@@ -261,6 +275,213 @@ final class AgentListModel {
             } catch {
                 self.qrPairing = .error("Pairing failed: \(ErrorText.message(for: error))")
             }
+        }
+    }
+
+    // MARK: - Device-code pairing (browser/phone mints, operator retypes)
+
+    /// Mint a pairing code and start watching for a machine to enter it.
+    func startDeviceCodePairing() {
+        guard case .idle = deviceCodePairing else { return }
+        deviceCodePairing = .minting
+        deviceCodeSheetPresented = true
+        // Retained and re-checked after the await: the minting sheet is
+        // interactively dismissible, so a swipe-down mid-mint would otherwise
+        // leave this task writing `.waitingForHost` over an `.idle` state and
+        // starting a poll with no UI.
+        deviceCodeMintTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let minted = try await self.agentRepository.mintDeviceCode()
+                guard case .minting = self.deviceCodePairing else {
+                    // The user backed out while the mint was in flight; release
+                    // the code instead of letting it age out.
+                    try? await self.agentRepository.cancelDeviceCode(
+                        requestId: minted.request_id
+                    )
+                    return
+                }
+                self.deviceCodePairing = .waitingForHost(
+                    requestId: minted.request_id,
+                    code: minted.code,
+                    command: minted.verification_command
+                )
+                self.startDeviceCodePoll(
+                    requestId: minted.request_id,
+                    expiresAt: minted.expires_at
+                )
+            } catch {
+                guard case .minting = self.deviceCodePairing else { return }
+                self.deviceCodePairing = .error(Self.deviceCodeMessage(for: error))
+            }
+        }
+    }
+
+    /// Poll until a machine redeems the code, or the code dies.
+    ///
+    /// Polled rather than pushed, unlike everything else this model reads:
+    /// a redemption is a step inside a handshake, not a change to any entity a
+    /// `*.changed` event describes. Runs until the request reaches a terminal
+    /// status or its deadline passes — deliberately *through* `.confirming`,
+    /// since the confirm window is the nonce's and an expiry that arrives
+    /// while the user is deciding has to reach the screen.
+    private func startDeviceCodePoll(requestId: String, expiresAt: String) {
+        deviceCodePollTask?.cancel()
+        // Bounded by the request's own deadline rather than `while true`: a
+        // client that loses connectivity with the sheet open would otherwise
+        // poll every two seconds for the life of the process.
+        // `CountdownView.parse` is the codebase's one reader of relay ISO
+        // timestamps (it handles both the fractional and plain forms Python's
+        // `isoformat()` can emit). A shape it cannot read yields nil, which
+        // leaves the loop unbounded — the same behaviour as before this bound
+        // existed, so an unparseable deadline degrades rather than breaks.
+        let deadline = CountdownView.parse(expiresAt)
+        deviceCodePollTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                while deadline.map({ self.now() < $0 }) ?? true {
+                    try Task.checkCancellation()
+                    try await self.sleeper.sleep(for: .seconds(Self.deviceCodePollIntervalSeconds))
+                    // Polling continues through `.confirming`, deliberately:
+                    // the confirm window is the nonce's, so a user who sits on
+                    // the screen past it would otherwise be looking at a live
+                    // button whose only possible outcome is a 410.
+                    guard self.isDeviceCodePollable else { return }
+                    let status: DeviceCodeStatusResponse
+                    do {
+                        status = try await self.agentRepository.deviceCodeStatus(requestId: requestId)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        // A dropped poll is not a failed pairing: the code is
+                        // still live server-side, so keep polling rather than
+                        // tearing down a request the user can still complete.
+                        continue
+                    }
+                    guard self.isDeviceCodePollable else { return }
+                    switch status.status {
+                    case "redeemed":
+                        self.deviceCodePairing = .confirming(
+                            requestId: requestId,
+                            hostname: status.hostname ?? "an unnamed machine",
+                            os: status.os,
+                            repairAgentName: status.repair_agent_name,
+                            blockedReason: DeviceCodeBlockedReason(wire: status.blocked_reason)
+                        )
+                    case "expired", "canceled":
+                        self.deviceCodePairing = .error(self.deviceCodeExpiredMessage)
+                        return
+                    default:
+                        continue
+                    }
+                }
+                if self.isDeviceCodePollable {
+                    self.deviceCodePairing = .error(self.deviceCodeExpiredMessage)
+                }
+            } catch {
+                // Cancellation (dismiss / deinit) unwinds here.
+                self.watcherCancellationObserved = true
+            }
+        }
+    }
+
+    /// Whether the poll still has a phase to drive.
+    private var isDeviceCodePollable: Bool {
+        switch deviceCodePairing {
+        case .waitingForHost, .confirming: return true
+        default: return false
+        }
+    }
+
+    private var deviceCodeExpiredMessage: String {
+        if case .confirming = deviceCodePairing {
+            return "This pairing request expired before it was confirmed. Get a new code."
+        }
+        return "That code expired before any machine used it. Get a new one."
+    }
+
+    /// Approve the machine that entered the code.
+    func confirmDeviceCode() {
+        guard case .confirming(let requestId, _, _, _, let blocked) = deviceCodePairing else { return }
+        guard blocked == nil else { return }
+        deviceCodePollTask?.cancel()
+        deviceCodePollTask = nil
+        deviceCodePairing = .claiming(requestId: requestId)
+        Task { [weak self] in
+            guard let self else { return }
+            let request = DeviceCodeConfirmRequest(
+                mobile_device_id: self.deviceIdentityStore.getOrCreateDeviceId(),
+                mobile_device_name: self.deviceIdentityStore.getDeviceName(),
+                platform: "ios"
+            )
+            do {
+                let response = try await self.agentRepository.confirmDeviceCode(
+                    requestId: requestId,
+                    request: request
+                )
+                // Hand off to the shared tail: from here the two pairing
+                // directions are the same problem — the relay has the
+                // credentials and the agent still has to pick them up.
+                self.deviceCodePairing = .idle
+                self.deviceCodeSheetPresented = false
+                self.pairingSheetPresented = true
+                self.startWaitingForOnlineWatcher(
+                    agentId: response.agent_id,
+                    friendlyName: response.agent_friendly_name,
+                    wsDeliveredAtClaim: response.ws_delivered
+                )
+            } catch {
+                self.deviceCodePairing = .error(Self.deviceCodeMessage(for: error))
+            }
+        }
+    }
+
+    /// Abandon the pairing request.
+    ///
+    /// The cancel call is best-effort: it is a courtesy to the agent waiting on
+    /// its WebSocket, and a failure changes nothing the user can act on.
+    func dismissDeviceCodePairing() {
+        let requestId = deviceCodePairing.requestId
+        resetDeviceCodePairing()
+        deviceCodeSheetPresented = false
+        guard let requestId else { return }
+        Task { [agentRepository] in
+            try? await agentRepository.cancelDeviceCode(requestId: requestId)
+        }
+    }
+
+    /// Cancel the poll and reset to idle without touching sheet presentation —
+    /// the sheet's `onDismiss` calls this so a swipe-to-close still tears the
+    /// poll down cleanly.
+    func resetDeviceCodePairing() {
+        deviceCodeMintTask?.cancel()
+        deviceCodeMintTask = nil
+        deviceCodePollTask?.cancel()
+        deviceCodePollTask = nil
+        deviceCodePairing = .idle
+    }
+
+    /// Copy for the reversed direction's failures.
+    ///
+    /// Separate from the QR flow's messages because the remedies differ.
+    static func deviceCodeMessage(for error: Error) -> String {
+        guard let apiError = error as? APIError else {
+            return "Pairing failed: \(ErrorText.message(for: error))"
+        }
+        if apiError.errorBody.contains(trustPinMismatchCode) {
+            return "This relay's signing key is not the one this account first paired with. "
+                + "Pairing is refused. Compare the fingerprint on a machine you already paired "
+                + "(mobaide-agent show-trust-fp) and contact the relay operator if they differ."
+        }
+        switch apiError.code {
+        case 404: return "This pairing request no longer exists. Get a new code."
+        case 409: return DeviceCodeBlockedReason.ownedByOther.message
+        case 410: return "This pairing request expired or was already used. Get a new code."
+        case 429: return "Too many pairing attempts. Wait a moment and try again."
+        case 503:
+            return "Pairing is not configured on this relay — it is missing its manifest "
+                + "signing keys. Contact the relay operator."
+        default: return "Pairing failed: \(ErrorText.message(for: error))"
         }
     }
 

@@ -434,6 +434,11 @@ long-press action, reachable through a new `Route.createAutoScan(projectName:)`.
 No wire field, endpoint, protocol version or dependency changes —
 `ClaudeOptionsModel` already carried `plan_mode` / `initial_prompt` / `worktree`,
 and `ProjectInfo.has_linear_key` / `auto_scan_prompt` were decoded but unread.
+CLA-199 adds the reversed device-code pairing direction: a new "Pair with a
+code" action in the Agents screen's overflow menu opens a guarded mint →
+wait → confirm flow (`DeviceCodePairingState`) beside the CLA-102 QR
+scanner; the account-level `trust_key_fp` pin behind it is documented in
+[docs/qr-pairing.md](qr-pairing.md).
 Remaining feature screens land in later issues.
 
 ## Layout

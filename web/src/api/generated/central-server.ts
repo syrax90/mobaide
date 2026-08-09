@@ -516,6 +516,96 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/pairing/device-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint Device Code
+         * @description Mint a short code for the operator to retype on the agent host.
+         */
+        post: operations["mint_device_code_api_pairing_device_code_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pairing/device-code/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Redeem Device Code
+         * @description Exchange a retyped code for a pairing nonce. Anonymous by necessity.
+         *
+         *     The agent has no credentials yet — that is the whole point of pairing —
+         *     so this endpoint authenticates nothing. It hands back no secret beyond
+         *     a nonce that is worthless without the account owner's separate confirm,
+         *     plus the masked account name the operator needs to decide whether to
+         *     grant this machine to that account at all.
+         */
+        post: operations["redeem_device_code_api_pairing_device_code_redeem_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pairing/device-code/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Device Code Status
+         * @description Poll a minted code. Owner-scoped: a foreign ``request_id`` is a 404.
+         */
+        get: operations["get_device_code_status_api_pairing_device_code__request_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Device Code
+         * @description Abandon a pairing request and expire any nonce it handed out.
+         */
+        delete: operations["cancel_device_code_api_pairing_device_code__request_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pairing/device-code/{request_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Device Code
+         * @description Approve a redeemed code and release credentials to the waiting agent.
+         */
+        post: operations["confirm_device_code_api_pairing_device_code__request_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/pairing/initiate": {
         parameters: {
             query?: never;
@@ -534,6 +624,29 @@ export interface paths {
          *     192-bit nonce + the short TTL + the single-flight CAS at claim time.
          */
         post: operations["initiate_pairing_api_pairing_initiate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pairing/trust-pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Trust Pin
+         * @description Report the relay's signing fingerprint and the account's recorded pin.
+         *
+         *     Advisory only. Clients may display the pair and warn when they differ,
+         *     but must not copy ``account_trust_key_fp`` into a local trust store.
+         */
+        get: operations["get_trust_pin_api_pairing_trust_pin_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -941,6 +1054,146 @@ export interface components {
             password?: string | null;
         };
         /**
+         * DeviceCodeConfirmRequest
+         * @description Browser's approval of a redeemed code.
+         *
+         *     Carries the same device fields as ``PairingClaimRequest`` because the
+         *     confirm runs the identical completion path.
+         */
+        DeviceCodeConfirmRequest: {
+            /** Friendly Name */
+            friendly_name?: string | null;
+            /** Mobile Device Id */
+            mobile_device_id: string;
+            /** Mobile Device Name */
+            mobile_device_name?: string | null;
+            /** Platform */
+            platform?: string | null;
+        };
+        /**
+         * DeviceCodeMintResponse
+         * @description Server's reply to ``POST /api/pairing/device-code``.
+         *
+         *     ``request_id`` is the handle every follow-up call uses, so the code
+         *     itself never travels in a URL path or query string where the relay's
+         *     access log would capture it.
+         */
+        DeviceCodeMintResponse: {
+            /** Code */
+            code: string;
+            /** Expires At */
+            expires_at: string;
+            /** Request Id */
+            request_id: string;
+            /** Verification Command */
+            verification_command: string;
+        };
+        /**
+         * DeviceCodeRedeemRequest
+         * @description The agent's anonymous redeem, keyed by the retyped code.
+         *
+         *     ``redeemer_id`` is generated and persisted by the agent *before* the
+         *     request goes out. The nonce is handed out exactly once, so without a
+         *     stable redeemer identity a response lost in transit would leave the
+         *     operator holding a burnt code and no way to reach the pairing
+         *     WebSocket; a retry carrying the same id is answered from the existing
+         *     row instead of rejected as a double redeem.
+         */
+        DeviceCodeRedeemRequest: {
+            /** Code */
+            code: string;
+            /** Current Agent Id */
+            current_agent_id?: string | null;
+            /** Hostname */
+            hostname?: string | null;
+            /** Os */
+            os?: string | null;
+            /** Redeemer Id */
+            redeemer_id: string;
+        };
+        /**
+         * DeviceCodeRedeemResponse
+         * @description What the agent needs to wait for its credentials.
+         *
+         *     Shaped like ``PairingInitiateResponse`` minus the QR text: the agent
+         *     derives the WS URL from ``RELAY_SERVER_URL`` + ``nonce`` exactly as it
+         *     does for the QR flow.
+         *
+         *     ``account_hint`` is a masked address, and it is the load-bearing
+         *     control of the reversed direction. Because the browser mints the code,
+         *     a confirmation shown only in the browser is confirmed by whoever minted
+         *     it — including an attacker who talked the operator into running the
+         *     command. Naming the account on the agent's own terminal is what lets
+         *     the human refuse.
+         *
+         *     ``nonce`` is ``None`` on a replayed redeem: it is never stored
+         *     server-side, so a retrying agent reads it back from its own pending
+         *     file.
+         */
+        DeviceCodeRedeemResponse: {
+            /** Account Hint */
+            account_hint: string;
+            /** Expires At */
+            expires_at: string;
+            /**
+             * Is Repair
+             * @default false
+             */
+            is_repair: boolean;
+            /** Nonce */
+            nonce?: string | null;
+            /** Relay Url */
+            relay_url: string;
+            /**
+             * Replayed
+             * @default false
+             */
+            replayed: boolean;
+            /** Trust Key Fp */
+            trust_key_fp: string;
+        };
+        /**
+         * DeviceCodeStatusResponse
+         * @description Poll state for the browser half of the flow.
+         *
+         *     ``hostname`` / ``os`` come from the anonymous redeem body and are
+         *     therefore attacker-settable — the same caveat that applies to the QR
+         *     flow's ``current_agent_id``. They are shown so a legitimate operator
+         *     can recognise their machine, not as an authentication signal.
+         *
+         *     ``blocked_reason`` surfaces the ownership verdict *before* the confirm
+         *     click, so a re-pair that is going to 404 or 409 says so while the code
+         *     and nonce are still spendable.
+         *
+         *     ``repair_agent_name`` is set only when the redeeming host claims an
+         *     agent this account already owns. Approving then *moves* that agent —
+         *     rotating its token onto the redeemer and knocking the real host
+         *     offline — so the clients must name it rather than asking the
+         *     first-pair question.
+         */
+        DeviceCodeStatusResponse: {
+            /** Blocked Reason */
+            blocked_reason?: ("unknown_agent" | "owned_by_other") | null;
+            /** Expires At */
+            expires_at: string;
+            /** Hostname */
+            hostname?: string | null;
+            /**
+             * Is Repair
+             * @default false
+             */
+            is_repair: boolean;
+            /** Os */
+            os?: string | null;
+            /** Repair Agent Name */
+            repair_agent_name?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "redeemed" | "confirmed" | "canceled" | "expired";
+        };
+        /**
          * DeviceResponse
          * @description One entry in the user's ``GET /api/devices`` listing.
          *
@@ -1236,6 +1489,21 @@ export interface components {
              * @description Base64-encoded Ed25519 manifest-signing public key.
              */
             public_key_b64: string;
+        };
+        /**
+         * TrustPinResponse
+         * @description The relay's current signing fingerprint and the account's pin.
+         *
+         *     Read-only and advisory. Clients display it and may warn on a
+         *     difference; they must NOT write it into their local trust store.
+         */
+        TrustPinResponse: {
+            /** Account Trust Key Fp */
+            account_trust_key_fp?: string | null;
+            /** Relay Trust Key Fp */
+            relay_trust_key_fp: string;
+            /** Relay Url */
+            relay_url: string;
         };
         /**
          * UpdateCustomAgentTypeRequest
@@ -2153,6 +2421,154 @@ export interface operations {
             };
         };
     };
+    mint_device_code_api_pairing_device_code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCodeMintResponse"];
+                };
+            };
+        };
+    };
+    redeem_device_code_api_pairing_device_code_redeem_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceCodeRedeemRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCodeRedeemResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_device_code_status_api_pairing_device_code__request_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCodeStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_device_code_api_pairing_device_code__request_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_device_code_api_pairing_device_code__request_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceCodeConfirmRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PairingClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     initiate_pairing_api_pairing_initiate_post: {
         parameters: {
             query?: never;
@@ -2182,6 +2598,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_trust_pin_api_pairing_trust_pin_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrustPinResponse"];
                 };
             };
         };

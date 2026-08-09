@@ -35,6 +35,8 @@ _SENSITIVE_KEYS = frozenset(
         "x-api-key",
         "agent_token",
         "pairing_token",
+        "device_code",
+        "redeemer_id",
     }
 )
 

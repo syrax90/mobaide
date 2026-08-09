@@ -95,6 +95,29 @@ class ResendRateLimiter:
             self._evict_if_full()
             return None
 
+    async def peek(self, email: str) -> int | None:
+        """Report whether ``email`` is out of quota, without reserving a slot.
+
+        The read-only twin of ``try_acquire``. A caller that charges the
+        bucket only on some outcomes (the device-code circuit breaker
+        charges failed redeems, not successful pairings) still has to
+        refuse while the bucket is full — and using ``try_acquire`` for
+        that check would charge every caller, which is exactly what it is
+        trying to avoid.
+
+        Returns seconds-to-wait when exhausted, else ``None``.
+        """
+        key = self._normalise(email)
+        now = time.monotonic()
+        async with self._lock:
+            self._prune_entry(key, now)
+            entry = self._state.get(key, [])
+            if len(entry) >= self._hourly_cap and self._hourly_cap > 0:
+                oldest = entry[0]
+                wait = int(self._window - (now - oldest))
+                return max(1, wait or 1)
+            return None
+
     async def reset(self, email: str) -> None:
         """Clear the rate-limit state for an email."""
         key = self._normalise(email)

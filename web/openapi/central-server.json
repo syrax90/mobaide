@@ -406,6 +406,274 @@
         "title": "DeleteAccountRequest",
         "type": "object"
       },
+      "DeviceCodeConfirmRequest": {
+        "description": "Browser's approval of a redeemed code.\n\nCarries the same device fields as ``PairingClaimRequest`` because the\nconfirm runs the identical completion path.",
+        "properties": {
+          "friendly_name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Friendly Name"
+          },
+          "mobile_device_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+            "title": "Mobile Device Id",
+            "type": "string"
+          },
+          "mobile_device_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile Device Name"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform"
+          }
+        },
+        "required": [
+          "mobile_device_id"
+        ],
+        "title": "DeviceCodeConfirmRequest",
+        "type": "object"
+      },
+      "DeviceCodeMintResponse": {
+        "description": "Server's reply to ``POST /api/pairing/device-code``.\n\n``request_id`` is the handle every follow-up call uses, so the code\nitself never travels in a URL path or query string where the relay's\naccess log would capture it.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "verification_command": {
+            "title": "Verification Command",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "code",
+          "expires_at",
+          "verification_command"
+        ],
+        "title": "DeviceCodeMintResponse",
+        "type": "object"
+      },
+      "DeviceCodeRedeemRequest": {
+        "description": "The agent's anonymous redeem, keyed by the retyped code.\n\n``redeemer_id`` is generated and persisted by the agent *before* the\nrequest goes out. The nonce is handed out exactly once, so without a\nstable redeemer identity a response lost in transit would leave the\noperator holding a burnt code and no way to reach the pairing\nWebSocket; a retry carrying the same id is answered from the existing\nrow instead of rejected as a double redeem.",
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "current_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Agent Id"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "os": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Os"
+          },
+          "redeemer_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Redeemer Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "redeemer_id"
+        ],
+        "title": "DeviceCodeRedeemRequest",
+        "type": "object"
+      },
+      "DeviceCodeRedeemResponse": {
+        "description": "What the agent needs to wait for its credentials.\n\nShaped like ``PairingInitiateResponse`` minus the QR text: the agent\nderives the WS URL from ``RELAY_SERVER_URL`` + ``nonce`` exactly as it\ndoes for the QR flow.\n\n``account_hint`` is a masked address, and it is the load-bearing\ncontrol of the reversed direction. Because the browser mints the code,\na confirmation shown only in the browser is confirmed by whoever minted\nit \u2014 including an attacker who talked the operator into running the\ncommand. Naming the account on the agent's own terminal is what lets\nthe human refuse.\n\n``nonce`` is ``None`` on a replayed redeem: it is never stored\nserver-side, so a retrying agent reads it back from its own pending\nfile.",
+        "properties": {
+          "account_hint": {
+            "title": "Account Hint",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "is_repair": {
+            "default": false,
+            "title": "Is Repair",
+            "type": "boolean"
+          },
+          "nonce": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nonce"
+          },
+          "relay_url": {
+            "title": "Relay Url",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "trust_key_fp": {
+            "title": "Trust Key Fp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expires_at",
+          "trust_key_fp",
+          "relay_url",
+          "account_hint"
+        ],
+        "title": "DeviceCodeRedeemResponse",
+        "type": "object"
+      },
+      "DeviceCodeStatusResponse": {
+        "description": "Poll state for the browser half of the flow.\n\n``hostname`` / ``os`` come from the anonymous redeem body and are\ntherefore attacker-settable \u2014 the same caveat that applies to the QR\nflow's ``current_agent_id``. They are shown so a legitimate operator\ncan recognise their machine, not as an authentication signal.\n\n``blocked_reason`` surfaces the ownership verdict *before* the confirm\nclick, so a re-pair that is going to 404 or 409 says so while the code\nand nonce are still spendable.\n\n``repair_agent_name`` is set only when the redeeming host claims an\nagent this account already owns. Approving then *moves* that agent \u2014\nrotating its token onto the redeemer and knocking the real host\noffline \u2014 so the clients must name it rather than asking the\nfirst-pair question.",
+        "properties": {
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unknown_agent",
+                  "owned_by_other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "is_repair": {
+            "default": false,
+            "title": "Is Repair",
+            "type": "boolean"
+          },
+          "os": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Os"
+          },
+          "repair_agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repair Agent Name"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "redeemed",
+              "confirmed",
+              "canceled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "expires_at"
+        ],
+        "title": "DeviceCodeStatusResponse",
+        "type": "object"
+      },
       "DeviceResponse": {
         "description": "One entry in the user's ``GET /api/devices`` listing.\n\n``platform`` is the free-form label the device sent when it last minted\nagent tokens (``\"ios\"``, ``\"android\"``, ``\"web\"``); it is null for rows\nregistered by a client that omitted the field.",
         "properties": {
@@ -1037,6 +1305,36 @@
           "public_key_b64"
         ],
         "title": "TrustKeyResponse",
+        "type": "object"
+      },
+      "TrustPinResponse": {
+        "description": "The relay's current signing fingerprint and the account's pin.\n\nRead-only and advisory. Clients display it and may warn on a\ndifference; they must NOT write it into their local trust store.",
+        "properties": {
+          "account_trust_key_fp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Trust Key Fp"
+          },
+          "relay_trust_key_fp": {
+            "title": "Relay Trust Key Fp",
+            "type": "string"
+          },
+          "relay_url": {
+            "title": "Relay Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relay_url",
+          "relay_trust_key_fp"
+        ],
+        "title": "TrustPinResponse",
         "type": "object"
       },
       "UpdateCustomAgentTypeRequest": {
@@ -2294,6 +2592,200 @@
         ]
       }
     },
+    "/api/pairing/device-code": {
+      "post": {
+        "description": "Mint a short code for the operator to retype on the agent host.",
+        "operationId": "mint_device_code_api_pairing_device_code_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCodeMintResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Mint Device Code",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/pairing/device-code/redeem": {
+      "post": {
+        "description": "Exchange a retyped code for a pairing nonce. Anonymous by necessity.\n\nThe agent has no credentials yet \u2014 that is the whole point of pairing \u2014\nso this endpoint authenticates nothing. It hands back no secret beyond\na nonce that is worthless without the account owner's separate confirm,\nplus the masked account name the operator needs to decide whether to\ngrant this machine to that account at all.",
+        "operationId": "redeem_device_code_api_pairing_device_code_redeem_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceCodeRedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCodeRedeemResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Redeem Device Code",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/pairing/device-code/{request_id}": {
+      "delete": {
+        "description": "Abandon a pairing request and expire any nonce it handed out.",
+        "operationId": "cancel_device_code_api_pairing_device_code__request_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Device Code",
+        "tags": [
+          "pairing"
+        ]
+      },
+      "get": {
+        "description": "Poll a minted code. Owner-scoped: a foreign ``request_id`` is a 404.",
+        "operationId": "get_device_code_status_api_pairing_device_code__request_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceCodeStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Device Code Status",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/pairing/device-code/{request_id}/confirm": {
+      "post": {
+        "description": "Approve a redeemed code and release credentials to the waiting agent.",
+        "operationId": "confirm_device_code_api_pairing_device_code__request_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceCodeConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingClaimResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Device Code",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
     "/api/pairing/initiate": {
       "post": {
         "description": "Allocate a single-use pairing nonce and return its QR payload.\n\nAnonymous: the install scripts and the running agent both call this\nbefore any credentials exist. Replay-resistance comes from the\n192-bit nonce + the short TTL + the single-flight CAS at claim time.",
@@ -2331,6 +2823,28 @@
           }
         },
         "summary": "Initiate Pairing",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/api/pairing/trust-pin": {
+      "get": {
+        "description": "Report the relay's signing fingerprint and the account's recorded pin.\n\nAdvisory only. Clients may display the pair and warn when they differ,\nbut must not copy ``account_trust_key_fp`` into a local trust store.",
+        "operationId": "get_trust_pin_api_pairing_trust_pin_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustPinResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Trust Pin",
         "tags": [
           "pairing"
         ]

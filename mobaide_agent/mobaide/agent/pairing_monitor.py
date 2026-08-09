@@ -22,6 +22,8 @@ import random
 import socket
 import sys
 import time
+import urllib.error as urllib_error
+from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -40,6 +42,7 @@ from .pairing_qr import (
     PendingPairing,
     clear_pending_pairing,
     compute_trust_key_fp,
+    encode_qr_payload,
     load_pending_pairing,
     parse_qr_payload,
     render_qr_to_terminal,
@@ -52,6 +55,7 @@ from .updater import InstallLayout
 logger = logging.getLogger(__name__)
 
 _INITIATE_PATH = "/api/pairing/initiate"
+_DEVICE_CODE_REDEEM_PATH = "/api/pairing/device-code/redeem"
 _BACKOFF_FLOOR_S = 2.0
 _BACKOFF_CEIL_S = 60.0
 from .install_paths import ALLOW_INSECURE_HTTPS_BOOTSTRAP_ENV as _ALLOW_INSECURE_FETCH_ENV
@@ -62,6 +66,15 @@ def _initiate_url(relay_server_url: str) -> str:
     from .install_paths import endpoint_url_from_relay_server_url
 
     return endpoint_url_from_relay_server_url(relay_server_url, _INITIATE_PATH)
+
+
+def _device_code_redeem_url(relay_server_url: str) -> str:
+    """Translate ``RELAY_SERVER_URL`` into the HTTP device-code redeem URL."""
+    from .install_paths import endpoint_url_from_relay_server_url
+
+    return endpoint_url_from_relay_server_url(
+        relay_server_url, _DEVICE_CODE_REDEEM_PATH
+    )
 
 
 def _pairing_ws_url(relay_server_url: str, nonce: str) -> str:
@@ -198,6 +211,117 @@ def initiate_pairing(
 
 class PairingMonitorError(Exception):
     """Raised when initiate or WS-wait fails irrecoverably for one cycle."""
+
+
+class DeviceCodeRejected(Exception):
+    """The relay refused a device code (unknown, expired, spent, throttled)."""
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def redeem_device_code(
+    relay_server_url: str,
+    pinned_trust_key_fp: str,
+    *,
+    code: str,
+    redeemer_id: str,
+    hostname: str | None = None,
+    os_name: str | None = None,
+    current_agent_id: str | None = None,
+) -> tuple[PendingPairing | None, str, bool]:
+    """Exchange a retyped device code for a pairing nonce.
+
+    The reversed-direction twin of ``initiate_pairing``: same fail-closed
+    fingerprint comparison, same locally-derived WS URL, same
+    ``PendingPairing`` result. Returns
+    ``(pending, account_hint, is_repair)``.
+
+    ``pending`` is ``None`` when the relay reports the code was already
+    redeemed by this same ``redeemer_id`` — the nonce is not stored
+    server-side, so a caller that also lost its local copy has to mint a
+    fresh code rather than resume.
+    """
+    url = _device_code_redeem_url(relay_server_url)
+    body: dict[str, str] = {"code": code, "redeemer_id": redeemer_id}
+    if hostname:
+        body["hostname"] = hostname
+    if os_name:
+        body["os"] = os_name
+    if current_agent_id:
+        body["current_agent_id"] = current_agent_id
+    data = json.dumps(body).encode("utf-8")
+    try:
+        with _http.urlopen(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+            timeout=30,
+        ) as resp:
+            if resp.status != 200:
+                raise DeviceCodeRejected(
+                    f"redeem returned HTTP {resp.status}", status=resp.status
+                )
+            record = json.loads(resp.read().decode("utf-8"))
+    except urllib_error.HTTPError as exc:
+        raise DeviceCodeRejected(
+            _redeem_error_message(exc), status=exc.code
+        ) from exc
+
+    server_fp = record["trust_key_fp"]
+    if server_fp != pinned_trust_key_fp:
+        raise PairingMonitorError(
+            f"trust key fingerprint mismatch: server announced "
+            f"{server_fp!r}, agent has pinned {pinned_trust_key_fp!r}; "
+            f"refuse to pair against a relay this agent does not trust"
+        )
+
+    account_hint = record.get("account_hint") or "unknown account"
+    is_repair = bool(record.get("is_repair"))
+    nonce = record.get("nonce")
+    if not nonce:
+        return None, account_hint, is_repair
+
+    relay_url = record["relay_url"]
+    expires_at = record["expires_at"]
+    exp_unix = int(datetime.fromisoformat(expires_at).timestamp())
+    qr_payload = encode_qr_payload(relay_url, nonce, server_fp, exp_unix)
+    return (
+        PendingPairing(
+            nonce=nonce,
+            expires_at=expires_at,
+            trust_key_fp=server_fp,
+            ws_url=_pairing_ws_url(relay_server_url, nonce),
+            relay_url=relay_url,
+            qr_payload=qr_payload,
+        ),
+        account_hint,
+        is_repair,
+    )
+
+
+def _redeem_error_message(exc) -> str:
+    """Pull the relay's ``detail`` out of an error response, else summarise.
+
+    The redeem rejections are all operator-facing (wrong code, expired
+    code, throttled), so the server's own wording is worth surfacing
+    verbatim rather than replacing with a status number.
+    """
+    try:
+        payload = json.loads(exc.read().decode("utf-8"))
+    except Exception:
+        return f"redeem returned HTTP {exc.code}"
+    detail = payload.get("detail") if isinstance(payload, dict) else None
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict) and detail.get("retry_after_seconds"):
+        return (
+            "too many pairing attempts against this relay; retry in "
+            f"{detail['retry_after_seconds']}s"
+        )
+    return f"redeem returned HTTP {exc.code}"
 
 
 async def write_credentials_to_env(

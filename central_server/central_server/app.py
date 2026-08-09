@@ -211,10 +211,33 @@ def create_app(config: CentralServerConfig | None = None) -> FastAPI:
             cooldown_seconds=0,
             hourly_cap=config.password_reset_ip_hourly_cap,
         )
+        # Device-code pairing. The mint limiter is cooldown-only on purpose
+        # (hourly_cap=0 disables the cap): minting supersedes the account's
+        # previous code, so a page reload re-mints and a cap would lock the
+        # user out of pairing entirely. The two redeem limiters guard the
+        # only anonymous, guessable endpoint — per-IP for precision, global
+        # for the distributed case per-IP cannot see.
+        device_code_mint_limiter = ResendRateLimiter(
+            cooldown_seconds=config.pairing_device_code_mint_cooldown_seconds,
+            hourly_cap=0,
+        )
+        device_code_ip_limiter = ResendRateLimiter(
+            cooldown_seconds=(
+                config.pairing_device_code_redeem_ip_cooldown_seconds
+            ),
+            hourly_cap=config.pairing_device_code_redeem_ip_hourly_cap,
+        )
+        device_code_global_limiter = ResendRateLimiter(
+            cooldown_seconds=0,
+            hourly_cap=config.pairing_device_code_redeem_global_hourly_cap,
+        )
         app.state.email_sender = email_sender
         app.state.resend_limiter = resend_limiter
         app.state.reset_email_limiter = reset_email_limiter
         app.state.reset_ip_limiter = reset_ip_limiter
+        app.state.device_code_mint_limiter = device_code_mint_limiter
+        app.state.device_code_ip_limiter = device_code_ip_limiter
+        app.state.device_code_global_limiter = device_code_global_limiter
         app.state.auth_service = AuthService(
             config,
             db,

@@ -222,9 +222,27 @@ regenerates the browser's device UUID, which under the
 last-login-wins registry above orphans a `mobile_devices` row. Recovery
 is clearing the site's data rather than the app's.
 
-This is a known Phase-1 limitation, not an oversight — CLA-199 replaces it
-with an account-level fingerprint the server validates on every claim from
-any client.
+### The account-level pin, and what it does not do
+
+Every account records the relay signing fingerprint it first paired against,
+in `users.trust_key_fp`, and every later claim from any client is refused when
+that fingerprint no longer matches the relay's current key. A browser whose
+`localStorage` was wiped therefore cannot silently re-trust a rotated key: the
+server still remembers, and the refusal happens server-side.
+
+Be precise about what that buys. A claim whose `trust_key_fp` disagrees with
+the relay's current key is *already* a 400, so the account pin only ever fires
+when the relay's own signing key changed. It is a **rotation tripwire, not an
+MITM detector** — the relay both stores the pin and serves the value it is
+compared against, so a compromised relay simply returns a matching pair. The
+local pin remains the only thing that records what the user personally
+vouched for, which is why `GET /api/pairing/trust-pin` is read-only and no
+client writes its response into a local trust store: an unattended write is a
+permanent lockout waiting for a bad value.
+
+The refusal is HTTP 409 with `detail.error = "trust_key_pin_mismatch"` — a
+structured detail rather than prose, because 409 already carries the "agent
+belongs to another account" refusal and the two need different copy.
 
 ## Re-pair semantics
 
@@ -347,6 +365,151 @@ Set `MOBAIDE_AGENT_SKIP_INSTALL_QR=1` before running the installer (or
 the install-time render. The boot-time autorun still produces a QR on
 the next service start.
 
+## Device-code pairing (the reversed direction)
+
+The QR direction needs a camera pointed at the agent's terminal. That fails
+exactly where desktops live: an SSH jump host, a VM console, a machine whose
+screen the phone cannot see and whose clipboard does not reach it. The
+device-code direction inverts the flow so nothing has to travel *off* the
+agent host — the operator only has to type eight characters *into* it.
+
+```
+client (web / phone)        central_server                 agent (mobaide-agent)
+        │                          │                                │
+        │ POST /api/pairing/device-code  (auth)                     │
+        │ ─────────────────────────►                                │
+        │                          │ INSERT pairing_device_codes    │
+        │                          │  (code_hash = HMAC(pepper))    │
+        │                          │  supersede this account's      │
+        │                          │  earlier unredeemed codes      │
+        │ ◄── 200 {request_id, code "WDJB-MJHT", expires_at,        │
+        │           verification_command}                            │
+        │                          │                                 │
+        │ show "mobaide-agent pair WDJB-MJHT"                        │
+        │                          │ ◄── POST …/device-code/redeem ──┤ (anon)
+        │                          │      {code, redeemer_id,        │
+        │                          │       hostname, os,             │
+        │                          │       current_agent_id?}        │
+        │                          │ CAS-redeem + INSERT             │
+        │                          │   pairing_tokens (nonce)        │
+        │                          │ ── 200 {nonce, trust_key_fp, ──►│
+        │                          │        relay_url, account_hint} │
+        │                          │                                 │ ← "Pair 'host' with
+        │                          │                                 │    account p***l@g***.com?"
+        │                          │ ◄── open WS /ws/pairing/{nonce} ┤   [y/N]
+        │ GET …/device-code/{id} (poll)                              │
+        │ ◄── {status: "redeemed", hostname, os, blocked_reason?}    │
+        │ "Is this your machine pavel-mbp?"                          │
+        │ POST …/device-code/{id}/confirm                            │
+        │ ─────────────────────────►                                 │
+        │                          │ _complete_pairing() — the same  │
+        │                          │ path a QR claim takes           │
+        │ ◄── 200 {agent_id, name, ws_delivered?}                    │
+        │                          │ ── signed credential push ─────►│
+```
+
+Everything after the confirm is byte-identical to the QR flow: the same
+`pairing_tokens` row, the same Ed25519 `PairingPushPayload`, the same
+`claimed_token_raw` recovery slot, the same single-flight CAS. Only the front
+half differs, and both halves finish through `_complete_pairing`.
+
+### The code
+
+Eight characters over the 20-consonant alphabet `BCDFGHJKLMNPQRSTVWXZ`
+(RFC 8628 §6.1): 20⁸ ≈ 2³⁴·⁶, no vowels so it cannot spell a word, and no
+confusable pair like `0`/`O` or `1`/`I`/`l`. Input is normalised by filtering
+to that alphabet, so hyphens, spaces and a pasted trailing newline all vanish.
+
+The code is stored as a **peppered HMAC** (`hash_device_code`), not a plain
+digest: 34.6 bits is small enough to brute-force from a database dump, so the
+relay's JWT secret is folded in the way `AuthService._hash_code` does for the
+6-digit OTP. Unlike the OTP there is no `user_id` in the HMAC input — the
+redeeming agent is anonymous and looks the row up by code alone.
+
+There is deliberately **no per-code attempt counter**: a wrong guess HMACs to a
+row that does not exist, so there is nothing to increment. The guessing defence
+is the code's entropy plus at most one live code per account, a short TTL,
+single use, a per-IP limiter on the redeem endpoint, and a global
+constant-keyed circuit breaker for the distributed case the per-IP bucket
+cannot see (it collapses to one shared bucket behind a proxy that does not
+forward the client address — see `FORWARDED_ALLOW_IPS` in
+`docs/deployment.md`).
+
+The global breaker is charged on **failed** redeems only, and checked with
+`ResendRateLimiter.peek` so the check itself costs nothing. Charging every
+redeem would turn a guessing defence into a deployment-wide throughput
+ceiling — with a 30/hr per-IP allowance, roughly twenty addresses would be
+enough to deny pairing to everyone.
+
+### Why the agent asks too
+
+Reversing the mint direction reverses the phishing attack, and the browser's
+"Is this your machine?" screen does not cover the new one. In the QR flow the
+code proves presence at the machine being paired. Here an attacker can mint a
+code on *their* account and talk someone into running
+`mobaide-agent pair <code>` — at which point the victim's machine becomes an
+agent the **attacker** owns, and the attacker is the one clicking the browser
+confirmation. The `current_agent_id` ownership guard does not help: it only
+protects hosts that are already paired, which is not the install-time case
+this feature targets.
+
+So the redeem response carries a masked `account_hint`, and the CLI requires an
+interactive `y/N` naming that account and this hostname before it writes
+anything. Non-interactive callers must pass `--yes`, and an already-paired host
+refuses outright without `--force`. Declining burns the code — deliberately: an
+attacker's code is then spent and cannot be redeemed again.
+
+Conversely, the browser-side confirmation is real but limited. `hostname` and
+`os` come from the anonymous redeem body and are attacker-settable, exactly as
+`current_agent_id` is in the QR flow. They let a user recognise their own
+machine; they authenticate nothing.
+
+One case the confirm screen must not get wrong: the redeem body also carries
+`current_agent_id`, and when it names an agent the confirming account *already
+owns*, approving does not add a machine — it **moves** that agent, rotating its
+token onto the redeeming host and knocking the real one offline. The status
+response therefore returns `repair_agent_name` for that case, and all three
+clients swap the heading from "Is this your machine?" to "Move ‘<name>’ to this
+machine?" with an explicit warning. Asking the first-pair question there would
+be asking about the wrong thing entirely.
+
+### Retries, and what `redeemer_id` does and does not buy
+
+The CLI generates a `redeemer_id`, persists it to
+`<prefix>/run/pending_device_code.json` *before* the request, and re-sends it
+on a retry. The relay recognises a matching retry from the existing row instead
+of rejecting it as a second machine racing the code.
+
+Be precise about the limit: **the raw nonce is never stored server-side**, so a
+replayed redeem comes back with `nonce: null`. The retry therefore only
+continues if the agent still holds its own copy — which the pending file gives
+it, rewritten with the nonce as soon as the response lands, so a Ctrl-C during
+the wait resumes rather than restarts. A redeem whose *response* was lost in
+transit is not recoverable: the CLI exits 8 and the operator mints a new code.
+
+The record is keyed by a digest of the code, so typing a *different* code
+starts a fresh redemption rather than silently waiting out the earlier one. It
+is also a **separate file** from `pending_pairing.json` on purpose: on a fresh
+install the agent service is already running its own QR pairing cycle, and a
+shared file would overwrite the nonce that cycle is waiting on.
+
+### Cancelling
+
+`DELETE /api/pairing/device-code/{request_id}` marks the code canceled and
+expires its nonce in the same transaction, so a confirm racing the cancel loses
+the CAS on `expires_at`.
+
+It does **not** promptly stop an agent that has already connected. The WS
+handler reads `expires_at` once and then blocks in a single
+`asyncio.wait_for(queue.get(), timeout=…)`, so a cancel issued after the agent
+dialled in leaves that CLI waiting until the nonce's original deadline
+(`PAIRING_DEVICE_CODE_CONFIRM_TTL_SECONDS`, 300 s by default) and then exiting
+6. The operator can Ctrl-C; the deadline is printed when the wait starts.
+
+No "denied" frame is pushed: `pairing_ws._parse_and_verify` rejects any payload
+whose `type` is not `claim_completed`, so older agents would surface it as an
+opaque transport error rather than a clean refusal.
+
 ## Server-side configuration
 
 The server **must** hold both halves of the manifest signing keypair
@@ -358,6 +521,28 @@ to operate the QR pairing flow:
 | `MANIFEST_SIGNING_PRIVATE_KEY` | QR initiate, claim push signing | `POST /api/pairing/initiate` returns 503 |
 | `PAIRING_QR_TOKEN_TTL_SECONDS` | nonce TTL (default `120`; prod sets `600` for cross-device pairing links) | uses default |
 | `PUBLIC_BASE_URL` | QR `relay_url` field | falls back to request `Host` header |
+| `PAIRING_DEVICE_CODE_TTL_SECONDS` | how long a device code stays redeemable (default `600`) | uses default |
+| `PAIRING_DEVICE_CODE_CONFIRM_TTL_SECONDS` | the redeem-to-confirm window, and the TTL of the nonce minted at redeem (default `300`) | uses default |
+| `PAIRING_DEVICE_CODE_REDEEM_IP_HOURLY_CAP` | per-IP redeem attempts per hour (default `30`) | uses default |
+| `PAIRING_DEVICE_CODE_REDEEM_IP_COOLDOWN_SECONDS` | minimum gap between redeems from one IP (default `1`) | uses default |
+| `PAIRING_DEVICE_CODE_REDEEM_GLOBAL_HOURLY_CAP` | **failed** redeems per hour across all callers before the breaker trips (default `600`) | uses default |
+| `PAIRING_DEVICE_CODE_MINT_COOLDOWN_SECONDS` | minimum gap between mints for one account (default `2`; no hourly cap by design — a new code supersedes the old one, so a page reload re-mints) | uses default |
+| `TRUST_KEY_PIN_ENFORCED` | refuse claims whose relay key differs from the account pin (default `true`) | uses default |
+
+### Trust-key rotation runbook
+
+Rotating `MANIFEST_SIGNING_*` invalidates every account's pin at once, so the
+rotation itself would lock out every existing account. The intended sequence:
+
+1. Set `TRUST_KEY_PIN_ENFORCED=false` and restart the relay. Mismatching pins
+   are then cleared as accounts pair, rather than refused.
+2. Rotate the keypair; have each agent host re-run `mobaide-agent
+   fetch-trust-key` (the agent's own pin is separate and fail-closed).
+3. Once accounts have re-paired, set `TRUST_KEY_PIN_ENFORCED=true` again.
+
+An account that currently owns **no** agents re-pins automatically even while
+enforcement is on — the pin protects nothing in that state, so "remove every
+agent, then pair again" is the self-service recovery for a single account.
 
 > **Note on private-key residency.** The manifest signing private key
 > was previously held only by the release pipeline. CLA-50 expands the
@@ -369,9 +554,14 @@ to operate the QR pairing flow:
 ## Multi-worker deployments
 
 The pairing-WS waiter map is in-memory and per-process
-(`PairingWsRegistry`). Multi-worker deployments (gunicorn `-w N`)
-break the flow: a claim can land on a different worker than the one
-holding the agent's WS, and the push is silently dropped. Mitigations:
+(`PairingWsRegistry`, keyed by the SHA-256 of the nonce). Multi-worker
+deployments (gunicorn `-w N`) break the flow: a claim can land on a different
+worker than the one holding the agent's WS, and the push is silently dropped.
+
+The device-code direction makes this worse in kind, not degree. A QR claim's
+dropped push is recovered by the agent's next WS reconnect, which retries on a
+loop; a device-code confirm is a **browser** request with no retry loop behind
+it, so the user sees "waiting for the agent" until the timeout. Mitigations:
 
 * Single uvicorn process per host (the default deployment model — see
   `docs/deployment.md`).
@@ -391,12 +581,18 @@ holding the agent's WS, and the push is silently dropped. Mitigations:
 | Mobile shows "Pairing code consumed or expired" (HTTP 410) | QR scanned twice, or after TTL | Render a fresh QR via `show-qr` |
 | Mobile shows "Trust key changed — possible MITM" | TOFS pin diverges from scanned fingerprint | If you intentionally rotated the relay key, clear the app's data; otherwise treat as a security incident |
 | `pair-qr --wait` exits 6 | Pairing WS transport, TTL, or signature failure | Re-run; check relay logs |
+| `pair <code>` exits 8 | The relay refused the code: unknown, expired, superseded by a newer code, or already redeemed by another machine | Get a fresh code in the app and re-run. A repeated 8 with "already redeemed from this machine" means the first redeem's response was lost — the nonce is unrecoverable, so mint a new code |
+| `pair <code>` exits 9 | Refused locally: the host already has credentials, stdin is not a terminal without `--yes`, or the operator answered no | Use `--force` to re-pair a working host, `--yes` for a non-interactive run — but only when the code came from your own account |
+| `pair <code>` returns 429 | Redeem rate limit tripped (per-IP or the global circuit breaker) | Wait for the `Retry-After` interval. Behind a proxy, check `FORWARDED_ALLOW_IPS` — without it every redeem is attributed to the proxy and shares one bucket |
+| Client shows "This relay's signing key is not the one this account first paired with" (409 `trust_key_pin_mismatch`) | The relay's `MANIFEST_SIGNING_*` keypair was rotated after this account pinned it | Compare fingerprints with `mobaide-agent show-trust-fp` on an already-paired host. If the rotation was intentional, follow the trust-key rotation runbook above; otherwise treat as a security incident |
+| Browser shows "waiting for a machine to enter the code" forever | Nothing redeemed the code, or the relay runs multiple workers and the confirm landed on a worker without the agent's WS | Check the command actually ran on the agent host; confirm the relay is single-worker (see "Multi-worker deployments") |
 | QR scan succeeded but mobile shows "Waiting for agent…" then times out with an error after 60 s | Agent relay client did not come online within the timeout. Possible causes: agent process crashed after writing `.env`, Windows service stdout silenced (pre-v0.1.9), Windows service log file encoded as cp1252/cp437 causing `UnicodeEncodeError` in QR render and aborting the WS before `wait_for_claim` (pre-v0.1.11), or `relay_url` scheme mismatch caused the agent to discard its own credentials. | On the agent host run: `mobaide-agent show-qr` (re-render QR and restart pairing), `Get-Service MobaideAgent` (check service state on Windows), `Get-Content "$env:ProgramFiles\MobaideAgent\logs\agent.err.log" -Tail 50` (Windows error log). Upgrade to v0.1.11+ if on Windows service builds below that version. |
 | QR scan succeeded (mobile shows "Paired") but agent stays offline / `pairing_pending: true` persists | Pre-v0.1.5 agent: post-pairing restart used `sudo -n systemctl restart`, which silently no-op'd when the install user lacked NOPASSWD. v0.1.5–v0.1.6 used `sys.exit(75)` + supervisor restart, which failed when credentials were not flushed before the process exited. v0.1.7–v0.1.8 on Windows service builds: the service host redirected stdout to DEVNULL, silently dropping every structlog line (the issue is visible only after checking `<prefix>\logs\agent.out.log`, which v0.1.9+ captures); a fast mobile scan could also hit the WS-recovery path and receive a push with a `relay_url` scheme that mismatched the initiate-time value (https vs http behind a proxy) — agent strict-equality check discarded its own credentials. | Upgrade to v0.1.9+. The agent now (a) captures stdout to `<prefix>\logs\agent.out.log`, (b) writes `pending_pairing.json` only after the WS is open, and (c) uses `pairing_tokens.relay_url` as the single source of truth for both the dispatch and recovery paths. On older installs: for Linux/macOS, manually run `sudo systemctl restart mobaide-agent` or `launchctl unload … && launchctl load …` once after the initial pairing scan. |
 
 ## Security tests
 
-The flow is exercised by `central_server/tests/test_pairing_qr.py`:
+The flow is exercised by `central_server/tests/test_pairing_qr_router.py` and
+`central_server/tests/test_pairing_qr_db_helpers.py`:
 
 * **Replay** — the second claim of an already-consumed nonce returns
   410 Gone (CAS in `db.claim_pairing_nonce` returns `False`).

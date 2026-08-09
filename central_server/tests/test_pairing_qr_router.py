@@ -26,7 +26,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 
 from central_server.config import CentralServerConfig
-from central_server.pairing.qr_signer import compute_trust_key_fp
+from central_server.pairing.qr_signer import compute_trust_key_fp, hash_pairing_nonce
 from central_server.pairing.ws_handlers import PairingWsRegistry
 
 _CLAIM_DEV_UUID = "11111111-1111-4111-8111-111111111111"
@@ -492,7 +492,9 @@ class TestClaimWsDispatch:
         # must land on the queue and verify under the configured public key.
         nonce = await TestClaim._initiate_nonce(self, client)
         fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
-        queue = await qr_app.state.pairing_ws_registry.register_waiter(nonce)
+        queue = await qr_app.state.pairing_ws_registry.register_waiter(
+            hash_pairing_nonce(nonce)
+        )
 
         resp = await client.post(
             "/api/pairing/claim",
@@ -566,7 +568,9 @@ class TestClaimWsDispatch:
         persisted_relay = persisted["relay_url"]
         fp = compute_trust_key_fp(qr_app.state._test_pub_b64)
 
-        queue = await qr_app.state.pairing_ws_registry.register_waiter(nonce)
+        queue = await qr_app.state.pairing_ws_registry.register_waiter(
+            hash_pairing_nonce(nonce)
+        )
         resp = await client.post(
             "/api/pairing/claim",
             json={

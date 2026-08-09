@@ -1,7 +1,7 @@
 """QR rendering, payload encoding/decoding, and pending-pairing persistence.
 
-Used by the ``mobaide-agent pair-qr`` / ``show-qr`` / ``re-pair`` CLI
-verbs and the agent app's pairing monitor. The trust-key
+Used by the ``mobaide-agent pair-qr`` / ``show-qr`` / ``re-pair`` /
+``pair`` CLI verbs and the agent app's pairing monitor. The trust-key
 fingerprint algorithm here MUST stay in lockstep with the central
 server's ``central_server.pairing.qr_signer.compute_trust_key_fp`` and
 the Android client's ``TrustKeyPinning`` — the three are independently
@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -369,6 +370,109 @@ def load_pending_pairing(layout) -> PendingPairing | None:
 def clear_pending_pairing(layout) -> None:
     """Remove the pending-pairing file. Idempotent."""
     target = pending_pairing_path(layout)
+    try:
+        target.unlink()
+    except OSError:
+        pass
+
+
+def new_redeemer_id() -> str:
+    """Random identity for one device-code redemption attempt."""
+    return secrets.token_urlsafe(12)
+
+
+def pending_device_code_path(layout) -> Path:
+    """Path of the device-code pairing state.
+
+    Deliberately a different file from ``pending_pairing.json``. On a fresh
+    install the agent service is already running its own QR pairing cycle,
+    and a ``pair <code>`` invocation that shared the file would overwrite
+    the nonce that cycle is waiting on.
+    """
+    return Path(layout.prefix) / "run" / "pending_device_code.json"
+
+
+def device_code_fingerprint(code: str) -> str:
+    """Digest identifying which code a pending record belongs to.
+
+    Stored instead of the code itself so a resume can tell "continue the
+    request I started" from "the operator typed a different code", without
+    leaving a live pairing code at rest on the agent host.
+    """
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def save_pending_device_code(
+    layout,
+    redeemer_id: str,
+    code_fp: str,
+    pending: PendingPairing | None,
+) -> None:
+    """Persist device-code redemption state.
+
+    Written twice per run: once with ``pending=None`` *before* the redeem
+    request goes out, so a retry re-presents the same ``redeemer_id``
+    instead of looking like a second machine racing the code, and again
+    with the nonce once the response lands, so a Ctrl-C during the wait can
+    resume rather than burn the code.
+    """
+    from ._env_writer import atomic_write, restrict_perms
+
+    target = pending_device_code_path(layout)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    body = {
+        "redeemer_id": redeemer_id,
+        "code_fp": code_fp,
+        "pending": asdict(pending) if pending is not None else None,
+    }
+    atomic_write(target, json.dumps(body, indent=2) + "\n")
+    restrict_perms(target)
+
+
+def load_pending_device_code(
+    layout, code_fp: str
+) -> tuple[str, PendingPairing | None] | None:
+    """Read state for ``code_fp`` as ``(redeemer_id, pending)``, or ``None``.
+
+    Returns ``None`` when the stored record belongs to a *different* code,
+    so a later ``mobaide-agent pair OTHERCODE`` starts a fresh redemption
+    instead of silently waiting out the earlier request's nonce while the
+    browser polls a request nothing will ever redeem.
+
+    ``pending`` comes back ``None`` when the record predates a successful
+    redeem *or* when its nonce has since expired — the caller then knows
+    the id is still worth resending but the nonce is not worth dialling.
+    """
+    target = pending_device_code_path(layout)
+    try:
+        text = target.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        data = json.loads(text)
+        redeemer_id = data["redeemer_id"]
+        raw_pending = data.get("pending")
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return None
+    if not isinstance(redeemer_id, str) or not redeemer_id:
+        return None
+    if data.get("code_fp") != code_fp:
+        return None
+    if not isinstance(raw_pending, dict):
+        return redeemer_id, None
+    try:
+        pending = PendingPairing(**raw_pending)
+    except TypeError:
+        return redeemer_id, None
+    parsed = parse_qr_payload(pending.qr_payload)
+    if parsed is None or parsed.exp_unix <= int(time.time()):
+        return redeemer_id, None
+    return redeemer_id, pending
+
+
+def clear_pending_device_code(layout) -> None:
+    """Remove the device-code pairing file. Idempotent."""
+    target = pending_device_code_path(layout)
     try:
         target.unlink()
     except OSError:

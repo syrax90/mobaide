@@ -79,6 +79,11 @@ sealed interface QrPairingState {
  */
 internal const val WAIT_FOR_ONLINE_TIMEOUT_SECONDS: Int = 60
 
+internal const val DEVICE_CODE_POLL_INTERVAL_MS: Long = 2_000L
+
+/** The `detail.error` discriminator on the relay's account-trust-pin refusal. */
+internal const val TRUST_PIN_MISMATCH_CODE: String = "trust_key_pin_mismatch"
+
 data class AgentListUiState(
     val agents: List<AgentSummaryResponse> = emptyList(),
     val isLoading: Boolean = false,
@@ -89,6 +94,7 @@ data class AgentListUiState(
     val isConnecting: Boolean = false,
     val connectedAgentId: String? = null,
     val qrPairing: QrPairingState = QrPairingState.Idle,
+    val deviceCodePairing: DeviceCodePairingState = DeviceCodePairingState.Idle,
     /**
      * True between [AgentListViewModel.onScanQrClicked] and the first
      * [AgentListViewModel.onScanResult] callback. Drives a thin
@@ -131,6 +137,14 @@ class AgentListViewModel @Inject constructor(
      */
     private var waitForOnlineJob: Job? = null
 
+    /**
+     * Poll job for the device-code flow. Held here for the same reason as
+     * [waitForOnlineJob]: every exit from the polling phase — a machine
+     * arrives, the code expires, the user backs out — cancels it from one
+     * place.
+     */
+    private var deviceCodePollJob: Job? = null
+
     init {
         viewModelScope.launch {
             agentRepository.observeAgents().collect { agents ->
@@ -144,6 +158,7 @@ class AgentListViewModel @Inject constructor(
         super.onCleared()
         waitForOnlineJob?.cancel()
         waitForOnlineJob = null
+        cancelDeviceCodePoll()
     }
 
     fun refresh() {
@@ -283,6 +298,231 @@ class AgentListViewModel @Inject constructor(
     fun dismissQrPairing() {
         cancelWaitForOnlineWatcher()
         _uiState.update { it.copy(qrPairing = QrPairingState.Idle) }
+    }
+
+    /** Mint a pairing code and start watching for a machine to enter it. */
+    fun startDeviceCodePairing() {
+        if (_uiState.value.deviceCodePairing !is DeviceCodePairingState.Idle) return
+        _uiState.update { it.copy(deviceCodePairing = DeviceCodePairingState.Minting) }
+        viewModelScope.launch {
+            try {
+                val minted = agentRepository.mintDeviceCode()
+                _uiState.update {
+                    it.copy(
+                        deviceCodePairing = DeviceCodePairingState.WaitingForHost(
+                            requestId = minted.request_id,
+                            code = minted.code,
+                            command = minted.verification_command,
+                        ),
+                    )
+                }
+                startDeviceCodePoll(minted.request_id, minted.expires_at)
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        deviceCodePairing = DeviceCodePairingState.Error(
+                            deviceCodeErrorMessage(e)
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Poll until a machine redeems the code, or the code dies.
+     *
+     * Polled rather than pushed, unlike everything else in this ViewModel that
+     * reads from [AgentEventBus]: a redemption is a step inside a handshake,
+     * not a change to any entity a `*.changed` event describes, and inventing
+     * a server event for it would put a per-account channel behind a
+     * two-minute foreground interaction. Same shape as the bounded loop in
+     * [startWaitingForOnlineWatcher], and it stops the moment the request
+     * settles.
+     */
+    private fun startDeviceCodePoll(requestId: String, expiresAt: String) {
+        cancelDeviceCodePoll()
+        // Bounded by the request's own deadline, not by `while (true)`: a
+        // client that loses connectivity with the dialog open would otherwise
+        // wake the radio every two seconds for the life of the process.
+        val deadline = parseInstantMillis(expiresAt)
+        deviceCodePollJob = viewModelScope.launch {
+            while (deadline == null || System.currentTimeMillis() < deadline) {
+                delay(DEVICE_CODE_POLL_INTERVAL_MS)
+                val status = try {
+                    agentRepository.getDeviceCodeStatus(requestId)
+                } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // A dropped poll is not a failed pairing: the code is
+                    // still live server-side, so keep polling rather than
+                    // tearing down a request the user can still complete.
+                    continue
+                }
+                // Polling continues through Confirming, deliberately. The
+                // confirm window is the nonce's, so a user who sits on the
+                // screen past it would otherwise be looking at a live button
+                // whose only possible outcome is a 410.
+                val current = _uiState.value.deviceCodePairing
+                if (current !is DeviceCodePairingState.WaitingForHost &&
+                    current !is DeviceCodePairingState.Confirming
+                ) {
+                    return@launch
+                }
+                when (status.status) {
+                    "redeemed" -> {
+                        _uiState.update {
+                            it.copy(
+                                deviceCodePairing = DeviceCodePairingState.Confirming(
+                                    requestId = requestId,
+                                    hostname = status.hostname ?: "an unnamed machine",
+                                    os = status.os,
+                                    repairAgentName = status.repair_agent_name,
+                                    blockedReason = DeviceCodeBlockedReason
+                                        .fromWire(status.blocked_reason),
+                                ),
+                            )
+                        }
+                    }
+                    "expired", "canceled" -> {
+                        val confirming = current is DeviceCodePairingState.Confirming
+                        _uiState.update {
+                            it.copy(
+                                deviceCodePairing = DeviceCodePairingState.Error(
+                                    if (confirming) {
+                                        "This pairing request expired before it was " +
+                                            "confirmed. Get a new code."
+                                    } else {
+                                        "That code expired before any machine used " +
+                                            "it. Get a new one."
+                                    }
+                                ),
+                            )
+                        }
+                        return@launch
+                    }
+                }
+            }
+            if (_uiState.value.deviceCodePairing !is DeviceCodePairingState.Claiming) {
+                _uiState.update {
+                    it.copy(
+                        deviceCodePairing = DeviceCodePairingState.Error(
+                            "This pairing request expired. Get a new code."
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** ISO-8601 to epoch millis, or null when the relay sends a shape we cannot parse. */
+    private fun parseInstantMillis(value: String): Long? = try {
+        java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+    } catch (_: java.time.format.DateTimeParseException) {
+        null
+    }
+
+    /** Approve the machine that entered the code. */
+    fun confirmDeviceCode() {
+        val state = _uiState.value.deviceCodePairing
+        if (state !is DeviceCodePairingState.Confirming) return
+        if (state.blockedReason != null) return
+        cancelDeviceCodePoll()
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    deviceCodePairing = DeviceCodePairingState.Claiming(state.requestId),
+                )
+            }
+            try {
+                val response = agentRepository.confirmDeviceCode(
+                    requestId = state.requestId,
+                    mobileDeviceId = deviceIdentityStore.getOrCreateDeviceId(),
+                    mobileDeviceName = deviceIdentityStore.getDeviceName(),
+                    friendlyName = null,
+                )
+                // Hand off to the shared tail: from here the two pairing
+                // directions are the same problem — the relay has the
+                // credentials and the agent still has to pick them up.
+                _uiState.update {
+                    it.copy(deviceCodePairing = DeviceCodePairingState.Idle)
+                }
+                startWaitingForOnlineWatcher(
+                    agentId = response.agent_id,
+                    friendlyName = response.agent_friendly_name,
+                    wsDeliveredAtClaim = response.ws_delivered,
+                )
+            } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        deviceCodePairing = DeviceCodePairingState.Error(
+                            deviceCodeErrorMessage(e)
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Abandon the pairing request.
+     *
+     * The cancel call is best-effort: it is a courtesy to the agent waiting on
+     * its WebSocket, and a failure changes nothing the user can act on.
+     */
+    fun dismissDeviceCodePairing() {
+        cancelDeviceCodePoll()
+        val current = _uiState.value.deviceCodePairing
+        val requestId = when (current) {
+            is DeviceCodePairingState.WaitingForHost -> current.requestId
+            is DeviceCodePairingState.Confirming -> current.requestId
+            else -> null
+        }
+        _uiState.update { it.copy(deviceCodePairing = DeviceCodePairingState.Idle) }
+        if (requestId != null) {
+            viewModelScope.launch {
+                try {
+                    agentRepository.cancelDeviceCode(requestId)
+                } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun cancelDeviceCodePoll() {
+        deviceCodePollJob?.cancel()
+        deviceCodePollJob = null
+    }
+
+    /**
+     * Copy for the reversed direction's failures.
+     *
+     * Separate from the QR flow's messages because the remedies differ.
+     */
+    private fun deviceCodeErrorMessage(e: Exception): String {
+        if (e !is ApiException) return e.message ?: "Pairing failed"
+        return when {
+            e.errorBody.contains(TRUST_PIN_MISMATCH_CODE) ->
+                "This relay's signing key is not the one this account first paired " +
+                    "with. Pairing is refused. Compare the fingerprint on a machine " +
+                    "you already paired (mobaide-agent show-trust-fp) and contact the " +
+                    "relay operator if they differ."
+            e.code == 404 -> "This pairing request no longer exists. Get a new code."
+            e.code == 409 -> DeviceCodeBlockedReason.OWNED_BY_OTHER.message
+            e.code == 410 ->
+                "This pairing request expired or was already used. Get a new code."
+            e.code == 429 -> "Too many pairing attempts. Wait a moment and try again."
+            e.code == 503 ->
+                "Pairing is not configured on this relay — it is missing its manifest " +
+                    "signing keys. Contact the relay operator."
+            else -> e.message ?: "Pairing failed (HTTP ${e.code})"
+        }
     }
 
     private fun cancelWaitForOnlineWatcher() {

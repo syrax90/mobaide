@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
@@ -55,12 +56,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mobaide.app.data.network.dto.AgentSummaryResponse
+import com.mobaide.app.ui.common.CopyableCodeBlock
 import com.mobaide.app.ui.common.GraceBannerSection
 import com.mobaide.app.ui.theme.StateRunning
 import com.mobaide.app.ui.theme.StateStopped
@@ -107,6 +110,7 @@ fun AgentListScreen(
                     AgentListOverflowMenu(
                         onShowInstall = viewModel::showInstallSheet,
                         onAddManually = viewModel::showAddDialog,
+                        onPairWithCode = viewModel::startDeviceCodePairing,
                     )
                     IconButton(onClick = onSettingsClick) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
@@ -199,6 +203,12 @@ fun AgentListScreen(
         onDismiss = viewModel::dismissQrPairing,
     )
 
+    DeviceCodePairingDialogs(
+        state = uiState.deviceCodePairing,
+        onConfirm = viewModel::confirmDeviceCode,
+        onDismiss = viewModel::dismissDeviceCodePairing,
+    )
+
     if (uiState.showInstallSheet) {
         InstallCommandsSheet(onDismiss = viewModel::dismissInstallSheet)
     }
@@ -219,6 +229,7 @@ internal fun ScanQrFab(onClick: () -> Unit) {
 internal fun AgentListOverflowMenu(
     onShowInstall: () -> Unit,
     onAddManually: () -> Unit,
+    onPairWithCode: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     Box {
@@ -229,6 +240,19 @@ internal fun AgentListOverflowMenu(
             expanded = menuExpanded,
             onDismissRequest = { menuExpanded = false },
         ) {
+            // Above "show install commands" because it is the path that works
+            // when the agent host's screen is not somewhere a camera can see —
+            // an SSH session, a VM console, a machine in another room.
+            DropdownMenuItem(
+                text = { Text("Pair with a code") },
+                onClick = {
+                    menuExpanded = false
+                    onPairWithCode()
+                },
+                leadingIcon = {
+                    Icon(Icons.Default.Keyboard, contentDescription = null)
+                },
+            )
             DropdownMenuItem(
                 text = { Text("Show install commands") },
                 onClick = {
@@ -335,6 +359,156 @@ internal fun EmptyAgentsState(
                 Text("Add manually instead")
             }
         }
+    }
+}
+
+/**
+ * Dialogs for the reversed direction.
+ *
+ * There is no "waiting for the agent to come online" case here — the flow
+ * hands that shared tail to [QrPairingDialogs] once the confirm lands.
+ */
+@Composable
+internal fun DeviceCodePairingDialogs(
+    state: DeviceCodePairingState,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (state) {
+        DeviceCodePairingState.Idle -> Unit
+        DeviceCodePairingState.Minting -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Getting a code…") },
+            text = {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            },
+            confirmButton = {},
+        )
+        is DeviceCodePairingState.WaitingForHost -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Add an agent") },
+            text = {
+                Column {
+                    Text("On the computer you want to pair, run:")
+                    Spacer(modifier = Modifier.size(8.dp))
+                    CopyableCodeBlock(
+                        label = "Pairing command",
+                        code = state.command,
+                        modifier = Modifier.testTag("device-code-command"),
+                    )
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Text(
+                        "The code is ${state.code} if you would rather type it " +
+                            "yourself. The agent will name this account and ask you " +
+                            "to confirm before it pairs — only enter it on a machine " +
+                            "you own.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                    Spacer(modifier = Modifier.size(8.dp))
+                    Text(
+                        "Waiting for a machine to enter the code…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            },
+        )
+        is DeviceCodePairingState.Confirming -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = {
+                Text(
+                    if (state.repairAgentName == null) {
+                        "Is this your machine?"
+                    } else {
+                        "Move '${state.repairAgentName}' to this machine?"
+                    }
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        state.hostname,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    state.os?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(modifier = Modifier.size(12.dp))
+                    // The name above is whatever the machine that entered the
+                    // code reported, over an endpoint that authenticates
+                    // nobody — it helps a user recognise their own host and
+                    // proves nothing by itself.
+                    Text(
+                        "A machine calling itself ${state.hostname} entered your " +
+                            "code. If that is not the computer you just typed it " +
+                            "into, do not continue.",
+                    )
+                    state.repairAgentName?.let { name ->
+                        Spacer(modifier = Modifier.size(12.dp))
+                        Text(
+                            "That machine reported it is already '$name'. Continuing " +
+                                "rotates that agent's credentials onto it — if the " +
+                                "real '$name' is a different computer, that one goes " +
+                                "offline.",
+                        )
+                    }
+                    state.blockedReason?.let {
+                        Spacer(modifier = Modifier.size(12.dp))
+                        Text(
+                            it.message,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = onConfirm,
+                    enabled = state.blockedReason == null,
+                ) { Text("Pair this machine") }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            },
+        )
+        is DeviceCodePairingState.Claiming -> AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Pairing…") },
+            text = {
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+            },
+            confirmButton = {},
+        )
+        is DeviceCodePairingState.Error -> AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Pairing failed") },
+            text = { Text(state.message) },
+            confirmButton = {
+                OutlinedButton(onClick = onDismiss) { Text("Close") }
+            },
+        )
     }
 }
 

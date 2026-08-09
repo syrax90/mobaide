@@ -30,6 +30,29 @@ def compute_trust_key_fp(public_key_b64: str) -> str:
     return hashlib.sha256(key_bytes).hexdigest()
 
 
+def encode_pairing_payload(
+    relay_url: str, nonce: str, trust_key_fp: str, exp_unix: int
+) -> str:
+    """Build the canonical ``MOBA1|...`` text the clients parse.
+
+    Byte-identical to the agent's ``pairing_qr.encode_qr_payload`` and to
+    the ``parse_moba1`` implementations on web, Android and iOS.
+    """
+    return f"MOBA1|{relay_url}|{nonce}|{trust_key_fp}|{exp_unix}"
+
+
+def hash_pairing_nonce(raw_nonce: str) -> str:
+    """SHA-256 hex of a raw pairing nonce — the ``pairing_tokens`` key.
+
+    Must stay identical to the digest ``Database`` stores, since this is
+    what the pairing router uses to address a token row and to key the
+    WebSocket waiter registry. The nonce is 192 bits of ``token_urlsafe``,
+    so an unpeppered digest is enough (contrast ``device_code``, whose
+    34.6-bit code needs a pepper).
+    """
+    return hashlib.sha256(raw_nonce.encode()).hexdigest()
+
+
 def canonical_payload_bytes(payload: dict) -> bytes:
     """Canonical JSON form used as the signature input.
 

@@ -1,0 +1,26 @@
+{
+  "type": "DeviceCodeConfirmRequest",
+  "cases": [
+    {
+      "name": "full",
+      "wire": {
+        "mobile_device_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+        "mobile_device_name": "Pavel's iPhone",
+        "platform": "ios",
+        "friendly_name": "pavel-mbp"
+      }
+    },
+    {
+      "name": "device_fields_only",
+      "wire": {
+        "mobile_device_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+        "mobile_device_name": null,
+        "platform": null,
+        "friendly_name": null
+      },
+      "decoded_canonical": {
+        "mobile_device_id": "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+      }
+    }
+  ]
+}

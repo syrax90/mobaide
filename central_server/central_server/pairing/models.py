@@ -1,9 +1,14 @@
-"""Pydantic models for the QR pairing flow.
+"""Pydantic models for both pairing directions.
 
-The agent calls ``POST /api/pairing/initiate`` to get a nonce + QR payload,
-the mobile calls ``POST /api/pairing/claim`` to consume the nonce, and the
-central server pushes a signed ``PairingPushPayload`` over the agent's
+QR (agent-first): the agent calls ``POST /api/pairing/initiate`` to get a
+nonce + QR payload, a client calls ``POST /api/pairing/claim`` to consume
+it, and the server pushes a signed ``PairingPushPayload`` over the agent's
 ``WS /ws/pairing/{nonce}``.
+
+Device code (browser-first): a signed-in client mints a short code, the
+operator retypes it into ``mobaide-agent pair``, which redeems it for a
+nonce and waits on the same WebSocket. Only the front half differs; the
+credential delivery is shared.
 """
 from __future__ import annotations
 
@@ -83,6 +88,121 @@ class PairingClaimResponse(BaseModel):
     agent_id: str
     agent_friendly_name: str
     ws_delivered: bool | None = None
+
+
+class DeviceCodeMintResponse(BaseModel):
+    """Server's reply to ``POST /api/pairing/device-code``.
+
+    ``request_id`` is the handle every follow-up call uses, so the code
+    itself never travels in a URL path or query string where the relay's
+    access log would capture it.
+    """
+
+    request_id: str
+    code: str
+    expires_at: str
+    verification_command: str
+
+
+class DeviceCodeRedeemRequest(BaseModel):
+    """The agent's anonymous redeem, keyed by the retyped code.
+
+    ``redeemer_id`` is generated and persisted by the agent *before* the
+    request goes out. The nonce is handed out exactly once, so without a
+    stable redeemer identity a response lost in transit would leave the
+    operator holding a burnt code and no way to reach the pairing
+    WebSocket; a retry carrying the same id is answered from the existing
+    row instead of rejected as a double redeem.
+    """
+
+    code: str = Field(min_length=1, max_length=64)
+    redeemer_id: str = Field(min_length=8, max_length=64)
+    hostname: str | None = Field(default=None, max_length=255)
+    os: str | None = Field(default=None, max_length=64)
+    current_agent_id: str | None = Field(default=None, max_length=64)
+
+
+class DeviceCodeRedeemResponse(BaseModel):
+    """What the agent needs to wait for its credentials.
+
+    Shaped like ``PairingInitiateResponse`` minus the QR text: the agent
+    derives the WS URL from ``RELAY_SERVER_URL`` + ``nonce`` exactly as it
+    does for the QR flow.
+
+    ``account_hint`` is a masked address, and it is the load-bearing
+    control of the reversed direction. Because the browser mints the code,
+    a confirmation shown only in the browser is confirmed by whoever minted
+    it — including an attacker who talked the operator into running the
+    command. Naming the account on the agent's own terminal is what lets
+    the human refuse.
+
+    ``nonce`` is ``None`` on a replayed redeem: it is never stored
+    server-side, so a retrying agent reads it back from its own pending
+    file.
+    """
+
+    nonce: str | None = None
+    expires_at: str
+    trust_key_fp: str
+    relay_url: str
+    account_hint: str
+    is_repair: bool = False
+    replayed: bool = False
+
+
+class DeviceCodeStatusResponse(BaseModel):
+    """Poll state for the browser half of the flow.
+
+    ``hostname`` / ``os`` come from the anonymous redeem body and are
+    therefore attacker-settable — the same caveat that applies to the QR
+    flow's ``current_agent_id``. They are shown so a legitimate operator
+    can recognise their machine, not as an authentication signal.
+
+    ``blocked_reason`` surfaces the ownership verdict *before* the confirm
+    click, so a re-pair that is going to 404 or 409 says so while the code
+    and nonce are still spendable.
+
+    ``repair_agent_name`` is set only when the redeeming host claims an
+    agent this account already owns. Approving then *moves* that agent —
+    rotating its token onto the redeemer and knocking the real host
+    offline — so the clients must name it rather than asking the
+    first-pair question.
+    """
+
+    status: Literal[
+        "pending", "redeemed", "confirmed", "canceled", "expired"
+    ]
+    expires_at: str
+    hostname: str | None = None
+    os: str | None = None
+    is_repair: bool = False
+    repair_agent_name: str | None = None
+    blocked_reason: Literal["unknown_agent", "owned_by_other"] | None = None
+
+
+class DeviceCodeConfirmRequest(BaseModel):
+    """Browser's approval of a redeemed code.
+
+    Carries the same device fields as ``PairingClaimRequest`` because the
+    confirm runs the identical completion path.
+    """
+
+    mobile_device_id: str = Field(pattern=MOBILE_DEVICE_ID_PATTERN)
+    mobile_device_name: str | None = Field(default=None, max_length=255)
+    platform: str | None = Field(default=None, max_length=32)
+    friendly_name: str | None = Field(default=None, max_length=128)
+
+
+class TrustPinResponse(BaseModel):
+    """The relay's current signing fingerprint and the account's pin.
+
+    Read-only and advisory. Clients display it and may warn on a
+    difference; they must NOT write it into their local trust store.
+    """
+
+    relay_url: str
+    relay_trust_key_fp: str
+    account_trust_key_fp: str | None = None
 
 
 class PairingPushPayload(BaseModel):
