@@ -110,11 +110,12 @@ struct InputBar: View {
         .background(colors.surfaceVariant.opacity(0.3))
         .animation(.easeInOut(duration: 0.15), value: model.composerVisible)
         .task {
-            for await _ in model.focusRequests() {
+            for await focused in model.focusRequests() {
                 // Let a just-revealed composer render before claiming focus —
                 // setting @FocusState on a not-yet-mounted field is dropped.
-                await Task.yield()
-                inputFocused = true
+                // Releasing focus has no such ordering need.
+                if focused { await Task.yield() }
+                inputFocused = focused
             }
         }
     }
