@@ -52,6 +52,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -90,6 +91,7 @@ fun TerminalScreen(
     val templatesLoading by viewModel.templatesLoading.collectAsStateWithLifecycle()
     val displayConfig by viewModel.displayConfig.collectAsStateWithLifecycle()
     val sessionKind by viewModel.sessionKind.collectAsStateWithLifecycle()
+    val headerLabel by viewModel.headerLabel.collectAsStateWithLifecycle()
     val composerVisible by viewModel.composerVisible.collectAsStateWithLifecycle()
     val shortcutRecents by viewModel.shortcutRecents.collectAsStateWithLifecycle()
     val savedShortcuts by viewModel.savedShortcutsForKind.collectAsStateWithLifecycle()
@@ -186,10 +188,12 @@ fun TerminalScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = sessionState.replaceFirstChar { it.uppercase() },
+                            text = headerLabel,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontFamily = FontFamily.Monospace,
                             ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 },

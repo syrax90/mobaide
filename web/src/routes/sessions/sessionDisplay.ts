@@ -44,6 +44,20 @@ export function sessionTitle(session: SessionResponse, kindLabel: string): strin
   return `${kindLabel} · ${session.project_name ?? session.session_id.slice(0, 8)}`;
 }
 
+/**
+ * The terminal header's label: the live OSC title while there is one, otherwise
+ * the kind. Deliberately not [sessionTitle]'s composite — the cards may show a
+ * truncated id to disambiguate a list, a single screen's header has nothing to
+ * disambiguate against, so it never renders one.
+ */
+export function sessionHeaderLabel(
+  session: SessionResponse,
+  customTypeNames: ReadonlyMap<string, string>,
+): string {
+  if (session.title !== undefined && session.title.trim() !== '') return session.title;
+  return sessionKindLabel(session, customTypeNames);
+}
+
 export type SessionStateTone = 'running' | 'pending' | 'stopped' | 'crashed';
 
 /**

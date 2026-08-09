@@ -23,8 +23,15 @@ private struct TerminalScreenContent: View {
     @State private var templateName = ""
     @State private var showShortcutPicker = false
     @State private var renameShortcutTarget: SavedShortcutUi?
+    /// Last known row for this session, the header label's source. Held rather
+    /// than read from the repository on demand because `SessionRepository` is
+    /// not `@Observable` — only its stream drives a re-render.
+    @State private var sessionRow: SessionResponse?
+    @State private var customTypeNames: [String: String]
     private let displayStore: TerminalDisplayStore
     private let sessionRepository: SessionRepository
+    private let customAgentTypesRepository: CustomAgentTypesRepository
+    private let agentAPI: AgentAPI
     private let sessionId: String
 
     @Environment(Router.self) private var router
@@ -40,9 +47,40 @@ private struct TerminalScreenContent: View {
             resolvedKind: session?.kind,
             initialStatus: session?.state
         ))
+        _sessionRow = State(initialValue: session)
+        _customTypeNames = State(initialValue: Self.typeNames(container.customAgentTypesRepository.currentTypes))
         displayStore = container.terminalDisplayStore
         sessionRepository = container.sessionRepository
+        customAgentTypesRepository = container.customAgentTypesRepository
+        agentAPI = container.agentAPI
         self.sessionId = sessionId
+    }
+
+    /// Empty only until the row resolves from either source below.
+    private var headerLabel: String {
+        sessionRow.map { SessionDisplay.headerLabel($0, customTypeNames: customTypeNames) } ?? ""
+    }
+
+    /// One-shot seed for a cold-start deep link (notification tap), whose
+    /// `currentSessions` is empty and whose event bus may be slow or down while
+    /// the PTY socket connects fine — without this the title stays blank for
+    /// the whole visit.
+    ///
+    /// Read-only on purpose: `SessionRepository.listSessions()` publishes the
+    /// REST snapshot and evicts terminal models absent from it, so a stale
+    /// response on this cold-start path could disconnect a session created
+    /// meanwhile (same reasoning as `AppContainer`'s kind resolver).
+    private func seedSessionRow() async {
+        guard sessionRow == nil else { return }
+        let list = try? await agentAPI.listSessions()
+        // Re-checked after the await: a snapshot that landed while the request
+        // was in flight is newer than the response, and the title is mutable.
+        guard sessionRow == nil else { return }
+        sessionRow = list?.first { $0.session_id == sessionId }
+    }
+
+    private static func typeNames(_ types: [CustomAgentTypeDto]) -> [String: String] {
+        Dictionary(types.map { ("custom_\($0.id)", $0.name) }, uniquingKeysWith: { _, last in last })
     }
 
     /// Leaves for the sessions list once the agent's snapshot proves this
@@ -98,7 +136,7 @@ private struct TerminalScreenContent: View {
         }
         .clipped()
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .navigationTitle(model.sessionId)
+        .navigationTitle(headerLabel)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -127,14 +165,31 @@ private struct TerminalScreenContent: View {
             model.renameShortcut(id: shortcut.id, name: name)
         }
         .task {
+            await seedSessionRow()
+        }
+        .task {
             checkSessionStillExists()
-            for await _ in sessionRepository.sessions() {
+            for await sessions in sessionRepository.sessions() {
+                // Last non-nil wins: a session dropping out of the snapshot
+                // pops this screen, so blanking the header on the way out
+                // would only flash an empty title bar.
+                if let row = sessions.first(where: { $0.session_id == sessionId }) {
+                    sessionRow = row
+                }
                 checkSessionStillExists()
             }
         }
         .task {
             for await _ in sessionRepository.sessionsSyncedStates() {
                 checkSessionStillExists()
+            }
+        }
+        // Only reachable for a custom-kind session whose row predates the
+        // `kind_label` snapshot; the registry is the label's second chance.
+        .task {
+            try? await customAgentTypesRepository.refreshCustomTypes()
+            for await types in customAgentTypesRepository.types() {
+                customTypeNames = Self.typeNames(types)
             }
         }
         .onAppear {

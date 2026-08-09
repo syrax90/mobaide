@@ -107,6 +107,30 @@ final class SessionListModelTests: XCTestCase {
         )
     }
 
+    func testHeaderLabelPrefersTitle() {
+        XCTAssertEqual(
+            SessionDisplay.headerLabel(makeSessionResponse(title: "Fix the header", kind: .codex), customTypeNames: [:]),
+            "Fix the header"
+        )
+    }
+
+    func testHeaderLabelFallsBackToKindWithoutUsableTitle() {
+        XCTAssertEqual(
+            SessionDisplay.headerLabel(makeSessionResponse(kind: .codex), customTypeNames: [:]), "Codex",
+            "a session with no title yet renders its kind, never its id"
+        )
+        XCTAssertEqual(
+            SessionDisplay.headerLabel(makeSessionResponse(title: "   ", kind: .shell), customTypeNames: [:]), "Terminal",
+            "a whitespace-only OSC title is not a label"
+        )
+    }
+
+    func testHeaderLabelReusesCustomKindChain() {
+        let names = ["custom_ab12cd34ef56": "Aider Renamed"]
+        let session = makeSessionResponse(kind: .custom("custom_ab12cd34ef56"))
+        XCTAssertEqual(SessionDisplay.headerLabel(session, customTypeNames: names), "Aider Renamed")
+    }
+
     func testAttentionMapping() {
         XCTAssertEqual(SessionDisplay.attention("awaiting_permission")?.text, "Needs permission")
         XCTAssertEqual(SessionDisplay.attention("turn_finished")?.text, "Ready")

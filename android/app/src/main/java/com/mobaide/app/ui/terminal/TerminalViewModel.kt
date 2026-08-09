@@ -15,12 +15,15 @@ import com.mobaide.app.data.network.TerminalProtocol
 import com.mobaide.app.data.network.WebSocketConnection
 import com.mobaide.app.data.network.WsEvent
 import com.mobaide.app.data.network.dto.SessionKind
+import com.mobaide.app.data.network.dto.SessionResponse
 import com.mobaide.app.data.network.dto.TemplateDto
 import com.mobaide.app.data.network.dto.wireName
+import com.mobaide.app.data.repository.CustomAgentTypesRepository
 import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.data.repository.ShortcutsRepository
 import com.mobaide.app.data.repository.TemplatesRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
+import com.mobaide.app.ui.sessions.sessionHeaderLabel
 import com.termux.terminal.TerminalSession
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineStart
@@ -40,10 +43,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -64,6 +69,7 @@ private const val CLEAR_INPUT_LINE = ""
 class TerminalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessionRepository: SessionRepository,
+    private val customAgentTypesRepository: CustomAgentTypesRepository,
     private val templatesRepository: TemplatesRepository,
     private val shortcutsRepository: ShortcutsRepository,
     private val foregroundSessionTracker: ForegroundSessionTracker,
@@ -148,33 +154,49 @@ class TerminalViewModel @Inject constructor(
      *  assume `resolvedKind == sessionKind`. */
     private val resolvedKind = MutableStateFlow<SessionKind?>(null)
 
-    /** CLI of this session, used to drive the CLI-aware control-key bar. Resolved from
-     *  the app-scoped session list (the single source of truth) and, on a cold launch,
-     *  from a one-shot REST seed. Null until either resolves — consumers render the
-     *  kind-neutral default (plain key bar, no saved shortcuts, no MRU writes) rather
-     *  than guessing Claude, which would flash the wrong bar and mislabel MRU buckets
-     *  for custom/Codex sessions — then sticks to the real kind (immutable per
-     *  session, so the two sources never disagree). */
-    val sessionKind: StateFlow<SessionKind?> =
+    /** This session's row, from the app-scoped session list (the single source of
+     *  truth) plus a one-shot REST seed for a cold launch.
+     *
+     *  observeSessionList() starts empty, so a cold launch (notification tap /
+     *  deep link) can build this VM before the first sessions.changed snapshot —
+     *  listSessions() is a pass-through that never writes the cache, so without
+     *  the seed both consumers below would stay unresolved until some later
+     *  session event, or for the whole visit if the event bus never connects.
+     *  Delegates to resolvedSession() — the single implementation of
+     *  live-list-then-REST resolution, shared with saveShortcut.
+     *
+     *  Shared (not two independent merges) so the seed costs one fetch, and
+     *  mapNotNull'd so a row that vanishes from the list leaves the last value
+     *  standing rather than reverting its consumers. */
+    private val sessionRow: Flow<SessionResponse> =
         merge(
             sessionRepository.observeSessionList()
-                .mapNotNull { sessions ->
-                    sessions.firstOrNull { it.session_id == sessionId }?.kind
-                },
-            flow {
-                // observeSessionList() is WS-pushed with no replay, so a cold launch
-                // (notification tap / deep link) can build this VM before the first
-                // sessions.changed snapshot — the list starts empty and the kind
-                // would stay unresolved. Delegate to resolvedSessionKind() — the
-                // single implementation of live-list-then-REST resolution, shared
-                // with saveShortcut — for a one-shot seed. mapNotNull above means
-                // null only ever comes from stateIn's seed value, so there is no
-                // Codex→null→Codex flicker once a real kind arrives.
-                resolvedSessionKind()?.let { emit(it) }
-            },
+                .mapNotNull { sessions -> sessions.firstOrNull { it.session_id == sessionId } },
+            flow { resolvedSession()?.let { emit(it) } },
         )
+            .shareIn(viewModelScope, SharingStarted.Eagerly, replay = 1)
+
+    /** CLI of this session, used to drive the CLI-aware control-key bar. Null until
+     *  [sessionRow] resolves — consumers render the kind-neutral default (plain key
+     *  bar, no saved shortcuts, no MRU writes) rather than guessing Claude, which
+     *  would flash the wrong bar and mislabel MRU buckets for custom/Codex sessions
+     *  — then sticks to the real kind (immutable per session, so the live list and
+     *  the REST seed never disagree). [sessionRow] only ever emits a real row, so
+     *  null comes from stateIn's seed value alone and there is no Codex→null→Codex
+     *  flicker once a kind arrives. */
+    val sessionKind: StateFlow<SessionKind?> =
+        sessionRow
+            .map { it.kind }
             .onEach { resolvedKind.value = it }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** What the top bar names this session: its live OSC title while there is
+     *  one, else the kind label. Empty only until [sessionRow] resolves. */
+    val headerLabel: StateFlow<String> =
+        combine(sessionRow, customAgentTypesRepository.observeTypes()) { session, types ->
+            sessionHeaderLabel(session, types.associate { "custom_${it.id}" to it.name })
+        }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -618,19 +640,27 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
-    /** The session's actual kind, or null while it cannot be determined.
+    /** The session's actual row, or null while it cannot be determined.
      *  Persisting a synced shortcut under a guessed kind would file it in
      *  the wrong per-kind bucket permanently (unlike the self-healing
      *  device-local recents) — so saves re-resolve from the authoritative
-     *  sources instead of trusting the [sessionKind] StateFlow value. */
-    private suspend fun resolvedSessionKind(): SessionKind? {
+     *  sources instead of trusting the [sessionKind] StateFlow value.
+     *
+     *  The live list wins on both sides of the fetch. A sessions.changed
+     *  snapshot landing while the request is in flight is newer than the
+     *  response by definition, and [headerLabel] reads a mutable field off this
+     *  row — returning the REST copy there would regress the title to whatever
+     *  it was when the request was issued, until the next session event. */
+    private suspend fun resolvedSession(): SessionResponse? {
+        liveSessionRow()?.let { return it }
+        val fetched = runCatching { sessionRepository.listSessions() }.getOrNull()
+            ?.firstOrNull { it.session_id == sessionId }
+        return liveSessionRow() ?: fetched
+    }
+
+    private fun liveSessionRow(): SessionResponse? =
         sessionRepository.observeSessionList().value
             .firstOrNull { it.session_id == sessionId }
-            ?.let { return it.kind }
-        return runCatching { sessionRepository.listSessions() }.getOrNull()
-            ?.firstOrNull { it.session_id == sessionId }
-            ?.kind
-    }
 
     /** Chord tokens with a create request currently in flight. Main-thread
      *  confined: [saveShortcut] is only ever called from the UI, and
@@ -657,7 +687,7 @@ class TerminalViewModel @Inject constructor(
         if (!savesInFlight.add(token)) return
         viewModelScope.launch {
             try {
-                val kind = resolvedSessionKind()
+                val kind = resolvedSession()?.kind
                 if (kind == null) {
                     _userMessages.tryEmit(
                         "Failed to save shortcut: session type not known yet",
@@ -669,7 +699,7 @@ class TerminalViewModel @Inject constructor(
                 // merge that normally writes it — so without this a cold-launch save
                 // can succeed while the picker still shows "Save" with no hint row
                 // and (success being silent) no feedback at all. Same authority as
-                // the merge: resolvedSessionKind() never returns the eager seed.
+                // the merge: resolvedSession() never returns the eager seed.
                 resolvedKind.compareAndSet(null, kind)
                 try {
                     shortcutsRepository.createShortcut(kind.wireName, chord.token(), null)

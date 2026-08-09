@@ -71,6 +71,7 @@ class TerminalViewModelResizeTest {
         TerminalViewModel(
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = sessionRepository,
+            customAgentTypesRepository = mockk { every { observeTypes() } returns MutableStateFlow(emptyList()) },
             templatesRepository = templatesRepository,
             shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),

@@ -84,6 +84,7 @@ class TerminalViewModelChunkedReplayTest {
         TerminalViewModel(
             savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
             sessionRepository = repo,
+            customAgentTypesRepository = mockk { every { observeTypes() } returns MutableStateFlow(emptyList()) },
             templatesRepository = templatesRepository,
             shortcutsRepository = mockk(),
             foregroundSessionTracker = ForegroundSessionTracker(),

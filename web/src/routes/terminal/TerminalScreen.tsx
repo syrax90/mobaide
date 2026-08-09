@@ -27,6 +27,7 @@ import { ShortcutPicker } from './ShortcutPicker';
 import { TemplatesPicker } from './TemplatesPicker';
 import { TerminalSurface } from './TerminalSurface';
 import { useSessionGone } from './useSessionGone';
+import { useSessionHeaderLabel } from './useSessionHeaderLabel';
 import { useSessionKind } from './useSessionKind';
 
 export function TerminalScreen() {
@@ -55,6 +56,7 @@ interface TerminalRouteProps {
 function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
   useSessionGone(agentId, sessionId);
   const kind = useSessionKind(agentId, sessionId);
+  const headerLabel = useSessionHeaderLabel(agentId, sessionId);
   const key = sessionChannelName(agentId, sessionId);
   const model = useTerminalStore((state) => state.models[key]);
 
@@ -95,15 +97,16 @@ function TerminalRoute({ agentId, sessionId }: TerminalRouteProps) {
     return <section className="terminal-page terminal-page-empty">Attaching…</section>;
   }
 
-  return <TerminalView model={model} kind={kind} />;
+  return <TerminalView model={model} kind={kind} headerLabel={headerLabel} />;
 }
 
 interface TerminalViewProps {
   model: TerminalSessionModel;
   kind: string | null;
+  headerLabel: string;
 }
 
-function TerminalView({ model, kind }: TerminalViewProps) {
+function TerminalView({ model, kind, headerLabel }: TerminalViewProps) {
   const view = model.state();
   const passCtrlV = useTerminalPrefsStore((state) => state.passCtrlVToTerminal);
   const setPassCtrlV = useTerminalPrefsStore((state) => state.setPassCtrlVToTerminal);
@@ -177,7 +180,7 @@ function TerminalView({ model, kind }: TerminalViewProps) {
         >
           {view.status?.status ?? 'connecting'}
         </span>
-        <span className="terminal-session-id">{model.sessionId}</span>
+        {headerLabel !== '' && <span className="terminal-title">{headerLabel}</span>}
         <span className="terminal-bar-spacer" />
         <label className="terminal-toggle">
           <input

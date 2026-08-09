@@ -4,6 +4,7 @@ import {
   attentionChip,
   canStopSession,
   customTypeNameMap,
+  sessionHeaderLabel,
   sessionKindLabel,
   sessionStateTone,
   sessionTitle,
@@ -68,6 +69,27 @@ describe('sessionTitle', () => {
     expect(sessionTitle(session({ title: '', project_name: 'mobaide' }), 'Codex')).toBe(
       'Codex · mobaide',
     );
+  });
+});
+
+describe('sessionHeaderLabel', () => {
+  it('uses the agent-supplied title when there is one', () => {
+    expect(sessionHeaderLabel(session({ title: 'Fix the parser', kind: 'codex' }), names)).toBe(
+      'Fix the parser',
+    );
+  });
+
+  it('falls back to the kind, never to an id', () => {
+    // The header names one session; a truncated id would identify nothing.
+    expect(sessionHeaderLabel(session({ kind: 'codex' }), names)).toBe('Codex');
+    expect(sessionHeaderLabel(session({ title: '', project_name: 'mobaide' }), names)).toBe(
+      'Claude Code',
+    );
+    expect(sessionHeaderLabel(session({ title: '   ', kind: 'shell' }), names)).toBe('Terminal');
+  });
+
+  it('resolves a custom kind through the live registry', () => {
+    expect(sessionHeaderLabel(session({ kind: 'custom_0123456789ab' }), names)).toBe('My Linter');
   });
 });
 
