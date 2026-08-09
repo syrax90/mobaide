@@ -32,6 +32,7 @@ router = APIRouter()
 FRAME_OUTPUT = b"o"      # 0x6f  S->C  raw PTY bytes
 FRAME_INPUT = b"i"       # 0x69  C->S  raw input bytes
 FRAME_RESIZE = b"r"      # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
+FRAME_CLEAR_REPLAY = b"c"  # 0x63  C->S  clear replay ring + scrollback (empty payload)
 FRAME_EXECUTE = b"x"     # 0x78  C->S  clear-then-submit: Ctrl+C + pause + payload + pause + CR
 FRAME_SUBMIT = b"m"      # 0x6d  C->S  submit: payload + pause + CR (discrete Enter)
 FRAME_STATE = b"s"       # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
@@ -188,6 +189,9 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                         rows, cols = struct.unpack(">HH", payload[:4])
                         await session.resize(rows, cols)
                         counters["msg_count"] += 1
+                elif frame_type == FRAME_CLEAR_REPLAY:
+                    session.clear_replay()
+                    counters["msg_count"] += 1
                 else:
                     logger.debug(
                         "ws.unknown_frame",

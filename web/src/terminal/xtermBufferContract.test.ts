@@ -12,7 +12,7 @@
 import { Terminal } from '@xterm/headless';
 import { afterEach, describe, expect, it } from 'vitest';
 import { accrueScrollbackRows, isPinned, type ScrollSample } from './terminalFollow';
-import { CLEAR_BEFORE_REPLAY } from './terminalReplay';
+import { CLEAR_BEFORE_REPLAY, CLEAR_SCROLLBACK } from './terminalReplay';
 
 const live: Terminal[] = [];
 
@@ -114,6 +114,28 @@ describe('xterm buffer indices that the unread tally reads', () => {
     const after = sample(terminal);
 
     expect(after).toEqual({ baseY: 0, viewportY: 0 });
+    expect(accrueScrollbackRows(before, after)).toBe(12);
+  });
+
+  it('trims only the scrollback on a bare ESC[3J, keeping the viewport painted', async () => {
+    // The Ctrl+L local wipe relies on ED 3 leaving the active screen intact:
+    // only the scrollback ring is dropped, with both indices shifted down by
+    // the trimmed amount. The raw accrue reads that shift as unread rows,
+    // which is why `sendControlKey` re-baselines before the write.
+    const terminal = headless(5, 20, 100);
+    await writeLines(terminal, 20);
+    terminal.scrollLines(-4);
+
+    const before = sample(terminal);
+    expect(before).toEqual({ baseY: 16, viewportY: 12 });
+
+    await write(terminal, CLEAR_SCROLLBACK);
+    const after = sample(terminal);
+
+    expect(after).toEqual({ baseY: 0, viewportY: 0 });
+    // The active rows survive — unlike the replay wipe, nothing blanks them.
+    expect(terminal.buffer.active.getLine(0)?.translateToString(true)).toBe('line16');
+    expect(terminal.buffer.active.getLine(3)?.translateToString(true)).toBe('line19');
     expect(accrueScrollbackRows(before, after)).toBe(12);
   });
 });

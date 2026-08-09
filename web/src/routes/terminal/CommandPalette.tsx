@@ -94,7 +94,7 @@ export function CommandPalette({
         disabled: !canSend,
         restoresTerminalFocus: true,
         run: () => {
-          model.sendChordBytes(builtIn.bytes);
+          model.sendControlKey(builtIn);
         },
       })),
       ...(templates.data ?? []).map((template) => ({

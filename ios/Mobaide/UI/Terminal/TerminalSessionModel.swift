@@ -46,6 +46,11 @@ final class TerminalSessionModel {
         0x1B, 0x5B, 0x33, 0x4A,       // ESC [ 3 J
     ]
 
+    /// `ESC[3J` alone — the Ctrl+L local wipe (`sendControlKey`). Unlike
+    /// `clearBeforeReplay` the viewport stays painted, so a TUI mid-frame is
+    /// never blanked.
+    static let clearScrollback: [UInt8] = [0x1B, 0x5B, 0x33, 0x4A]
+
     let sessionId: String
     let kind: SessionKind
     let terminalView: MobaideTerminalView
@@ -314,8 +319,23 @@ final class TerminalSessionModel {
         sendBytes(data)
     }
 
-    func sendControlKey(_ bytes: [UInt8]) {
-        sendBytes(Data(bytes))
+    /// Send a control-bar key, honoring its `clearsView` flag (Ctrl+L): the
+    /// local scrollback is wiped and the `c` frame queued *before* the key's
+    /// own bytes, so the agent's ring is gone before any output the 0x0c might
+    /// provoke and a reconnect replay cannot resurrect the cleared history.
+    /// SwiftTerm's ED-3 branch trims the scrollback without calling `scroll`,
+    /// so no unread rows accrue from the wipe itself.
+    func sendControlKey(_ key: TerminalControlKey) {
+        if key.clearsView {
+            // The selection's rows are about to be renumbered by the trim
+            // (same reason the replay wipe ends it first).
+            endSelection()
+            terminalView.applyingEmulatorOutput {
+                terminalView.feedTrackingSynchronizedOutput(Self.clearScrollback[...])
+            }
+            enqueue(.clearReplay)
+        }
+        sendBytes(Data(key.bytes))
     }
 
     // MARK: - Text selection

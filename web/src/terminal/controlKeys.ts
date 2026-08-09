@@ -17,6 +17,14 @@ export interface ControlKey {
   ariaLabel?: string;
   bytes: Uint8Array;
   title: string;
+  /**
+   * Tapping this key also wipes the local scrollback and the agent's replay
+   * ring before the bytes go out (`TerminalSessionModel.sendControlKey`). No
+   * CLI clears the screen for us: Claude Code binds ctrl+l to
+   * `chat:clearInput` gated on fullscreen-TUI mode, and its real screen clear
+   * (cmd+k) has no wire encoding.
+   */
+  clearsView?: boolean;
 }
 
 function key(
@@ -52,7 +60,7 @@ const LEFT = key('left', '←', [0x1b, 0x5b, 0x44], 'Left', 'Left');
 const RIGHT = key('right', '→', [0x1b, 0x5b, 0x43], 'Right', 'Right');
 const CTRL_O = key('ctrlO', 'Ctrl+O', [0x0f], 'Toggle the transcript');
 const CTRL_R = key('ctrlR', 'Ctrl+R', [0x12], 'Search history');
-const CTRL_L = key('ctrlL', 'Ctrl+L', [0x0c], 'Clear the screen');
+const CTRL_L: ControlKey = { ...key('ctrlL', 'Ctrl+L', [0x0c], 'Clear the screen'), clearsView: true };
 // Bare 'y' / 'n' with no CR — Enter stays a separate key.
 const APPROVE = key('approve', 'Approve', [0x79], "Answer 'y'");
 const REJECT = key('reject', 'Reject', [0x6e], "Answer 'n'");

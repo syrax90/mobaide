@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SavedShortcut } from '../../api/shortcutRepository';
+import type { ControlKey } from '../../terminal/controlKeys';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { stubLocalStorage } from '../../test/localStorageStub';
 
@@ -22,10 +23,15 @@ const { ShortcutBar } = await import('./ShortcutBar');
 const { useTerminalPrefsStore } = await import('../../stores/terminalPrefsStore');
 
 const sent: Uint8Array[] = [];
+const controlKeysSent: ControlKey[] = [];
 
-/** The bar reaches outside the DOM for exactly one thing. */
+/** The bar reaches outside the DOM for exactly two things. */
 const model = {
   sendChordBytes: (payload: Uint8Array) => sent.push(payload),
+  sendControlKey: (key: ControlKey) => {
+    controlKeysSent.push(key);
+    sent.push(key.bytes);
+  },
 } as unknown as TerminalSessionModel;
 
 function saved(over: Partial<SavedShortcut> = {}): SavedShortcut {
@@ -67,6 +73,7 @@ const keys = (): HTMLElement[] =>
 beforeEach(() => {
   repo.shortcuts = [];
   sent.length = 0;
+  controlKeysSent.length = 0;
   openedComposer = 0;
   useTerminalPrefsStore.setState({ shortcutBarExpanded: true, recentChords: {} });
 });
@@ -96,6 +103,16 @@ describe('ShortcutBar built-in keys', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Mode' }));
 
     expect(sent).toEqual([Uint8Array.of(0x1b, 0x5b, 0x5a)]);
+  });
+
+  it('hands the whole key to the model, so Ctrl+L keeps its clearsView flag', async () => {
+    await renderBar();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl+L' }));
+
+    expect(controlKeysSent).toHaveLength(1);
+    expect(controlKeysSent[0]?.id).toBe('ctrlL');
+    expect(controlKeysSent[0]?.clearsView).toBe(true);
   });
 
   it('disables the keys while the send gate is shut', async () => {

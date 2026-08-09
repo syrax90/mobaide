@@ -34,6 +34,12 @@ export const CLEAR_BEFORE_REPLAY = Uint8Array.from([
 ]);
 
 /**
+ * `ESC[3J` (erase scrollback) alone — the Ctrl+L local wipe. Unlike the replay
+ * wipe it leaves the viewport painted, so a TUI mid-frame is never blanked.
+ */
+export const CLEAR_SCROLLBACK = Uint8Array.from([0x1b, 0x5b, 0x33, 0x4a]);
+
+/**
  * Screen-level connection state — Android's three-value enum exactly.
  *
  * iOS adds a fourth, `.closed`, for an evicted session. The web client tracks

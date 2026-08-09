@@ -9,7 +9,8 @@
     { "name": "input_utf8", "frame": { "kind": "input", "text": "é" }, "bytes_hex": "69c3a9" },
     { "name": "execute_ls", "frame": { "kind": "execute", "text": "ls" }, "bytes_hex": "786c73" },
     { "name": "submit_empty", "frame": { "kind": "submit", "text": "" }, "bytes_hex": "6d" },
-    { "name": "submit_command", "frame": { "kind": "submit", "text": "git status" }, "bytes_hex": "6d67697420737461747573" }
+    { "name": "submit_command", "frame": { "kind": "submit", "text": "git status" }, "bytes_hex": "6d67697420737461747573" },
+    { "name": "clear_replay", "frame": { "kind": "clear_replay" }, "bytes_hex": "63" }
   ],
   "decode": [
     { "name": "output_hi_newline", "bytes_hex": "6f68690a", "expect": { "kind": "output", "payload_hex": "68690a" } },
@@ -21,6 +22,7 @@
     { "name": "empty_frame_is_nil", "bytes_hex": "", "expect": null },
     { "name": "unknown_type_is_nil", "bytes_hex": "7a00", "expect": null },
     { "name": "inbound_input_byte_is_nil", "bytes_hex": "6968", "expect": null },
+    { "name": "inbound_clear_replay_byte_is_nil", "bytes_hex": "63", "expect": null },
     { "name": "inbound_resize_byte_is_nil", "bytes_hex": "7200280078", "expect": null }
   ]
 }

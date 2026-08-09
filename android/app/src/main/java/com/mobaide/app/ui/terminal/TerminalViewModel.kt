@@ -442,6 +442,23 @@ class TerminalViewModel @Inject constructor(
         enqueueInput(bytes)
     }
 
+    /**
+     * Clear the terminal view: wipe the local scrollback and tell the agent to
+     * drop its replay ring + REST scrollback, so a later reconnect replay
+     * cannot resurrect the cleared history.
+     *
+     * Runs before the key's own bytes go out (the InputBar invokes this and
+     * then [sendBytes]; the single [sendChannel] keeps `'c'` ahead of `'i'`).
+     * Bare `ESC[3J` — unlike [CLEAR_BEFORE_REPLAY] the viewport stays painted,
+     * so a TUI mid-frame is never blanked. Termux's ED-3 branch calls
+     * `clearTranscript()` without touching `scrollCounter`, so no unread rows
+     * accrue from the wipe itself.
+     */
+    fun clearLocalView() {
+        session.emitOutput(CLEAR_SCROLLBACK, CLEAR_SCROLLBACK.size)
+        sendChannel.trySend(TerminalProtocol.encodeClearReplay())
+    }
+
     /** Queue [bytes] for the PTY as an `'i'` (input) frame — the raw-byte path shared by
      *  [sendBytes] and [sendTerminalBytes]. */
     private fun enqueueInput(bytes: ByteArray) {
@@ -901,6 +918,11 @@ class TerminalViewModel @Inject constructor(
         val CLEAR_BEFORE_REPLAY: ByteArray = byteArrayOf(
             0x1b, '['.code.toByte(), 'H'.code.toByte(),
             0x1b, '['.code.toByte(), '2'.code.toByte(), 'J'.code.toByte(),
+            0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),
+        )
+
+        /** `ESC [ 3 J` alone — the Ctrl+L local wipe ([clearLocalView]). */
+        val CLEAR_SCROLLBACK: ByteArray = byteArrayOf(
             0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),
         )
     }

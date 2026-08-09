@@ -152,6 +152,24 @@ class TerminalProtocolTest {
         assertEquals(0xFF.toByte(), frame[4])
     }
 
+    // ---- encodeClearReplay --------------------------------------------------
+
+    @Test
+    fun encodeClearReplay_isExactlyOneTypeByte() {
+        // Golden bytes shared with tests/protocol_fixtures/frames/terminal_frames.json
+        // ("clear_replay" → "63"); the frame carries no payload.
+        assertArrayEquals(
+            byteArrayOf('c'.code.toByte()),
+            TerminalProtocol.encodeClearReplay().toByteArray(),
+        )
+    }
+
+    @Test
+    fun decode_inboundClearReplayByte_returnsNull() {
+        // 'c' is client→server only; an agent must never emit it.
+        assertNull(TerminalProtocol.decode(byteArrayOf('c'.code.toByte()).toByteString()))
+    }
+
     // ---- decode -------------------------------------------------------------
 
     @Test

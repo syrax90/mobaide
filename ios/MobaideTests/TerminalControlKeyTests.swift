@@ -101,6 +101,17 @@ final class TerminalControlKeyTests: XCTestCase {
         }
     }
 
+    func testOnlyCtrlLClearsTheView() {
+        // The clearsView flag drives the local ESC[3J wipe + the 'c' frame in
+        // `sendControlKey`; any other key gaining it would silently wipe the
+        // scrollback on tap.
+        for keys in [TerminalControlKey.claudeKeys, TerminalControlKey.codexKeys, TerminalControlKey.antigravityKeys] {
+            for key in keys {
+                XCTAssertEqual(key.clearsView, key.id == "ctrlL", key.id)
+            }
+        }
+    }
+
     func testCodexAndAntigravityControlBytes() {
         XCTAssertEqual(bytes("approve", in: TerminalControlKey.codexKeys), [0x79])
         XCTAssertEqual(bytes("reject", in: TerminalControlKey.codexKeys), [0x6E])

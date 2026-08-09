@@ -53,9 +53,16 @@ final class TerminalSessionModelTests: XCTestCase {
 
     func testControlKeySendsInputFrame() async throws {
         let (model, connection) = try await connectedModel()
-        model.sendControlKey([0x03])
+        model.sendControlKey(.ctrlC)
         let sent = await waitForBinaries(connection, atLeast: 1)
         XCTAssertEqual(sent.first, Data([0x69, 0x03]))
+    }
+
+    func testClearingControlKeyQueuesClearReplayBeforeInput() async throws {
+        let (model, connection) = try await connectedModel()
+        model.sendControlKey(.ctrlL)
+        let sent = await waitForBinaries(connection, atLeast: 2)
+        XCTAssertEqual(Array(sent.prefix(2)), [Data([0x63]), Data([0x69, 0x0C])])
     }
 
     func testTappedHistoricalRowExecutesWhenLive() async throws {

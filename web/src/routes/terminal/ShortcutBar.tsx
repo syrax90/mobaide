@@ -86,7 +86,7 @@ export function ShortcutBar({ model, kind, canSend, onOpenComposer }: ShortcutBa
               aria-label={builtIn.ariaLabel ?? builtIn.label}
               disabled={!canSend}
               onClick={(event) => {
-                model.sendChordBytes(builtIn.bytes);
+                model.sendControlKey(builtIn);
                 restoreFocusAfterClick(event);
               }}
             >

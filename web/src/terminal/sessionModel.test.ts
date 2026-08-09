@@ -8,7 +8,9 @@ import {
 import { WS_CLOSE } from '../protocol/closeCodes';
 import { encodeTerminalFrame, TERMINAL_FRAME_TYPE } from '../protocol/terminalCodec';
 import { useToastStore } from '../stores/toastStore';
+import { controlKeysFor } from './controlKeys';
 import { MAX_PASTE_BYTES } from './terminalPaste';
+import { CLEAR_SCROLLBACK } from './terminalReplay';
 import { CLEAR_INPUT_LINE } from './terminalSubmit';
 
 // The credential seams are the only part of the channel that would go to the
@@ -809,5 +811,69 @@ describe('TerminalSessionModel selection focus', () => {
 
     expect(model.state.getState().composerVisible).toBe(true);
     expect(focus).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalSessionModel control keys', () => {
+  const claudeKeys = controlKeysFor('claude');
+  const ctrlL = claudeKeys.find((key) => key.id === 'ctrlL');
+  const mode = claudeKeys.find((key) => key.id === 'mode');
+  if (ctrlL === undefined || mode === undefined) throw new Error('claude set lost a key');
+
+  /** Local emulator writes, with the parser left out of the loop. */
+  function spyWrites(model: Model): Uint8Array[] {
+    const writes: Uint8Array[] = [];
+    vi.spyOn(model.term, 'write').mockImplementation((data) => {
+      if (typeof data !== 'string') writes.push(data);
+    });
+    return writes;
+  }
+
+  it('queues the clear-replay frame before the 0x0c and wipes the local scrollback', async () => {
+    const { model, socket, framesOfType } = await liveRunning();
+    const writes = spyWrites(model);
+
+    model.sendControlKey(ctrlL);
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.clearReplay).map((frame) => [...frame])).toEqual([
+      [0x63],
+    ]);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map((frame) => [...frame])).toEqual([
+      [0x69, 0x0c],
+    ]);
+    // The ring must be gone before any output the 0x0c might provoke.
+    const order = socket.sent
+      .filter((frame): frame is Uint8Array => frame instanceof Uint8Array)
+      .map((frame) => frame[0]);
+    expect(order.indexOf(TERMINAL_FRAME_TYPE.clearReplay)).toBeLessThan(
+      order.indexOf(TERMINAL_FRAME_TYPE.input),
+    );
+    expect(writes).toContainEqual(CLEAR_SCROLLBACK);
+  });
+
+  it('sends a plain key with no clear side effects', async () => {
+    const { model, framesOfType } = await liveRunning();
+    const writes = spyWrites(model);
+
+    model.sendControlKey(mode);
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.clearReplay)).toEqual([]);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map((frame) => [...frame])).toEqual([
+      [0x69, 0x1b, 0x5b, 0x5a],
+    ]);
+    expect(writes).toEqual([]);
+  });
+
+  it('does nothing while the send gate is shut — not even the local wipe', async () => {
+    // A cleared screen with the replay ring intact would repaint on the next
+    // attach anyway; refusing both sides keeps the button's effect atomic.
+    const { model, framesOfType } = await harness();
+    const writes = spyWrites(model);
+
+    model.sendControlKey(ctrlL);
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.clearReplay)).toEqual([]);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
+    expect(writes).toEqual([]);
   });
 });

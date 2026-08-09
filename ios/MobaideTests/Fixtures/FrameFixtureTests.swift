@@ -86,6 +86,8 @@ final class FrameFixtureTests: XCTestCase {
             return .execute(try XCTUnwrap(spec.text, caseName))
         case "submit":
             return .submit(try XCTUnwrap(spec.text, caseName))
+        case "clear_replay":
+            return .clearReplay
         default:
             throw FixtureLoaderError.fileNotFound("unknown frame kind \(spec.kind) in \(caseName)")
         }

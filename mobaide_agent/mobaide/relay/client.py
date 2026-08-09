@@ -160,6 +160,7 @@ def _build_relay_ssl_context(
 FRAME_OUTPUT = b"o"
 FRAME_INPUT = b"i"
 FRAME_RESIZE = b"r"
+FRAME_CLEAR_REPLAY = b"c"
 FRAME_EXECUTE = b"x"
 FRAME_SUBMIT = b"m"
 FRAME_STATE = b"s"
@@ -2008,6 +2009,8 @@ class RelayClient:
             if len(frame_data) >= 4:
                 rows, cols = struct.unpack(">HH", frame_data[:4])
                 await session.resize(rows, cols)
+        elif frame_type == FRAME_CLEAR_REPLAY:
+            session.clear_replay()
 
     async def _notify_session_unknown(
         self, session_id: str, ws: ClientConnection

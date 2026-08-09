@@ -7,6 +7,12 @@ struct TerminalControlKey: Identifiable {
     let label: String
     let bytes: [UInt8]
     var systemImage: String?
+    /// Tapping also wipes the local scrollback and the agent's replay ring
+    /// before the bytes go out (`TerminalSessionModel.sendControlKey`). Ctrl+L
+    /// only: no CLI clears the screen for us — Claude Code binds ctrl+l to
+    /// `chat:clearInput` gated on fullscreen-TUI mode, and its real clear
+    /// (cmd+k) has no wire encoding.
+    var clearsView: Bool = false
 
     static let esc = TerminalControlKey(id: "esc", label: "Esc", bytes: [0x1B])
     static let tab = TerminalControlKey(id: "tab", label: "Tab", bytes: [0x09])
@@ -22,7 +28,7 @@ struct TerminalControlKey: Identifiable {
     static let right = TerminalControlKey(id: "right", label: "Right", bytes: [0x1B, 0x5B, 0x43], systemImage: "arrow.right")
     static let ctrlO = TerminalControlKey(id: "ctrlO", label: "Ctrl+O", bytes: [0x0F])
     static let ctrlR = TerminalControlKey(id: "ctrlR", label: "Ctrl+R", bytes: [0x12])
-    static let ctrlL = TerminalControlKey(id: "ctrlL", label: "Ctrl+L", bytes: [0x0C])
+    static let ctrlL = TerminalControlKey(id: "ctrlL", label: "Ctrl+L", bytes: [0x0C], clearsView: true)
     static let mode = TerminalControlKey(id: "mode", label: "Mode", bytes: [0x1B, 0x5B, 0x5A])
     static let rewind = TerminalControlKey(id: "rewind", label: "Rewind", bytes: [0x1B, 0x1B])
     static let approve = TerminalControlKey(id: "approve", label: "Approve", bytes: [0x79])
@@ -128,7 +134,7 @@ struct InputBar: View {
                 // neutral set for an unresolved kind too).
                 ForEach(TerminalControlKey.keys(for: model.resolvedKind)) { key in
                     Button {
-                        model.sendControlKey(key.bytes)
+                        model.sendControlKey(key)
                     } label: {
                         if let image = key.systemImage {
                             Image(systemName: image)

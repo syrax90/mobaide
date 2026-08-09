@@ -132,6 +132,14 @@ describe('controlKeysFor — bytes', () => {
     expect(byId(controlKeysFor('antigravity'), 'ctrlK').bytes).toEqual(Uint8Array.of(0x0b));
   });
 
+  it('flags exactly Ctrl+L to clear the local view, in every set that has it', () => {
+    for (const kind of ['claude', 'codex', 'antigravity']) {
+      for (const key of controlKeysFor(kind)) {
+        expect(key.clearsView ?? false).toBe(key.id === 'ctrlL');
+      }
+    }
+  });
+
   it('labels the glyph-only keys for a screen reader', () => {
     // '⌫' and the arrows are announced as their glyph name or not at all.
     for (const id of ['backspace', 'up', 'down', 'left', 'right']) {

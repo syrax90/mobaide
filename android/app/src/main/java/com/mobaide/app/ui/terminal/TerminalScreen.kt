@@ -295,6 +295,7 @@ fun TerminalScreen(
                     onTextChange = viewModel::updateInputText,
                     onSend = { text -> viewModel.sendInput(text) },
                     onSendBytes = viewModel::sendBytes,
+                    onClearView = viewModel::clearLocalView,
                     enabled = isConnected && sessionState == "running",
                     requestFocus = requestInputFocus,
                     onFocusHandled = viewModel::consumeFocusRequest,

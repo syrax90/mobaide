@@ -429,6 +429,17 @@ class TerminalSession:
         for start in range(0, len(snapshot), chunk_size):
             yield snapshot[start : start + chunk_size]
 
+    def clear_replay(self) -> None:
+        """Drop the replay ring and the REST scrollback history.
+
+        Client-initiated (``'c'`` frame) when the user clears their terminal
+        view, so a later reconnect replay or ``/scrollback`` fetch doesn't
+        resurrect the wiped history. Live output keeps flowing; both buffers
+        simply restart from the next PTY read.
+        """
+        self._ring.clear()
+        self._scrollback.clear()
+
     def on_claude_hook(self, kind: HookKind, payload: Mapping[str, Any]) -> None:
         """Feed one Claude Code hook to the attention gate.
 

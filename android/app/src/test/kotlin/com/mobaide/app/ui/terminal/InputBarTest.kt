@@ -359,7 +359,10 @@ class InputBarCodexTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun openCodexPanel(onSendBytes: (ByteArray) -> Unit = {}) {
+    private fun openCodexPanel(
+        onSendBytes: (ByteArray) -> Unit = {},
+        onClearView: () -> Unit = {},
+    ) {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -367,6 +370,7 @@ class InputBarCodexTest {
                     onTextChange = {},
                     onSend = {},
                     onSendBytes = onSendBytes,
+                    onClearView = onClearView,
                     sessionKind = SessionKind.Codex,
                 )
             }
@@ -431,6 +435,33 @@ class InputBarCodexTest {
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x0c), captured.single())
+    }
+
+    @Test
+    fun ctrlL_firesClearView_beforeItsBytes() {
+        // The clear must precede the 0x0c so the agent's replay ring is gone
+        // before any output the keystroke might provoke.
+        val events = mutableListOf<String>()
+        openCodexPanel(
+            onSendBytes = { events += "bytes" },
+            onClearView = { events += "clear" },
+        )
+
+        composeRule.onNodeWithText("Ctrl+L").performScrollTo().performClick()
+
+        assertEquals(listOf("clear", "bytes"), events)
+    }
+
+    @Test
+    fun otherKeys_neverFireClearView() {
+        var cleared = 0
+        openCodexPanel(onClearView = { cleared += 1 })
+
+        listOf("Ctrl+C", "Esc", "Approve").forEach {
+            composeRule.onNodeWithText(it).performScrollTo().performClick()
+        }
+
+        assertEquals(0, cleared)
     }
 
     @Test

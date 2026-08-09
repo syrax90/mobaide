@@ -133,6 +133,22 @@ cadence; they do **not** gate compatibility.
   supported combination. Deciding that a session is *gone* (rather than merely
   stopped) stays a client-side judgement from the ``sessions.changed``
   snapshot, not a wire signal.
+* Additive delta within proto-v7 (2026-08-09, Ctrl+L clear-view fix): the PTY
+  frame set on ``/ws/session/<id>`` and the ``CH_SESSION_IO`` channel gains one
+  C->S type. No version bump: the frame *layout* (1 type byte + payload) is
+  unchanged, the new type is purely additive, ``central_server`` forwards
+  ``CH_SESSION_IO`` payloads opaquely, and both agent dispatchers already drop
+  unknown frame types silently, so every old/new pairing degrades gracefully.
+  * New C->S frame ``0x63`` / ``'c'`` (**clear-replay**, empty payload): the
+    agent empties the session's replay ring and REST ``/scrollback`` deque
+    (``TerminalSession.clear_replay``). Sent when the user taps the on-screen
+    Ctrl+L key: Claude Code binds ``ctrl+l`` to ``chat:clearInput`` gated on
+    fullscreen-TUI mode — not a screen clear — so the client wipes its own
+    emulator scrollback locally (``ESC[3J``) and uses this frame to keep a
+    later reconnect replay or ``/scrollback`` fetch from resurrecting the
+    cleared history. The client queues ``'c'`` **before** the accompanying
+    ``0x0c`` input frame. An old agent ignores the frame (history simply
+    reappears on reattach); an old client never sends it.
 
 ## proto-v6 (superseded by proto-v7)
 

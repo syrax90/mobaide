@@ -117,6 +117,32 @@ class TestFrameTypes:
             ws.send_bytes(b"r" + struct.pack(">HH", 30, 100))
             time.sleep(0.2)
 
+    @pytest.mark.timeout(20)
+    def test_clear_replay_frame_empties_ring_and_scrollback(
+        self, test_client, auth_token,
+    ):
+        """A 'c' frame drops the replay ring and the REST scrollback, so a
+        reconnect replay cannot resurrect a screen the user cleared."""
+        sid = _create_session(test_client, auth_token)
+        manager = test_client.app.state.session_manager
+        session = manager._sessions[sid]
+        session._append_ring(b"history the user cleared")
+        session._scrollback.append(b"history the user cleared")
+
+        with test_client.websocket_connect(
+            f"/ws/session/{sid}?token={auth_token}",
+        ) as ws:
+            _drain_through_replay_end(ws)
+            ws.send_bytes(b"c")
+            deadline = time.time() + 5
+            while time.time() < deadline and session.get_ring():
+                time.sleep(0.05)
+            assert session.get_ring() == b""
+            assert session.get_scrollback() == []
+            # The connection survives — a follow-up frame still dispatches.
+            ws.send_bytes(b"r" + struct.pack(">HH", 30, 100))
+            time.sleep(0.2)
+
 
 class TestRingBufferReplay:
     @pytest.mark.timeout(20)

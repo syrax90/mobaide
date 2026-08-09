@@ -45,6 +45,8 @@ function frameFromSpec(spec: EncodeCase['frame'], caseName: string): TerminalOut
     case 'execute':
     case 'submit':
       return terminalTextFrame(spec.kind, spec.text ?? '');
+    case 'clear_replay':
+      return { kind: 'clearReplay' };
     default:
       throw new Error(`${caseName}: unknown frame kind ${spec.kind}`);
   }

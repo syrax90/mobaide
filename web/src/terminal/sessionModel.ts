@@ -46,10 +46,12 @@ import {
   type FollowState,
   type ScrollSample,
 } from './terminalFollow';
+import type { ControlKey } from './controlKeys';
 import { detectIsMac, resolveKeyAction } from './terminalKeys';
 import { encodePaste, type PayloadOutcome } from './terminalPaste';
 import {
   CLEAR_BEFORE_REPLAY,
+  CLEAR_SCROLLBACK,
   initialReplayState,
   reduceDisconnected,
   reduceInboundFrame,
@@ -691,6 +693,29 @@ export class TerminalSessionModel {
   sendChordBytes(payload: Uint8Array): void {
     if (payload.length === 0 || !this.canSendBytes()) return;
     this.sendInputBytes(payload);
+    this.jumpToBottom();
+  }
+
+  /**
+   * Send a built-in control-bar key, honoring its `clearsView` flag.
+   *
+   * The flagged path (Ctrl+L) wipes the local scrollback with bare `ESC[3J`
+   * — the viewport stays painted, so a TUI mid-frame is never blanked — and
+   * queues the `'c'` frame *before* the key's own bytes, so the agent's
+   * replay ring is gone before any output the 0x0c might provoke, and a
+   * reconnect cannot resurrect the cleared history.
+   */
+  sendControlKey(key: ControlKey): void {
+    if (key.bytes.length === 0 || !this.canSendBytes()) return;
+    if (key.clearsView) {
+      // Selection rows are about to be renumbered, and ED 3 moves baseY —
+      // without the rebaseline the follow fold reads the trim as unread rows.
+      this.term.clearSelection();
+      this.rebaseline = true;
+      this.writeLive(CLEAR_SCROLLBACK);
+      this.io.send({ kind: 'clearReplay' });
+    }
+    this.sendInputBytes(key.bytes);
     this.jumpToBottom();
   }
 

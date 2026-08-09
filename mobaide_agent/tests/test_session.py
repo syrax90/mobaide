@@ -412,6 +412,29 @@ class TestRingBufferCap:
         assert large.get_ring() == b"abcdefgh"
 
 
+class TestClearReplay:
+    """``clear_replay()`` (the ``'c'`` frame) empties both reconnect
+    histories — the binary replay ring and the REST scrollback deque — so a
+    reattach cannot resurrect a screen the user cleared."""
+
+    def test_clear_replay_empties_ring_and_scrollback(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"history the user cleared")
+        session._scrollback.append(b"history the user cleared")
+
+        session.clear_replay()
+
+        assert session.get_ring() == b""
+        assert session.get_scrollback() == []
+
+    def test_output_after_clear_reaccumulates(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"before")
+        session.clear_replay()
+        session._append_ring(b"after")
+        assert session.get_ring() == b"after"
+
+
 class TestRingScrub:
     """``_append_ring`` scrubs terminal *queries* (and DA replies) from the
     replay ring so a reconnect can't make the client emulator re-answer them and

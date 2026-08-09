@@ -79,6 +79,11 @@ private data class ControlKey(
     val label: String,
     val bytes: ByteArray,
     val icon: ImageVector? = null,
+    // Tapping also wipes the local scrollback and the agent's replay ring
+    // (via onClearView) before the bytes go out. Ctrl+L only: no CLI clears
+    // the screen for us — Claude Code binds ctrl+l to chat:clearInput gated
+    // on fullscreen-TUI mode, and its real clear (cmd+k) has no wire encoding.
+    val clearsView: Boolean = false,
 )
 
 private val EscKey = ControlKey("Esc", byteArrayOf(0x1b))
@@ -104,7 +109,7 @@ private val LeftKey = ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'
 private val RightKey = ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte()), Icons.Filled.KeyboardArrowRight)
 private val CtrlOKey = ControlKey("Ctrl+O", byteArrayOf(0x0f))
 private val CtrlRKey = ControlKey("Ctrl+R", byteArrayOf(0x12))
-private val CtrlLKey = ControlKey("Ctrl+L", byteArrayOf(0x0c))
+private val CtrlLKey = ControlKey("Ctrl+L", byteArrayOf(0x0c), clearsView = true)
 private val ApproveKey = ControlKey("Approve", byteArrayOf('y'.code.toByte()))
 private val RejectKey = ControlKey("Reject", byteArrayOf('n'.code.toByte()))
 // Antigravity (agy) TUI controls: Ctrl+K fast-approves the pending action,
@@ -196,6 +201,7 @@ fun InputBar(
     onTextChange: (TextFieldValue) -> Unit,
     onSend: (String) -> Unit,
     onSendBytes: (ByteArray) -> Unit,
+    onClearView: () -> Unit = {},
     enabled: Boolean = true,
     requestFocus: Boolean = false,
     onFocusHandled: () -> Unit = {},
@@ -327,6 +333,7 @@ fun InputBar(
                         FilledTonalButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (key.clearsView) onClearView()
                                 onSendBytes(key.bytes)
                             },
                             enabled = enabled,
