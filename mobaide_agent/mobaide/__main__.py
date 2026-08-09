@@ -42,6 +42,7 @@ import subprocess
 import sys
 import time
 import urllib.error as urllib_error
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -766,6 +767,7 @@ def _run_pair(args: argparse.Namespace) -> int:
         write_credentials_to_env,
     )
     from mobaide.agent.pairing_qr import (
+        PendingDeviceCode,
         clear_pending_device_code,
         compute_trust_key_fp,
         device_code_fingerprint,
@@ -834,18 +836,20 @@ def _run_pair(args: argparse.Namespace) -> int:
     # only continue from the local record.
     code_fp = device_code_fingerprint(args.code)
     stored = load_pending_device_code(layout, code_fp)
-    redeemer_id = stored[0] if stored else new_redeemer_id()
-    pending = stored[1] if stored else None
+    record = stored or PendingDeviceCode(
+        redeemer_id=new_redeemer_id(), code_fp=code_fp
+    )
     hostname = socket.gethostname()
+    is_repair = bool(current_agent_id)
 
-    if pending is None:
-        save_pending_device_code(layout, redeemer_id, code_fp, None)
+    if record.pending is None:
+        save_pending_device_code(layout, record)
         try:
             pending, account_hint, is_repair = redeem_device_code(
                 relay_server_url,
                 pinned_fp,
                 code=args.code,
-                redeemer_id=redeemer_id,
+                redeemer_id=record.redeemer_id,
                 hostname=hostname,
                 os_name=platform.system(),
                 current_agent_id=current_agent_id,
@@ -874,9 +878,25 @@ def _run_pair(args: argparse.Namespace) -> int:
             clear_pending_device_code(layout)
             return 8
 
-        if not args.yes and not _confirm_device_pairing(
-            account_hint, hostname
-        ):
+        # Persisted before the prompt, not after: the prompt blocks on human
+        # input, and a Ctrl-C or a dropped SSH session there would otherwise
+        # leave a code the relay has already spent with no local nonce to
+        # resume from. ``confirmed`` stays false, so the resume below still
+        # has to ask.
+        record = replace(record, pending=pending, account_hint=account_hint)
+        save_pending_device_code(layout, record)
+    else:
+        sys.stdout.write(
+            "[mobaide-agent] Resuming the pairing request this machine "
+            "already started.\n"
+        )
+
+    # Runs on every path, including a resume. This prompt is the reversed
+    # flow's primary control, so an interrupted run must not be able to slip
+    # past it by coming back with a nonce already on disk.
+    if not record.confirmed:
+        account_hint = record.account_hint or "an unknown account"
+        if not args.yes and not _confirm_device_pairing(account_hint, hostname):
             sys.stderr.write(
                 "mobaide-agent pair: declined. The code has been used up "
                 "and cannot be redeemed again.\n"
@@ -888,17 +908,15 @@ def _run_pair(args: argparse.Namespace) -> int:
                 f"[mobaide-agent] Pairing '{hostname}' with Mobaide account "
                 f"{account_hint} (--yes).\n"
             )
-        if is_repair:
-            sys.stdout.write(
-                "[mobaide-agent] Re-pairing the existing agent "
-                f"{current_agent_id}.\n"
-            )
-        save_pending_device_code(layout, redeemer_id, code_fp, pending)
-    else:
+        record = replace(record, confirmed=True)
+        save_pending_device_code(layout, record)
+    if is_repair:
         sys.stdout.write(
-            "[mobaide-agent] Resuming the pairing request this machine "
-            "already started.\n"
+            "[mobaide-agent] Re-pairing the existing agent "
+            f"{current_agent_id}.\n"
         )
+
+    pending = record.pending
 
     sys.stdout.write(
         "[mobaide-agent] Waiting for the pairing to be confirmed in the "

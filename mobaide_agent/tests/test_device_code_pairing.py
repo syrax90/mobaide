@@ -24,7 +24,9 @@ from mobaide.agent.pairing_monitor import (
     redeem_device_code,
 )
 from mobaide.agent.pairing_qr import (
+    PendingDeviceCode,
     PendingPairing,
+    canonical_device_code,
     clear_pending_device_code,
     device_code_fingerprint,
     encode_qr_payload,
@@ -85,56 +87,90 @@ class TestNewRedeemerId:
         assert len({new_redeemer_id() for _ in range(50)}) == 50
 
 
+class TestCanonicalDeviceCode:
+    def test_matches_the_relays_alphabet_not_isalnum(self):
+        # The relay's normalize_code discards digits and vowels too (RFC
+        # 8628 confusable-pair exclusions, no 0/O, no 1/I/l) — an
+        # ``isalnum()`` filter would keep them, so "WDJB0MJHT" would fold
+        # differently from "WDJB-MJHT" even though the relay treats them as
+        # the identical code.
+        assert canonical_device_code("WDJB0MJHT") == canonical_device_code("WDJB-MJHT")
+        assert canonical_device_code("wdjb mjht") == "WDJBMJHT"
+
+    def test_a_discarded_character_fingerprints_identically(self):
+        assert device_code_fingerprint("WDJB0MJHT") == device_code_fingerprint(
+            "WDJB-MJHT"
+        )
+
+
 class TestPendingDeviceCodeLifecycle:
     def test_save_then_load_round_trips(self, layout):
-        pending = _pending()
+        record = PendingDeviceCode(
+            redeemer_id="redeemer-1",
+            code_fp=_CODE_FP,
+            pending=_pending(),
+            account_hint="p***l@g***.com",
+            confirmed=True,
+        )
 
-        save_pending_device_code(layout, "redeemer-1", _CODE_FP, pending)
+        save_pending_device_code(layout, record)
 
-        assert load_pending_device_code(layout, _CODE_FP) == ("redeemer-1", pending)
+        assert load_pending_device_code(layout, _CODE_FP) == record
 
     def test_the_pre_redeem_write_keeps_the_id_without_a_nonce(self, layout):
         # Written before the request goes out, so a retry re-presents the
         # same identity instead of looking like a second machine racing.
-        save_pending_device_code(layout, "redeemer-1", _CODE_FP, None)
+        record = PendingDeviceCode(redeemer_id="redeemer-1", code_fp=_CODE_FP)
 
-        assert load_pending_device_code(layout, _CODE_FP) == ("redeemer-1", None)
+        save_pending_device_code(layout, record)
+
+        assert load_pending_device_code(layout, _CODE_FP) == record
 
     def test_it_does_not_share_a_file_with_the_qr_flow(self, layout):
         # The agent service runs its own QR pairing cycle on a fresh
         # install; a shared file would have `pair <code>` overwrite the
         # nonce that cycle is waiting on.
         qr_pending = _pending("qr-nonce")
-        device_pending = _pending("device-nonce")
+        device_record = PendingDeviceCode(
+            redeemer_id="redeemer-1", code_fp=_CODE_FP, pending=_pending("device-nonce")
+        )
 
         save_pending_pairing(layout, qr_pending)
-        save_pending_device_code(layout, "redeemer-1", _CODE_FP, device_pending)
+        save_pending_device_code(layout, device_record)
 
         assert pending_device_code_path(layout) != pending_pairing_path(layout)
         assert load_pending_pairing(layout) == qr_pending
-        assert load_pending_device_code(layout, _CODE_FP) == (
-            "redeemer-1",
-            device_pending,
-        )
+        assert load_pending_device_code(layout, _CODE_FP) == device_record
 
     def test_an_expired_nonce_still_yields_the_redeemer_id(self, layout):
         # The id is still worth resending — the relay replays the same
         # redemption — but the nonce is no longer worth dialling.
         save_pending_device_code(
-            layout, "redeemer-1", _CODE_FP, _pending(exp_offset=-10)
+            layout,
+            PendingDeviceCode(
+                redeemer_id="redeemer-1",
+                code_fp=_CODE_FP,
+                pending=_pending(exp_offset=-10),
+            ),
         )
 
-        assert load_pending_device_code(layout, _CODE_FP) == ("redeemer-1", None)
+        assert load_pending_device_code(layout, _CODE_FP) == PendingDeviceCode(
+            redeemer_id="redeemer-1", code_fp=_CODE_FP
+        )
 
     def test_a_malformed_payload_yields_the_redeemer_id(self, layout):
         save_pending_device_code(
             layout,
-            "redeemer-1",
-            _CODE_FP,
-            replace(_pending(), qr_payload="MOBA0|garbage"),
+            PendingDeviceCode(
+                redeemer_id="redeemer-1",
+                code_fp=_CODE_FP,
+                pending=replace(_pending(), qr_payload="MOBA0|garbage"),
+            ),
         )
 
-        assert load_pending_device_code(layout, _CODE_FP) == ("redeemer-1", None)
+        assert load_pending_device_code(layout, _CODE_FP) == PendingDeviceCode(
+            redeemer_id="redeemer-1", code_fp=_CODE_FP
+        )
 
     def test_load_returns_none_when_absent(self, layout):
         assert load_pending_device_code(layout, _CODE_FP) is None
@@ -156,17 +192,40 @@ class TestPendingDeviceCodeLifecycle:
     def test_a_different_code_fp_does_not_resume(self, layout):
         # A Ctrl-C'd `pair CODE-A` followed by `pair CODE-B` must not
         # silently wait out CODE-A's nonce under CODE-B's redemption.
-        pending = _pending()
-        save_pending_device_code(layout, "redeemer-1", _CODE_FP, pending)
+        record = PendingDeviceCode(
+            redeemer_id="redeemer-1", code_fp=_CODE_FP, pending=_pending()
+        )
+        save_pending_device_code(layout, record)
 
         other_fp = device_code_fingerprint("QRST-VWXZ")
         assert load_pending_device_code(layout, other_fp) is None
         # The original code's own record is untouched and still resumable.
-        assert load_pending_device_code(layout, _CODE_FP) == ("redeemer-1", pending)
+        assert load_pending_device_code(layout, _CODE_FP) == record
+
+    def test_a_code_differing_only_by_a_discarded_character_resumes_the_same_record(
+        self, layout
+    ):
+        # "WDJB0MJHT" and "WDJB-MJHT" hash to the same fingerprint (see
+        # TestCanonicalDeviceCode) — this pins that the *persistence* layer
+        # actually resumes on that match rather than, say, comparing the raw
+        # code some other way.
+        record = PendingDeviceCode(
+            redeemer_id="redeemer-1", code_fp=_CODE_FP, pending=_pending()
+        )
+        save_pending_device_code(layout, record)
+
+        resumed_fp = device_code_fingerprint("WDJB0MJHT")
+        assert resumed_fp == _CODE_FP
+        assert load_pending_device_code(layout, resumed_fp) == record
 
     def test_clear_is_idempotent(self, layout):
         clear_pending_device_code(layout)
-        save_pending_device_code(layout, "redeemer-1", _CODE_FP, _pending())
+        save_pending_device_code(
+            layout,
+            PendingDeviceCode(
+                redeemer_id="redeemer-1", code_fp=_CODE_FP, pending=_pending()
+            ),
+        )
         clear_pending_device_code(layout)
         clear_pending_device_code(layout)
 

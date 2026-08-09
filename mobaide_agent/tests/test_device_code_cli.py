@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -24,7 +25,16 @@ from mobaide.__main__ import (
     _run_show_trust_fp,
 )
 from mobaide.agent._env_writer import env_path_for_prefix
-from mobaide.agent.pairing_qr import compute_trust_key_fp
+from mobaide.agent.pairing_qr import (
+    PendingDeviceCode,
+    PendingPairing,
+    compute_trust_key_fp,
+    device_code_fingerprint,
+    encode_qr_payload,
+    save_pending_device_code,
+)
+from mobaide.agent.pairing_ws import PairingWsError
+from mobaide.agent.updater import InstallLayout
 
 
 def _ns(**overrides) -> argparse.Namespace:
@@ -59,6 +69,37 @@ def _seed_trust_key(prefix: Path) -> str:
         pub_b64 + "\n", encoding="utf-8"
     )
     return pub_b64
+
+
+def _seed_pending_device_code(
+    prefix: Path, *, code: str = "WDJB-MJHT", confirmed: bool
+) -> None:
+    """Persist a redeemed-but-not-yet-claimed record ``_run_pair`` can resume.
+
+    Mirrors the shape ``_run_pair`` itself writes after a successful redeem:
+    a nonce on disk with ``confirmed`` set independently, so a test can drive
+    the resume branch without going through a real (mocked) redeem call.
+    """
+    nonce = "nonce-abc"
+    exp = int(time.time()) + 10_000
+    pending = PendingPairing(
+        nonce=nonce,
+        expires_at="2099-01-01T00:00:00+00:00",
+        trust_key_fp="ff" * 32,
+        ws_url=f"wss://relay.test/ws/pairing/{nonce}",
+        relay_url="https://relay.test",
+        qr_payload=encode_qr_payload("https://relay.test", nonce, "ff" * 32, exp),
+    )
+    save_pending_device_code(
+        InstallLayout(prefix=prefix),
+        PendingDeviceCode(
+            redeemer_id="redeemer-1",
+            code_fp=device_code_fingerprint(code),
+            pending=pending,
+            account_hint="p***l@g***.com",
+            confirmed=confirmed,
+        ),
+    )
 
 
 class TestRunPairRefusals:
@@ -142,6 +183,79 @@ class TestRunPairRefusals:
 
         assert rc == 4
         assert "fetch-trust-key" in capsys.readouterr().err
+
+
+class TestRunPairResume:
+    """The nonce is now persisted before the confirm prompt, not after — so
+    these pin the guarantee that makes that safe: a resume only ever skips
+    the redeem call, never the approval gate.
+    """
+
+    def test_an_unconfirmed_resume_is_prompted_again(self, tmp_path, capsys):
+        # Persisting early must not let an interrupted run come back with a
+        # nonce on disk and slip past the agent-side approval — the
+        # reversed flow's primary security control.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=False)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "builtins.input", return_value="n"
+        ) as mock_input:
+            rc = _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        mock_input.assert_called_once()
+        out = capsys.readouterr().out
+        assert "Resuming the pairing request" in out
+        assert "p***l@g***.com" in out
+        # Declined: the code is spent and the record must not linger.
+        assert rc == 9
+        assert not (tmp_path / "run" / "pending_device_code.json").exists()
+
+    def test_a_confirmed_resume_is_not_re_prompted(self, tmp_path, capsys):
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, confirmed=True)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_ws.PairingWsClient"
+        ) as mock_ws_cls, patch("builtins.input") as mock_input:
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=PairingWsError("boom")
+            )
+            rc = _run_pair(_ns(prefix=str(tmp_path), yes=False))
+
+        # Never asked — the whole point of ``confirmed`` is that a second
+        # approval is not required to continue waiting on the same request.
+        mock_input.assert_not_called()
+        out = capsys.readouterr().out
+        assert "Resuming the pairing request" in out
+        # Reaching (and failing) the WS wait proves the code got past the
+        # confirm gate without a prompt, not just that nothing crashed.
+        assert rc == 6
+
+    def test_a_code_typed_with_a_discarded_character_resumes_the_record(
+        self, tmp_path, capsys
+    ):
+        # "WDJB0MJHT" and "WDJB-MJHT" fingerprint identically (0 is outside
+        # the relay's alphabet, same as the hyphen) — retyping the code
+        # slightly differently on a resume must not make the CLI treat it as
+        # a fresh, unrelated request.
+        _seed_env(tmp_path, RELAY_SERVER_URL="wss://relay.test")
+        _seed_trust_key(tmp_path)
+        _seed_pending_device_code(tmp_path, code="WDJB-MJHT", confirmed=True)
+
+        with patch("sys.stdin.isatty", return_value=True), patch(
+            "mobaide.agent.pairing_ws.PairingWsClient"
+        ) as mock_ws_cls, patch("builtins.input") as mock_input:
+            mock_ws_cls.return_value.wait_for_claim = AsyncMock(
+                side_effect=PairingWsError("boom")
+            )
+            rc = _run_pair(_ns(prefix=str(tmp_path), code="WDJB0MJHT", yes=False))
+
+        mock_input.assert_not_called()
+        assert "Resuming the pairing request" in capsys.readouterr().out
+        assert rc == 6
 
 
 class TestConfirmDevicePairing:

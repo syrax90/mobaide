@@ -17,7 +17,7 @@ import re
 import secrets
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from .install_paths import read_trust_public_key
@@ -376,6 +376,29 @@ def clear_pending_pairing(layout) -> None:
         pass
 
 
+@dataclass(frozen=True)
+class PendingDeviceCode:
+    """Local state for one device-code redemption attempt.
+
+    Written twice: once with ``pending=None`` before the redeem request, so
+    a retry re-presents the same ``redeemer_id`` rather than looking like a
+    second machine racing the code, and again with the nonce the moment the
+    response lands — *before* the operator is prompted, because that prompt
+    blocks on human input and a Ctrl-C there would otherwise strand a code
+    the relay has already spent.
+
+    ``confirmed`` is what keeps that early write safe: a resumed run that
+    has not been confirmed is prompted again, so persisting sooner never
+    turns into skipping the agent-side approval.
+    """
+
+    redeemer_id: str
+    code_fp: str
+    pending: PendingPairing | None = None
+    account_hint: str | None = None
+    confirmed: bool = False
+
+
 def new_redeemer_id() -> str:
     """Random identity for one device-code redemption attempt."""
     return secrets.token_urlsafe(12)
@@ -392,17 +415,25 @@ def pending_device_code_path(layout) -> Path:
     return Path(layout.prefix) / "run" / "pending_device_code.json"
 
 
+# The relay's device-code alphabet, duplicated here for the same reason
+# ``compute_trust_key_fp`` is: the agent cannot import from
+# ``central_server``. Must stay in lockstep with
+# ``central_server.pairing.device_code.CODE_ALPHABET``.
+DEVICE_CODE_ALPHABET = frozenset("BCDFGHJKLMNPQRSTVWXZ")
+
+
 def canonical_device_code(code: str) -> str:
     """Fold a typed code to the form the relay hashes.
 
-    The relay upper-cases and strips everything outside its alphabet, so
-    ``wdjb-mjht`` and ``WDJB MJHT`` name the same code. The local pending
-    record has to agree, or a resume typed in a different case looks like a
-    *different* code: the record is discarded, the fresh redeem is refused
+    The relay upper-cases and drops everything outside its alphabet, so
+    ``wdjb-mjht`` and ``WDJB MJHT`` name the same code. The local record has
+    to agree exactly — filtering more loosely (say, on ``isalnum``) keeps
+    characters the relay discards, so a stray digit makes a resume look like
+    a *different* code: the record is dropped, the fresh redeem is refused
     as already-used, and the error path then deletes the very
     ``redeemer_id`` and nonce that could have completed the pairing.
     """
-    return "".join(ch for ch in code.upper() if ch.isalnum())
+    return "".join(ch for ch in code.upper() if ch in DEVICE_CODE_ALPHABET)
 
 
 def device_code_fingerprint(code: str) -> str:
@@ -417,46 +448,33 @@ def device_code_fingerprint(code: str) -> str:
     ).hexdigest()
 
 
-def save_pending_device_code(
-    layout,
-    redeemer_id: str,
-    code_fp: str,
-    pending: PendingPairing | None,
-) -> None:
-    """Persist device-code redemption state.
-
-    Written twice per run: once with ``pending=None`` *before* the redeem
-    request goes out, so a retry re-presents the same ``redeemer_id``
-    instead of looking like a second machine racing the code, and again
-    with the nonce once the response lands, so a Ctrl-C during the wait can
-    resume rather than burn the code.
-    """
+def save_pending_device_code(layout, record: PendingDeviceCode) -> None:
+    """Persist device-code redemption state."""
     from ._env_writer import atomic_write, restrict_perms
 
     target = pending_device_code_path(layout)
     target.parent.mkdir(parents=True, exist_ok=True)
     body = {
-        "redeemer_id": redeemer_id,
-        "code_fp": code_fp,
-        "pending": asdict(pending) if pending is not None else None,
+        "redeemer_id": record.redeemer_id,
+        "code_fp": record.code_fp,
+        "account_hint": record.account_hint,
+        "confirmed": record.confirmed,
+        "pending": asdict(record.pending) if record.pending is not None else None,
     }
     atomic_write(target, json.dumps(body, indent=2) + "\n")
     restrict_perms(target)
 
 
-def load_pending_device_code(
-    layout, code_fp: str
-) -> tuple[str, PendingPairing | None] | None:
-    """Read state for ``code_fp`` as ``(redeemer_id, pending)``, or ``None``.
+def load_pending_device_code(layout, code_fp: str) -> PendingDeviceCode | None:
+    """Read state for ``code_fp``, or ``None`` when it belongs elsewhere.
 
-    Returns ``None`` when the stored record belongs to a *different* code,
-    so a later ``mobaide-agent pair OTHERCODE`` starts a fresh redemption
-    instead of silently waiting out the earlier request's nonce while the
-    browser polls a request nothing will ever redeem.
+    Returns ``None`` when the stored record names a *different* code, so a
+    later ``mobaide-agent pair OTHERCODE`` starts a fresh redemption instead
+    of silently waiting out the earlier request's nonce.
 
     ``pending`` comes back ``None`` when the record predates a successful
-    redeem *or* when its nonce has since expired — the caller then knows
-    the id is still worth resending but the nonce is not worth dialling.
+    redeem *or* its nonce has since expired — the caller then knows the id
+    is still worth resending but the nonce is not worth dialling.
     """
     target = pending_device_code_path(layout)
     try:
@@ -473,16 +491,24 @@ def load_pending_device_code(
         return None
     if data.get("code_fp") != code_fp:
         return None
+    account_hint = data.get("account_hint")
+    confirmed = data.get("confirmed") is True
+    base = PendingDeviceCode(
+        redeemer_id=redeemer_id,
+        code_fp=code_fp,
+        account_hint=account_hint if isinstance(account_hint, str) else None,
+        confirmed=confirmed,
+    )
     if not isinstance(raw_pending, dict):
-        return redeemer_id, None
+        return base
     try:
         pending = PendingPairing(**raw_pending)
     except TypeError:
-        return redeemer_id, None
+        return base
     parsed = parse_qr_payload(pending.qr_payload)
     if parsed is None or parsed.exp_unix <= int(time.time()):
-        return redeemer_id, None
-    return redeemer_id, pending
+        return base
+    return replace(base, pending=pending)
 
 
 def clear_pending_device_code(layout) -> None:
