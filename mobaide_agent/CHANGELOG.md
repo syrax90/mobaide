@@ -1,5 +1,19 @@
 # mobaide_agent Changelog
 
+## [0.3.8](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.7...agent-v0.3.8) (2026-08-09)
+
+
+### Features
+
+* **web,mobaide_agent:** auto scan monitor, attention notifications, and settings (CLA-196) ([d6d257f](https://github.com/syrax90/claude_mobile/commit/d6d257f79ea222db612f4e735486ae45ff75d11f))
+* **web:** agents & pairing phase 1 — /pair and /agents routes (CLA-194) ([5dfa073](https://github.com/syrax90/claude_mobile/commit/5dfa073e3badde4cccdbe5a4668613d6cfaec7a9))
+
+
+### Bug Fixes
+
+* **agent:** stop auto-creating a session for an unknown relay session_id ([a6a6001](https://github.com/syrax90/claude_mobile/commit/a6a60019f88621d51605376bf7784a406131bb8c))
+* **agent:** stop auto-creating a session for an unknown relay session_id ([35a433b](https://github.com/syrax90/claude_mobile/commit/35a433bbe65184b8ed93114888bf530407c316fe))
+
 ## [0.3.7](https://github.com/syrax90/claude_mobile/compare/agent-v0.3.6...agent-v0.3.7) (2026-08-03)
 
 

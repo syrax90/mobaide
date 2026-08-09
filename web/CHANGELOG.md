@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.1.2](https://github.com/syrax90/claude_mobile/compare/web-v0.1.1...web-v0.1.2) (2026-08-09)
+
+
+### Features
+
+* **web,android,ios:** desktop keyboard & shortcuts, shared chord fixture, CLA-158 (CLA-197) ([1157916](https://github.com/syrax90/claude_mobile/commit/115791676121559b70ad5310b3a928bcaa994a42))
+* **web,central_server:** Sign in with Apple on the SPA and portal (CLA-198) ([edd1c59](https://github.com/syrax90/claude_mobile/commit/edd1c59fcc5ed9be14f93bdff5b5c87ef152c0af))
+* **web,mobaide_agent:** auto scan monitor, attention notifications, and settings (CLA-196) ([d6d257f](https://github.com/syrax90/claude_mobile/commit/d6d257f79ea222db612f4e735486ae45ff75d11f))
+* **web:** agents & pairing phase 1 — /pair and /agents routes (CLA-194) ([5dfa073](https://github.com/syrax90/claude_mobile/commit/5dfa073e3badde4cccdbe5a4668613d6cfaec7a9))
+* **web:** projects, git items & prompt templates — CRUD, accessible reorder, tri-state updates (CLA-195) ([a2fd525](https://github.com/syrax90/claude_mobile/commit/a2fd525999439290564a4fb63a187585c540e193))
+* **web:** realtime protocol core — WS manager, binary terminal codec, golden fixtures in CI (CLA-191) ([6807e5d](https://github.com/syrax90/claude_mobile/commit/6807e5d9b1b02999c3fdfd3a7d2ddd4205bb6caf))
+* **web:** sessions list, auto-resume and the six-branch create wizard (CLA-193) ([9c1bac4](https://github.com/syrax90/claude_mobile/commit/9c1bac4b9a828b1ec9f53ccf9dce9f1e929d44ab))
+* **web:** terminal screen on xterm.js 6 — replay, follow mode, unread badge, copy/paste (CLA-192) ([69495ad](https://github.com/syrax90/claude_mobile/commit/69495ada1d8120d52e937c14cfbb1596705ae3be))
+
+
+### Bug Fixes
+
+* **agent:** stop auto-creating a session for an unknown relay session_id ([a6a6001](https://github.com/syrax90/claude_mobile/commit/a6a60019f88621d51605376bf7784a406131bb8c))
+* **agent:** stop auto-creating a session for an unknown relay session_id ([35a433b](https://github.com/syrax90/claude_mobile/commit/35a433bbe65184b8ed93114888bf530407c316fe))
+* **android,web:** resolve the header label on cold start, drop it on route change ([01e696e](https://github.com/syrax90/claude_mobile/commit/01e696ebcad1e717e3bd3bcccc7d98339cc1c355))
+* **ios,android,web:** name the terminal header by session title, not id ([0ea96ff](https://github.com/syrax90/claude_mobile/commit/0ea96ff697d7c9fdb3a9aadcd3c62b030fbe3a0b))
+* **ios,android,web:** name the terminal header by session title, not id ([b32a097](https://github.com/syrax90/claude_mobile/commit/b32a097bfd7cfb26472d95e7d12eb67c8d26fa30))
+* **web:** address Codex review round 1 on CLA-191 — token refresh outcome, agent token rotation, reachability probe-gate, version re-probe ([5f57582](https://github.com/syrax90/claude_mobile/commit/5f57582af7a8c9364000b97de06d387d369fc329))
+* **web:** address Codex review round 1 on CLA-192 — IME Enter, LRU touch, reattach size, replay gates ([5b7b7ba](https://github.com/syrax90/claude_mobile/commit/5b7b7ba03b2a098f508dbe3d9bf38ade773319b0))
+* **web:** address Codex review round 1 on CLA-193 - agent-token minting, snapshot race, add_dirs gate ([bba9ebb](https://github.com/syrax90/claude_mobile/commit/bba9ebb79e702ec90797bf78e328ecdc49e7adcc))
+* **web:** address Codex review round 2 on CLA-191 — reachability probe races, unbounded agent retry, cross-tab token resurrection ([e063ee3](https://github.com/syrax90/claude_mobile/commit/e063ee30f2a4de973bb61350978642d87bd2323e))
+* **web:** address Codex review round 2 on CLA-192 — floating selection bar, stdin gate mirrored into xterm ([6e8340d](https://github.com/syrax90/claude_mobile/commit/6e8340d1e65cbb15f65e63a12c92d543582b43f3))
+* **web:** address Codex review round 2 on CLA-193 — draft/URL reconciliation, E2E token stub ([5a8b2f5](https://github.com/syrax90/claude_mobile/commit/5a8b2f5f1d4aa3cf2046ae481ed2091700e38a21))
+* **web:** address Codex review round 3 on CLA-191 — onlineManager ownership, agent token storage-fallback merge, fractional seq truncation ([70212e4](https://github.com/syrax90/claude_mobile/commit/70212e4e5fc4c591674075418f109635d275e019))
+* **web:** address Codex review round 3 on CLA-192 — restore terminal focus after selection actions, guard the favourite toggle ([83be3d3](https://github.com/syrax90/claude_mobile/commit/83be3d30f3a153dc818ebd5bbf89ec828b148735))
+* **web:** address Codex review round 3 on CLA-193 — effort-ladder parity, offline guards, model options ([a3af34a](https://github.com/syrax90/claude_mobile/commit/a3af34a62d4fc56947904151cb808716d1b96393))
+* **web:** address Codex review round 4 on CLA-192 — fixed dark terminal palette, replay-drain guard for all selection actions, composer focus ([3383a2f](https://github.com/syrax90/claude_mobile/commit/3383a2f27d4e729879c38ec1b01fd7ade60c5d17))
+* **web:** address Codex review round 4 on CLA-193 — cache races and in-flight guards ([8211388](https://github.com/syrax90/claude_mobile/commit/82113887589bc5a1978916a9161f2a9c7e9446f3))
+* **web:** address Codex review round 5 on CLA-192 — per-row favourite guard, composer focus on template insert ([fc1abb7](https://github.com/syrax90/claude_mobile/commit/fc1abb702d24d099c64669b7b6e6d412bb2d4a40))
+* **web:** address Codex review round 5 on CLA-193 — close the Codex dialog on a non-auth failure ([d20797d](https://github.com/syrax90/claude_mobile/commit/d20797d49d7681bca156084899065dba33c18276))
+* **web:** use the destructured binding in clearSnapshot so eslint passes ([458c578](https://github.com/syrax90/claude_mobile/commit/458c578496f3be9901f6f17d0958e176aad82fb6))
+
 ## [0.1.1](https://github.com/syrax90/claude_mobile/compare/web-v0.1.0...web-v0.1.1) (2026-08-03)
 
 

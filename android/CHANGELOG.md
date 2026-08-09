@@ -1,5 +1,23 @@
 # Android Changelog
 
+## [3.5.0](https://github.com/syrax90/claude_mobile/compare/android-v3.4.0...android-v3.5.0) (2026-08-09)
+
+
+### Features
+
+* **web,android,ios:** desktop keyboard & shortcuts, shared chord fixture, CLA-158 (CLA-197) ([1157916](https://github.com/syrax90/claude_mobile/commit/115791676121559b70ad5310b3a928bcaa994a42))
+
+
+### Bug Fixes
+
+* **agent:** stop auto-creating a session for an unknown relay session_id ([a6a6001](https://github.com/syrax90/claude_mobile/commit/a6a60019f88621d51605376bf7784a406131bb8c))
+* **agent:** stop auto-creating a session for an unknown relay session_id ([35a433b](https://github.com/syrax90/claude_mobile/commit/35a433bbe65184b8ed93114888bf530407c316fe))
+* **android,ios:** don't let the header's REST seed overwrite a live title ([be7326a](https://github.com/syrax90/claude_mobile/commit/be7326a93d48ba045cf3da1a19b349f865f5881f))
+* **android,web:** resolve the header label on cold start, drop it on route change ([01e696e](https://github.com/syrax90/claude_mobile/commit/01e696ebcad1e717e3bd3bcccc7d98339cc1c355))
+* **ios,android,web:** name the terminal header by session title, not id ([0ea96ff](https://github.com/syrax90/claude_mobile/commit/0ea96ff697d7c9fdb3a9aadcd3c62b030fbe3a0b))
+* **ios,android,web:** name the terminal header by session title, not id ([b32a097](https://github.com/syrax90/claude_mobile/commit/b32a097bfd7cfb26472d95e7d12eb67c8d26fa30))
+* **ios,android:** disable autocapitalization/autocorrection on verbatim-input fields (CLA-146) ([05910c7](https://github.com/syrax90/claude_mobile/commit/05910c711b82138b1c4be576afebcfde268c102e))
+
 ## [3.4.0](https://github.com/syrax90/claude_mobile/compare/android-v3.3.0...android-v3.4.0) (2026-08-03)
 
 
