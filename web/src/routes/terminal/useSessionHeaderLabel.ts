@@ -7,6 +7,12 @@
  * empty, so a session vanishing from the snapshot (it ended, and the terminal
  * deliberately stays readable) does not blank the bar.
  *
+ * What it retains is stamped with the route it was resolved for. A notification
+ * tap navigates terminal→terminal, which swaps this route's params without
+ * remounting, and the incoming session's row is not in the cache yet — an
+ * unstamped value would name the new terminal after the old one, indefinitely
+ * if that agent never syncs.
+ *
  * The sessions query is the one `useSessionGone` and `useSessionKind` already
  * run; TanStack dedupes on the key, so this costs no extra fetch.
  */
@@ -42,11 +48,15 @@ export function useSessionHeaderLabel(agentId: string, sessionId: string): strin
     session === undefined
       ? ''
       : sessionHeaderLabel(session, customTypeNameMap(customTypes.data));
-  const [lastLabel, setLastLabel] = useState('');
+  const route = `${agentId}/${sessionId}`;
+  const [retained, setRetained] = useState({ route, label: '' });
 
   useEffect(() => {
-    if (label !== '') setLastLabel(label);
-  }, [label]);
+    if (label !== '') setRetained({ route, label });
+  }, [route, label]);
 
-  return label === '' ? lastLabel : label;
+  if (label !== '') return label;
+  // Compared during render, not reset by the effect, so the very first frame
+  // after a route swap is already blank rather than briefly stale.
+  return retained.route === route ? retained.label : '';
 }

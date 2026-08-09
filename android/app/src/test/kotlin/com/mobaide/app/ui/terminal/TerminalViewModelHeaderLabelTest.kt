@@ -13,6 +13,7 @@ import com.mobaide.app.data.repository.SessionRepository
 import com.mobaide.app.notifications.ForegroundSessionTracker
 import com.mobaide.app.testing.MainDispatcherRule
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -72,12 +73,13 @@ class TerminalViewModelHeaderLabelTest {
     private fun newViewModel(
         sessions: MutableStateFlow<List<SessionResponse>>,
         types: MutableStateFlow<List<CustomAgentTypeDto>> = MutableStateFlow(emptyList()),
+        restSessions: List<SessionResponse> = emptyList(),
     ): TerminalViewModel {
         val repo = mockk<SessionRepository> {
             every { createSessionIoConnection("test-session") } returns connection
             every { observeSessionList() } returns sessions
             every { observeSessionsSynced() } returns MutableStateFlow(false)
-            coEvery { listSessions() } returns emptyList()
+            coEvery { listSessions() } returns restSessions
         }
         val typesRepo = mockk<CustomAgentTypesRepository> {
             every { observeTypes() } returns types
@@ -94,14 +96,58 @@ class TerminalViewModelHeaderLabelTest {
     }
 
     @Test
-    fun headerLabel_isEmpty_untilSessionResolves() =
+    fun headerLabel_isEmpty_whenNeitherSourceKnowsTheSession() =
         runTest(testDispatcher) {
-            // Cold launch (notification tap / deep link) builds the VM before the
-            // first sessions.changed snapshot: an empty bar beats a wrong label.
+            // Nothing to name it with: an empty bar beats a wrong label.
             val vm = newViewModel(MutableStateFlow(emptyList()))
             runCurrent()
 
             assertEquals("", vm.headerLabel.value)
+        }
+
+    @Test
+    fun headerLabel_seedsFromRest_whenLiveListEmptyOnColdStart() =
+        runTest(testDispatcher) {
+            // Cold launch (notification tap / deep link) builds the VM before the
+            // first sessions.changed snapshot, and listSessions() never writes the
+            // cache — without the one-shot seed the bar stays blank for the whole
+            // visit if the event bus never connects.
+            val vm = newViewModel(
+                MutableStateFlow(emptyList()),
+                restSessions = listOf(session(title = "* Fix the header")),
+            )
+            runCurrent()
+
+            assertEquals("* Fix the header", vm.headerLabel.value)
+        }
+
+    @Test
+    fun headerLabel_skipsRestSeed_whenLiveListAlreadyHasSession() =
+        runTest(testDispatcher) {
+            // Normal navigation from the session list: the row is already there,
+            // and sessionKind shares this flow, so neither costs a fetch.
+            val sessions = MutableStateFlow(listOf(session(title = "* Fix the header")))
+            val repo = mockk<SessionRepository> {
+                every { createSessionIoConnection("test-session") } returns connection
+                every { observeSessionList() } returns sessions
+                every { observeSessionsSynced() } returns MutableStateFlow(false)
+                coEvery { listSessions() } returns emptyList()
+            }
+            val vm = TerminalViewModel(
+                savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
+                sessionRepository = repo,
+                customAgentTypesRepository = mockk {
+                    every { observeTypes() } returns MutableStateFlow(emptyList())
+                },
+                templatesRepository = mockk(relaxed = true),
+                shortcutsRepository = mockk(),
+                foregroundSessionTracker = ForegroundSessionTracker(),
+                preferencesStore = preferencesStore,
+            )
+            runCurrent()
+
+            assertEquals("* Fix the header", vm.headerLabel.value)
+            coVerify(exactly = 0) { repo.listSessions() }
         }
 
     @Test
