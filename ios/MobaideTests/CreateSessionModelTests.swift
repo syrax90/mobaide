@@ -30,9 +30,20 @@ final class CreateSessionModelTests: XCTestCase {
         )
     }
 
+    /// `SessionHarness(agentConnected: true)` saves an agent URL but no agent
+    /// id, so the wizard scopes recents by URL.
+    private let harnessAgentKey = "https://agent.example.com"
+
+    /// A device that never paired and never reached an agent directly: both
+    /// halves of the wizard's agent scope key are nil.
+    private func unscopedTokenStore() -> TokenStore {
+        TokenStore(keychain: InMemoryKeychainStore())
+    }
+
     private func makeModel(
         prefs: PreferencesStore? = nil,
-        typesRepo: CustomAgentTypesRepository? = nil
+        typesRepo: CustomAgentTypesRepository? = nil,
+        tokenStore: TokenStore? = nil
     ) -> CreateSessionModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
@@ -49,6 +60,7 @@ final class CreateSessionModelTests: XCTestCase {
             agentAPI: agentAPI,
             sessionRepository: repo,
             preferencesStore: prefs ?? isolatedPrefs(),
+            tokenStore: tokenStore ?? harness.tokenStore,
             customAgentTypesRepository: typesRepo ?? makeTypesRepo(),
             autoScanRepository: AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: idleWsClient())
         )
@@ -56,7 +68,8 @@ final class CreateSessionModelTests: XCTestCase {
 
     private func stubbedModel(
         prefs: PreferencesStore? = nil,
-        typesRepo: CustomAgentTypesRepository? = nil
+        typesRepo: CustomAgentTypesRepository? = nil,
+        tokenStore: TokenStore? = nil
     ) -> CreateSessionModel {
         let harness = SessionHarness(userLoggedIn: true, agentConnected: true)
         let bus = AgentEventBus(
@@ -71,6 +84,7 @@ final class CreateSessionModelTests: XCTestCase {
             agentAPI: agentAPI,
             sessionRepository: repo,
             preferencesStore: prefs ?? isolatedPrefs(),
+            tokenStore: tokenStore ?? harness.tokenStore,
             customAgentTypesRepository: typesRepo ?? makeTypesRepo(),
             autoScanRepository: AutoScanRepository(agentAPI: agentAPI, agentEventBus: bus, wsClient: idleWsClient())
         )
@@ -352,6 +366,218 @@ final class CreateSessionModelTests: XCTestCase {
         XCTAssertEqual(saved?.noMemory, true)
     }
 
+    // MARK: - Recent custom paths
+
+    func testSelectCustomPathLoadsRecentsAndLeavesTheEmptyDraftUnflagged() {
+        let prefs = isolatedPrefs()
+        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/srv/app")
+        let model = makeModel(prefs: prefs)
+        model.selectStoredProject("alpha")
+        model.worktree = true
+        model.branchName = "feat"
+
+        model.selectCustomPath()
+
+        XCTAssertEqual(model.selection, .customPath(""))
+        XCTAssertEqual(model.customPathDraft, "")
+        XCTAssertNil(
+            model.customPathError,
+            "an untouched field must not render \"Path is required\" the moment the section appears"
+        )
+        XCTAssertFalse(model.worktree, "the stored project's git options do not carry into an ad-hoc path")
+        XCTAssertEqual(model.branchName, "")
+        XCTAssertEqual(
+            model.recentCustomPaths, ["/srv/app"],
+            "recents resolve through the agent-url fallback when there is no agent id"
+        )
+    }
+
+    func testReselectingCustomPathRefreshesRecentsWithoutWipingTheDraft() {
+        let prefs = isolatedPrefs()
+        let model = makeModel(prefs: prefs)
+        model.selectCustomPath()
+        model.setCustomPath("/typed/path")
+        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/added/later")
+
+        model.selectCustomPath()
+
+        XCTAssertEqual(model.customPathDraft, "/typed/path", "the row stays on screen, so a second tap must not clear typed text")
+        XCTAssertEqual(model.selection, .customPath("/typed/path"))
+        XCTAssertEqual(model.recentCustomPaths, ["/added/later"], "recents still refresh")
+    }
+
+    func testPickRecentCustomPathFillsTheFieldAndRunsValidation() {
+        let prefs = isolatedPrefs()
+        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/srv/app")
+        let model = makeModel(prefs: prefs)
+        model.selectCustomPath()
+
+        model.pickRecentCustomPath("/srv/app")
+
+        XCTAssertEqual(model.customPathDraft, "/srv/app")
+        XCTAssertEqual(model.selection, .customPath("/srv/app"))
+        XCTAssertNil(model.customPathError)
+        XCTAssertTrue(model.canContinueProject, "a tapped recent unblocks the step exactly like typed text")
+    }
+
+    func testRemoveRecentCustomPathClearsItFromStateAndStore() {
+        let prefs = isolatedPrefs()
+        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/a")
+        prefs.addRecentCustomPath(agentKey: harnessAgentKey, path: "/b")
+        let model = makeModel(prefs: prefs)
+        model.selectCustomPath()
+        XCTAssertEqual(model.recentCustomPaths, ["/b", "/a"])
+
+        model.removeRecentCustomPath("/b")
+
+        XCTAssertEqual(model.recentCustomPaths, ["/a"], "the swiped row disappears without re-entering the step")
+        XCTAssertEqual(prefs.getRecentCustomPaths(agentKey: harnessAgentKey), ["/a"], "and stays gone next launch")
+    }
+
+    func testCreateWithCustomPathRecordsTheRecentButNeverTheLastUsedProject() async {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        prefs.setLastUsedProjectName("alpha")
+        let model = stubbedModel(prefs: prefs)
+        model.mode = .standard
+        model.selectCustomPath()
+        model.setCustomPath("  /srv/app  ")
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        XCTAssertEqual(
+            prefs.getRecentCustomPaths(agentKey: harnessAgentKey), ["/srv/app"],
+            "the trimmed launch directory is recorded under the agent scope key"
+        )
+        XCTAssertEqual(model.recentCustomPaths, ["/srv/app"], "the open wizard picks it up immediately")
+        XCTAssertEqual(
+            prefs.getLastUsedProjectName(), "alpha",
+            "an ad-hoc path must never displace the last-used project"
+        )
+    }
+
+    func testCreateWithoutAnAgentScopeKeySkipsRecentsAndStillSucceeds() async {
+        StubURLProtocol.reset()
+        let defaults = UserDefaults(suiteName: "cw-\(UUID().uuidString)")!
+        let prefs = PreferencesStore(defaults: defaults)
+        let model = stubbedModel(prefs: prefs, tokenStore: unscopedTokenStore())
+        model.mode = .standard
+        model.selectCustomPath()
+        XCTAssertEqual(model.recentCustomPaths, [], "no scope key means nothing to load")
+        model.setCustomPath("/srv/app")
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error, "a missing scope key must not fail the launch")
+        let recentKeys = defaults.dictionaryRepresentation().keys.filter {
+            $0.hasPrefix(PreferencesStore.recentCustomPathsPrefix)
+        }
+        XCTAssertEqual(recentKeys, [], "and must not write an unscoped bucket")
+    }
+
+    func testCreateRecordsTheLaunchedPathNotOneTypedWhileTheCreateWasInFlight() async {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.mode = .standard
+        model.selectCustomPath()
+        model.setCustomPath("/srv/launched")
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        // Back is not gated on `submitting`, so the field stays editable while
+        // the POST is in flight; hold the response until the edit has landed.
+        let released = DispatchSemaphore(value: 0)
+        StubURLProtocol.onRequest = { _ in
+            StubURLProtocol.onRequest = nil
+            Task { @MainActor in
+                model.setCustomPath("/srv/edited")
+                released.signal()
+            }
+            XCTAssertEqual(released.wait(timeout: .now() + 2), .success, "the mid-flight edit never landed")
+        }
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        XCTAssertEqual(
+            prefs.getRecentCustomPaths(agentKey: harnessAgentKey), ["/srv/launched"],
+            "recents record the directory the session was launched in, never a later edit"
+        )
+        XCTAssertEqual(model.recentCustomPaths, ["/srv/launched"])
+        XCTAssertEqual(model.customPathDraft, "/srv/edited", "the in-flight edit itself is left alone")
+    }
+
+    func testCreateOfAStoredProjectIgnoresACustomPathEnteredMidFlight() async {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.mode = .standard
+        model.selectStoredProject("alpha")
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        let released = DispatchSemaphore(value: 0)
+        StubURLProtocol.onRequest = { _ in
+            StubURLProtocol.onRequest = nil
+            Task { @MainActor in
+                model.selectCustomPath()
+                model.setCustomPath("/srv/never-launched")
+                released.signal()
+            }
+            XCTAssertEqual(released.wait(timeout: .now() + 2), .success, "the mid-flight selection change never landed")
+        }
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        XCTAssertEqual(
+            prefs.getLastUsedProjectName(), "alpha",
+            "the launched stored project is what the wizard remembers, even though the selection moved on"
+        )
+        XCTAssertEqual(
+            prefs.getRecentCustomPaths(agentKey: harnessAgentKey), [],
+            "a directory that was never launched must not become a recent"
+        )
+    }
+
+    func testCreateNeverRecordsAPathTheWizardWouldReject() async {
+        StubURLProtocol.reset()
+        let prefs = isolatedPrefs()
+        let model = stubbedModel(prefs: prefs)
+        model.mode = .standard
+        model.selectCustomPath()
+        // `setCustomPath` assigns `selection` even when it flags the draft, so
+        // an invalid path is reachable at the create call.
+        model.setCustomPath("relative/path")
+        XCTAssertEqual(model.customPathError, "Path must be absolute")
+        StubURLProtocol.enqueue(
+            status: 200,
+            body: #"{"session_id":"s-new","state":"starting","created_at":"t"}"#
+        )
+
+        await model.create()
+
+        XCTAssertNil(model.error)
+        XCTAssertEqual(
+            prefs.getRecentCustomPaths(agentKey: harnessAgentKey), [],
+            "a rejected path must not become a row that can never be launched"
+        )
+    }
+
     // MARK: - Custom agent types: validation / sanitization statics
 
     func testValidateCustomTypeMessagesAndOrder() {
@@ -573,7 +799,7 @@ final class CreateSessionModelTests: XCTestCase {
                 await model.confirmDeleteType(makeCustomAgentType())
                 released.signal()
             }
-            _ = released.wait(timeout: .now() + 2)
+            XCTAssertEqual(released.wait(timeout: .now() + 2), .success, "the repeat confirm never completed")
         }
 
         await model.confirmDeleteType(makeCustomAgentType())
@@ -619,7 +845,7 @@ final class CreateSessionModelTests: XCTestCase {
                 released.signal()
                 await second.value
             }
-            _ = released.wait(timeout: .now() + 2)
+            XCTAssertEqual(released.wait(timeout: .now() + 2), .success, "the second confirm never became in-flight")
         }
 
         await model.confirmDeleteType(makeCustomAgentType())

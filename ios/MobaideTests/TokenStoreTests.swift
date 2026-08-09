@@ -59,6 +59,33 @@ final class TokenStoreTests: XCTestCase {
         XCTAssertEqual(relay.getEffectiveBaseUrl(), "https://relay.example.com/proxy/A1")
     }
 
+    func testAgentScopeKeyPrefersTheAgentIdAndFallsBackToTheAgentUrl() {
+        let (store, keychain) = makeStore()
+        XCTAssertNil(store.getAgentScopeKey(), "a device that reached no agent has no per-agent bucket")
+
+        store.saveAgentUrl("https://agent.example.com///")
+        XCTAssertEqual(
+            store.getAgentScopeKey(), "https://agent.example.com",
+            "DIRECT mode is never issued an agent id, so the stored (trimmed) URL carries the scope"
+        )
+
+        store.saveRelayCredentials(
+            serverUrl: "https://relay.example.com",
+            agentId: "A1",
+            pairingId: "P1",
+            deviceId: "D1",
+            accessToken: "at",
+            refreshToken: "rt"
+        )
+        XCTAssertEqual(
+            store.getAgentScopeKey(), "A1",
+            "a paired agent keeps one bucket even though a direct URL is still on file"
+        )
+
+        keychain.removeValue(forKey: TokenStore.keyAgentId)
+        XCTAssertEqual(store.getAgentScopeKey(), "https://agent.example.com")
+    }
+
     func testIsLoggedInPerMode() {
         let (direct, _) = makeStore()
         XCTAssertFalse(direct.isLoggedIn())

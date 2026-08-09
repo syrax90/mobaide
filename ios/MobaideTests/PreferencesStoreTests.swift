@@ -172,6 +172,41 @@ final class PreferencesStoreTests: XCTestCase {
         XCTAssertEqual(store.getRecentCustomPaths(agentKey: "codex"), [], "per-agent isolation")
     }
 
+    func testRemoveRecentCustomPathDropsOnlyTheExactMatch() {
+        for path in ["/one", "/two", "/three"] {
+            store.addRecentCustomPath(agentKey: "claude", path: path)
+        }
+        store.addRecentCustomPath(agentKey: "codex", path: "/two")
+
+        store.removeRecentCustomPath(agentKey: "claude", path: "/tw")
+        XCTAssertEqual(
+            store.getRecentCustomPaths(agentKey: "claude"), ["/three", "/two", "/one"],
+            "a path that is only a prefix of a stored one removes nothing"
+        )
+
+        store.removeRecentCustomPath(agentKey: "claude", path: "  /two  ")
+        XCTAssertEqual(
+            store.getRecentCustomPaths(agentKey: "claude"), ["/three", "/one"],
+            "removal trims like the add path and leaves the survivors in MRU order"
+        )
+        XCTAssertEqual(store.getRecentCustomPaths(agentKey: "codex"), ["/two"], "per-agent isolation")
+
+        store.removeRecentCustomPath(agentKey: "claude", path: "/three")
+        store.removeRecentCustomPath(agentKey: "claude", path: "/one")
+        XCTAssertEqual(
+            store.getRecentCustomPaths(agentKey: "claude"), [],
+            "removing the last entry empties the bucket"
+        )
+        XCTAssertNil(
+            defaults.dictionaryRepresentation()[PreferencesStore.recentCustomPathsKey(agentKey: "claude")],
+            "the emptied bucket is deleted, not parked as an \"[]\" blob keyed by an agent URL that may never return"
+        )
+        XCTAssertNotNil(
+            defaults.dictionaryRepresentation()[PreferencesStore.recentCustomPathsKey(agentKey: "codex")],
+            "and the delete is scoped to the one agent"
+        )
+    }
+
     func testRecentShortcutChordsMRUOrderBumpAndCap() {
         XCTAssertEqual(
             PreferencesStore.recentShortcutChordsKey(kindKey: "claude"),

@@ -435,6 +435,16 @@ No wire field, endpoint, protocol version or dependency changes —
 `ClaudeOptionsModel` already carried `plan_mode` / `initial_prompt` / `worktree`,
 and `ProjectInfo.has_linear_key` / `auto_scan_prompt` were decoded but unread.
 Remaining feature screens land in later issues.
+The create-session wizard's custom-path step now calls `PreferencesStore`'s
+recent-launch-directories persistence (`getRecentCustomPaths`/
+`addRecentCustomPath`, key `recent_custom_paths::<agentKey>`, MRU, cap 5) —
+ported alongside the rest of `PreferencesStore` in CLA-98 but never wired into
+production. Selecting "Custom path…" now loads a "Recent paths" section of up
+to 5 previously launched per-agent directories, monospaced and head-truncated
+so the trailing folder stays visible; tapping a row fills the field, and swipe
+or long-press removes it, a capability Android (CLA-60) lacks. A path is
+recorded only after the session is actually created and never becomes the
+last-used project.
 
 ## Layout
 
