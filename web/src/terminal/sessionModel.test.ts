@@ -8,6 +8,7 @@ import {
 import { WS_CLOSE } from '../protocol/closeCodes';
 import { encodeTerminalFrame, TERMINAL_FRAME_TYPE } from '../protocol/terminalCodec';
 import { useToastStore } from '../stores/toastStore';
+import { controlKeysFor } from './controlKeys';
 import { MAX_PASTE_BYTES } from './terminalPaste';
 import { CLEAR_INPUT_LINE } from './terminalSubmit';
 
@@ -272,6 +273,66 @@ describe('TerminalSessionModel send gate', () => {
     expect(framesOfType(TERMINAL_FRAME_TYPE.execute).map(payloadText)).toEqual([
       'git status',
     ]);
+  });
+});
+
+describe('TerminalSessionModel control keys', () => {
+  const CTRL_L = controlKeysFor('claude').find((key) => key.id === 'ctrlL');
+  const CTRL_C = controlKeysFor('claude').find((key) => key.id === 'ctrlC');
+
+  it('sends an ordinary built-in as one input frame and nothing else', async () => {
+    const { model, framesOfType } = await liveRunning();
+
+    model.sendControlKey(CTRL_C!);
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map((frame) => [...frame.subarray(1)])).toEqual(
+      [[0x03]],
+    );
+    expect(framesOfType(TERMINAL_FRAME_TYPE.clear)).toEqual([]);
+  });
+
+  it('clears the scrollback locally and still ships 0x0c for Ctrl+L', async () => {
+    const { model, framesOfType } = await liveRunning();
+    const written: unknown[] = [];
+    vi.spyOn(model.term, 'write').mockImplementation((data: string | Uint8Array) => {
+      written.push(data);
+    });
+
+    model.sendControlKey(CTRL_L!);
+
+    // ED 3, not a full clear: the live screen stays painted so a TUI mid-frame
+    // is not left on a blank grid waiting for its next repaint.
+    expect(written).toEqual(['\u001b[3J']);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input).map((frame) => [...frame.subarray(1)])).toEqual(
+      [[0x0c]],
+    );
+  });
+
+  it('empties the agent ring before the chord that may repaint into it', async () => {
+    // Order matters: the clear frame has to land first, or the repaint the
+    // chord provokes is wiped along with the history.
+    const { model, socket, framesOfType } = await liveRunning();
+    vi.spyOn(model.term, 'write').mockImplementation(() => undefined);
+
+    model.sendControlKey(CTRL_L!);
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.clear).map((frame) => [...frame])).toEqual([[0x63]]);
+    const types = socket.sent
+      .filter((frame): frame is Uint8Array => frame instanceof Uint8Array)
+      .map((frame) => frame[0]);
+    expect(types.indexOf(TERMINAL_FRAME_TYPE.clear)).toBeLessThan(
+      types.indexOf(TERMINAL_FRAME_TYPE.input),
+    );
+  });
+
+  it('sends no clear frame while the gate is shut', async () => {
+    const { model, deliverFrame, framesOfType } = await harness();
+    deliverFrame(stateFrame('stopped'));
+
+    model.sendControlKey(CTRL_L!);
+
+    expect(framesOfType(TERMINAL_FRAME_TYPE.clear)).toEqual([]);
+    expect(framesOfType(TERMINAL_FRAME_TYPE.input)).toEqual([]);
   });
 });
 

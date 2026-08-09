@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SavedShortcut } from '../../api/shortcutRepository';
+import type { ControlKey } from '../../terminal/controlKeys';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { stubLocalStorage } from '../../test/localStorageStub';
 
@@ -22,10 +23,13 @@ const { ShortcutBar } = await import('./ShortcutBar');
 const { useTerminalPrefsStore } = await import('../../stores/terminalPrefsStore');
 
 const sent: Uint8Array[] = [];
+/** Built-ins route through `sendControlKey`, which owns the `clearsView` rule. */
+const controlKeysPressed: ControlKey[] = [];
 
-/** The bar reaches outside the DOM for exactly one thing. */
+/** The bar reaches outside the DOM for exactly two things. */
 const model = {
   sendChordBytes: (payload: Uint8Array) => sent.push(payload),
+  sendControlKey: (key: ControlKey) => controlKeysPressed.push(key),
 } as unknown as TerminalSessionModel;
 
 function saved(over: Partial<SavedShortcut> = {}): SavedShortcut {
@@ -67,6 +71,7 @@ const keys = (): HTMLElement[] =>
 beforeEach(() => {
   repo.shortcuts = [];
   sent.length = 0;
+  controlKeysPressed.length = 0;
   openedComposer = 0;
   useTerminalPrefsStore.setState({ shortcutBarExpanded: true, recentChords: {} });
 });
@@ -95,7 +100,22 @@ describe('ShortcutBar built-in keys', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Mode' }));
 
-    expect(sent).toEqual([Uint8Array.of(0x1b, 0x5b, 0x5a)]);
+    expect(controlKeysPressed.map((key) => key.bytes)).toEqual([
+      Uint8Array.of(0x1b, 0x5b, 0x5a),
+    ]);
+  });
+
+  it('routes Ctrl+L through the clear-view path, still carrying 0x0c', async () => {
+    // The button is only useful because the model clears locally: Claude Code
+    // binds ctrl+l to chat:clearInput, which repaints and nothing else outside
+    // its fullscreen TUI mode.
+    await renderBar();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ctrl+L' }));
+
+    expect(controlKeysPressed).toHaveLength(1);
+    expect(controlKeysPressed[0]?.clearsView).toBe(true);
+    expect(controlKeysPressed[0]?.bytes).toEqual(Uint8Array.of(0x0c));
   });
 
   it('disables the keys while the send gate is shut', async () => {

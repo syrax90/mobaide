@@ -133,6 +133,23 @@ cadence; they do **not** gate compatibility.
   supported combination. Deciding that a session is *gone* (rather than merely
   stopped) stays a client-side judgement from the ``sessions.changed``
   snapshot, not a wire signal.
+* Additive delta within proto-v7 (2026-08-09, Ctrl+L clear): **new
+  client→server frame, no version bump.** ``FRAME_CLEAR = b"c"`` (0x63) on the
+  session-IO channel — a bare type byte, no payload — makes the agent drop the
+  output it retains for a reattaching client: ``TerminalSession.clear_replay``
+  empties both the binary-WS replay ring and the REST ``/scrollback`` deque.
+  Live output is untouched. Handled on both input paths
+  (``agent/ws/session_io.py`` and ``RelayClient._handle_session_input``).
+  Backward compatible in both directions: an **old agent** already logs an
+  unknown frame type at debug and ignores it, so a new client degrades to
+  "cleared until the next reattach replays it back"; an **old client** simply
+  never sends one. The clients pair it with the Ctrl+L bar button, which also
+  feeds ``ESC[3J`` to its own emulator and still sends ``0x0c`` — the byte
+  alone does nothing visible, because Claude Code binds ``ctrl+l`` to
+  ``chat:clearInput``, whose visible half is gated on its fullscreen TUI mode.
+  Ordering is load-bearing: the ``c`` frame is queued **before** the ``i`` frame
+  carrying ``0x0c``, so the ring is empty before any repaint the byte provokes
+  arrives. Both ride the same ordered queue.
 
 ## proto-v6 (superseded by proto-v7)
 

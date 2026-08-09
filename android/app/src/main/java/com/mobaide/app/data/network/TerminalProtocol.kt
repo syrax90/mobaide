@@ -16,6 +16,7 @@ import okio.ByteString.Companion.toByteString
  * | 0x78 | 'x'  | C->S      | execute: server Ctrl+C clears, types payload, then CR  |
  * | 0x6d | 'm'  | C->S      | submit: server writes payload, pauses, then writes CR  |
  * | 0x72 | 'r'  | C->S      | resize: u16 rows + u16 cols (big-endian)               |
+ * | 0x63 | 'c'  | C->S      | clear: drop the server's retained output (no payload)  |
  * | 0x73 | 's'  | S->C      | state: UTF-8 JSON {status, pid?, exit_code?}           |
  * | 0x62 | 'b'  | S->C      | replay-buffer start marker (empty payload)             |
  * | 0x65 | 'e'  | S->C      | replay-buffer end marker — live frames follow (empty)  |
@@ -32,6 +33,7 @@ object TerminalProtocol {
     const val TYPE_EXECUTE: Byte = 'x'.code.toByte()
     const val TYPE_SUBMIT: Byte = 'm'.code.toByte()
     const val TYPE_RESIZE: Byte = 'r'.code.toByte()
+    const val TYPE_CLEAR: Byte = 'c'.code.toByte()
     const val TYPE_STATE: Byte = 's'.code.toByte()
     const val TYPE_REPLAY: Byte = 'b'.code.toByte()
     const val TYPE_REPLAY_END: Byte = 'e'.code.toByte()
@@ -73,6 +75,9 @@ object TerminalProtocol {
         out[4] = (cols and 0xff).toByte()
         return out.toByteString()
     }
+
+    /** Build a `'c'` (clear) frame: a bare type byte, no payload. */
+    fun encodeClear(): ByteString = byteArrayOf(TYPE_CLEAR).toByteString()
 
     fun decode(frame: ByteString): TerminalFrame? {
         if (frame.size == 0) return null

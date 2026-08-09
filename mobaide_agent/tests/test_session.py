@@ -412,6 +412,34 @@ class TestRingBufferCap:
         assert large.get_ring() == b"abcdefgh"
 
 
+class TestClearReplay:
+    """``clear_replay`` backs the clients' Ctrl+L, which clears the emulator's
+    scrollback locally. Without it a reattach replays the bytes the user just
+    cleared and the history reappears.
+    """
+
+    def test_clears_ring_and_rest_scrollback_together(self) -> None:
+        session = TerminalSession(_ring_config(ring_buffer_bytes=1024))
+        session._append_ring(b"old output")
+        session._scrollback.append(b"old output")
+
+        session.clear_replay()
+
+        assert session.get_ring() == b""
+        assert session.get_scrollback() == []
+
+    def test_ring_keeps_working_after_clear(self) -> None:
+        # The cap and the trim-from-head behaviour have to survive the reset —
+        # a client clears mid-session and keeps streaming.
+        session = TerminalSession(_ring_config(ring_buffer_bytes=8))
+        session._append_ring(b"AAAABBBB")
+        session.clear_replay()
+        session._append_ring(b"CCCCDDDDEEEE")
+        ring = session.get_ring()
+        assert len(ring) == 8
+        assert ring == b"DDDDEEEE"
+
+
 class TestRingScrub:
     """``_append_ring`` scrubs terminal *queries* (and DA replies) from the
     replay ring so a reconnect can't make the client emulator re-answer them and

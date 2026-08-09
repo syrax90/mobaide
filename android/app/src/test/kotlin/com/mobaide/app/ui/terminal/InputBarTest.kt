@@ -359,7 +359,10 @@ class InputBarCodexTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun openCodexPanel(onSendBytes: (ByteArray) -> Unit = {}) {
+    private fun openCodexPanel(
+        onSendBytes: (ByteArray) -> Unit = {},
+        onClearView: () -> Unit = {},
+    ) {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -367,6 +370,7 @@ class InputBarCodexTest {
                     onTextChange = {},
                     onSend = {},
                     onSendBytes = onSendBytes,
+                    onClearView = onClearView,
                     sessionKind = SessionKind.Codex,
                 )
             }
@@ -431,6 +435,33 @@ class InputBarCodexTest {
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x0c), captured.single())
+    }
+
+    @Test
+    fun ctrlL_clearsTheViewBeforeSendingTheByte() {
+        // The byte alone is not enough: Claude Code binds ctrl+l to
+        // chat:clearInput, which repaints and nothing else outside its
+        // fullscreen TUI mode. The clear has to happen first so the agent's
+        // ring is empty before any output the byte provokes arrives.
+        val order = mutableListOf<String>()
+        openCodexPanel(
+            onSendBytes = { order += "bytes" },
+            onClearView = { order += "clear" },
+        )
+
+        composeRule.onNodeWithText("Ctrl+L").performScrollTo().performClick()
+
+        assertEquals(listOf("clear", "bytes"), order)
+    }
+
+    @Test
+    fun ordinaryControlKey_doesNotClearTheView() {
+        var cleared = 0
+        openCodexPanel(onClearView = { cleared += 1 })
+
+        composeRule.onNodeWithText("Ctrl+C").performScrollTo().performClick()
+
+        assertEquals(0, cleared)
     }
 
     @Test
@@ -500,7 +531,10 @@ class InputBarAntigravityTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
-    private fun openAntigravityPanel(onSendBytes: (ByteArray) -> Unit = {}) {
+    private fun openAntigravityPanel(
+        onSendBytes: (ByteArray) -> Unit = {},
+        onClearView: () -> Unit = {},
+    ) {
         composeRule.setContent {
             Surface {
                 InputBar(
@@ -508,6 +542,7 @@ class InputBarAntigravityTest {
                     onTextChange = {},
                     onSend = {},
                     onSendBytes = onSendBytes,
+                    onClearView = onClearView,
                     sessionKind = SessionKind.Antigravity,
                 )
             }
@@ -572,6 +607,33 @@ class InputBarAntigravityTest {
 
         assertEquals(1, captured.size)
         assertArrayEquals(byteArrayOf(0x0c), captured.single())
+    }
+
+    @Test
+    fun ctrlL_clearsTheViewBeforeSendingTheByte() {
+        // The byte alone is not enough: Claude Code binds ctrl+l to
+        // chat:clearInput, which repaints and nothing else outside its
+        // fullscreen TUI mode. The clear has to happen first so the agent's
+        // ring is empty before any output the byte provokes arrives.
+        val order = mutableListOf<String>()
+        openAntigravityPanel(
+            onSendBytes = { order += "bytes" },
+            onClearView = { order += "clear" },
+        )
+
+        composeRule.onNodeWithText("Ctrl+L").performScrollTo().performClick()
+
+        assertEquals(listOf("clear", "bytes"), order)
+    }
+
+    @Test
+    fun ordinaryControlKey_doesNotClearTheView() {
+        var cleared = 0
+        openAntigravityPanel(onClearView = { cleared += 1 })
+
+        composeRule.onNodeWithText("Ctrl+C").performScrollTo().performClick()
+
+        assertEquals(0, cleared)
     }
 
     @Test

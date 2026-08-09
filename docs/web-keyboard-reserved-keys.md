@@ -44,9 +44,12 @@ Cmd chords are outside it entirely; the one that matters (Cmd+W in an installed
 app) is covered by the PWA probe below rather than by a table row.
 
 The rows that hurt most are `ctrl+l` and `ctrl+o`: both are **built-in
-control-bar keys** (clear screen, transcript toggle), and on Windows and Linux
-the browser takes them for the address bar and the file picker. That is the
-single best argument for keeping the bar on a machine that has a real keyboard.
+control-bar keys** (clear the scrollback, transcript toggle), and on Windows and
+Linux the browser takes them for the address bar and the file picker. That is the
+single best argument for keeping the bar on a machine that has a real keyboard —
+more so for `ctrl+l`, whose button does not merely send the chord but clears the
+view around it (see *docs/web-client.md*), so a typed `Ctrl+L` that did reach
+xterm would be the weaker of the two paths anyway.
 
 ## Running the sweep
 

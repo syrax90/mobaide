@@ -17,6 +17,7 @@ import pytest
 
 from mobaide.relay import client as _relay_client
 from mobaide.relay.client import (
+    FRAME_CLEAR,
     FRAME_EXECUTE,
     FRAME_INPUT,
     FRAME_OUTPUT,
@@ -1346,6 +1347,25 @@ class TestHandleSessionInput:
         await client._handle_session_input("s1", payload, ws)
 
         mock_session.resize.assert_awaited_once_with(50, 132)
+
+    async def test_clear_frame_clears_replay(
+        self, client, mock_session_manager
+    ):
+        # A bare type byte with no payload — the tunnel path must dispatch it
+        # rather than fall through the ``if not payload`` guard.
+        mock_session = AsyncMock()
+        mock_session.session_id = "s1"
+        mock_session.state = SessionState.RUNNING
+        mock_session.pid = 100
+        mock_session.get_ring = MagicMock(return_value=b"")
+        mock_session.clear_replay = MagicMock()
+        mock_session_manager.get_session = AsyncMock(return_value=mock_session)
+
+        ws = AsyncMock()
+        await client._handle_session_input("s1", FRAME_CLEAR, ws)
+
+        mock_session.clear_replay.assert_called_once_with()
+        mock_session.write.assert_not_awaited()
 
     async def test_execute_frame_calls_write_execute(
         self, client, mock_session_manager

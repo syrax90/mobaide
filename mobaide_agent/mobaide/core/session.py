@@ -402,6 +402,18 @@ class TerminalSession:
         if overflow > 0:
             del self._ring[:overflow]
 
+    def clear_replay(self) -> None:
+        """Drop the retained output a client would be shown on (re)attach.
+
+        Both buffers hold the same PTY bytes in different shapes — the ring
+        for binary-WS replay, the deque for the REST ``/scrollback`` endpoint
+        — so a client that cleared its view has to lose both or the history
+        returns through whichever path it did not clear. Live output is
+        untouched; the next PTY read starts refilling immediately.
+        """
+        self._ring.clear()
+        self._scrollback.clear()
+
     def get_ring(self) -> bytes:
         """Snapshot of the recent raw PTY bytes for binary-WS replay."""
         return bytes(self._ring)

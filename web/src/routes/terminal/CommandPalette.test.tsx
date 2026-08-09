@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SavedShortcut } from '../../api/shortcutRepository';
 import type { PromptTemplate } from '../../api/templateRepository';
+import type { ControlKey } from '../../terminal/controlKeys';
 import type { TerminalSessionModel } from '../../terminal/sessionModel';
 import { stubLocalStorage } from '../../test/localStorageStub';
 
@@ -31,13 +32,16 @@ const { CommandPalette } = await import('./CommandPalette');
 const { useTerminalPrefsStore } = await import('../../stores/terminalPrefsStore');
 
 const sent: Uint8Array[] = [];
+/** Built-ins route through `sendControlKey`, which owns the `clearsView` rule. */
+const controlKeysPressed: ControlKey[] = [];
 let focused = 0;
 let inserted: string[] = [];
 let closed = 0;
 
-/** The two things the palette reaches outside the DOM for. */
+/** The three things the palette reaches outside the DOM for. */
 const model = {
   sendChordBytes: (payload: Uint8Array) => sent.push(payload),
+  sendControlKey: (key: ControlKey) => controlKeysPressed.push(key),
   focus: () => {
     focused += 1;
   },
@@ -96,6 +100,7 @@ beforeEach(() => {
   repo.shortcuts = [];
   repo.templates = [];
   sent.length = 0;
+  controlKeysPressed.length = 0;
   inserted = [];
   focused = 0;
   closed = 0;
@@ -147,9 +152,19 @@ describe('CommandPalette built-in keys', () => {
 
     fireEvent.click(await row('Ctrl+C'));
 
-    expect(sent).toEqual([Uint8Array.of(0x03)]);
+    expect(controlKeysPressed.map((key) => key.bytes)).toEqual([Uint8Array.of(0x03)]);
     expect(useTerminalPrefsStore.getState().recentChords).toEqual({});
     expect(focused).toBe(1);
+  });
+
+  it('routes Ctrl+L through the clear-view path, like the bar', async () => {
+    renderPalette({ kind: 'claude' });
+
+    fireEvent.click(await row('Ctrl+L'));
+
+    expect(controlKeysPressed).toHaveLength(1);
+    expect(controlKeysPressed[0]?.clearsView).toBe(true);
+    expect(controlKeysPressed[0]?.bytes).toEqual(Uint8Array.of(0x0c));
   });
 });
 

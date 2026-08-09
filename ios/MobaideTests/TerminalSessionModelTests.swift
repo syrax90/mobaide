@@ -53,9 +53,27 @@ final class TerminalSessionModelTests: XCTestCase {
 
     func testControlKeySendsInputFrame() async throws {
         let (model, connection) = try await connectedModel()
-        model.sendControlKey([0x03])
+        model.sendControlKey(.ctrlC)
         let sent = await waitForBinaries(connection, atLeast: 1)
         XCTAssertEqual(sent.first, Data([0x69, 0x03]))
+    }
+
+    func testCtrlLClearsTheAgentRingBeforeSendingTheByte() async throws {
+        // The byte alone is not enough: Claude Code binds ctrl+l to
+        // chat:clearInput, which repaints and nothing else outside its
+        // fullscreen TUI mode. The 'c' frame has to land first so the ring is
+        // empty before any output the byte provokes arrives.
+        let (model, connection) = try await connectedModel()
+        model.sendControlKey(.ctrlL)
+        let sent = await waitForBinaries(connection, atLeast: 2)
+        XCTAssertEqual(Array(sent.prefix(2)), [Data([0x63]), Data([0x69, 0x0C])])
+    }
+
+    func testOrdinaryControlKeySendsNoClearFrame() async throws {
+        let (model, connection) = try await connectedModel()
+        model.sendControlKey(.ctrlC)
+        let sent = await waitForBinaries(connection, atLeast: 1)
+        XCTAssertFalse(sent.contains(Data([0x63])))
     }
 
     func testTappedHistoricalRowExecutesWhenLive() async throws {

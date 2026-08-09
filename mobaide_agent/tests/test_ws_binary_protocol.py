@@ -261,6 +261,40 @@ class TestResizeFrame:
             time.sleep(0.1)
 
 
+class TestClearFrame:
+    def test_clear_frame_drops_retained_output(self, test_client, auth_token):
+        """A 'c' frame clears what a reattach would replay, so the scrollback
+        the client just cleared locally does not come back."""
+        sid = _create_session(test_client, auth_token)
+        manager = test_client.app.state.session_manager
+        session = manager._sessions[sid]
+        session._append_ring(b"CLEARFRAMEMARKER")
+
+        with test_client.websocket_connect(
+            f"/ws/session/{sid}?token={auth_token}",
+        ) as ws:
+            _drain_through_replay_end(ws)
+            ws.send_bytes(b"c")
+            time.sleep(0.3)
+            assert b"CLEARFRAMEMARKER" not in session.get_ring()
+
+    def test_clear_frame_carries_no_payload_and_keeps_socket_open(
+        self, test_client, auth_token
+    ):
+        """The frame is a bare type byte — the reader's ``if not data`` guard
+        rejects empty *messages*, not empty payloads, so a 1-byte 'c' must
+        still dispatch and leave the connection usable."""
+        sid = _create_session(test_client, auth_token)
+        with test_client.websocket_connect(
+            f"/ws/session/{sid}?token={auth_token}",
+        ) as ws:
+            _drain_through_replay_end(ws)
+            ws.send_bytes(b"c")
+            time.sleep(0.2)
+            ws.send_bytes(b"r" + struct.pack(">HH", 30, 100))
+            time.sleep(0.2)
+
+
 class TestInputFrame:
     def test_input_frame_writes_raw_bytes_to_pty(self, test_client, auth_token):
         """An 'i' frame's raw bytes (including CR / Ctrl-C) reach the PTY

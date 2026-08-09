@@ -34,6 +34,7 @@ FRAME_INPUT = b"i"       # 0x69  C->S  raw input bytes
 FRAME_RESIZE = b"r"      # 0x72  C->S  payload: u16 rows, u16 cols (big-endian)
 FRAME_EXECUTE = b"x"     # 0x78  C->S  clear-then-submit: Ctrl+C + pause + payload + pause + CR
 FRAME_SUBMIT = b"m"      # 0x6d  C->S  submit: payload + pause + CR (discrete Enter)
+FRAME_CLEAR = b"c"       # 0x63  C->S  no payload: drop retained output (replay + REST scrollback)
 FRAME_STATE = b"s"       # 0x73  S->C  payload: UTF-8 JSON {status,pid?,exit_code?}
 FRAME_REPLAY = b"b"      # 0x62  S->C  marker: ring-buffer replay starts next frame
 FRAME_REPLAY_END = b"e"  # 0x65  S->C  marker: ring-buffer replay finished; live frames follow
@@ -188,6 +189,9 @@ async def session_io(websocket: WebSocket, session_id: str) -> None:
                         rows, cols = struct.unpack(">HH", payload[:4])
                         await session.resize(rows, cols)
                         counters["msg_count"] += 1
+                elif frame_type == FRAME_CLEAR:
+                    session.clear_replay()
+                    counters["msg_count"] += 1
                 else:
                     logger.debug(
                         "ws.unknown_frame",

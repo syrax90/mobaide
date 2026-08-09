@@ -763,6 +763,20 @@ discovers Mode, Rewind and saved shortcuts, and because on Windows and Linux the
 browser takes Ctrl+L and Ctrl+O outright. Saved chips send only; renaming and
 removing live in the composer, as they do on both phones.
 
+**Ctrl+L is the one built-in that does more than send bytes.** It carries
+`clearsView`, and `sessionModel.sendControlKey` routes it through `clearView()`:
+a `c` frame so the agent empties its replay ring, `ESC[3J` written to the local
+emulator, then the usual `0x0c`. The byte on its own is inert — Claude Code
+binds `ctrl+l` to `chat:clearInput`, whose visible half (the "press again to
+clear" hint and the `/clear` it confirms) is gated on its fullscreen TUI mode,
+so outside fullscreen the chord only triggers an internal repaint of identical
+content. ED 3 rather than a full clear because nothing repaints afterwards:
+erasing the visible screen would strand a TUI mid-frame on a blank grid. The
+frame goes before the chord so the ring is empty before any repaint lands, and
+the local write re-baselines the follow sampler in its post-parse callback so
+the shrunken buffer is not counted as unread. Android `TerminalViewModel
+.clearView` and iOS `TerminalSessionModel.clearView` are the same three steps.
+
 **CLA-158 is fixed here, on all three clients at once**: a Shell session now
 renders the neutral 9-key set rather than Claude's 14. Mode (`CSI Z`) and Rewind
 (`ESC ESC`) are Claude-TUI input, and Ctrl+O / Ctrl+R / Ctrl+L are readline

@@ -162,6 +162,7 @@ FRAME_INPUT = b"i"
 FRAME_RESIZE = b"r"
 FRAME_EXECUTE = b"x"
 FRAME_SUBMIT = b"m"
+FRAME_CLEAR = b"c"
 FRAME_STATE = b"s"
 FRAME_REPLAY = b"b"
 FRAME_REPLAY_END = b"e"
@@ -2008,6 +2009,8 @@ class RelayClient:
             if len(frame_data) >= 4:
                 rows, cols = struct.unpack(">HH", frame_data[:4])
                 await session.resize(rows, cols)
+        elif frame_type == FRAME_CLEAR:
+            session.clear_replay()
 
     async def _notify_session_unknown(
         self, session_id: str, ws: ClientConnection

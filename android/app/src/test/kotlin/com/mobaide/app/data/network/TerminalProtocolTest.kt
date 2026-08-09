@@ -118,6 +118,16 @@ class TerminalProtocolTest {
     // ---- encodeResize -------------------------------------------------------
 
     @Test
+    fun encodeClear_isABareTypeByte() {
+        // No payload at all: the agent's reader guards against empty *messages*,
+        // not empty payloads, so one byte is the whole frame.
+        assertArrayEquals(
+            byteArrayOf('c'.code.toByte()),
+            TerminalProtocol.encodeClear().toByteArray(),
+        )
+    }
+
+    @Test
     fun encodeResize_packsRowsAndColsAsBigEndianU16() {
         // rows = 300 = 0x012C  -> hi=0x01, lo=0x2C
         // cols = 500 = 0x01F4  -> hi=0x01, lo=0xF4

@@ -39,6 +39,7 @@ import { registerDisposable, unregisterDisposable } from '../realtime/liveChanne
 import { realScheduler, type Scheduler } from '../realtime/webSocketChannel';
 import { useToastStore } from '../stores/toastStore';
 import { useTerminalPrefsStore } from '../stores/terminalPrefsStore';
+import type { ControlKey } from './controlKeys';
 import { refuseOsc52Reads, TerminalClipboardProvider } from './terminalClipboard';
 import {
   foldSample,
@@ -75,6 +76,9 @@ const SCROLLBACK_ROWS = 10_000;
 
 /** xterm's viewport-paging chords — the only keyboard route out of the tail. */
 const VIEWPORT_PAGING_KEYS = ['PageUp', 'PageDown', 'Home', 'End'];
+
+/** ED 3 — erase scrollback, leaving the viewport painted. */
+const CLEAR_SCROLLBACK = '\u001b[3J';
 
 export interface TerminalViewState {
   connection: TerminalConnectionState;
@@ -692,6 +696,46 @@ export class TerminalSessionModel {
     if (payload.length === 0 || !this.canSendBytes()) return;
     this.sendInputBytes(payload);
     this.jumpToBottom();
+  }
+
+  /**
+   * Drop the scrollback and send the chord that goes with it (Ctrl+L).
+   *
+   * `ESC[3J` rather than a full clear: it trims the rows above the viewport and
+   * leaves the live screen painted, so a TUI mid-frame keeps rendering instead
+   * of sitting on a blank grid until its next repaint. That also makes the
+   * action safe for every CLI, none of which is asked to redraw.
+   *
+   * The `clear` frame goes **before** the chord so the agent has emptied its
+   * replay ring by the time any output the chord provokes arrives — the input
+   * queue preserves order. Without it a reattach replays the rows just cleared.
+   */
+  private clearView(payload: Uint8Array): void {
+    if (!this.canSendBytes()) return;
+    this.io.send({ kind: 'clear' });
+    try {
+      this.term.write(CLEAR_SCROLLBACK, () => {
+        // Post-parse: the trim has landed, so re-baselining now records the
+        // shrunken buffer instead of counting it as unread scrollback.
+        if (!this.disposed) this.jumpToBottom();
+      });
+    } catch {
+      // Same discard path as `writeLive` — nothing useful to do with a
+      // sequence the emulator refused.
+    }
+    this.sendChordBytes(payload);
+  }
+
+  /**
+   * Run a built-in bar button. The single place the `clearsView` rule is
+   * applied, so the bar and the command palette cannot drift apart.
+   */
+  sendControlKey(key: ControlKey): void {
+    if (key.clearsView) {
+      this.clearView(key.bytes);
+      return;
+    }
+    this.sendChordBytes(key.bytes);
   }
 
   setComposer(text: string): void {

@@ -46,6 +46,11 @@ final class TerminalSessionModel {
         0x1B, 0x5B, 0x33, 0x4A,       // ESC [ 3 J
     ]
 
+    /// Fed by ``clearView``: erase the scrollback, keep the viewport painted.
+    static let clearScrollback: [UInt8] = [
+        0x1B, 0x5B, 0x33, 0x4A,       // ESC [ 3 J
+    ]
+
     let sessionId: String
     let kind: SessionKind
     let terminalView: MobaideTerminalView
@@ -314,8 +319,24 @@ final class TerminalSessionModel {
         sendBytes(data)
     }
 
-    func sendControlKey(_ bytes: [UInt8]) {
-        sendBytes(Data(bytes))
+    func sendControlKey(_ key: TerminalControlKey) {
+        if key.clearsView { clearView() }
+        sendBytes(Data(key.bytes))
+    }
+
+    /// Drop the scrollback: locally, and on the agent so a reconnect does not
+    /// replay it back. Backs Ctrl+L, which then sends `0x0C` as usual.
+    ///
+    /// `ESC[3J` alone, unlike ``clearBeforeReplay``'s `2J`+`3J`: nothing
+    /// repaints after this one, so erasing the visible screen would strand a
+    /// TUI mid-frame on a blank grid until its next redraw. The `c` frame is
+    /// queued before the caller's input frame so the agent has emptied its ring
+    /// before any output the chord provokes arrives.
+    func clearView() {
+        enqueue(.clear)
+        terminalView.applyingEmulatorOutput {
+            terminalView.feedTrackingSynchronizedOutput(Self.clearScrollback[...])
+        }
     }
 
     // MARK: - Text selection

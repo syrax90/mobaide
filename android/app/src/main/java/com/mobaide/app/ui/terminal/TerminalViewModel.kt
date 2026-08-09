@@ -420,6 +420,21 @@ class TerminalViewModel @Inject constructor(
         enqueueInput(bytes)
     }
 
+    /**
+     * Drop the scrollback: locally, and on the agent so a reconnect does not
+     * replay it back. Backs the Ctrl+L button, which then sends `0x0c` as
+     * usual — Claude Code binds it to `chat:clearInput`, which repaints and
+     * nothing else outside its fullscreen TUI mode, so the clear is ours.
+     *
+     * The `'c'` frame is queued before the caller's input frame so the agent
+     * has emptied its ring before any output the chord provokes arrives; both
+     * ride [sendChannel], which preserves order.
+     */
+    fun clearView() {
+        sendChannel.trySend(TerminalProtocol.encodeClear())
+        session.emitOutput(CLEAR_SCROLLBACK, CLEAR_SCROLLBACK.size)
+    }
+
     /** Queue [bytes] for the PTY as an `'i'` (input) frame — the raw-byte path shared by
      *  [sendBytes] and [sendTerminalBytes]. */
     private fun enqueueInput(bytes: ByteArray) {
@@ -871,6 +886,17 @@ class TerminalViewModel @Inject constructor(
         val CLEAR_BEFORE_REPLAY: ByteArray = byteArrayOf(
             0x1b, '['.code.toByte(), 'H'.code.toByte(),
             0x1b, '['.code.toByte(), '2'.code.toByte(), 'J'.code.toByte(),
+            0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),
+        )
+
+        /**
+         * `ESC [ 3 J` on its own — erase the scrollback, leave the viewport
+         * painted. Deliberately without the `2 J` of [CLEAR_BEFORE_REPLAY]:
+         * this one runs mid-session under [clearView], where no replay follows
+         * to repaint, so wiping the visible screen would strand a TUI on a
+         * blank grid until its next redraw.
+         */
+        val CLEAR_SCROLLBACK: ByteArray = byteArrayOf(
             0x1b, '['.code.toByte(), '3'.code.toByte(), 'J'.code.toByte(),
         )
     }

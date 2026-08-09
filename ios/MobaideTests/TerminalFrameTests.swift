@@ -18,6 +18,12 @@ final class TerminalFrameTests: XCTestCase {
         XCTAssertEqual(TerminalOutboundFrame.submit("a").encoded.first, 0x6D)
     }
 
+    func testClearIsABareTypeByte() {
+        // No payload at all: the agent's reader guards against empty *messages*,
+        // not empty payloads, so one byte is the whole frame.
+        XCTAssertEqual(TerminalOutboundFrame.clear.encoded, Data([0x63]))
+    }
+
     func testInputPayloadIsUTF8AtOffsetOne() {
         let encoded = TerminalOutboundFrame.input("hé").encoded
         XCTAssertEqual(encoded, Data([0x69]) + Data("hé".utf8))

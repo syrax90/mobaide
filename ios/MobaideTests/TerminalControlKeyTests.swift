@@ -101,6 +101,20 @@ final class TerminalControlKeyTests: XCTestCase {
         }
     }
 
+    func testOnlyCtrlLClearsTheView() {
+        // Every other key is a pure byte send. Ctrl+L is the exception because
+        // Claude Code binds it to chat:clearInput, whose visible half is gated
+        // on its fullscreen TUI mode — the clear has to be ours.
+        for keys in [TerminalControlKey.claudeKeys,
+                     TerminalControlKey.codexKeys,
+                     TerminalControlKey.antigravityKeys,
+                     TerminalControlKey.defaultKeys] {
+            XCTAssertEqual(keys.filter(\.clearsView).map(\.id),
+                           keys.contains { $0.id == "ctrlL" } ? ["ctrlL"] : [])
+        }
+        XCTAssertEqual(bytes("ctrlL", in: TerminalControlKey.claudeKeys), [0x0C])
+    }
+
     func testCodexAndAntigravityControlBytes() {
         XCTAssertEqual(bytes("approve", in: TerminalControlKey.codexKeys), [0x79])
         XCTAssertEqual(bytes("reject", in: TerminalControlKey.codexKeys), [0x6E])

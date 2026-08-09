@@ -79,6 +79,14 @@ private data class ControlKey(
     val label: String,
     val bytes: ByteArray,
     val icon: ImageVector? = null,
+    /**
+     * Clear the terminal view before sending [bytes]. Only Ctrl+L sets it:
+     * Claude Code binds `ctrl+l` to `chat:clearInput`, whose visible half is
+     * gated on its fullscreen TUI mode, so outside fullscreen the byte only
+     * repaints identical content and the button looks dead. The clear is ours;
+     * the byte still goes so the CLI's own handling is unchanged.
+     */
+    val clearsView: Boolean = false,
 )
 
 private val EscKey = ControlKey("Esc", byteArrayOf(0x1b))
@@ -104,7 +112,7 @@ private val LeftKey = ControlKey("←", byteArrayOf(0x1b, '['.code.toByte(), 'D'
 private val RightKey = ControlKey("→", byteArrayOf(0x1b, '['.code.toByte(), 'C'.code.toByte()), Icons.Filled.KeyboardArrowRight)
 private val CtrlOKey = ControlKey("Ctrl+O", byteArrayOf(0x0f))
 private val CtrlRKey = ControlKey("Ctrl+R", byteArrayOf(0x12))
-private val CtrlLKey = ControlKey("Ctrl+L", byteArrayOf(0x0c))
+private val CtrlLKey = ControlKey("Ctrl+L", byteArrayOf(0x0c), clearsView = true)
 private val ApproveKey = ControlKey("Approve", byteArrayOf('y'.code.toByte()))
 private val RejectKey = ControlKey("Reject", byteArrayOf('n'.code.toByte()))
 // Antigravity (agy) TUI controls: Ctrl+K fast-approves the pending action,
@@ -153,7 +161,7 @@ private val SHARED_KEYS = listOf(
 
 // Claude / shell / auto-scan: the shared keys plus Mode (Shift+Tab, CSI Z — cycles
 // plan/accept-edits/normal), Rewind (Esc-Esc — edits the previous message) and Ctrl+L
-// (clear screen).
+// (clears the scrollback client-side, then sends 0x0c).
 private val CLAUDE_CONTROL_KEYS =
     orderedControlKeys(listOf(ModeKey, RewindKey) + SHARED_KEYS + CtrlLKey)
 
@@ -163,8 +171,8 @@ private val CODEX_CONTROL_KEYS =
     orderedControlKeys(listOf(ApproveKey, RejectKey) + CLAUDE_CONTROL_KEYS)
 
 // Antigravity (agy) adds its own TUI controls — Ctrl+K (fast-approve pending action),
-// Ctrl+G (tool confirmation view), Ctrl+D (exit) — to the shared keys and Ctrl+L
-// (clear screen). It has no Mode/Rewind. Bracketed paste is honored, so no newline key.
+// Ctrl+G (tool confirmation view), Ctrl+D (exit) — to the shared keys and Ctrl+L.
+// It has no Mode/Rewind. Bracketed paste is honored, so no newline key.
 private val ANTIGRAVITY_CONTROL_KEYS =
     orderedControlKeys(listOf(CtrlKKey, CtrlGKey, CtrlDKey) + SHARED_KEYS + CtrlLKey)
 
@@ -196,6 +204,7 @@ fun InputBar(
     onTextChange: (TextFieldValue) -> Unit,
     onSend: (String) -> Unit,
     onSendBytes: (ByteArray) -> Unit,
+    onClearView: () -> Unit = {},
     enabled: Boolean = true,
     requestFocus: Boolean = false,
     onFocusHandled: () -> Unit = {},
@@ -327,6 +336,7 @@ fun InputBar(
                         FilledTonalButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                if (key.clearsView) onClearView()
                                 onSendBytes(key.bytes)
                             },
                             enabled = enabled,

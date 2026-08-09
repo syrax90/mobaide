@@ -12,6 +12,7 @@
  * | 0x78 | 'x'  | C→S       | execute: agent sends Ctrl+C, payload, delayed CR  |
  * | 0x6d | 'm'  | C→S       | submit: agent writes payload, pauses, writes CR   |
  * | 0x72 | 'r'  | C→S       | resize: u16 rows + u16 cols, big-endian           |
+ * | 0x63 | 'c'  | C→S       | clear: drop retained output (empty payload)       |
  * | 0x73 | 's'  | S→C       | state: UTF-8 JSON {status, pid?, exit_code?}      |
  * | 0x62 | 'b'  | S→C       | replay-buffer start marker (empty payload)        |
  * | 0x65 | 'e'  | S→C       | replay-buffer end marker (empty payload)          |
@@ -30,6 +31,7 @@ export const TERMINAL_FRAME_TYPE = {
   execute: 0x78,
   submit: 0x6d,
   resize: 0x72,
+  clear: 0x63,
   state: 0x73,
   replayStart: 0x62,
   replayEnd: 0x65,
@@ -39,7 +41,8 @@ export type TerminalOutboundFrame =
   | { kind: 'input'; payload: Uint8Array }
   | { kind: 'execute'; payload: Uint8Array }
   | { kind: 'submit'; payload: Uint8Array }
-  | { kind: 'resize'; rows: number; cols: number };
+  | { kind: 'resize'; rows: number; cols: number }
+  | { kind: 'clear' };
 
 export type TerminalInboundFrame =
   | { kind: 'output'; payload: Uint8Array }
@@ -73,6 +76,9 @@ export function encodeTerminalFrame(frame: TerminalOutboundFrame): Uint8Array {
     view.setUint16(1, rows);
     view.setUint16(3, cols);
     return out;
+  }
+  if (frame.kind === 'clear') {
+    return Uint8Array.of(TERMINAL_FRAME_TYPE.clear);
   }
   const type = TERMINAL_FRAME_TYPE[frame.kind];
   const out = new Uint8Array(frame.payload.length + 1);
