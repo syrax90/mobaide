@@ -77,6 +77,7 @@ describe('useSessionHeaderLabel', () => {
 
     await act(async () => {
       client.setQueryData(queryKeys.sessions('a1'), [session({ title: '* Fix the header' })]);
+      await Promise.resolve();
     });
 
     expect(label()).toBe('* Fix the header');
@@ -96,6 +97,7 @@ describe('useSessionHeaderLabel', () => {
     // case proves an update lands inside one `act`, so this is not vacuous.
     await act(async () => {
       client.setQueryData(queryKeys.sessions('a1'), []);
+      await Promise.resolve();
     });
 
     expect(label()).toBe('* Fix the header');
