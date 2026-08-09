@@ -644,14 +644,23 @@ class TerminalViewModel @Inject constructor(
      *  Persisting a synced shortcut under a guessed kind would file it in
      *  the wrong per-kind bucket permanently (unlike the self-healing
      *  device-local recents) — so saves re-resolve from the authoritative
-     *  sources instead of trusting the [sessionKind] StateFlow value. */
+     *  sources instead of trusting the [sessionKind] StateFlow value.
+     *
+     *  The live list wins on both sides of the fetch. A sessions.changed
+     *  snapshot landing while the request is in flight is newer than the
+     *  response by definition, and [headerLabel] reads a mutable field off this
+     *  row — returning the REST copy there would regress the title to whatever
+     *  it was when the request was issued, until the next session event. */
     private suspend fun resolvedSession(): SessionResponse? {
+        liveSessionRow()?.let { return it }
+        val fetched = runCatching { sessionRepository.listSessions() }.getOrNull()
+            ?.firstOrNull { it.session_id == sessionId }
+        return liveSessionRow() ?: fetched
+    }
+
+    private fun liveSessionRow(): SessionResponse? =
         sessionRepository.observeSessionList().value
             .firstOrNull { it.session_id == sessionId }
-            ?.let { return it }
-        return runCatching { sessionRepository.listSessions() }.getOrNull()
-            ?.firstOrNull { it.session_id == sessionId }
-    }
 
     /** Chord tokens with a create request currently in flight. Main-thread
      *  confined: [saveShortcut] is only ever called from the UI, and

@@ -122,6 +122,38 @@ class TerminalViewModelHeaderLabelTest {
         }
 
     @Test
+    fun headerLabel_prefersSnapshotThatLandsDuringTheSeedFetch() =
+        runTest(testDispatcher) {
+            // The REST response is a snapshot of when the request was issued. A
+            // sessions.changed that arrives while it is in flight carries a newer
+            // OSC title, and the seed must not overwrite it with the stale copy.
+            val sessions = MutableStateFlow<List<SessionResponse>>(emptyList())
+            val repo = mockk<SessionRepository> {
+                every { createSessionIoConnection("test-session") } returns connection
+                every { observeSessionList() } returns sessions
+                every { observeSessionsSynced() } returns MutableStateFlow(false)
+                coEvery { listSessions() } coAnswers {
+                    sessions.value = listOf(session(title = "* Newer title"))
+                    listOf(session(title = "* Stale title"))
+                }
+            }
+            val vm = TerminalViewModel(
+                savedStateHandle = SavedStateHandle(mapOf("sessionId" to "test-session")),
+                sessionRepository = repo,
+                customAgentTypesRepository = mockk {
+                    every { observeTypes() } returns MutableStateFlow(emptyList())
+                },
+                templatesRepository = mockk(relaxed = true),
+                shortcutsRepository = mockk(),
+                foregroundSessionTracker = ForegroundSessionTracker(),
+                preferencesStore = preferencesStore,
+            )
+            runCurrent()
+
+            assertEquals("* Newer title", vm.headerLabel.value)
+        }
+
+    @Test
     fun headerLabel_skipsRestSeed_whenLiveListAlreadyHasSession() =
         runTest(testDispatcher) {
             // Normal navigation from the session list: the row is already there,

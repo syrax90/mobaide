@@ -31,6 +31,7 @@ private struct TerminalScreenContent: View {
     private let displayStore: TerminalDisplayStore
     private let sessionRepository: SessionRepository
     private let customAgentTypesRepository: CustomAgentTypesRepository
+    private let agentAPI: AgentAPI
     private let sessionId: String
 
     @Environment(Router.self) private var router
@@ -51,12 +52,31 @@ private struct TerminalScreenContent: View {
         displayStore = container.terminalDisplayStore
         sessionRepository = container.sessionRepository
         customAgentTypesRepository = container.customAgentTypesRepository
+        agentAPI = container.agentAPI
         self.sessionId = sessionId
     }
 
-    /// Empty only on a cold-start deep link, until the first snapshot lands.
+    /// Empty only until the row resolves from either source below.
     private var headerLabel: String {
         sessionRow.map { SessionDisplay.headerLabel($0, customTypeNames: customTypeNames) } ?? ""
+    }
+
+    /// One-shot seed for a cold-start deep link (notification tap), whose
+    /// `currentSessions` is empty and whose event bus may be slow or down while
+    /// the PTY socket connects fine — without this the title stays blank for
+    /// the whole visit.
+    ///
+    /// Read-only on purpose: `SessionRepository.listSessions()` publishes the
+    /// REST snapshot and evicts terminal models absent from it, so a stale
+    /// response on this cold-start path could disconnect a session created
+    /// meanwhile (same reasoning as `AppContainer`'s kind resolver).
+    private func seedSessionRow() async {
+        guard sessionRow == nil else { return }
+        let list = try? await agentAPI.listSessions()
+        // Re-checked after the await: a snapshot that landed while the request
+        // was in flight is newer than the response, and the title is mutable.
+        guard sessionRow == nil else { return }
+        sessionRow = list?.first { $0.session_id == sessionId }
     }
 
     private static func typeNames(_ types: [CustomAgentTypeDto]) -> [String: String] {
@@ -143,6 +163,9 @@ private struct TerminalScreenContent: View {
         .toast(Bindable(model).terminalMessage)
         .renameShortcutAlert(target: $renameShortcutTarget) { shortcut, name in
             model.renameShortcut(id: shortcut.id, name: name)
+        }
+        .task {
+            await seedSessionRow()
         }
         .task {
             checkSessionStillExists()
